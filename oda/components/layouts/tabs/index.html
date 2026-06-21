@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="description" content="test">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>oda-tabs</title>
+</head>
+<body>
+    <oda-tabs  allow-drag id="tabsL" align="top"></oda-tabs>
+<!--    <div style="max-height: 200px;max-height: 200px;overflow: hidden;" class="flex horizontal">-->
+<!--        top<oda-tabs id="tabsT" content-align="top"></oda-tabs>-->
+<!--    </div>-->
+<!--    <div style="max-width: 200px;max-height: 200px;overflow: hidden;" class="flex vertical">-->
+<!--        right<oda-tabs id="tabsR" content-align="right"></oda-tabs>-->
+<!--    </div>-->
+<!--    <div style="max-height: 200px;max-height: 200px;overflow: hidden;" class="flex horizontal">-->
+<!--        bottom<oda-tabs id="tabsD" content-align="bottom"></oda-tabs>-->
+<!--    </div>-->
+    <script type="module">
+        import '/oda/oda.js';
+        import './tabs.js';
+
+        const items = Array.from({length: 100}).map((_, i) => ({label: 'закладка '+i, icon: 'odant:class', allowClose: i%2}));
+        // tabsL.index = 50;
+        // // tabsT.index = 50;
+        // // tabsR.index = 50;
+        // // tabsD.index = 50;
+        tabsL.items = items;
+        tabsL.allowDrag = true;
+        // // tabsT.items = items;
+        // // tabsR.items = items;
+        // // tabsD.items = items;
+    </script>
+</body>
+</html>

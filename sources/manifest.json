@@ -1,0 +1,50 @@
+{
+  "name" : "ODANT-WORK",
+  "short_name": "WORK",
+  "start_url": "/",
+  "display" : "standalone",
+  "background_color": "black",
+  "theme_color": "black",
+  "icons": [
+    {
+      "src": "/sources/odant.png?mode=preview72",
+      "sizes": "72x72",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview96",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview128",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview144",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview152",
+      "sizes": "152x152",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview384",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "/sources/odant.png?mode=preview512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

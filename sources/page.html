@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="theme-color" content="dark">
+    <meta name="color-scheme" id="color-scheme" content="light dark">
+    <meta name="viewport" content="initial-scale=1, maximum-scale=3, width=device-width">
+    <meta name="description" content="odb content">
+    <link rel="manifest" href="{item_path}?manifest" crossorigin="use-credentials">
+    <link rel="icon" type="image/svg+xml" href="{item_icon_path}" crossorigin="use-credentials">
+    <title>{title}</title>
+    <style>
+        body{
+            visibility: hidden;
+            overflow: hidden !important;
+        }
+    </style>
+</head>
+<body>
+    <script type="module">
+        await import(window.location.origin + '/sources/client.js');
+        try{
+            await WORK.login();
+        }
+        catch(e){
+            console.log(e.message)
+        }
+
+        const item_path = "{item_path}";
+        const $item = await WORK.get_item(item_path, 'info');
+        window.$context ??= $item;
+
+        const id = $item.id;
+        let handler = "{handler}";
+        const component_name = "{handler-type}-" + handler.toLowerCase();
+        handler = await WORK.get_item($item.short + '/~/handlers//' + handler);
+        // handler = handler[0];
+        let module = await import(handler.short + `/~/data.js`);
+        module = module.default
+        module.is ??= component_name;
+        await WORK(module);
+        const el = document.createElement(module.is);
+        el.$item = $item;
+        document.body.appendChild(el);
+
+        el.$handler = handler;
+        let view = '{view_name}';
+        if(view)
+            el.view_name = view;
+
+        window.addEventListener('pointerdown', e=>{
+            let parent = window.parent;
+            if(window !== parent){
+                for(let p of parent.document.querySelectorAll('[popover]'))
+                    p.hidePopover();
+            }
+            else{
+                for(let w of Array.from(window.frames)){
+                    for(let p of w.document.querySelectorAll('[popover]'))
+                        p.hidePopover();
+                }
+            }
+        })
+    </script>
+</body>
+</html>

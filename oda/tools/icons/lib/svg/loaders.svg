@@ -1,0 +1,739 @@
+<svg xmlns="http://www.w3.org/2000/svg" name="loaders" icon="spin">
+    <symbol id="spin">
+        <style>
+            @keyframes spin {
+                from {
+                    transform: rotate(0deg);
+                }
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
+            #spin {
+                transform-origin: center;
+                animation: spin 2s linear infinite;
+            }
+        </style>
+        <path d="M18.7 12.4c-.28-.16-.57-.29-.86-.4.29-.11.58-.24.86-.4 1.92-1.11 2.99-3.12 3-5.19-1.79-1.03-4.07-1.11-6 0-.28.16-.54.35-.78.54.05-.31.08-.63.08-.95 0-2.22-1.21-4.15-3-5.19C10.21 1.85 9 3.78 9 6c0 .32.03.64.08.95-.24-.2-.5-.39-.78-.55-1.92-1.11-4.2-1.03-6 0 0 2.07 1.07 4.08 3 5.19.28.16.57.29.86.4-.29.11-.58.24-.86.4-1.92 1.11-2.99 3.12-3 5.19 1.79 1.03 4.07 1.11 6 0 .28-.16.54-.35.78-.54-.05.32-.08.64-.08.96 0 2.22 1.21 4.15 3 5.19 1.79-1.04 3-2.97 3-5.19 0-.32-.03-.64-.08-.95.24.2.5.38.78.54 1.92 1.11 4.2 1.03 6 0-.01-2.07-1.08-4.08-3-5.19zM12 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z" class="style-scope iron-icon"/>
+    </symbol>
+
+    <symbol id="puff">
+        <style>
+            @keyframes puff {
+                0% {
+                    r: 1;
+                    stroke-opacity: 1;
+                }
+                100% {
+                    r: 20;
+                    stroke-opacity: 0;
+                }
+            }
+
+            #puff circle:nth-child(1) {
+                animation: puff 1.8s cubic-bezier(0.165, 0.84, 0.44, 1) infinite;
+            }
+
+            #puff circle:nth-child(2) {
+                animation: puff 1.8s cubic-bezier(0.165, 0.84, 0.44, 1) infinite;
+                animation-delay: -0.9s;
+            }
+        </style>
+        <g fill="none" fill-rule="evenodd" stroke-width="2">
+            <circle cx="22" cy="22" r="1" stroke="#03a"/>
+            <circle cx="22" cy="22" r="1" stroke="#0a3"/>
+        </g>
+    </symbol>
+
+
+    <symbol id="circles">
+        <style>
+            @keyframes rotate {
+                from {
+                    transform: rotate(0deg);
+                }
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
+            @keyframes rotate-reverse {
+                from {
+                    transform: rotate(0deg);
+                }
+                to {
+                    transform: rotate(-360deg);
+                }
+            }
+
+            #circles path:nth-child(1) {
+                transform-origin: center;
+                animation: rotate-reverse 4s linear infinite;
+            }
+
+            #circles path:nth-child(2) {
+                transform-origin: center;
+                animation: rotate 2s linear infinite;
+            }
+        </style>
+        <path d="M67.447 58c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10zm9.448 9.447c0 5.523 4.477 10 10 10 5.522 0 10-4.477 10-10s-4.478-10-10-10c-5.523 0-10 4.477-10 10zm-9.448 9.448c-5.523 0-10 4.477-10 10 0 5.522 4.477 10 10 10s10-4.478 10-10c0-5.523-4.477-10-10-10zM58 67.447c0-5.523-4.477-10-10-10s-10 4.477-10 10 4.477 10 10 10 10-4.477 10-10z"/>
+        <path d="M28.19 40.31c6.627 0 12-5.374 12-12 0-6.628-5.373-12-12-12-6.628 0-12 5.372-12 12 0 6.626 5.372 12 12 12zm30.72-19.825c4.686 4.687 12.284 4.687 16.97 0 4.686-4.686 4.686-12.284 0-16.97-4.686-4.687-12.284-4.687-16.97 0-4.687 4.686-4.687 12.284 0 16.97zm35.74 7.705c0 6.627 5.37 12 12 12 6.626 0 12-5.373 12-12 0-6.628-5.374-12-12-12-6.63 0-12 5.372-12 12zm19.822 30.72c-4.686 4.686-4.686 12.284 0 16.97 4.687 4.686 12.285 4.686 16.97 0 4.687-4.686 4.687-12.284 0-16.97-4.685-4.687-12.283-4.687-16.97 0zm-7.704 35.74c-6.627 0-12 5.37-12 12 0 6.626 5.373 12 12 12s12-5.374 12-12c0-6.63-5.373-12-12-12zm-30.72 19.822c-4.686-4.686-12.284-4.686-16.97 0-4.686 4.687-4.686 12.285 0 16.97 4.686 4.687 12.284 4.687 16.97 0 4.687-4.685 4.687-12.283 0-16.97zm-35.74-7.704c0-6.627-5.372-12-12-12-6.626 0-12 5.373-12 12s5.374 12 12 12c6.628 0 12-5.373 12-12zm-19.823-30.72c4.687-4.686 4.687-12.284 0-16.97-4.686-4.686-12.284-4.686-16.97 0-4.687 4.686-4.687 12.284 0 16.97 4.686 4.687 12.284 4.687 16.97 0z"/>
+    </symbol>
+
+    <symbol id="loader">
+        <style>
+            @keyframes rotate {
+                from {
+                    transform: rotate(0deg);
+                }
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
+            @keyframes rotate-reverse {
+                from {
+                    transform: rotate(0deg);
+                }
+                to {
+                    transform: rotate(-360deg);
+                }
+            }
+
+            @keyframes bounce {
+                0%, 100% {
+                    transform: translateY(0);
+                }
+                50% {
+                    transform: translateY(10px);
+                }
+            }
+
+            #loader circle:nth-child(1) {
+                transform-origin: center;
+                animation: rotate 5s linear infinite;
+            }
+
+            #loader circle:nth-child(2) {
+                transform-origin: center;
+                animation: rotate-reverse 5s linear infinite;
+            }
+
+            #loader rect:nth-child(1) {
+                animation: bounce 1s infinite 0.1s;
+            }
+
+            #loader rect:nth-child(2) {
+                animation: bounce 1s infinite 0.2s;
+            }
+
+            #loader rect:nth-child(3) {
+                animation: bounce 1s infinite 0.3s;
+            }
+
+            #loader rect:nth-child(4) {
+                animation: bounce 1s infinite 0.4s;
+            }
+
+            #loader rect:nth-child(5) {
+                animation: bounce 1s infinite 0.5s;
+            }
+        </style>
+        <circle fill="none" stroke="#0a3" stroke-width="6" stroke-miterlimit="15" stroke-dasharray="14.2472,14.2472" cx="50" cy="50" r="47">
+        </circle>
+        <circle fill="none" stroke="#0a3" stroke-width="1" stroke-miterlimit="10" stroke-dasharray="10,10" cx="50" cy="50" r="39">
+        </circle>
+        <g>
+            <rect x="30" y="35" width="5" height="30">
+            </rect>
+            <rect x="40" y="35" width="5" height="30">
+            </rect>
+            <rect x="50" y="35" width="5" height="30">
+            </rect>
+            <rect x="60" y="35" width="5" height="30">
+            </rect>
+            <rect x="70" y="35" width="5" height="30">
+            </rect>
+        </g>
+
+    </symbol>
+
+
+    <!-- Loader 2 -->
+
+    <symbol id="clock" stroke="#fff">
+        <style>
+            @keyframes rotate-fast {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            @keyframes rotate-slow {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            #clock-hand-fast {
+                transform-origin: 50px 50px;
+                animation: rotate-fast 2s linear infinite;
+            }
+            #clock-hand-slow {
+                transform-origin: 50px 50px;
+                animation: rotate-slow 15s linear infinite;
+            }
+        </style>
+        <circle stroke-width="4" stroke-miterlimit="10" cx="50" cy="50" r="48"/>
+        <line id="clock-hand-fast" stroke-linecap="round" stroke-width="4" stroke-miterlimit="10" x1="50" y1="50" x2="85" y2="50.5"/>
+        <line id="clock-hand-slow" stroke-linecap="round" stroke-width="4" stroke-miterlimit="10" x1="50" y1="50" x2="49.5" y2="74"/>
+    </symbol>
+
+
+    <!-- Loader 3 -->
+
+    <symbol id="dot">
+        <style>
+            @keyframes rotate-dot {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            #rotating-dot {
+                transform-origin: 50px 50px;
+                animation: rotate-dot 2s linear infinite;
+            }
+        </style>
+        <circle fill="none" stroke="#888" stroke-width="4" cx="50" cy="50" r="44" style="opacity:0.5;"/>
+        <circle id="rotating-dot" stroke="#e74c3c" fill="none" stroke-width="3" cx="8" cy="54" r="6"/>
+    </symbol>
+
+
+    <!-- Loader 4 -->
+
+    <symbol id="horizontal-dots">
+        <style>
+            @keyframes fade {
+                0%, 100% { opacity: 0; }
+                50% { opacity: 1; }
+            }
+            #horizontal-dots circle {
+                animation: fade 1s infinite;
+            }
+            #horizontal-dots circle:nth-child(1) { animation-delay: 0.1s; }
+            #horizontal-dots circle:nth-child(2) { animation-delay: 0.2s; }
+            #horizontal-dots circle:nth-child(3) { animation-delay: 0.3s; }
+        </style>
+        <circle stroke="none" cx="6" cy="50" r="6"/>
+        <circle stroke="none" cx="26" cy="50" r="6"/>
+        <circle stroke="none" cx="46" cy="50" r="6"/>
+    </symbol>
+    <!-- Loader 5 -->
+
+    <symbol id="wave-dots">
+        <style type="text/css">
+            @keyframes wave {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-15px); }
+            }
+            #wave-dots circle {
+                animation: wave 1s ease-in-out infinite;
+            }
+            #wave-dots circle:nth-child(2) {
+                animation-delay: 0.1s;
+            }
+            #wave-dots circle:nth-child(3) {
+                animation-delay: 0.2s;
+            }
+        </style>
+        <circle stroke="none" cx="6" cy="50" r="6"/>
+        <circle stroke="none" cx="30" cy="50" r="6"/>
+        <circle stroke="none" cx="54" cy="50" r="6"/>
+    </symbol>
+
+
+    <!--&lt;!&ndash; Loader 6 &ndash;&gt;-->
+
+    <symbol id="box">
+        <style type="text/css">
+            @keyframes rotate-box {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(180deg); }
+            }
+            @keyframes shrink-box {
+                0%, 100% { height: 50px; }
+                50% { height: 0; }
+            }
+            #box-outer {
+                animation: rotate-box 1.8s linear infinite;
+                transform-origin: 50px 50px;
+            }
+            #box-inner {
+                animation: shrink-box 1.8s ease-in-out infinite;
+            }
+        </style>
+        <rect id="box-outer" stroke-width="4" x="25" y="25" width="50" height="50" fill="none"/>
+        <rect id="box-inner" x="27" y="27" width="46" height="50"/>
+    </symbol>
+
+    <!-- Loader 7 -->
+
+    <symbol id="segments">
+        <style>
+            @keyframes rotate {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+
+            @keyframes rotate-reverse {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(-360deg);
+                }
+            }
+
+            .rotate {
+                animation: rotate 2s linear infinite;
+                transform-origin: 50% 50%;
+            }
+
+            .rotate-reverse {
+                animation: rotate-reverse 1s linear infinite;
+                transform-origin: 50% 50%;
+            }
+        </style>
+        <path class="rotate" d="M31.6,3.5C5.9,13.6-6.6,42.7,3.5,68.4c10.1,25.7,39.2,38.3,64.9,28.1l-3.1-7.9c-21.3,8.4-45.4-2-53.8-23.3   c-8.4-21.3,2-45.4,23.3-53.8L31.6,3.5z"/>
+        <path class="rotate-reverse" d="M42.3,39.6c5.7-4.3,13.9-3.1,18.1,2.7c4.3,5.7,3.1,13.9-2.7,18.1l4.1,5.5c8.8-6.5,10.6-19,4.1-27.7   c-6.5-8.8-19-10.6-27.7-4.1L42.3,39.6z"/>
+        <path class="rotate" d="M82,35.7C74.1,18,53.4,10.1,35.7,18S10.1,46.6,18,64.3l7.6-3.4c-6-13.5,0-29.3,13.5-35.3s29.3,0,35.3,13.5   L82,35.7z"/>
+    </symbol>
+
+    <!-- Loader 8 -->
+
+    <symbol id="equalizer">
+        <style>
+            @keyframes equalizer-bar {
+                0%, 100% { height: 30px; }
+                50% { height: 100px; }
+            }
+            
+            #equalizer rect {
+                animation: equalizer-bar 1s infinite;
+            }
+            #equalizer rect:nth-child(2) {
+                animation-delay: 0.1s;
+            }
+            #equalizer rect:nth-child(3) {
+                animation-delay: 0.3s;
+            }
+            #equalizer rect:nth-child(4) {
+                animation-delay: 0.5s;
+            }
+            #equalizer rect:nth-child(5) {
+                animation-delay: 0.1s;
+            }
+
+            @keyframes lines-move {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(20px); }
+            }
+
+            #lines rect {
+                animation: lines-move 0.6s infinite;
+            }
+            #lines rect:nth-child(2) {
+                animation-delay: 0.2s;
+            }
+            #lines rect:nth-child(3) {
+                animation-delay: 0.4s;
+            }
+
+            @keyframes rotate {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+
+            #half-circle path {
+                transform-origin: 50px 50px;
+                animation: rotate 1s linear infinite;
+            }
+        </style>
+        <rect width="3" height="100" transform="translate(0) rotate(180 3 50)"/>
+        <rect x="17" width="3" height="100" transform="translate(0) rotate(180 20 50)"/>
+        <rect x="40" width="3" height="100" transform="translate(0) rotate(180 40 50)"/>
+        <rect x="60" width="3" height="100" transform="translate(0) rotate(180 58 50)"/>
+        <rect x="80" width="3" height="100" transform="translate(0) rotate(180 76 50)"/>
+    </symbol>
+
+
+    <!-- Loader 9 -->
+
+    <symbol id="lines">
+        <style>
+            @keyframes lines-move {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(20px); }
+            }
+
+            #lines rect {
+                animation: lines-move 0.6s infinite;
+            }
+            #lines rect:nth-child(2) {
+                animation-delay: 0.2s;
+            }
+            #lines rect:nth-child(3) {
+                animation-delay: 0.4s;
+            }
+        </style>
+        <rect x="20" y="50" width="4" height="10"/>
+        <rect x="30" y="50" width="4" height="10"/>
+        <rect x="40" y="50" width="4" height="10"/>
+    </symbol>
+
+
+    <!-- Loader 10 -->
+
+    <symbol id="half-circle">
+        <style>
+            @keyframes rotate {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+
+            #half-circle path {
+                transform-origin: 50px 50px;
+                animation: rotate 1s linear infinite;
+            }
+        </style>
+        <path d="M73,50c0-12.7-10.3-23-23-23S27,37.3,27,50 M30.9,50c0-10.5,8.5-19.1,19.1-19.1S69.1,39.5,69.1,50"/>
+    </symbol>
+
+    <symbol id="audio">
+        <style>
+            @keyframes audio-bar1 {
+                0%, 100% { height: 20px; }
+                5% { height: 45px; }
+                10% { height: 57px; }
+                15% { height: 80px; }
+                20% { height: 64px; }
+                25% { height: 32px; }
+                30% { height: 66px; }
+                35% { height: 45px; }
+                40% { height: 64px; }
+                45% { height: 23px; }
+                50% { height: 66px; }
+                55% { height: 13px; }
+                60% { height: 64px; }
+                65% { height: 56px; }
+                70% { height: 34px; }
+                75% { height: 34px; }
+                80% { height: 2px; }
+                85% { height: 23px; }
+                90% { height: 76px; }
+                95% { height: 79px; }
+            }
+            @keyframes audio-bar2 {
+                0%, 100% { height: 80px; }
+                8% { height: 55px; }
+                16% { height: 33px; }
+                24% { height: 5px; }
+                32% { height: 75px; }
+                40% { height: 23px; }
+                48% { height: 73px; }
+                56% { height: 33px; }
+                64% { height: 12px; }
+                72% { height: 14px; }
+                80% { height: 60px; }
+            }
+            @keyframes audio-bar3 {
+                0%, 100% { height: 50px; }
+                8% { height: 34px; }
+                16% { height: 78px; }
+                24% { height: 23px; }
+                32% { height: 56px; }
+                40% { height: 23px; }
+                48% { height: 34px; }
+                56% { height: 76px; }
+                64% { height: 80px; }
+                72% { height: 54px; }
+                80% { height: 21px; }
+            }
+            @keyframes audio-bar4 {
+                0%, 100% { height: 30px; }
+                8% { height: 45px; }
+                16% { height: 13px; }
+                24% { height: 80px; }
+                32% { height: 56px; }
+                40% { height: 72px; }
+                48% { height: 45px; }
+                56% { height: 76px; }
+                64% { height: 34px; }
+                72% { height: 23px; }
+                80% { height: 67px; }
+            }
+            
+            #audio rect:nth-child(1) { animation: audio-bar1 4.3s linear infinite; }
+            #audio rect:nth-child(2) { animation: audio-bar2 2s linear infinite; }
+            #audio rect:nth-child(3) { animation: audio-bar3 1.4s linear infinite; }
+            #audio rect:nth-child(4) { animation: audio-bar4 2s linear infinite; }
+        </style>
+        <g transform="matrix(1 0 0 -1 0 80)">
+            <rect width="10" height="20" rx="3"/>
+            <rect x="15" width="10" height="80" rx="3"/>
+            <rect x="30" width="10" height="50" rx="3"/>
+            <rect x="45" width="10" height="30" rx="3"/>
+        </g>
+    </symbol>
+
+    <!-- By Sam Herbert (@sherb), for everyone. More @ http://goo.gl/7AJzbL -->
+    <!-- Todo: add easing -->
+
+    <symbol id="ball-triangle" fill="none" fill-rule="evenodd">
+        <style>
+            @keyframes ball-move1 {
+                0%, 100% { transform: translate(5px, 50px); }
+                33% { transform: translate(27px, 5px); }
+                66% { transform: translate(49px, 50px); }
+            }
+            @keyframes ball-move2 {
+                0%, 100% { transform: translate(27px, 5px); }
+                33% { transform: translate(49px, 50px); }
+                66% { transform: translate(5px, 50px); }
+            }
+            @keyframes ball-move3 {
+                0%, 100% { transform: translate(49px, 50px); }
+                33% { transform: translate(5px, 50px); }
+                66% { transform: translate(27px, 5px); }
+            }
+            
+            #ball-triangle circle:nth-child(1) {
+                animation: ball-move1 2.2s linear infinite;
+            }
+            #ball-triangle circle:nth-child(2) {
+                animation: ball-move2 2.2s linear infinite;
+            }
+            #ball-triangle circle:nth-child(3) {
+                animation: ball-move3 2.2s linear infinite;
+            }
+        </style>
+        <g transform="translate(1 1)" stroke-width="2">
+            <circle r="5" stroke="#0a3"/>
+            <circle r="5" stroke="#03a"/>
+            <circle r="5" stroke="#a30"/>
+        </g>
+    </symbol>
+    <symbol id="bars">
+        <style>
+            @keyframes bars-animation {
+                0%, 100% { height: 120px; y: 10px; }
+                10% { height: 110px; y: 15px; }
+                20% { height: 100px; y: 20px; }
+                30% { height: 90px; y: 25px; }
+                40% { height: 80px; y: 30px; }
+                50% { height: 70px; y: 35px; }
+                60% { height: 60px; y: 40px; }
+                70% { height: 50px; y: 45px; }
+                80% { height: 40px; y: 50px; }
+                90% { height: 140px; y: 0px; }
+            }
+            
+            #bars rect {
+                animation: bars-animation 1s linear infinite;
+            }
+            #bars rect:nth-child(2) { animation-delay: 0.25s; }
+            #bars rect:nth-child(3) { animation-delay: 0s; }
+            #bars rect:nth-child(4) { animation-delay: 0.25s; }
+            #bars rect:nth-child(5) { animation-delay: 0.5s; }
+        </style>
+        <rect y="10" width="15" height="120" rx="6"/>
+        <rect x="30" y="10" width="15" height="120" rx="6"/>
+        <rect x="60" width="15" height="140" rx="6"/>
+        <rect x="90" y="10" width="15" height="120" rx="6"/>
+        <rect x="120" y="10" width="15" height="120" rx="6"/>
+    </symbol>
+
+    <symbol id="grid">
+        <style>
+            @keyframes grid-fade {
+                0%, 100% { fill-opacity: 1; }
+                50% { fill-opacity: 0.2; }
+            }
+            
+            #grid circle {
+                animation: grid-fade 1s linear infinite;
+            }
+            #grid circle:nth-child(2) { animation-delay: 100ms; }
+            #grid circle:nth-child(3) { animation-delay: 300ms; }
+            #grid circle:nth-child(4) { animation-delay: 600ms; }
+            #grid circle:nth-child(5) { animation-delay: 800ms; }
+            #grid circle:nth-child(6) { animation-delay: 400ms; }
+            #grid circle:nth-child(7) { animation-delay: 700ms; }
+            #grid circle:nth-child(8) { animation-delay: 500ms; }
+            #grid circle:nth-child(9) { animation-delay: 200ms; }
+        </style>
+        <circle cx="12.5" cy="12.5" r="12.5"/>
+        <circle cx="12.5" cy="52.5" r="12.5" fill-opacity=".5"/>
+        <circle cx="52.5" cy="12.5" r="12.5"/>
+        <circle cx="52.5" cy="52.5" r="12.5"/>
+        <circle cx="92.5" cy="12.5" r="12.5"/>
+        <circle cx="92.5" cy="52.5" r="12.5"/>
+        <circle cx="12.5" cy="92.5" r="12.5"/>
+        <circle cx="52.5" cy="92.5" r="12.5"/>
+        <circle cx="92.5" cy="92.5" r="12.5"/>
+    </symbol>
+
+    <symbol id="hearts">
+        <style>
+            @keyframes heart-fade {
+                0%, 100% { fill-opacity: 0.5; }
+                50% { fill-opacity: 1; }
+            }
+            
+            #hearts path:nth-child(1) {
+                animation: heart-fade 1.4s linear infinite;
+            }
+            #hearts path:nth-child(2) {
+                animation: heart-fade 1.4s linear infinite;
+                animation-delay: 0.7s;
+            }
+        </style>
+        <path d="M30.262 57.02L7.195 40.723c-5.84-3.976-7.56-12.06-3.842-18.063 3.715-6 11.467-7.65 17.306-3.68l4.52 3.76 2.6-5.274c3.717-6.002 11.47-7.65 17.305-3.68 5.84 3.97 7.56 12.054 3.842 18.062L34.49 56.118c-.897 1.512-2.793 1.915-4.228.9z" fill-opacity=".5"/>
+        <path d="M105.512 56.12l-14.44-24.272c-3.716-6.008-1.996-14.093 3.843-18.062 5.835-3.97 13.588-2.322 17.306 3.68l2.6 5.274 4.52-3.76c5.84-3.97 13.592-2.32 17.307 3.68 3.718 6.003 1.998 14.088-3.842 18.064L109.74 57.02c-1.434 1.014-3.33.61-4.228-.9z" fill-opacity=".5"/>
+        <path d="M67.408 57.834l-23.01-24.98c-5.864-6.15-5.864-16.108 0-22.248 5.86-6.14 15.37-6.14 21.234 0L70 16.168l4.368-5.562c5.863-6.14 15.375-6.14 21.235 0 5.863 6.14 5.863 16.098 0 22.247l-23.007 24.98c-1.43 1.556-3.757 1.556-5.188 0z"/>
+    </symbol>
+
+    <symbol id="oval">
+        <style>
+            @keyframes oval-rotate {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            
+            #oval path {
+                transform-origin: 18px 18px;
+                animation: oval-rotate 1s linear infinite;
+            }
+        </style>
+        <g fill="none" fill-rule="evenodd">
+            <g transform="translate(1 1)" stroke-width="2">
+                <circle stroke-opacity=".5" cx="18" cy="18" r="18"/>
+                <path stroke="#0a3" d="M36 18c0-9.94-8.06-18-18-18"/>
+            </g>
+        </g>
+    </symbol>
+    <symbol id="rings">
+        <style>
+            @keyframes ring-expand {
+                0% {
+                    r: 6;
+                    stroke-opacity: 1;
+                    stroke-width: 2;
+                }
+                100% {
+                    r: 22;
+                    stroke-opacity: 0;
+                    stroke-width: 0;
+                }
+            }
+            @keyframes ring-pulse {
+                0%, 100% { r: 6; }
+                16% { r: 1; }
+                32% { r: 2; }
+                48% { r: 3; }
+                64% { r: 4; }
+                80% { r: 5; }
+            }
+            
+            #rings circle:nth-child(1) {
+                animation: ring-expand 3s linear infinite;
+                animation-delay: 1.5s;
+            }
+            #rings circle:nth-child(2) {
+                animation: ring-expand 3s linear infinite;
+                animation-delay: 3s;
+            }
+            #rings circle:nth-child(3) {
+                animation: ring-pulse 1.5s linear infinite;
+            }
+        </style>
+        <g fill="none" fill-rule="evenodd" transform="translate(1 1)" stroke-width="2">
+            <circle cx="22" cy="22" r="6" stroke="#0a3"/>
+            <circle cx="22" cy="22" r="6" stroke="#03a"/>
+            <circle cx="22" cy="22" r="8" stroke="#a30"/>
+        </g>
+    </symbol>
+    <symbol id="spinning-circles">
+        <style>
+            @keyframes circle-fade {
+                0% { fill-opacity: 1; }
+                12.5% { fill-opacity: 0; }
+                100% { fill-opacity: 0; }
+            }
+            
+            #spinning-circles circle {
+                animation: circle-fade 1.3s linear infinite;
+            }
+            #spinning-circles circle:nth-child(2) {
+                animation-delay: -1.1375s;
+            }
+            #spinning-circles circle:nth-child(3) {
+                animation-delay: -0.975s;
+            }
+            #spinning-circles circle:nth-child(4) {
+                animation-delay: -0.8125s;
+            }
+            #spinning-circles circle:nth-child(5) {
+                animation-delay: -0.65s;
+            }
+            #spinning-circles circle:nth-child(6) {
+                animation-delay: -0.4875s;
+            }
+            #spinning-circles circle:nth-child(7) {
+                animation-delay: -0.325s;
+            }
+            #spinning-circles circle:nth-child(8) {
+                animation-delay: -0.1625s;
+            }
+        </style>
+        <g fill-rule="evenodd">
+            <g transform="translate(2 1)" stroke-width="1.5">
+                <circle cx="42.601" cy="11.462" r="5" fill-opacity="1"/>
+                <circle cx="49.063" cy="27.063" r="5" fill-opacity="0"/>
+                <circle cx="42.601" cy="42.663" r="5" fill-opacity="0"/>
+                <circle cx="27" cy="49.125" r="5" fill-opacity="0"/>
+                <circle cx="11.399" cy="42.663" r="5" fill-opacity="0"/>
+                <circle cx="4.938" cy="27.063" r="5" fill-opacity="0"/>
+                <circle cx="11.399" cy="11.462" r="5" fill-opacity="0"/>
+                <circle cx="27" cy="5" r="5" fill-opacity="0"/>
+            </g>
+        </g>
+    </symbol>
+    <symbol id="tail-spin">
+        <style>
+            @keyframes tail-rotate {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            
+            #tail-spin path,
+            #tail-spin circle {
+                transform-origin: 18px 18px;
+                animation: tail-rotate 0.9s linear infinite;
+            }
+        </style>
+        <defs>
+            <linearGradient x1="8.042%" y1="0%" x2="65.682%" y2="23.865%" id="a">
+                <stop stop-color="#03a" stop-opacity="0" offset="0%"/>
+                <stop stop-color="#03a" stop-opacity=".631" offset="63.146%"/>
+                <stop stop-color="#03a" offset="100%"/>
+            </linearGradient>
+        </defs>
+        <g fill="none" fill-rule="evenodd">
+            <g transform="translate(1 1)">
+                <path d="M36 18c0-9.94-8.06-18-18-18" id="Oval-2" stroke="url(#a)" stroke-width="2"/>
+                <circle cx="36" cy="18" r="1"/>
+            </g>
+        </g>
+    </symbol>
+</svg>

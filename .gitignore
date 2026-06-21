@@ -1,0 +1,28 @@
+node_modules/
+
+# Secrets and local config
+/#system/mail.json
+/#system/vapid_keys.json
+/#system/settings.json
+/services/AI/GigaChat/$service/#system/settings.json
+.env
+
+# Local user profiles (runtime data)
+users/*/
+!users/$users/
+
+# Runtime data (keep structure, ignore volatile content)
+users/*/logs/
+**/.data.logs/
+**/.RAG/
+**/.history/
+**/.data.js/
+**/*.webm
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+*.log
+
+# Large ML model weights (download separately)
+torus/binnet/models/

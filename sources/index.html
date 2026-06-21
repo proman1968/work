@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="theme-color" content="dark">
+    <meta name="color-scheme" id="color-scheme" content="light dark">
+    <meta name="viewport" content="initial-scale=1, maximum-scale=3">
+    <meta name="description" content="odb content">
+    <link rel="shortcut icon" type="image/x-icon" href="@icon" crossorigin="use-credentials">
+    <title>{title}</title>
+    <style>
+        body{
+            visibility: hidden;
+            overflow: hidden !important;
+        }
+    </style>
+</head>
+<body>
+    <script type="module">
+        await import(window.location.origin + '/client.js');
+        await WORK.login();
+        const item_path = "{item_path}";
+        const $item = await WORK.get_item(item_path || '/');
+        window.$context ??= $item;
+        const id = $item.id;
+        let handler = "{handler}";
+        const component_name = "{handler-type}-" + handler;
+        handler = await WORK.get_item(item_path + '/~/handlers//' + handler);
+        // handler = handler[0];
+        let module = await import(handler.short + `/~/data.js`);
+        module = module.default
+        module.is ??= component_name;
+        await WORK(module);
+        const el = document.createElement(component_name);
+        el.$handler = handler;
+        el.view_name ??= '{view_name}';
+        el.$item = $item;
+        document.body.appendChild(el);   
+        window.addEventListener('pointerdown', e=>{
+            let parent = window.parent;
+            if(window !== parent){
+                for(let p of parent.document.querySelectorAll('[popover]'))
+                    p.hidePopover();
+            }
+            else{
+                for(let w of Array.from(window.frames)){
+                    for(let p of w.document.querySelectorAll('[popover]'))
+                        p.hidePopover();
+                }
+            }
+        })
+    </script>
+</body>
+</html>

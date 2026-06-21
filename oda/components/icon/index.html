@@ -1,0 +1,34 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+    .icons {
+        display: flex;
+        font-family: Arial, sans-serif;
+    }
+    oda-icon {
+        margin: 8px;
+    }
+</style>
+<!--<oda-tester>-->
+    <oda-icon default="icons:error" id="iconCpt" sub-title="Sub title" icon="https://gen-api.ru/_ipx/q_80/images/logo.svg" icon-size="64"></oda-icon>
+<!-- 
+<oda-icon icon="icons:home" icon-size="32" bubble="5" rotate="45" blink="500"></oda-icon>
+<oda-icon icon="icons:settings" sub-icon="icons:info" icon-size="24"></oda-icon> -->
+
+
+<!--</oda-tester>-->
+
+<!-- <div class="vertical border" style="width: 300px; gap: 8px; margin: 8px; padding: 8px;">
+    <input id="inputElem" value="phone:phone2" type="text" onkeydown="javascript: event.key === 'Enter' && changeIcon()">
+    <button onclick="changeIcon">set icon</button>
+</div> -->
+
+<script type="module">
+    import "/oda/oda.js";
+    import "./icon.js";
+
+    window.changeIcon = function changeIcon() {
+        iconCpt.icon = inputElem.value
+    }
+</script>

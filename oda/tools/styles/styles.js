@@ -1,0 +1,753 @@
+let style = /*css*/`
+
+:root {
+    --main-color: indigo;
+    --main-color-invert: oklch(from var(--main-color) 1 .15 h);
+    --header-1: oklch(from var(--main-color) 0.8 .07 h);
+    --header-2: oklch(from var(--main-color) 0.4 .07 h);
+    --header-background: light-dark(var(--header-1), var(--header-2));
+    --header-color: light-dark(var(--header-2), var(--header-1));
+
+    --content-1: oklch(from var(--main-color) 1 .02 h);
+    --content-2: oklch(from var(--main-color) 0.2 .02 h);
+    --content-background: light-dark(var(--content-1), var(--content-2));
+    --content-color: light-dark(var(--content-2), var(--content-1));
+
+    --dark-1: oklch(from var(--main-color) .6 .05 h);
+    --dark-2: oklch(from var(--main-color) .8 .05 h);
+    --dark-background: light-dark(var(--dark-1), var(--dark-2));
+    --dark-color: light-dark(var(--dark-2), var(--dark-1));
+
+    --light-1: oklch(from var(--main-color) .95 .05 h);
+    --light-2: oklch(from var(--main-color) .5 .05 h);
+    --light-background: light-dark(var(--light-1), var(--light-2));
+    --light-color: light-dark(var(--light-2), var(--light-1));
+
+    --body-1: oklch(from var(--main-color) 1 .02 h);
+    --body-2: oklch(from var(--main-color) 0.2 .02 h);
+    --body-background: light-dark(transparent, transparent);
+    --body-color: light-dark(var(--body-2), var(--body-1));
+
+    --section-1: oklch(from var(--main-color) .8 .02 h);
+    --section-2: oklch(from var(--main-color) 0.2 .02 h);
+    --section-background: light-dark(var(--section-1), var(--section-2));
+    --section-color: light-dark(var(--section-2), var(--section-1));
+
+
+
+    --layout-1: oklch(from var(--main-color) 1 .02 h);
+    --layout-2: oklch(from var(--main-color) 0.2 .02 h);
+    --layout-background: light-dark(var(--layout-1), var(--layout-2));
+    --layout-color: light-dark(var(--layout-2), var(--layout-1));
+
+
+    --info-1: oklch(from var(--main-color) 1 .02 h);
+    --info-2: oklch(from var(--main-color) 0.6 .2 h);
+    --info-background: light-dark(var(--info-1), var(--info-2));
+    --info-color: light-dark(var(--info-2), var(--info-1));
+
+
+    --focused-color: blue;
+
+    --accent-color: light-dark(var(--main-color), var(--main-color-invert));
+
+    --accent-back: light-dark(var(--main-color-invert), var(--main-color));
+
+    --bar-background: var(--content-background);
+    --stroke-color: light-dark(transparent, transparent);
+
+
+    --border-color: light-dark(black, white);
+    
+    --shadow-color: light-dark(rgba(0,0,0,.2), rgba(255,255,255,.2));
+
+
+
+
+
+    --success-color: light-dark(green, white);
+    --success-background: light-dark(white, green);
+    
+    --error-color: light-dark(red, yellow);
+    --error-background: light-dark(yellow, red);
+
+    --warning-color: light-dark(orange, wheat);
+    --warning-background: light-dark(wheat, orange);
+    
+    
+    --disabled-color: light-dark(silver, silver);
+
+    --selected-color: light-dark(var(--light-1), var(--light-2));
+    --selected-background: light-dark(var(--light-2), var(--light-1));
+    --selected-filter: brightness(0.8) contrast(1.2);
+    --pointer-color: light-dark(var(--main-color), var(--main-color-invert));
+
+
+}
+
+:root{
+    --font-family: Roboto, Noto, sans-serif;
+    --font-150:{
+        font-size: 150%;
+    };
+    
+}
+:root{
+    --header: {
+        background-color: var(--header-background);
+        color: var(--header-color);
+        fill: var(--header-color);
+        border-color: var(--header-color);
+    };
+    --dark: {
+        background-color: var(--dark-background) !important;
+        color: var(--dark-color) !important;
+        fill: var(--dark-color)  !important;
+        border-color: var(--dark-color) !important;
+    };
+
+    --content:{
+        background-color: var(--content-background);
+        color: var(--content-color);
+        fill: var(--content-color);
+        border-color: var(--dark-color);
+    };
+    --light:{
+        background-color: var(--light-background);
+        color: var(--light-color);
+        fill: var(--light-color);
+        border-color: var(--light-color);
+    };
+
+    --boxed: {
+        border: 1px solid darkgray;
+        margin: 4px;
+        padding: 4px;
+    };
+    --horizontal: {
+        display: flex;
+        flex-direction: row;
+    };
+    --horizontal-center:{
+        @apply --horizontal;
+        align-items: center;
+    };
+    --h:{
+        @apply --horizontal;
+    };
+    --horizontal-end:{
+        @apply --horizontal;
+        justify-content: flex-end;
+    };
+    --bold:{
+        font-weight: bold;
+    };
+    --between:{
+        justify-content: space-between;
+    };
+    --flex:{
+        flex: 1;
+        flex-basis: auto;
+    };
+
+    --no-flex: {
+        flex-grow: 0;
+        flex-shrink: 0;
+        flex-basis: auto;
+    };
+    --bar:{
+        @apply --horizontal;
+    };
+    --center:{
+        justify-content: center;
+        align-self: center;
+        align-content: center;
+        align-items: center;
+    };
+    --vertical: {
+        display: flex;
+        flex-direction: column;
+    };
+    --border:{
+        border: 1px solid;
+        box-sizing: border-box;
+    };
+
+    --toolbar:{
+        @apply --horizontal;
+        align-items: center;
+    };
+
+    --heading: {
+        @apply --horizontal;
+        align-items: center;
+        justify-content: space-between;
+        background-color: var(--content-color) !important;
+        color: var(--content-background) !important;
+        fill: var(--content-background) !important;
+    };
+    --layout: {
+        background: var(--layout-background);
+        color: var(--layout-color);
+        fill: var(--layout-color);
+    };
+    --footer: {
+        @apply --header;
+    };
+    --border-radius: 0px;
+    --border: {
+        border: 1px solid var(--border-color, black);
+        border-radius: var(--border-radius);
+    };
+    --border-left: {
+        border-left: 1px solid var(--border-color, black);
+    };
+    --border-top: {
+        border-top: 1px solid var(--border-color, black);
+    };
+    --border-right: {
+        border-right: 1px solid var(--border-color, black);
+    };
+    --border-bottom: {
+        border-bottom: 1px solid var(--border-color, black);
+    };
+
+    --cover:{
+        position: fixed;
+        left: 0px;
+        top: 0px;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,.1);
+        z-index: 1000;
+    };
+    --user-select:{
+        user-select: text !important;
+    }
+}
+html {
+    touch-action: none;
+    -ms-text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+    height: 100%;
+    --my-variable: 100px;
+}
+@media print {
+    .pe-no-print {
+        display: none !important;
+    }
+    .pe-preserve-ancestor {
+        display: block !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    *::-webkit-scrollbar {
+        width: 0px; height: 0px;
+    }
+    .raised, [raised] {
+        border: none !important;
+        box-shadow: none !important;
+    }
+}
+input{
+    background-color: var(--content-background);
+    color: var(--content-color);
+}
+input::placeholder{
+    color: inherit;
+    opacity: .5;
+}
+
+::part{
+    min-width: 0px;
+}
+::part(error){
+    position: relative;
+    overflow: visible;
+    min-height: 20px;
+    min-width: 20px;
+}
+::part(error):before{
+    content: '';
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    width: 0px;
+    height: 0px;
+    border: 4px solid transparent;
+    border-left: 4px solid red;
+    border-top: 4px solid red;
+}
+body{
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    font-family: var(--font-family);
+    user-select: none;
+    margin: 0px;
+    padding: 0px;
+    height: 100%;
+    overscroll-behavior: contain;
+}
+[hidden]{
+    display: none !important;
+}
+[direction='vertical']{
+        display: flex;
+        flex-direction: column;
+}
+[direction='horizontal']{
+      display: flex;
+      flex-direction: row;
+}
+
+
+:root {
+    --shadow: {
+        box-shadow: 0 8px 10px 1px var(--shadow-color), 0 3px 14px 2px var(--shadow-color), 0 5px 5px -3px var(--shadow-color);
+    };
+
+    --shadow-transition: {
+        transition: box-shadow 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    };
+
+    --text-shadow: {
+        text-shadow: 0 1px 1px var(--header-background, gray);
+    };
+
+    --text-shadow-black: {
+        text-shadow: 0 1px 1px black;
+    };
+    --raised:{
+        box-shadow: 0 0 3px 0  var(--shadow-color);
+    };
+}
+body[context-menu-show] *:not(oda-context-menu){
+    pointer-events: none;
+}
+
+[popover]::backdrop {
+    background-color: rgb(0 0 0 / 0.5);
+    pointer-events: none;
+    z-index: 100;
+}
+
+:root {
+
+    --rainbow: {
+        color: white !important;
+        fill: white !important;
+        animation: gradient-flow 5s ease infinite;
+        background: linear-gradient(90deg, red, orange, yellow, green, lime, cyan, blue, indigo, magenta, violet, red); 
+        background-size: 1000% 1000%  !important;
+        
+    };
+
+    --invert:{
+        filter: invert(1);
+    };
+    --error: {
+        color: var(--error-color) !important;
+        border-color: var(--error-color) !important;
+        fill: var(--error-color) !important;
+        background-color: var(--error-background) !important;
+
+    };
+    --error-invert: {
+        color: var(--error-background) !important;
+        border-color: var(--error-background) !important;
+        fill: var(--error-background) !important;
+        background-color: var(--error-color) !important;
+    };
+    --error-before: {
+        content: attr(error);
+        background-image: url("/web/oda/tools/styles/error.png");
+        background-size: contain;
+        background-repeat: no-repeat;
+        position: absolute;
+        top: -6px;
+        left: 6px;
+        pointer-events: none;
+        @apply --raised;
+        @apply --error;
+        @apply --content;
+        font-size: xx-small;
+        padding: 2px 2px 2px 16px;
+        z-index: 1;
+        @apply --border;
+        border-radius: 6px;
+        min-height: 10px;
+    };
+
+
+
+    --success: {
+        color: var(--success-color) !important;
+        fill: var(--success-color) !important;
+        border-color: var(--success-color) !important;
+        background-color: var(--success-background) !important;
+    };
+    --success-invert: {
+        background-color: var(--success-color) !important;
+        fill: var(--success-background) !important;
+        color: var(--success-background) !important;
+        border-color: var(--success-background) !important;
+    };
+
+    --info: {
+        background-color: var(--info-background) !important;
+        color: var(--info-color) !important;
+        fill: var(--info-color) !important;
+        border-color: var(--info-color) !important;
+
+    };
+    --info-invert: {
+        background-color: var(--info-color) !important;
+        fill: var(--info-background) !important;
+        color: var(--info-background) !important;
+        border-color: var(--info-background) !important;
+    };
+
+    --warning: {
+        background-color: var(--warning-background) !important;
+        color: var(--warning-color)  !important;
+        fill: var(--warning-color) !important;
+        border-color: var(--warning-color) !important;
+    };
+
+    --warning-invert: {
+        background-color: var(--warning-color) !important;
+        color: var(--warning-background)  !important;
+        fill: var(--warning-background) !important;
+        border-color: var(--warning-background) !important;
+    };
+    --accent: {
+        color: var(--accent-color) !important;
+        fill: var(--accent-color) !important;
+        border-color: var(--accent-color) !important;
+        background-color: var(--accent-back) !important;
+    };
+    --accent-invert: {
+        background-color: var(--accent-color) !important;
+        fill: var(--accent-back) !important;
+        color: var(--accent-back) !important;
+        border-color: var(--accent-back) !important;
+    };
+    --drop-reciver:{
+        background-color: var(--info-color) !important;
+
+    };
+    --help: {
+    };
+    --help-after: {
+        content: attr(help);
+        background-image: url("/web/oda/tools/styles/help.png");
+        background-size: contain;
+        background-repeat: no-repeat;
+        position: absolute;
+        top: -6px;
+        left: 6px;
+        pointer-events: none;
+        @apply --raised;
+        @apply --error;
+        @apply --content;
+        font-size: xx-small;
+        padding: 2px 2px 2px 16px;
+        z-index: 1;
+        @apply --border;
+        border-radius: 6px;
+        min-height: 10px;
+    };
+}
+
+[state='error']{
+              color: var(--error-color) !important;
+        border-color: var(--error-color) !important;
+        fill: var(--error-color) !important;
+        background-color: var(--error-background) !important;
+}
+[state='info']{
+         background-color: var(--info-background) !important;
+        color: var(--info-color) !important;
+        fill: var(--info-color) !important;
+        border-color: var(--info-color) !important;
+}
+
+:root{
+    --hover: {
+         filter: brightness(.95) !important;
+         outline: 1px dotted var(--dark-background);
+         outline-offset: -1px;
+
+    };
+    --active: {
+        filter: brightness(.9) !important;
+    };
+    --selected: {
+        color: var(--selected-color) !important;
+        fill: var(--selected-color) !important;
+        filter: var(--selected-filter);
+        background: var(--selected-background) !important;
+    };
+    --outlined: {
+        outline: var(--content-color) dashed .5px;
+        outline-offset: -1px;
+    };
+    --focused:{
+        position: relative !important;
+    };
+    --dimmed: {
+        filter: contrast(0.7);
+    };
+    --disabled: {
+        @apply --dimmed;
+        cursor: default !important;
+        user-focus: none;
+        user-focus-key: none;
+        user-select: none;
+        user-input: none;
+        pointer-events: none;
+    };
+    --transparent: {
+        opacity: 0;
+        user-focus: none;
+        user-focus-key: none;
+        user-select: none;
+        user-input: none;
+        pointer-events: none;
+    };
+}
+[hoverable]:hover{
+    filter: brightness(.95) !important;
+    outline: 1px dotted var(--dark-background);
+    outline-offset: -1px;
+}
+.focused:after, *[focused]:after{
+    content: "";
+    position: absolute;
+    background-color: var(--focused-color);
+    bottom: 0px;
+    left: 0px;
+    height: .1em;
+    right: 0px;
+    z-index: 2;
+}
+.focused.focused-left:after, *[focused].focused-left:after{
+    bottom: 0px;
+    left: 0px;
+    width: 2px;
+    top: 0px;
+    right: unset;
+    height: unset;
+}
+.focused.focused-right:after, *[focused].focused-right:after{
+    bottom: 0px;
+    top: 0px;
+    width: 2px;
+    right: 0px;
+    left: unset;
+    height: unset;
+}
+.focused.focused-top:after, *[focused].focused-top:after{
+    left: 0px;
+    top: 0px;
+    right: 0px;
+    bottom: unset;
+}
+
+@keyframes blinker {
+    100% {
+        opacity: 0;
+    }
+}
+@-webkit-keyframes blinker {
+    100% {
+        opacity: 0;
+    }
+}
+
+@keyframes zoom-in {
+    from {transform:scale(0)}
+    to {transform:scale(1)}
+}
+@keyframes zoom-out {
+    from {transform:scale(1)}
+    to {transform:scale(0)}
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@-moz-keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+@-moz-keyframes fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+::-webkit-scrollbar-thumb {
+    background-color: transparent;
+   -webkit-box-shadow: inset 0 0 4px var(--shadow-color);
+}
+::-webkit-scrollbar-thumb:hover {
+    background-color: transparent;
+}
+::-webkit-scrollbar-track {
+    background-color: transparent;
+}
+
+@keyframes gradient-flow {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+`;
+globalThis.cssRules = [];
+globalThis.adopted = [];
+
+const APPLY_REG_EXP = /@apply\s*/gm;
+const COMMENT_REG_EXP = /\/\*[^*/]*\*\//igm;
+const VAR_REG_EXP = /^--[\w-]*\w+/;
+const RULE_BODY_REG_EXP = /^\s*{\s*[^{}]*\s*}\s*$/;
+
+function extractCSSRules (style){
+    const result = []
+    const adds = []
+    if (typeof style === 'string'){
+        let ss = new CSSStyleSheet();
+        ss.replaceSync(style);
+        style = ss;
+    }
+    for (let rule of style.cssRules) {
+        if(rule.type === CSSRule.KEYFRAMES_RULE){
+            // console.log(rule);
+            result.push(rule.cssText);
+            continue;
+        }
+        else if (rule?.selectorText)
+            result.push(rule.selectorText+ '{');
+        else{
+            adds.unshift(applyStyleMixins(rule.cssText));
+            continue
+        }
+        for (let key of rule.style || []) {
+            let val = rule.style.getPropertyValue(key).toString().trim();
+            const priority = rule.style.getPropertyPriority(key);
+            if (priority) {
+                val = `${val} !${priority}`;
+            }
+            if (!val) continue;
+            if (!VAR_REG_EXP.test(key) || !RULE_BODY_REG_EXP.test(val)) {
+                result.push(key+': '+val+';')
+                continue;
+            }
+            val = val.replace(/^{|}$/g, '');
+            val = applyStyleMixins(val);
+            val = val.trim().split(';').map(i => {
+                return i.trim();
+            }).join(';\n\t').trim();
+            cssRules[key] ??= val;
+            key = key.substring(2);
+            adds.push(`.${key}, [${key}] {`)
+            adds.push(`${val}`)
+            adds.push(`}`)
+        }
+        result.push('}');
+    }
+    result.push(...adds);
+    return result.join('\n');
+}
+function applyStyleMixins (styleText) {
+    styleText = styleText.replace(COMMENT_REG_EXP, '');
+    styleText =  styleText.split(APPLY_REG_EXP);
+    styleText =  styleText.map(i=>{
+        let v = i.match(VAR_REG_EXP)?.[0];
+        if(!v)
+            return i;
+        return i.replace(v+';', cssRules[v]);
+    });
+    styleText = styleText.join('');
+    return styleText;
+}
+const PARSE_RULE_REG_EXP = /([a-z-]+)\s*:\s*((?:[^;]*url\(.*?\)[^;]*|[^;]*)*)\s*(?:;|$)/gi;
+function cssRuleParse (rules, res, host = false) {
+    for (let rule of rules) {
+        switch (rule.type){
+            case CSSRule.KEYFRAMES_RULE:{
+                let key = rule.cssText;
+                let r = res[key] = res[key] || {};
+                cssRuleParse(rule.cssRules, r);
+            } break;
+            case CSSRule.MEDIA_RULE:{
+                let key = '@media ' + rule.media.mediaText;
+                let r = res[key] = res[key] || {};
+                cssRuleParse(rule.cssRules, r);
+            } break;
+            default:{
+                if (rule.cssText.includes(':host') && !host) continue;
+                const ss = rule.cssText.replace(rule.selectorText, '').match(PARSE_RULE_REG_EXP);
+                if (!ss) continue;
+                let sel = rule.selectorText?.split(',').join(',\n');
+                let r = res[sel] = res[sel] || [];
+                r.add(...ss);
+            } break;
+        }
+    }
+}
+style = extractCSSRules(style)
+const ss = document.createElement('style');
+ss.textContent = style;
+ss.setAttribute('scope', 'ODA');
+document.head.appendChild(ss);
+import './adoptedStyleSheets.js'; // https://github.com/calebdwilliams/construct-style-sheets
+if ('adoptedStyleSheets' in Document.prototype) {
+    let ss = new CSSStyleSheet();
+    ss.replaceSync(style);
+    globalThis.adopted = [ss];
+}
+export default {
+    cssRules: globalThis.cssRules,
+    adopted: globalThis.adopted,
+    extractCSSRules,
+    applyStyleMixins,
+    cssRuleParse
+};

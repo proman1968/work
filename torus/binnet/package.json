@@ -1,0 +1,13 @@
+{
+  "name": "binnet-llm-node",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "1-bit Binary Mamba LLM Engine on WebGPU and Node.js",
+  "main": "run.mjs",
+  "scripts": {
+    "start": "node --max-old-space-size=16384 run.mjs"
+  },
+  "dependencies": {
+    "webgpu": "^0.4.0"
+  }
+}

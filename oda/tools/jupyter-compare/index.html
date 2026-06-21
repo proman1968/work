@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light" />
+
+<oda-jupyter-compare id="jupytercompare"></oda-jupyter-compare>
+
+
+<script type="module">
+    import '/oda/oda.js';
+    import './jupyter-compare.js';
+    setTimeout(() => {
+        jupytercompare.src1 = 'colab-1.ipynb';
+        jupytercompare.src2 = 'colab-2.ipynb';
+    }, 100)
+</script>
+ 

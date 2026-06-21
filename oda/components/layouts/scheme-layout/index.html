@@ -1,0 +1,76 @@
+<meta charset="utf-8">
+<!-- <oda-tester> -->
+    <oda-scheme-layout show-scale="false" design-mode allow-links id="layout" style="width: 100%; height: 100%"></oda-scheme-layout>
+<!-- </oda-tester> -->
+
+<script type="module">
+    import "/oda/oda.js";
+    import "./scheme-layout.js";
+    layout.items = [
+        {
+            is: 'oda-button', id: 0, x: 100, y: 100,
+            props: { label: '1:oda-button', icon: 'icons:extension', fill: 'blue', iconSize: 64 },
+            pins: {
+                top: [
+                    {
+                        props: { icon: 'icons:error' }
+                    },
+                    {
+                        bind: [{
+                            block: 1, top: 0
+                        }]
+                    }],
+                right: [
+                    {
+                        bind: [{
+                            block: 2, left: 0
+                        }]
+                    },
+                    {
+                        bind: [{
+                            block: 1, bottom: 1
+                        }]
+                    },
+                    {
+                        props: {
+                            my: 'dfkjlsfjl',
+                            icon: 'icons:error',
+                            iconSize: 30,
+                            style: 'background: red;',
+                        }
+                    }
+                ],
+                left: [
+                    {},
+                    {}
+                ],
+                bottom: [
+                    {},
+                    {}
+                ],
+            }
+        },
+        {
+            is: 'oda-button', id: 1, x: 600, y: 30,
+            props: { label: '2:oda-button', icon: 'icons:android', fill: 'green', iconSize: 64 },
+            pins: {
+                top: [{}],
+                left: [{}],
+                right: [{}, {}],
+                bottom: [{}, {}]
+            }
+        }, {
+            is: 'oda-button', id: 2, x: 400, y: 360,
+            props: { label: '3:oda-button', iconSize: 30 },
+            pins: {
+                top: [
+                    {}
+                ],
+                left: [
+                    {}
+                ],
+                right: [{}, {}]
+            }
+        }
+    ]
+</script>

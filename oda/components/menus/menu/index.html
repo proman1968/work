@@ -1,0 +1,381 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="/oda//button.js"></script>
+<script type="module" src="./menu.js"></script>
+<style>
+    body{
+        visibility: hidden;
+    }
+    div > div {
+        justify-content: space-around;
+        align-items: center;
+    }
+    div > h1 {
+        align-self: center;
+    }
+    oda-button {
+        border: solid black 1px;
+        margin: 4px;
+    }
+</style>
+
+
+<!-- <oda-tester> -->
+    <div class="flex vertical">
+        <h1>Контекстное меню</h1>
+        <div class="flex horizontal">
+            <oda-button id="btnCM" label="Контекстное меню"></oda-button>
+        </div>
+        <h1>Вправо вниз</h1>
+        <div class="flex horizontal">
+            <oda-button id="btn11" label="Правый верхний"></oda-button>
+            <oda-button id="btn12" label="Правый нижний"></oda-button>
+            <oda-button id="btn13" label="Левый верхний"></oda-button>
+            <oda-button id="btn14" label="Левый нижний"></oda-button>
+        </div>
+        <h1>Вправо вверх</h1>
+        <div class="flex horizontal">
+            <oda-button id="btn21" label="Правый верхний"></oda-button>
+            <oda-button id="btn22" label="Правый нижний"></oda-button>
+            <oda-button id="btn23" label="Левый верхний"></oda-button>
+            <oda-button id="btn24" label="Левый нижний"></oda-button>
+        </div>
+        <h1>Влево вниз</h1>
+        <div class="flex horizontal">
+            <oda-button id="btn31" label="Правый верхний"></oda-button>
+            <oda-button id="btn32" label="Правый нижний"></oda-button>
+            <oda-button id="btn33" label="Левый верхний"></oda-button>
+            <oda-button id="btn34" label="Левый нижний"></oda-button>
+        </div>
+        <h1>Влево вверх</h1>
+        <div class="flex horizontal">
+            <oda-button id="btn41" label="Правый верхний"></oda-button>
+            <oda-button id="btn42" label="Правый нижний"></oda-button>
+            <oda-button id="btn43" label="Левый верхний"></oda-button>
+            <oda-button id="btn44" label="Левый нижний"></oda-button>
+        </div>
+    </div>
+<!-- </oda-tester> -->
+<script type="module">
+    //#region Items
+    const selectedItem = { label: "4 строка" };
+    const items = [
+        {
+            label: "1 строка", group: true
+        },
+        {
+            label: "2 строка", icon: 'icons:add', group: false, is: 'red-item', execute() {
+                ODA.push('execute');
+            },
+            items: [
+                {
+                    label: "2.1 строка", items: [
+                        { label: "2.1 строка" },
+                        { label: "2.2 строка", is: 'red-item' }]
+                },
+                {
+                    label: "2.2 строка", is: 'red-item',
+                    items: [
+                        {
+                            label: "2.2.1 строка", items: [
+                                {
+                                    label: "2.1 строка", items: [
+                                        { label: "2.1 строка" },
+                                        { label: "2.2 строка", is: 'red-item' }]
+                                },
+                                { label: "2.2 строка", is: 'red-item' }]
+                        },
+                        { label: "2.2.2 строка" },
+                        { label: "2.2.3 строка" },
+                        { label: "2.2.4 строка", group: true },
+                        { label: "2.2.5 строка" },
+                        { label: "2.2.6 строка" },
+                        { label: "2.2.7 строка" },
+                        { label: "2.2.8 строка" },
+                        { label: "2.2.9 строка" },
+                        { label: "2.2.10 строка" }
+                    ]
+                },
+                { label: "2.3 строка" },
+                { label: "2.4 строка" },
+                { label: "2.5 строка" }
+            ]
+        },
+        {
+            label: "3 строка", icon: 'icons:settings',
+            items: [
+                { label: "3.1 строка" },
+                { label: "3.2 строка" },
+                { label: "3.3 строка" },
+                { label: "3.4 строка" },
+                { label: "3.5 строка" },
+                { label: "3.6 строка" },
+                { label: "3.7 строка" },
+                { label: "3.8 строка" },
+                { label: "3.9 строка" },
+                { label: "3.10 строка" }
+            ]
+        },
+        selectedItem,
+        {
+            label: "5 строка",
+            items: [
+                { label: "5.1 строка" },
+                {
+                    label: "5.2 строка",
+                    items: [
+                        { label: "5.2.1 строка" },
+                        { label: "5.2.2 строка" },
+                        { label: "5.2.3 строка" },
+                        { label: "5.2.4 строка" },
+                        { label: "5.2.5 строка" },
+                        { label: "5.2.6 строка" },
+                        { label: "5.2.7 строка" },
+                        { label: "5.2.8 строка" },
+                        { label: "5.2.9 строка" },
+                        { label: "5.2.10 строка" }
+                    ]
+                },
+                { label: "5.3 строка", icon: 'icons:add' },
+                { label: "5.4 строка" },
+                { label: "5.5 строка" },
+                { label: "5.6 строка" },
+                { label: "5.7 строка" },
+                { label: "5.8 строка" },
+                { label: "5.9 строка" },
+                { label: "5.10 строка" }
+            ]
+        },
+        { label: "6 строка" },
+        {
+            label: "7 строка",
+            items: [
+                { label: 'новая ветка' }
+            ]
+        },
+        { label: "8 строка", is: 'red-item' },
+        { label: "9 строка", group: true},
+        { label: "10 строка" }
+    ];
+    //#endregion Items
+
+    //#region Контекстное меню
+    btnCM.addEventListener('contextmenu', (e) => {
+        e.target.showContextMenu({
+            anchor: e,
+            style: {
+                // Положение меню
+                //'transform': 'translateX(-100%)',
+                //'transform': 'translateY(-100%)',
+                //'transform': 'translateX(-100%) translateY(-100%)',
+            },
+            title: e.label,
+            items,
+        });
+    });
+    //#endregion Контекстное меню
+
+    //#region Вправо вниз
+
+    // Правый верхний
+    btn11.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-right',
+            popoverPoint: 'top-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Правый нижний
+    btn12.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-right',
+            popoverPoint: 'top-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый верхний
+    btn13.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-left',
+            popoverPoint: 'top-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый нижний
+    btn14.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-left',
+            popoverPoint: 'top-left',
+            title: e.label,
+            items,
+        });
+    });
+    //#endregion Вправо вниз
+
+    //#region Вправо вверх
+
+    // Правый верхний
+    btn21.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-right',
+            popoverPoint: 'bottom-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Правый нижний
+    btn22.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-right',
+            popoverPoint: 'bottom-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый верхний
+    btn23.addEventListener('click', (e) => {
+        // todo: style
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-left',
+            popoverPoint: 'bottom-left',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый нижний
+    btn24.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-left',
+            popoverPoint: 'bottom-left',
+            title: e.label,
+            items,
+        });
+    });
+    //#endregion Вправо вверх
+
+    //#region Влево вниз
+
+    // Правый верхний
+    btn31.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-right',
+            popoverPoint: 'top-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Правый нижний
+    btn32.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-right',
+            popoverPoint: 'top-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый верхний
+    btn33.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-left',
+            popoverPoint: 'top-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый нижний
+    btn34.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-left',
+            popoverPoint: 'top-right',
+            title: e.label,
+            items,
+        });
+    });
+    //#endregion Влево вниз
+
+    //#region Влево вверх
+
+    // Правый верхний
+    btn41.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-right',
+            popoverPoint: 'bottom-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Правый нижний
+    btn42.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-right',
+            popoverPoint: 'bottom-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый верхний
+    btn43.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'top-left',
+            popoverPoint: 'bottom-right',
+            title: e.label,
+            items,
+        });
+    });
+
+    // Левый нижний
+    btn44.addEventListener('click', (e) => {
+        e.target.showContextMenu({
+            anchor: e.target,
+            anchorPoint: 'bottom-left',
+            popoverPoint: 'bottom-right',
+            title: e.label,
+            items,
+        });
+    });
+    //#endregion Влево вниз
+
+    //#region Дополнительные компоненты
+    ODA({ is: 'red-item', template: `
+        <style>
+            :host {
+                background-color: red;
+                @apply --flex;
+                color: white;
+            }
+        </style>
+        {{ item.label }}`,
+        item: {}
+    });
+    //#endregion Дополнительные компоненты
+</script>

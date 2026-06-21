@@ -1,0 +1,1965 @@
+const jupyter_path = import.meta.url.split('/').slice(0, -1).join('/');
+const path = window.location.href.split('/').slice(0, -1).join('/');
+
+window.run_context = Object.create(null);
+run_context.output_data = undefined;
+function log_recurse(obj) {
+    if (obj === null) return 'null';
+    if (obj === undefined) return 'undefined';
+    switch (obj.constructor) {
+        case undefined: {
+            if (obj instanceof JupyterProxyElement)
+                return obj;
+            obj = Object.assign({}, obj);
+        }
+        case Function:
+        case Object: {
+            try {
+                return JSON.stringify(obj, 0, 2);
+            }
+            catch (e) {
+                return obj.toString();
+            }
+        }
+        case Array: {
+            try {
+                return JSON.stringify(obj, 0, 2);
+            }
+            catch (e) {
+                return '[' + obj.map(log_recurse) + ']';
+            }
+
+        }
+        default: {
+            if (obj instanceof HTMLElement) {
+
+            }
+            else if (typeof obj === 'object' || typeof obj === 'function')
+                return obj.toString();
+        }
+    }
+    return obj;
+}
+window.log = (...e) => {
+    e = e.map(log_recurse);
+    run_context.output_data?.push(...e.map(v => {
+        let mimeType = 'text/plain';
+        if (v instanceof HTMLElement)
+            mimeType = 'html/text';
+        else if (v instanceof JupyterProxyElement) {
+            return { 'jupyter/iframe': v };
+        }
+        else
+            v = v.toString();
+        return { [mimeType]: v };
+    }))
+}
+const console_warn = console.warn;
+window.warning = window.warn = console.warn = (...e) => {
+    console_warn.call(window, ...e);
+    run_context.output_data?.push(...e.map(v => {
+        return { 'html/text': '<span style="font-size: large;" info><b>warning: </b>' + v.toString() + '</span>' };
+    }))
+}
+const console_error = console.error;
+window.err = window.error = console.error = (...e) => {
+    console_error.call(window, ...e);
+    run_context.output_data?.push(...e.map(v => {
+        return { 'html/text': '<span style="font-size: large;" error><b>error: </b>' + v.toString() + '</span>' };
+    }))
+}
+window.run_context = run_context;
+
+import '/oda/components/editors/markdown/markdown.js';
+import '/oda/components/editors/markdown/markdown-editor/markdown-editor.js';
+import '/oda/components/editors/markdown/markdown-viewer/markdown-viewer.js';
+ODA({ is: 'oda-jupyter', imports: 'oda//code-editor, oda//button',
+    template: /* html */`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --flex;
+                outline: none !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                padding-top: 14px;
+                scroll-behavior: smooth;
+                position: relative;
+                @apply --light;
+                z-index: 1;
+                gap: 2px;
+            }
+        </style>
+        <oda-jupyter-divider ~style="{zIndex: cells.length + 1}"></oda-jupyter-divider>
+        <oda-jupyter-cell content @tap="focusedCell = $for.item" ~for="cells" :cell="$for.item" ~show="!$for.item.hidden" :focused="focusedCell === $for.item"></oda-jupyter-cell>
+        <div style="min-height: 90%"></div>
+    `,
+    command_replace(){
+        const el = this.getCell(this.focusedCell.id);
+        el?.control?.editor?.editor?.execCommand?.('replace')
+
+    },
+    connect(target){
+        if (this.connected_target === target)
+            return;
+        if (this.connected_target){
+            this.connected_target.unlisten('progress-changed');
+            this.unlisten('stop');
+        }
+        this.connected_target = target;
+        target.listen('progress-changed', async progress=>{
+            await this.setProgress(progress);
+        })
+        this.listen('stop', e=>{
+            target.stop = true;
+            setTimeout(()=>{
+                target.stop = false;
+            }, 100)
+        })
+    },
+    iconSize: 24,
+    readOnly: false,
+    editMode: false,
+    file_path: String,
+    get url() {
+        if (this.file_path?.startsWith('http'))
+            return this.file_path;
+        if (this.file_path)
+            return path + '/' + this.file_path;
+        return '';
+    },
+    editors: {
+        code: { editor: 'oda-jupyter-code-editor', type: 'code' },
+        text: { editor: 'oda-markdown', type: 'text' },
+        file: { editor: 'oda-jupyter-code-editor', type: 'code', isFile: true },
+    },
+    get cells() {
+        return this.notebook?.cells;
+    },
+    isStarted: true,
+    focusedCell: {
+        $def: null,
+        set(n, o) {
+            if (n) {
+                this.editMode = false;
+                this.savedIndex = n.index;
+                let el = this.getCell(n.id);
+                if (!el)
+                    return;
+                el.blink = true;
+                el.scrollToCell(o && o.index < n.index ? false : true, this.isStarted);
+                this.isStarted = false;
+                if (el.cell?.lastRange && el.control) {
+                    if (el.scrollCancel || this.isMoveCell)
+                        return;
+                    this.async(() => {
+                        el.control.scrollToCursor(el.cell.lastRange.start.row, 10);
+                        this.isMoveCell = 1;
+                        el.control.focus();
+                    }, 100)
+                }
+            }
+            else if (o) {
+                this.focusedCell = o;
+            }
+        }
+    },
+    set isMoveCell(v) {
+        if (this.isMoveCell === 0)
+            return;
+        this.fire('isMoveCell');
+        // console.log(v)
+        this._isMoveCell?.clearTimeout?.();
+        this._isMoveCell = setTimeout(() => {
+            this.isMoveCell = 0;
+        }, 500)
+    },
+    getCell(id) {
+        return this.$$('oda-jupyter-cell').find(i => i.cell.id === id);
+    },
+    get notebook() {
+        this.style.visibility = 'hidden';
+        const nb = new JupyterNotebook(this.url);
+        nb.listen('ready', async (e) => {
+            await this.$$('oda-jupyter-cell').filter(i => i.cell.autoRun).last?.auto_run();
+            await this.render();
+            this.cells = this.notebook?.cells;
+            this.async(() => {
+                this.focusedCell = this.cells?.[this.savedIndex];
+                this.async(() => {
+                    this.style.visibility = 'visible';
+                }, 100)
+            }, 1000)
+
+        })
+        nb.listen('changed', async (e) => {
+            //if (e.detail.value) {
+                this.cells = undefined;
+                this.getCell(this.focusedCell?.id)?.focus?.();
+            //}
+            this.fire('changed');
+        })
+        this.async(() => {
+            this.style.visibility = 'visible';
+        }, 1000)
+        return nb;
+    },
+    get jupyter() {
+        return this;
+    },
+    output_data: [],
+    tabindex: {
+        $def: 0,
+        $attr: true
+    },
+    savedIndex: {
+        $def: 0,
+        $save: true
+    },
+    get $saveKey() {
+        return this.notebook.url
+    },
+    get jupyter_height(){
+        return this.offsetHeight;
+    },
+    maxOutputRows: {
+        $def: 20,
+        $save: true
+    },
+    $listeners:{
+        // scroll(e){
+        //     this.jupyter_scroll_top = this.scrollTop;
+        //     this.jupyter.debounce('blink', ()=>{
+        //         this.getCell(this.focusedCell?.id).blink = false;
+        //     }, 200)
+        // },
+        resize(e){
+            this.jupyter_height = this.offsetHeight;
+            //this.render();
+        }
+    },
+    async attached() {
+        // await getLoader();
+        this.listen('cell-action-run-next', e => {
+            const cell = e.detail?.value;
+            if (cell) {
+                // console.log(cell.id)
+                cell.jupyter ||= this;
+                let next = cell.next;
+                next?.execute?.(cell);
+            }
+        })
+    },
+    $keyBindings:{
+        "ctrl+home"(e){
+            this.focusedCell = this.cells[0];
+        },
+        enter(e){
+            this.editMode = true;
+        },
+        arrowup(e){
+            e.preventDefault()
+            if (!this.editMode && this.focusedCell.index > 0)
+                this.focusedCell = this.cells[this.focusedCell.index - 1]
+        },
+        arrowdown(e){
+            e.preventDefault();
+            if (!this.editMode && this.cells.length - 1 > this.focusedCell.index)
+                this.focusedCell = this.cells[this.focusedCell.index + 1]
+        },
+        async "ctrl+p"(e){
+            e.stopPropagation();
+            e.preventDefault();
+            this.printValue();          
+        }
+    },
+    set stop(n){
+        this.fire('stop', n)
+    },
+    progress: 0,
+    message: '',
+    async setProgress(percent){
+        return await new Promise(resolve=>{
+            this.progress = percent;
+            requestAnimationFrame(()=>{
+                resolve(this.progress)
+            })
+        })
+    },
+    async setMessage(message = '', replace = false){
+        return await new Promise(resolve=>{
+            this.message ||= '';
+            this.message = replace ? message : this.message + '\n\n' + message;
+            requestAnimationFrame(()=>{
+                resolve(this.message)
+            })
+        })
+    },
+    addMessage(message = '') {
+        this.message = (this.message || '') + '\n\n' + message;
+    },
+})
+
+ODA({ is: 'oda-jupyter-cell-out', 
+    template: /* html */`
+        <style>
+            [text-mode]{
+                padding: 4px;
+                user-select: text;
+                overflow-x: auto;
+            }
+            label {
+                width: fit-content;
+            }
+            label:hover{
+                text-decoration: underline;
+                cursor: pointer !important;
+            }
+            label[selected]{
+                @apply --content;
+                text-decoration: underline;
+            }
+            iframe {
+                border: none;
+                width: 100%;
+                height: 40px;
+            }
+        </style>
+        <div :src="image" light ~is="out_tag" :srcdoc vertical  ~html="outHtml" ~style="{overflowWrap: (textWrap ? 'break-word': ''), whiteSpace: (textWrap ? 'break-spaces': 'pre')}" :text-mode="typeof outHtml === 'string'" :warning @load="iframe_loaded"></div>
+        <div ~if="curRowsLength<maxRowsLength && !showAll" class="horizontal left header flex" style="font-size: small; align-items: center;">
+            <span style="padding: 9px;">Rows: {{curRowsLength.toLocaleString()}} of {{maxRowsLength.toLocaleString()}}</span>
+            <oda-button ~if="!showAll" :icon-size class="dark border" style="margin: 4px; border-radius: 2px;" @tap="setStep($event, 1)">Show next {{(max).toLocaleString()}}</oda-button>
+            <oda-button ~if="!showAll" :icon-size class="dark border" style="margin: 4px; border-radius: 2px;" @tap="showAll=true">Show all</oda-button>
+        </div>
+    `,
+    // $wake: true,
+    control: undefined,
+    textWrap: true,
+    row: undefined,
+    showAll: false,
+    get max() {
+        return this.$pdp.maxOutputRows;
+    },
+    step: 1,
+    setStep(e, sign) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.step += sign;
+    },
+    iframe_loaded(e) {
+        const iframe = e.target;
+        if (!iframe.contentDocument) return;
+        iframe.style.height = '40px';
+        this.row.item.elem = iframe.contentDocument.body.firstChild;
+        // console.log(this.row.item.elem);
+        const resizeObserver = new ResizeObserver((e) => {
+            let h = iframe.contentDocument.body.scrollHeight;
+            iframe.style.height = h + 'px';
+            // if (h === iframe.contentDocument.body.scrollHeight) {
+            //     resizeObserver.unobserve(iframe.contentDocument.body);
+            // }
+        })
+        resizeObserver.observe(iframe.contentDocument.body);
+        this.async(() => {
+            this.$('#out-frame')?.scrollIntoView({ block: "end" });
+        }, 500)
+    },
+    get srcdoc() {
+        if (this.row?.key !== 'jupyter/iframe') return '';
+        let tag_name = this.row.item.tag_name, src = '';
+        try {
+            src = JSON.stringify(ODA.telemetry.prototypes[tag_name] || {});
+        } catch (err) {
+            console.log(err);
+        }
+        src = `
+<${tag_name}></${tag_name}>
+<script type="module">
+    import '${jupyter_path.replace('tools/jupyter', 'oda.js')}';
+    ODA(
+        ${src}
+    )
+<\/script>
+`
+        return src;
+    },
+    get image() {
+        if (this.row?.key === 'image/png')
+            return 'data:image/png;base64,' + this.row.item;
+    },
+    get out_tag() {
+        switch (this.row?.key) {
+            case 'image/png':
+                return 'img';
+            case 'jupyter/iframe':
+                return 'iframe';
+        }
+        return 'div';
+    },
+    get maxRowsLength() {
+        return this.split_out().length;
+    },
+    get curRowsLength() {
+        return this.max * 1 * (this.step + 1);
+    },
+    split_out(out = this.row?.item || this.row || '') {
+        const limit = 10000
+        return out.split?.('\n').map(v => {
+            if (v.length > limit)
+                return v.substring(0, limit);
+            return v
+        }) || [];
+    },
+    replaceAngleBrackets(htmlString) {
+        if (typeof htmlString !== 'string') return;
+        const validHtmlTags = new Set(['img', 'input', 'button']);
+        const regex = /<([^>\s]+)([^>]*)>/g;
+        function hasClosingTag(tag, str) {
+            const closingTag = `</${tag}>`;
+            return str.includes(closingTag);
+        }
+        return htmlString.replace(regex, (match, tagName, attributes) => {
+            if (tagName.startsWith('/')) {
+                const actualTagName = tagName.slice(1);
+                if (validHtmlTags.has(actualTagName) || actualTagName.match(/^[a-zA-Z][a-zA-Z0-9-_]*$/)) {
+                    return match;
+                }
+            }
+            if (validHtmlTags.has(tagName))
+                return match;
+            if (tagName.match(/^[a-zA-Z][a-zA-Z0-9-_]*$/) && hasClosingTag(tagName, htmlString))
+                return match;
+            return `&lt;${tagName}${attributes}&gt;`;
+        })
+    },
+    get outHtml() {
+        if (this.row?.item instanceof HTMLElement)
+            return this.row.item;
+
+        let out = this.row.item;
+        if (out && !out.startsWith?.("<label bold onclick='_findCodeEntry(this)'"))
+            out = this.replaceAngleBrackets(out);
+
+        if (this.showAll)
+            return out || ''
+        let array = this.split_out(out).slice(0, this.curRowsLength);
+        return array.join('\n');
+    },
+    get warning() {
+        return this.cell?.status === 'warning';
+    },
+    get error() {
+        return this.cell?.status === 'error';
+    },
+    attached(e) {
+        this.showAll = false;
+    }
+})
+
+ODA({ is: 'oda-jupyter-cell',
+    template: /* html */`
+        <style>
+           :host{
+                padding-top: 2px;
+                /*padding-left: 2px;*/
+                @apply --vertical;
+                @apply --no-flex;
+                position: relative;
+                padding-right: 2px;
+                /*margin-top: 4px;*/
+                min-height: 24px;
+            }
+            .sticky{
+                cursor: pointer;
+                position: sticky;
+                top: 0px;
+            }
+            oda-icon{
+                cursor: pointer;
+                max-height: 64px;
+            }
+            oda-button:hover{
+                border-radius: 50%;
+                @apply --success-invert;
+            }
+            
+            :host([raised]) .left-panel {
+                @apply --header;
+            }
+            :host([raised]) {
+                @apply --header;
+            }
+            :host(:hover) {
+                @apply --shadow;
+            }
+            :host(:hover) oda-jupyter-toolbar, :host(:hover) oda-jupyter-outputs-toolbar{
+                display: flex !important;
+            }
+            #block {
+                transition: filter .2s ease-in-out;
+            }
+            @media print {
+                .pe-preserve-print {
+                    width: 100%!important;
+                }
+            }
+            .circular-progress-container {
+                margin: 4px 0px 4px 4px;
+            }
+            .hidden-progress {
+                position: absolute;
+                opacity: 0;
+                width: 0;
+                height: 0;
+            } 
+            .circular-progress {
+                --size: 32px;
+                --border-width: 3px;
+                --progress: 0;
+                
+                width: var(--size);
+                height: var(--size);
+                border-radius: 50%;
+                background: conic-gradient(
+                #3498db calc(var(--progress) * 3.6deg),
+                #eee 0deg
+                );
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                position: relative;
+            }     
+            .circular-progress::before {
+                content: '';
+                position: absolute;
+                width: calc(100% - var(--border-width) * 2);
+                height: calc(100% - var(--border-width) * 2);
+                background: white;
+                border-radius: 50%;
+            }
+            .progress-text {
+                position: relative;
+                font-family: Arial, sans-serif;
+                font-size: 10px;
+                color: #333;
+                z-index: 1;
+            }
+        </style>
+        <div class="vertical no-flex" style="position: relative;">
+            <div class="horizontal" id="block" :blink :outline="selected">
+                <div class="pe-no-print left-panel vertical" :error-invert="cell.type === 'code' && status === 'error'" content style="z-index: 2;">
+                    <div class="sticky" style="min-width: 40px; max-width: 40px; margin: -2px; margin-top: 2px; min-height: 50px; font-size: xx-small; text-align: center; white-space: break-spaces;" >
+                        <oda-button ~if="!showProgress && cell.type === 'code'"  :icon-size :icon :error="!!fn" @down.stop="run" :info-invert="cell?.autoRun" :success="!fn && !cell?.time" style="margin: 4px; border-radius: 50%;">
+                        </oda-button>
+                        <div ~if="showProgress && cell.type === 'code'" class="circular-progress-container" @down.stop="run">
+                            <progress class="hidden-progress" max="100" :value="jupyter.progress"></progress>
+                            <div class="circular-progress" :style="progressStyle()">
+                                <!-- <span class="progress-text">{{jupyter.progress}}%</span> -->
+                                <oda-icon icon="av:stop" error style="border-radius: 50%;"></oda-icon>
+                            </div>
+                        </div>
+                        <div ~if="cell.type === 'code'" >{{time}}</div>
+                        <div ~if="cell.type === 'code'" >{{status}}</div>
+                    </div>
+                </div>
+                <div class="vertical flex">
+                    <oda-jupyter-toolbar :icon-size="iconSize * .7" :cell :control ~show="selected"></oda-jupyter-toolbar>
+                    <div class="horizontal">
+                        <oda-icon ~if="cell.type!=='code' && cell.allowExpand && !editMode" :icon="expanderIcon" @dblclick.stop @tap.stop="cell.collapsed = !cell.collapsed"></oda-icon>
+                        <div flex id="control" ~is="editor" :cell :edit-mode :value :read-only show-preview :_value @change="onChange"></div>
+                    </div>
+                    <div info ~if="cell.collapsed" class="horizontal" @tap="cell.collapsed = false">
+                        <oda-icon style="margin: 4px;" :icon="childIcon"></oda-icon>
+                        <div style="margin: 8px;">Hidden {{cell.childrenCount}} cells</div>
+                    </div>
+                </div>
+            </div>
+            <div id="outputs" ~if="cell?.controls?.length && !cell?.hideCode && !cell?.hideOutput" class="info border" flex style="z-index: 1;">
+                <oda-jupyter-outputs-toolbar :icon-size="iconSize * .7" :cell ~show="selected" :cell-control="this"></oda-jupyter-outputs-toolbar>
+                <div class="vertical flex" style="overflow: hidden;">
+                    <div flex vertical ~if="!cell?.hideOutput" style="overflow: hidden;">
+                        <div ~for="cell?.controls" style="font-family: monospace;" >
+                            <oda-jupyter-cell-out ~for="($for.item.data || $for.item.text)" :row="$for.$for.item" :max="control?.maxRow" @down.stop @tap.stop :control></oda-jupyter-cell-out>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="pe-no-print horizontal left header flex" ~if="!cell?.hideOutput && showOutInfo" style="padding: 0 4px; font-size: small; align-items: center; font-family: monospace;">
+                <span style="padding: 9px;">{{outInfo}}</span>
+                <oda-button ~if="!showAllOutputsRow" :icon-size class="dark" style="margin: 4px; border-radius: 2px; cursor: pointer;" @tap="setOutputsStep($event, 1)">Show next {{maxOutputsRow.toLocaleString()}}</oda-button>
+                <oda-button ~if="!showAllOutputsRow" :icon-size class="dark" style="margin: 4px; border-radius: 2px; cursor: pointer;" @tap="setOutputsStep($event, 0)">Show all</oda-button>
+            </div>
+        </div>
+        <oda-jupyter-divider :cell></oda-jupyter-divider>
+
+    `,
+    async setProgress(progress) {
+        await this.$pdp.jupyter.setProgress(progress);
+    },
+    editMode: {
+        $def: false,
+        get() {
+            let mode = !this.$pdp.jupyter.readOnly && this.$pdp.jupyter.editMode && this.selected;
+            return mode;
+        },
+        set(n) {
+            this.$pdp.jupyter.editMode = n;
+        }
+    },
+    set cell(n) {
+        n.isFile = this.isFile;
+    },
+    get time() {
+        return this.cell?.time || undefined;
+    },
+    value: {
+        get() {
+            return this.cell.src || '';
+        },
+        set(n) {
+            this.cell.src = n;
+        }
+    },
+    $listeners:{
+        dblclick(e){
+            if (!this.readOnly && this.cell?.type === 'text') {
+                this.editMode = true;
+                //this.render();
+            }
+        },
+        click(e){
+            if (!this.readOnly && !this.value && this.cell?.type === 'text') {
+                this.editMode = true;
+                //this.render();
+            }
+        },
+        resize(e) {
+            this.control_height = undefined;
+            this.cell_height = undefined;
+        }
+    },
+    onChange(e) {
+        this.value = e.detail.value;
+    },
+    progressStyle() {
+        return `--progress: ${this.$pdp.jupyter.progress}`;
+    },
+    showProgress: false,
+    get outputs(){
+        this.control = undefined;
+        return this.cell?.controls?.slice(0, this.maxOutputsRow * (this.outputsStep + 1)) || [];
+    },
+    get maxOutputsRow() {
+        return this.control?.maxRow;
+    },
+    get outInfo() {
+        return `Blocks: ${this.showAllOutputsRow ? this.cell.outputs.length.toLocaleString() : Math.round(this.maxOutputsRow * (this.outputsStep + 1)).toLocaleString()} of ${this.cell?.outputs?.length.toLocaleString()}`;
+    },
+    get showOutInfo() {
+        return this.cell?.outputs?.length > this.maxOutputsRow;
+    },
+    get _value() {
+        return `<b style="margin: 4px; cursor: pointer; align-self: center;"><u>Empty ${this.cell?.type}</u></b> <gray>(click for edit...)</gray>`
+    },
+    showProgress: false,
+    get outputs() {
+        this.control = undefined;
+        return this.cell?.controls?.slice(0, this.maxOutputsRow * (this.outputsStep + 1)) || [];
+    },
+    blink: {
+        $def: false,
+        set(n) {
+            if (n && !this.fn) {
+                this.$pdp.jupyter.debounce('blink', () => {
+                    this.blink = false;
+                }, 100)
+            }
+        }
+    },
+    selected: {
+        $def: false,
+        get() {
+            return !this.readOnly && (this.$pdp.focusedCell === this.cell/* || this.focusedCell?.id === this.cell?.id*/);
+        }
+    },
+    raised: {
+        $def: false,
+        $attr: true,
+        get() {
+            return this.selected;
+        }
+    },
+    focused: {
+        $def: false,
+        // $attr: true,
+        get() {
+            return this.selected;
+        }
+    },
+    get control() {
+        return this.$('#control') || undefined;
+    },
+    get outInfo() {
+        return `Blocks: ${this.showAllOutputsRow ? this.cell.outputs.length.toLocaleString() : Math.round(this.maxOutputsRow * (this.outputsStep + 1)).toLocaleString()} of ${this.cell?.outputs?.length.toLocaleString()}`;
+    },
+    get showOutInfo() {
+        return this.cell?.outputs?.length > this.maxOutputsRow;
+    },
+    get editor() {
+        return this.$pdp.editors[this.cell.type]?.editor ?? this.$pdp.editors.text.editor;
+    },
+    get isFile() {
+        return this.$pdp.editors[this.cell.type]?.isFile;
+    },
+    get expanderIcon() {
+        return this.cell.collapsed ? 'icons:chevron-right' : 'icons:expand-more';
+    },
+    get childIcon() {
+        return this.cell.childCodes.length ? 'av:play-circle-outline' : 'bootstrap:text-left';
+    },
+    get icon() {
+        return this.fn ? 'av:stop' : 'av:play-circle-outline';
+    },
+    fn: null,
+    focus() {
+        this.async(() => {
+            this.$('#control').focus();
+        }, 300)
+    },
+    // set scrollCancel(n){
+    //     if (n){
+    //         this.async(()=>{
+    //             this.scrollCancel = false;
+    //         }, 500)
+    //     }
+    // },
+    scrollToCell(forward = undefined, toTop) {
+        // if(this.scrollCancel){
+        //     this.scrollCancel = false;
+        //     return;
+        // }
+        const jupyter = this.$pdp.jupyter;
+        this.async(() => {
+            if (toTop) {
+                this.scrollIntoView(true);
+                return;
+            }
+            switch (forward) {
+                case true: {
+                    if (jupyter.scrollTop + jupyter.offsetHeight / 2 > this.offsetTop)
+                        return;
+                    if ((this.offsetTop + this.offsetHeight) >= Math.floor(jupyter.scrollTop + jupyter.offsetHeight)) {
+                        if (this.offsetHeight > jupyter.offsetHeight && this.previousElementSibling?.offsetHeight < jupyter.offsetHeight / 2) {
+                            this.previousElementSibling.scrollIntoView(true);
+                        }
+                        else
+                            this.scrollIntoView(this.offsetHeight > jupyter.offsetHeight);
+                    }
+                } break;
+                case false: {
+                    if (jupyter.scrollTop + jupyter.offsetHeight / 2 < this.offsetTop + this.offsetHeight)
+                        return;
+                    if (this.offsetTop <= Math.ceil(jupyter.scrollTop)) {
+                        if (this.previousElementSibling?.offsetHeight < jupyter.offsetHeight / 3)
+                            this.previousElementSibling.scrollIntoView(true);
+                        else
+                            this.scrollIntoView(true);
+                    }
+                } break;
+                default: {
+                    this.scrollIntoView(true);
+                }
+            }
+        }, 300)
+    },
+    async run(){
+        try{
+            this.cell.hideOutput = false;
+            this.cell.outputs = [];
+            this.cell.controls = undefined;
+            // this.cell.hideCode = false;
+            this.blink =  true;
+            this.showProgress = true;
+            this.checkBreakpoints();
+            this.scrollToBlockEnd();
+            let outs = this.$$('oda-jupyter-cell-out');
+            if (outs?.length) {
+                outs.forEach(i => i.showAll = false);
+            }
+            await this.auto_run();
+        }
+        finally {
+            this.notebook?.change();
+            this.cell?.next?.clearTimes();
+            this.showProgress = false;
+            this.scrollToBlockEnd();
+            this.blink = false;
+        }
+    },
+    async auto_run(autorun) {
+        if (this.fn) {
+            this.fn = null;
+            this.$pdp.jupyter.stop = true;
+            return;
+        }
+        this.$pdp.jupyter.stop = false;
+        // const task = ODA.addTask();
+        await new Promise(resolve =>{
+            this.async(async () => {
+                try {
+                    for (let code of this.$pdp.notebook.codes) {
+                        if (code.id === this.cell.id) break;
+                        if (code.time) continue;
+                        const cellControl = this.$pdp.jupyter.getCell(code.id);
+                        if (code.hideCode && !cellControl.showProgress) continue;
+                        cellControl.checkBreakpoints();
+                        await code.execute(cellControl.control);
+                    }
+                    await this.cell.execute(this);
+
+                }
+                finally {
+                    // ODA.removeTask(task);
+                    resolve();
+                    this.$pdp.jupyter.progress = 0;
+                    this.async(()=>{
+                        this.render();
+                    })
+                }
+            }, 100)
+
+        })
+        // await this.render();
+            // this.async(async () => {
+
+            // }, 50)
+    },
+    checkBreakpoints() {
+        let cell = this.cell;
+        cell.srcWithBreakpoints = '';
+        if (cell.hideCode || !cell.breakpoints)
+            return;
+        const control = this.control,
+            session = control?.session;
+        if (!session)
+            return;
+        let src = '';
+        const breakpoints = cell.breakpoints.split(' '),
+            obj = {};
+        breakpoints.map(i => obj[i - 1] = true);
+        session.doc.getAllLines().map((i, idx) => {
+            if (obj[idx]) {
+                if (i?.trim().startsWith('>')) {
+                    i= i.trim();
+                    let count = 0;
+                    while(i[0] === '>') {
+                        count += 1;
+                        i = i.slice(1);
+                    }
+                }
+                src += 'debugger;\n' + i + '\n';
+            } else {
+                src += i + '\n';
+            }
+        })
+        cell.srcWithBreakpoints = src;
+    },
+    scrollToBlockEnd() {
+        this.async(() => {
+            let block = this.$('#block');
+            let visibleTop = this.$pdp.jupyter.scrollTop,
+                visibleBottom = visibleTop + this.$pdp.jupyter.offsetHeight,
+                blockBottom = this.offsetTop + block.offsetHeight;
+            if (blockBottom >= visibleTop && blockBottom <= visibleBottom)
+                return;
+            this.$pdp.jupyter.scrollTop = blockBottom - this.$pdp.jupyter.offsetHeight + 128;
+        })
+    },
+    setOutputsStep(e, sign) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.outputsStep += sign;
+        if (this.outputsStep > this.cell?.outputs?.length / this.maxOutputsRow - 1 || sign === 0) {
+            this.outputsStep = this.cell.outputs.length / this.maxOutputsRow - 1;
+            this.showAllOutputsRow = true;
+        }
+    },
+    get expanderIcon() {
+        return this.cell.collapsed ? 'icons:chevron-right' : 'icons:expand-more';
+    },
+    showOutput() {
+        this.cell.hideOutput = false;
+        this.jupyter.$render();
+        this.notebook.change();
+    },
+    create(tag_name, props = {}){
+        return new JupyterProxyElement(tag_name, props = {});
+    }
+})
+
+class JupyterProxyElement{
+    #props = {};
+    #tag_name = '';
+    #elem = {};
+    constructor(tag_name, props = {}) {
+        this.#props = props;
+        this.#tag_name = tag_name;
+        return new Proxy(this,  {
+            get(target, p) {
+                if (p !== 'constructor') {
+                    return target.elem?.[p] || target[p];
+                }
+            },
+            set(target, p, value) {
+                target[p] = value;
+                if (target.elem)
+                    target.elem[p] = value;
+                return true;
+            }
+        })
+    }
+    get tag_name() {
+        return this.#tag_name;
+    }
+    get elem() {
+        return this.#elem;
+    }
+    set elem(n) {
+        this.#elem = n;
+        for (p in this.#props)
+            this.elem[p] = p;
+    }
+}
+
+ODA({ is: 'oda-jupyter-divider',
+    template: /* html */ `
+        <style>
+            :host {
+                @apply --vertical;
+                justify-content: center;
+                opacity: {{!visible?0:1}};
+                position: relative;
+                z-index: 1;
+            }
+            :host(:hover) {
+                opacity: 1 !important;
+            }
+            oda-button {
+                font-size: 14px;
+                margin: -4px 4px 0 4px;
+                @apply --content;
+                @apply --border;
+                padding: 0px 4px 0px 0px;
+                border-radius: 4px;
+                opacity: 1;
+            }
+        </style>
+        <div class="pe-no-print horizontal center" style="z-index: 2">
+            <div horizontal ~for="$pdp.jupyter.editors">
+                <oda-button ~if="!readOnly" :icon-size icon="icons:add"  @tap.stop="add($for.key)">{{$for.key}}</oda-button>
+            </div>
+            <oda-button ~if="showInsertBtn()" :icon-size icon="icons:add" @tap.stop="insert" style="color: red; fill: red">Insert cell - {{showInsertBtn()}} </oda-button>
+        </div>
+    `,
+    cell: undefined,
+    get last() {
+        return this.$pdp.cell?.isLast;
+    },
+    get visible() {
+        if (!this.$pdp.cells?.length)
+            return true;
+        // if (this.$pdp.cell?.isLast)
+        //     return true;
+        return false
+    },
+    add(key) {
+        this.$pdp.jupyter.isMoveCell = (this.$pdp.jupyter.isMoveCell || 0) + 1;
+        this.$pdp.focusedCell = this.$pdp.notebook.add(this.cell, key);
+    },
+    showInsertBtn() {
+        return !this.readOnly && JSON.parse(top._jupyterCellData || '[]')?.length;
+    },
+    insert() {
+        const cells = JSON.parse(top._jupyterCellData || '[]');
+        this.$pdp.focusedCell = this.$pdp.cell;
+        let lastCell;
+        cells.map(i => {
+            this.$pdp.jupyter.isMoveCell = (this.$pdp.jupyter.isMoveCell || 0) + 1;
+            lastCell = this.$pdp.notebook.add(lastCell || this.$pdp.cell, '', i);
+            lastCell.id = lastCell.metadata.id = getID();
+        })
+        this.$pdp.focusedCell ||= lastCell;
+        top._jupyterCellData = undefined;
+    }
+})
+
+ODA({ is: 'item-tree-jupyter', imports: '~/lib//tree.js', extends: 'this, item-tree',
+    template: `
+        <div horizontal flex style="min-width: 240px; border-bottom: 1px solid var(--dark-2);">
+            <input flex ::value />
+            <oda-button icon="icons:delete" @tap="clearUrl"></oda-button>
+            <oda-button icon="icons:check" @tap="isOk"></oda-button>
+        </div>
+    `,
+    get value() {
+        return this.cell.url || '';
+    },
+    set value(v) {
+        this.cell.url = v;
+    },
+    cell: undefined,
+    clearUrl() {
+        this.cell.url = '';
+    },
+    isOk() {
+        this.cell.url = this.value;
+        this.parentElement.close();
+    }
+})
+
+ODA({ is: 'oda-jupyter-toolbar', // imports: 'oda/tools/containers/containers, oda/tools/property-grid/property-grid',
+    template:/* html */ `
+        <style>
+            :host{
+                position: sticky;
+                top: 20px;
+                z-index: {{cells.length + 2}};
+            }
+            .top {
+                @apply --horizontal;
+                @apply --no-flex;
+                @apply --content;
+                @apply --raised;
+                position: absolute;
+                right: 8px;
+                padding: 1px;
+                border-radius: 4px;
+                margin-top: -10px;
+            }
+            oda-button{
+                 border-radius: 4px;
+            }
+        </style>
+        <div class="pe-no-print top" ~if="!readOnly">
+            <oda-button ~if="cell?.isFile" :icon-size icon="bootstrap:filetype-js" @tap.stop="setURL"></oda-button>
+            <oda-button :disabled="!cell.prev" :icon-size icon="icons:arrow-back:90" @tap.stop="move(-1)"></oda-button>
+            <oda-button :disabled="!cell.next" :icon-size icon="icons:arrow-back:270" @tap.stop="move(1)"></oda-button>
+            <oda-button :icon-size icon="icons:delete" @tap.stop="deleteCell"></oda-button>
+            <oda-button :icon-size icon="icons:content-copy" @tap.stop="copyCell" ~style="{fill: isCopiedCell ? 'red' : ''}"></oda-button>
+            <oda-button ~if="cell.type!=='code'" allow-toggle ::toggled="editMode"  :icon-size :icon="editMode?'icons:close':'editor:mode-edit'"></oda-button>
+            <oda-button ~if="cell?.type === 'code'" :icon-size :icon="iconEye" title="Hide/Show code" @tap.stop="toggleShowCode"></oda-button>
+        </div>
+    `,
+    async setURL(e) {
+        const currentTarget = e.currentTarget;
+        const $root = await WORK.get_item('/root/doc');
+        const menu = ODA.createElement('item-tree-jupyter',
+            {
+                $item:  $root,
+                hideTops: 1,
+                hideRoots: 2,
+                cell: this.cell,
+                execute(item) {
+                    this.parentElement.close(item);
+                }
+            }
+        )
+        const item = await WORK.showDropdown(menu, { TITLE: { label: 'Select file - *.js' } }, currentTarget);
+        if (item) {
+            this.cell.url = item.url;
+        }
+    },
+    get iconEye() {
+        return this.cell.hideCode ? 'bootstrap:eye-slash' : 'bootstrap:eye';
+    },
+    toggleShowCode() {
+        this.control.hideCode = this.cell.hideOutput = !this.cell.hideOutput;
+        this.$pdp.jupyter.render();
+        this.$pdp.notebook.change();
+    },
+    move(direction) {
+        let top = this.$pdp.jupyter.scrollTop;
+        let id = this.cell.id;
+        if (direction < 0) {
+            top -= this.host.previousElementSibling?.offsetHeight
+        }
+        else if (direction > 0) {
+            top += this.host.nextElementSibling?.offsetHeight
+        }
+        this.$pdp.jupyter.isMoveCell = (this.$pdp.jupyter.isMoveCell || 0) + 1;
+        this.cell.move(direction);
+        this.$pdp.jupyter.scrollTop = top;
+        this.async(() => {
+            this.$pdp.jupyter.focusedCell = this.$pdp.jupyter.getCell(id)?.cell;
+        }, 10)
+    },
+    cell: null,
+    iconSize: 16,
+    deleteCell() {
+        if (!window.confirm(`Delete cell?`)) return;
+        let id = null;
+        if (this.cell.prev) {
+            id = this.cell.prev.id;
+        }
+        else if (this.cell.next) {
+            id = this.cell.next.id;
+        }
+        this.$pdp.jupyter.isMoveCell = (this.$pdp.jupyter.isMoveCell || 0) + 1;
+        this.cell.delete();
+        this.async(() => {
+            this.$pdp.jupyter.focusedCell = this.$pdp.jupyter.getCell(id)?.cell;
+        }, 10)
+    },
+    control: null,
+    showSettings(e) {
+        ODA.showDropdown('oda-property-grid', { inspectedObject: this.control, filterByFlags: '' }, { minWidth: '480px', parent: e.target, anchor: 'top-right', align: 'left', title: 'Settings', hideCancelButton: true })
+    },
+    get isCopiedCell() {
+        let cells = JSON.parse(top._jupyterCellData || '[]');
+        return cells.find(i => i.metadata.id === this.cell.metadata.id);
+    },
+    copyCell() {
+        let cell,
+            cells = JSON.parse(top._jupyterCellData || '[]');
+        if (cells?.length) {
+            cell = cells.find(i => i.metadata.id === this.cell.metadata.id);
+            if (cell) {
+                cells = cells.filter(i => i.metadata.id !== this.cell.metadata.id);
+                if (cells.length === 0) {
+                    top._jupyterCellData = this.isCopiedCell = undefined;
+                } else {
+                    top._jupyterCellData = JSON.stringify(cells);
+                    this.isCopiedCell = undefined;
+                }
+            }
+        }
+        if (!cell) {
+            cells.push(this.cell.data);
+            top._jupyterCellData = JSON.stringify(cells);
+        }
+        this.$pdp.jupyter.render();
+    }
+})
+
+ODA({ is: 'oda-jupyter-outputs-toolbar',
+    template: /* html */ `
+        <style>
+            :host{
+                opacity: .5;
+                position: sticky;
+                top: 20px;
+                z-index: 9;
+                display: block;
+            }
+            :host(:hover){
+                opacity: 1;
+            }
+            .top {
+                @apply --horizontal;
+                @apply --no-flex;
+                @apply --content;
+                @apply --raised;
+                right: 8px;
+                position: absolute;
+                padding: 1px;
+                border-radius: 4px;
+                margin-top: 4px;
+            }
+            oda-button{
+                 border-radius: 4px;
+            }
+        </style>
+        <div class="pe-no-print top info border" ~if="cell?.outputs?.length || cell?.controls?.length">
+            <oda-button :icon-size icon="carbon:up-to-top" title="scroll to Up" @tap="scrollUp"></oda-button>
+            <oda-button :icon-size icon="carbon:down-to-bottom" title="scroll to Down" @tap="scrollDown"></oda-button>
+            <oda-button :icon-size icon="icons:clear" @tap="clearOutputs" title="Clear outputs"></oda-button>
+        </div>
+    `,
+    cell: null,
+    cellControl: null,
+    iconSize: 16,
+    clearOutputs() {
+        this.cell.hideOutput = true;
+        this.cell.outputs = [];
+        this.cell.controls = undefined;
+        // this.host.scrollToCell();
+    },
+    scrollUp() {
+        this.parentElement.scrollIntoView({ block: "start" });
+    },
+    scrollDown() {
+        const outs = this.cellControl.$$('oda-jupyter-cell-out');
+        if (outs?.length) {
+            outs.map(i => {
+                i.showAll = true;
+            })
+        }
+        this.async(() => {
+            this.parentElement.scrollIntoView({ block: "end" });
+        }, 100)
+    }
+})
+
+const AsyncFunction = async function () { }.constructor;
+ODA({ is: 'oda-jupyter-code-editor', imports: 'oda//code-editor',
+    template: /* html */`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --flex;
+                position: relative;
+            }
+            .sticky{
+                cursor: pointer;
+                position: sticky;
+                top: 0px;
+            }
+            oda-button:hover{
+                border-radius: 50%;
+                @apply --active;
+            }
+            oda-code-editor {
+                opacity: 1;
+                filter: unset;
+
+            }
+            .err {
+                cursor: pointer;
+                color: red;
+                opacity: 0;
+                font-size: larger;
+                font-weight: bold;
+            }
+            .err:hover {
+                opacity: 1;
+            }
+        </style>
+        <div  class="horizontal"  style="min-height: 64px;">
+            <oda-code-editor :scroll-calculate="$pdp.jupyter_height - 24" :wrap ~if="!hideCode" show-gutter :read-only @change-cursor="on_change_cursor" @change-breakpoints="on_change_breakpoints" @keypress="_keypress" mode="javascript" font-size="12" class="flex" max-lines="Infinity" @change="editorValueChanged" @pointerdown="on_pointerdown" enable-breakpoints sticky-search use-global-find :highlight-active-line="showCursor" :show-cursor :src offset_h_scroll></oda-code-editor>
+            <div dimmed ~if="hideCode" class="horizontal left content flex" style="cursor: pointer; padding: 8px 4px;" @dblclick="hideCode=false">
+                <oda-icon icon="bootstrap:eye-slash" style="align-self: baseline; cursor: pointer;" @tap="hideCode = false"></oda-icon>
+                <h1 flex  vertical style="margin: 0px 16px; font-size: large; cursor: pointer; text-overflow: ellipsis;" ~html="cell.name +'... <u disabled style=\\\'font-size: x-small; right: 0px;\\\'>(Double click to show...)</u>'" ></h1>
+            </div>
+        </div>
+        <div ~if="syntaxError"  border vertical style="padding: 4px; z-index: 1;">
+            <div border style="padding: 4px; font-family: monospace; white-space: pre" border error style="white-space: pre-wrap" ~html="syntaxError"></div>
+        </div>
+        
+
+    `,
+    src: '',
+    set cell(n) {
+        this.src = n?.data?.source;
+        n.listen('cell-source-load', (e) => {
+            this.src = e?.detail?.value?.data?._urlSource;
+        })
+    },
+    on_pointerdown(e) {
+        this.host.scrollCancel = true;
+        this.ace?.focus();
+    },
+    on_change_cursor(e) {
+        if (this.$pdp.jupyter.isMoveCell)
+            return;
+        this.showCursor = true;
+        let range = this.ace?.getSelectionRange();
+        try {
+            if (this.cell.lastRange) {
+                let currentRow = range.start.row;
+                let lastRow = this.cell.lastRange.start.row;
+                if (currentRow === lastRow) return;
+
+                this.throttle('scrollToCursor', () => {
+                    this.scrollToCursor(currentRow);
+                }, 10)
+            }
+        }
+        finally {
+            this.cell.lastRange = range;
+        }
+    },
+    scrollToCursor(currentRow, shift = 1) {
+        let h = this.editor.lineHeight;
+        let lineTop = this.host.offsetTop + currentRow * h;
+        let lineBottom = this.host.offsetTop + (currentRow + 1) * h;
+        let visibleTop = this.$pdp.jupyter.scrollTop;
+        let visibleBottom = this.$pdp.jupyter.scrollTop + this.$pdp.jupyter.offsetHeight;
+        let needScrollUp = lineTop < visibleTop + h;
+        let needScrollDown = lineBottom > visibleBottom - h;
+        if (needScrollUp) {
+            let targetScroll = Math.max(0, lineTop - h * shift);
+            this.$pdp.jupyter.scrollTop = targetScroll;
+        } else if (needScrollDown) {
+            let targetScroll = lineBottom - this.$pdp.jupyter.offsetHeight + h * shift;
+            this.$pdp.jupyter.scrollTop = targetScroll;
+        }
+    },
+    on_change_breakpoints(e) {
+        this.cell.breakpoints = e.detail.value;
+    },
+    get syntaxError() {
+        let error = this.editor?.editor?.session?.getAnnotations();
+        error = error?.filter((e, i) => {
+            if (e.type !== 'error') return false;
+            if (this.$pdp.jupyter?.notebook?.data?.hiddenErrors?.some(s => s.startsWith(e.text.replace(/\s*from\s*line\s*\d*\s*/gm, '')))) return false;
+            if (e.text.startsWith('Expected an identifier and instead saw \'>')) return false;
+            if (e.text.startsWith('Unexpected early end of program.')) return false;
+            if (e.text.startsWith('Missing ";" before statement')) return false;
+            if (e.text.startsWith(`Expected an identifier and instead saw '='.`) && error[i + 1]?.text.startsWith(`Unexpected '{a}'.`)) return false;
+            if (e.text.startsWith(`Unexpected '{a}'.`) && error[i - 1]?.text.startsWith(`Expected an identifier and instead saw '='.`)) return false;
+            return true;
+        }).map(err => {
+            return `<span class="err" onclick="_hideError(this)">  x  </span><span>${err.text}</span><u row="${err.row}" column="${err.column}" onclick="_findErrorPos(this)" style="cursor: pointer; color: -webkit-link">(${err.row + 1}:${err.column})</u>`
+        }).join('\n');
+        if (error)
+            error = '<span style="padding: 2px; font-size: large; margin-bottom: 4px; white-space: pre-wrap;">SyntaxError:</span><br>' + error;
+        return error;
+    },
+    get editor() {
+        return this.$('oda-code-editor');
+    },
+    get ace() {
+        return this.editor?.editor;
+    },
+    get session() {
+        return this.ace?.session;
+    },
+    focus() {
+        this.ace?.focus();
+    },
+    _keypress(e) {
+        if (e.ctrlKey && e.keyCode === 10) {
+            this.host.run();
+        }
+    },
+    editorValueChanged(e) {
+        this.syntaxError = undefined;
+        this.cell.src = e.detail.value;
+        this.fire('resize');
+        this.debounce('erros', () => {
+            this.syntaxError = undefined;
+            this.render();
+        }, 700)
+    },
+    $listeners: {
+        resize(e) {
+            this.async(() => {
+                if (this.editor) {
+                    this.editor.gutterWidth = undefined;
+                    this.editor?.editor?.resize?.();
+                }
+            })
+        }
+    },
+    // $public: {
+        autoRun: {
+            $type: Boolean,
+            get() {
+                return this.cell?.autoRun;
+            },
+            set(n) {
+                this.cell.autoRun = n;
+            }
+        },
+        wrap: {
+            $def: false,
+            get() {
+                return this.cell?.readMetadata('wrap', false)
+            },
+            set(n) {
+                this.cell?.writeMetadata('wrap', n)
+            }
+        },
+        hideCode: {
+            $def: false,
+            get() {
+                return this.cell?.hideCode
+            },
+            set(n) {
+                this.cell.hideCode = n;
+                this.editor = undefined;
+                this.setBreakpoints();
+            }
+        },
+        get maxRow() {
+            // // $group: 'output',
+            // $pdp: true,
+            // $def: 50,
+            // get(){
+            //     return this.cell?.readMetadata('maxRow', 50)
+            // },
+            // set(n){
+            //     this.cell?.writeMetadata('maxRow', n)
+            // }
+            return this.$pdp.maxOutputRows;
+        },
+        clearHiddenErros: {
+            $def: '',
+            get() {
+                let l = this.$pdp.jupyter?.notebook?.data?.hiddenErrors?.length;
+                return l ? l + ' hidden errors' : '';
+            },
+            set(n) {
+                let l = this.$pdp.jupyter?.notebook?.data?.hiddenErrors?.length;
+                if (l && l !== l + ' hidden errors') {
+                    this.$pdp.jupyter.notebook.clearHiddenErrors();
+                }
+            }
+        },
+    // },
+    get scrollCalculate() {
+        return this.$pdp.jupyter.offsetHeight - 24;
+    },
+    showCursor: false,
+    attached() {
+        this.setBreakpoints();
+        this.listen('change-breakpoints', () => this.setBreakpoints());
+        this.async(() => {
+            this.$pdp.jupyter.isMoveCell = 1;
+            this.ace?.gotoLine(0, 0);
+        }, 1000)
+        this.$pdp.jupyter.listen('isMoveCell', (e) => {
+            this.async(() => {
+                this.src = this.value = this.cell?.src || '';
+            }, 100)
+        })
+    },
+    setBreakpoints() {
+        this.async(() => {
+            if (this.cell.breakpoints) {
+                this.editor?.setBreakpoints(this.cell.breakpoints, true);
+                this.render();
+            }
+        }, 700)
+    }
+})
+
+
+class JupyterNotebook extends Reactor {
+    data = { cells: [], hiddenErrors: [] };
+    isChanged = false;
+    name = 'NOTEBOOK';
+    icon = 'fontawesome:s-book';
+    url = '';
+
+    get cells() {
+        this.data.cells ||= [];
+        this._cellCache ??= new WeakMap();
+        return this.data.cells.map(cell => {
+            if (!this._cellCache.has(cell))
+                this._cellCache.set(cell, new JupyterCell(cell, this));
+            return this._cellCache.get(cell);
+        })
+    }
+    get codes() {
+        return this.cells.filter(i => i.type === 'code');
+    }
+    get items() {
+        return this.cells.filter(cell => cell.level === 0);
+    }
+    get label() {
+        return this.name;
+    }
+
+    constructor(url) {
+        super();
+        if (url) {
+            this.load(url);
+            this.name = url.split('/').pop();
+        }
+    }
+
+    async load(url) {
+        try {
+            let data = await fetch(url);
+            data = await data.json()
+            this.data = data;
+            // this._cellCache = new WeakMap();
+            this.data.cells.forEach(c => c.time = '');
+            this.url = url;
+            await this.loadCellSources();
+        } catch (err) {
+        } finally {
+            this.cells = undefined;
+            this.fire('ready');
+        }
+    }
+    save(url) {
+        //todo save
+        this.isChanged = false;
+    }
+    add(cell, cell_type = 'text', data) {
+        try {
+            data = data ? JSON.parse(data) : null;
+        } catch (err) { }
+        let id = getID();
+        if (data?.metadata) {
+            data.metadata.id = id;
+        }
+        data ||= {
+            cell_type,
+            source: '',
+            metadata: { id }
+        }
+        if (cell === undefined) {
+            this.data.cells.splice(0, 0, data);
+        } else {
+            const idx = cell.index + 1;
+            this.data.cells.splice(idx, 0, data);
+        }
+        this.cells = undefined;
+        this.async(() => {
+            this.change(true);
+        }, 100)
+        return this.cells.find(i => i.id === id);
+    }
+    addHiddenError(err) {
+        this.data.hiddenErrors ||= [];
+        this.data.hiddenErrors.add(err);
+        this.change();
+    }
+    clearHiddenErrors() {
+        this.data.hiddenErrors = [];
+        this.change();
+    }
+    change(add_new) {
+        this.isChanged = true;
+        this.fire('changed', add_new);
+    }
+    async loadCellSources() {
+        await Promise.all((this.data.cells || []).map(cell => this.loadCellSource(cell)));
+    }
+    async loadCellSource(cell) {
+        if (!cell?.isFile || (cell?.isFile && !cell?.url)) return;
+        try {
+            const response = await fetch(this.resolveCellUrl(cell.url));
+            if (!response.ok)
+                throw new Error(response.statusText);
+            this.setRuntimeCellSource(cell, await response.text());
+        } catch (err) {
+        }
+    }
+    setRuntimeCellSource(cell, source) {
+        if (!cell) return;
+        Object.defineProperty(cell, '_urlSource', {
+            value: source,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+        })
+    }
+    resolveCellUrl(url) {
+        url = new URL(url);
+        url = window.location.origin + url.pathname;
+        console.log(url);
+        return url;
+    }
+}
+
+class JupyterCell extends Reactor {
+    data = null;
+    notebook = null;
+    isRun = false;
+    _outputs = null;
+
+    get type() {
+        return this.data?.cell_type || 'text';
+    }
+    get items() {
+        return this.notebook.cells.filter(cell => cell.parent?.id === this.id);
+    }
+    get parent() {
+        let prev = this.prev;
+        while (prev && prev.level !== this.level - 1) {
+            prev = prev.prev;
+        }
+        return prev;
+    }
+    get name() {
+        const firstSource = this.src.trim().split('\n')[0];
+        let t = this.type;
+        switch (this.type) {
+            case 'text':
+            case 'markdown': return firstSource.substring(this.h).trim() || (t + ' [empty]');
+            case 'code': return firstSource ?? ' [empty]';
+        }
+        return '???';
+    }
+    get url() {
+        return this.isFile ? (this.data.url || '') : '';
+    }
+    set url(n) {
+        if (!this.isFile) return;
+        this.data.url = n;
+        this.notebook.loadCellSource(this.data).finally(() => {
+            this.fire('cell-source-load', this)
+            this.notebook.change();
+        })
+    }
+    get isFile() {
+        return this.data.isFile;
+    }
+    set isFile(n) {
+        this.data.isFile = n;
+    }
+    get time() {
+        return this.data.time;
+    }
+    set time(n) {
+        this.data.time = n;
+    }
+    get metadata() {
+        return this.data.metadata;
+    }
+    get id() {
+        return this.metadata?.id || getID();
+    }
+    get controls() {
+        return this.data?.controls || this.outputs;
+    }
+    set controls(n) {
+        this.outputs = n;
+        Object.defineProperty(this.data, 'controls', {
+            value: this.outputs,
+            enumerable: false,
+            configurable: true,
+            writable: false,
+        });
+    }
+    get autoRun() {
+        return this.readMetadata('autoRun', false);
+    }
+    set autoRun(n) {
+        this.writeMetadata('autoRun', n);
+    }
+    get outputs() {
+        return this._outputs || this.data?.outputs || [];
+    }
+    set outputs(n) {
+        this._outputs = n;
+        if (n && Array.isArray(n)) {
+            this.data.outputs = [];
+            n.map(item => {
+                if (item.data && typeof item.data === 'object') {
+                    for (const key in item.data) {
+                        const newItem = { data: {} };
+                        if (item.data[key] instanceof HTMLElement) {
+                            newItem.data[key] = 'HTMLElement ...';
+                        } else {
+                            newItem.data[key] = item.data[key];
+                        }
+                        this.data.outputs.push(newItem);
+                    }
+                }
+            });
+            this.notebook.change();
+        }
+    }
+    get sources() {
+        if (this.isFile)
+            return [this.data._urlSource || ''];
+        return this.data?.source || [];
+    }
+    get src() {
+        return Array.isArray(this.sources) ? this.sources.join('') : this.sources;
+    }
+    set src(n) {
+        this.data.source = this.isFile ? [''] : [n];
+        this.notebook.change();
+        if (this.type !== 'code') return;
+        this.clearTimes();
+    }
+    get breakpoints() {
+        return this.data.breakpoints;
+    }
+    set breakpoints(n) {
+        this.data.breakpoints = n || '';
+        this.notebook.change();
+        this.fire('change-breakpoints');
+        this.clearTimes();
+    }
+    clearTimes(all = false) {
+        let clear = all;
+        for (let cell of this.notebook.cells) {
+            if (cell === this)
+                clear = true;
+            if (clear && cell.type === 'code')
+                cell.status = cell.time = undefined;
+        }
+    }
+    get collapsed() {
+        return this.metadata?.collapsed;
+    }
+    set collapsed(n) {
+        this.writeMetadata('collapsed', n);
+    }
+    get __expanded__() {
+        return !this.collapsed;
+    }
+    set __expanded__(n) {
+        this.collapsed = !n;
+    }
+    readMetadata(attr, def = '') {
+        return this.metadata?.[attr] ?? def;
+    }
+    writeMetadata(attr, val) {
+        this.data.metadata ??= Object.create(null);
+        this.data.metadata[attr] = val;
+        this.notebook.change();
+    }
+    get childrenCount() {
+        let next = this.next;
+        let cnt = 0;
+        while (next && next.level > this.level) {
+            cnt++;
+            next = next.next;
+        }
+        return cnt;
+    }
+    get index() {
+        return this.notebook.cells.indexOf(this);
+    }
+    get prev() {
+        return this.notebook.cells[this.index - 1];
+    }
+    get next() {
+        return this.notebook.cells[this.index + 1];
+    }
+    get allowExpand() {
+        return (this.h && this.next && (this.next?.h > this.h || !this.next?.h));
+    }
+    get status() {
+        return this.data.state || undefined;
+    }
+    set status(n) {
+        this.data.state = n;
+    }
+    get h() {
+        let h = this.sources[0]?.trim().toLowerCase();
+        if (h?.startsWith('#')) {
+            let i = -1;
+            while (h[++i] === '#' && i < 7) { }
+            return i;
+        }
+        return 0;
+    }
+    get level() {
+        let prev = this.prev;
+        while (prev) {
+            if (this.h === 1) return 0;
+            if (this.h === 0) {
+                if (prev.h) return prev.level + 1;
+                return prev.level;
+            } else {
+                if (prev.h && prev.h < this.h) return prev.level + 1;
+            }
+            prev = prev.prev;
+        }
+        return 0;
+    }
+    get childCodes() {
+        let next = this.next;
+        const codes = [];
+        while (next && next.h > this.h) {
+            if (next.type === 'code')
+                codes.push(next);
+            next = next.next;
+        }
+        return codes;
+    }
+    get hideCode() {
+        return this.readMetadata('hideCode') || false;
+    }
+    set hideCode(n) {
+        this.writeMetadata('hideCode', n);
+        this.hideOutput = n;
+    }
+    get hideOutput() {
+        return this.readMetadata('hideOutput') || false;
+    }
+    set hideOutput(n) {
+        this.writeMetadata('hideOutput', n);
+    }
+    get hidden() {
+        let prev = this.prev;
+        while (prev && prev.level >= this.level) {
+            prev = prev.prev;
+        }
+        return prev?.collapsed || prev?.hidden;
+    }
+    delete() {
+        const cell = this.notebook.data.cells.splice(this.index, 1)[0];
+        if (!cell) return;
+        this.clearTimes();
+        this.notebook.change();
+    }
+    move(direct) {
+        direct = this.index + direct;
+        const cell = this.notebook.data.cells.splice(this.index, 1)[0];
+        if (!cell) return;
+        this.notebook.data.cells.splice(direct, 0, cell);
+        this.clearTimes();
+        this.notebook.change();
+    }
+    get isLast() {
+        return this.notebook.cells.last === this;
+    }
+
+    constructor(data, notebook) {
+        super();
+        this.notebook = notebook;
+        this.data = data;
+    }
+
+    async execute(cell) {
+        if (!cell) return;
+        let jupyter = cell.jupyter || cell.$pdp?.jupyter;
+        this.hideOutput = false;
+        this.time = '';
+        this.status = '';
+        this.isRun = true;
+        try {
+            run_context.output_data = jupyter.output_data = [];
+            this.code = undefined;
+            cell.fn = new AsyncFunction('JUPYTER', this.code);
+            cell.blink = true;
+
+            let startTime = performance.now();
+            let res = await cell.fn.call(cell, jupyter);
+            let elapsed = performance.now() - startTime;
+            let time_str = '';
+            let minutes = Math.floor(elapsed / 60000);
+            if (minutes) {
+                time_str += minutes + ' m\n';
+            }
+            let seconds = Math.floor((elapsed % 60000) / 1000);
+            if (time_str || seconds) {
+                time_str += seconds + ' s\n';
+            }
+            let milliseconds = Math.floor(elapsed % 1000);
+            time_str += milliseconds + ' ms';
+            this.time = time_str;
+
+            if (res) {
+                jupyter.output_data.push({ 'text/plain': res });
+            }
+        }
+        catch (e) {
+            let error = '<span bold style=\'padding: 2px; font-size: large; margin-bottom: 4px; white-space: pre-wrap;\'>' + e.toString() + '</span>';
+            jupyter.output_data.push({ 'html/text': '<div style="padding: 4px;" border error>' + error + '</div>' });
+            this.status = 'error';
+            this.time = '0 ms';
+        }
+        finally {
+            this.controls = jupyter.output_data.map(val => ({ data: val }));
+            this.isRun = false;
+            run_context.output_data = [];
+            cell.fn = null;
+        }
+
+    }
+    get code() {
+        let src = this.srcWithBreakpoints || this.src;
+        let code = src.replace(/import\s+([\"|\'])(\S+)([\"|\'])/gm, 'await import($1$2$3)');
+        code = code.replace(/import\s+(\{.*\})\s*from\s*([\"|\'])(\S+)([\"|\'])/gm, '__v__ =  $1 = await import($2$3$4); for(let i in __v__) run_context.i = __v__[i]');
+        // code = code.replace(/(import\s*\()/gm, ' ODA.$1');
+        code = code.replace(/^\s*print\s*\((.*)\)/gm, ' log($1)');
+        code = code.replace(/^\s*runNext\s*\((.*)\)/gm, `
+    this.$pdp.jupyter.fire("cell-action-run-next", this.cell);
+        `);
+        code = code.split('\n').map(row => {
+
+            let s = row.trim();
+            if (s[0] === '[' || s[0] === '{')
+                s = ';' + s;
+            let cnt = 0;
+            while (s[0] === '>') {
+                cnt++;
+                s = s.slice(1);
+            }
+            if (cnt) {
+                cnt = s.lastIndexOf('//')
+                if (cnt > 0)
+                    s = s.substring(0, cnt);
+                cnt = s.lastIndexOf('/*')
+                if (cnt > 0)
+                    s = s.substring(0, cnt);
+                if (s.match(/(^'*')|(^"*")/g)) {
+                    s = s.substring(1, s.length - 1);
+                    s = s.replaceAll('"', '\\\"');
+                    s = 'log(\"<div style=\'cursor: pointer\' onclick=\'_findCodeEntry(this)\'>' + s + '</div>\")';
+                }
+                else {
+                    cnt = s.lastIndexOf(';')
+                    if (cnt > 0)
+                        s = s.substring(0, cnt);
+                    s = 'log(\"<label bold onclick=\'_findCodeEntry(this)\' style=\'text-decoration: underline; padding: 2px; font-size: large; margin-bottom: 4px; cursor: pointer; color: -webkit-link\'>' + s.replaceAll('"', '\\\"') + '</label>\\\n\", ' + s + ')';
+                }
+                row = s;
+            }
+            return row;
+        }).join('\n');
+        code = `try{
+${code}
+        }catch(e){
+            let idx = e.stack.indexOf('<anonymous>:');
+            if(idx>-1){
+                  let stack = e.stack;
+                stack = stack.split('<anonymous>:')[1] || '';
+                stack = stack.split(')')[0] || ''
+                stack = stack.split(':');
+                let row = (stack[0] || 0) - 3;
+                let column = stack[1];
+                let mess = e.stack + \` <u row="\$\{row-1\}" column="\$\{column\}" onclick="_findErrorPos(this)" style="cursor: pointer; color: -webkit-link">(\$\{row\}:\$\{column\})</u>\`
+                throw new Error(mess)
+            }
+            throw new Error(e.stack)
+        }`;
+        return code;
+    }
+}
+function getID() {
+    return Math.floor(Math.random() * Date.now()).toString(16);
+}
+window._findCodeEntry = async (e) => {
+    // const text = '>'+e.innerText;
+    const text = e.innerText;
+
+    const cellElement = e.parentElement.host
+    const codeEditor = cellElement.control?.$('oda-code-editor');
+    const aceEditor = codeEditor.editor;
+    const row = aceEditor.session.doc.$lines.findIndex(r => r.trim().startsWith('>') && r.includes(text));
+    const range = new ace.Range(row, 1000, row, 0);
+    aceEditor.session.selection.setRange(range);
+    aceEditor.focus();
+}
+window._findErrorPos = async (e) => {
+    const row = +e.getAttribute('row');
+    const column = +e.getAttribute('column');
+
+    let cellElement = e.parentElement;
+    while (cellElement && !cellElement.host) {
+        cellElement = cellElement.parentElement;
+    }
+    cellElement = cellElement.host
+    const codeEditor = cellElement.control?.$('oda-code-editor') || cellElement.$('oda-code-editor');
+    const aceEditor = codeEditor.editor;
+    const range = new ace.Range(row, 0, row, column);
+    aceEditor.session.selection.setRange(range);
+    aceEditor.focus();
+}
+window._hideError = async (e) => {
+    let cellElement = e.parentElement;
+    while (cellElement && !cellElement.host) {
+        cellElement = cellElement.parentElement;
+    }
+    cellElement = cellElement.host
+    cellElement.$pdp.jupyter.notebook.addHiddenError(e.nextElementSibling.innerText.replace(/\s*from\s*line\s*\d*\s*/gm, ''));
+}
+window.addEventListener('keydown', e => {
+    if (e.code === 'KeyR' && e.ctrlKey) {
+        e.stopPropagation();
+        e.preventDefault();
+        e.target?.command_replace?.();
+    }
+}, true)

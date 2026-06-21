@@ -1,0 +1,49 @@
+<meta charset="utf-8">
+
+<body style="overflow: hidden">
+    <!-- <oda-tester> -->
+    <oda-hexagon-layout id="hex" icon-size="30" allow-delete></oda-hexagon-layout>
+    <!-- </oda-tester> -->
+
+</body>
+
+
+<script type="module">
+    import '/oda//oda.js';
+    import './hexagon-layout.js';
+    setTimeout(() => {
+        hex.tops = hex.items ??= [
+            // {
+            //     x: 8, y: 5, is: 'input', label: 'А это input inputinputinputinputinputinput input', props: {
+            //         icon: 'odant:base', iconSize: 50,
+            //     }
+            // },
+            // {
+            //     x: 3, y: 3, is: 'oda-icon', label: 'А это супер-пупер длинный заголовок', props: {
+            //         icon: 'odant:base', iconSize: 50,
+            //     }
+            // },
+            // {
+            //     x: 2, y: 3, is: 'oda-icon', label: 'А это супер-пупер длинный заголовок 000001', props: {
+            //         icon: 'odant:base', iconSize: 50,
+            //     }
+            // },
+            {
+                x: 3, y: 6,  label: 'А это супер-пупер длинныйдлинныйдлинный заголовок', props: {
+                    icon: 'odant:base',  subIcon: 'icons:error'
+                }
+            },
+            {
+                x: 5, y: 3, label: 'Заголовок', props: {
+                    icon: 'odant:class', iconSize: 50,
+                }
+            },
+            // {
+            //     x: 5, y: 4, is: 'oda-icon', label: 'Заголовок', props: {
+            //         icon: 'odant:class', iconSize: 50,
+            //     }
+            // }
+        ]
+    })
+
+</script>

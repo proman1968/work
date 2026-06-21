@@ -1,0 +1,42 @@
+<h2 style="color: gray">Convert *.json to *.svg ...</h2>
+
+<script type="module">
+
+    const filename = 'logos.json';
+    const name = 'social-color';
+    const readJson = async (filename) => {
+        const response = await fetch(filename);
+        const data = await response.json();
+        return data;
+    }
+    const json = await readJson(filename);
+    console.log(json);
+    let svg = `
+<svg xmlns="http://www.w3.org/2000/svg" name="${name}">`;
+    Object.keys(json.icons).forEach(k => {
+        svg += `
+    <g id="${k}">
+        ${json.icons[k].body}
+    </g>`
+    })
+    svg += `
+</svg>
+`;
+    console.log(svg);
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(svg);
+    } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = svg;
+        document.body.appendChild(textArea);
+        textArea.focus({ preventScroll: true });
+        textArea.select();
+        try {
+            document.execCommand('copy');
+        } catch (err) {
+            console.error('Unable to copy to clipboard', err);
+        }
+        document.body.removeChild(textArea);
+    }
+
+</script>

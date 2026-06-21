@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>html2canvas - Пример скриншотов</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        /* Стили для элементов, которые будем снимать */
+        .demo-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .card h2 {
+            color: #333;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        /* Элемент 1: Профиль пользователя */
+        .profile {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .avatar {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 36px;
+            font-weight: bold;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .user-info h3 {
+            font-size: 24px;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        
+        .user-info p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .badge {
+            background: #667eea;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: inline-block;
+        }
+        
+        /* Элемент 2: Прогресс бар */
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        
+        .progress-bar {
+            height: 20px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 75%;
+            border-radius: 10px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Элемент 3: Карточка с градиентом */
+        .gradient-card {
+            background: linear-gradient(45deg, #ff6b6b, #feca57, #48dbfb);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        
+        .gradient-card h3 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        /* Элемент 4: Статистика */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            text-align: center;
+        }
+        
+        .stat-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        /* Элемент 5: Сложный элемент с тенями и трансформациями */
+        .complex-element {
+            position: relative;
+            padding: 30px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 
+                0 10px 30px rgba(0,0,0,0.1),
+                0 0 0 2px #667eea,
+                0 0 0 5px rgba(102, 126, 234, 0.1);
+            transform: rotate(1deg) scale(0.98);
+            transition: transform 0.3s ease;
+        }
+        
+        .complex-element:hover {
+            transform: rotate(0deg) scale(1);
+        }
+        
+        .tooltip {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: #ff6b6b;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 5px 15px rgba(255, 107, 107, 0.4);
+        }
+        
+        /* Панель управления */
+        .controls {
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 30px 0;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+        }
+        
+        .controls h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        select, input, button {
+            padding: 12px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button.secondary {
+            background: linear-gradient(135deg, #f5f7fa, #c3cfe2);
+            color: #333;
+        }
+        
+        .result-area {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 200px;
+            border: 2px dashed #667eea;
+        }
+        
+        #result {
+            max-width: 100%;
+            overflow-x: auto;
+        }
+        
+        #result canvas, #result img {
+            max-width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+        
+        .quality-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
+    <!-- Подключаем html2canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 html2canvas - Демонстрация возможностей</h1>
+        
+        <!-- Элементы для скриншотов -->
+        <div class="demo-section">
+            <!-- Карточка 1: Профиль -->
+            <div class="card" id="profile-card">
+                <h2>👤 Профиль пользователя</h2>
+                <div class="profile">
+                    <div class="avatar">JD</div>
+                    <div class="user-info">
+                        <h3>John Doe</h3>
+                        <p>john.doe@example.com</p>
+                        <span class="badge">PRO</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Карточка 2: Прогресс -->
+            <div class="card" id="progress-card">
+                <h2>📊 Прогресс</h2>
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>Завершено</span>
+                        <span>75%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 75%"></div>
+                    </div>
+                    <div class="progress-label">
+                        <span>В процессе</span>
+                        <span>25%</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Карточка 3: Градиент -->
+            <div class="card" id="gradient-card">
+                <h2>🎨 Градиент</h2>
+                <div class="gradient-card">
+                    <h3>Beautiful Gradient</h3>
+                    <p>Сложный градиент с тремя цветами</p>
+                </div>
+            </div>
+            
+            <!-- Карточка 4: Статистика -->
+            <div class="card" id="stats-card">
+                <h2>📈 Статистика</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value">1,234</div>
+                        <div class="stat-label">Подписчики</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">567</div>
+                        <div class="stat-label">Проекты</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">89</div>
+                        <div class="stat-label">Награды</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Карточка 5: Сложный элемент -->
+            <div class="card" id="complex-card">
+                <h2>🔧 Сложный элемент</h2>
+                <div class="complex-element">
+                    <span class="tooltip">NEW</span>
+                    <p style="margin-bottom: 10px;">Элемент с:</p>
+                    <ul style="margin-left: 20px; color: #666;">
+                        <li>Несколькими тенями</li>
+                        <li>Рамками</li>
+                        <li>Трансформацией rotate</li>
+                        <li>Абсолютным позиционированием</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Панель управления -->
+        <div class="controls">
+            <h2>⚙️ Настройки скриншота</h2>
+            
+            <div class="control-group">
+                <select id="element-select">
+                    <option value="profile-card">Профиль пользователя</option>
+                    <option value="progress-card">Прогресс бар</option>
+                    <option value="gradient-card">Градиент</option>
+                    <option value="stats-card">Статистика</option>
+                    <option value="complex-card">Сложный элемент</option>
+                    <option value="all" selected>ВСЕ элементы</option>
+                </select>
+                
+                <div class="quality-control">
+                    <label for="scale">Качество (scale):</label>
+                    <input type="range" id="scale" min="1" max="3" step="0.5" value="2">
+                    <span id="scale-value">2</span>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="bg-transparent" checked>
+                    Прозрачный фон
+                </label>
+                
+                <label>
+                    <input type="checkbox" id="use-cors" checked>
+                    Использовать CORS
+                </label>
+            </div>
+            
+            <div class="control-group">
+                <button id="capture-btn">
+                    <span>📸</span> Сделать скриншот
+                </button>
+                <button id="download-btn" class="secondary">
+                    <span>💾</span> Скачать
+                </button>
+                <button id="copy-btn" class="secondary">
+                    <span>📋</span> Копировать в буфер
+                </button>
+                <button id="clear-btn" class="secondary">
+                    <span>🗑️</span> Очистить
+                </button>
+            </div>
+            
+            <!-- Индикатор загрузки -->
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Создание скриншота...</p>
+            </div>
+        </div>
+        
+        <!-- Результат -->
+        <div class="controls">
+            <h2>🎯 Результат</h2>
+            <div id="result" class="result-area">
+                <p style="color: #999; text-align: center;">Нажмите "Сделать скриншот" для создания снимка</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        class ScreenshotManager {
+            constructor() {
+                this.currentCanvas = null;
+                this.initEventListeners();
+            }
+            
+            initEventListeners() {
+                document.getElementById('capture-btn').addEventListener('click', () => this.capture());
+                document.getElementById('download-btn').addEventListener('click', () => this.download());
+                document.getElementById('copy-btn').addEventListener('click', () => this.copyToClipboard());
+                document.getElementById('clear-btn').addEventListener('click', () => this.clear());
+                
+                // Обновление отображения значения scale
+                document.getElementById('scale').addEventListener('input', (e) => {
+                    document.getElementById('scale-value').textContent = e.target.value;
+                });
+            }
+            
+            async capture() {
+                const loading = document.getElementById('loading');
+                loading.classList.add('active');
+                
+                try {
+                    const element = this.getElementToCapture();
+                    const options = this.getCaptureOptions();
+                    
+                    let canvas;
+                    
+                    if (element === 'all') {
+                        // Создаем общий контейнер для всех карточек
+                        const container = document.createElement('div');
+                        container.style.display = 'grid';
+                        container.style.gridTemplateColumns = 'repeat(3, 1fr)';
+                        container.style.gap = '20px';
+                        container.style.padding = '20px';
+                        container.style.background = options.backgroundColor;
+                        
+                        const cards = document.querySelectorAll('.card');
+                        cards.forEach(card => {
+                            const clone = card.cloneNode(true);
+                            clone.style.transform = 'none';
+                            container.appendChild(clone);
+                        });
+                        
+                        document.body.appendChild(container);
+                        canvas = await html2canvas(container, options);
+                        document.body.removeChild(container);
+                    } else {
+                        canvas = await html2canvas(document.getElementById(element), options);
+                    }
+                    
+                    this.currentCanvas = canvas;
+                    this.displayResult(canvas);
+                    
+                } catch (error) {
+                    console.error('Ошибка при создании скриншота:', error);
+                    this.showError('Не удалось создать скриншот. Проверьте консоль для деталей.');
+                } finally {
+                    loading.classList.remove('active');
+                }
+            }
+            
+            getElementToCapture() {
+                const select = document.getElementById('element-select');
+                return select.value;
+            }
+            
+            getCaptureOptions() {
+                return {
+                    scale: parseFloat(document.getElementById('scale').value),
+                    backgroundColor: document.getElementById('bg-transparent').checked ? null : '#ffffff',
+                    useCORS: document.getElementById('use-cors').checked,
+                    allowTaint: false,
+                    logging: false,
+                    imageTimeout: 15000,
+                    onclone: (clonedDoc, element) => {
+                        // Можно модифицировать клон перед захватом
+                        console.log('Элемент склонирован', element);
+                    }
+                };
+            }
+            
+            displayResult(canvas) {
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = '';
+                
+                // Добавляем canvas
+                resultDiv.appendChild(canvas);
+                
+                // Добавляем информацию
+                const info = document.createElement('p');
+                info.style.marginTop = '10px';
+                info.style.color = '#666';
+                info.innerHTML = `✅ Скриншот создан! Размер: ${canvas.width} x ${canvas.height} пикселей`;
+                resultDiv.appendChild(info);
+            }
+            
+            download() {
+                if (!this.currentCanvas) {
+                    alert('Сначала создайте скриншот!');
+                    return;
+                }
+                
+                const link = document.createElement('a');
+                link.download = `screenshot-${new Date().getTime()}.png`;
+                link.href = this.currentCanvas.toDataURL('image/png');
+                link.click();
+            }
+            
+            async copyToClipboard() {
+                if (!this.currentCanvas) {
+                    alert('Сначала создайте скриншот!');
+                    return;
+                }
+                
+                try {
+                    const blob = await new Promise(resolve => 
+                        this.currentCanvas.toBlob(resolve, 'image/png')
+                    );
+                    
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            'image/png': blob
+                        })
+                    ]);
+                    
+                    this.showMessage('Скриншот скопирован в буфер обмена!');
+                } catch (error) {
+                    console.error('Ошибка копирования:', error);
+                    
+                    // Fallback для браузеров без поддержки Clipboard API
+                    const dataUrl = this.currentCanvas.toDataURL('image/png');
+                    const img = document.createElement('img');
+                    img.src = dataUrl;
+                    
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    
+                    const range = document.createRange();
+                    range.selectNode(img);
+                    selection.addRange(range);
+                    
+                    document.execCommand('copy');
+                    selection.removeAllRanges();
+                    
+                    this.showMessage('Скриншот скопирован (методом fallback)!');
+                }
+            }
+            
+            clear() {
+                this.currentCanvas = null;
+                document.getElementById('result').innerHTML = 
+                    '<p style="color: #999; text-align: center;">Результат очищен</p>';
+            }
+            
+            showError(message) {
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = `<p style="color: #ff6b6b; text-align: center;">❌ ${message}</p>`;
+            }
+            
+            showMessage(message) {
+                const resultDiv = document.getElementById('result');
+                const msg = document.createElement('p');
+                msg.style.color = '#4CAF50';
+                msg.style.textAlign = 'center';
+                msg.style.marginTop = '10px';
+                msg.textContent = `✅ ${message}`;
+                resultDiv.appendChild(msg);
+                
+                setTimeout(() => msg.remove(), 3000);
+            }
+        }
+        
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', () => {
+            window.screenshotManager = new ScreenshotManager();
+        });
+    </script>
+</body>
+</html>

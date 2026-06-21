@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ODANT-WORK — Децентрализованная социо-платформа</title>
+    
+    <!-- Reveal.js core CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+    
+    <!-- Custom fonts and icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,600;14..32,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    
+    <style>
+        /* Global overrides */
+        .reveal {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at 10% 20%, #0a0f1e, #03060c);
+        }
+        .reveal .slides section {
+            background: rgba(12, 20, 30, 0.65);
+            backdrop-filter: blur(3px);
+            border-radius: 2rem;
+            padding: 2rem;
+            box-shadow: 0 25px 45px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,255,255,0.1);
+        }
+        .reveal h1, .reveal h2, .reveal h3 {
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            text-transform: none;
+            background: linear-gradient(135deg, #ffffff, #7bc5ff);
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            text-shadow: none;
+        }
+        .reveal h1 { font-size: 2.8em; }
+        .reveal h2 { font-size: 1.9em; border-left: 5px solid #2ad4ff; padding-left: 1rem; margin-bottom: 1rem; }
+        .reveal p, .reveal li, .reveal .text-block {
+            font-size: 0.85em;
+            line-height: 1.5;
+            color: #eef4ff;
+        }
+        .reveal a { color: #3bc9ff; text-decoration: none; }
+        .reveal ul, .reveal ol { text-align: left; }
+        .reveal li { margin: 0.6rem 0; }
+        
+        .highlight-cyan { color: #2ad4ff; font-weight: 600; }
+        .badge {
+            background: #1e2a3a;
+            display: inline-block;
+            padding: 0.2rem 0.8rem;
+            border-radius: 30px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: #9ec8ff;
+            margin-right: 0.6rem;
+        }
+        .grid-2col {
+            display: flex;
+            gap: 1.5rem;
+            justify-content: space-between;
+            margin-top: 1rem;
+        }
+        .card {
+            background: rgba(20, 30, 45, 0.7);
+            border-radius: 1.5rem;
+            padding: 1.2rem;
+            flex: 1;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(42, 212, 255, 0.2);
+        }
+        .comparison-table {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            background: #0a111c;
+            border-radius: 1.2rem;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        .comparison-header {
+            font-weight: 700;
+            color: #2ad4ff;
+            border-bottom: 1px solid #2ad4ff40;
+            padding-bottom: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .skill-badge {
+            background: #0f212e;
+            border-radius: 40px;
+            padding: 0.3rem 1rem;
+            display: inline-block;
+            margin: 0.2rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+        .footer-note {
+            font-size: 0.55rem;
+            text-align: center;
+            margin-top: 1.5rem;
+            color: #7b8aa0;
+        }
+        .reveal .controls {
+            color: #2ad4ff;
+        }
+        .reveal .progress {
+            background: #1e3a4a;
+            color: #2ad4ff;
+        }
+        i.icon-spacing {
+            margin-right: 0.5rem;
+            color: #2ad4ff;
+        }
+        .quote {
+            font-style: italic;
+            border-left: 3px solid #2ad4ff;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: #c0e0ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+            
+            <!-- SLIDE 1: TITLE -->
+            <section data-transition="zoom">
+                <h1 style="font-size: 3.5rem;">⚡ ODANT-WORK</h1>
+                <p style="font-size: 1.3rem; letter-spacing: 1px;">Децентрализованная социо-платформа нового поколения</p>
+                <div style="height: 1rem;"></div>
+                <p><i class="fas fa-database icon-spacing"></i> Ваши данные — ваши правила</p>
+                <p><i class="fas fa-microchip icon-spacing"></i> Ваши навыки — ваши агенты</p>
+                <div class="footer-note" style="margin-top: 2rem;">Автономные ноды | Фрактальная ФС | ИИ-оркестрация</div>
+            </section>
+            
+            <!-- SLIDE 2: Что такое ODANT-WORK -->
+            <section data-transition="convex">
+                <h2>📌 Что такое ODANT-WORK?</h2>
+                <ul>
+                    <li><i class="fas fa-share-alt highlight-cyan"></i> <strong>Не сеть, а облако автономных нод</strong></li>
+                    <li><i class="fas fa-folder-tree highlight-cyan"></i> Каждая нода = фрактальная файловая система + встроенная оргструктура</li>
+                    <li><i class="fas fa-cubes highlight-cyan"></i> Всё внутри: файлы, коммуникации, процессы, взаимодействия → <strong class="highlight-cyan">ОБЪЕКТЫ</strong></li>
+                    <li><i class="fas fa-user-tie highlight-cyan"></i> Принадлежит частному лицу или организации</li>
+                    <li><i class="fas fa-cloud-upload-alt highlight-cyan"></i> Работает на своих ресурсах или в облачном хостинге (как обычный сайт)</li>
+                </ul>
+                <div class="quote">«Никто не владеет вашей нодой, кроме вас»</div>
+            </section>
+            
+            <!-- SLIDE 3: Децентрализованная DNS / поиск нод -->
+            <section data-transition="convex">
+                <h2>🌐 Как ноды находят друг друга?</h2>
+                <ul>
+                    <li><i class="fas fa-globe icon-spacing"></i> <strong>Децентрализованная DNS</strong> — общее облако известных адресов</li>
+                    <li><i class="fas fa-link icon-spacing"></i> Первые контакты: прямые URL, обмен ссылками, QR-коды, соцсети, мессенджеры</li>
+                    <li><i class="fas fa-server icon-spacing"></i> Нет единого центра — нет единой точки отказа</li>
+                    <li><i class="fas fa-handshake icon-spacing"></i> Установив контакт, ноды формируют доверенную mesh-сеть</li>
+                </ul>
+                <div style="background: #07121e; border-radius: 2rem; padding: 0.8rem; margin-top: 1rem; text-align: center;">
+                    <i class="fas fa-qrcode"></i> Поделился ссылкой → QR → приглашение → ноды увидели друг друга
+                </div>
+            </section>
+            
+            <!-- SLIDE 4: Приватность и публичность -->
+            <section data-transition="convex">
+                <h2>🔐 Приватность и публичность под контролем</h2>
+                <div class="grid-2col">
+                    <div class="card">
+                        <i class="fas fa-lock fa-2x" style="color:#2ad4ff"></i>
+                        <h3 style="font-size:1.4rem;">Приватное пространство</h3>
+                        <p>Владелец полностью контролирует ноду. Доступ по ролям, шифрование, аудит.</p>
+                    </div>
+                    <div class="card">
+                        <i class="fas fa-broadcast-tower fa-2x" style="color:#2ad4ff"></i>
+                        <h3 style="font-size:1.4rem;">Публичные точки</h3>
+                        <p>Любую структурную точку можно открыть: видеотрансляции, реклама, магазин, API-доступ.</p>
+                    </div>
+                </div>
+                <p style="margin-top:1rem;"><i class="fas fa-sliders-h"></i> Вы решаете, кто и что видит — гибкие права на каждый ОБЪЕКТ.</p>
+            </section>
+            
+            <!-- SLIDE 5: Интерфейс + организационные структуры -->
+            <section data-transition="convex">
+                <h2>💬 Интерфейс: знакомо, но глубже</h2>
+                <p>Базовый интерфейс — как мессенджер, но с мощной архитектурой:</p>
+                <div class="grid-2col">
+                    <div class="card">
+                        <i class="fas fa-sitemap"></i> <strong>Оргструктуры</strong><br>
+                        Проекты, рабочие группы, чаты. Куратор + исполнители на каждый уровень.<br>
+                        <span class="skill-badge">Права доступа к ОБЪЕКТАМ</span>
+                    </div>
+                    <div class="card">
+                        <i class="fas fa-comments"></i> <strong>Гибкое взаимодействие</strong><br>
+                        Чат (текст/голос) с системой или другими пользователями. Ответ на активность.
+                    </div>
+                </div>
+                <p class="footer-note">Каждая точка управления — свой контроль доступа, кураторы, история.</p>
+            </section>
+            
+            <!-- SLIDE 6: Управление через ИИ -->
+            <section data-transition="convex">
+                <h2>🧠 Локальный ИИ-ассистент</h2>
+                <p>Пользователь даёт команды → встроенный ИИ интерпретирует в <strong>задачи или процессы</strong></p>
+                <ul>
+                    <li><i class="fas fa-check-circle"></i> Использует <strong class="highlight-cyan">НАВЫКИ</strong> (встроенные/пользовательские)</li>
+                    <li><i class="fas fa-question-circle"></i> Уточняет у пользователя при необходимости</li>
+                    <li><i class="fas fa-users"></i> Привлекает других пользователей (компетентных)</li>
+                    <li><i class="fas fa-tasks"></i> Выдаёт задания людям или внешним устройствам и контролирует выполнение</li>
+                </ul>
+                <div class="quote">ИИ не заменяет вас — он расширяет ваши возможности</div>
+            </section>
+            
+            <!-- SLIDE 7: Навыки и кибер-агенты (ядро) -->
+            <section data-transition="convex">
+                <h2>🧬 Навыки (Skills) — эволюция системы</h2>
+                <p><strong>Что можно делать с Навыками:</strong></p>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: center; margin: 1rem 0;">
+                    <span class="skill-badge"><i class="fas fa-chart-line"></i> Развивать</span>
+                    <span class="skill-badge"><i class="fas fa-code"></i> Программировать свои</span>
+                    <span class="skill-badge"><i class="fas fa-exchange-alt"></i> Обмениваться с другими нодами</span>
+                    <span class="skill-badge"><i class="fas fa-store"></i> Покупать на Скилл-бирже</span>
+                    <span class="skill-badge"><i class="fas fa-puzzle-piece"></i> Комбинировать</span>
+                </div>
+                <p><strong>Результат развития:</strong> Навык → <i class="fas fa-robot"></i> <strong class="highlight-cyan">Кибер-агент</strong> (замена человека в обработке информации и управлении процессами)</p>
+                <div class="footer-note">Навыки = новый рынок труда. Автоматизация сложных цепочек.</div>
+            </section>
+            
+            <!-- SLIDE 8: Файлы и RAG-хранилище -->
+            <section data-transition="convex">
+                <h2>📁 Фрактальная ФС + RAG-хранилище</h2>
+                <ul>
+                    <li><i class="fas fa-cloud-upload-alt"></i> Загрузка с устройств или из интернета</li>
+                    <li><i class="fas fa-tree"></i> Динамическое <strong>древовидное RAG-хранилище</strong> для семантического поиска</li>
+                    <li><i class="fas fa-link"></i> <strong>Вложенные файлы</strong> — внутри любых файлов можно хранить связанные файлы</li>
+                    <li><i class="fas fa-history"></i> Полная история изменений каждого файла</li>
+                    <li><i class="fas fa-stream"></i> Логи взаимодействий → отображаются как <strong>лента чата</strong> (с фильтрацией)</li>
+                </ul>
+                <p><i class="fas fa-magic"></i> ИИ-инструменты: поиск по критериям, открытие, редактирование, обработка.</p>
+            </section>
+            
+            <!-- SLIDE 9: Видеоконференции и связь -->
+            <section data-transition="convex">
+                <h2>🎥 Коммуникации реального времени</h2>
+                <div class="grid-2col">
+                    <div class="card">
+                        <i class="fas fa-phone-alt fa-2x"></i>
+                        <p>Голосовые и видеозвонки</p>
+                    </div>
+                    <div class="card">
+                        <i class="fas fa-video fa-2x"></i>
+                        <p>Конференции с модерацией и автозаписью</p>
+                    </div>
+                </div>
+                <p><i class="fas fa-globe"></i> Участники: из своей ноды и нод-партнеров. Рабочая группа не привязана к одному серверу.</p>
+                <div class="quote">Полная запись, управление участниками, интеграция с ОБЪЕКТАМИ ноды.</div>
+            </section>
+            
+            <!-- SLIDE 10: Сравнение с традиционными платформами -->
+            <section data-transition="convex">
+                <h2>⚖️ ODANT-WORK vs Традиционные платформы</h2>
+                <div class="comparison-table">
+                    <div class="comparison-header">Традиционные платформы</div>
+                    <div class="comparison-header">ODANT-WORK</div>
+                    <div>Ваши данные — не ваши</div>
+                    <div class="highlight-cyan">Полный контроль, локальное шифрование</div>
+                    <div>Центральный сервер / корпорация</div>
+                    <div class="highlight-cyan">Облако автономных нод</div>
+                    <div>Закрытые форматы</div>
+                    <div class="highlight-cyan">Фрактальная ФС + RAG, вложенные файлы</div>
+                    <div>Фиксированный функционал</div>
+                    <div class="highlight-cyan">Навыки и кибер-агенты, программируемость</div>
+                    <div>Чат + файлы отдельно</div>
+                    <div class="highlight-cyan">Единое пространство ОБЪЕКТОВ (логи чата = история файла)</div>
+                </div>
+            </section>
+            
+            <!-- SLIDE 11: Дорожная карта -->
+            <section data-transition="convex">
+                <h2>🗺️ Дорожная карта (пример)</h2>
+                <ol style="columns: 2; column-gap: 2rem;">
+                    <li>MVP ноды с базовым чатом и фрактальной ФС</li>
+                    <li>Оргструктуры + гранулярные права доступа</li>
+                    <li>Локальный ИИ + исполнение Навыков</li>
+                    <li>Скилл-биржа и кибер-агенты (рынок навыков)</li>
+                    <li>Децентрализованная DNS между нодами (DHT)</li>
+                    <li>Публичные точки, монетизация и плагины</li>
+                </ol>
+                <div style="margin-top: 1.5rem; text-align: center;">
+                    <i class="fas fa-rocket"></i> Этапы открыты для сообщества — каждый владелец ноды может форкнуть развитие.
+                </div>
+            </section>
+            
+            <!-- SLIDE 12: Заключение / призыв -->
+            <section data-transition="zoom">
+                <h2 style="font-size: 2.3rem;">ODANT-WORK —<br>Ваша цифровая вселенная</h2>
+                <p>Не просто мессенджер.<br>Не просто файловое хранилище.<br>Не просто ИИ.</p>
+                <p style="font-size: 1.2rem; margin-top: 1rem;"><strong>Персональная экосистема, которая работает на вас<br>и с вами — децентрализованно, безопасно, безгранично.</strong></p>
+                <div class="footer-note" style="margin-top: 2rem;">
+                    <i class="fas fa-crown"></i> Готовы создать свою ноду? Время строить приватный веб 3.0
+                </div>
+                <div style="margin-top: 1rem;">
+                    <span class="skill-badge">#ODANTWORK</span>
+                    <span class="skill-badge">#DeSocial</span>
+                    <span class="skill-badge">#OwnYourData</span>
+                </div>
+            </section>
+
+            <!-- Bonus: дополнительный слайд про механику "навыков и биржи" (опционально углубление) -->
+            <section data-transition="convex">
+                <h2>🛠️ Скилл-биржа и экономика агентов</h2>
+                <ul>
+                    <li>Разработчики и компании публикуют готовые <strong>НАВЫКИ</strong> (от парсинга до управления складами)</li>
+                    <li>Покупка, продажа, лицензирование внутри сети нод</li>
+                    <li><strong>Кибер-агенты</strong> автономно выполняют контракты, взаимодействуют с другими агентами</li>
+                    <li>Иерархия агентов: от простых ботов до руководителей процессов</li>
+                </ul>
+                <div class="quote">«Навык — это новая валюта в мире ODANT-WORK. Развивай, продавай, автоматизируй.»</div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Reveal.js and dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/markdown/markdown.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            center: true,
+            transition: 'slide', // default transition
+            transitionSpeed: 'default',
+            backgroundTransition: 'fade',
+            slideNumber: true,
+            controls: true,
+            progress: true,
+            keyboard: true,
+            overview: true,
+            touch: true,
+            plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+        });
+    </script>
+</body>
+</html>

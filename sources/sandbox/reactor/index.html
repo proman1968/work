@@ -1,0 +1,42 @@
+<test-reactor></test-reactor>
+<test-reactor></test-reactor>
+<script type="module" >
+    import '../../oda/oda.js';
+    ODA({is: 'test-reactor',
+        template:/* html */`
+            <style>
+                :host{
+                    @apply --vertical;
+                    gap: 8px;
+                    padding: 32px;
+                }
+            </style>
+            email1:
+            <input ::value="obj.email">
+            email2:
+            <input ::value="obj.email">
+            name:
+            <input ::value="obj.name">
+            test:
+            <input ::value="test">
+            MIX:
+            {{mix}}
+
+        `,
+        test: '',
+        obj: null,
+        get mix(){
+            return this.obj.name + ': ' + this.obj.email + ': ' + this.test;
+        }
+    })
+    let obj = {
+            email: '',
+            name: ''
+
+        }
+    for(let el of document.querySelectorAll('test-reactor')){
+        el.obj = obj;
+    }
+
+</script>
+

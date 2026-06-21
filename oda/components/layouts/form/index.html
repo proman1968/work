@@ -1,0 +1,27 @@
+<meta charset="utf-8">
+
+<oda-form id="form"></oda-form>
+
+<script type="module">
+    import '/oda//oda.js';
+    import './form.js';
+    let data = {
+        prompt: {
+            is: 'textarea',
+            value: 'генерация изображения'
+        },
+        aspect_ratio: {
+            value: '16:9',
+            list: ['2:1', '20:9', '19.5:9', '16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16', '9:19.5', '1:2']
+        },
+        num_images: {
+            value: 1,
+            list: [1, 2, 3, 4]
+        },
+        output_format: {
+            value: "jpeg",
+            list: ['jpeg', 'png', 'webp']
+        }
+    } 
+    form.metadata = data;
+</script>

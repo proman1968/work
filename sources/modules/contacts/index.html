@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📇 Contact Picker API — демо</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(145deg, #f8faff 0%, #edf2fa 100%);
+            min-height: 100vh;
+            padding: 2rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #1e293b;
+        }
+
+        .container {
+            max-width: 1000px;
+            width: 100%;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 2.4rem;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #0f2b4b, #1e4c6b);
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .subhead {
+            font-size: 1.1rem;
+            color: #475569;
+            border-bottom: 2px solid #cbd5e1;
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card {
+            background: rgba(255,255,255,0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 28px;
+            padding: 1.8rem;
+            box-shadow: 0 20px 35px -8px rgba(0,20,40,0.15);
+            margin-bottom: 2rem;
+        }
+
+        .status-card {
+            background: #f1f5f9;
+            border-left: 6px solid #3b7c9c;
+            border-radius: 16px;
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            margin-bottom: 1.8rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.35rem 0.9rem;
+            border-radius: 40px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .badge-success {
+            background: #cbf0d9;
+            color: #0b4d2e;
+            border: 1px solid #7ac9a0;
+        }
+
+        .badge-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+
+        .field-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            align-items: center;
+            margin: 1.2rem 0 1.5rem;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.2rem;
+            background: #e9f0f7;
+            padding: 0.9rem 1.5rem;
+            border-radius: 40px;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-weight: 500;
+            color: #1e3a5f;
+            cursor: pointer;
+        }
+
+        .multiple-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            background: white;
+            padding: 0.5rem 1.2rem;
+            border-radius: 40px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        }
+
+        button {
+            background: #0b3b5c;
+            border: none;
+            padding: 0.9rem 2.2rem;
+            border-radius: 50px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: white;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.7rem;
+            transition: all 0.2s;
+            box-shadow: 0 8px 18px rgba(17, 67, 99, 0.25);
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+
+        button:hover {
+            background: #145c7e;
+            transform: scale(1.02);
+            box-shadow: 0 12px 22px rgba(17, 67, 99, 0.35);
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        .export-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.8rem;
+            margin-top: 1.2rem;
+            justify-content: flex-end;
+        }
+
+        .export-buttons button {
+            background: #334155;
+            box-shadow: none;
+            padding: 0.6rem 1.4rem;
+            font-size: 0.9rem;
+        }
+
+        .contacts-list {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .contact-item {
+            background: white;
+            border-radius: 18px;
+            padding: 1.2rem 1.6rem;
+            border-left: 10px solid #6b9ec7;
+            box-shadow: 0 6px 14px rgba(0, 20, 30, 0.06);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .contact-info {
+            font-size: 1.05rem;
+            font-weight: 500;
+            color: #0c2b3e;
+            word-break: break-word;
+            flex: 1;
+        }
+
+        .contact-meta {
+            color: #4a657b;
+            font-size: 0.85rem;
+        }
+
+        .letter-group {
+            margin-top: 1.5rem;
+        }
+
+        .letter-title {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: #1a4c6b;
+            border-bottom: 3px dashed #98b9d4;
+            padding-bottom: 0.3rem;
+            margin-bottom: 1rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2.5rem 1rem;
+            background: #f8fafc;
+            border-radius: 24px;
+            color: #5e6f8c;
+            font-size: 1.1rem;
+        }
+
+        .field-info {
+            background: #e6edf3;
+            padding: 0.5rem 1.2rem;
+            border-radius: 24px;
+            font-size: 0.9rem;
+            color: #21475b;
+        }
+
+        hr {
+            border: none;
+            border-top: 2px solid rgba(100,130,160,0.2);
+            margin: 1.8rem 0 1rem;
+        }
+
+        .error-message {
+            background: #ffefef;
+            border-radius: 18px;
+            padding: 1.2rem;
+            color: #a52422;
+            border: 1px solid #ffb3b3;
+        }
+
+        footer {
+            margin-top: 2rem;
+            font-size: 0.8rem;
+            color: #66809a;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📱 Contact Picker</h1>
+            <div class="subhead">нативный API выбора контактов • чистый ES6 модуль</div>
+        </header>
+
+        <!-- индикатор поддержки и доступные поля -->
+        <div class="status-card" id="supportStatus">
+            <span style="display: flex; gap: 0.6rem; align-items: center;">
+                <span style="font-size: 1.4rem;">🔄</span> 
+                <span id="statusText">Проверка поддержки API...</span>
+            </span>
+            <span id="fieldsBadge" class="badge">поля: —</span>
+        </div>
+
+        <!-- основная панель управления -->
+        <div class="card">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <span style="font-size: 1.8rem;">🧩</span>
+                <h2 style="font-weight: 600; font-size: 1.7rem; color: #1e3e58;">Выбор контактов</h2>
+            </div>
+            
+            <div class="field-selector">
+                <div class="checkbox-group" id="fieldsGroup">
+                    <label>
+                        <input type="checkbox" value="name" checked> 👤 Имя
+                    </label>
+                    <label>
+                        <input type="checkbox" value="tel" checked> 📞 Телефон
+                    </label>
+                    <label>
+                        <input type="checkbox" value="email"> ✉️ Email
+                    </label>
+                    <label>
+                        <input type="checkbox" value="address"> 🏠 Адрес
+                    </label>
+                    <label>
+                        <input type="checkbox" value="icon"> 🖼️ Иконка
+                    </label>
+                </div>
+                
+                <div class="multiple-toggle">
+                    <span style="font-weight: 500;">👥</span>
+                    <label>
+                        <input type="checkbox" id="multipleCheckbox" checked> Несколько контактов
+                    </label>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <button id="pickContactsBtn">
+                    <span style="font-size: 1.3rem;">📇</span> Открыть контакты
+                </button>
+                <span class="field-info" id="selectedFieldsHint">name, tel</span>
+            </div>
+
+            <!-- кнопки экспорта (появляются когда есть контакты) -->
+            <div id="exportPanel" style="display: none;">
+                <hr>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: #21556b;">⬇️ Экспорт контактов</span>
+                    <div class="export-buttons">
+                        <button id="exportVCFBtn" style="background: #1f5e3a;">📇 vCard</button>
+                        <button id="exportCSVBtn" style="background: #8a6e3c;">📊 CSV</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- отображение контактов + группировка -->
+        <div class="card" style="padding: 1.8rem 1.5rem;">
+            <div style="display: flex; gap: 0.8rem; align-items: baseline; margin-bottom: 1rem;">
+                <span style="font-size: 1.9rem;">📋</span>
+                <h2 style="font-weight: 600; color: #1e3e58; font-size: 1.6rem;">Выбранные контакты</h2>
+                <span id="contactsCount" style="background: #cbdde8; padding: 0.2rem 0.9rem; border-radius: 50px; font-weight: 600;">0</span>
+            </div>
+
+            <!-- контейнер для вывода контактов -->
+            <div id="contactsContainer">
+                <div class="empty-state">
+                    ⚡ Нажми «Открыть контакты» и выбери людей из телефонной книги.<br>
+                    <span style="opacity: 0.7; font-size: 0.95rem; display: block; margin-top: 0.7rem;">(только Chrome/Edge Android, Samsung Internet)</span>
+                </div>
+            </div>
+        </div>
+        <footer>
+            ⚡ Contact Picker API — модуль contacts.js • демо без фреймворков
+        </footer>
+    </div>
+
+    <!-- подключаем наш модуль + основной скрипт -->
+    <script type="module">
+        import { 
+            isContactPickerSupported, 
+            getAvailableFields, 
+            pickContacts, 
+            formatContact, 
+            groupContactsByLetter,
+            exportToVCard,
+            exportToCSV,
+            downloadContacts
+        } from './contacts.js';
+
+        // ========== СОСТОЯНИЕ ==========
+        let currentContacts = [];
+        let supportedFields = [];
+
+        // ========== DOM ЭЛЕМЕНТЫ ==========
+        const statusText = document.getElementById('statusText');
+        const fieldsBadge = document.getElementById('fieldsBadge');
+        const pickBtn = document.getElementById('pickContactsBtn');
+        const contactsContainer = document.getElementById('contactsContainer');
+        const contactsCount = document.getElementById('contactsCount');
+        const exportPanel = document.getElementById('exportPanel');
+        const fieldsCheckboxes = document.querySelectorAll('#fieldsGroup input[type="checkbox"]');
+        const multipleCheckbox = document.getElementById('multipleCheckbox');
+        const selectedFieldsHint = document.getElementById('selectedFieldsHint');
+
+        // ========== ИНИЦИАЛИЗАЦИЯ: ПРОВЕРКА ПОДДЕРЖКИ ==========
+        async function initSupportInfo() {
+            const supported = isContactPickerSupported();
+            
+            if (supported) {
+                statusText.innerHTML = '✅ Contact Picker API <span style="font-weight:700;">доступен</span>';
+                document.getElementById('supportStatus').style.borderLeftColor = '#2b7a4b';
+                // получаем доступные поля
+                supportedFields = await getAvailableFields();
+                if (supportedFields.length) {
+                    fieldsBadge.textContent = `📌 доступны: ${supportedFields.join(', ')}`;
+                    fieldsBadge.className = 'badge badge-success';
+                    
+                    // отмечаем только реально доступные поля (снимаем недоступные)
+                    fieldsCheckboxes.forEach(cb => {
+                        if (!supportedFields.includes(cb.value)) {
+                            cb.checked = false;
+                            cb.disabled = true;
+                            cb.parentElement.style.opacity = '0.5';
+                        }
+                    });
+                } else {
+                    fieldsBadge.textContent = '⚠️ поля не определены';
+                }
+            } else {
+                statusText.innerHTML = '❌ Contact Picker API <span style="font-weight:700;">НЕ поддерживается</span>';
+                document.getElementById('supportStatus').style.borderLeftColor = '#a13b3b';
+                fieldsBadge.textContent = '🚫 API недоступно';
+                fieldsBadge.className = 'badge badge-error';
+                pickBtn.disabled = true;
+                pickBtn.style.opacity = '0.6';
+                pickBtn.style.cursor = 'not-allowed';
+            }
+            updateSelectedHint();
+        }
+
+        // ========== ОБНОВЛЕНИЕ ПОДСКАЗКИ ВЫБРАННЫХ ПОЛЕЙ ==========
+        function updateSelectedHint() {
+            const selected = [];
+            fieldsCheckboxes.forEach(cb => {
+                if (cb.checked) selected.push(cb.value);
+            });
+            const hint = selected.length ? selected.join(', ') : 'name, tel (умолч.)';
+            selectedFieldsHint.textContent = `⚙️ поля: ${hint}`;
+        }
+
+        // ========== ОТРИСОВКА КОНТАКТОВ С ГРУППИРОВКОЙ ==========
+        function renderContacts(contacts) {
+            if (!contacts || contacts.length === 0) {
+                contactsContainer.innerHTML = `<div class="empty-state">📭 Нет выбранных контактов</div>`;
+                contactsCount.textContent = '0';
+                exportPanel.style.display = 'none';
+                return;
+            }
+
+            contactsCount.textContent = contacts.length;
+            exportPanel.style.display = 'block';
+            
+            const groups = groupContactsByLetter(contacts);
+            let html = '';
+
+            Object.keys(groups).sort().forEach(letter => {
+                html += `<div class="letter-group"><div class="letter-title">${letter}</div>`;
+                groups[letter].forEach(contact => {
+                    const formatted = formatContact(contact);
+                    // доп. информация о кол-ве телефонов/email
+                    const telCount = contact.tel?.length || 0;
+                    const emailCount = contact.email?.length || 0;
+                    const metaParts = [];
+                    if (telCount) metaParts.push(`${telCount} 📞`);
+                    if (emailCount) metaParts.push(`${emailCount} ✉️`);
+                    const metaStr = metaParts.join(' · ');
+
+                    html += `<div class="contact-item">
+                        <span class="contact-info">${formatted}</span>
+                        <span class="contact-meta">${metaStr}</span>
+                    </div>`;
+                });
+                html += '</div>';
+            });
+
+            contactsContainer.innerHTML = html;
+        }
+
+        // ========== ОБРАБОТЧИК ВЫБОРА КОНТАКТОВ ==========
+        async function handlePickContacts() {
+            if (!isContactPickerSupported()) {
+                alert('❌ Contact Picker не поддерживается в этом браузере.\nПопробуйте Chrome для Android или Samsung Internet.');
+                return;
+            }
+
+            // собираем выбранные поля
+            const selectedFields = [];
+            fieldsCheckboxes.forEach(cb => {
+                if (cb.checked) selectedFields.push(cb.value);
+            });
+
+            const multiple = multipleCheckbox.checked;
+
+            try {
+                pickBtn.disabled = true;
+                pickBtn.innerHTML = '<span style="font-size:1.3rem;">⏳</span> Открываем контакты...';
+                
+                const contacts = await pickContacts({
+                    fields: selectedFields,
+                    multiple: multiple
+                });
+                
+                currentContacts = contacts;
+                renderContacts(currentContacts);
+                
+            } catch (error) {
+                // пользователь отменил или ошибка
+                console.error('Picker error:', error);
+                if (error.name === 'NotAllowedError') {
+                    // не выдаём громкую ошибку, просто показываем
+                    contactsContainer.innerHTML = `<div class="error-message">🔒 Доступ к контактам запрещён. Разрешите доступ в настройках браузера.</div>`;
+                } else if (error.message && !error.message.includes('cancel')) {
+                    contactsContainer.innerHTML = `<div class="error-message">⚠️ Ошибка: ${error.message}</div>`;
+                }
+                // если просто отмена — ничего не делаем
+            } finally {
+                pickBtn.disabled = false;
+                pickBtn.innerHTML = '<span style="font-size:1.3rem;">📇</span> Открыть контакты';
+            }
+        }
+
+        // ========== ЭКСПОРТ ==========
+        function handleExportVCF() {
+            if (!currentContacts.length) return;
+            const vcardData = exportToVCard(currentContacts);
+            downloadContacts(vcardData, 'contacts.vcf', 'text/vcard');
+        }
+
+        function handleExportCSV() {
+            if (!currentContacts.length) return;
+            const csvData = exportToCSV(currentContacts);
+            downloadContacts(csvData, 'contacts.csv', 'text/csv');
+        }
+
+        // ========== ПОДПИСКА НА СОБЫТИЯ ==========
+        pickBtn.addEventListener('click', handlePickContacts);
+        
+        document.getElementById('exportVCFBtn').addEventListener('click', handleExportVCF);
+        document.getElementById('exportCSVBtn').addEventListener('click', handleExportCSV);
+        
+        // обновление хинта при изменении чекбоксов
+        fieldsCheckboxes.forEach(cb => {
+            cb.addEventListener('change', updateSelectedHint);
+        });
+
+        // ========== СТАРТ ==========
+        initSupportInfo();
+        // пример начального состояния
+        updateSelectedHint();
+
+        // дополнительно: показать сообщение, если нет поддержки
+        window.addEventListener('load', () => {
+            if (!isContactPickerSupported()) {
+                const warnDiv = document.createElement('div');
+                warnDiv.style.marginTop = '1rem';
+                warnDiv.className = 'error-message';
+                warnDiv.innerHTML = '💡 Этот API работает на Android в Chrome, Edge и Samsung Internet. На iOS/desktop недоступен.';
+                document.querySelector('.status-card').after(warnDiv);
+            }
+        });
+    </script>
+</body>
+</html>

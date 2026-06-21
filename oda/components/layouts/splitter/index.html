@@ -1,0 +1,51 @@
+<div style="margin: 4px; border: 2px solid gray; height: 99%;">
+    <div style="display: flex; width: 100%; height: 100%;">
+        
+        <div id="panel-1" style="width: 25%; display: flex; flex-direction: column;">
+            
+            <div id="panel-5" style="height: 200px; display: flex;  flex-direction: column; text-align: right;">
+                <div style="padding: 4px;">VERTICAL - Зеленый сплиттер делит ширину 100% между двумя панелями слева и справа в % (если percent attribute) или в px (по умолчанию)</div>
+                <div style="flex: 1;"></div>
+                <div style="padding: 4px; text-align: left;">BOTTOM - Синий сплиттер снизу панели устанавливает ее высоту в 'px'
+                </div>
+            </div>
+            <oda-splitter color="blue" bottom min="100" size="2" ></oda-splitter>
+
+            <div style="flex: 1;"></div>
+            
+            <oda-splitter top color="red" min="100" size="2"></oda-splitter>
+            <div id="panel-6" style="height: 200px; padding: 4px;">TOP - Красный сплиттер сверху панели устанавливает ее высоту в 'px'</div>
+        
+        </div>
+
+        <oda-splitter color="green" vertical size="2"></oda-splitter>
+        
+        <div id="panel-2" style="display: flex; flex: 1; flex-direction: column;">
+            <div style="display: flex; flex: 1; flex-direction: column;">
+                
+                <div id="panel-3" flex style="display: flex; flex: 1;">
+                    
+                    <div id="panel-7" style="width: 200px; text-align: right; padding: 4px;">RIGHT - Оранжевый сплиттер справа от панели устанавливает ее ширину в 'px'</div>
+                    <oda-splitter color="orange" right min="200" size="2"></oda-splitter>
+                    
+                    <div style="flex: 1;"></div>
+                    
+                    <oda-splitter color="violet" left min="200" size="2"></oda-splitter>
+                    <div if="panel-8" style="width: 200px; padding: 4px;">LEFT - Фиолетовый сплиттер слева от панели устанавливает ее ширину в 'px'</div>
+                
+                </div>
+
+                <oda-splitter color="brown" horizontal size="2"></oda-splitter>
+                
+                <div id="panel-4" style="height:50%; padding: 4px;">HORIZONTAL - Коричневый сплиттер делит высоту 100% между двумя панелями сверху и снизу в % (если percent attribute) или в px (по умолчанию)</div>
+            
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script type="module">
+    import '/oda/oda.js';
+    import './splitter.js';
+</script>

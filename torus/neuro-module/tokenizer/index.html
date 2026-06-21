@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+    <pre id="pre"></pre>
+</body>
+<script type="module">
+    import {Parser} from './parser.js';
+    let text = await fetch('./test1.txt');
+    text = await text.text();
+    let parser = new Parser(text, true);
+    let tree = parser();
+    let indentation = 4;
+    let result = JSON.stringify(tree, undefined, indentation);
+    // let reg = RegExp('^ {' + indentation + '}\\[', 'gm');
+    // result = result.replace(reg, ' '.repeat(indentation) + '[' + ' --- paragraph ---');
+    // reg = RegExp('^ {' + indentation*2 + '}\\[', 'gm');
+    // result = result.replace(reg, ' '.repeat(indentation * 2) + '[' + ' --- sentence ---');
+    let elem = document.getElementById("pre");
+    elem.innerText = result;
+
+</script>
+</html>

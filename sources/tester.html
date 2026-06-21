@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="theme-color" content="dark">
+    <meta name="color-scheme" id="color-scheme" content="light dark">
+    <meta name="viewport" content="initial-scale=1, maximum-scale=3">
+    <meta name="description" content="odb content">
+    <link rel="shortcut icon" type="image/x-icon" href="@icon" crossorigin="use-credentials">
+    <title>{title}</title>
+    <style>
+        body{
+            visibility: hidden;
+            overflow: hidden !important;
+        }
+    </style>
+</head>
+<body>
+    <work-tester></work-tester>
+    <script type="module">
+        let script_path = "{script_path}"
+        await import(window.location.origin + '/client.js');
+        try{
+            await WORK.login();
+        }
+        catch(e){
+            console.log(e.message)
+        }
+        const $script = await WORK.get_item(script_path);
+        let module = await import($script.short);
+        if(module.default){
+            module = module.default
+            module.is ??= 'testing-'+$script.name;
+            await WORK(module);
+        }
+
+        const el = document.createElement(module?.is || 'oda-' + $script.name);
+        el.$item = $script;
+        document.body.firstElementChild.appendChild(el);   
+        window.addEventListener('pointerdown', e=>{
+            let parent = window.parent;
+            if(window !== parent){
+                for(let p of parent.document.querySelectorAll('[popover]'))
+                    p.hidePopover();
+            }
+            else{
+                for(let w of Array.from(window.frames)){
+                    for(let p of w.document.querySelectorAll('[popover]'))
+                        p.hidePopover();
+                }
+            }
+        })
+    </script>
+</body>
+</html>

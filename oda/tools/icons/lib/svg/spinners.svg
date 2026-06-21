@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" name="spinners-2">
+    <symbol id="circle">
+        <circle id="sp-circle" cx="30" cy="30" r="20" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="60 20"/>
+        <style>#sp-pulse{animation:1s infinite alternate pulse}@keyframes pulse{from{r:10;opacity:1}to{r:24;opacity:.5}}</style>
+    </symbol>
+    <symbol id="pulse">
+        <circle id="sp-pulse" cx="30" cy="30" r="20"/>
+        <style>#sp-circle{transform-origin:50% 50%;animation:1s linear infinite spin}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>
+    </symbol>
+    <symbol id="3-dots-bounce">
+        <style>.spinner_qM83{animation:1.05s infinite spinner_8HQG}.spinner_oXPr{animation-delay:.1s}.spinner_ZTLf{animation-delay:.2s}@keyframes spinner_8HQG{0%,57.14%{animation-timing-function:cubic-bezier(0.33,.66,.66,1);transform:translate(0)}28.57%{animation-timing-function:cubic-bezier(0.33,0,.66,.33);transform:translateY(-6px)}100%{transform:translate(0)}}</style>
+        <circle class="spinner_qM83" cx="4" cy="12" r="3"/>
+        <circle class="spinner_qM83 spinner_oXPr" cx="12" cy="12" r="3"/>
+        <circle class="spinner_qM83 spinner_ZTLf" cx="20" cy="12" r="3"/>
+    </symbol>
+    <symbol id="3-dots-fade">
+        <style>.spinner_S1WN{animation:.8s linear -.8s infinite spinner_MGfb}.spinner_Km9P{animation-delay:-.65s}.spinner_JApP{animation-delay:-.5s}@keyframes spinner_MGfb{100%,93.75%{opacity:.2}}</style>
+        <circle class="spinner_S1WN" cx="4" cy="12" r="3"/>
+        <circle class="spinner_S1WN spinner_Km9P" cx="12" cy="12" r="3"/>
+        <circle class="spinner_S1WN spinner_JApP" cx="20" cy="12" r="3"/>
+    </symbol>
+    <symbol id="3-dots-move">
+
+            <style>.spinner_nOfF{animation:spinner_qtyZ 2s cubic-bezier(0.36,.6,.31,1) infinite}.spinner_fVhf{animation-delay:-.5s}.spinner_piVe{animation-delay:-1s}.spinner_MSNs{animation-delay:-1.5s}@keyframes spinner_qtyZ{0%{r:0}25%{r:3px;cx:4px}50%{r:3px;cx:12px}75%{r:3px;cx:20px}100%{r:0;cx:20px}}</style>
+            <circle class="spinner_nOfF" cx="4" cy="12" r="3"/>
+            <circle class="spinner_nOfF spinner_fVhf" cx="4" cy="12" r="3"/>
+            <circle class="spinner_nOfF spinner_piVe" cx="4" cy="12" r="3"/>
+            <circle class="spinner_nOfF spinner_MSNs" cx="4" cy="12" r="3"/>
+
+    </symbol>
+    <symbol id="3-dots-rotate">
+        <style>.spinner_HIK5{transform-origin:center;animation:1s cubic-bezier(.36,.6,.31,1) infinite spinner_XVY9}@keyframes spinner_XVY9{50%{transform:rotate(180deg)}100%{transform:rotate(360deg)}}</style>
+        <circle cx="12" cy="12" r="3"/>
+        <g class="spinner_HIK5">
+            <circle cx="4" cy="12" r="3"/>
+            <circle cx="20" cy="12" r="3"/>
+        </g>
+    </symbol>
+    <symbol id="3-dots-scale">
+        <style>.spinner_b2T7{animation:.8s linear infinite spinner_xe7Q}.spinner_YRVV{animation-delay:-.65s}.spinner_c9oY{animation-delay:-.5s}@keyframes spinner_xe7Q{100%,93.75%{r:3px}46.875%{r:.2px}}</style>
+        <circle class="spinner_b2T7" cx="4" cy="12" r="3"/>
+        <circle class="spinner_b2T7 spinner_YRVV" cx="12" cy="12" r="3"/>
+        <circle class="spinner_b2T7 spinner_c9oY" cx="20" cy="12" r="3"/>
+    </symbol>
+    <symbol id="3-dots-middle">
+        <style>.spinner_I8Q1{animation:.75s linear infinite spinner_qhi1}.spinner_vrS7{animation-delay:-.375s}@keyframes spinner_qhi1{0%,100%{r:1.5px}50%{r:3px}}</style>
+        <circle class="spinner_I8Q1" cx="4" cy="12" r="1.5"/>
+        <circle class="spinner_I8Q1 spinner_vrS7" cx="12" cy="12" r="3"/>
+        <circle class="spinner_I8Q1" cx="20" cy="12" r="1.5"/>
+    </symbol>
+    <symbol id="6-dots-rotate">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_Wezc{transform-origin:center;animation:spinner_Oiah .75s step-end infinite}@keyframes spinner_Oiah{8.3%{transform:rotate(30deg)}16.6%{transform:rotate(60deg)}25%{transform:rotate(90deg)}33.3%{transform:rotate(120deg)}41.6%{transform:rotate(150deg)}50%{transform:rotate(180deg)}58.3%{transform:rotate(210deg)}66.6%{transform:rotate(240deg)}75%{transform:rotate(270deg)}83.3%{transform:rotate(300deg)}91.6%{transform:rotate(330deg)}100%{transform:rotate(360deg)}}</style><g class="spinner_Wezc"><circle cx="12" cy="2.5" r="1.5" opacity=".14"/><circle cx="16.75" cy="3.77" r="1.5" opacity=".29"/><circle cx="20.23" cy="7.25" r="1.5" opacity=".43"/><circle cx="21.50" cy="12.00" r="1.5" opacity=".57"/><circle cx="20.23" cy="16.75" r="1.5" opacity=".71"/><circle cx="16.75" cy="20.23" r="1.5" opacity=".86"/><circle cx="12" cy="21.5" r="1.5"/></g></svg>
+    </symbol>
+    <symbol id="8-dots-rotate">
+        <style>.spinner_GuJz{transform-origin:center;animation:spinner_STY6 1.5s linear infinite}@keyframes spinner_STY6{100%{transform:rotate(360deg)}}</style>
+        <g class="spinner_GuJz">
+            <circle cx="3" cy="12" r="2"/>
+            <circle cx="21" cy="12" r="2"/>
+            <circle cx="12" cy="21" r="2"/>
+            <circle cx="12" cy="3" r="2"/>
+            <circle cx="5.64" cy="5.64" r="2"/>
+            <circle cx="18.36" cy="18.36" r="2"/>
+            <circle cx="5.64" cy="18.36" r="2"/>
+            <circle cx="18.36" cy="5.64" r="2"/>
+        </g>
+    </symbol>
+    <symbol id="dot-resolve">
+        <style>.spinner_7WDj{transform-origin:center;animation:spinner_PBVY .75s linear infinite}@keyframes spinner_PBVY{100%{transform:rotate(360deg)}}</style>
+        <path d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12,20Z" opacity=".25"/>
+        <circle class="spinner_7WDj" cx="12" cy="2.5" r="1.5"/>
+    </symbol>
+    <symbol id="180-ring-with-bg">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_z9k8{transform-origin:center;animation:spinner_StKS .75s infinite linear}@keyframes spinner_StKS{100%{transform:rotate(360deg)}}</style><path d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12,20Z" opacity=".25"/><path d="M12,4a8,8,0,0,1,7.89,6.7A1.53,1.53,0,0,0,21.38,12h0a1.5,1.5,0,0,0,1.48-1.75,11,11,0,0,0-21.72,0A1.5,1.5,0,0,0,2.62,12h0a1.53,1.53,0,0,0,1.49-1.3A8,8,0,0,1,12,4Z" class="spinner_z9k8"/></svg>
+    </symbol>
+    <symbol id="bars-rotate-fade">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_OSmW{transform-origin:center;animation:spinner_T6mA .75s step-end infinite}@keyframes spinner_T6mA{8.3%{transform:rotate(30deg)}16.6%{transform:rotate(60deg)}25%{transform:rotate(90deg)}33.3%{transform:rotate(120deg)}41.6%{transform:rotate(150deg)}50%{transform:rotate(180deg)}58.3%{transform:rotate(210deg)}66.6%{transform:rotate(240deg)}75%{transform:rotate(270deg)}83.3%{transform:rotate(300deg)}91.6%{transform:rotate(330deg)}100%{transform:rotate(360deg)}}</style><g class="spinner_OSmW"><rect x="11" y="1" width="2" height="5" opacity=".14"/><rect x="11" y="1" width="2" height="5" transform="rotate(30 12 12)" opacity=".29"/><rect x="11" y="1" width="2" height="5" transform="rotate(60 12 12)" opacity=".43"/><rect x="11" y="1" width="2" height="5" transform="rotate(90 12 12)" opacity=".57"/><rect x="11" y="1" width="2" height="5" transform="rotate(120 12 12)" opacity=".71"/><rect x="11" y="1" width="2" height="5" transform="rotate(150 12 12)" opacity=".86"/><rect x="11" y="1" width="2" height="5" transform="rotate(180 12 12)"/></g></svg>
+    </symbol>
+    <symbol id="blocks-wave">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_zWVm{animation:spinner_5QiW 1.2s linear infinite,spinner_PnZo 1.2s linear infinite}.spinner_gfyD{animation:spinner_5QiW 1.2s linear infinite,spinner_4j7o 1.2s linear infinite;animation-delay:.1s}.spinner_T5JJ{animation:spinner_5QiW 1.2s linear infinite,spinner_fLK4 1.2s linear infinite;animation-delay:.1s}.spinner_E3Wz{animation:spinner_5QiW 1.2s linear infinite,spinner_tDji 1.2s linear infinite;animation-delay:.2s}.spinner_g2vs{animation:spinner_5QiW 1.2s linear infinite,spinner_CMiT 1.2s linear infinite;animation-delay:.2s}.spinner_ctYB{animation:spinner_5QiW 1.2s linear infinite,spinner_cHKR 1.2s linear infinite;animation-delay:.2s}.spinner_BDNj{animation:spinner_5QiW 1.2s linear infinite,spinner_Re6e 1.2s linear infinite;animation-delay:.3s}.spinner_rCw3{animation:spinner_5QiW 1.2s linear infinite,spinner_EJmJ 1.2s linear infinite;animation-delay:.3s}.spinner_Rszm{animation:spinner_5QiW 1.2s linear infinite,spinner_YJOP 1.2s linear infinite;animation-delay:.4s}@keyframes spinner_5QiW{0%,50%{width:7.33px;height:7.33px}25%{width:1.33px;height:1.33px}}@keyframes spinner_PnZo{0%,50%{x:1px;y:1px}25%{x:4px;y:4px}}@keyframes spinner_4j7o{0%,50%{x:8.33px;y:1px}25%{x:11.33px;y:4px}}@keyframes spinner_fLK4{0%,50%{x:1px;y:8.33px}25%{x:4px;y:11.33px}}@keyframes spinner_tDji{0%,50%{x:15.66px;y:1px}25%{x:18.66px;y:4px}}@keyframes spinner_CMiT{0%,50%{x:8.33px;y:8.33px}25%{x:11.33px;y:11.33px}}@keyframes spinner_cHKR{0%,50%{x:1px;y:15.66px}25%{x:4px;y:18.66px}}@keyframes spinner_Re6e{0%,50%{x:15.66px;y:8.33px}25%{x:18.66px;y:11.33px}}@keyframes spinner_EJmJ{0%,50%{x:8.33px;y:15.66px}25%{x:11.33px;y:18.66px}}@keyframes spinner_YJOP{0%,50%{x:15.66px;y:15.66px}25%{x:18.66px;y:18.66px}}</style><rect class="spinner_zWVm" x="1" y="1" width="7.33" height="7.33"/><rect class="spinner_gfyD" x="8.33" y="1" width="7.33" height="7.33"/><rect class="spinner_T5JJ" x="1" y="8.33" width="7.33" height="7.33"/><rect class="spinner_E3Wz" x="15.66" y="1" width="7.33" height="7.33"/><rect class="spinner_g2vs" x="8.33" y="8.33" width="7.33" height="7.33"/><rect class="spinner_ctYB" x="1" y="15.66" width="7.33" height="7.33"/><rect class="spinner_BDNj" x="15.66" y="8.33" width="7.33" height="7.33"/><rect class="spinner_rCw3" x="8.33" y="15.66" width="7.33" height="7.33"/><rect class="spinner_Rszm" x="15.66" y="15.66" width="7.33" height="7.33"/></svg>
+    </symbol>
+    <symbol id="blocks-shuffle-3">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_9y7u{animation:spinner_fUkk 2.4s linear infinite;animation-delay:-2.4s}.spinner_DF2s{animation-delay:-1.6s}.spinner_q27e{animation-delay:-.8s}@keyframes spinner_fUkk{8.33%{x:13px;y:1px}25%{x:13px;y:1px}33.3%{x:13px;y:13px}50%{x:13px;y:13px}58.33%{x:1px;y:13px}75%{x:1px;y:13px}83.33%{x:1px;y:1px}}</style><rect class="spinner_9y7u" x="1" y="1" rx="1" width="10" height="10"/><rect class="spinner_9y7u spinner_DF2s" x="1" y="1" rx="1" width="10" height="10"/><rect class="spinner_9y7u spinner_q27e" x="1" y="1" rx="1" width="10" height="10"/></svg>
+    </symbol>
+    <symbol id="blocks-shuffle-2">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><style>.spinner_9Mto{animation:spinner_5GqJ 1.6s linear infinite;animation-delay:-1.6s}.spinner_bb12{animation-delay:-1s}@keyframes spinner_5GqJ{12.5%{x:13px;y:1px}25%{x:13px;y:1px}37.5%{x:13px;y:13px}50%{x:13px;y:13px}62.5%{x:1px;y:13px}75%{x:1px;y:13px}87.5%{x:1px;y:1px}}</style><rect class="spinner_9Mto" x="1" y="1" rx="1" width="10" height="10"/><rect class="spinner_9Mto spinner_bb12" x="1" y="1" rx="1" width="10" height="10"/></svg>
+    </symbol>
+    <symbol id="blocks-scale">
+        <style>.spinner_LWk7{animation:spinner_GWy6 1.2s linear infinite,spinner_BNNO 1.2s linear infinite}.spinner_yOMU{animation:spinner_GWy6 1.2s linear infinite,spinner_pVqn 1.2s linear infinite;animation-delay:.15s}.spinner_KS4S{animation:spinner_GWy6 1.2s linear infinite,spinner_6uKB 1.2s linear infinite;animation-delay:.3s}.spinner_zVee{animation:spinner_GWy6 1.2s linear infinite,spinner_Qw4x 1.2s linear infinite;animation-delay:.45s}@keyframes spinner_GWy6{0%,50%{width:9px;height:9px}10%{width:11px;height:11px}}@keyframes spinner_BNNO{0%,50%{x:1.5px;y:1.5px}10%{x:.5px;y:.5px}}@keyframes spinner_pVqn{0%,50%{x:13.5px;y:1.5px}10%{x:12.5px;y:.5px}}@keyframes spinner_6uKB{0%,50%{x:13.5px;y:13.5px}10%{x:12.5px;y:12.5px}}@keyframes spinner_Qw4x{0%,50%{x:1.5px;y:13.5px}10%{x:.5px;y:12.5px}}</style><rect class="spinner_LWk7" x="1.5" y="1.5" rx="1" width="9" height="9"/><rect class="spinner_yOMU" x="13.5" y="1.5" rx="1" width="9" height="9"/><rect class="spinner_KS4S" x="13.5" y="13.5" rx="1" width="9" height="9"/><rect class="spinner_zVee" x="1.5" y="13.5" rx="1" width="9" height="9"/>
+    </symbol>
+    <symbol id="clock">
+        <style>.spinner_d9Sa{transform-origin:center}.spinner_qQQY{animation:spinner_ZpfF 9s linear infinite}.spinner_pote{animation:spinner_ZpfF .75s linear infinite}@keyframes spinner_ZpfF{100%{transform:rotate(360deg)}}</style><path d="M12,1A11,11,0,1,0,23,12,11,11,0,0,0,12,1Zm0,20a9,9,0,1,1,9-9A9,9,0,0,1,12,21Z"/><rect class="spinner_d9Sa spinner_qQQY" x="11" y="6" rx="1" width="2" height="7"/><rect class="spinner_d9Sa spinner_pote" x="11" y="11" rx="1" width="2" height="9"/>
+    </symbol>
+</svg>

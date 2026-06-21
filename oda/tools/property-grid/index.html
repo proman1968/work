@@ -1,0 +1,25 @@
+<meta charset="utf-8">
+
+<oda-property-grid id="grid"></oda-property-grid>
+<script type="module">
+    import '/oda/oda.js';
+    import './property-grid.js';
+
+
+    class myClass extends Reactor{
+        get $public(){
+            return {
+                a: 100,
+                b:{
+                    $category: 'next',
+                    $def: 300
+                },
+                get c(){
+                    return this.a + this.b
+                }
+            }
+        }
+    }
+    let test = new myClass();
+    grid.inspected = test
+</script>
