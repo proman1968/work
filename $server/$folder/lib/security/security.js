@@ -49,11 +49,9 @@ export default {
         const admin = await this.admin;
         security.admin = admin.id;
 
-        const supervisor = await this.supervisor;
-        security.supervisor = supervisor.id;
-
-        const members = this.$item.members.map(m => m.id);
-        security.members = members;
+        let users = await this.$item.users;
+        users = users.map(m => m.id);
+        security.users = users;
 
         return security;
     },

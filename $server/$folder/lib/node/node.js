@@ -88,8 +88,15 @@ export default {
             return res?.last
         })
     },
-    get label(){
-        return this.$item?.label;
+    label: {
+        get() {
+            if (this._customLabel != null && this._customLabel !== '')
+                return this._customLabel;
+            return this.$item?.label;
+        },
+        set(n) {
+            this._customLabel = n;
+        }
     },
     last:{
         $def: 0,

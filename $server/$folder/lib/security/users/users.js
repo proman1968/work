@@ -18,12 +18,12 @@ export default {
             }
         </style>
         <div class="horizontal part" no-flex>
-            <item-user border ~for="users" :$item="$for.item" :icon-size @tap="_add"></item-user>
+            <item-user border ~for="users" :$item="$for.item" :icon-size @tap="_add" @contextmenu.capture="_userMenu"></item-user>
         </div>
         <div flex></div>
         <div ~if="selected_users.length" class="horizontal part" success-invert no-flex>
             <oda-icon icon="eva:f-arrow-ios-back" :icon-size @tap="_clear"></oda-icon>
-            <item-user border ~for="selection" :$item="$for.item" :icon-size @tap="_remove"></item-user>
+            <item-user border ~for="selection" :$item="$for.item" :icon-size @tap="_remove" @contextmenu.capture="_userMenu"></item-user>
         </div>
     `,
     get $saveKey(){
@@ -45,7 +45,7 @@ export default {
     get users() {
         return this.selected_users && this.all_users?.then(users => {
             return users?.reduce?.((res, val) => {
-                if (!this.selected_users.includes(val.id)) 
+                if (!this.selected_users.includes(val.id))
                     res.add(val);
                 return res;
             }, []) || [];
@@ -71,7 +71,12 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        security.members.add(user.id);
+        security.users.add(user.id);
+        this.$item.save(undefined, {});
+    },
+    async suspendUser(user) {
+        const security = await this.getSecurity();
+        security.users.remove(user.id);
         this.$item.save(undefined, {});
     },
     _add(e) {
@@ -87,10 +92,58 @@ export default {
     _clear(e) {
         this.selected_users = [];
     },
-    async _removeAccess(e) {
-        const security = await this.getSecurity();
-        const users = await this.users;
-        security.members = users.map(u => u.id);
-        this.$item.save(undefined, {});
+    _userMenu(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const user = e.target.$item;
+        const items = [
+            {
+                icon: 'icons:remove',
+                label: 'Отстранить пользователя',
+                execute: (e) => {
+                    this.suspendUser(user);
+                }
+            }
+        ];
+
+        const menu = ODA.createElement('oda-tree',
+            {
+                items,
+                nodeTemplate: 'menu-node',
+                hideTops: 0,
+                hideRoots: 1,
+                execute(item) {
+                    this.parentElement.close(item);
+                }
+            }
+        );
+        WORK.showDropdown(menu, { TITLE: { label: user.label } }, e.target);
     }
 }
+
+ODA({is: 'menu-node', exports: 'oda//icon.js',
+    template: /*html*/`
+    <style>
+        :host {
+            @apply --horizontal;
+            cursor: pointer;
+            align-items: center;
+        }
+    </style>
+    <oda-icon :icon></oda-icon>
+    <span>{{label}}</span>
+    `,
+    row: null,
+    get icon() {
+        return this.row?.icon;
+    },
+    get label() {
+        return this.row?.label;
+    },
+    $listeners: {
+        tap(e) {
+            this.row.execute?.();
+            this.$pdp.execute?.(this.row);
+        }
+    }
+})

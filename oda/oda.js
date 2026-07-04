@@ -242,7 +242,7 @@ globalThis.ODA = async function ODA(prototype = {}){
                     return this.host?.isPopover || !!this.popover;
                 }
                 async showContextMenu(menu = {title: 'Context menu', items:[]}){
-                    await import('/oda/components/menu.js');
+                    await import('/oda/components/menus/menu/menu.js');
                     const element = ODA.createElement('oda-menu', menu);
                     if(this.isPopover)
                         this.__shadowRoot__.appendChild(element);
@@ -301,6 +301,38 @@ globalThis.ODA = async function ODA(prototype = {}){
     })()
 }
 ODA.rootPath = '/oda';
+function waitForCustomElement(tagName, timeout = 30000) {
+    tagName = String(tagName || '').toLowerCase();
+    if (!tagName)
+        return Promise.reject(new Error('waitReg: empty tag name'));
+    if (typeof customElements !== 'undefined' && customElements.get(tagName))
+        return Promise.resolve();
+    if (typeof customElements === 'undefined')
+        return Promise.reject(new Error('waitReg: customElements unavailable'));
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`waitReg timeout: ${tagName}`));
+        }, timeout);
+        customElements.whenDefined(tagName).then(() => {
+            clearTimeout(timer);
+            resolve();
+        }, (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+    });
+}
+async function loadJSON(url) {
+    const response = await fetch(url);
+    if (!response.ok)
+        throw new Error(`loadJSON failed (${response.status}): ${url}`);
+    const text = await response.text();
+    if (!text.trim())
+        return null;
+    return JSON.parse(text);
+}
+ODA.waitReg = waitForCustomElement;
+ODA.loadJSON = loadJSON;
 
 class VNode{
     id = VNode.counter();
@@ -494,7 +526,7 @@ class VNode{
                     this.#for?.(element);
                     break;
                 }
-                
+
                 const dirs = this.#directives;
                 for (const dir in dirs) {
                     const next = dirs[dir](element);
@@ -504,7 +536,7 @@ class VNode{
                         return next;
                     }
                 }
-                
+
                 const binds = this.#bindings;
                 for (const bind in binds) {
                     binds[bind](element);
@@ -516,7 +548,7 @@ class VNode{
                     const cache = element[R].cache;
                     const replacer = cache.replacer ??= { '#comment': element };
                     if (element !== replacer['#comment']) return element;
-                    
+
                     let el = element.__replacer__;
                     if (!el || el === element) {
                         el = replacer[this.tag];
@@ -528,12 +560,12 @@ class VNode{
                         el.host = element.host;
                         el = this.render(el);
                     }
-                    
+
                     requestAnimationFrame(() => el.render?.());
-                    
+
                     const filter = `slot[name='${el.slot}']`;
                     let domHost = el.host;
-                    
+
                     for (const ch of domHost.$$('*', true)) {
                         if (!ch.isComment && !ch.children.length) ch.render();
                         if (ch.$?.(filter, true)) {
@@ -544,7 +576,7 @@ class VNode{
                             return el;
                         }
                     }
-                    
+
                     while (domHost) {
                         for (const ch of domHost.children) {
                             if (!ch.isComment && !ch.children.length) ch.render();
@@ -826,7 +858,7 @@ Node:{
             const cache = this[R].cache;
             const key = '$pdp:' + this.nodeName;
             if (cache[key]) return cache[key];
-            
+
             const proxy = new Proxy(this, {
                 has(target, p) {
                     if (p === '$for' || p === '$event' || p === '$this') return false;
@@ -864,7 +896,7 @@ Node:{
                     return true;
                 }
             });
-            
+
             cache[key] = proxy;
             return proxy;
         }
@@ -1219,12 +1251,12 @@ ODA.DIRECTIVES = {
             items = new Array(len);
             for (let i = 0; i < len; i++) items[i] = i;
         }
-        
+
         const prevFor = this.$for;
         const childs = this.childNodes;
         const itemsLen = items.length;
         const currentLen = childs.length;
-        
+
         // Обновляем существующие или создаём новые
         for (let i = 0; i < itemsLen; i++) {
             const item = items[i];
@@ -1232,13 +1264,13 @@ ODA.DIRECTIVES = {
                 while (this.firstChild) this.removeChild(this.firstChild);
                 return;
             }
-            
+
             let el = childs[i];
             if (!el) {
                 el = this.__vnode__.isComment ? this.__vnode__.createElement('#comment') : this.__vnode__.createElement();
                 this.appendChild(el);
             }
-            
+
             let target = el;
             if (prevFor) {
                 target = el.$for = Object.assign({}, prevFor);
@@ -1246,14 +1278,14 @@ ODA.DIRECTIVES = {
                     target = target.$for = Object.assign({}, target.$for);
                 }
             }
-            
+
             const $for = { item, index: i, items, key: item.key ?? i };
             if (!Reactor.equal(target.$for, $for, 2)) {
                 target.$for = $for;
             }
             el.render();
         }
-        
+
         // Удаляем лишние
         for (let i = currentLen - 1; i >= itemsLen; i--) {
             const el = childs[i];
@@ -1306,7 +1338,7 @@ ODA.DIRECTIVES = {
     text(text = '') {
         if (this[R].cache.textContent === text) return;
         this[R].cache.textContent = text;
-        if (!this[CACHER].pendingText) {
+        if (!this[R].cache.pendingText) {
             this[R].cache.pendingText = text;
             queueMicrotask(() => {
                 this.textContent = this[R].cache.pendingText;
@@ -1385,7 +1417,7 @@ const loadedCallback = async () => {
             window.tester.constructor.prototype.addButton = function (e){
                 buttons.push(e)
             }
-            await import('.$oda/tools/tester.js');
+            await import('./tools/tester/tester.js');
             setTimeout(() => {
                 document.body.firstElementChild.style.visibility = 'visible';
                 document.body.style.visibility = 'visible';

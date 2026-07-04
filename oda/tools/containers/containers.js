@@ -47,7 +47,7 @@ ODA.loadJSON(path + '/_.dir').then(res=>{
 
             let control = component;
             if (typeof control === 'string') {
-                ODA.waitReg(control);
+                await ODA.waitReg(control);
                 control = await ODA.createComponent.call(containerHost, control, props);
             }
             else { //todo Поверить режим для готовых компонентов

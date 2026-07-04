@@ -1,4 +1,5 @@
 node_modules/
+root/
 
 # Secrets and local config
 /#system/mail.json
@@ -23,6 +24,7 @@ users/*/logs/
 .DS_Store
 Thumbs.db
 *.log
+.svn/
 
 # Large ML model weights (download separately)
 torus/binnet/models/

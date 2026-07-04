@@ -352,7 +352,7 @@ ODA({is: 'oda-tree-item',
             <oda-icon ~if="useExpander" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
             <div flex class="node" :info-invert="isFocused">
-                <span :title="label" flex ~is="nodeTemplate" :row :expanded :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" @tap="setItemFocus">{{label}}</span>
+                <span :title="label" flex ~is="nodeTemplate" :row :expanded :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode @tap="setItemFocus">{{label}}</span>
             </div>
             <div horizontal style="height: 100%;" ~if="!isCategory">
                 <oda-tree-cell ~for="$pdp.cells"  ~is="$for?.item?.template || 'oda-tree-cell'" :part="'cell-' + $for?.index" :row :col="$for?.item"></oda-tree-cell>
@@ -361,7 +361,7 @@ ODA({is: 'oda-tree-item',
         <div horizontal flex ~if="expanded" style="min-height: 1px;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
-                <oda-tree-item  :filter :show-tools :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :row="$for?.item"></oda-tree-item>
+                <oda-tree-item  :filter :show-tools :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :row="$for?.item" :menu-mode></oda-tree-item>
             </div>
         </div>
     `,
@@ -411,6 +411,10 @@ ODA({is: 'oda-tree-item',
         return (this.row?.nodeTemplate || this.host.nodeTemplate);
     },
     showTools: false,
+    menuMode: {
+        $def: 'tools',
+        $list: ['tools']
+    },
     showSize: true,
     setItemFocus(e){
         e.stopPropagation();

@@ -8,15 +8,50 @@ export default {
                 overflow: hidden;
                 @apply --vertical;
                 @apply --content;
+
+                .tools-list{
+                    @apply --vertical;
+
+                    .tool{
+                        @apply --horizontal;
+                        @apply --flex;
+                        align-items: center;
+                        font-size: 120%;
+                        padding: 2px;
+                    }
+                }
             }
         </style>
-        <item-tree @resize :hide-tops :hide-roots expander-order="1" expand-all :$item="menuRoot" :allow-categories></item-tree>
+        <div ~if="showTools" class="tools-list">
+            <div ~for="tools" @pointerdown="executeTool($for.item)" class="tool">
+                <oda-icon :icon="$for.item.icon" :icon-size></oda-icon>
+                <div>{{$for.item.label}}</div>
+            </div>
+        </div>
+        <item-tree ~if="showHandlers" @resize :hide-tops :hide-roots expander-order="1" expand-all :$item="handlersRoot" :allow-categories></item-tree>
     `,
     hideRoots: 2,
     hideTops: 1,
     allowCategories: true,
     path: '',
-    get menuRoot() {
+    mode: {
+        $def: 'handlers',
+        $list: ['tools', 'handlers', 'both']
+    },
+    get showTools() {
+        return ['tools', 'both'].includes(this.mode);
+    },
+    get showHandlers() {
+        return ['handlers', 'both'].includes(this.mode);
+    },
+    get handlersRoot() {
         return this.$item?.fetch('handlers', {path: this.path});
+    },
+    get tools(){
+        return this.$item?.tools;
+    },
+    executeTool(tool) {
+        this.fire('close');
+        tool.execute();
     }
 }

@@ -38,10 +38,10 @@ export default {
                     return (res?'unicon:check-circle':null);
                 })
             }
-                
+
             return this.$item?.subIcon;
         }
-    
+
     },
     subIconColor:{
         $def: '',
@@ -50,9 +50,9 @@ export default {
                 return this.online?.then?.(res=>{
                     return (res?'lime':'');
                 })
-            } 
+            }
             return '';
-        }        
+        }
     },
     get default(){
         return this.isUser?'':'files:file';
@@ -63,6 +63,10 @@ export default {
         return ''
     },
     autoRun: false,
+    menuMode: {
+        $def: 'handlers',
+        $list: ['handlers', 'tools', 'both']
+    },
     title: {
         $attr: true,
         get() {
@@ -92,7 +96,7 @@ export default {
         get() {
             return this.$item instanceof CORE.$storage;
         }
-    },    
+    },
     $listeners: {
         tap(e) {
             // e.stopPropagation();
@@ -118,7 +122,7 @@ export default {
         contextmenu(e) {
             e.preventDefault();
             e.stopPropagation();
-            WORK.showMenu({ $item: this.$item }, e);
+            WORK.showMenu({ $item: this.$item, mode: this.menuMode }, e);
         }
     }
 }

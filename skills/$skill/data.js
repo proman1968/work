@@ -8,8 +8,8 @@ export default {
 				type: "String"
 			}]
 		},
-		STAICS: {
-			id: "STAICS",
+		STATICS: {
+			id: "STATICS",
 			icon: "carbon:tree-view-alt",
 			fields: []
 		}
