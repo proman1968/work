@@ -1,5 +1,5 @@
 export default {
-    icon: 'icons:edit',
+    icon: 'editor:mode-edit',
     allowSave: true,
     get allowUse() {
         return this.$context?.STATIC?.fields?.length;

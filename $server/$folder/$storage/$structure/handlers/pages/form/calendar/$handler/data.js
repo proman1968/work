@@ -3,11 +3,17 @@ export default {
     extends:'oda-app-layout',
     icon: 'enterprise:calendar',
     template: /* html */`
-        <oda-form-calendar slot="main" flex :$item></oda-form-calendar>
-        <oda-form-calendar-list-view slot="right-panel" flex :$item label="Tasks" icon="carbon:table-of-contents:180"></oda-form-calendar-list-view>
-    `
+        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;"></oda-form-calendar ::day ::day-from ::day-to>
+        <div slot="right-panel" vertical flex style="overflow-y: auto; height: 0; padding: 4px 0;">
+            <oda-form-calendar-list-view  flex :$item label="Tasks" icon="carbon:table-of-contents:180" :day :day-from :day-to></oda-form-calendar-list-view>
+        </div>
+    `,
+    day: '',
+    dayFrom: '',
+    dayTo: ''
 }
 
+import '/$server/$folder/$file/$ics/handlers/pages/open/$handler/data.js'
 ODA({
     is: 'oda-form-calendar',
     template: /* html */`
@@ -59,11 +65,65 @@ ODA({
         </div>
     `,
     $item: null,
+    day: {
+        $def: '',
+        set(n) {
+            // this.$pdp.day = n;
+        }
+    },
+    dayFrom: {
+        $def: '',
+        set(n) {
+            // this.$pdp.dayFrom = n;
+        }
+    },
+    dayTo: {
+        $def: '',
+        set(n) {
+            // this.$pdp.dayTo = n;
+        }
+    },
     viewMode: {
         $def: 'day', // month, week, day, list
-        $save: true
+        $save: true,
+        set(n) {
+            this._updateDateRange();
+        }
     },
-    currentDate: undefined,
+    currentDate: {
+        $def: new Date(),
+        set(n) {
+            this._updateDateRange();
+        }
+    },
+    _formatDate(date){
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    },
+    _updateDateRange(){
+        const date = this.currentDate || new Date();
+        this.day = this._formatDate(date);
+        if(this.viewMode === 'day'){
+            this.dayFrom = this.day;
+            this.dayTo = this.day;
+        } else if(this.viewMode === 'week'){
+            const start = new Date(date);
+            const dayOfWeek = start.getDay();
+            const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+            start.setDate(start.getDate() + diff);
+            const end = new Date(start);
+            end.setDate(end.getDate() + 6);
+            this.dayFrom = this._formatDate(start);
+            this.dayTo = this._formatDate(end);
+        } else if(this.viewMode === 'month'){
+            const start = new Date(date.getFullYear(), date.getMonth(), 1);
+            const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+            this.dayFrom = this._formatDate(start);
+            this.dayTo = this._formatDate(end);
+        }
+    },
     get datePickerValue(){
         this.currentDate ||= new Date();
         const year = this.currentDate.getFullYear();
@@ -90,16 +150,17 @@ ODA({
         if (detail.allDay) start.setHours(9, 0, 0, 0);
         const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 60 * 60 * 1000);
         const el = ODA.createElement('oda-calendar-event-form', {
-            body: {
+            events: [{
                 startStr: this.toLocalDateTime(start),
                 endStr: this.toLocalDateTime(end)
-            }
+            }],
+            $item: this.$item
         })
         await WORK.showDialog(el, { TITLE: { label: 'New event', icon: 'enterprise:calendar' } });
-        const startDate = new Date(el.body.startStr);
-        const endDate = new Date(el.body.endStr);
+        const startDate = new Date(el.events[0].startStr);
+        const endDate = new Date(el.events[0].endStr);
         if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate) return;
-        let body = JSON.stringify(el.body);
+        let body = JSON.stringify(el.events[0]);
         const filename = `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ics`;
         let file = new File([body || ''], filename, { type: "text/plain" });
         await this.$item.save_file(file);
@@ -118,6 +179,7 @@ ODA({
             newDate.setMonth(newDate.getMonth() - 1);
         }
         this.currentDate = newDate;
+        this._updateDateRange();
     },
     nextPeriod() {
         const newDate = new Date(this.currentDate);
@@ -129,53 +191,10 @@ ODA({
             newDate.setMonth(newDate.getMonth() + 1);
         }
         this.currentDate = newDate;
+        this._updateDateRange();
     },
     goToday() {
         this.currentDate = new Date();
-    },
-    parseICSContent(icsContent, sourcePath){
-        const events = [];
-        const lines = icsContent.split(/\r?\n/);
-        let currentEvent = null;
-        for(let i = 0; i < lines.length; i++){
-            let line = lines[i].trim();
-            // Обработка многострочных значений
-            while(i + 1 < lines.length && lines[i + 1].match(/^[ \t]/)){
-                i++;
-                line += lines[i].trim();
-            }
-            if(line === 'BEGIN:VEVENT'){
-                currentEvent = {sourcePath};
-            } else if(line === 'END:VEVENT' && currentEvent){
-                events.push(currentEvent);
-                currentEvent = null;
-            } else if(currentEvent){
-                // Разделяем ключ и значение, учитывая параметры (например, DTSTART;TZID=...)
-                let colonIndex = line.indexOf(':');
-                if(colonIndex > 0){
-                    const fullKey = line.substring(0, colonIndex);
-                    const value = line.substring(colonIndex + 1);
-                    // Извлекаем имя ключа без параметров
-                    const key = fullKey.split(';')[0];
-                    if(key === 'DTSTART'){
-                        currentEvent.start = this.parseICSDate(value);
-                    } else if(key === 'DTEND'){
-                        currentEvent.end = this.parseICSDate(value);
-                    } else if(key === 'SUMMARY'){
-                        currentEvent.title = value.replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\n/g, '\n');
-                    } else if(key === 'DESCRIPTION'){
-                        currentEvent.description = value.replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\n/g, '\n');
-                    } else if(key === 'LOCATION'){
-                        currentEvent.location = value.replace(/\\,/g, ',').replace(/\\;/g, ';');
-                    } else if(key === 'STATUS'){
-                        currentEvent.status = value;
-                    } else if(key === 'UID'){
-                        currentEvent.uid = value;
-                    }
-                }
-            }
-        }
-        return events;
     },
     parseICSDate(dateStr){
         // Удаляем экранирование
@@ -505,77 +524,81 @@ ODA({
     }
 })
 
+import '/$server/$folder/lib/chat-item/$handler/data.js';
 ODA({
-    is: 'oda-calendar-event-form',
-    template: /* html */`
-        <style>
-            :host{
-                @apply --vertical;
-                padding: 8px;
-                gap: 8px;
-                min-width: 320px;
-            }
-            fieldset{
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
-                padding: 2px 8px;
-                margin: 0px;
-                min-width: 0px;
-            }
-            legend{
-                font-size: small;
-                padding: 0px 4px;
-            }
-            input, textarea{
-                border: none;
-                outline: none;
-                background-color: transparent;
-                font-family: inherit;
-                font-size: inherit;
-                width: 100%;
-                padding: 4px 0px;
-                box-sizing: border-box;
-            }
-            textarea{
-                resize: vertical;
-                min-height: 60px;
-            }
-            .row{
-                @apply --horizontal;
-                gap: 8px;
-            }
-            .row > fieldset{
-                @apply --flex;
-            }
-        </style>
-        <fieldset>
-            <legend>Title</legend>
-            <input ::value="body.summary" autofocus>
-        </fieldset>
-        <div class="row">
-            <fieldset>
-                <legend>Start</legend>
-                <input type="datetime-local" ::value="body.startStr">
-            </fieldset>
-            <fieldset>
-                <legend>End</legend>
-                <input type="datetime-local" ::value="body.endStr">
-            </fieldset>
-        </div>
-        <fieldset>
-            <legend>Location</legend>
-            <input ::value="body.location">
-        </fieldset>
-        <fieldset>
-            <legend>Description</legend>
-            <textarea ::value="body.description"></textarea>
-        </fieldset>
+    is: 'oda-form-calendar-list-view',
+    template: `
+        <!-- <div ~for="logs" :$item="$for.item">{{$for.item}}</div> -->
+        <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
     `,
-    body:{
-        summary: '',
-        location: '',
-        description: '',
-        startStr: '',
-        endStr: ''
+    logItems: [],
+    _logsFolder: null,
+    day: '2026-06-26',
+    dayFrom: '',
+    dayTo: '',
+    _sortLogFiles(files){
+        return files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
+    },
+    async _fetchLogFiles(){
+        const logs = this._logsFolder;
+        if (!logs)
+            return [];
+        let files = await logs.get_item('/*.logs');
+        if (!Array.isArray(files))
+            files = files ? [files] : [];
+        files = await Promise.all(files.map(f => Promise.resolve(f)));
+        return this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs')));
+    },
+    async _reloadLogItems(){
+        this.logItems = await this._fetchLogFiles();
+        this.render();
+        // this._scrollRibbonDown();
+    },
+    async _bindLogsFolder(){
+        const source = await Promise.resolve(this.logsSource);
+        if (!source)
+            return false;
+        // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
+        await source.logs(this.day);
+        let folder = await source.get_item('/~/logs/.data.logs/history/' + this.day);
+        folder = await Promise.resolve(folder);
+        if (!folder)
+            return false;
+        if (this._logsFolder?.path !== folder.path) {
+            this._logsFolder = folder;
+            this._dayFolderHooked = false;
+        }
+        if (!this._dayFolderHooked) {
+            this._dayFolderHooked = true;
+            folder.listen?.('changed', e => this._onLogsChanged(e));
+        }
+        return true;
+    },
+    _ensureLogsWatch(){
+        if (this._logsWatch)
+            return this._logsWatch;
+        this._logsWatch = Promise.resolve(this.logsSource).then(async source=>{
+            if (!source)
+                return;
+            // const onChanged = e => this._onLogsChanged(e);
+            // source?.listen?.('changed', onChanged);
+            // this.$pdp.$item?.listen?.('changed', onChanged);
+            // const history = await source.get_item('/~/logs/.data.logs/history');
+            // history?.listen?.('changed', onChanged);
+            await this._bindLogsFolder();
+            await this._reloadLogItems();
+        });
+        return this._logsWatch;
+    },
+    get logs(){
+        this._ensureLogsWatch();
+        return this.logItems;
+    },
+    get logsSource(){
+        if(this.$pdp.$item instanceof CORE.$user)
+            return WORK.USER
+        return Promise.resolve(this.$pdp.$item.admins).then(admins=>{
+            return admins.find(user=>user.id === WORK.uid) ||  WORK.USER
+        })
     }
 })

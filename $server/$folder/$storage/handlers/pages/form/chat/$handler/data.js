@@ -1,6 +1,6 @@
 export default{
     icon: 'icons:question-answer',
-    imports: '/oda//toggle.js, ~/lib//tree.js',
+    imports: '/oda//toggle.js, ~/lib//tree.js, ~/lib//chat-item',
     template: /* html */`
         <style>
             :host{
@@ -22,33 +22,11 @@ ODA({is: 'form-chat',
                 overflow: hidden;
                 position: relative;
             }
-            .btn {
-                position: relative;
-                align-items: center;
-                gap: 4px;
-                min-height: 32px;
-                border-radius: 16px;
-                cursor: pointer;
-                overflow: hidden;
-            }
             .tools {
                 gap: 8px;
                 padding: 4px;
                 align-items: center;
                 justify-content: space-between;
-            }
-            label {
-                font-size: x-small;
-                align-self: center;
-                cursor: pointer;
-            }
-            span {
-                width: 100%;
-                text-align: center;
-                font-size: x-small;
-                position: absolute:
-                top: 0px;
-                padding: 2px;
             }
         </style>
         <div class="tools" accent-invert horizontal>
@@ -61,14 +39,20 @@ ODA({is: 'form-chat',
         return this.receivers.length?'communication:call':'av:videocam'
     },
     async _onSelectionChanged(e){
-        this.receivers = (await e.detail.value) || []
+        const itemUsers = e.currentTarget;
+        this.receivers = (await itemUsers.selection) || [];
+    },
+    async attached(){
+        const itemUsers = this.$('item-users');
+        if (itemUsers)
+            this.receivers = (await itemUsers.selection) || [];
     },
     get showCallButton(){
         return this.receivers?.length
     },
     async call(e) {
         if(this.receivers?.length)
-            WORK.top.RTCCaller.startCall(await this.$item, this.receivers);
+            WORK.top.RTCCaller.startCall(await this.$item, this.receivers.map(u => u.id));
         else
             WORK.top.RTCCaller.startRecord(await this.$item);
     },
@@ -94,8 +78,13 @@ ODA({is: 'form-chat',
         })
     },
     receivers: [],
-    $item: null
-
+    // $item: null
+    $item: {
+        $def: null,
+        set($item) {
+            if($item && this.isPrivate && this.$item.id !== WORK.uid) this.receivers = [$item];
+        }
+    }
 })
 ODA({is: 'oda-chat',
     imports: 'oda//button, ~/lib//pack',
@@ -133,9 +122,6 @@ ODA({is: 'oda-chat',
                 font-family: system-ui;
                 outline-color: var(--header-background);
                 overflow: hidden;
-            }
-            item-node{
-                font-size: x-small;
             }
             label{
                 text-overflow: ellipsis;
@@ -274,7 +260,7 @@ ODA({is: 'oda-chat',
     files: [],
     get placeholder(){
         if(this.$pdp.receivers.length)
-            return 'Mesage to ' + this.$pdp.receivers.map(user=>user.label).join(', ') + ' ...';
+            return 'Message to ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
         return 'Command to AI ...'
     },
     clear(e){
@@ -293,7 +279,6 @@ ODA({is: 'oda-chat',
     get rows(){
         return Math.min(this.value.split('\n').length, 10);
     },
-
     async _onKeydown(e){
         if(e.keyCode === 13 || e.keyCode === 10){
             if(e.ctrlKey){
@@ -372,7 +357,7 @@ ODA({is: 'oda-chat',
     },
     focusedItem: null,
     $item: null,
-    async send(e){
+    send(e){
         this.$('#ribbon').scrollDown = true;
         const formData = new FormData();
         this.files.forEach((file, index) => {
@@ -385,27 +370,36 @@ ODA({is: 'oda-chat',
             else if(this.$pdp.receivers.length)
                 params.receivers = this.$pdp.receivers.map(u => u.id);
 
-            let file = new File([this.value || ''], 'message.txt', { type: "text/plain" });
+            const isForeign = this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid;
+            const hasReceivers = !!(params.receivers?.length);
+            const ext = (isForeign || hasReceivers) ? 'msg' : 'prompt';
+            let file = new File([this.value || ''], 'message.' + ext, { type: "text/plain" });
+            const onFail = err => console.warn('[chat] send', err);
 
             if(!this.files.length && !this.$pdp.replyTarget) {
                 this.clear();
-                await this.$pdp.$item.save_file(file, params);
+                this.$pdp.$item.save_file(file, params).catch(onFail);
             } else {
                 formData.append('message', file, file.name);
+                const upload = () => {
+                    this.clear();
+                    this.$pdp.$item.save_files(formData, params).catch(onFail);
+                };
                 if(this.$pdp.replyTarget){
-                    const replyTarget = await this.$pdp.replyTarget;
-                    let metadata = replyTarget.toJSON();
-                    metadata.reply = true;
-                    formData.append('metadata', JSON.stringify(metadata));
+                    Promise.resolve(this.$pdp.replyTarget).then(replyTarget => {
+                        let metadata = replyTarget.toJSON();
+                        metadata.reply = true;
+                        formData.append('metadata', JSON.stringify(metadata));
+                        upload();
+                    }).catch(onFail);
+                } else {
+                    upload();
                 }
-                this.clear();
-                await this.$pdp.$item.save_files(formData, params);
             }
         } else {
             this.chatAudioController.record(e);
             return;
         }
-        this.clear();
         this.$('#ribbon').scrollDown = true;
     },
     recording: false,
@@ -504,24 +498,37 @@ ODA({is: 'chat-ribbon',
         return history[idx];
     },
     get history(){
-        return this.lastDay.logs.then(async res=>{
-            let itemBodies = await Promise.all(res.map($file => $file.load()));
-            const $files = await Promise.all(itemBodies.map($itemBody => {
-                const $itemObj = JSON.parse($itemBody);
-                return WORK.get_item($itemObj.path, 'info');
-            }));
-            const fileContents = await Promise.all($files.map($file => $file.load()));
-            const contentStrArray = fileContents.filter(content => content &&  typeof content === 'string');
+        return Promise.resolve(this.lastDay?.logs).then(async items=>{
+            if (!Array.isArray(items))
+                return [];
             const result = [];
-            for(let i = contentStrArray.length - 1; i >= 0; i--) {
-                if(!result.has(contentStrArray[i])) result.unshift(contentStrArray[i])
+            for (const file of items) {
+                if (typeof file?.load !== 'function')
+                    continue;
+                let raw;
+                try {
+                    raw = await file.load();
+                }
+                catch {
+                    continue;
+                }
+                const body = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                const ext = body?.ext || body?.path?.split('/').pop()?.split('.').pop();
+                if (ext !== 'txt' && ext !== 'prompt' && ext !== 'msg')
+                    continue;
+                const text = body.content != null ? String(body.content) : '';
+                if (text && !result.has(text))
+                    result.push(text);
             }
             return result;
         })
     },
     $listeners:{
         scroll(e){
-            this.scrollDown = this.scrollTop > -10;
+            const down = this.scrollTop > -10;
+            if (this.scrollDown === down)
+                return;
+            this.scrollDown = down;
             this.render();
         }
     },
@@ -529,11 +536,47 @@ ODA({is: 'chat-ribbon',
     get ribbon(){
         return this;
     },
-    get dates(){
-        return this.$item.fetch('logs_dates').then(dates=>{
-            dates.reverse();
-            return dates;
+    dateList: [],
+    _datesWatch: null,
+    async refreshDates(){
+        if (!this.$item)
+            return false;
+        const today = new Date().toISOString().slice(0, 10);
+        if (this.dateList.length) {
+            if (this.dateList.includes(today))
+                return false;
+            this.dateList = [...this.dateList, today];
+            this.render();
+            return true;
+        }
+        delete this.$item[R]?.cache?.logs_dates;
+        let dates = await this.$item.fetch('logs_dates');
+        // logs_dates на сервере — по убыванию; в ленте дни — от старых к новым
+        dates = dates.slice().reverse();
+        if (dates.indexOf(today) === -1)
+            dates.push(today);
+        this.dateList = dates;
+        this.render();
+        return true;
+    },
+    get onChanged() {
+        return () => this.refreshDates();
+    },
+    _ensureDatesWatch(){
+        if (this._datesWatch) return this._datesWatch;
+        this._datesWatch = this.refreshDates().then(()=>{
+            // const onChanged = () => this.debounce('chat-dates', () => this.refreshDates(), 150);
+            this.$item?.listen?.('changed', this.onChanged);
+            // this.$pdp.$item?.listen?.('changed', this.onChanged);
         });
+        return this._datesWatch;
+    },
+    get dates(){
+        this._ensureDatesWatch();
+        return this.dateList;
+    },
+    detached() {
+        this.$item.unlisten('changed', this.onChanged);
     }
 })
 ODA({is: 'chat-day',
@@ -565,22 +608,14 @@ ODA({is: 'chat-day',
         </div>
 
         <div flex vertical ~if="visible">
-            <chat-item @tap="setFocus" ~for="logs" :$item="$for?.item" @wake="waked($for.index)"></chat-item>
+            <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
         </div>
     `,
-    waked(index) {
-        if(new Date().toISOString().slice(0, 10) === this.day) {
-            this.logs.then(logs => {
-                if(index === logs.length - 1) {
-                    this.$pdp.formChat.$item.localStorage.setToItem('count', new Date().toLocaleDateString(), ++index);
-                }
-            })
-        }
-    },
     get last(){
-        return this.$pdp.dates.then(days=>{
-            return days.last === this.day;
-        })
+        let dates = this.$pdp.dates;
+        if (dates?.then)
+            return dates.then(days => days.last === this.day);
+        return dates?.last === this.day;
     },
     day: '',
     get eye(){
@@ -597,38 +632,152 @@ ODA({is: 'chat-day',
     get visible(){
         return this.last;
     },
-    get logs_source(){
-        if(this.$pdp.$item instanceof CORE.$user)
-            return WORK.USER
-        return Promise.resolve(this.$pdp.$item.admins).then(admins=>{
-            return admins.find(user=>user.id === WORK.uid) ||  WORK.USER
-        })
+    logItems: [],
+    _logsFolder: null,
+    _logsInit: false,
+    _logsListenersHooked: false,
+    _dayFolderHooked: false,
+    _sortLogFiles(files){
+        return files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
     },
-    get logs(){
-        return Promise.resolve(this.logs_source).then(source=>{
-            return source?.logs(this.day).then(async logs=>{
-                let items = (await logs?.items) || [];
-                logs?.listen?.('changed', async e=>{
-                    let file = await logs.get_item('/' + e.detail.value.initiator, 'info');
-                    if(!file || file.label === '.RAG') return;
-                    items.push(file);
+    async _dedupeLogFiles(files){
+        const seen = new Set();
+        const result = [];
+        for (const f of files) {
+            let key = f?.id;
+            if (typeof f?.load === 'function') {
+                try {
+                    const raw = await f.load();
+                    const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    if (row?.path)
+                        key = row.path;
+                }
+                catch { /* skip */ }
+            }
+            if (!key || seen.has(key))
+                continue;
+            seen.add(key);
+            result.push(f);
+        }
+        return result;
+    },
+    _scrollRibbonDown(){
+        if (this.$pdp.ribbon?.scrollDown)
+            this.async(() => { this.$pdp.ribbon.scrollTop = 0; }, 0);
+    },
+    async _bindLogsFolder(){
+        const source = await Promise.resolve(this.logsSource);
+        if (!source)
+            return false;
+        // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
+        await source.logs(this.day);
+        let folder = await source.get_item('/~/logs/.data.logs/history/' + this.day);
+        folder = await Promise.resolve(folder);
+        if (!folder)
+            return false;
+        if (this._logsFolder?.path !== folder.path) {
+            this._logsFolder = folder;
+            this._dayFolderHooked = false;
+        }
+        if (!this._dayFolderHooked) {
+            this._dayFolderHooked = true;
+            folder.listen?.('changed', e => this._onLogsChanged(e));
+        }
+        return true;
+    },
+    async _fetchLogFiles(){
+        const logs = this._logsFolder;
+        if (!logs)
+            return [];
+        let files = await logs.get_item('/*.logs'); // todo: сервер в случае если один файл в папке, возвращает строковое содержимое этого файла, а ожидается массив экземпляров файлов
+        if (!Array.isArray(files)) {
+            if(typeof files === 'string') {
+                const allFiles = await logs.files;
+                if(allFiles?.length === 1) files = allFiles[0];
+            }
+            files = files ? [files] : [];
+        }
+        files = await Promise.all(files.map(f => Promise.resolve(f)));
+        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs'))));
+    },
+    async _mergeNewLogItems(){
+        if (!this._logsInit)
+            return;
+        const files = await this._fetchLogFiles();
+        let added = false;
+        for (const file of files) {
+            if (this.logItems.some(i => i.id === file.id))
+                continue;
+            this.logItems.push(file);
+            added = true;
+        }
+        if (!added)
+            return;
+        this.logItems = this._sortLogFiles(this.logItems);
+        this.render();
+        this._scrollRibbonDown();
+    },
+    async _onLogsChangedRun(e){
+        await this._bindLogsFolder();
+        const folder = this._logsFolder;
+        if (!folder)
+            return;
+        if (!this._logsInit)
+            return;
+        const initiator = e?.detail?.initiator ?? e?.detail?.value?.initiator;
+        if (initiator && initiator !== '.RAG' && String(initiator).endsWith('.logs')) {
+            try {
+                let file = await folder.get_item('/' + initiator, 'info');
+                if (file?.id?.endsWith?.('.logs') && !this.logItems.some(i => i.id === file.id)) {
+                    this.logItems.push(file);
+                    this.logItems = this._sortLogFiles(this.logItems);
                     this.render();
-                    if(this.$pdp.ribbon.scrollDown){
-                        this.async(async ()=>{
-                            while(this.$pdp.ribbon.scrollTop < 0){
-                                await new Promise(resolve=>{
-                                    this.async(()=>{
-                                        this.$pdp.ribbon.scrollTop = 0;
-                                        resolve();
-                                    })
-                                })
-                            }
-                        })
-                    }
-                })
-                return items.toReversed();
-            })
-        })
+                    this._scrollRibbonDown();
+                    return;
+                }
+            }
+            catch (err) {
+                console.warn('[chat-day] log changed', err);
+            }
+        }
+        await this._mergeNewLogItems();
+    },
+    _onLogsChanged(e){
+        this._lastChangedEvent = e;
+        this.debounce('chat-day-logs', () => this._onLogsChangedRun(this._lastChangedEvent), 30);
+    },
+    _ensureLogsInit() {
+        if (this._logsInit)
+            return;
+        this._logsInit = true;
+        Promise.resolve(this.logsSource).then(async source => {
+            if (!source)
+                return;
+            if (!this._logsListenersHooked) {
+                this._logsListenersHooked = true;
+                const onChanged = e => this._onLogsChanged(e);
+                source?.listen?.('changed', onChanged);
+                this.$pdp.$item?.listen?.('changed', onChanged);
+                const history = await source.get_item('/~/logs/.data.logs/history');
+                history?.listen?.('changed', onChanged);
+            }
+            await this._bindLogsFolder();
+            this.logItems = await this._fetchLogFiles();
+            this.render();
+            this._scrollRibbonDown();
+        }).catch(e => {
+            console.warn('[chat-day] logs', e.message);
+            this._logsInit = false;
+        });
+    },
+    get logs() {
+        this._ensureLogsInit();
+        return this.logItems;
+    },
+    get logsSource(){
+        if (this.$pdp.$item instanceof CORE.$user)
+            return WORK.USER;
+        return this.$pdp.$item;
     },
     get label(){
         let date = new Date(this.day);
@@ -638,192 +787,6 @@ ODA({is: 'chat-day',
                 month: "long",
                 day: "numeric",
             });
-    }
-})
-ODA({is: 'chat-item', imports:"~/lib//node-explorer.js",
-    template:/* html */`
-        <style>
-            :host {
-                @apply --horizontal;
-                padding: 4px 8px;
-                visibility: hidden;
-                transition: opacity .5s;
-            }
-            :host([select]) {
-                background-color: rgba(.1,.1,.1,.1);
-            }
-            :host([reply]) {
-                zoom: .5;
-            }
-            :host(:hover) > .right-buttons {
-                visibility: visible !important;
-            }
-            :host([visible]) {
-                visibility: visible;
-            }
-            .card {
-                min-width: 70px;
-                overflow: hidden;
-                border-radius: 8px;
-            }
-            .card[raised] {
-                border-radius: 0px !important;
-            }
-
-            .sender {
-                position: sticky;
-                bottom: 0px;
-                border-radius: 50% !important;
-            }
-            .body {
-                user-select: text;
-            }
-            oda-button {
-                padding: 0px !important;
-                transition: opacity, scale .2s;
-                scale: .8;
-                border-radius: 50%;
-                opacity: .8;
-            }
-            oda-button:hover {
-                @apply --selection;
-            }
-            .status {
-                font-size: xx-small;
-            }
-            [is-include] {
-                justify-content: center !important;
-            }
-            *[visibility-hidden]{
-                visibility: hidden;
-            }
-        </style>
-        <div vertical ~if="!isInclude" :visibility-hidden="hideAvatar" style="padding: 0px 8px;">
-            <div flex></div>
-            <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
-        </div>
-        <div class="card" content :raised="isInclude" :shadow="!isInclude" :flex="isInclude" vertical ~style="{marginLeft: senderId === WORK.uid?'auto':'0px'}">
-            <div flex></div>
-
-            <div  class="body" vertical>
-                <div ~is="previewTag" flex vertical :$item="$file"></div>
-            </div>
-            <div  class="includes" vertical>
-                <chat-item :reply="$for.item?.data?.reply" ~for="includes" is-include :$file="$for.item"></chat-item>
-            </div>
-            <div class="status" light :is-include horizontal flex style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isMessage" :no-flex="isInclude" style="padding: 2px 4px; border-radius: 4px; font-size: x-small;"></item-node>
-                <div ~if="!isInclude && senderId !== WORK.uid && senderId === 'GigaChat'" horizontal>
-                    <oda-button icon="box:s-like" @tap="like"></oda-button>
-                    <oda-button icon="box:s-dislike" @tap="dislike"></oda-button>
-                </div>
-            </div>
-        </div>
-        <div class="right-buttons" vertical ~if="senderId !== WORK.uid && !reply && !isInclude" ~style="{visibility: $pdp.focusedItem === $item ? 'visible':'hidden'}" style="padding: 4px;">
-            <div flex></div>
-            <oda-button  class="sender" content :icon-size="24"  no-flex icon="bootstrap:reply" @tap="$pdp.replyTarget = $file"></oda-button>
-        </div>
-    `,
-    colorMode: {
-        set(n) {
-            if(this._color)
-                this.$('.card')?.removeAttribute(this._color);
-            this._color = n;
-            if(this._color)
-                this.$('.card')?.setAttribute(this._color, true);
-        }
-    },
-    allowPreview: false,
-    isInclude: {
-        $attr: true,
-        $def: false
-    },
-    visible: {
-        $attr: true,
-        $type: Boolean,
-        get() {
-            return this.previewIsReady && (this.senderIsReady || this.isInclude || this.$pdp.replyTarget !== this.$file);
-        }
-    },
-    previewIsReady: false,
-    senderIsReady: false,
-    reply: {
-        $def: false,
-        $attr: true,
-    },
-    previewTag: 'div',
-    get itemBody() {
-        return this.$item?.load().then(body => {
-            return JSON.parse(body);
-        });
-    },
-    get includes() {
-        return this.itemBody?.then(body => {
-            return body.includes?.map(f=>WORK.get_item(f, 'info'));
-        }) || [];
-    },
-    get isMessage() {
-        return this.$file?.then?.(file => {
-            return file.label.includes('message.txt');
-        })
-    },
-    $file: {
-        get() {
-            return this.itemBody?.then(async body => {
-                let $file = await WORK.get_item(body.path, 'info');
-                this.loadPreview($file);
-                return $file;
-            })
-        },
-        set($file) {
-            this.loadPreview($file);
-        }
-    },
-    get fileLabel() {
-        return this.$file?.then?.(file => {
-            return file.label.includes('message.txt') ? file.label.slice(0, 5) : file.label;
-        });
-    },
-    async loadPreview($file) {
-        try {
-            this.allowPreview = await CORE.$file.loadPreview($file);
-            if(this.allowPreview)
-                this.previewTag = ($file?.ext || 'file') + '-preview';
-        }
-        catch(e) {
-            this.allowPreview = false;
-        }
-        finally {
-            if(this.previousElementSibling) this.previousElementSibling.hideAvatar = undefined;
-            this.previewIsReady = true;
-        }
-    },
-    $item: null,
-    senderId: {
-        $type: String,
-        set(n) {
-            this.senderIsReady = true;
-        }
-    },
-    get sender() {
-        return this.itemBody?.then(async body => {
-            let users = await WORK.users;
-            this.senderId = body.sender;
-            return users.find(u=>u.id === body.sender) || null;
-        });
-    },
-    get hideAvatar() {
-        if(!this.nextElementSibling) return false;
-        return Promise.all([
-            this.sender,
-            this.nextElementSibling.sender
-        ]).then(([current, sibling]) => !!sibling && !!current && current.id === sibling.id);
-    },
-    like() {
-        alert('todo: like');
-    },
-    dislike() {
-        alert('todo: dislike');
     }
 })
 ODA({is: 'skill-tree', imports: '~/lib//tree.js', extends: 'item-tree',

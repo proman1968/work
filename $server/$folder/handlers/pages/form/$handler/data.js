@@ -31,6 +31,18 @@ export default {
             #error_tooltip::backdrop{
                 pointer-events: none;
             }
+            #tools {
+                gap: 4px;
+                padding: 4px;
+                overflow-x: auto;
+            }
+            #tools oda-button {
+                flex-shrink: 0;
+            }
+            #tools oda-button[info-invert] {
+                flex-shrink: 1;
+                min-width: 0;
+            }
         </style>
         <work-form :$item flex :view_name></work-form>
     `,
@@ -77,10 +89,19 @@ ODA({is: 'work-form',
                             ></oda-button>
 
                         </div>
-                        <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center; border-bottom: 1px solid;">
-                            <item-node :icon-size  :$item="view" @pointerdown.stop="openView"></item-node>
-                            <oda-button hidden icon="icons:settings" :icon-size @tap.stop="settings"></oda-button>
-                            <oda-button icon="icons:chevron-right:90" :icon-size @tap.stop="select_view" style="padding: 0px;"></oda-button>
+                        <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center;">
+                            <oda-button
+                                ~for="formViews"
+                                :icon="$for.item.icon || 'files:file'"
+                                :icon-size
+                                :label="view?.id === $for.item.id ? view.label : ''"
+                                :title="$for.item.label"
+                                :info-invert="view?.id === $for.item.id"
+                                :light="view?.id !== $for.item.id"
+                                style="border-radius: 4px;"
+                                @tap.stop="switchView($for.item, $event)"
+                                @pointerdown.stop="view?.id === $for.item.id && openView($event)"
+                            ></oda-button>
                         </div>
                     </div>
                 </div>
@@ -190,11 +211,28 @@ ODA({is: 'work-form',
             }
     },
     view_name: '',
+    formViews: [],
+    async loadFormViews() {
+        if (!this.$item) {
+            this.formViews = [];
+            return;
+        }
+        try {
+            const root = await this.$item.fetch('handlers', {path: '//form'});
+            this.formViews = (root?.items || []).filter(item =>
+                item.type === '$handler' && item.allowUse !== false
+            );
+        } catch (err) {
+            console.error(err);
+            this.formViews = [];
+        }
+    },
     $item: {
         $def: null,
         async set(n) {
             const view_name = this.host.default_view || this.host.view_name || this.$item?.form;
             this.view ||= await this.$item.get_item(`/~/handlers//form/${view_name}`);
+            this.loadFormViews();
         }
     },
     focusedItem: null,
@@ -247,19 +285,15 @@ ODA({is: 'work-form',
         WORK.showDropdown(el, {}, this.$('#tools'));
 
     },
-    async select_view(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        const params = { $item: this.$item, path: '//form', hideTops: 1, hideRoots: 1 };
-        params.execute = (handler) => {
-            const form_idx = window.location.href.lastIndexOf('/form') + '/form'.length;
-            const url = `${window.location.href.slice(0, form_idx)}/${handler.id}/index.html`;
-            if (url === location.href) return;
-            this.host.view_name = handler.id;
-            location.assign(url);
-        }
-        let res = await WORK.showMenu(params, this.$('#tools'));
-        // alert(res)
+    switchView(handler, e) {
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
+        if (this.view?.id === handler.id) return;
+        const form_idx = window.location.href.lastIndexOf('/form') + '/form'.length;
+        const url = `${window.location.href.slice(0, form_idx)}/${handler.id}/index.html`;
+        if (url === location.href) return;
+        this.host.view_name = handler.id;
+        location.assign(url);
     },
     ok(e) {
         alert('ok')

@@ -165,8 +165,8 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             }
         }
 
-        const $server = await WORK.get_item('');
-        const system_types = await $server.system_types;
+        const response = await fetch(origin + '?system_types');
+        const system_types = await response.text();
         const filterItems = async (items) => {
             if (!items)
                 return;
