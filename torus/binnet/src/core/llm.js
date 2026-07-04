@@ -37,10 +37,10 @@ export class LLM extends BinNet {
     async save(folder = this.folder) {
         await this.tokenizer.save(folder);
         for (let layer of this.pipeline) {
-            await layer.save(folder);
+            await layer.save({readGpu: true});
         }
         console.log(`Модель "${folder}" сохранена.\n`);
-    }    
+    }
 
     // Тренировка эмбеддингов со сдвигом на предсказание следующего слова
     async trainEmbedding(text_corpus) {
@@ -56,10 +56,11 @@ export class LLM extends BinNet {
 
         console.time('Тренировка Эмбеддингов');
         let counter = 0;
+        let errors = 0;
         for (let i = 0; i < lines.length; i++) {
             let tokens = this.tokenizer.encode(lines[i].trim());
             if (tokens.length < 2) continue;
-            console.log('--- line', i, 'из', lines.length);
+            console.log('--- line', i+1, 'из', lines.length);
 
             // Идем до length - 1, цель — строго следующий токен
             for (let t = 0; t < tokens.length - 1; t++) {
@@ -67,13 +68,16 @@ export class LLM extends BinNet {
                 let currentToken = tokens[t];
                 let nextToken = tokens[t + 1];
 
-                let result = await this.forward({ tokenIdx: currentToken, targetIdx: nextToken });  
-                await result.src.back({ target: nextToken });
-                console.log('target', nextToken, 'predict', result.predict, 'loss', result.loss)  
+                let result = await this.forward({ tokenIdx: currentToken, targetIdx: nextToken }); 
+                if (result.loss) {
+                    await this.back({ back_target: nextToken, predict: result.predictIdx});
+                    errors++;
+                }
+                console.log('target', nextToken, 'predict', result.predictIdx, 'loss', result.loss);
             }
         }
         console.timeEnd('Тренировка Эмбеддингов');
-        console.log("Обработано токенов:", counter, '\n');
+        console.log("Обработано токенов:", counter, 'Ошибок:', errors, '\n');
         await this.save();
     }
 
@@ -86,59 +90,39 @@ export class LLM extends BinNet {
         }
         
         console.log(`\n================== СТАРТ ОБУЧЕНИЯ (1 ЭПОХА) ==================`);
-        const epochStart = performance.now();
-        let lineCounter = 0;
+        console.time('Тренировка предсказаний');
+        let counter = 0;
+        let errors = 0;
 
-        for (let row of lines) {
-            let tokens = this.tokenizer.encode(row);
-            if (tokens.length < 2) continue; 
+        for (let i = 0; i < lines.length; i++) {
+            let tokens = this.tokenizer.encode(lines[i]);
+            if (tokens.length < 2) continue;
+            console.log('--- line', i+1, 'из', lines.length);
             
-            lineCounter++;
-            const lineStart = performance.now();
-            const showDetails = (lineCounter === 1); 
-
-            if (showDetails) {
-                console.log(`\n--- Детальный разбор Строки ${lineCounter}: "${row.trim()}" ---`);
-            }
-
             // Честный сдвиг: обучаем сеть по текущему токену предсказывать СЛЕДУЮЩИЙ
-            for (let i = 0; i < tokens.length - 1; i++) {
-                let currentToken = tokens[i];
-                let nextToken = tokens[i + 1]; 
+            for (let t = 0; t < tokens.length - 1; t++) {
+                counter++;
+                let currentToken = tokens[t];
+                let nextToken = tokens[t + 1]; 
 
-                // 1. Прямой ход по всей цепочке слоев
                 let result = await this.forward({ tokenIdx: currentToken, targetIdx: nextToken });
                 
-                // 2. Обратный ход (обучение Хебба во всех подслоях Linear каскадом)
-                await result.src.back({ target: nextToken });
-
-                if (showDetails) {
-                    let predBuffer = await this.gpu.readData(result.predict);
-                    const predTokenId = predBuffer[0] & 0x1FFFF; 
-
-                    const currentWord = this.tokenizer.decode([currentToken]);
-                    const targetWord = this.tokenizer.decode([nextToken]);
-                    const predictedWord = this.tokenizer.decode([predTokenId]);
-
-                    const status = (predTokenId === nextToken) ? "🟢 [УГАДАЛ]" : "🔴 [ОШИБКА]";
-                    console.log(`  Слово: "${currentWord}" -> Ждем: "${targetWord}" | Сеть выдала: "${predictedWord}" ${status}`);
+                if (result.loss) {
+                    await this.back({ back_target: nextToken, predict: result.predictIdx});
+                    errors++;
                 }
+                console.log('current', currentToken, 'target', nextToken, 'predict', result.predictIdx, 'loss', result.loss);
             }
             
             // Читаем loss из vars нашего Head слоя на CPU
             const headVars = await this.gpu.readData(this.head.vars);
             const view = new DataView(headVars.buffer, headVars.byteOffset);
             const lastLoss = view.getFloat32(16, true); 
-            const lineDuration = performance.now() - lineStart;
-
-            if (!showDetails) {
-                console.log(`Строка ${lineCounter}: Loss: ${lastLoss.toFixed(4)} | Время: ${lineDuration.toFixed(2)} ms`);
-            } else {
-                console.log(`>> Итоговый Loss строки: ${lastLoss.toFixed(4)} | Время: ${lineDuration.toFixed(2)} ms\n`);
-            }
+            console.log(`Строка ${i}: Loss: ${lastLoss.toFixed(4)}`);
         }
 
-        console.log(`\n>> Обучение завершено за ${((performance.now() - epochStart) / 1000).toFixed(2)} сек.`);
+        console.timeEnd('Тренировка предсказаний');
+        console.log("Обработано токенов:", counter, 'Ошибок:', errors, '\n');
         await this.save();
     }
 

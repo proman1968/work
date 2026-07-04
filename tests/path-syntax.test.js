@@ -1,52 +1,63 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-    toShortPath,
-    parsePathSteps,
-    classifyPathStep,
-    PATH_STEP,
-    isMetaId,
-    isSystemId,
-} from '../sources/shared/path-syntax.js';
-import { buildHandlerUrl, buildMethodHandlerPath } from '../sources/shared/url-builder.js';
+import '../oda/reactor.js';
+import { fixMdHistoryLinks } from '../sources/client/index.js';
+import { $item } from '../sources/core.js';
+import { $file, $folder } from '../sources/server/index.js';
 
 describe('path-syntax', () => {
     it('toShortPath hides $ meta folders', () => {
         assert.equal(
-            toShortPath('/root/direction/$group/text'),
+            $item.toShortPath('/root/direction/$group/text'),
             '/root/direction/~/text'
         );
     });
 
     it('parsePathSteps splits //uid paths', () => {
-        assert.deepEqual(parsePathSteps('//uid123'), ['', '', 'uid123']);
+        assert.deepEqual($folder.parsePathSteps('//uid123'), ['', '', 'uid123']);
     });
 
     it('classifyPathStep detects special prefixes', () => {
-        assert.equal(classifyPathStep(''), PATH_STEP.EMPTY);
-        assert.equal(classifyPathStep('~'), PATH_STEP.TILDE);
-        assert.equal(classifyPathStep('@ancestor'), PATH_STEP.ANCESTOR);
-        assert.equal(classifyPathStep('*'), PATH_STEP.WILDCARD);
-        assert.equal(classifyPathStep('.'), PATH_STEP.CURRENT);
-        assert.equal(classifyPathStep('file.txt'), PATH_STEP.NAME);
+        assert.equal($folder.classifyPathStep(''), $folder.PATH_STEP.EMPTY);
+        assert.equal($folder.classifyPathStep('~'), $folder.PATH_STEP.TILDE);
+        assert.equal($folder.classifyPathStep('@ancestor'), $folder.PATH_STEP.ANCESTOR);
+        assert.equal($folder.classifyPathStep('*'), $folder.PATH_STEP.WILDCARD);
+        assert.equal($folder.classifyPathStep('.'), $folder.PATH_STEP.CURRENT);
+        assert.equal($folder.classifyPathStep('file.txt'), $folder.PATH_STEP.NAME);
     });
 
     it('isMetaId and isSystemId', () => {
-        assert.equal(isMetaId('$group'), true);
-        assert.equal(isMetaId('group'), false);
-        assert.equal(isSystemId('#system'), true);
-    });
-});
-
-describe('url-builder', () => {
-    it('buildHandlerUrl encodes handler path', () => {
-        assert.equal(
-            buildHandlerUrl('/root/direction/~/text', 'explorer'),
-            '/root/direction/~/text/~/handlers/pages//explorer/'
-        );
+        assert.equal($item.isMetaId('$group'), true);
+        assert.equal($item.isMetaId('group'), false);
+        assert.equal($item.isSystemId('#system'), true);
+        assert.equal($item.isHiddenId('.history'), true);
     });
 
-    it('buildMethodHandlerPath', () => {
-        assert.equal(buildMethodHandlerPath('info'), '~/handlers/methods/info');
+    it('parseHistoryEntryPath reads timestamp uid and source file', () => {
+        const path = '/root/direction/$group/text/.document (6).pptx/history/2026-06-21/1782064530427.CA4E097FF6C1D387.pptx';
+        const p = $file.parseHistoryEntryPath(path);
+        assert.equal(p.timestamp, '1782064530427');
+        assert.equal(p.userId, 'CA4E097FF6C1D387');
+        assert.equal(p.fileName, 'document (6).pptx');
+        assert.match(p.time, /^\d{2}:\d{2}$/);
+    });
+
+    it('historyEntryLabel uses source file name not uid', () => {
+        const path = '/root/text/.message.txt/history/2026-06-21/1782064530427.CA4E097FF6C1D387.txt';
+        const label = $file.historyEntryLabel(path);
+        assert.match(label, /^\d{2}:\d{2} \| message\.txt$/);
+        assert.doesNotMatch(label, /CA4E097FF6C1D387/);
+    });
+
+    it('historyUserLabel uses uid when no user list', () => {
+        const path = '/root/text/.MNIST2.ipynb/history/2026-06-21/1782064530427.CA4E097FF6C1D387.ipynb';
+        assert.match($file.historyUserLabel(path), / \| CA4E097FF6C1D387$/);
+    });
+
+    it('fixMdHistoryLinks replaces uid with file name when path has parentheses', () => {
+        const md = '[21:03|CA4E097FF6C1D387](/root/direction/$group/pptx/.document%20(6).pptx/history/2026-06-21/1782065020664.CA4E097FF6C1D387.pptx/~/handlers/pages/form/index.html)';
+        const fixed = fixMdHistoryLinks(md);
+        assert.match(fixed, /\[21:03 \| document \(6\)\.pptx\]/);
+        assert.doesNotMatch(fixed, /\[21:03\|CA4E097FF6C1D387\]/);
     });
 });

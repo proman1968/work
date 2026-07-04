@@ -1,0 +1,24 @@
+# Папки сборки и кэша компиляторов
+dist/
+build/
+.next/
+.nuxt/
+.vuepress/dist
+.cache/
+.parcel-cache/
+ 
+# Покрытие тестов (если используете Jest/Mocha/Vitest)
+coverage/
+.nyc_output/
+ 
+# Локальные переменные среды (Защита данных)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Папки с моделями, корпусом и модули NodeJS
+node_modules/
+models/
+dataset/

@@ -10,18 +10,10 @@ export class Head extends BinNet {
             weights: this.vocabSize * this.embSize
         };   
 
-        this.logits = this.write(new Int32Array(this.vocabSize), 'logits');    
-        // 1. Создаем сырой буфер на 24 байта (6 элементов * 4 байта)
-        const buffer = new ArrayBuffer(24);
+        this.logits = this.write(new Int32Array(this.vocabSize), 'logits');
+        this.vars = this.write(new Uint32Array(6), 'vars');
 
-        // 2. Создаем типизированные представления для разных типов данных внутри этой памяти
-        this.varsInt32   = new Int32Array(buffer);
-        this.varsUint32  = new Uint32Array(buffer);
-        this.varsFloat32 = new Float32Array(buffer);
-
-        // 3. Регистрируем буфер в WebGPU (передаем любой из view, они делят один buffer)
-        this.vars = this.write(this.varsInt32, 'vars');
-
+        this.back_target = this.write(new Uint32Array(this.embSize), 'back_target');
     }
 
     async forward(input = {}) {    
@@ -29,6 +21,7 @@ export class Head extends BinNet {
         if (!this.FWD) {
             this.FWD = this.gpu.compute_info(this.vocabSize);
             let code = `
+                // FORWARD Head
                 struct Vars {
                     max_logit: atomic<i32>,
                     errors: atomic<u32>,
@@ -86,6 +79,7 @@ export class Head extends BinNet {
         if (!this.SAMPLE) {
             this.SAMPLE = this.gpu.compute_info(this.vocabSize);
             let code = `
+                // SAMPLE Head
                 struct Vars {
                     max_logit: atomic<i32>,
                     errors: atomic<u32>,
@@ -101,7 +95,7 @@ export class Head extends BinNet {
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${this.SAMPLE.idx_code_gen} 
                     let logit = atomicLoad(&vars.max_logit);
-                    if(logits[idx] == logit) {  
+                    if (logits[idx] == logit) {  
                         atomicMin(&vars.predict, idx);
                     }
                 }
@@ -112,90 +106,98 @@ export class Head extends BinNet {
         this.SAMPLE.compute([this.logits, this.vars]);
         await this.read(this.vars);
 
-        let predict = view.getUint32(8, true);
+        let predictIdx = view.getUint32(8, true);
         
         // ВЫЧИСЛЕНИЕ ЧЕСТНОГО LOSS НА CPU
-        let loss = (predict === this.input.targetIdx) ? 0.0 : 1.0;
+        let loss = (predictIdx === this.input.targetIdx) ? 0.0 : 1.0;
         view.setFloat32(16, loss, true); // Перезаписываем loss для BACK шага
 
-        this.back({ target: this.input.targetIdx, predict: predict });
-        return { predict, loss };  
+        return { predictIdx, loss, src: this.input.src };
     }
 
     back(data = {}) {
-        let targetIdx = data.target || 0;
-        let predictIdx = data.predict || 0;
-
-        if (targetIdx === predictIdx) { return; }
+        let target = data.back_target || 0;
+        let predict = data.predict || 0;
 
         if (!this.BACK) {
-            this.BACK = this.gpu.compute_info(this.vocabSize);
 
+            this.BACK = this.gpu.compute_info(this.embSize * 2);  // Первая половина потоков обновит веса для target_idx, а вторая половина — для predict
             let code = `
+                // BACK Head
                 struct Vars {
                     max_logit: i32,
                     errors: u32,
                     predict: u32,
                     target_idx: u32,
                     loss: f32,
-                    random: f32                      
+                    random: f32
                 }
-                @group(0) @binding(0) var<storage, read> inputs: array<u32>; 
-                @group(0) @binding(1) var<storage, read_write> weights: array<u32>; 
-                
-                // ИСПРАВЛЕНО: Меняем uniform на storage, read, чтобы убрать ошибку Binding Usage!
-                @group(0) @binding(2) var<storage, read> vars: Vars; 
+                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
+                @group(0) @binding(1) var<storage, read_write> weights: array<u32>;
+                @group(0) @binding(2) var<storage, read> vars: Vars;
+                @group(0) @binding(3) var<storage, read_write> back_target: array<u32>;
+
+                // Сверхбыстрый целочисленный хеш
+                fn hash(state: u32) -> u32 {
+                    var x = state;
+                    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+                    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+                    x = (x >> 16u) ^ x;
+                    return x;
+                }
 
                 @compute @workgroup_size(${this.BACK.workgroup_size})
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${this.BACK.idx_code_gen}
-                    let e_size = ${this.embSize}u;
-                    let w_start = idx * e_size;
+                    const e_size = ${this.embSize}u;
 
-                    if (idx == vars.target_idx) {
-                        for (var i = 0u; i < e_size; i++) {
-                            weights[w_start + i] = inputs[i]; 
-                        }
-                    }
-                    if (idx == vars.predict) {
-                        for (var i = 0u; i < e_size; i++) {
-                            weights[w_start + i] = ~inputs[i]; 
-                        }
+                    // Базовое случайное зерно из JS
+                    let base_seed = bitcast<u32>(vars.random);
+                    // var rnd = (idx ^ base_seed) * 0xcc9e2d51u;
+                    // rnd = (rnd << 15u) | (rnd >> 17u);
+                    // rnd = rnd * 0x1b873593u;
+                    let rnd = hash(base_seed ^ (idx + 1u));
+                    // Генерируем фиксированный процент маски (пример: 6.25% == 2 единицы в маске) через И
+                    // Первый множитель дает 16 единиц в маске, каждый последующий делит это число на 2
+                    let mask = rnd & ((rnd >> 5u) | (rnd << 27u)) & ((rnd >> 11u) | (rnd << 21u)) & ((rnd >> 17u) | (rnd << 15u));
+
+                    // Разделяем потоки: первая половина для target, вторая для predict
+                    if (idx < e_size) {
+                        let i = idx;   
+                        let w_index = vars.target_idx * e_size + i;
+                        let old_w = weights[w_index];
+                        let new_w = inputs[i];
+                        weights[w_index] = (old_w & ~mask) | (new_w & mask);
+                        back_target[i] = weights[w_index];
+                    } 
+                    else {
+                        let i = idx - e_size; // Смещаем индекс обратно к 0..e_size
+                        let w_index = vars.predict * e_size + i;
+                        let old_w = weights[w_index];
+                        let new_w = ~inputs[i];
+                        weights[w_index] = (old_w & ~mask) | (new_w & mask);
                     }
                 }
             `;
             this.BACK.compile(code, this.id + ':BACK_HEAD_CONTRAST');
         }
 
-        let targetBuffer = null;
-        if (this.input) {
-            if (this.input.data) targetBuffer = this.input.data;
-            else if (this.input.buffer) targetBuffer = this.input;
-        }
-        if (!targetBuffer && this.embedding) {
-            targetBuffer = this.embedding.output;
-        }
-
-        if (!targetBuffer || !this.logits || !this.vars || !this.params || !this.params.weights) {
-            return;
-        }
+        let targetBuffer = this.input?.data ?? this.input;
 
         const view = new DataView(this.vars.buffer, this.vars.byteOffset);
-        view.setUint32(12, targetIdx, true); 
-        view.setUint32(8, predictIdx, true);  
-        view.setFloat32(20, Math.random(), true); 
+        view.setUint32(12, target, true);
+        view.setUint32(8, predict, true);
+        view.setFloat32(20, Math.random(), true);
         this.write(this.vars);
 
         this.BACK.compute([
-            targetBuffer,          
-            this.params.weights,   
-            this.vars              
+            targetBuffer,
+            this.params.weights,
+            this.vars,
+            this.back_target
         ]);
 
-        if (this.embedding && typeof this.embedding.back === 'function') {
-            this.embedding.back({ target: targetIdx, parentLoss: 1.0 });
-        }
-    }
-
+        return { predict, back_target: this.back_target };
+     }
 
 }

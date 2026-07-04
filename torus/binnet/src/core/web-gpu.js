@@ -147,8 +147,10 @@ export class WebGpu {
         return { info, limits, features };
     }
 
-    copy(src, target, offset = 0, from = 0, size = src.size){
+    copy(src, target, offset = 0, from = 0, size = src.size) {
         let src_buffer = src instanceof GPUBuffer? src: this.buffers.get(src);
+        if (!src_buffer)
+            throw new Error(`WebGpu.copy: source has no GPU buffer`);
         let target_buffer = target instanceof GPUBuffer? target: this.buffers.get(target);
         const commandEncoder = this.device.createCommandEncoder();
         commandEncoder.copyBufferToBuffer(src_buffer, from, target_buffer, offset, size);
@@ -167,7 +169,7 @@ export class WebGpu {
         return this.info.limits.maxBufferSize / this.info.limits.maxDynamicStorageBuffersPerPipelineLayout;
     }
 
-    writeData(bufferArray, options = {}){ 
+    writeData(bufferArray, options = {}) { 
         let buffer = this.buffers.get(bufferArray);
         if (!buffer) {
             if (this.maxBufferSize < bufferArray.byteLength)
@@ -175,19 +177,20 @@ export class WebGpu {
             let type = options.type || 'storage'; // ['storage', 'uniform']
             delete options.type;
             let alignment = type === 'uniform' ? 16 : 4;
-            let alignSize = Math.ceil(bufferArray.byteLength / 4) * alignment;
+            let alignSize = Math.ceil(bufferArray.byteLength / alignment) * alignment;   //Необходимо, чтобы буфер в целом был кратен alignment
+            // let alignSize = Math.ceil(bufferArray.byteLength / 4) * alignment;   // Здесь каждый отдельный элемент буфера кратен alignment
             let keyBuffer = bufferArray;
-            if(bufferArray.byteLength < alignSize){
+            if(bufferArray.byteLength < alignSize) {
                 const alignedBuffer = new bufferArray.constructor(alignSize / bufferArray.BYTES_PER_ELEMENT);
                 alignedBuffer.set(bufferArray);
                 bufferArray = alignedBuffer;
             }
             options.size = alignSize;
-            switch(type){
-                case 'storage':{
+            switch(type) {
+                case 'storage': {
                     options.usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
                 } break;
-                case 'uniform':{
+                case 'uniform': {
                     options.usage = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
                 }       
             }

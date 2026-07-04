@@ -15,7 +15,7 @@ class XenovaService {
     async initEmbedding() {
         return this.extractor ??= new AsyncPromise(async _=>{
             console.log(`🔄 Загрузка модели: ${this.modelName}...`);
-            let extractor = await pipeline("feature-extraction", this.modelName,  {device: 'webgpu',  quantized: true }); // Используем квантованную версию для скорости
+            let extractor = await pipeline("feature-extraction", this.modelName,  {device: 'cpu',  quantized: true }); // Используем квантованную версию для скорости
             console.log("✅ модель готова!");
             return extractor;
         })

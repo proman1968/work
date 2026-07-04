@@ -194,6 +194,8 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
             case 'ok': {
                 await WORK.fetch("/", 'user_exit', {}, this.params);
                 this.params.uid = undefined;
+                WORK.uid = '';
+                WORK.USER = undefined;
                 WORK.credentials = this.workSecure.setItem('credentials', this.params);
                 this.workSecure.setItem('KEY', null);
 
@@ -257,6 +259,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
     },
     check() {
         return WORK.login().then(res => {
+            this.error = null;
             this.text = res;
         }).catch(e => {
             this.error = e;

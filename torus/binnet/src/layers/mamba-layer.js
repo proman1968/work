@@ -13,27 +13,23 @@ export class MambaLayer extends BinNet {
         this.dSize = this.hSize * (config.expansionFactor || 2); 
         this.divider = config.divider || 1;
         
-        // const lCfg = (sub) => ({ gpu: this.gpu, testMode: this.testMode, folder: this.folder, id: `${this.id}_${sub}` });
-
-        // Внутренние проекции Linear
-        // this.projIn     = new Linear(Object.assign(lCfg('in'),     { in_size: this.hSize, out_size: this.dSize, divider: this.divider })); 
-        // this.projForget = new Linear(Object.assign(lCfg('forget'), { in_size: this.dSize, out_size: this.dSize, divider: this.divider }));
-        // this.projAdd    = new Linear(Object.assign(lCfg('add'),    { in_size: this.dSize, out_size: this.dSize, divider: this.divider }));
-        // this.projOut    = new Linear(Object.assign(lCfg('out'),    { in_size: this.dSize, out_size: this.hSize, divider: this.divider }));
         this.projIn     = new Linear(Object.assign({}, config, { in_size: this.hSize, out_size: this.dSize, divider: this.divider, id: `${this.id}_in` })); 
         this.projForget = new Linear(Object.assign({}, config, { in_size: this.dSize, out_size: this.dSize, divider: this.divider, id: `${this.id}_forget` }));
         this.projAdd    = new Linear(Object.assign({}, config, { in_size: this.dSize, out_size: this.dSize, divider: this.divider, id: `${this.id}_add` }));
         this.projOut    = new Linear(Object.assign({}, config, { in_size: this.dSize, out_size: this.hSize, divider: this.divider, id: `${this.id}_out` }));
 
         // Наполняем пайплайн для автоматического сквозного подсчета параметров в LLM.js
-        this.pipeline = [this.projIn, this.projForget, this.projAdd, this.projOut];
+        this.pipeline = [
+            this.projIn,
+            this.projForget,
+            this.projAdd,
+            this.projOut
+        ];
         this.mambaMemory = new MambaBlock(Object.assign({}, config, { hiddenSizeBlocks: this.dSize, id: this.layerId }));
-        // this.mambaMemory = new MambaBlock(this.dSize, this.gpu);
 
         // Буферы для бинарной свертки времени Conv1D
-        this.convDelayBuffer = this.write(new Uint32Array(this.dSize), 'mamba_conv_delay');
-        this.convOutputCpuKey = new Uint32Array(this.dSize);
-        this.convOutputBuffer = this.write(this.convOutputCpuKey, 'mamba_conv_output');
+        this.convDelay = this.write(new Uint32Array(this.dSize), 'mamba_conv_delay');
+        this.convOutput = this.write(new Uint32Array(this.dSize), 'mamba_conv_output');
     }
 
     get paramCount() { return this.pipeline.reduce((sum, l) => sum + l.paramCount, 0); }
@@ -56,8 +52,7 @@ export class MambaLayer extends BinNet {
         return Object.assign({}, input, { data: output.data, src: this });
     }
 
-    _applyBinaryConv1d(expandedInputCpuKey) {
-        const inGpu = this.gpu.buffers.get(expandedInputCpuKey);
+    _applyBinaryConv1d(expandedInput) {
         if (!this._convShader) {
             let wg = this.gpu.compute_info(this.dSize);
             this._convShader = wg;
@@ -72,18 +67,17 @@ export class MambaLayer extends BinNet {
                 }
             `, this.id + ':CONV1D');
         }
-        this._convShader.compute([inGpu, this.convDelayBuffer, this.convOutputBuffer]);
-        this.gpu.copy(inGpu, this.convDelayBuffer, 0, 0, this.dSize * 4);
-        return this.convOutputCpuKey; 
+        this._convShader.compute([expandedInput, this.convDelay, this.convOutput]);
+        this.gpu.copy(expandedInput, this.convDelay, 0, 0, this.dSize * 4);
+        return this.convOutput; 
     }
 
     async back(targetInput) {
         // Каскадный спуск градиента: каждый подслой Linear автоматически обновляет веса внутри своего .back()
-        let gOut = await this.projOut.back({ target: targetInput?.target ?? targetInput });
-        let gForget = await this.projForget.back({ target: gOut.data });
-        let gAdd = await this.projAdd.back({ target: gOut.data });
-        let tBottom = await this.projIn.back({ target: gAdd.data });
-
-        return { data: tBottom.data, src: this };
+        let gOut = await this.projOut.back({ back_target: targetInput.back_target});
+        let gForget = await this.projForget.back({ back_target: gOut.back_target });
+        let gAdd = await this.projAdd.back({ back_target: gOut.back_target });
+        let tBottom = await this.projIn.back({ back_target: gAdd.back_target });
+        return { back_target: tBottom.back_target};
     }
 }

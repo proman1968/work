@@ -14,25 +14,32 @@ export class BinNet extends EventTarget {
         if (!fs.existsSync(this.folder))
             fs.mkdirSync(this.folder, { recursive: true }); 
     }
-    get paramCount(){
+    get paramCount() {
         return Object.values(this.params).reduce((sum, v)=>sum + v.length, 0) * 32;
     }  
-    readFile(filename){
+    readFile(filename) {
         return fsp.readFile(path.join(this.folder, filename));
     }
-    writeFile(filename, data){
+    writeFile(filename, data) {
         return fsp.writeFile(path.join(this.folder, filename), data);
     } 
-    async forward(x){
-        for(let step of this.pipeline){
+    async forward(x) {
+        for (let step of this.pipeline) {
             x = await step.forward(x); 
         }    
         return x;
     }
-    async read(CpuBufferArrayOrName){
+    async back(x) {
+        let pipeline = this.pipeline.toReversed();
+        for (let step of pipeline) {
+            x = await step.back(x); 
+        }    
+        return x;
+    }
+    async read(CpuBufferArrayOrName) {
         let context = this;
         if(typeof CpuBufferArrayOrName === 'string'){
-            for(let prop of CpuBufferArrayOrName.split('.')){
+            for (let prop of CpuBufferArrayOrName.split('.')) {
                 context = context[prop];
             }
         }
@@ -44,8 +51,8 @@ export class BinNet extends EventTarget {
     test(propname, size = 6){
         if(!this.testMode)
             return;
-        return this.read(propname).then(result=>{
-            if(!result)
+        return this.read(propname).then(result => {
+            if (!result)
                 return '';
             console.warn(this.id + ': ');
             console.warn(propname, result.subarray(0, size).toString());
@@ -54,52 +61,55 @@ export class BinNet extends EventTarget {
         })
 
     }
-    print(propname, group_by = 1){
-        if(!this.testMode)
+    print(propname, group_by = 1) {
+        if (!this.testMode)
             return;
-        return this.read(propname).then(result=>{
+        return this.read(propname).then(result => {
             if(!result)
                 return '';
             let array = Array(result.length / group_by).fill().map((_, idx)=>{
                 let start = idx * group_by;
                 return result.subarray(start, start + group_by);
             })
-            result = BinNet.printW(array)
+            result = BinNet.printW(array);
             console.warn(this.id + ': ');
             console.warn(propname, result.toString());
             console.warn('');
             return result;
         })
     }
-    write(CpuBufferArray, label, type = "storage", options = {}){
-        options.label ??= this.id + ' ' + options.label || '';
+    write(CpuBufferArray, label, type = "storage", options = {}) {
+        options.label ??= this.id + ' ' + label || '';
         options.type ??= type;
         this.gpu.writeData(CpuBufferArray, options);
         return CpuBufferArray;
     }
-    async load(){
-        for(let p in this.params){
+    async load() {
+        for (let p in this.params) {
             let name = `${this.id} - ${p}.bin`;
             try{
                 const buffer = await this.readFile(name);
                 this.params[p] = new Uint32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / Uint32Array.BYTES_PER_ELEMENT); 
                 console.log(`Параметры "${name}" загружены`);
             }
-            catch(e){
+            catch(e) {
                 this.params[p] = BinNet.create_random_vector(this.params[p]);
                 console.log(`Созданы новые параметры "${name}"`);
             }
         }
         console.log(`Модуль "${this.id}" готов к работе\n`);
     }
-    async save(){
-        for(let p in this.params){
+    async save(config = {readGpu: true}) {
+        for (let p in this.params) {
             let name = `${this.id} - ${p}.bin`;
-            try{
+            try {
+                if (config.readGpu && this.gpu.buffers.has(this.params[p])) {
+                    await this.gpu.readData(this.params[p]);
+                }
                 await this.writeFile(name, this.params[p]);
                 console.log(`Параметры "${name}" сохранены`);
             }
-            catch(e){
+            catch(e) {
                 console.error(name + '\n' + e.message);
             }
         }

@@ -1,0 +1,323 @@
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import { $item } from '../core.js';
+import * as mime from "mime-types";
+import { extractor } from '../modules/embeddings/embeddings.js';
+import { DOMParser } from 'linkedom';
+import { FS } from './index.js';
+import { $folder } from './folder.js';
+import { MERGE } from "../host/babel-merge.js";
+import * as Security from '../host/security.js';
+export class $file extends $folder{
+    metadata = null;
+    meta_file = null;
+    GET = 'load';
+    POST = 'save';
+    form = 'file';
+    static parseHistoryEntryPath(path) {
+        if (!path) return null;
+        const parts = path.split('/');
+        const id = parts.pop();
+        if (!id) return null;
+        parts.pop();
+        if (parts.pop() !== 'history') return null;
+        const sourceId = parts.pop() || '';
+        const extDot = id.lastIndexOf('.');
+        const name = extDot > 0 ? id.slice(0, extDot) : id;
+        const nameParts = name.split('.');
+        const timestamp = nameParts[0];
+        const userId = nameParts.length > 1 ? nameParts[1] : '';
+        const fileName = sourceId.startsWith('.') ? sourceId.slice(1) : sourceId;
+        const ms = +timestamp;
+        const time = Number.isFinite(ms)
+            ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+        return { timestamp, userId, fileName, time };
+    }
+
+    static historyEntryLabel(path) {
+        const p = this.parseHistoryEntryPath(path);
+        if (!p) return '';
+        return p.fileName ? `${p.time} | ${p.fileName}` : p.time;
+    }
+
+    static historyUserLabel(path) {
+        const p = this.parseHistoryEntryPath(path);
+        if (!p) return '';
+        return p.userId ? `${p.time} | ${p.userId}` : p.time;
+    }
+
+    get svg_icons_list(){
+        return this.load().then(svgString=>{
+            const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
+            let items = doc.querySelectorAll('symbol[id]');
+            return Array.from(items.map(r=>r.id));
+        });
+    }
+    restore_from_history(params = {}){
+        if(!this.inHistory)
+            throw new Error('Восстановить можно только файл из истории');
+        let target_folder = this.parent.parent.parent;
+        params.filename = target_folder.id.slice(1);
+        params.post = {path: this.dir};
+        return target_folder.parent.save_file(params);
+    }
+    async save_includes(params = {}){
+        let chat = await this.$parent.chat();
+        let row = chat.find(el=>el.path === this.path);
+        if(!row)
+            throw new Error(`Не найдена запись о файле ${this.path}`);
+        params.ignore_save_logs = true;
+        let logs = await this.$owner.save_files(params);
+        row.includes ??= [];
+        row.includes.add(...logs.map(l=>l.path));
+        this.$parent.save_chat(chat);
+        this.reset();
+        return row;
+    }
+    get steps(){
+        let type = this.ext ? '$' + this.ext : this.type;
+        return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{
+            let folder = await WORK.$folder.children;
+            folder = folder.find(f=>f.id === '$file');
+            folder = await folder.find_item(type, item => item.id?.[0] === '$');
+            if(!folder)
+                return [this.constructor.name, type];
+            return folder.path.split('/').slice(3);
+        })
+    }
+    get rag(){
+        return this.parent.rag.then(rag=>rag?.[this.id]);
+    }
+    async delete(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
+        await fsp.unlink(this.dir);
+        let chat = await this.$parent.chat();
+        let row = chat.find(r=>r.path === this.path);
+        if(row){
+            chat.remove(row)
+        }
+        this.parent.reset();
+        this.reset();
+        return 'removed: '+ this.path;
+    }
+    get size(){
+        return this.stat.size;
+    }
+    get files(){
+        return this.storage_folder.files;
+    }
+    get items(){
+        return this.files;
+    }
+
+    get history(){
+        let history = this.parent?.parent;
+        if(history?.id === 'history')
+            return history;
+        return null;
+    }
+    get label(){
+        let parts = this.path.split('/');
+        this.id = parts.pop();
+        parts.pop();
+        if (parts.pop() === 'history')
+            return this.constructor.historyUserLabel(this.path);
+        return this.id;
+    }
+    get storage_folder(){ // папка - хранилище
+        return FS.$folder.build(`.${this.id}`, this.parent);
+    }
+    get name(){
+        let idx = this.id.lastIndexOf('.');
+        if (idx>-1)
+            return this.id.substring(0, idx);
+        return this.id
+    }
+    get icon(){
+        if(this.ext)
+            return this.DATA.icon || ('files-color:s-' + this.ext);
+        return this.DATA.icon || 'files:document';
+    }
+    async load(params = {encoding: 'utf8'}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        if(fs.existsSync(this.dir)){
+            return fsp.readFile(this.dir, params);
+        }
+
+        let ancestor = await this.ancestor;
+        if(ancestor)
+            return ancestor.load(params)
+        throw new Error(`file ${this.path} not found`);
+    }
+    async inherit() {
+        return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
+            const ancestor = await this.ancestor;
+            if (ancestor) {
+                const selfData = await this.load();
+                const ancestorData = await ancestor.inherit();
+                return MERGE.mergeScripts(selfData, ancestorData);
+            }
+            else {
+                return await this.load();
+            }
+        });
+    }
+    async download(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        return fs.createReadStream(this.dir, params);
+    }
+    async save(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        if(this.inHistory || this.inRAG){
+            if(!fs.existsSync(this.parent.real_dir)){
+                fs.mkdirSync(this.parent.real_dir, {recursive: true});
+            }
+            await fsp.writeFile(this.real_dir, params.post, params);
+            this.reset();
+            return this;
+        }
+        params.filename = this.id;
+        return this.parent.save_file(params)
+    }
+    async create(p = {}) {
+        switch (p.type) {
+            case '$file':
+            case '$folder':
+                return this.storage_folder.create(p);
+        }
+        throw new Error(`Невозможно создание элемента типа "${p.type}" внутри файла`);
+    }
+    static _logStorageKey(storage) {
+        if (!storage || storage === globalThis.WORK)
+            return 'WORK';
+        return storage.id || storage.path || storage.dir || '';
+    }
+
+    static async _writeLogTo(storage, log_param, written) {
+        if (!storage?.save_file)
+            return;
+        const key = $file._logStorageKey(storage);
+        if (key && written.has(key))
+            return;
+        if (key)
+            written.add(key);
+        await storage.save_file(log_param);
+    }
+
+    static async save_to_history(params){
+        const actor = params.user;
+        let uid = actor?.uid;
+        if (!uid) {
+            if (actor === globalThis.WORK)
+                uid = WORK.id;
+            else
+                uid = actor?.$user?.id || actor?.id || 'system';
+        }
+        if (actor && actor !== globalThis.WORK && !actor.uid)
+            params.user = { uid, $user: actor.$user || actor };
+        params.time = Date.now();
+        params.dateTime = new Date(params.time);
+        let date = params.dateTime.toISOString();
+        params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
+        let dir = this.storage_folder.dir + '/history/' + params.date;
+        fs.mkdirSync(dir, { recursive: true });
+        let id = params.time + '.' + uid + '.' + this.ext;
+        dir += '/' + id;
+        await fsp.copyFile(this.dir, dir);
+        let history = await this.storage_folder._get_item('history', FS.$folder);
+        let data_history = await history._get_item(params.date, FS.$folder);
+
+        let file = FS.$file.build(id, data_history);
+
+        let res =  await FS.$file.save_to_log.call(file, params);
+        file.reset();
+        return res;
+    }
+
+    static async save_to_log(params){
+        let time = params.dateTime.getTime();
+        let log = {time};
+        if (params.sender)
+            log.sender = params.sender;
+        else if (params.user?.uid)
+            log.sender = params.user.uid;
+        else if (params.user === globalThis.WORK)
+            log.sender = WORK.id;
+        if (params.filename === 'pack.pack') {
+            try {
+                const pack = typeof params.post === 'string' ? JSON.parse(params.post) : params.post;
+                log.content = pack?.content ?? '';
+                if (pack?.includes?.length)
+                    log.includes = pack.includes;
+            }
+            catch {
+                log.content = String(params.post ?? '');
+            }
+        }
+        else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
+            || params.filename === 'response.md' || params.filename === 'error.txt'
+            || params.filename === 'task.ai')
+            log.content = params.post;
+        log.path = this.json_model.path;
+        log.type = '$file';
+        if (params.filename)
+            log.ext = params.filename.includes('.') ? params.filename.split('.').pop() : params.filename;
+        else if (this.ext)
+            log.ext = this.ext;
+        log.receivers = params.receivers?.split?.(',');
+
+        if (params.includes?.length && !log.includes?.length)
+            log.includes = params.includes;
+        if (params.mainContext)
+            log.mainContext = params.mainContext;
+        if(params.ignore_save_logs) {
+            log.logFullPath = this.json_model.path;
+            return log;
+        }
+        const log_param = Object.assign({}, params, {ignore_save_logs: true, filename: 'data.logs', post: JSON.stringify(log, null, 2), encoding: 'utf-8'})
+
+        let $storage = this.$owner || this.$parent;
+        const written = new Set();
+
+        await $file._writeLogTo($storage, log_param, written);
+
+        const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
+        if (authorCabinet && authorCabinet !== globalThis.WORK
+            && $file._logStorageKey(authorCabinet) !== $file._logStorageKey($storage))
+            await $file._writeLogTo(authorCabinet, log_param, written);
+        if (log.receivers?.length) {
+            log.receivers = log.receivers.filter(r => r !== $storage.id);
+            if (log.receivers?.length) {
+                params.receivers = log.receivers.map(uid => WORK.$users.then(u => u.get_item('//' + uid)));
+                params.receivers = await Promise.all(params.receivers);
+                for (const receiver of params.receivers)
+                    await $file._writeLogTo(receiver, log_param, written);
+            }
+        }
+        params.logFullPath = this.json_model.path;
+        params.logPath = this.short;
+        if (!params.skip_file_handler) {
+            queueMicrotask(async () => {
+                // Контекстный триггер: ~/triggers/on_save по наследованию типа файла
+                try {
+                    if (typeof this.get_item !== 'function') throw new Error('no get_item'); const trigger = await this.get_item('~/triggers/on_save');
+                    if (trigger) {
+                        const data = await trigger.import();
+                        if (data?.execute) {
+                            await data.execute.call($storage, params);
+                            return;
+                        }
+                    }
+                }
+                catch (e) {
+                    console.warn('[file] on_save trigger', e.message);
+                }
+                // Fallback: статический словарь (временное, до переноса handlers)
+                WORK.file_handlers?.[params.filename]?.call($storage, params);
+            })
+        }
+        return log;
+    }
+}
+$file.steps = Object.create(null);

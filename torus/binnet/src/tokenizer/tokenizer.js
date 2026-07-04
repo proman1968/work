@@ -34,8 +34,8 @@ export class Tokenizer extends BinNet {
             pairCounts: this.getPrunedStats(this.pairCounts, 5)
         };
     }
-    async load(folder = this.folder){
-        try{
+    async load(folder = this.folder) {
+        try {
             let metadata = await this.readFile('tokenizer.json');
             metadata = JSON.parse(metadata);
             this.merges = metadata.merges || {};
@@ -55,13 +55,13 @@ export class Tokenizer extends BinNet {
             }                     
             console.log('Токенизатор загружен');
         }
-        catch(e){
+        catch(e) {
             console.log('Создан новый токенизатор');
         }
         console.log(`Модуль "${this.id}" готов к работе\n`);
     }
-    async save(folder = this.folder){
-        try{
+    async save(folder = this.folder) {
+        try {
             let tokenizer = {
                 merges: this.merges,
                 singleCounts: this.singleCounts,
@@ -70,7 +70,7 @@ export class Tokenizer extends BinNet {
             await this.writeFile('tokenizer.json', JSON.stringify(tokenizer, null, 2));       
             console.log('Токенизатор сохранен');
         }
-        catch(e){
+        catch(e) {
             console.error('Ошибка при сохранении токенизатора!\n'+e.message);
         }
     }
@@ -125,11 +125,9 @@ export class Tokenizer extends BinNet {
                 }
                 newIds.push(ids[i]);
                 i += 1;
-            }
-            
+            }            
             ids = newIds;
         }
-
         return new Uint32Array(ids);
     }
 
@@ -156,7 +154,7 @@ export class Tokenizer extends BinNet {
         for (let i = 0; i < tokens.length - 1; i++) {
             const p = `${tokens[i]},${tokens[i+1]}`;
             fastCheck[p] = (fastCheck[p] || 0) + 1;
-            if (fastCheck[p] > 1){
+            if (fastCheck[p] > 1) {
                 hasCandidates = true; 
                 break;  
             }
@@ -213,8 +211,6 @@ export class Tokenizer extends BinNet {
         while (currentVocabSize < this.vocabSize) {
             let bestPair = null;
             let maxScore = -1.0;
-
-
 
             // Линейно сканируем только живые локальные пары прямо по цепочке индексов
             let idx = 0;

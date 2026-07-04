@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDevMode } from '../sources/config.js';
+import { parseDevMode } from '../sources/host/config.js';
 
 describe('config', () => {
     it('parseDevMode is false by default', () => {

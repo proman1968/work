@@ -10,9 +10,8 @@ export class Embedding extends BinNet {
         }   
         this.output = this.write(BinNet.create_zeros_vector(this.embSize), 'output');
         this.target = this.write(BinNet.create_zeros_vector(this.embSize), 'target');
-        this.rnd_seed = this.write(new Float32Array(1), 'rnd_seed', 'uniform');
-        
     }
+
     async forward(input = {}) {
         const { tokenIdx = 0, targetIdx = 0} = input; 
         this.input = input;   
@@ -20,9 +19,10 @@ export class Embedding extends BinNet {
             this.FWD = this.gpu.compute_info(this.embSize); 
             this.FWD.offsets = this.write(new Uint32Array(2), 'offsets', 'uniform');
             let code = `
+                // FORWARD Embedding
                 struct Offsets {
                     outputs: u32,
-                    targets: u32,
+                    targets: u32
                 };
                 @group(0) @binding(0) var<storage, read> embeddings: array<u32>;
                 @group(0) @binding(1) var<uniform> offsets: Offsets;
@@ -47,7 +47,7 @@ export class Embedding extends BinNet {
             this.FWD.offsets, 
             this.output,
             this.target
-        ])
+        ]);
         this.test('output');
         this.test('target');
 
@@ -55,19 +55,18 @@ export class Embedding extends BinNet {
     }    
 
     back(data = {}) {
-        let { target, parentLoss } = data; 
+        let target = data.back_target || 0;
+        let predict = data.predict || 0;
         
-        // Если родительский слой (Head) не передал статус лосса, берем дефолтную ошибку 1.0
-        let is_error = (parentLoss !== undefined) ? parentLoss : 1.0;
-
-        if (!this.vars) {
-            const tempArray = new Float32Array(6);
-            this.vars = this.write(tempArray, this.id + '_vars');
-        }
-
         if (!this.BACK) {
+            if (!this.vars) {
+                this.vars = new Float32Array(6);
+                this.write(this.vars, this.id + '_vars', 'uniform');
+            }
+
             this.BACK = this.gpu.compute_info(this.embSize);
             let code = `
+                // BACK Embedding
                 struct Offsets {
                     output: u32,
                 }
@@ -89,15 +88,16 @@ export class Embedding extends BinNet {
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${this.BACK.idx_code_gen}
 
-                    // Если сеть угадала токен — эмбеддинги не трогаем, они правильные
-                    if (vars.loss == 0.0) { return; }
-
                     let emb_idx = idx + offsets.output;
                     
                     let current_emb = embeddings[emb_idx];
                     let output_val = outputs[idx];
                     let diff = current_emb ^ output_val;
 
+                    let rand_bits = bitcast<u32>(vars.random);
+                    var hash = (idx ^ rand_bits) * 0xcc9e2d51u;
+                    hash = (hash << 15u) | (hash >> 17u);
+                    hash = hash * 0x1b873593u;
                     // Мутируем биты эмбеддингов порциями (например, 10% за шаг), чтобы память обновлялась плавно
                     for (var bit = 0u; bit < 32u; bit++) {
                         let bit_check = 1u << bit;
@@ -118,7 +118,6 @@ export class Embedding extends BinNet {
 
         const view = new DataView(this.vars.buffer, this.vars.byteOffset);
         view.setUint32(8, target || 0, true);        
-        view.setFloat32(16, is_error, true); // Передаем статус ошибки (0.0 или 1.0) в шейдер эмбеддинга
         view.setFloat32(20, Math.random(), true); 
         this.write(this.vars);
 
@@ -129,6 +128,4 @@ export class Embedding extends BinNet {
             this.FWD.offsets       
         ]);
     }
-
-
 }

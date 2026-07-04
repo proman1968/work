@@ -1,5 +1,5 @@
 import "../oda/oda.js";
-import * as CORE from "./core.js";
+import * as CORE from "./client/index.js";
 import { Reactor } from "../oda/reactor.js";
 import { RTCCaller } from "./modules/call/call.js";
 import "./modules/user-profile/user-profile.js";
@@ -282,9 +282,19 @@ WORK.__bind = function (data, path = '') {
     if (typeof data === 'object') {
         if (Array.isArray(data))
             return data.map(d => WORK.__bind(d))
-        if (data?.type) {
+        if (data?.type || data?.path) {
+            if (!data.type) {
+                const id = data.id || data.path?.split('/').pop() || '';
+                data = {...data, id, type: id.includes('.') ? '$file' : '$folder'};
+            }
             let key =  (path || data.path || (data.id + ':' + data.type)) + (data.reply?':reply':'');
-            let item = CORE.$item.ITEMS[key] ??= Reactor.activate(new (CORE[data.type] || CORE.$storage)(data));
+            let item = CORE.$item.ITEMS[key];
+            if (!item) {
+                item = CORE.$item.ITEMS[key] = Reactor.activate(new (CORE[data.type] || CORE.$storage)(data));
+            } else {
+                Object.assign(item.DATA ??= {}, data);
+                delete item.body;
+            }
             for (let list of CORE.$item.LISTS) {
                 let items = data[list];
                 if (items?.length) {
@@ -292,13 +302,6 @@ WORK.__bind = function (data, path = '') {
                 }
             }
             return item;
-        }
-        else if(data?.path){
-            return WORK.get_item(data?.path).then(item=>{
-                if(item)
-                    item.DATA = data;
-                return item;
-            })
         }
     }
     return Reactor.activate(data);
@@ -367,32 +370,82 @@ WORK.showPopover = function (el, params = {}, e) {
         pop.showPopover();
     })
 }
-WORK.login = async function(){
-    // try{
+WORK.clearSessionCache = function () {
+    for (const item of Object.values(CORE.$item.ITEMS)) {
+        if (item[R]?.cache)
+            item[R].cache = {};
+        for (const list of CORE.$item.LISTS)
+            delete item[list];
+    }
+    for (const key of Object.keys(CORE.$item.ITEMS))
+        delete CORE.$item.ITEMS[key];
+};
+
+WORK.syncAuthUI = async function () {
+    WORK.USER = WORK.uid ? await WORK.get_$user(WORK.uid) : undefined;
+    const explorer = window.explorer;
+    if (!explorer)
+        return;
+    explorer.left_buttons = undefined;
+    explorer.render?.();
+};
+
+WORK.onAuthChanged = function (payload = {}) {
+    if (WORK._authReloading)
+        return;
+    const credUid = WORK.credentials?.uid || '';
+    const newUid = payload.uid || '';
+    if (payload.reason === 'login' && newUid && newUid === credUid) {
+        WORK.uid = newUid;
+        WORK.syncAuthUI();
+        return;
+    }
+    if (payload.reason === 'logout' && !newUid && !credUid) {
         WORK.uid = '';
+        WORK.USER = undefined;
+        WORK.syncAuthUI();
+        return;
+    }
+    WORK._authReloading = true;
+    WORK.clearSessionCache();
+    WORK.uid = newUid;
+    WORK.USER = undefined;
+    location.reload();
+};
+
+if (typeof BroadcastChannel !== 'undefined') {
+    WORK.AUTH_CHANNEL ??= new BroadcastChannel('work-auth');
+    WORK.AUTH_CHANNEL.addEventListener('message', (e) => {
+        if (e.data)
+            WORK.onAuthChanged(e.data);
+    });
+}
+
+WORK.login = async function(){
         let secure = ODA.LocalStorage.create('work-secure');
         WORK.credentials = secure.getItem('credentials');
         let KEY = secure.getItem('KEY');
         let uid = WORK.credentials?.uid;
         if(uid && KEY){
-            // 1. получаем challenge
             let challengeId = crypto.randomUUID();
             const challenge = await WORK.fetch("/", 'user_login_start', { uid, challengeId});
-            // 2. Получаем подпись
             KEY = Uint8Array.from(atob(KEY), c => c.charCodeAt(0));
             let privateKey = await crypto.subtle.importKey("pkcs8", KEY, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]);
             let signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, privateKey, new TextEncoder().encode(challenge));
             signature = WORK.arrayBufferToBase64(signature);
-            // 3. Отправляем на сервер
             const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature});
             WORK.uid = uid;
-            WORK.USER = await WORK.get_$user();
+            await WORK.syncAuthUI();
+            if (!WORK.connected)
+                WORK.AUTH_CHANNEL?.postMessage({ uid, reason: 'login' });
             return res;
         }
-    // }
-    // catch(e){
-    //     return e.message;
-    // }
+        WORK.uid = '';
+        WORK.USER = undefined;
+        await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
+        await WORK.syncAuthUI();
+        if (!WORK.connected)
+            WORK.AUTH_CHANNEL?.postMessage({ uid: '', reason: 'logout' });
 }
 WORK.requestNotificationPermission = async function () {
     let result = false;
@@ -490,7 +543,6 @@ class WebSocketEvents {
     }
     onclose(e) {
         WORK.connected = false;
-        WORK.uid = '';
         WORK.wsid = '';
         delete this;
         setTimeout(() => {
@@ -513,6 +565,9 @@ class WebSocketEvents {
         switch(data?.type){
             case 'connect':{
                 WORK.wsid = this.id = data.wsid
+            } break;
+            case 'auth-changed': {
+                WORK.onAuthChanged(data);
             } break;
             case 'phone.call': {
                 if (window === WORK.top)
@@ -539,6 +594,7 @@ class WebSocketEvents {
                     }
                     // item[R].cache = {};
                     item.fire('changed', data);
+                    item.increaseVersion();
                 }
             }
         }
