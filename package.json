@@ -6,8 +6,13 @@
   "main": "work.js",
   "scripts": {
     "start": "node run.mjs",
-    "dev": "set WORK_DEV=true&& node run.mjs",
-    "test": "set WORK_TEST=1&& node --test tests/*.test.js"
+    "dev": "node scripts/run-dev.mjs",
+    "dev:check": "node scripts/run-tests.mjs && node scripts/run-dev.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",
+    "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
+    "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-sync.ps1",
+    "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +27,7 @@
     "adm-zip": "^0.5.16",
     "esprima": "^4.0.1",
     "linkedom": "^0.18.12",
-    "mime-types": "^2.1.35",
+    "mime-types": "^3.0.2",
     "multiparty": "^4.2.3",
     "nodemailer": "^8.0.4",
     "stun": "^1.1.0",

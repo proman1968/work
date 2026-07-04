@@ -52,11 +52,15 @@ ODA({ is: 'phone-call', imports: '~/lib//icon.js', template: /* html */`
             return message.receivers.map(id => users.find(u => u.id === id)).filter(Boolean);
         })
     },
-    get type() {
-        return this.message?.then(message=>{
-            this.$pdp.colorMode = COLORS[message.type];
-            return message.type;
+    attached() {
+        this.async(() => {
+            this.message?.then(message => {
+                this.$pdp.colorMode = COLORS[message.type] || '';
+            });
         });
+    },
+    get type() {
+        return this.message?.then(message => message.type);
     },
     get theme(){
         return this.message?.then(message=>{
@@ -77,12 +81,12 @@ const ICONS = {
     hang: 'unicon:phone:90',
 }
 const COLORS = {
-    offer: 'success',
-    answer: 'success-invert',
+    offer: 'success-invert',
+    answer: 'success',
     cancel: 'error-invert',
     busy: 'error-invert',
     timeout: 'error-invert',
-    end_call: 'error-invert',
+    end_call: 'error',
     hang: 'error-invert',
 }
 const THEMES = {
