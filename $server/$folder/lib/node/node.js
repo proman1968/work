@@ -73,10 +73,10 @@ export default {
     get showAdmin(){
         if(!(this.$item instanceof CORE.$storage) || this.$item instanceof CORE.$user)
             return false
-        return this.$item && this.admin?.then(admin=>{
+        return new AsyncPromise(async ()=>{
+            let admin = await this.admin;
             return admin && admin.id !== WORK.uid;
-        });
-        
+        })
     },
     get status(){
         if(this.$item.constructor === CORE.$storage)
@@ -84,7 +84,8 @@ export default {
         return ''
     },
     get admin(){
-        return Promise.resolve(this.$item?.admins).then(res=>{
+        return new AsyncPromise(async ()=>{
+            let res = await Promise.resolve(this.$item?.admins);
             return res?.last
         })
     },

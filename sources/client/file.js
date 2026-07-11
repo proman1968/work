@@ -6,6 +6,16 @@ export class $file extends $folder{
             form: 'file',
         }
     }
+    /** load() возвращает сырые данные файла без __bind */
+    load(params = {}) {
+        return this.body ??= new AsyncPromise(async _ => {
+            return WORK.fetch(this.short || '/', 'load', {...params, version: this.__version});
+        });
+    }
+    reset() {
+        this.body = undefined;
+        super.reset();
+    }
     import(){
         return this.load().then(body=>{
             body = toBase64(body);

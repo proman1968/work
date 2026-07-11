@@ -339,7 +339,7 @@ describe('task pipeline', () => {
             },
         });
 
-        const lastPack = entry.includes.filter(p => p.includes('.pack.pack')).pop();
+        const lastPack = entry.includes.filter(p => p.includes('.files.pack')).pop();
         assert.ok(lastPack, 'pack include path');
         const packRow = await loadPackEntry(group, lastPack);
         assert.equal(packRow?.content, 'посмотри файлы');
@@ -394,7 +394,7 @@ describe('task pipeline', () => {
         };
         const entry = await execItemMethod(group, 'task_reply', params, { method: 'POST' });
 
-        const lastPack = entry.includes.filter(p => p.includes('.pack.pack')).pop();
+        const lastPack = entry.includes.filter(p => p.includes('.files.pack')).pop();
         assert.ok(lastPack, 'pack include path');
         const packRow = await loadPackEntry(group, lastPack);
         assert.equal(packRow?.content, 'посмотри файлы');
@@ -428,7 +428,7 @@ describe('task pipeline', () => {
             post: { files: [{ originalFilename: 'sample.doc', path: docPath }] },
         });
 
-        assert.ok(entry?.includes?.some(p => p.includes('.pack.pack')), 'task includes pack path');
+        assert.ok(entry?.includes?.some(p => p.includes('.files.pack')), 'task includes pack path');
 
         await fsp.rm(tmpDir, { recursive: true, force: true });
     });

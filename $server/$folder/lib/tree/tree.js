@@ -71,7 +71,7 @@ export default {
     },
     items: [],
     get step() {
-        return this.iconSize || 12;
+        return (this.iconSize || 24) / 2;
     },
     $item: {
         async set(n) {
@@ -336,8 +336,8 @@ ODA({is: 'oda-tree-node',
         }
     },
     get items() {
-        let items = (this.$item?.[this.$pdp.itemsSelector] || []);
-        return Promise.resolve(items).then(items=>{
+        return new AsyncPromise(async ()=>{
+            let items = (this.$item?.[this.$pdp.itemsSelector] || []);
             if(this.$pdp.hideSystem)
                 items = items.filter(f=>!f.isType)
             this.$item?.addEventListener?.('changed', e=>{
@@ -356,10 +356,11 @@ ODA({is: 'oda-tree-node',
         })
     },
     get expanderIcon() {
-        let icon = 'icons:chevron-right';
-        if (this.expanded)
-            icon += ':90'
-        return this.items.then(items=>{
+        return new AsyncPromise(async ()=>{
+            let icon = 'icons:chevron-right';
+            if (this.expanded)
+                icon += ':90'
+            let items = await this.items;
             if (!items?.length)
                 return '';
             return icon;

@@ -1,0 +1,46 @@
+# Текущий контекст работы
+
+## Что делаем
+Интеграция ИИ (GigaChat) в платформу WORK. Подключение моделей LLM через новую систему провайдеров.
+
+## Текущее состояние (09.07.2026)
+
+### Структура models/
+```
+models/$models/                              — корневой тип
+models/$models/data.js                       — описание $models
+models/$models/$folder/                      — локальная точка наследования
+models/$models/$folder/$storage/$provider/   — прототип провайдера
+  data.js                                    — METADATA.STATIC + accessToken getter/setter
+  handlers/methods/chat/$method/data.js      — серверный chat (https, auth)
+  handlers/methods/streamChat/$method/data.js — серверный streamChat (https, auth, SSE)
+models/$models/$folder/$storage/$llm/        — прототип модели
+models/GigaChat/$provider/data.js            — настройки GigaChat (protocol, baseUrl, apiKey...)
+models/GigaChat/GigaChat Pro/$llm/           — настройки GigaChat-Pro
+```
+
+### Что сделано
+1. **Локальное наследование через `$folder`** — `collect_tilde` с локальной цепочкой ПЕРЕД `meta_folder`
+2. **STATIC в DataAccessNode** — `_rootAccess` + `_directValue` для прямых свойств
+3. **babel-merge** — `ObjectMethod(kind='method')` → `ObjectProperty` + `FunctionExpression(null)`
+4. **Прототип `$provider`** — только METADATA + accessToken. Серверная логика в handlers/methods/
+5. **Микрочат task.ai** — переведён на новый провайдер `/models/GigaChat/$provider`
+   - `LLM.generate({messages})` → `llmChat(messages)` → `execItemMethod(provider, 'chat', {messages})`
+   - `skill-manager.js` тоже переведён
+   - Все ссылки на `/services/AI/GigaChat` удалены
+
+### Что проверить
+- Запуск микрочата task.ai через браузер
+- Работу `?chat` при вызове провайдера
+- Сохранение настроек через editor
+
+## Файлы в работе
+- `sources/server/folder.js` — collect_tilde (исправлен порядок)
+- `sources/client/storage.js` — DataAccessNode/Root (STATIC)
+- `sources/host/babel-merge.js` — cloneNode (ObjectMethod → ObjectProperty)
+- `sources/host/file-handlers.js` — микрочат (llmChat вместо LLM.generate)
+- `sources/host/skill-manager.js` — скилы (llmChat)
+- `models/$models/$folder/$storage/$provider/data.js` — чистый прототип
+- `models/$models/$folder/$storage/$provider/handlers/methods/chat/$method/data.js` — серверный chat
+- `models/$models/$folder/$storage/$provider/handlers/methods/streamChat/$method/data.js` — серверный streamChat
+- `models/GigaChat/$provider/data.js` — настройки GigaChat

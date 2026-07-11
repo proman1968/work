@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>ODANT — обзор для инвесторов</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 22mm 20mm 24mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', Georgia, 'Times New Roman', serif;
+      font-size: 11pt;
+      line-height: 1.55;
+      color: #1a2c3e;
+      max-width: 170mm;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    .doc-header {
+      border-bottom: 3px solid #2266dc;
+      padding-bottom: 14px;
+      margin-bottom: 22px;
+    }
+
+    .doc-header-top {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    .doc-logo {
+      width: 68px;
+      height: 68px;
+      flex-shrink: 0;
+    }
+
+    .doc-header h1 {
+      font-size: 22pt;
+      font-weight: 700;
+      color: #0a3e7c;
+      margin: 0 0 6px;
+      line-height: 1.2;
+    }
+
+    .doc-header .subtitle {
+      font-size: 12pt;
+      color: #3d5a73;
+      margin: 0 0 10px;
+    }
+
+    .doc-meta {
+      font-size: 9.5pt;
+      color: #5a7a96;
+    }
+
+    .doc-meta a { color: #2266dc; text-decoration: none; }
+
+    h2 {
+      font-size: 13pt;
+      color: #0a3e7c;
+      margin: 22px 0 10px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #c8d9ee;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      font-size: 11pt;
+      color: #1f3b4c;
+      margin: 16px 0 8px;
+      page-break-after: avoid;
+    }
+
+    p { margin: 0 0 10px; text-align: justify; }
+
+    ul, ol { margin: 0 0 12px 20px; }
+    li { margin-bottom: 5px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10pt;
+      margin: 10px 0 14px;
+      page-break-inside: avoid;
+    }
+
+    th, td {
+      border: 1px solid #c8d9ee;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef4ff;
+      color: #0a3e7c;
+      font-weight: 600;
+    }
+
+    .lead {
+      font-size: 11.5pt;
+      color: #2c4c6e;
+      background: #f8fbff;
+      border-left: 4px solid #2266dc;
+      padding: 12px 14px;
+      margin: 0 0 18px;
+    }
+
+    .thesis-box {
+      background: #eef4ff;
+      border: 1px solid #b8d0ef;
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin: 16px 0;
+    }
+
+    .thesis-box strong { color: #0a3e7c; }
+
+    .footnote {
+      font-size: 9pt;
+      color: #5a7a96;
+      font-style: italic;
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid #e0eaf5;
+    }
+
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+
+<header class="doc-header">
+  <div class="doc-header-top">
+    <img class="doc-logo" src="../sources/odant.png" alt="ODANT">
+    <div>
+      <h1>ODANT</h1>
+      <p class="subtitle">Обзор платформы для потенциальных инвесторов</p>
+    </div>
+  </div>
+  <p class="doc-meta">
+    odant.org · <a href="https://current.odant.org">current.odant.org</a> ·
+    Платформа ODANT · PaaS-решение WORK · UI-фреймворк ODA · 2026
+  </p>
+</header>
+
+<p class="lead">
+  <strong>ODANT</strong> — платформа, в которой структура папок одновременно является базой данных,
+  API и пользовательским интерфейсом. <strong>WORK</strong> — прикладное PaaS-решение на базе ODANT
+  для цифровой работы организаций: чат, документы, звонки, календарь, почта и ИИ-память в единой
+  модели — без классического разрыва между мессенджером, файловым хранилищем, CRM и кастомной разработкой.
+</p>
+
+<h2>1. Проблема рынка</h2>
+
+<p>
+  Современная организация вынуждена собирать цифровой контур из разрозненных продуктов. Мессенджеры
+  хранят переписку отдельно от документов. Диски и офисные редакторы не связаны с контекстом решений.
+  CRM и ERP требуют дорогой интеграции. Корпоративный ИИ часто работает на данных, ушедших во внешние
+  SaaS-сервисы. Для регулируемых отраслей критичен on-premise и суверенитет данных — но классический
+  стек из десятка вендоров это усложняет.
+</p>
+
+<table>
+  <tr>
+    <th>Область</th>
+    <th>Типичное решение</th>
+    <th>Последствие</th>
+  </tr>
+  <tr>
+    <td>Коммуникации</td>
+    <td>Slack, Teams, Telegram</td>
+    <td>Сообщения оторваны от документов и процессов</td>
+  </tr>
+  <tr>
+    <td>Документы</td>
+    <td>SharePoint, Google Drive, OnlyOffice</td>
+    <td>Нет единого контекста переписки и решений</td>
+  </tr>
+  <tr>
+    <td>Процессы</td>
+    <td>CRM, ERP, low-code</td>
+    <td>Vendor lock-in, высокая стоимость интеграций</td>
+  </tr>
+  <tr>
+    <td>ИИ</td>
+    <td>Внешние copilot, корпоративный RAG</td>
+    <td>Данные вне периметра, слабый контроль</td>
+  </tr>
+</table>
+
+<p>
+  Итог для бизнеса: высокая совокупная стоимость владения (TCO), фрагментированная история
+  деятельности, слабая аудируемость и медленная адаптация IT-системы под реальные практики
+  подразделений.
+</p>
+
+<h2>2. Решение: платформа ODANT и PaaS WORK</h2>
+
+<p>
+  Платформа <strong>ODANT</strong> реализует <strong>файлово-событийную модель</strong>. Любая рабочая активность
+  материализуется как файл в иерархии хранилищ организации. Сохранение файла — это событие
+  с версией в history, записью в журнале (logs) и возможностью последующего ИИ-анализа.
+  Главный продуктовый объект — не файл сам по себе, а <em>событие деятельности</em> в хранилище.
+</p>
+
+<p>
+  Организация моделируется иерархией хранилищ (подразделения). Пользователи создают артефакты:
+  сообщения, документы, письма, звонки, ответы ИИ. Система накапливает единый след —
+  основу для аудита, аналитики и RAG-памяти организации.
+</p>
+
+<h3>2.1. Ключевые принципы архитектуры</h3>
+
+<ul>
+  <li>
+    <strong>Фрактальная файловая система.</strong> Каждая папка — типизированный объект
+    (<code>$folder</code>, <code>$storage</code>, <code>$file</code>, <code>$user</code>).
+    URL равен пути к объекту, метод API — query-параметр. Отдельные БД, REST-контроллеры
+    и фронтенд-роутинг не проектируются вручную — они вырастают из дерева каталогов.
+  </li>
+  <li>
+    <strong>Наследование поведения.</strong> Тип, структура и подразделение наследуют handlers,
+    формы и настройки слоями. Подразделение может переопределить UI и логику без пересборки ядра.
+  </li>
+  <li>
+    <strong>Чат как представление событий.</strong> Чат не является отдельной базой сообщений.
+    Сообщение сохраняется как <code>message.txt</code>, ответ ИИ — как <code>response.md</code>,
+    вложения — как файлы со связями. Один след для чата, аудита и RAG.
+  </li>
+  <li>
+    <strong>Self-hosted и white-label.</strong> Платформа разворачивается on-premise или в
+    защищённом контуре клиента. Это ответ на запрос enterprise, госсектора и регулируемых отраслей.
+  </li>
+</ul>
+
+<h2>3. Продукт</h2>
+
+<h3>3.1. Платформа ODANT и PaaS-решение WORK</h3>
+
+<table>
+  <tr><th>Уровень</th><th>Назначение</th></tr>
+  <tr>
+    <td><strong>ODANT</strong> — ядро (<code>sources/</code>)</td>
+    <td>HTTP-сервер, навигация по FS, merge <code>data.js</code>, auth, logs, security</td>
+  </tr>
+  <tr>
+    <td><strong>ODANT</strong> — UI ODA (<code>oda/</code>)</td>
+    <td>Web Components, layouts, формы, диалоги</td>
+  </tr>
+  <tr>
+    <td><strong>ODANT</strong> — типы и расширяемость (<code>$server/</code>)</td>
+    <td>Системные типы, handlers, наследование, lib — основа для прикладных решений</td>
+  </tr>
+  <tr>
+    <td><strong>WORK</strong> — PaaS-решение (<code>root/</code>, модули)</td>
+    <td>Готовая поставка для организаций: чат, звонки, почта, календарь, документы, RAG, explorer</td>
+  </tr>
+</table>
+
+<p>
+  <strong>ODANT</strong> — технологическая платформа и экосистема расширений.
+  <strong>WORK</strong> — коммерчески готовое PaaS-решение (включая white-label и self-hosted),
+  построенное на этой платформе.
+</p>
+
+<h3>3.2. Возможности PaaS-решения WORK</h3>
+
+<ul>
+  <li>Чат и WebRTC-звонки как основной интерфейс взаимодействия</li>
+  <li>Редактирование документов (OnlyOffice: DOCX, XLSX, PPTX и др.)</li>
+  <li>Календарь, email, версионирование файлов и history</li>
+  <li>RAG и ИИ-помощник на собственных данных организации</li>
+  <li>Иерархия подразделений, роли, права доступа</li>
+  <li>Explorer и клиентский UI (<code>~/client/pages/</code>) — файловые и табличные представления</li>
+</ul>
+
+<p>
+  Рабочее демо развёрнуто на <a href="https://current.odant.org">current.odant.org</a>.
+  Локальный запуск: <code>npm install && npm start</code> → <code>http://localhost:8001</code>.
+</p>
+
+<h3>3.3. Целевые сегменты</h3>
+
+<ul>
+  <li>Средний и крупный бизнес — единая среда вместо множества SaaS-интеграций</li>
+  <li>Госсектор, финансы, промышленность — on-premise, контроль данных, аудит</li>
+  <li>ИТ-интеграторы и вендоры — white-label WORK PaaS на платформе ODANT</li>
+  <li>Организации с ИИ-стратегией — RAG на собственных данных без утечки в публичные модели</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h2>4. Бизнес-модель</h2>
+
+<table>
+  <tr><th>Направление</th><th>Описание</th></tr>
+  <tr>
+    <td>Лицензия ODANT (platform)</td>
+    <td>Доступ к платформе для разработки собственных решений и интеграторов</td>
+  </tr>
+  <tr>
+    <td>WORK PaaS / white-label</td>
+    <td>Подписка за готовое прикладное решение: брендированный контур, свой домен, on-premise</td>
+  </tr>
+  <tr>
+    <td>Enterprise / on-premise</td>
+    <td>Внедрение WORK, техническая поддержка, защищённый периметр</td>
+  </tr>
+  <tr>
+    <td>Модули и интеграции</td>
+    <td>OnlyOffice, AI, телефония, отраслевые handlers</td>
+  </tr>
+  <tr>
+    <td>ИИ-слой (premium)</td>
+    <td>RAG, агенты администратора, аналитика процессов</td>
+  </tr>
+</table>
+
+<p>
+  Экономика продукта усиливается с глубиной внедрения WORK: чем больше организация «живёт»
+  в решении (события → файлы → logs → RAG), тем выше ценность платформы ODANT и стоимость
+  переключения на альтернативу.
+</p>
+
+<h2>5. Конкурентное позиционирование</h2>
+
+<table>
+  <tr>
+    <th>Критерий</th>
+    <th>Классические SaaS</th>
+    <th>ODANT / WORK</th>
+  </tr>
+  <tr>
+    <td>Размещение данных</td>
+    <td>У вендора</td>
+    <td>У клиента (self-hosted WORK на ODANT)</td>
+  </tr>
+  <tr>
+    <td>История процессов</td>
+    <td>Разрозненная по продуктам</td>
+    <td>Единый файлово-событийный след</td>
+  </tr>
+  <tr>
+    <td>Кастомизация</td>
+    <td>API, плагины, ограниченный no-code</td>
+    <td>Наследование типов и handlers на диске</td>
+  </tr>
+  <tr>
+    <td>ИИ</td>
+    <td>Внешние copilot</td>
+    <td>Встроенный RAG по памяти организации</td>
+  </tr>
+  <tr>
+    <td>Скорость адаптации</td>
+    <td>Месяцы интеграций</td>
+    <td>Дни: новый тип или handler без пересборки ядра</td>
+  </tr>
+</table>
+
+<p>
+  Технологический ров: фрактальная FS с merge <code>data.js</code>, единая модель событий
+  и наследуемый UI — архитектура, которую сложно быстро воспроизвести поверх классического стека
+  «БД + REST + SPA».
+</p>
+
+<h2>6. Дорожная карта</h2>
+
+<p><strong>Уже реализовано:</strong> платформа ODANT (ядро, ODA, типы), PaaS-решение WORK
+(чат, звонки, документы, RAG, explorer), публичное демо на current.odant.org.</p>
+
+<p><strong>Ближайшие шаги:</strong></p>
+<ul>
+  <li>Стабилизация архитектуры и тестовое покрытие критических инвариантов</li>
+  <li>Единый клиентский UI (<code>~/client/pages/</code>) как основной продуктовый интерфейс</li>
+  <li>Усиление RAG: ранжирование локального и вышестоящего контекста, права видимости</li>
+</ul>
+
+<p><strong>Стратегическое направление:</strong> автопрограммирование — ИИ-агент администратора
+адаптирует типы, <code>data.js</code> и handlers по команде в чате, с подтверждением и аудитом
+изменений. Долгосрочная цель — WORK как операционная система организации на платформе ODANT,
+которая учится на практике подразделений.</p>
+
+<h2>7. Риски и их снижение</h2>
+
+<table>
+  <tr><th>Риск</th><th>Митигация</th></tr>
+  <tr>
+    <td>Сложность объяснения концепции «FS = платформа»</td>
+    <td>Фокус на продуктовых сценариях: чат + документы + ИИ на своих данных</td>
+  </tr>
+  <tr>
+    <td>Конкуренция с экосистемами Microsoft, Google</td>
+    <td>Ниша: self-hosted, white-label, суверенитет данных, глубокая кастомизация</td>
+  </tr>
+  <tr>
+    <td>Зрелость отдельных модулей</td>
+    <td>Модульная архитектура: ядро стабильно, прикладное наращивается поэтапно</td>
+  </tr>
+</table>
+
+<h2>8. Инвестиционный тезис</h2>
+
+<div class="thesis-box">
+  <p><strong>ODANT</strong> — технологическая платформа нового типа. <strong>WORK</strong> — готовое
+  PaaS-решение для организаций, построенное на ней. Вместе они дают:</p>
+  <ol>
+    <li>Платформа: папка = объект = API = UI — радикально снижает стоимость разработки</li>
+    <li>WORK: единый след деятельности — основа для аудита, процессов и ИИ</li>
+    <li>Self-hosted и white-label WORK отвечают на запрос рынка на суверенитет данных</li>
+    <li>ODANT: наследование и handlers — масштабируемая кастомизация без форка продукта</li>
+    <li>ИИ встроен в модель данных WORK, а не прикручен как внешний сервис</li>
+  </ol>
+  <p>
+    Инвестиционная возможность: платформа ODANT как технологический фундамент и WORK PaaS
+    как коммерческий продукт для сегментов, где критичны контроль данных, интеграция
+    коммуникаций с документами и ИИ на собственных материалах компании.
+  </p>
+</div>
+
+<p class="footnote">
+  Документ подготовлен на основе архитектуры платформы ODANT и PaaS-решения WORK.
+  Разделы «команда», «пилоты», «финансовые метрики» и «запрос инвестиций» заполняются
+  перед конкретным питчем. Техническая документация: README.md, whitepaper.md в репозитории.
+</p>
+
+</body>
+</html>

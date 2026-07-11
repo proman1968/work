@@ -48,11 +48,12 @@ export class $file extends $folder{
     }
 
     get svg_icons_list(){
-        return this.load().then(svgString=>{
+        return new AsyncPromise(async ()=>{
+            let svgString = await this.load();
             const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
             let items = doc.querySelectorAll('symbol[id]');
             return Array.from(items.map(r=>r.id));
-        });
+        })
     }
     restore_from_history(params = {}){
         if(!this.inHistory)
@@ -83,11 +84,16 @@ export class $file extends $folder{
             folder = await folder.find_item(type, item => item.id?.[0] === '$');
             if(!folder)
                 return [this.constructor.name, type];
+            // Возвращаем путь относительно WORK.$folder: ['$file', '$prompt']
+            // Полный путь /$server/$folder/$file/$prompt — отрезаем первые 3 части
             return folder.path.split('/').slice(3);
         })
     }
     get rag(){
-        return this.parent.rag.then(rag=>rag?.[this.id]);
+        return new AsyncPromise(async ()=>{
+            let rag = await this.parent.rag;
+            return rag?.[this.id];
+        })
     }
     async delete(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
@@ -180,6 +186,81 @@ export class $file extends $folder{
         params.filename = this.id;
         return this.parent.save_file(params)
     }
+    async edit_file(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        const diff = typeof params.post === 'string' ? params.post : params.diff;
+        if (!diff)
+            throw new Error('edit_file: не указан diff (params.post или params.diff)');
+        const current = await this.load({ encoding: 'utf-8' });
+        const result = this.constructor.apply_diff(current, diff);
+        const saveParams = Object.assign({}, params, { post: result });
+        if (this.inHistory || this.inRAG) {
+            if (!fs.existsSync(this.parent.real_dir))
+                fs.mkdirSync(this.parent.real_dir, { recursive: true });
+            await fsp.writeFile(this.real_dir, result, saveParams);
+            this.reset();
+            return result;
+        }
+        saveParams.filename = this.id;
+        await this.parent.save_file(saveParams);
+        return result;
+    }
+    static _parse_diff(diff){
+        const SEARCH_MARKER = '------- SEARCH';
+        const REPLACE_MARKER = '=======';
+        const END_MARKER = '+++++++ REPLACE';
+        const lines = String(diff).split('\n');
+        const blocks = [];
+        let i = 0;
+        while (i < lines.length) {
+            if (lines[i].startsWith(SEARCH_MARKER)) {
+                i++;
+                const searchLines = [];
+                while (i < lines.length && lines[i].trim() !== REPLACE_MARKER) {
+                    searchLines.push(lines[i]);
+                    i++;
+                }
+                if (i >= lines.length)
+                    throw new Error('edit_file: не найден разделитель =======');
+                i++;
+                const replaceLines = [];
+                while (i < lines.length && lines[i].trim() !== END_MARKER) {
+                    replaceLines.push(lines[i]);
+                    i++;
+                }
+                if (i >= lines.length)
+                    throw new Error('edit_file: не найден завершающий +++++++ REPLACE');
+                i++;
+                blocks.push({
+                    search: searchLines.join('\n'),
+                    replace: replaceLines.join('\n'),
+                });
+            }
+            else
+                i++;
+        }
+        if (!blocks.length)
+            throw new Error('edit_file: не найдено блоков SEARCH/REPLACE');
+        return blocks;
+    }
+    static apply_diff(content, diff){
+        const blocks = this._parse_diff(diff);
+        let result = String(content);
+        for (const block of blocks) {
+            if (!result.includes(block.search))
+                throw new Error('edit_file: фрагмент не найден в файле:\n' + block.search.slice(0, 200));
+            result = result.replace(block.search, block.replace);
+        }
+        return result;
+    }
+    async get_imports(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        const content = await this.load({ encoding: 'utf-8' });
+        if (typeof content !== 'string')
+            return [];
+        const matches = content.match(/^\s*import\s+.*$/gmi);
+        return matches ? matches.map(m => m.trim()) : [];
+    }
     async create(p = {}) {
         switch (p.type) {
             case '$file':
@@ -244,7 +325,7 @@ export class $file extends $folder{
             log.sender = params.user.uid;
         else if (params.user === globalThis.WORK)
             log.sender = WORK.id;
-        if (params.filename === 'pack.pack') {
+        if (params.filename === 'files.pack') {
             try {
                 const pack = typeof params.post === 'string' ? JSON.parse(params.post) : params.post;
                 log.content = pack?.content ?? '';
@@ -258,7 +339,7 @@ export class $file extends $folder{
         else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
             || params.filename === 'response.md' || params.filename === 'error.txt'
             || params.filename === 'task.ai')
-            log.content = params.post;
+            log.content = params.message ?? params.post;
         log.path = this.json_model.path;
         log.type = '$file';
         if (params.filename)
@@ -289,8 +370,8 @@ export class $file extends $folder{
         if (log.receivers?.length) {
             log.receivers = log.receivers.filter(r => r !== $storage.id);
             if (log.receivers?.length) {
-                params.receivers = log.receivers.map(uid => WORK.$users.then(u => u.get_item('//' + uid)));
-                params.receivers = await Promise.all(params.receivers);
+                let usersList = await WORK.$users;
+                params.receivers = await Promise.all(log.receivers.map(uid => usersList.get_item('//' + uid)));
                 for (const receiver of params.receivers)
                     await $file._writeLogTo(receiver, log_param, written);
             }
@@ -299,11 +380,13 @@ export class $file extends $folder{
         params.logPath = this.short;
         if (!params.skip_file_handler) {
             queueMicrotask(async () => {
-                // Контекстный триггер: ~/triggers/on_save по наследованию типа файла
+                // Контекстный триггер: ~/triggers/on_save/~/data.js
+                // Двойная тильда: первая ищет триггеры по типу файла, вторая — data.js внутри on_save
                 try {
-                    if (typeof this.get_item !== 'function') throw new Error('no get_item'); const trigger = await this.get_item('~/triggers/on_save');
-                    if (trigger) {
-                        const data = await trigger.import();
+                    const dataFiles = await this.get_item('~/triggers/on_save/~/data.js');
+                    if (Array.isArray(dataFiles) && dataFiles.length) {
+                        const script = await $server.mergeFiles(dataFiles);
+                        const data = await $folder.importScript(script);
                         if (data?.execute) {
                             await data.execute.call($storage, params);
                             return;
@@ -313,8 +396,6 @@ export class $file extends $folder{
                 catch (e) {
                     console.warn('[file] on_save trigger', e.message);
                 }
-                // Fallback: статический словарь (временное, до переноса handlers)
-                WORK.file_handlers?.[params.filename]?.call($storage, params);
             })
         }
         return log;

@@ -135,7 +135,7 @@ export class $folder extends $item {
     }
     load(params = {}) {
         return this.body ??= new AsyncPromise(async _ => {
-            return this.fetch('load', params);
+            return this.fetch('load', {...params, version: this.__version});
         })
     }
     async save(post = this.body) {

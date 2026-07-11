@@ -6,7 +6,7 @@ import * as mime from 'mime-types';
 import * as zlib from 'node:zlib';
 import { pipeline, Readable } from 'node:stream';
 import multiparty from 'multiparty';
-import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST } from './config.js';
+import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.js';
 import * as CORE from '../server/index.js';
 import { filterHttpTreeResult } from './security.js';
 import { $server } from '../server/server.js';
@@ -81,12 +81,14 @@ export function parseCookies(request) {
 }
 
 function requestBody(params, request) {
-    return params.post ?? request.post;
+    return params.post ?? request?.post;
 }
 
 async function tryHandlerMethod(item, method, params, request) {
     try {
-        const handlerItem = await item.get_item('~/handlers/methods/' + method);
+        let handlerItem = await item.get_item('~/handlers/methods/' + method);
+        if (Array.isArray(handlerItem))
+            handlerItem = handlerItem.find(Boolean);
         if (!handlerItem) return undefined;
         const data = await handlerItem.import();
         if (typeof data?.execute === 'function') {

@@ -302,12 +302,17 @@ export class Reactor extends EventTarget {
         return context;
     }
 
+    static _protoCache = new WeakMap();
+
     static activate(target, host) {
         if (target?.[R]?.active) {
             if (host)
                 target[R].hosts.add(host);
             return target[R].proxy;
         }
+
+        if (target === null || target === undefined)
+            return target;
 
         if (!Object.isExtensible(target) || target instanceof Promise)
             return target;
@@ -320,8 +325,14 @@ export class Reactor extends EventTarget {
 
         let props = {}
         if (target.constructor !== Array) {
-            props = Reactor.proto2props(target);
-            props = Reactor.join_props(target.constructor?.[R]?.props || {}, props);
+            // Кэшируем proto2props по самому объекту — активация вызывается один раз,
+            // но при массовом создании похожих объектов это снижает накладные расходы
+            props = Reactor._protoCache.get(target);
+            if (!props) {
+                props = Reactor.proto2props(target);
+                props = Reactor.join_props(target.constructor?.[R]?.props || {}, props);
+                Reactor._protoCache.set(target, props);
+            }
         }
 
         const context = Reactor.createReactiveContext(target, props);
@@ -354,6 +365,37 @@ export class Reactor extends EventTarget {
         values.add(Reactor._collectorKey);
     }
 
+    static cleanupDeps(target) {
+        const actor = target[R];
+        if (!actor) return;
+        for (const depKey in actor.deps) {
+            const depMap = actor.deps[depKey];
+            if (!depMap) continue;
+            for (const [host, keys] of depMap) {
+                const hostActor = host[R];
+                if (!hostActor?.deps) continue;
+                for (const key of keys) {
+                    const hostDeps = hostActor.deps[key];
+                    if (hostDeps) {
+                        hostDeps.delete(target);
+                        if (!hostDeps.size)
+                            delete hostActor.deps[key];
+                    }
+                }
+            }
+        }
+        actor.deps = {};
+    }
+
+    static _notifyBatch = new Set();
+    static _notifyScheduled = false;
+
+    static _notifyTarget(target) {
+        if (!target)
+            return;
+        target.notify?.();
+    }
+
     static reset_deps = function (target, key = '', keep_notify = false) {
         const actor = target[R];
         if (!actor) return;
@@ -364,6 +406,7 @@ export class Reactor extends EventTarget {
                 for (let dep of deps) {
                     let host = dep[0];
                     for (let k of dep[1]) {
+                        // Защита от циклов: если кэш уже сброшен — пропускаем
                         if (host[R].cache[k] === undefined)
                             continue;
                         host[R].cache[k] = undefined;
@@ -382,11 +425,12 @@ export class Reactor extends EventTarget {
             return;
         }
 
-        target?.notify?.()
+        // Уведомляем с дедупликацией — _notifyBatch гарантирует один вызов за microtask
+        this._notifyTarget(target);
         let hosts = actor.hosts;
         if (!hosts) return;
         for (let h of hosts)
-            h.notify?.()
+            this._notifyTarget(h);
     }
 
     static get [R]() {
@@ -436,12 +480,25 @@ export class Reactor extends EventTarget {
                 value = prop.$def();
             }
             if (value !== undefined) {
-                if (value?.then) {
-                    // value.then(res=>{
-                    //     target[key] = res;
-                    // }).catch(err=>{
-                    //     target[key] = undefined;
-                    // })
+                if (typeof value?.then === 'function') {
+                    // Разворачивание Promise: при разрешении обновляем кэш и уведомляем
+                    const pending = value;
+                    pending.then(res => {
+                        // Защита от гонки: если кэш уже обновлён другим путём — не перезаписываем
+                        if (actor.cache[key] !== pending)
+                            return;
+                        // Применяем конвертер типа и активируем результат — как для синхронного значения
+                        res = getTypeConverter(prop?.$type)(res);
+                        res = actor.cache[key] = Reactor.activate(res, target);
+                        Reactor.reset_deps(target, key);
+                        target.notify?.(prop, res);
+                    }).catch(err => {
+                        // При ошибке очищаем кэш без уведомления — избегаем цикла повторных вызовов
+                        if (actor.cache[key] === pending) {
+                            actor.cache[key] = undefined;
+                            console.warn(`Асинхронный геттер '${key}' отклонён:`, err);
+                        }
+                    });
                 }
                 else
                     value = getTypeConverter(prop?.$type)(value);
@@ -597,23 +654,32 @@ Object.equal = Reactor.equal = function (a, b, recurse = 1) {
     if (a == null || b == null) return false;
     if (typeof a !== 'object' || typeof b !== 'object') return false;
     
-    if (a[R]) {
-        if (a[R]?.target === b[R]?.target)
+    // Защита от реентерабельности: если equal уже выполняется,
+    // используем простое сравнение ссылок
+    if (Reactor._inEqual)
+        return a === b;
+    Reactor._inEqual = true;
+    try {
+        if (a[R]) {
+            if (a[R]?.target === b[R]?.target)
+                return true;
+        }
+        if (a instanceof Function && a.constructor === b.constructor)
+            return a.toString() === b.toString();
+        if (a instanceof Date && a.constructor === b.constructor)
+            return a.valueOf() === b.valueOf();
+        if (recurse > 0) {
+            const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+            for (let key of keys)
+                if (!Reactor.equal(b[key], a[key], recurse - 1))
+                    return false;
             return true;
+        }
+        return false;
     }
-    if (a instanceof Function && a.constructor === b.constructor)
-        return a.toString() === b.toString();
-    if (a instanceof Date && a.constructor === b.constructor)
-        return a.valueOf() === b.valueOf();
-    if (recurse > 0) {
-        const keys = Object.keys(a);
-        keys.add(...Object.keys(b));
-        for (let key of keys)
-            if (!Reactor.equal(b[key], a[key], recurse - 1))
-                return false;
-        return true;
+    finally {
+        Reactor._inEqual = false;
     }
-    return false;
 }
 
 Reactor.join_props = function (parent, child) {
@@ -678,6 +744,42 @@ Array: {
         Reactor.reset_deps(this);
         return res;
     }
+    const pop = Array.prototype.pop;
+    Array.prototype.pop = function () {
+        const res = pop.call(this);
+        Reactor.reset_deps(this);
+        return res;
+    }
+    const shift = Array.prototype.shift;
+    Array.prototype.shift = function () {
+        const res = shift.call(this);
+        Reactor.reset_deps(this);
+        return res;
+    }
+    const sort = Array.prototype.sort;
+    Array.prototype.sort = function (...args) {
+        const res = sort.call(this, ...args);
+        Reactor.reset_deps(this);
+        return res;
+    }
+    const reverse = Array.prototype.reverse;
+    Array.prototype.reverse = function () {
+        const res = reverse.call(this);
+        Reactor.reset_deps(this);
+        return res;
+    }
+    const fill = Array.prototype.fill;
+    Array.prototype.fill = function (...args) {
+        const res = fill.call(this, ...args);
+        Reactor.reset_deps(this);
+        return res;
+    }
+    const copyWithin = Array.prototype.copyWithin;
+    Array.prototype.copyWithin = function (...args) {
+        const res = copyWithin.call(this, ...args);
+        Reactor.reset_deps(this);
+        return res;
+    }
 
     Object.defineProperty(Array.prototype, 'has', {
         enumerable: false, configurable: true, value(...val) {
@@ -723,7 +825,11 @@ Array: {
     Object.defineProperty(Array.prototype, 'swap', {
         enumerable: false, configurable: true,
         value: function (i1, i2) {
-            return [this[i1], this[i2]] = [this[i2], this[i1]];
+            const tmp = this[i1];
+            this[i1] = this[i2];
+            this[i2] = tmp;
+            Reactor.reset_deps(this);
+            return [this[i1], this[i2]];
         }
     });
     Object.defineProperty(Array.prototype, 'sum', {

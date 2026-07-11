@@ -29,7 +29,8 @@ WORK построен вокруг `$item`.
 - `$server.js` — `$server` (бывший `WorkServer`): корневой серверный `$storage`, HTTP-сессии, merge `data.js`, шаблоны страниц.
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, manifest, сортировка.
 - `storage.js` — `$storage`: `data.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](../docs/storage-inheritance.md).
-- `file.js` — `$file`: load/save, history, restore, file-specific behavior.
+- `file.js` — `$file`: load/save, history, restore, file-specific behavior. Переопределён `collect_tilde` — для файлов tilde ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки.
+- `llm.js` — `$llm extends $storage`: подключение к внешним языковым моделям. Методы: `chat()` (полный ответ), `streamChat()` (AsyncGenerator). Протоколы: `openai`, `anthropic`, `gigachat` (OAuth + self-signed SSL).
 - `user.js` — `$user`: пользовательская storage-сущность.
 
 ## `client/`
@@ -39,7 +40,7 @@ WORK построен вокруг `$item`.
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`.
 - `folder.js` — клиентский `$folder extends $item` (из `core.js`): `url`, `open_url`, `fetch`, `get_item`, browser actions, `save_file`, `load`, `save`, `delete`, `create`.
 - `storage.js` — клиентский `$storage`: import/save `data.js`, metadata, fields, data access.
-- `file.js` — клиентский `$file`.
+- `file.js` — клиентский `$file`. Переопределён `load()` — возвращает сырые данные через `WORK.fetch()` без `__bind` (для чтения JSON-файлов вроде `task.ai`). `reset()` очищает `body` и кэш.
 - `user.js` — клиентский `$user`.
 - `handler.js` — клиентская модель handler'а.
 - `field.js` — клиентская модель поля/описателя данных.
@@ -54,7 +55,7 @@ WORK построен вокруг `$item`.
 - `websocket.js` — WebSocket-события.
 - `stun.js` — локальный STUN для WebRTC.
 - `auth-methods.js` — login/register/session methods (примешиваются в прототип `$server`).
-- `file-handlers.js` — реакции на сохранение файлов (`task.ai`, `message.txt`, `pack.pack`, `outbox.eml`…).
+- `file-handlers.js` — реакции на сохранение файлов (`task.ai`, `message.txt`, `files.pack`, `outbox.eml`…).
 - `skill-manager.js` — запуск и контроль выполнения скиллов.
 - `skill-router.js` — роутинг запросов к скиллам (эмбеддинги + keyword fallback).
 - `mail.js`, `email-utils.js` — почта и EML.
@@ -92,3 +93,70 @@ WORK построен вокруг `$item`.
 7. Не создавать новые `helpers`, `shared`, `utils` без явного владельца и причины.
 8. Не держать demo/sandbox-файлы внутри `sources`; такие файлы должны быть удалены или вынесены в отдельные examples вне ядра.
 9. Имя файла в `server/` и `client/` должно совпадать с именем класса в нём (например, `folder.js` → `$folder`).
+
+## Принципы архитектуры
+
+1. **МИНИМАЛИЗМ** — код должен быть минимальным. `ai-preview` — ~100 строк, не 800. Меньше кода — меньше ошибок.
+2. **Поведение в классе-владельце** — метод живёт в классе объекта, которому принадлежит. Общий метод поднимается в базовый класс.
+3. **Методы ядра, не костыли** — использовать существующие методы (`load()`, `get_item()`, `fetch()`), а не прямые HTTP-вызовы или хардкод путей.
+4. **Реактивная модель** — геттеры + события `changed`/`reset()` для автообновления. Не поллинг.
+5. **`__bind` только для дерева** — `fetch()` — транспорт, `__bind` — привязка к дереву элементов. `load()` не должен оборачивать результат.
+
+## $llm — внешние языковые модели
+
+`$llm extends $storage` (`sources/server/llm.js`) — единый интерфейс для LLM провайдеров.
+
+- `chat(messages, options)` — полный ответ
+- `streamChat(messages, options)` — AsyncGenerator для стриминга
+- Протоколы: `openai` (Bearer), `anthropic` (x-api-key), `gigachat` (OAuth + self-signed SSL), `custom`
+
+Структура провайдера:
+```
+services/LLM/$llm/data.js                    — мета-тип (поля настройки)
+services/LLM/<Провайдер>/<Модель>/$llm/data.js — конкретная модель
+```
+
+## Triggers (~/triggers/on_save)
+
+Триггер `on_save` — реакция на сохранение файла. Ищется через двойную тильду:
+
+```
+~/triggers/on_save/~/data.js
+```
+
+- **Первая `~`** — `collect_tilde` для типа файла. Для `$file` переопределён: ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки внутри файла.
+- **Вторая `~`** — поиск `data.js` внутри мета-папок `on_save` (через `$trigger`).
+- **Результат** — массив `data.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
+
+Структура триггера на диске (через `steps`):
+
+```
+$server/$folder/$file/$prompt/triggers/on_save/$trigger/data.js
+```
+
+- `$folder` — корневой типизатор (начало цепочки `steps`)
+- `$file/$prompt` — цепочка типов от расширения файла (`.prompt`)
+- `triggers/on_save` — папка триггера
+- `$trigger` — мета-тип (как `$handler`), содержит `data.js` с методом `execute(params)`
+
+Вызов триггера — в `sources/server/file.js`, метод `save_to_log`, через `queueMicrotask`.
+
+### ai-preview — микрочат для task.ai
+
+`ai-preview` (~100 строк) — компонент-превью для `task.ai`.
+
+- `get includes()` — геттер: `$item.load()` → JSON → `includes` → `WORK.get_item(p, 'info')` → массив экземпляров
+- `$item.listen('changed')` → инвалидация кэша `includes` → автообновление
+- `send()` — `save_file('message.prompt')` в storage владельца
+- `compact` режим в `chat-item`: `flex` + `raised` вместо `shadow`
+
+### task.ai — носитель микрочата
+
+`task.ai` — файл-контейнер для микрочата с ИИ. Создаётся триггером `on_save` при первом `message.prompt`. Содержит JSON:
+
+```json
+{ "content": "", "includes": ["/path/to/prompt", "/path/to/response.md"] }
+```
+
+- `includes` — история диалога (prompts и responses в порядке)
+- Отсутствие LLM-исполнителя не отменяет создание `task.ai` — он хранит includes для последующего выполнения

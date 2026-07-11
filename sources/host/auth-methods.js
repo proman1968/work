@@ -90,7 +90,8 @@ export const authMethods = {
             label: ((surname || '') + ' ' + (name || '') + ' ' + (patronymic || '')).trim() || email,
         };
 
-        let $user_item = await this.$users.then(u => u._get_item(uid, CORE.$user));
+        let users = await this.$users;
+        let $user_item = await users._get_item(uid, CORE.$user);
         credentials.keys = $user_item.keys || {};
         credentials.keys[time] = publicKey;
 
@@ -101,11 +102,10 @@ export const authMethods = {
         let post = CORE.$storage.toScript(credentials);
 
         let res = await $user_item.save({ filename: 'data.js', post, user: WORK });
-        await this.$users.then(async u => {
-            (await u.children)?.forEach?.(ch => ch.children = undefined);
-            u.children = undefined;
-            u.users = undefined;
-        });
+        let u = await this.$users;
+        (await u.children)?.forEach?.(ch => ch.children = undefined);
+        u.children = undefined;
+        u.users = undefined;
 
         if (base64Image) {
             base64Image = Buffer.from(base64Image, 'base64');
@@ -127,7 +127,8 @@ export const authMethods = {
     async user_login_start(params = {}) {
         const { uid, user, challengeId } = params;
         if (!uid) throw new Error("uid required");
-        let $user = await WORK.$users.then(u => u.get_item('//' + uid));
+        let users = await WORK.$users;
+        let $user = await users.get_item('//' + uid);
         if (!$user)
             throw new Error("User not registered");
         await $user.info({ reset: true });

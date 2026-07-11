@@ -172,6 +172,7 @@ globalThis.ODA = async function ODA(prototype = {}){
                 }
                 disconnectedCallback() {
                     this.detached?.();
+                    Reactor.cleanupDeps(this);
                 }
                 static get observedAttributes() {
                     return observeAttrs;

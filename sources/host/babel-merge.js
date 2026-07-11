@@ -150,7 +150,25 @@ export const MERGE =
         };
 
         // Р¤СѓРЅРєС†РёСЏ РґР»СЏ РіР»СѓР±РѕРєРѕРіРѕ РєР»РѕРЅРёСЂРѕРІР°РЅРёСЏ AST РЅРѕРґС‹
-        const cloneNode = (node) => t.cloneNode(node, true);
+        const cloneNode = (node) => {
+            if (t.isObjectMethod(node) && node.kind === 'method') {
+                // Конвертируем ObjectMethod в ObjectProperty + FunctionExpression,
+                // т.к. @babel/generator некорректно генерирует ObjectMethod с generator: true
+                const fn = t.functionExpression(
+                    null,
+                    node.params.map(p => t.cloneNode(p, true)),
+                    t.cloneNode(node.body, true),
+                    node.generator,
+                    node.async
+                );
+                return t.objectProperty(
+                    t.cloneNode(node.key, true),
+                    fn,
+                    node.computed
+                );
+            }
+            return t.cloneNode(node, true);
+        };
 
         // Р”РѕР±Р°РІР»СЏРµРј СЃРІРѕР№СЃС‚РІР° РёР· РїРµСЂРІРѕРіРѕ РѕР±СЉРµРєС‚Р°
         props1.forEach(prop => {

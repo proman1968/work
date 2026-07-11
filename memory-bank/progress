@@ -1,0 +1,67 @@
+# Журнал прогресса
+
+## Завершённые задачи
+
+### Починить стриминг + Markdown вывод — 10.07.2026 ✅
+
+**Корневая причина стриминга:** метод `fire()` в Reactor (`oda/reactor.js:126`) оборачивает `detail` в `{ value: detail }`. Обработчики в preview читали `e.detail?.token` вместо `e.detail?.value?.token` — токен всегда был `undefined`.
+
+**Исправления:**
+- `_onChatDelta`: `e.detail?.value?.token` вместо `e.detail?.token`
+- `_onChatError`: `e.detail?.value?.error` вместо `e.detail?.error`
+- Убран `console.log('[ai-preview] _onChatDelta...')`
+
+**Markdown для вывода ИИ:**
+- `oda-markdown-viewer` добавлен в imports
+- Ответы из истории — `<oda-markdown-viewer :value="content">`
+- Стриминг — `<oda-markdown-viewer :value="streamingText">` с throttle 150мс
+- CSS `.streaming` — убраны `white-space: pre-wrap`, `word-break`
+
+**Убраны диагностические логи:**
+- `streamChat/$method/data.js` — `[streamChat] chunk`, `[streamChat] yield`, `[streamChat] done`
+- `prompt/$method/data.js` — `[prompt] token`, `[prompt] done`, `tokenCount`
+- `[gigachat-auth] response` → `console.warn` только при `statusCode >= 400`
+
+**Мусор models/G** — не найден, папка отсутствует.
+
+### Предыдущие задачи (по диагностике стриминга — 10.07.2026)
+- Сервер: стриминг РАБОТАЛ — токены отправлялись через `WORK.wsSend`
+- Клиент: `_onChatDelta` вызывался, но token был `undefined` из-за обёртки `fire()`
+
+### Bugfix: 404 No such model — 10.07.2026
+- `chatOptions.model` убран — `streamChat` берёт `ai.model` сам
+
+### Bugfix: selectedModelItem не отображался — 10.07.2026
+- Убран `'info'` из `WORK.get_item`
+
+### Инициализация model при создании task.ai — 10.07.2026
+- `on_save` триггер: `body.model = modelPath` перед стримингом
+
+### TITLE для меню + автозапись модели — 10.07.2026
+- `WORK.showDropdown(tree, { TITLE: { label: 'Select model' } }, e)`
+
+### Bugfix: findModel is not defined — 10.07.2026
+- Добавлена `findModel()` в prompt метод
+
+### Замена select на item-node + выпадающее дерево — 10.07.2026
+
+### Стриминговый вывод (on_save) — 09.07.2026
+
+### Панель инструментов ai-preview — 09.07.2026
+
+### Исправление ошибок микрочата — 09.07.2026
+
+### Удаление мусорной архитектуры — 09.07.2026
+- Удалены `file-handlers.js`, `skill-manager.js`, `skill-router.js`
+
+### Серверный класс $handler — 09.07.2026
+- `sources/server/handler.js` — `class $handler extends $storage`
+
+### Единый тип $ai — 09.07.2026
+
+## Незавершённое
+
+### Инструментарий агента (как в Cline)
+- System prompt с описанием инструментов
+- Цикл tool-call: read_file, write_file, list_dir, get_info, search
+- Лимит итераций (10), логирование в chat[]

@@ -29,7 +29,7 @@ export class $server extends $storage {
         return genApi;
     }
     get exclude_for_rag(){
-        return Object.keys(this.file_handlers);
+        return [];
     }
     get embedding_llm(){
         return getLLMModel({ name: DEFAULT_EMBEDDINGS_LLM});
@@ -37,6 +37,24 @@ export class $server extends $storage {
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'
     }
+    /**
+     * Отправить WebSocket сообщение всем подключённым сокетам.
+     * @param {object} data — объект, который будет сериализован в JSON
+     */
+    wsSend(data) {
+        const payload = JSON.stringify(data);
+        for (const user of Object.values(this.constructor.users)) {
+            for (const id in user.sockets) {
+                const socket = user.sockets[id];
+                try {
+                    socket.ws.send(payload);
+                } catch (e) {
+                    console.warn('[wsSend]', e.message);
+                }
+            }
+        }
+    }
+
     get types(){
         const type_scan = (dir)=>{
             let children = fs.readdirSync(dir);
@@ -196,6 +214,8 @@ export class $server extends $storage {
 
         return this.merges[key] ??= new AsyncPromise(async () => {
             let body = '';
+            if (!files?.length || !files[0])
+                return body;
             switch(files[0].ext){
                 case 'js':{
                     for (const file of unique_files) {
@@ -236,74 +256,6 @@ export class $server extends $storage {
     }
     static get mime(){
         return mime;
-    }
-    static async request(url, headers = {}, post){
-        headers = Object.assign({
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        }, headers)
-        url = new URL(url);
-        let options = {
-            method: post?'POST':'GET',
-            hostname: url.hostname,
-            port: url.port,
-            path: url.pathname,
-            headers
-        };
-        const client = url.protocol === 'https:' ? https : http;
-        return new Promise(async (resolve, reject)=>{
-            const req = client.request(options, async (res) => {
-                const chunks = [];
-                for await (const chunk of res)
-                    chunks.push(chunk);
-                let buffer = Buffer.concat(chunks);
-                switch(res.headers['content-type']){
-                    case 'application/json':{
-                        buffer = buffer.toString('utf-8');
-                        buffer = JSON.parse(buffer);
-                        resolve(buffer);
-                    } break;
-                    default:{
-                        resolve({
-                            buffer: buffer,
-                            contentType: res.headers['content-type'],
-                            contentLength: res.headers['content-length']
-                        });
-                    }
-                }
-            });
-            req.on('error', reject);
-            if(post)
-                req.write(JSON.stringify(post));
-            req.end();
-        })
-    }
-    static async awaitRequestResult(url, headers) {
-        return new Promise((resolve, reject) => {
-            const checkStatus = async () => {
-                try {
-                    const taskInfo = await $server.request(url, headers);
-                    console.log(`📊 Статус: ${taskInfo.status}`);
-
-                    if (taskInfo.status === 'success') {
-                        console.log('✅ Готово!');
-                        clearInterval(interval);
-                        resolve(taskInfo);
-                    }
-                    else if (taskInfo.status === 'failed') {
-                        clearInterval(interval);
-                        reject(new Error(JSON.stringify(taskInfo)));
-                    }
-
-                }
-                catch (error) {
-                    clearInterval(interval);
-                    reject(error);
-                }
-            };
-            checkStatus();
-            const interval = setInterval(checkStatus, 5000);
-        });
     }
 }
 $server.steps = Object.create(null);

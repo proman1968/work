@@ -422,7 +422,8 @@ export class $storage extends $folder{
         return this.meta_folder;
     }
     get logs_dates(){
-        return this.meta_folder.get_item('/logs/.data.logs/history').then(async history=>{
+        return new AsyncPromise(async ()=>{
+            let history = await this.meta_folder.get_item('/logs/.data.logs/history');
             let dates = [];
             try{
                 if(history){
@@ -752,21 +753,7 @@ export class $storage extends $folder{
             row = await this.appendLogIncludes(taskPath, [stepPath], { user: globalThis.WORK });
 
         const includes = row?.includes || (stepPath ? [stepPath] : []);
-        const handler = globalThis.WORK?.file_handlers?.['task.ai'];
-        let aiResult = null;
-        if (handler) {
-            aiResult = await handler.call(this, {
-                post: text,
-                includes,
-                logFullPath: taskPath,
-                logPath: taskPath,
-                logAuthor,
-                mainContext: row?.mainContext,
-                queued: true,
-                user: globalThis.WORK,
-            });
-        }
-
+        
         let entry = await this._findLogEntry(taskPath) ?? row;
         const normPath = p => (p?.startsWith('/') ? p : '/' + p);
         const hasInclude = (list, p) => {
@@ -882,7 +869,8 @@ export class $storage extends $folder{
         }
     }
     get structure(){
-        return this.info().then(async item=>{
+        return new AsyncPromise(async ()=>{
+            let item = await this.info();
             let result = {
                 id: item.id,
                 label: item.label,
@@ -994,7 +982,8 @@ export class $storage extends $folder{
             await this.info();
             let user = this.DATA['#security']?.admin;
             if(user){
-                user = (await WORK.$users.then(u=>u.get_item('//' + user)));
+                let users = await WORK.$users;
+                user = await users.get_item('//' + user);
                 if (user){
                     await user.info();
                     admins.add(user);
@@ -1008,8 +997,8 @@ export class $storage extends $folder{
             await this.info();
             let users = this.DATA['#security']?.users;
             if(users?.length){
-                users = users.map(id=>WORK.$users.then(u=>u.get_item('//'+id)));
-                users = await Promise.all(users);
+                let usersList = await WORK.$users;
+                users = await Promise.all(users.map(id=>usersList.get_item('//'+id)));
                 users = users.filter(Boolean);
             }
             return users;

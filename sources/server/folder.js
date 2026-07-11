@@ -178,7 +178,11 @@ export class $folder extends $item{
         return 0;
     }
     get size(){
-        return this.items.then(items=>Promise.all(items.map(f=>f.size)).then(items=>items.sum()));
+        return new AsyncPromise(async ()=>{
+            let items = await this.items;
+            let sizes = await Promise.all(items.map(f=>f.size));
+            return sizes.sum();
+        })
     }
     get ancestor(){
         return new AsyncPromise(async ()=>{
@@ -192,7 +196,8 @@ export class $folder extends $item{
 
 
             //тотальное наследование всех папкок и фалов
-            let children = await this.parent?.ancestor.then(a=>a?.children);
+            let parentAncestor = await this.parent?.ancestor;
+            let children = await parentAncestor?.children;
             let ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
             if(ancestor)
                 return ancestor;
@@ -208,12 +213,14 @@ export class $folder extends $item{
                 //наследование типизированных элементов
                 let parent = this.$parent.$parent;
                 while(parent && !ancestor){
-                    ancestor = await parent.children.then(c=>c.find(f=>f.id === this.id && f.type === this.type));
+                    let parentChildren = await parent.children;
+                    ancestor = parentChildren?.find(f=>f.id === this.id && f.type === this.type);
                     if(!ancestor && this.$owner){
                         //наследование вложенных типизированных элементов ($handler, $object, $index ...)
                         let folder = await parent.$folder.find_item(this.$owner.type, (item)=>item.id[0] === '$');
                         while(!ancestor && folder && !folder?.isMetaFolder){
-                            ancestor = await folder.children.then(c=>c.find(f=>f.id === this.id && f.type === this.type));
+                            let folderChildren = await folder.children;
+                            ancestor = folderChildren?.find(f=>f.id === this.id && f.type === this.type);
                             folder = folder.parent;
                         }
                     }
@@ -267,7 +274,10 @@ export class $folder extends $item{
         return {}
     }
     get items(){
-        return this.files.then(f=>f.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || []);
+        return new AsyncPromise(async ()=>{
+            let files = await this.files;
+            return files.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || [];
+        })
     }
     static build(id = '', parent){
         return parent.__items__[id] ??= (()=>{
@@ -524,19 +534,131 @@ export class $folder extends $item{
         rags = rags.sort((a,b)=>a.sim>b.sim?-1:1);
         return rags;
     }
-    find_item(name, filter_function){
-        return this.children.then(async children =>{
-            let items = children.filter(filter_function);
-            let result = items.find(f=>f.id === name);
-            if(!result){
-                for(let item of items){
-                    result = await item.find_item(name, filter_function);
-                    if(result)
+    async find_item(name, filter_function){
+        let children = await this.children;
+        let items = children.filter(filter_function);
+        let result = items.find(f=>f.id === name);
+        if(!result){
+            for(let item of items){
+                result = await item.find_item(name, filter_function);
+                if(result)
+                    break;
+            }
+        }
+        return result;
+    }
+    async find_text(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        const text = String(params.text ?? params.post ?? '');
+        if (!text)
+            throw new Error('find_text: не указан текст поиска (params.text или params.post)');
+        const flags = params.flags || 'i';
+        const regex = params.regex
+            ? new RegExp(params.regex, flags)
+            : null;
+        const substr = !regex ? text.toLowerCase() : null;
+        const exts = params.ext
+            ? (Array.isArray(params.ext) ? params.ext : [params.ext]).map(e => e.replace(/^\./, '').toLowerCase())
+            : null;
+        const maxResults = +params.limit || 200;
+        const results = [];
+        const walk = async (folder) => {
+            if (results.length >= maxResults)
+                return;
+            let children;
+            try {
+                children = await folder.children;
+            }
+            catch { return; }
+            for (const child of children) {
+                if (results.length >= maxResults)
+                    return;
+                if (child.constructor === FS.$folder) {
+                    if (child.id[0] === '.' || child.id[0] === '$')
+                        continue;
+                    await walk(child);
+                    continue;
+                }
+                if (child.isHidden)
+                    continue;
+                if (exts && !exts.includes(child.ext?.toLowerCase()))
+                    continue;
+                let content;
+                try {
+                    content = await child.load({ encoding: 'utf-8' });
+                }
+                catch { continue; }
+                if (typeof content !== 'string')
+                    continue;
+                const lines = content.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    if (results.length >= maxResults)
                         break;
+                    const line = lines[i];
+                    const match = regex
+                        ? regex.test(line)
+                        : line.toLowerCase().includes(substr);
+                    if (match) {
+                        results.push({
+                            path: child.path,
+                            line: i + 1,
+                            text: line.slice(0, 500),
+                        });
+                    }
                 }
             }
-            return result;
-        })
+        };
+        await walk(this);
+        return results;
+    }
+    async get_schema(params = {}){
+        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        const withBody = params.with_body === true || params.with_body === 'true';
+        const publics = this[R]?.publics || [];
+        const props = this[R]?.props || {};
+        const properties = [];
+        for (const name in props) {
+            const prop = props[name];
+            if (!prop || typeof name !== 'string' || name[0] === '#' || name === 'data')
+                continue;
+            const info = {
+                name,
+                isPublic: publics.includes(name),
+                hasGetter: !!prop.get?.getter,
+                hasSetter: !!prop.set?.setter,
+                type: prop.$type?.name || '',
+            };
+            if ('$def' in prop) {
+                try { info.hasDefault = true; }
+                catch {}
+            }
+            properties.push(info);
+        }
+        const proto = this.constructor.prototype;
+        const allNames = Object.getOwnPropertyNames(proto);
+        const reserved = new Set(['constructor', 'toJSON', 'toString', 'init_reactive_services', 'data', 'DATA']);
+        const methods = [];
+        for (const name of allNames) {
+            if (reserved.has(name) || name[0] === '#' || name === 'R')
+                continue;
+            const desc = Object.getOwnPropertyDescriptor(proto, name);
+            if (!desc || typeof desc.value !== 'function')
+                continue;
+            // Это метод (функция на прототипе), даже если он также в props как реактивное свойство
+            const info = {
+                name,
+                isAsync: desc.value.constructor.name === 'AsyncFunction',
+            };
+            if (withBody) {
+                info.body = desc.value.toString();
+            }
+            methods.push(info);
+        }
+        return {
+            className: this.constructor.name,
+            properties,
+            methods,
+        };
     }
 
     get steps(){
@@ -566,10 +688,25 @@ export class $folder extends $item{
                 if(step === inherit)
                     break;
             }
-            if(!inherit && this.meta_folder)
-                // if(this.$parent?.type === this.type && this.type !== '$handler')
-                //     folders.push(this.$parent.meta_folder);
+            if(!inherit && this.meta_folder){
+                // Локальная цепочка наследования внутри метапапки:
+                // meta_folder/$folder/$storage/$type/...
+                // ВАЖНО: локальная цепочка ДОЛЖНА быть ПЕРЕД meta_folder (SELF),
+                // чтобы meta_folder всегда был последним в массиве folders
+                let localFolder = this.meta_folder.$folder;
+                if (localFolder) {
+                    folders.push(localFolder);
+                    for (let step of steps) {
+                        localFolder = await localFolder._get_item(step, FS.$folder);
+                        if (localFolder)
+                            folders.push(localFolder);
+                        if (step === inherit)
+                            break;
+                    }
+                }
+                // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
                 folders.push(this.meta_folder);
+            }
         }
         folders = folders.filter(Boolean)
         let items = folders.map(f=>f.children);
@@ -615,10 +752,16 @@ export class $folder extends $item{
 
     static server_item = true;
     get triggers(){
-        return this.tilde.then(files=>files.find(f=>f.id === 'triggers'));
+        return new AsyncPromise(async ()=>{
+            let files = await this.tilde;
+            return files.find(f=>f.id === 'triggers');
+        })
     }
     get lib(){
-        return this.tilde.then(files=>files.find(f=>f.id === 'lib'));
+        return new AsyncPromise(async ()=>{
+            let files = await this.tilde;
+            return files.find(f=>f.id === 'lib');
+        })
     }
     get $context(){
         let parent = this.parent;
@@ -628,7 +771,10 @@ export class $folder extends $item{
         return parent?.$parent || null;
     }
     get files(){
-        return this.children.then(files => files.filter(f => !f.isHidden));
+        return new AsyncPromise(async ()=>{
+            let children = await this.children;
+            return children.filter(f => !f.isHidden);
+        })
     }
     get children(){
         return new AsyncPromise(async ()=>{
@@ -690,23 +836,25 @@ export class $folder extends $item{
         })
     }
     get folders(){
-        return this.files.then(c => c.filter(f => f.constructor === FS.$folder));
+        return new AsyncPromise(async ()=>{
+            let files = await this.files;
+            return files.filter(f => f.constructor === FS.$folder);
+        })
     }
-    _get_item(id, force_type){
-        return this.children.then(async children=>{
-            let item = children.find(f => f.id === id);
-            if(!item && force_type){
-                let real = await this.real_source._get_item(id);
-                if(real){
-                    await real.info();
-                    item = this.constructor.inherit(real, this);
-                }
-                else
-                    item = force_type.build(id, this);
-
+    async _get_item(id, force_type){
+        let children = await this.children;
+        let item = children.find(f => f.id === id);
+        if(!item && force_type){
+            let real = await this.real_source._get_item(id);
+            if(real){
+                await real.info();
+                item = this.constructor.inherit(real, this);
             }
-            return item;
-        });
+            else
+                item = force_type.build(id, this);
+
+        }
+        return item;
     }
 
     async get_item(path = [], deep = 0, $tilde, params) {
@@ -838,9 +986,8 @@ export class $folder extends $item{
         return Security.filterGetItemResult(result, params);
     }
     async execute(p = {}){
-        return this.info().then(()=>{
-            return this.execute(p)
-        });
+        await this.info();
+        return this.execute(p);
     }
     download(){
         return 'todo for $folder'
@@ -918,7 +1065,7 @@ export class $folder extends $item{
                 includes: logs.map(l => l.path).filter(Boolean),
             }, null, 2);
             let p = Object.assign({}, params);
-            p.filename = p.id = 'pack.pack';
+            p.filename = p.id = 'files.pack';
             p.post = packBody;
             p.encoding = 'utf-8';
             if (params.ignore_save_logs)
@@ -1151,9 +1298,7 @@ export class $folder extends $item{
             }
             if (a instanceof FS.$storage && !(b instanceof FS.$storage))
                 return -1;
-            if (!(a instanceof FS.$storage) && b instanceof FS.$storage)
-                return 1;
-            return a.type < b.type ? -1 : 1;
+            return 1;
         });
         if (reverse)
             files.reverse();

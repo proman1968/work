@@ -26,7 +26,8 @@ export default {
         },
     },
     get admin() {
-        return Promise.resolve(this.$item?.admins).then(admins => {
+        return new AsyncPromise(async ()=>{
+            let admins = await Promise.resolve(this.$item?.admins);
             return this.admin = admins?.length ? admins.last : null;
         })
     },

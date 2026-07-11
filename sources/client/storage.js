@@ -53,19 +53,26 @@ export class $storage extends $folder{
         return result;
     }
     get metadata() {
-        return this.body?.then(body => body.METADATA ??= {});
+        return new AsyncPromise(async ()=>{
+            let body = await this.body;
+            if (!body?.METADATA)
+                body.METADATA = {};
+            return body?.METADATA;
+        })
     }
     get $fields(){
-        return this.metadata.then(meta => {
+        return new AsyncPromise(async ()=>{
+            let meta = await this.metadata;
             meta.FIELDS ??= {id: 'FIELDS', icon: 'iconoir:input-field', fields: []}
             return new CORE.$field(meta.FIELDS, this);
-        });
+        })
     }
     get $statics(){
-        return this.metadata.then(meta => {
+        return new AsyncPromise(async ()=>{
+            let meta = await this.metadata;
             meta.STATIC ??= {id: 'STATIC', icon: 'carbon:tree-view-alt', fields: []}
             return new CORE.$field(meta.STATIC, this);
-        });
+        })
     }
     async execute(...params){
         let $item = Reactor.activate(this);
@@ -168,7 +175,7 @@ export class $storage extends $folder{
 $storage.DataAccessNode = class {
     static valueKey = '@';
     #key;
-    /**@param {{field: $field, parent?: $storage.DataAccessNode, key?: string}} */
+    /** @param {{field: $field, parent?: $storage.DataAccessNode, key?: string}} */
     constructor({field, parent, key}) {
         this.field = field;
         this.parent = parent;
@@ -187,11 +194,16 @@ $storage.DataAccessNode = class {
     get children() {
         if (this.field.fields) {
             return this.field.fields.map(f => {
-                return new $storage.DataAccessNode({field: f, parent: this});
+                const node = new $storage.DataAccessNode({field: f, parent: this});
+                if (this._rootAccess)
+                    node._directValue = true;
+                return node;
             });
         }
     }
     async getDataRoot() {
+        if (this._rootAccess)
+            return this.parent?.getDataRoot();
         const dr = await this.parent?.getDataRoot();
         return dr?.[this.key];
     }
@@ -206,9 +218,18 @@ $storage.DataAccessNode = class {
     }
     async getValue() {
         const dr = await this.getDataRoot();
+        if (this._directValue)
+            return dr;
         return dr?.[this.constructor.valueKey];
     }
     async setValue(value) {
+        if (this._directValue) {
+            const dr = await this.parent?.getDataRoot();
+            if (dr)
+                dr[this.key] = value;
+            this.riseChange();
+            return;
+        }
         let dr = await this.getDataRoot();
         if (!dr) {
             dr = await this.setDataRoot({});
@@ -224,7 +245,7 @@ $storage.DataAccessNode = class {
 $storage.DataAccessRoot = class extends $storage.DataAccessNode {
     #dataRoot;
     #fieldGroups;
-    /**@param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[]}} */
+    /** @param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[]}} */
     constructor({ dataRoot, key, fieldRoot, fieldGroups }) {
         super({field: fieldRoot, key});
         this.#dataRoot = dataRoot;
@@ -232,7 +253,11 @@ $storage.DataAccessRoot = class extends $storage.DataAccessNode {
     }
     get children() {
         return this.#fieldGroups.map(fg => {
-            return new $storage.DataAccessNode({field: fg, parent: this, key: 'data'});
+            const isStatic = fg.id === 'STATIC';
+            const node = new $storage.DataAccessNode({field: fg, parent: this, key: isStatic ? undefined : 'data'});
+            if (isStatic)
+                node._rootAccess = true;
+            return node;
         });
     }
     async getDataRoot() {

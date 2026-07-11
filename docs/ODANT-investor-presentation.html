@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>ODANT — обзор для инвесторов</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm 20mm;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #1a2c3e;
+      background: #fff;
+    }
+
+    .page {
+      width: 210mm;
+      min-height: 257mm;
+      padding: 0;
+      page-break-after: always;
+      position: relative;
+    }
+
+    .page:last-child { page-break-after: auto; }
+
+    .cover {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 257mm;
+      background: linear-gradient(160deg, #f0f6ff 0%, #ffffff 45%, #eef4ff 100%);
+      padding: 12mm 4mm;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+
+    .logo-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #2266dc, #0a3e7c);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 22px;
+      box-shadow: 0 8px 24px rgba(34, 102, 220, 0.3);
+    }
+
+    .logo-text {
+      font-size: 32pt;
+      font-weight: 800;
+      letter-spacing: -1px;
+      background: linear-gradient(120deg, #1f3b4c, #2266dc);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .cover h1 {
+      font-size: 22pt;
+      font-weight: 700;
+      line-height: 1.25;
+      color: #0f2a44;
+      max-width: 95%;
+      margin-bottom: 16px;
+    }
+
+    .cover .tagline {
+      font-size: 13pt;
+      color: #3d5a73;
+      max-width: 92%;
+      margin-bottom: 36px;
+    }
+
+    .cover-meta {
+      font-size: 9.5pt;
+      color: #5a7a96;
+      border-top: 2px solid #2266dc33;
+      padding-top: 16px;
+      max-width: 80%;
+    }
+
+    .cover-meta a { color: #2266dc; text-decoration: none; }
+
+    h2 {
+      font-size: 15pt;
+      color: #0a3e7c;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #2266dc;
+    }
+
+    h3 {
+      font-size: 11pt;
+      color: #1f3b4c;
+      margin: 14px 0 8px;
+    }
+
+    p { margin-bottom: 8px; }
+
+    ul { margin: 0 0 10px 18px; }
+    li { margin-bottom: 4px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9.5pt;
+      margin: 10px 0 14px;
+    }
+
+    th, td {
+      border: 1px solid #c8d9ee;
+      padding: 7px 9px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef4ff;
+      color: #0a3e7c;
+      font-weight: 600;
+    }
+
+    .highlight {
+      background: #eef4ff;
+      border-left: 4px solid #2266dc;
+      padding: 10px 12px;
+      margin: 12px 0;
+      font-size: 10pt;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 8px;
+    }
+
+    .card {
+      background: #f8fbff;
+      border: 1px solid #d4e4f7;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .card strong { color: #0a3e7c; display: block; margin-bottom: 4px; }
+
+    .diagram {
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 8.5pt;
+      background: #0f212f;
+      color: #c9f0ff;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin: 10px 0;
+      line-height: 1.5;
+      white-space: pre;
+    }
+
+    .footer {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      font-size: 8pt;
+      color: #7a96ad;
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid #e0eaf5;
+      padding-top: 6px;
+    }
+
+    .thesis {
+      background: linear-gradient(135deg, #0a3e7c, #2266dc);
+      color: #fff;
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin-top: 12px;
+    }
+
+    .thesis h3 { color: #fff; margin-top: 0; }
+    .thesis ul { margin-left: 16px; }
+    .thesis li { margin-bottom: 5px; }
+
+    .placeholder {
+      color: #5a7a96;
+      font-style: italic;
+      font-size: 9pt;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Страница 1: Обложка + проблема -->
+<section class="page cover">
+  <div class="logo-row">
+    <div class="logo-icon">O</div>
+    <div class="logo-text">ODANT</div>
+  </div>
+  <h1>Платформа организационной памяти и цифровых процессов</h1>
+  <p class="tagline">
+  Структура папок одновременно является базой данных, API и интерфейсом.
+  Коммуникации, документы, процессы и ИИ-память организации — в одной модели.
+  </p>
+  <div class="cover-meta">
+    <strong>Обзор для инвесторов</strong><br>
+    odant.org · current.odant.org<br>
+    Движок WORK · UI-фреймворк ODA · 2026
+  </div>
+</section>
+
+<section class="page">
+  <h2>Проблема рынка</h2>
+  <p>
+    Организации собирают цифровой контур из разрозненных продуктов: мессенджеры, диски,
+    CRM, офисные редакторы, корпоративный ИИ. Каждый инструмент хранит свой фрагмент
+    истории — без единого следа деятельности, аудита и контекста для принятия решений.
+  </p>
+  <table>
+    <tr>
+      <th>Боль</th>
+      <th>Типичное решение</th>
+      <th>Последствия</th>
+    </tr>
+    <tr>
+      <td>Коммуникации</td>
+      <td>Slack, Teams, Telegram</td>
+      <td>Сообщения оторваны от документов и процессов</td>
+    </tr>
+    <tr>
+      <td>Документы</td>
+      <td>SharePoint, Google Drive</td>
+      <td>Нет связи с перепиской и решениями</td>
+    </tr>
+    <tr>
+      <td>Процессы</td>
+      <td>CRM, ERP, no-code</td>
+      <td>Дорогая интеграция, vendor lock-in</td>
+    </tr>
+    <tr>
+      <td>ИИ</td>
+      <td>Внешние copilot / RAG</td>
+      <td>Данные уходят в SaaS, слабый контроль</td>
+    </tr>
+    <tr>
+      <td>Регуляторика</td>
+      <td>Западные облака</td>
+      <td>Сложно развернуть on-premise с полным суверенитетом</td>
+    </tr>
+  </table>
+  <div class="highlight">
+    <strong>Итог:</strong> высокая стоимость владения, фрагментированная память организации,
+    медленная адаптация IT-системы под реальные практики подразделений.
+  </div>
+  <div class="footer">
+    <span>ODANT — обзор для инвесторов</span>
+    <span>Стр. 2</span>
+  </div>
+</section>
+
+<!-- Страница 3: Решение -->
+<section class="page">
+  <h2>Решение ODANT</h2>
+  <p>
+    <strong>ODANT (WORK)</strong> — файлово-событийная платформа: любая рабочая активность
+    материализуется как файл в иерархии хранилищ организации. Сохранение файла —
+    событие с историей, журналом и возможностью ИИ-анализа.
+  </p>
+  <div class="diagram">Организация
+  └── Подразделения (хранилища $group, $structure…)
+        └── Артефакты: сообщения, документы, письма, звонки, ответы ИИ
+              └── history + logs + RAG → «память организации»</div>
+  <h3>Ключевые отличия архитектуры</h3>
+  <div class="two-col">
+    <div class="card">
+      <strong>Фрактальная FS</strong>
+      Папка = объект с типом. URL = путь к объекту. API = query-параметр.
+      Отдельные БД и REST-контроллеры не проектируются вручную.
+    </div>
+    <div class="card">
+      <strong>Наследование</strong>
+      Поведение и UI наследуются слоями: тип → структура → подразделение.
+      Кастомизация без пересборки ядра.
+    </div>
+    <div class="card">
+      <strong>Чат ≠ отдельная БД</strong>
+      Чат — представление над журналом событий. Сообщение = message.txt,
+      ответ ИИ = response.md. Единый след для аудита и RAG.
+    </div>
+    <div class="card">
+      <strong>Self-hosted</strong>
+      Развёртывание on-premise, white-label PaaS, полный контроль данных —
+      ответ на запрос enterprise и регулируемых отраслей.
+    </div>
+  </div>
+  <div class="footer">
+    <span>ODANT — обзор для инвесторов</span>
+    <span>Стр. 3</span>
+  </div>
+</section>
+
+<!-- Страница 4: Продукт и рынок -->
+<section class="page">
+  <h2>Продукт и целевые сегменты</h2>
+  <h3>Три слоя платформы</h3>
+  <table>
+    <tr><th>Слой</th><th>Содержание</th></tr>
+    <tr><td>Движок WORK</td><td>HTTP, FS-классы, merge data.js, auth, logs, security</td></tr>
+    <tr><td>UI ODA</td><td>Web Components, layouts, формы, диалоги</td></tr>
+    <tr><td>Прикладная база</td><td>Чат, звонки, почта, календарь, OnlyOffice, RAG, explorer</td></tr>
+  </table>
+  <h3>Готовые возможности</h3>
+  <ul>
+    <li>Чат и WebRTC-звонки как основной интерфейс работы</li>
+    <li>Документы (OnlyOffice), календарь, email, версионирование файлов</li>
+    <li>RAG и ИИ-помощник на собственных данных организации</li>
+    <li>Иерархия подразделений, роли, права, аудит через logs</li>
+    <li>Демо: current.odant.org — рабочий инстанс с клиентским UI</li>
+  </ul>
+  <h3>Целевые сегменты</h3>
+  <div class="two-col">
+    <ul>
+      <li>Средний и крупный бизнес</li>
+      <li>Госсектор, финансы, промышленность</li>
+    </ul>
+    <ul>
+      <li>ИТ-интеграторы (white-label PaaS)</li>
+      <li>Организации с ИИ-стратегией на своих данных</li>
+    </ul>
+  </div>
+  <div class="footer">
+    <span>ODANT — обзор для инвесторов</span>
+    <span>Стр. 4</span>
+  </div>
+</section>
+
+<!-- Страница 5: Бизнес, конкуренция, инвестиционный тезис -->
+<section class="page">
+  <h2>Бизнес-модель и позиционирование</h2>
+  <table>
+    <tr><th>Модель</th><th>Описание</th></tr>
+    <tr><td>Enterprise / on-premise</td><td>Лицензия, внедрение, поддержка</td></tr>
+    <tr><td>PaaS / white-label</td><td>Подписка за брендированный контур клиента</td></tr>
+    <tr><td>Модули</td><td>OnlyOffice, AI, телефония, кастомные handlers</td></tr>
+    <tr><td>ИИ-слой (premium)</td><td>RAG, агенты администратора, аналитика процессов</td></tr>
+  </table>
+  <table>
+    <tr>
+      <th></th>
+      <th>Классические SaaS</th>
+      <th>ODANT</th>
+    </tr>
+    <tr>
+      <td>Данные</td>
+      <td>У вендора</td>
+      <td><strong>У клиента</strong> (self-hosted)</td>
+    </tr>
+    <tr>
+      <td>История процессов</td>
+      <td>Разрозненная</td>
+      <td><strong>Единый файлово-событийный след</strong></td>
+    </tr>
+    <tr>
+      <td>ИИ</td>
+      <td>Внешние copilot</td>
+      <td><strong>Встроенный RAG по памяти организации</strong></td>
+    </tr>
+    <tr>
+      <td>Кастомизация</td>
+      <td>API, плагины</td>
+      <td><strong>Наследование типов и handlers на диске</strong></td>
+    </tr>
+  </table>
+  <h3>Дорожная карта</h3>
+  <ul>
+    <li><strong>Сейчас:</strong> ядро, ODA, чат, звонки, документы, RAG, публичное демо</li>
+    <li><strong>Ближайшее:</strong> единый клиентский UI (~/client/pages/), стабилизация архитектуры</li>
+    <li><strong>Vision:</strong> автопрограммирование — ИИ-агент администратора адаптирует систему по команде в чате</li>
+  </ul>
+  <div class="thesis">
+    <h3>Инвестиционный тезис</h3>
+    <ul>
+      <li>Папка = объект = API = UI — радикально снижает стоимость разработки и внедрения</li>
+      <li>Self-hosted и white-label — ниша суверенитета данных и регулируемых отраслей</li>
+      <li>ИИ встроен в модель данных, а не прикручен сбоку</li>
+      <li>Технологический ров: фрактальная FS с наследуемым поведением сложно быстро воспроизвести</li>
+    </ul>
+  </div>
+  <p class="placeholder" style="margin-top: 10px;">
+    Команда · пилоты · метрики · запрос инвестиций — заполняется перед питчем.
+  </p>
+  <div class="footer">
+    <span>odant.org · current.odant.org</span>
+    <span>Стр. 5</span>
+  </div>
+</section>
+
+</body>
+</html>

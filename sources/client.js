@@ -63,76 +63,6 @@ WORK.get_item = function (path = '/', method = '', params = {}){
     });
 }
 let fetches = {};
-WORK.awaitRequestResult = async function (url, options) {
-    return new Promise((resolve, reject) => {
-        const checkStatus = async () => {
-            try {
-                let taskInfo = await fetch(url, options);
-                taskInfo = await taskInfo.json();
-                console.log(`📊 Статус: ${taskInfo.status}`);
-
-                if (taskInfo.status === 'success') {
-                    console.log('✅ Готово!');
-                    clearInterval(interval);
-                    resolve(taskInfo);
-                }
-                else if (taskInfo.status === 'failed') {
-                    clearInterval(interval);
-                    reject(new Error(JSON.stringify(taskInfo)));
-                }
-
-            }
-            catch (error) {
-                clearInterval(interval);
-                reject(error);
-            }
-        };
-        checkStatus();
-        const interval = setInterval(checkStatus, 5000);
-    });
-}
-WORK.request = async function (url, options) {
-    let response = await fetch(url, options);
-    switch (response.status) {
-        case 302:
-        case 204:
-        case 200: {
-            let type = response.headers.get('Content-Type');
-            switch(type){
-                case 'application/x.odant.async':
-                case 'application/x.odant.async+json':
-                case 'text/x-json':
-                case 'application/json':
-                    return response.json();
-                case 'text/cmd':
-                case 'text/css':
-                case 'text/csv':
-                case 'text/javascript':
-                case 'application/javascript':
-                case 'text/php':
-                case 'text/html':
-                case 'text/plain':
-                case 'text/xml':
-                case 'text/msg':
-                case 'text/calendar':
-                    return response.text();
-                default:{
-                    let buffer = await response.blob();
-                    return {
-                        buffer,
-                        type: response.headers['content-type'],
-                        length: response.headers['content-length']
-                    }
-                }
-            }
-        } break;
-        default: {
-            throw new WORK_ServerError(await response.text());
-        }
-    }
-}
-
-
 WORK.fetch = function (url, method = '', params = {}, postObject) {
     let {contentType} = params;
     url = encodeURI(url + (method ? '?' + method : ''));
@@ -372,6 +302,7 @@ WORK.showPopover = function (el, params = {}, e) {
 }
 WORK.clearSessionCache = function () {
     for (const item of Object.values(CORE.$item.ITEMS)) {
+        Reactor.cleanupDeps(item);
         if (item[R]?.cache)
             item[R].cache = {};
         for (const list of CORE.$item.LISTS)
@@ -575,6 +506,17 @@ class WebSocketEvents {
             } break;
             case 'push':{
                 ODA.showMessage(data.message);
+            } break;
+            case 'chat.delta':
+            case 'chat.done':
+            case 'chat.error': {
+                if(!data.path)
+                    return;
+                let item = CORE.$item.ITEMS[data.path];
+                if(!item)
+                    item = Object.values(CORE.$item.ITEMS).find(i=>i.short === data.path);
+                if(item)
+                    item.fire(data.type, data);
             } break;
             default:{
                 if(!("path" in data)){

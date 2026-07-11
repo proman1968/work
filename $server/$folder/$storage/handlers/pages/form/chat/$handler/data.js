@@ -31,7 +31,7 @@ ODA({is: 'form-chat',
         </style>
         <div class="tools" accent-invert horizontal>
             <item-users ~if="!isPrivate" flex :$item @selected_users-changed="_onSelectionChanged"></item-users>
-            <oda-button shadow :icon="callIcon" @tap="call" title="Call..." style="border-radius: 50%;"></oda-button>
+            <oda-button shadow :icon="callIcon" @tap="call" title="Call..." :icon-size="iconSize * 1.5" style="border-radius: 50%;"></oda-button>
         </div>
         <oda-chat id="chat" :$item></oda-chat>
     `,
@@ -372,8 +372,24 @@ ODA({is: 'oda-chat',
 
             const isForeign = this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid;
             const hasReceivers = !!(params.receivers?.length);
-            const ext = (isForeign || hasReceivers) ? 'msg' : 'prompt';
-            let file = new File([this.value || ''], 'message.' + ext, { type: "text/plain" });
+            const isAI = !isForeign && !hasReceivers;
+            let file;
+            if (isAI) {
+                params.message = this.value || '';
+                const body = JSON.stringify({
+                    title: this.value || '',
+                    created: Date.now(),
+                    chat: [{
+                        role: 'user',
+                        content: this.value || '',
+                        time: Date.now(),
+                        sender: WORK.uid,
+                    }],
+                }, null, 2);
+                file = new File([body], 'task.ai', { type: "application/json" });
+            } else {
+                file = new File([this.value || ''], 'message.msg', { type: "text/plain" });
+            }
             const onFail = err => console.warn('[chat] send', err);
 
             if(!this.files.length && !this.$pdp.replyTarget) {
@@ -480,6 +496,12 @@ ODA({is: 'chat-ribbon',
 
     `,
     $item: null,
+    ribbonHeight: 0,
+    attached() {
+        this.async(() => {
+            this.ribbonHeight = this.clientHeight - 8;
+        });
+    },
     get lastDay(){
         return this.$$('chat-day').last;
     },
@@ -530,6 +552,9 @@ ODA({is: 'chat-ribbon',
                 return;
             this.scrollDown = down;
             this.render();
+        },
+        resize(){
+            this.ribbonHeight = this.clientHeight - 8;
         }
     },
     scrollDown: true,
@@ -585,32 +610,42 @@ ODA({is: 'chat-day',
             :host{
                 @apply --vertical;
                 @apply --no-flex;
+     
             }
             .label{
                 cursor: pointer;
-                position: sticky;
-                margin: 2px;
-                top: 2px;
-                font-size: small;
+                font-size: x-small;
+                opacity:.8;
                 align-self: center;
-                padding: 4px 8px;
-                border-radius: 16px;
                 align-items: center;
-                width: 200px;
                 text-align: center;
-                min-height: 24px;
-                z-index: 1;
+                width: 150px;
+                border-radius: 16px;
+                padding: 0px 8px;
+            }
+            .date-line{
+                height: 0px; 
+                overflow: visible; 
+                align-items: center;
+                border: dashed 1px gray;
+                width: -webkit-fill-available;
+                margin: 16px 0px;
             }
         </style>
-        <div class="label" :disabled="last" horizontal shadow :accent-invert="visible" header @tap="toggle" >
-            <label flex style="padding: 0px 4px;">{{label}}</label>
-            <oda-icon  :hidden="last" icon-size="16" :icon="eye"></oda-icon>
+        <div flex class="date-line" horizontal center>
+            <div class="label" raised dark horizontal :accent="visible" @tap="visible = !visible">
+                <label flex style="padding: 0px 4px;">{{label}}</label>
+                <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
+            </div>
         </div>
 
         <div flex vertical ~if="visible">
             <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
         </div>
     `,
+    get expanderIcon(){
+        return this.visible?'icons:chevron-right:90':'icons:chevron-right';
+    },
     get last(){
         let dates = this.$pdp.dates;
         if (dates?.then)
@@ -622,9 +657,6 @@ ODA({is: 'chat-day',
         if(!this.visible || this.visible.then)
             return 'icons:chevron-right'
         return 'icons:chevron-right:90';
-    },
-    async toggle(){
-        this.visible = !(await this.visible);
     },
     setFocus(e) {
         this.$pdp.focusedItem = e.target.$item;

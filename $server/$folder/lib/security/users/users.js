@@ -43,7 +43,10 @@ export default {
         return this.$item?.users;
     },
     get users() {
-        return this.selected_users && this.all_users?.then(users => {
+        return new AsyncPromise(async ()=>{
+            if (!this.selected_users)
+                return [];
+            let users = await this.all_users;
             return users?.reduce?.((res, val) => {
                 if (!this.selected_users.includes(val.id))
                     res.add(val);
@@ -52,8 +55,11 @@ export default {
         })
     },
     get selection(){
-        return this.selected_users && this.all_users?.then(users => {
-            return  users?.reduce?.((res, val) => {
+        return new AsyncPromise(async ()=>{
+            if (!this.selected_users)
+                return [];
+            let users = await this.all_users;
+            return users?.reduce?.((res, val) => {
                 if (this.selected_users.includes(val.id))
                     res.add(val);
                 return res;

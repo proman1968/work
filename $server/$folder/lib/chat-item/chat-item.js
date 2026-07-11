@@ -8,12 +8,19 @@ ODA({is: 'chat-item',
         <style>
             :host {
                 @apply --horizontal;
-                padding: 4px 8px;
+                padding: 1px;
                 visibility: hidden;
                 transition: opacity .5s;
+                max-height: var(--ribbon-height, none);
+                top: 0px;
+                border-radius: 4px;
             }
-            :host([select]) {
-                background-color: rgba(.1,.1,.1,.1);
+            :host([expanded]){
+                position: absolute;
+                z-index: 2;
+                width: stretch;
+                height: stretch;
+                border-radius: 0px;
             }
             :host([reply]) {
                 zoom: .5;
@@ -39,6 +46,7 @@ ODA({is: 'chat-item',
             }
             .body {
                 user-select: text;
+                overflow: hidden;
             }
             oda-button {
                 padding: 0px !important;
@@ -53,34 +61,32 @@ ODA({is: 'chat-item',
             .status {
                 font-size: xx-small;
             }
-            :host([hide-status]) .status {
-                display: none;
-            }
-            :host([hide-avatar]) > div:first-child {
-                display: none;
-            }
-            [is-include] {
-                justify-content: center !important;
-            }
-            *[visibility-hidden]{
-                visibility: hidden;
-            }
         </style>
-        <div vertical ~if="!isInclude && !compact && !hideAvatar" :visibility-hidden="hideAvatar" style="padding: 0px 8px;">
+        <div vertical ~if="!compact && !hideAvatar" style="padding: 0px 8px;">
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
-        <div class="card" :raised="isInclude" :shadow="!isInclude" :flex="isInclude || !isSender" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div flex></div>
-            <div class="body" vertical>
+        <div class="card" shadow :flex="expanded" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
+            <div  :accent-invert="expanded" class="status" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
+                <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" style="padding: 2px 4px; border-radius: 4px; font-size: x-small;"></item-node>
+                <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
+            </div>       
+            <div class="content" ~if="!expanded && content" ~html="content" style="padding: 8px; font-size: small;"></div>     
+            <div class="body" flex vertical ~if="expanded">
                 <div ~if="hasPreview" ~is="previewTag" flex vertical :$item="$file" :log="log" :log-content="logContent"></div>
-                <item-node ~if="!hasPreview" auto-run flex :icon-size :$item="$file" :label="fileLabel"></item-node>
-            </div>
-            <div class="status" ~if="!hideStatus && !compact" light :is-include horizontal flex style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" :no-flex="isInclude" style="padding: 2px 4px; border-radius: 4px; font-size: x-small;"></item-node>
             </div>
         </div>
     `,
+    get content() {
+        return this.log?.content ?? '';
+    },
+    get expanderIcon(){
+        return this.expanded?'icons:close':'box:i-expand';
+    },
+    expanded: {
+        $attr: true,
+        $def: false
+    },
     get isSender(){
         return this.senderId === WORK.uid;
     },
@@ -104,10 +110,6 @@ ODA({is: 'chat-item',
             this.colorMode = this._color || 'light';
         });
     },
-    isInclude: {
-        $attr: true,
-        $def: false
-    },
     history: {
         $attr: true,
         $def: false,
@@ -125,7 +127,7 @@ ODA({is: 'chat-item',
         $type: Boolean,
         get() {
             return this.previewIsReady
-                && (this.senderIsReady || this.isInclude || this.compact || this.hideAvatar || this.$pdp?.replyTarget !== this.$file);
+                && (this.senderIsReady || this.compact || this.hideAvatar || this.$pdp?.replyTarget !== this.$file);
         }
     },
     previewIsReady: false,
@@ -136,15 +138,7 @@ ODA({is: 'chat-item',
     },
     previewTag: 'item-node',
     hasPreview: false,
-    hideStatus: {
-        $attr: true,
-        $def: false,
-    },
-    hideAvatar: {
-        $attr: true,
-        $def: false,
-    },
-    _bodyCacheKeys: ['itemBody', 'fileLabel', 'sender', 'log', 'logContent', 'isText'],
+    _bodyCacheKeys: ['itemBody', 'fileLabel', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
     _resetBodyCache() {
         if (this[R]?.cache) {
             for (const key of this._bodyCacheKeys)
@@ -229,9 +223,10 @@ ODA({is: 'chat-item',
     get fileLabel() {
         if (this._includeFile?.path)
             return CORE.historyEntryLabel(this._includeFile.path);
-        return this.itemBody?.then(body =>
-            body?.path ? CORE.historyEntryLabel(body.path) : ''
-        );
+        return new AsyncPromise(async ()=>{
+            let body = await this.itemBody;
+            return body?.path ? CORE.historyEntryLabel(body.path) : '';
+        })
     },
     async loadPreview($file) {
         if (!$file) {
@@ -250,8 +245,8 @@ ODA({is: 'chat-item',
             this.previewTag = 'item-node';
         }
         finally {
-            if (this.previousElementSibling)
-                this.previousElementSibling.hideAvatar = undefined;
+            if (this.previousElementSibling?.[R]?.cache)
+                delete this.previousElementSibling[R].cache.hideAvatar;
             this.previewIsReady = true;
             this.render();
         }
@@ -260,7 +255,8 @@ ODA({is: 'chat-item',
         get() {
             if (this._includeFile)
                 return this._includeFile;
-            return this.itemBody?.then(async body => {
+            return new AsyncPromise(async ()=>{
+                let body = await this.itemBody;
                 if (!body?.path)
                     return null;
                 let $file = await WORK.get_item(body.path, 'info');
@@ -270,7 +266,7 @@ ODA({is: 'chat-item',
                 }
                 await this.loadPreview($file);
                 return $file;
-            });
+            })
         },
         set($file) {
             Promise.resolve($file).then(async file => {
@@ -324,7 +320,8 @@ ODA({is: 'chat-item',
         }
     },
     get sender() {
-        return this.itemBody?.then(async body => {
+        return new AsyncPromise(async ()=>{
+            let body = await this.itemBody;
             if (!body?.sender) {
                 this.senderIsReady = true;
                 return null;
@@ -332,9 +329,11 @@ ODA({is: 'chat-item',
             let users = await WORK.users;
             this.senderId = body.sender;
             return users.find(u => u.id === body.sender) || null;
-        });
+        })
     },
     get hideAvatar() {
+        if (this.isSender)
+            return true;
         if (!this.nextElementSibling)
             return false;
         return Promise.all([

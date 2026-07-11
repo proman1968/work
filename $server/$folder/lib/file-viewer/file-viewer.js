@@ -4,6 +4,9 @@ export default{
         <item-node ~for="files" :$item="$for.item"></item-node>
     `,
     get files(){
-        return this.$item?.storage.then(s=>s.items)
+        return new AsyncPromise(async ()=>{
+            let s = await this.$item?.storage;
+            return s?.items;
+        })
     }
 }

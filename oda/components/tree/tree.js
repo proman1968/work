@@ -64,8 +64,8 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
         showTools:  false,
     },
     items: [],
-    get step(){
-        return this.iconSize || 12;
+p(){
+        return (this.iconSize || 24) / 2;
     },
     async getItems(item, deep = 0) {
         let items = (await item?.[this.itemsSelector]) || [];
@@ -489,8 +489,8 @@ ODA({is: 'oda-tree-item',
         }
     },
     get items() {
-        let items = (this.row?.[this.$pdp.itemsSelector] || []);
-        return Promise.resolve(items).then(items=>{
+        return new AsyncPromise(async ()=>{
+            let items = (this.row?.[this.$pdp.itemsSelector] || []);
             this.row?.addEventListener?.('changed', e=>{
                 this.items = undefined;
                 this.async(async ()=>{
@@ -507,10 +507,11 @@ ODA({is: 'oda-tree-item',
         })
     },
     get expanderIcon() {
-        let icon = 'icons:chevron-right';
-        if (this.expanded)
-            icon += ':90'
-        return this.items.then(items=>{
+        return new AsyncPromise(async ()=>{
+            let icon = 'icons:chevron-right';
+            if (this.expanded)
+                icon += ':90'
+            let items = await this.items;
             if (!items?.length)
                 return '';
             return icon;

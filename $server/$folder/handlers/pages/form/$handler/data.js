@@ -56,12 +56,12 @@ ODA({is: 'work-form',
     extends: 'oda-app-layout',
     template: /* html */`
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 2px;">
-            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="padding: 0px; border-radius: 50%; margin: 4px;"></oda-button>
-            <item-node-explorer flex :$item style="align-items: center; overflow: hidden;" @resize>
-
-                <div class="view-selector" flex horizontal style="justify-content: space-between; overflow: hidden;" ~style="{order: flow?1:0}">
-                    <div flex></div>
-                    <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
+            <div center flex horizontal style="overflow: hidden; flex-wrap: balance;">
+                <div flex></div>
+                <item-node-explorer no-flex :$item></item-node-explorer>
+                <div flex></div>
+                <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
+                    <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
                         <div
                             ~if="view?.allowSave"
                             :disabled="saving"
@@ -105,13 +105,8 @@ ODA({is: 'work-form',
                         </div>
                     </div>
                 </div>
-                <div horizontal  :flex="!!flow" style="justify-content: space-between; top: 0px; right: 0px; order: 0;">
-                    <div flex></div>
-                    <oda-button  @tap="invite" icon="social:share" style="padding: 4px;"></oda-button>
-                    <oda-button ~if="modal" :icon="screenModeIcon" @tap="fullScreen = !fullScreen" style="padding: 4px;"></oda-button>
-
-                </div>
-            </item-node-explorer>
+            </div>
+            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="padding: 0px; border-radius: 50%; margin: 4px;"></oda-button>
         </div>
         <div slot="footer" footer horizontal flex style="justify-items: space-between">
             <item-tools :$item filter="service"></item-tools>
@@ -143,13 +138,6 @@ ODA({is: 'work-form',
     },
     get admin(){
         return this.admins.then(admins=>admins.last);
-    },
-    flow: 0,
-    _onResize(e){
-        if(e.target.offsetHeight > this.iconSize * 2)
-            this.flow = this.clientWidth - e.target.offsetWidth;
-        else
-           this.flow = 0;
     },
     async invite(e){
           const shareData = {
