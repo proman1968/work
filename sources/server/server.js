@@ -141,7 +141,7 @@ export class $server extends $storage {
     }
 
     get testerHTML() {
-        return fs.readFileSync('tester.html', {encoding: 'utf-8'});
+return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
     }
     getIndexForTest(file){
         let text = this.testerHTML;
