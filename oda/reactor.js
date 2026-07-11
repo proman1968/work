@@ -355,6 +355,8 @@ export class Reactor extends EventTarget {
             return;
         if (Reactor._collectorTarget === target && Reactor._collectorKey === key)
             return;
+        if (!actor)
+            return;
         const deps = actor.deps;
         let keys = deps[key] ??= new Map();
         let values = keys.get(Reactor._collectorTarget);
@@ -472,9 +474,13 @@ export class Reactor extends EventTarget {
                 const beforeKey = Reactor._collectorKey;
                 Reactor._collectorTarget = target;
                 Reactor._collectorKey = key;
-                value = prop.get.getter.call(target);
-                Reactor._collectorTarget = beforeTarget;
-                Reactor._collectorKey = beforeKey;
+                try {
+                    value = prop.get.getter.call(target);
+                }
+                finally {
+                    Reactor._collectorTarget = beforeTarget;
+                    Reactor._collectorKey = beforeKey;
+                }
             }
             if (value === undefined && '$def' in prop) {
                 value = prop.$def();

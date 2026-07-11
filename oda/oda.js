@@ -141,8 +141,8 @@ globalThis.ODA = async function ODA(prototype = {}){
                             delete this[field];
                             this[field] = val;
                         }
-                        for(let p in Object.values(props).filter(p=>(p?.$public || p?.$attr))){
-                            let val = this[p];
+                        for(let p of Object.values(props).filter(p=>(p?.$public || p?.$attr))){
+                            let val = this[p.name];
                         }
                         for (let a of Array.from(this.attributes)) {
                             if(!observeAttrs.includes(a.name))
@@ -1235,7 +1235,7 @@ ODA.DIRECTIVES = {
         }
     },
     is(tag = this.__vnode__?.tag){
-        if (tag && this.nodeType === 1 && tag !== this.nodeName.toLowerCase){
+        if (tag && this.nodeType === 1 && tag !== this.nodeName.toLowerCase()){
             return this.__vnode__.replaceElement(this, tag)
         }
     },
@@ -1390,7 +1390,7 @@ ODA.showNotification = async (title = '', options = {}) => {
             badge: options.badge || '/favicon.ico',
             image: options.image,
             tag: options.tag || 'label',
-            requireInteraction: options.requireInteraction || true,
+            requireInteraction: options.requireInteraction ?? true,
             silent: options.silent || false,
             vibrate: options.vibrate || [200, 100, 200],
             data: options.data || {},
