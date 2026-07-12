@@ -115,11 +115,26 @@ export default {
                     // Обработка get_property и set_property
                     if (call.method === 'get_property' && call.args?.name) {
                         const propName = call.args.name;
-                        const descriptor = Object.getOwnPropertyDescriptor(currentContext.constructor.prototype, propName);
+                        
+                        // Для folders/files/children запрашиваем у $storage, а не у текущего контекста
+                        let targetContext = currentContext;
+                        if (['folders', 'files', 'children'].includes(propName)) {
+                            targetContext = currentContext.$storage || currentContext;
+                        }
+                        
+                        const descriptor = Object.getOwnPropertyDescriptor(targetContext.constructor.prototype, propName);
                         if (descriptor?.get) {
-                            result = descriptor.get.call(currentContext);
+                            result = descriptor.get.call(targetContext);
+                            // Если результат - Promise или AsyncPromise, выполняем await
+                            if (result && typeof result === 'object' && typeof result.then === 'function') {
+                                result = await result;
+                            }
                         } else {
-                            result = currentContext[propName];
+                            result = targetContext[propName];
+                            // Если результат - Promise или AsyncPromise, выполняем await
+                            if (result && typeof result === 'object' && typeof result.then === 'function') {
+                                result = await result;
+                            }
                         }
                     } else if (call.method === 'set_property' && call.args?.name) {
                         const propName = call.args.name;
@@ -160,6 +175,12 @@ export default {
 
                 if (result && typeof result === 'object' && result.path && result.type) {
                     currentContext = result;
+                }
+                
+                // Обработка reset_context для возврата к домашнему контексту
+                if (call.method === 'reset_context') {
+                    currentContext = initialContext;
+                    result = { success: true, message: 'Контекст сброшен к хранилищу: ' + initialContext.path };
                 }
             }
 
@@ -224,12 +245,20 @@ function buildHistoryFromChat(body) {
         } else if (entry.role === 'assistant' && entry.content) {
             messages.push({ role: 'assistant', content: entry.content });
         } else if (entry.role === 'tool_result' && entry.content) {
+            // Форматируем tool_calls как действия от первого лица
+            let content = entry.content;
             const hints = {
                 'get_schema': '\nИспользуй список properties и methods для выбора следующего действия.',
                 'get_property': '\nПолучено значение свойства. Можешь использовать set_property для изменения.',
             };
             const hint = hints[entry.tool] || '';
-            messages.push({ role: 'user', content: 'Результат ' + entry.tool + ':\n' + entry.content + hint });
+            
+            // Если это JSON результат, просим ИИ описать его естественным языком
+            if (entry.tool === 'get_property' || entry.tool === 'get_schema') {
+                content = 'Результат выполнения:\n' + entry.content.slice(0, 5000);
+            }
+            
+            messages.push({ role: 'user', content: content + hint });
         } else if (entry.prompt) {
             messages.push({ role: 'user', content: entry.prompt });
             for (const agentPath of (entry.agent || [])) {
