@@ -86,7 +86,7 @@ function requestBody(params, request) {
 
 async function tryHandlerMethod(item, method, params, request) {
     try {
-        let handlerItem = await item.get_item('~/handlers/methods/' + method);
+        let handlerItem = await item.get_item('~/methods/' + method);
         if (Array.isArray(handlerItem))
             handlerItem = handlerItem.find(Boolean);
         if (!handlerItem) return undefined;

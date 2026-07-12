@@ -11,7 +11,6 @@ ODA({is: 'chat-item',
                 max-height: var(--ribbon-height, none);
                 border-radius: 4px;
                 opacity: 0;
-                transition: opacity .5s;
             }
             :host([visible]){
                 opacity: 1;
@@ -28,6 +27,10 @@ ODA({is: 'chat-item',
             :host([expanded]) .card{
                 border-radius: 0px;
             }
+            :host([expanded]) .title{
+                @apply --accent-invert;
+            }
+            
             .card {
                 min-width: 70px;
                 overflow: hidden;
@@ -55,6 +58,7 @@ ODA({is: 'chat-item',
             .title {
                 font-size: xx-small;
                 padding: 2px;
+                transition: background-color .5s;
             }
             item-node{
                 padding: 2px 0px 2px 4px; 
@@ -67,7 +71,7 @@ ODA({is: 'chat-item',
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
         <div class="card" shadow light :flex="expanded" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div :accent-invert="expanded" class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
+            <div class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
                 <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
                 <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       

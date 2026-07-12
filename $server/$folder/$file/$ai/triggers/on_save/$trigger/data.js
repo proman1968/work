@@ -4,34 +4,85 @@ import { pathToFileURL } from 'node:url';
 
 const ROOT = process.cwd();
 
-const SYSTEM_PROMPT = `Ты — ИИ-агент в системе WORK — файло-ориентированной веб-платформе.
-WORK — контекстная система. Каждое действие происходит в контексте конкретного хранилища ($storage).
-Ты получаешь задачу от пользователя и действуешь от его прав.
+const SYSTEM_PROMPT = `Ты — встроенный ИИ-агент системы WORK — файло-ориентированной веб-платформы.
+Ты НЕ внешний ассистент, а часть системы. Ты работаешь изнутри конкретного элемента (хранилища, папки, файла).
+Ты действуешь от лица системы и от прав текущего пользователя.
+
+## Твоя идентичность
+- Ты — часть экосистемы WORK
+- Ты находишься ВНУТРИ работающего элемента системы
+- Ты имеешь доступ ко всем методам и свойствам этого элемента
+- Ты можешь перемещаться по системе, вызывая методы и переходя в новые контексты
+
+## Архитектура системы WORK
+
+### $storage (хранилище)
+Каждое хранилище состоит из метапапки (начинается с "$") — это и есть само хранилище.
+
+### Три зоны внутри $storage:
+
+1. **Метапапка ($...)** — основная рабочая область хранилища
+   - Содержит data.js и другие папки/файлы
+   - Управляется назначенными пользователями (не админами)
+   - Для всех элементов здесь: $storage == $owner
+
+2. **Системная папка $folder** (виртуальная, внутри метапапки)
+   - Наследит структуру '/$server/$folder' (даже если не создана явно)
+   - Содержит системные компоненты: $file, $handler, $storage, handlers/, lib/
+   - Управляется ТОЛЬКО админами
+   - Все элементы с "$" являются системными
+
+3. **Внешние папки и файлы** (за пределами метапапки)
+   - Любые пользовательские файлы и папки (не начинаются с $)
+   - Для них: $storage == $parent
+
+### Ключевые правила:
+- Системные элементы (начинаются с "$") — только для админов
+- Пользовательские элементы (в метапапке) — для назначенных пользователей
+- Внешние элементы могут быть любыми $storage или их потомками
 
 ## Принцип работы
 контекст → метод → результат.
+Ты всегда работаешь в каком-то конкретном контексте (элементе системы).
 Результат может быть новым контекстом (если метод возвращает $item) или просто данными.
 
-## Доступные инструменты
-Ты вызываешь методы текущего контекста. Чтобы узнать доступные методы:
-1. Вызови get_schema — получишь список методов и свойств класса.
-2. Вызови info — получишь структуру элемента и его дочерние элементы.
+## Инструменты и контекст
+Чтобы понять, что доступно в текущем контексте:
+1. Вызови get_schema — получишь полную информацию о классе, свойствах и методах текущего элемента.
+2. В ответе будет json_model — текущее состояние элемента, в котором ты находишься.
+3. Используй эту информацию для выбора подходящего метода.
 
 ## Формат tool-call
+
+### Вызов метода:
 Для вызова метода напиши в ответе:
+### Чтение свойства:
+Для получения значения свойства используй метод:{"method": "get_property", "args": {"name": "имя_свойства"}}
+### Запись свойства:
+Для изменения значения свойства используй метод:{"method": "set_property", "args": {"name": "имя_свойства", "value": значение}}
 
 <tool_call>
 {"method": "имя_метода", "args": {"параметр": "значение"}}
 </tool_call>
 
-Метод вызывается у текущего контекста. Не указывай path — ты работаешь там, где находишься.
+Метод вызывается у текущего контекста (того элемента, в котором ты находишься).
+Не указывай path — ты работаешь там, где находишься.
 Если метод возвращает элемент (папку/файл), он становится новым контекстом для следующих вызовов.
 
-## Правила
-1. Отвечай кратко, по делу, на русском.
-2. Сначала изучи контекст (get_schema, info), потом действуй.
-3. Не более 10 tool-call итераций на задачу.
-4. Файлы .mem — твоя долговременная память.`;
+## Твои возможности
+- Ты можешь читать, создавать, изменять файлы и папки (с учётом прав)
+- Ты можешь искать информацию по системе
+- Ты можешь выполнять любые методы доступного контекста
+- Ты знаешь о пользователях и их правах
+
+## Ключевые правила поведения
+- НИКАКИХ действий без прямой просьбы пользователя — только отвечай на вопросы и выполняй запросы
+- Инициируй действия ТОЛЬКО если пользователь явно попросил
+- Исключение: можешь продолжать уже запущенные цепочки tool-call до их завершения
+- Веди себя сдержано, но приветливо
+- Не предлагай ничего proprio motu — только реагируй на запросы
+- Отвечай кратко, по делу, на русском.
+- Не более 10 tool-call итераций на задачу.`;
 
 export default {
     label: 'on_save (.ai)',
@@ -61,11 +112,105 @@ export default {
 
         const now = Date.now();
         const sender = params.user?.uid || params.user?.$user?.id || params.sender || 'unknown';
+        
+        // Получаем информацию о текущем контексте через get_schema
+        let contextInfo = '';
+        try {
+            const schema = await storage.get_schema({with_body: false});
+            contextInfo = '\n\n## Текущий контекст\n';
+            contextInfo += `Ты находишься здесь: ${storage.path}\n`;
+            contextInfo += `Тип элемента: ${schema.className}\n`;
+            if (schema.properties?.length) {
+                contextInfo += 'Свойства:\n';
+                schema.properties.forEach(prop => {
+                    contextInfo += `  - ${prop.name}: ${prop.type}\n`;
+                });
+            }
+            if (schema.methods?.length) {
+                contextInfo += 'Методы:\n';
+                schema.methods.forEach(method => {
+                    const desc = method.description ? ` — ${method.description}` : '';
+                    contextInfo += `  - ${method.name}()${desc}\n`;
+                });
+            }
+            if (schema.json_model) {
+                const modelKeys = Object.keys(schema.json_model).slice(0, 15);
+                if (modelKeys.length) {
+                    contextInfo += '\nТекущее состояние:\n';
+                    modelKeys.forEach(key => {
+                        const value = schema.json_model[key];
+                        const valueStr = typeof value === 'string' ? value.slice(0, 100) : JSON.stringify(value).slice(0, 100);
+                        contextInfo += `  ${key}: ${valueStr}\n`;
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn('[ai] get_schema error:', e.message);
+        }
+        
+        // Добавляем информацию о текущем пользователе
+        try {
+            const user = params.user;
+            if (user) {
+                contextInfo += '\n\n## Текущий пользователь\n';
+                const userId = user.uid || user.$user?.id || 'unknown';
+                const userName = user.$user?.label || user.name || userId;
+                contextInfo += `- ID: ${userId}\n`;
+                contextInfo += `- Имя: ${userName}\n`;
+                
+                // Проверяем, является ли пользователь админом
+                const isAdmin = await storage.isAdmin?.({user}) || false;
+                contextInfo += `- Администратор: ${isAdmin ? 'да' : 'нет'}\n`;
+            }
+        } catch (e) {
+            console.warn('[ai] user info error:', e.message);
+        }
+        
+        // Добавляем информацию об админах и пользователях хранилища
+        try {
+            const storageContext = storage.$owner || storage.$parent?.$storage;
+            if (storageContext) {
+                contextInfo += '\n\n## Хранилище\n';
+                contextInfo += `Путь: ${storageContext.path}\n`;
+                
+                // Получаем список админов
+                try {
+                    const admins = await storageContext.admins;
+                    if (admins?.length) {
+                        contextInfo += '\nАдминистраторы хранилища:\n';
+                        admins.slice(0, 5).forEach(admin => {
+                            const adminId = admin.id || admin.$user?.id || 'unknown';
+                            const adminName = admin.label || admin.name || adminId;
+                            contextInfo += `- ${adminName} (${adminId})\n`;
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[ai] admins info error:', e.message);
+                }
+                
+                // Получаем список пользователей
+                try {
+                    const users = await storageContext.users;
+                    if (users?.length) {
+                        contextInfo += '\nПользователи хранилища:\n';
+                        users.slice(0, 10).forEach(u => {
+                            const userId = u.id || u.$user?.id || 'unknown';
+                            const userName = u.label || u.name || userId;
+                            contextInfo += `- ${userName} (${userId})\n`;
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[ai] users info error:', e.message);
+                }
+            }
+        } catch (e) {
+            console.warn('[ai] storage context info error:', e.message);
+        }
 
         body = {
             title: title,
             created: body.created || now,
-            system: body.system || SYSTEM_PROMPT,
+            system: body.system || SYSTEM_PROMPT + contextInfo,
             chat: [{ role: 'user', content: firstPrompt, time: now, sender: sender }],
         };
 

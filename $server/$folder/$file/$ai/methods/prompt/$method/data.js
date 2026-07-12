@@ -112,13 +112,35 @@ export default {
             for (const call of toolCalls) {
                 let result;
                 try {
-                    const fn = currentContext[call.method];
-                    if (typeof fn === 'function') {
-                        result = await fn.call(currentContext, { ...call.args, user: params.user });
-                    } else if (fn !== undefined) {
-                        result = await fn;
+                    // Обработка get_property и set_property
+                    if (call.method === 'get_property' && call.args?.name) {
+                        const propName = call.args.name;
+                        const descriptor = Object.getOwnPropertyDescriptor(currentContext.constructor.prototype, propName);
+                        if (descriptor?.get) {
+                            result = descriptor.get.call(currentContext);
+                        } else {
+                            result = currentContext[propName];
+                        }
+                    } else if (call.method === 'set_property' && call.args?.name) {
+                        const propName = call.args.name;
+                        const value = call.args.value;
+                        const descriptor = Object.getOwnPropertyDescriptor(currentContext.constructor.prototype, propName);
+                        if (descriptor?.set) {
+                            descriptor.set.call(currentContext, value);
+                            result = { success: true, message: `Свойство ${propName} установлено` };
+                        } else {
+                            currentContext[propName] = value;
+                            result = { success: true, message: `Свойство ${propName} установлено` };
+                        }
                     } else {
-                        throw new Error('Метод/свойство "' + call.method + '" не найден у ' + currentContext.type);
+                        const fn = currentContext[call.method];
+                        if (typeof fn === 'function') {
+                            result = await fn.call(currentContext, { ...call.args, user: params.user });
+                        } else if (fn !== undefined) {
+                            result = await fn;
+                        } else {
+                            throw new Error('Метод/свойство "' + call.method + '" не найден у ' + currentContext.type);
+                        }
                     }
                 } catch (e) {
                     result = { error: e.message };
@@ -202,9 +224,11 @@ function buildHistoryFromChat(body) {
         } else if (entry.role === 'assistant' && entry.content) {
             messages.push({ role: 'assistant', content: entry.content });
         } else if (entry.role === 'tool_result' && entry.content) {
-            const hint = (entry.tool === 'get_schema')
-                ? '\nВЫБЕРИ подходящий method или property из списка и вызови его.'
-                : '';
+            const hints = {
+                'get_schema': '\nИспользуй список properties и methods для выбора следующего действия.',
+                'get_property': '\nПолучено значение свойства. Можешь использовать set_property для изменения.',
+            };
+            const hint = hints[entry.tool] || '';
             messages.push({ role: 'user', content: 'Результат ' + entry.tool + ':\n' + entry.content + hint });
         } else if (entry.prompt) {
             messages.push({ role: 'user', content: entry.prompt });
@@ -220,15 +244,69 @@ async function buildContextInfo(context, user) {
     let info = '';
     try {
         await context.info();
-        info = 'Контекст: ' + (context.path || context.short || '?') + '\n';
-        info += 'Тип: ' + context.type + '\n';
+        info = 'Ты находишься здесь: ' + (context.path || context.short || '?') + '\n';
+        info += 'Тип элемента: ' + context.type + '\n';
         if (context.label)
             info += 'Название: ' + context.label + '\n';
     } catch (e) {
         info = 'Контекст: ' + (context.path || '?') + '\n';
     }
-    if (user?.uid || user?.$user?.id)
-        info += 'Пользователь: ' + (user.uid || user.$user.id) + '\n';
+    
+    // Добавляем информацию о текущем пользователе
+    if (user?.uid || user?.$user?.id) {
+        const userId = user.uid || user.$user.id;
+        const userName = user.$user?.label || user.name || userId;
+        info += '\nТекущий пользователь:\n';
+        info += '- ID: ' + userId + '\n';
+        info += '- Имя: ' + userName + '\n';
+        
+        // Проверяем, является ли пользователь админом
+        try {
+            const isAdmin = await context.isAdmin?.({user}) || false;
+            info += '- Администратор: ' + (isAdmin ? 'да' : 'нет') + '\n';
+        } catch (e) {
+            // Игнорируем ошибки при проверке прав
+        }
+    }
+    
+    // Добавляем информацию об админах и пользователях хранилища
+    try {
+        const storageContext = context.$storage || context.$parent?.$storage;
+        if (storageContext) {
+            info += '\nХранилище: ' + storageContext.path + '\n';
+            
+            try {
+                const admins = await storageContext.admins;
+                if (admins?.length) {
+                    info += '\nАдминистраторы хранилища:\n';
+                    admins.slice(0, 5).forEach(admin => {
+                        const adminId = admin.id || admin.$user?.id || 'unknown';
+                        const adminName = admin.label || admin.name || adminId;
+                        info += '- ' + adminName + ' (' + adminId + ')\n';
+                    });
+                }
+            } catch (e) {
+                // Игнорируем ошибки
+            }
+            
+            try {
+                const users = await storageContext.users;
+                if (users?.length) {
+                    info += '\nПользователи хранилища:\n';
+                    users.slice(0, 10).forEach(u => {
+                        const userId = u.id || u.$user?.id || 'unknown';
+                        const userName = u.label || u.name || userId;
+                        info += '- ' + userName + ' (' + userId + ')\n';
+                    });
+                }
+            } catch (e) {
+                // Игнорируем ошибки
+            }
+        }
+    } catch (e) {
+        // Игнорируем ошибки при получении информации о хранилище
+    }
+    
     return info;
 }
 

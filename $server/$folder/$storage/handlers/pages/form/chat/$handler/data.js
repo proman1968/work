@@ -617,8 +617,7 @@ ODA({is: 'chat-day',
             }
             :host([expanded]) .day-ribbon{
                 transition: opacity 1s ease-in-out;
-                opacity: 1;
-                
+                opacity: 1; 
             }
             .label{
                 cursor: pointer;
@@ -766,6 +765,13 @@ ODA({is: 'chat-day',
                 if (file?.id?.endsWith?.('.logs') && !this.logItems.some(i => i.id === file.id)) {
                     this.logItems.push(file);
                     this._scrollRibbonDown();
+                    if(initiator.split('.')[1] === WORK.uid){
+                        this.async(()=>{
+                            let last = this.$$('chat-item').last;
+                            if(last)
+                                last.expanded = true;
+                        }, 1000)
+                    }
                     return;
                 }
             }

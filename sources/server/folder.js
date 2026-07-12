@@ -613,41 +613,38 @@ export class $folder extends $item{
     }
     // Статический словарь описаний серверных методов для ИИ-агента
     static TOOL_DESCRIPTIONS = {
-        info: 'Структура элемента и дочерние элементы. Параметры: deep (глубина), mask (фильтр по имени).',
-        load: 'Загрузить и объединить data.js элемента.',
-        import: 'Импортировать data.js как модуль.',
-        save: 'Сохранить data.js элемента. Параметры: post (содержимое).',
-        save_file: 'Сохранить файл. Параметры: filename, post (содержимое).',
-        save_files: 'Сохранить несколько файлов. Параметры: post (files, urls, message).',
-        find_text: 'Поиск текста по файлам. Параметры: text, ext, limit.',
-        find_item: 'Найти элемент по имени в дочерних. Параметры: name.',
-        get_item: 'Получить элемент по пути. Параметры: path.',
-        get_schema: 'Список методов и свойств текущего элемента.',
-        children: 'Список дочерних элементов (папки и файлы).',
-        files: 'Список файлов элемента.',
-        folders: 'Список дочерних папок.',
-        items: 'Список элементов (без метапапок).',
-        create: 'Создать файл/папку/хранилище. Параметры: type, id, post.',
-        delete: 'Удалить элемент.',
-        search: 'RAG-поиск по эмбеддингам. Параметры: prompt, sensitivity.',
-        logs: 'Логи хранилища. Параметры: mode, day, from, to, ext.',
-        read_log_bodies: 'Тела записей логов. Параметры: day, from, to, ext.',
-        log_index: 'Индекс логов (без content). Параметры: day, from, to.',
-        manifest: 'Манифест PWA. Параметры: handler_path.',
-        handlers: 'Дерево handlers. Параметры: path, deep.',
+        info: 'Получить информацию о структуре элемента. Параметры: deep (число, глубина вложенности), mask (строка, фильтр по имени с * и ?). Возвращает объект с данными элемента.',
+        load: 'Загрузить и объединить data.js элемента. Возвращает объект с данными data.js.',
+        import: 'Импортировать data.js как модуль. Возвращает экспорт data.js.',
+        save: 'Сохранить data.js элемента. Параметры: post (объект или строка с содержимым).',
+        save_file: 'Сохранить файл. Параметры: filename (имя файла), post (содержимое). Возвращает объект файла.',
+        save_files: 'Сохранить несколько файлов. Параметры: post {files, urls, message}. Возвращает массив результатов.',
+        find_text: 'Поиск текста по файлам. Параметры: text (текст для поиска), ext (массив расширений), limit (макс результатов). Возвращает массив {path, line, text}.',
+        find_item: 'Найти элемент по имени в дочерних. Параметры: name (имя элемента), filter_function (функция фильтра). Возвращает найденный элемент.',
+        get_item: 'Получить элемент по пути. Параметры: path (путь или массив шагов), deep (глубина). Возвращает элемент или массив элементов.',
+        get_schema: 'Получить список методов и свойств текущего элемента с json_model. Параметры: with_body (true для включения кода методов). Возвращает {className, properties, methods, json_model}.',
+        children: 'Получить список всех дочерних элементов (папки и файлы). Возвращает массив элементов.',
+        files: 'Получить список файлов элемента (без скрытых). Возвращает массив файлов.',
+        folders: 'Получить список дочерних папок. Возвращает массив папок.',
+        items: 'Получить список элементов (без метапапок). Возвращает массив элементов.',
+        create: 'Создать файл/папку/хранилище. Параметры: type ($file, $folder, $storage), id (имя), post (содержимое). Возвращает созданный элемент.',
+        delete: 'Удалить элемент. Требует ADMIN доступ. Возвращает строку с результатом.',
+        search: 'RAG-поиск по эмбеддингам. Параметры: prompt (текст запроса), sensitivity (0-1). Возвращает отсортированный массив результатов.',
+        logs: 'Получить логи хранилища. Параметры: mode, day, from, to, ext. Возвращает массив логов.',
+        read_log_bodies: 'Получить тела записей логов. Параметры: day, from, to, ext.',
+        log_index: 'Получить индекс логов (без content). Параметры: day, from, to.',
+        manifest: 'Получить манифест PWA. Параметры: handler_path. Возвращает объект манифеста.',
+        handlers: 'Получить дерево handlers. Параметры: path (путь), deep (глубина). Возвращает дерево handlers.',
     };
 
     async get_schema(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
-        const publics = this[R]?.publics || [];
         const props = this[R]?.props || {};
         const properties = [];
         for (const name in props) {
             const prop = props[name];
             if (!prop || typeof name !== 'string' || name[0] === '#' || name === 'data')
-                continue;
-            if (!publics.includes(name))
                 continue;
             const info = {
                 name,
@@ -685,6 +682,7 @@ export class $folder extends $item{
             className: this.constructor.name,
             properties,
             methods,
+            json_model: await this.json_model,
         };
     }
 
