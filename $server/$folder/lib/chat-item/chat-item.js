@@ -8,28 +8,25 @@ ODA({is: 'chat-item',
         <style>
             :host {
                 @apply --horizontal;
-                padding: 1px;
-                visibility: hidden;
-                transition: opacity .5s;
                 max-height: var(--ribbon-height, none);
-                top: 0px;
                 border-radius: 4px;
+                opacity: 0;
+                transition: opacity .5s;
+            }
+            :host([visible]){
+                opacity: 1;
             }
             :host([expanded]){
-                position: absolute;
+                position: fixed;
                 z-index: 2;
-                width: stretch;
-                height: stretch;
                 border-radius: 0px;
+                top: 0px;
+                left: 0px;
+                right: 0px;
+                bottom: 0px;
             }
-            :host([reply]) {
-                zoom: .5;
-            }
-            :host([visible]) {
-                visibility: visible;
-            }
-            :host([compact]) {
-                visibility: visible;
+            :host([expanded]) .card{
+                border-radius: 0px;
             }
             .card {
                 min-width: 70px;
@@ -49,26 +46,29 @@ ODA({is: 'chat-item',
                 overflow: hidden;
             }
             oda-button {
-                padding: 0px !important;
-                transition: opacity, scale .2s;
                 scale: .8;
                 border-radius: 50%;
-                opacity: .8;
             }
             oda-button:hover {
                 @apply --selection;
             }
-            .status {
+            .title {
                 font-size: xx-small;
+                padding: 2px;
+            }
+            item-node{
+                padding: 2px 0px 2px 4px; 
+                border-radius: 16px; 
+                font-size: x-small;
             }
         </style>
         <div vertical ~if="!compact && !hideAvatar" style="padding: 0px 8px;">
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
-        <div class="card" shadow :flex="expanded" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div  :accent-invert="expanded" class="status" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" style="padding: 2px 4px; border-radius: 4px; font-size: x-small;"></item-node>
+        <div class="card" shadow light :flex="expanded" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
+            <div :accent-invert="expanded" class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
+                <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
                 <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
             <div class="content" ~if="!expanded && content" ~html="content" style="padding: 8px; font-size: small;"></div>     
@@ -85,7 +85,7 @@ ODA({is: 'chat-item',
     },
     expanded: {
         $attr: true,
-        $def: false
+        $def: false,
     },
     get isSender(){
         return this.senderId === WORK.uid;
@@ -122,20 +122,17 @@ ODA({is: 'chat-item',
         $attr: true,
         $def: false,
     },
-    visible: {
-        $attr: true,
-        $type: Boolean,
-        get() {
-            return this.previewIsReady
-                && (this.senderIsReady || this.compact || this.hideAvatar || this.$pdp?.replyTarget !== this.$file);
-        }
+    attached(){
+        this.async(()=>{
+            this.visible = true;
+        }, 100)
     },
-    previewIsReady: false,
-    senderIsReady: false,
-    reply: {
+    visible:{
         $def: false,
         $attr: true,
     },
+    previewIsReady: false,
+    senderIsReady: false,
     previewTag: 'item-node',
     hasPreview: false,
     _bodyCacheKeys: ['itemBody', 'fileLabel', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],

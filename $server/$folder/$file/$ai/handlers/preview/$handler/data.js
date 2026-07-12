@@ -8,7 +8,6 @@ export default {
                 padding: 8px;
                 overflow: hidden;
             }
-
             #tools{
                 font-size: small;
                 align-items: center;
@@ -34,7 +33,7 @@ export default {
             }
             .msg-user {
                 @apply --header;
-                @apply --shadow;
+                @apply --raised;
                 padding: 4px 8px;
                 position: sticky;
                 border-radius: 4px;
@@ -43,8 +42,21 @@ export default {
                 @apply --bold;
             }
             .msg-assistant {
+                font-size: x-small;
+            }
+            .msg-tool-result {
+                font-size: xx-small;
+                @apply --content;
                 @apply --raised;
-                font-size: small;
+                padding: 4px 8px;
+                border-radius: 4px;
+                border-left: 3px solid var(--success-color);
+                margin-left: 8px;
+            }
+            .msg-tool-label {
+                @apply --bold;
+                font-size: x-small;
+                opacity: .7;
             }
             .msg-time {
                 font-size: xx-small;
@@ -68,7 +80,7 @@ export default {
                 overflow-y: auto;
                 font-family: inherit;
                 background: transparent;
-          
+           
             }
             .pending {
                 opacity: .55;
@@ -93,6 +105,10 @@ export default {
                     <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile">
                         <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.content"></oda-markdown-viewer>
                         <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
+                    </div>
+                    <div class="msg-tool-result" ~if="$for.$for.item.role === 'tool_result'">
+                        <div class="msg-tool-label">🔧 {{$for.$for.item.tool}}</div>
+                        <div class="msg-content">{{$for.$for.item.content}}</div>
                     </div>
                 </div>
             </div>
@@ -131,6 +147,7 @@ export default {
                     item.listen('chat.delta', e => this._onChatDelta(e));
                     item.listen('chat.done', e => this._onChatDone(e));
                     item.listen('chat.error', e => this._onChatError(e));
+                    item.listen('chat.tool_result', e => this._onToolResult(e));
                 }
                 this._loadTaskBody();
             });
@@ -152,7 +169,7 @@ export default {
             if (msg.role === 'user') {
                 current = { prompt: msg, responses: [] };
                 groups.push(current);
-            } else if (msg.role === 'assistant' && current) {
+            } else if ((msg.role === 'assistant' || msg.role === 'tool_result') && current) {
                 current.responses.push(msg);
             }
         }
@@ -187,7 +204,6 @@ export default {
             this.selectedModel = item.path;
             if (this.taskBody) {
                 this.taskBody.model = item.path;
-                // Записать выбранную модель в тело task.ai
                 try {
                     await this.$item.fetch('save', {}, JSON.stringify(this.taskBody, null, 2));
                 } catch (err) {
@@ -195,7 +211,6 @@ export default {
                 }
             }
             this.render();
-            // Закрыть все открытые popover
             const popovers = window.document.querySelectorAll('[popover]');
             for (const p of popovers) {
                 p.fire?.('close');
@@ -213,14 +228,12 @@ export default {
                 raw = await raw.text();
             const body = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (body?.chat) {
-                // Ленивое обновление: сравниваем с существующим taskBody
                 const oldChat = this.taskBody?.chat || [];
                 const oldKeys = oldChat.map(m => `${m.role}:${m.time}`);
                 for (const msg of body.chat) {
                     const key = `${msg.role}:${msg.time}`;
                     if (msg.time)
                         msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    // Только новые сообщения загружают $responseFile
                     if (!oldKeys.includes(key)) {
                         if (msg.role === 'assistant' && msg.responsePath) {
                             try {
@@ -230,7 +243,6 @@ export default {
                             }
                         }
                     } else {
-                        // Сохраняем уже загруженный $responseFile
                         const oldMsg = oldChat.find(m => `${m.role}:${m.time}` === key);
                         if (oldMsg?.$responseFile)
                             msg.$responseFile = oldMsg.$responseFile;
@@ -241,7 +253,6 @@ export default {
             if (this.taskBody?.model) {
                 this.selectedModel = this.taskBody.model;
             } else {
-                // Модель не задана — найти первую доступную и записать в тело
                 const modelPath = await findFirstModel();
                 if (modelPath) {
                     this.taskBody.model = modelPath;
@@ -309,6 +320,12 @@ export default {
         this.render();
         this._onChanged();
     },
+    _onToolResult(e) {
+        const tool = e.detail?.value?.tool;
+        const result = e.detail?.value?.result;
+        if (tool)
+            console.log('[ai-preview] tool_result:', tool, result?.slice?.(0, 200));
+    },
     _onChanged() {
         this.pending = false;
         this.streamingText = '';
@@ -319,7 +336,6 @@ export default {
         this.title = undefined;
         this.chat = undefined;
         this.chatGroups = undefined;
-        // Ленивое обновление: не обнуляем taskBody, а перезагружаем с мерджем
         this._loadTaskBody();
     },
     async send() {
@@ -334,7 +350,6 @@ export default {
         this.streamingText = '';
         this.value = '';
         this.render();
-        // Принудительный скролл вниз после отправки
         this.async(() => {
             const thread = this.$('.thread');
             if (thread)

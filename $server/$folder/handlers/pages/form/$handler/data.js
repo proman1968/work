@@ -52,12 +52,12 @@ export default {
     }
 }
 ODA({is: 'work-form',
-    imports: 'oda//icon, oda//app-layout, oda//property-grid, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree',
+    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree',
     extends: 'oda-app-layout',
     template: /* html */`
-        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 2px;">
+        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance;">
-                <div flex></div>
+                <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
                 <div flex></div>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
@@ -89,7 +89,7 @@ ODA({is: 'work-form',
                             ></oda-button>
 
                         </div>
-                        <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center;">
+                        <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center; gap: 8px; border-bottom: 1px solid;">
                             <oda-button
                                 ~for="formViews"
                                 :icon="$for.item.icon || 'files:file'"
@@ -106,7 +106,7 @@ ODA({is: 'work-form',
                     </div>
                 </div>
             </div>
-            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="padding: 0px; border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
         </div>
         <div slot="footer" footer horizontal flex style="justify-items: space-between">
             <item-tools :$item filter="service"></item-tools>
@@ -117,57 +117,13 @@ ODA({is: 'work-form',
             </div>
         </div>
     `,
-    get allowZoom(){
-        return window !== top;
-    },
     iconSize: 24,
-    get users(){
-        return this.$item?.users.then(res=>{
-            return res;
-        });
-    },
-    get supervisor(){
-        return this.users.then(users=>{
-            return users.users.find?.(i=>i.id === 'supervisors')?.users.last;
-        });
-    },
-    get admins(){
-        return this.users.then(users=>{
-            return users.users.find?.(i=>i.id === 'admins')?.users || [];
-        });
-    },
-    get admin(){
-        return this.admins.then(admins=>admins.last);
-    },
-    async invite(e){
-          const shareData = {
-            title: this.$item.id,
-            text: 'Посмотрите эту ссылку',
-            url: top.location.href,
-        };
-
-        try {
-            // Проверяем поддержку Web Share API
-            if (navigator.share && navigator.canShare(shareData)) {
-                await navigator.share(shareData);
-                console.log('Успешно поделились');
-            } else {
-            // Fallback для браузеров без поддержки
-                fallbackShare(url, title);
-            }
-        } catch (err) {
-            console.error('Ошибка при шеринге:', err);
-        }
-    },
     openView(e){
         if(e.button === 0 && this.view)
             window.open(this.view.short + '/');
     },
     back(e){
         alert('надо скрыть')
-    },
-    get screenModeIcon() {
-        return this.fullScreen ? 'icons:fullscreen-exit' : 'icons:fullscreen';
     },
     fullScreen: {
         // $save: true,
@@ -218,8 +174,8 @@ ODA({is: 'work-form',
     $item: {
         $def: null,
         async set(n) {
-            const view_name = this.host.default_view || this.host.view_name || this.$item?.form;
-            this.view ||= await this.$item.get_item(`/~/handlers//form/${view_name}`);
+            const view_name = this.host.default_view || this.host.view_name || n?.form;
+            this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
             this.loadFormViews();
         }
     },
@@ -227,11 +183,10 @@ ODA({is: 'work-form',
     modal: false,
     dialog: false,
     get isTop(){
-        return true;
         return window === top;
     },
     async close(e) {
-        if (this.$item.isChanged) {
+        if (this.$item?.isChanged) {
             const el = ODA.createElement('item-confirm', { $item: this.$item, message: 'Закрыть и ...' });
             const result = await WORK.showDialog(el, { $item: this.$item,  allowClose: true, OK: null, BUTTONS: [{label: 'Сохранить', icon: 'icons:save', success: true}, {label: 'Не сохранять', icon: 'icons:delete', error: true}]});
             switch(result){
@@ -262,16 +217,6 @@ ODA({is: 'work-form',
                 this.saving = false;
             }
         }, 100)
-    },
-    settings(e) {
-        if(!this.view_control)
-            return;
-        let el = ODA.createComponent('oda-property-grid', {
-            inspected: this.view_control
-        });
-        this.appendChild(el);
-        WORK.showDropdown(el, {}, this.$('#tools'));
-
     },
     switchView(handler, e) {
         e?.stopPropagation?.();

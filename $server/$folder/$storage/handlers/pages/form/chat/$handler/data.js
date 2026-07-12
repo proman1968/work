@@ -27,6 +27,8 @@ ODA({is: 'form-chat',
                 padding: 4px;
                 align-items: center;
                 justify-content: space-between;
+                margin-bottom: 1px;
+                @apply --shadow;
             }
         </style>
         <div class="tools" accent-invert horizontal>
@@ -170,7 +172,7 @@ ODA({is: 'oda-chat',
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
         </div>
-        <div vertical shadow content style="z-index: 1; max-height: 50%;">
+        <div  vertical shadow content style="z-index: 1; max-height: 50%;">
             <div ~if="replyTarget || files.length" horizontal accent-invert style="padding: 4px;">
                 <div horizontal flex style="overflow: auto; align-self: center;"></div>
                 <oda-button icon="icons:close" @tap="clear" style="padding: 0"></oda-button>
@@ -260,8 +262,8 @@ ODA({is: 'oda-chat',
     files: [],
     get placeholder(){
         if(this.$pdp.receivers.length)
-            return 'Message to ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
-        return 'Command to AI ...'
+            return 'Сообхение для ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
+        return 'Новая задача для ИИ ...'
     },
     clear(e){
         this.value = '';
@@ -487,6 +489,7 @@ ODA({is: 'chat-ribbon',
                 height: max-content;
                 @apply --vertical;
                 position: relative;
+                gap: 2px;
             }
         </style>
         <div id="ribbon" vertical flex>
@@ -612,39 +615,57 @@ ODA({is: 'chat-day',
                 @apply --no-flex;
      
             }
+            :host([expanded]) .day-ribbon{
+                transition: opacity 1s ease-in-out;
+                opacity: 1;
+                
+            }
             .label{
                 cursor: pointer;
                 font-size: x-small;
-                opacity:.8;
                 align-self: center;
                 align-items: center;
                 text-align: center;
                 width: 150px;
                 border-radius: 16px;
                 padding: 0px 8px;
+                z-index: 1;
             }
             .date-line{
-                height: 0px; 
-                overflow: visible; 
+                top: 0px;
+                position: sticky;
                 align-items: center;
-                border: dashed 1px gray;
                 width: -webkit-fill-available;
-                margin: 16px 0px;
+            }
+            .date-line::before{
+                content: '';
+                display: block;
+                position: absolute;
+                left: 0px;
+                right: 0px;
+                height: 0px;
+                border-top: 1px dashed;
+                opacity: .5;
+            }
+            .day-ribbon{
+                gap: 4px;
+                padding: 4px;
+                opacity: 0;
             }
         </style>
-        <div flex class="date-line" horizontal center>
-            <div class="label" raised dark horizontal :accent="visible" @tap="visible = !visible">
+        <div flex vertical class="date-line" center>
+            <div class="label" raised dark horizontal :accent="expanded" @tap="expanded = !expanded">
                 <label flex style="padding: 0px 4px;">{{label}}</label>
                 <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
             </div>
         </div>
 
-        <div flex vertical ~if="visible">
+        <div class="day-ribbon" flex vertical ~if="expanded">
             <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
         </div>
     `,
     get expanderIcon(){
-        return this.visible?'icons:chevron-right:90':'icons:chevron-right';
+        return this.expanded?'icons:chevron-right:90':'icons:chevron-right';
     },
     get last(){
         let dates = this.$pdp.dates;
@@ -653,16 +674,15 @@ ODA({is: 'chat-day',
         return dates?.last === this.day;
     },
     day: '',
-    get eye(){
-        if(!this.visible || this.visible.then)
-            return 'icons:chevron-right'
-        return 'icons:chevron-right:90';
-    },
     setFocus(e) {
         this.$pdp.focusedItem = e.target.$item;
     },
-    get visible(){
-        return this.last;
+    expanded:{
+        $def: false,
+        $attr: true,
+        get(){
+            return this.last;
+        }
     },
     logItems: [],
     _logsFolder: null,
@@ -732,23 +752,6 @@ ODA({is: 'chat-day',
         files = await Promise.all(files.map(f => Promise.resolve(f)));
         return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs'))));
     },
-    async _mergeNewLogItems(){
-        if (!this._logsInit)
-            return;
-        const files = await this._fetchLogFiles();
-        let added = false;
-        for (const file of files) {
-            if (this.logItems.some(i => i.id === file.id))
-                continue;
-            this.logItems.push(file);
-            added = true;
-        }
-        if (!added)
-            return;
-        this.logItems = this._sortLogFiles(this.logItems);
-        this.render();
-        this._scrollRibbonDown();
-    },
     async _onLogsChangedRun(e){
         await this._bindLogsFolder();
         const folder = this._logsFolder;
@@ -762,8 +765,6 @@ ODA({is: 'chat-day',
                 let file = await folder.get_item('/' + initiator, 'info');
                 if (file?.id?.endsWith?.('.logs') && !this.logItems.some(i => i.id === file.id)) {
                     this.logItems.push(file);
-                    this.logItems = this._sortLogFiles(this.logItems);
-                    this.render();
                     this._scrollRibbonDown();
                     return;
                 }
@@ -772,7 +773,9 @@ ODA({is: 'chat-day',
                 console.warn('[chat-day] log changed', err);
             }
         }
-        await this._mergeNewLogItems();
+        else 
+            this._logsInit = false;
+        // this.logs = undefined;
     },
     _onLogsChanged(e){
         this._lastChangedEvent = e;

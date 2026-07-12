@@ -611,6 +611,32 @@ export class $folder extends $item{
         await walk(this);
         return results;
     }
+    // Статический словарь описаний серверных методов для ИИ-агента
+    static TOOL_DESCRIPTIONS = {
+        info: 'Структура элемента и дочерние элементы. Параметры: deep (глубина), mask (фильтр по имени).',
+        load: 'Загрузить и объединить data.js элемента.',
+        import: 'Импортировать data.js как модуль.',
+        save: 'Сохранить data.js элемента. Параметры: post (содержимое).',
+        save_file: 'Сохранить файл. Параметры: filename, post (содержимое).',
+        save_files: 'Сохранить несколько файлов. Параметры: post (files, urls, message).',
+        find_text: 'Поиск текста по файлам. Параметры: text, ext, limit.',
+        find_item: 'Найти элемент по имени в дочерних. Параметры: name.',
+        get_item: 'Получить элемент по пути. Параметры: path.',
+        get_schema: 'Список методов и свойств текущего элемента.',
+        children: 'Список дочерних элементов (папки и файлы).',
+        files: 'Список файлов элемента.',
+        folders: 'Список дочерних папок.',
+        items: 'Список элементов (без метапапок).',
+        create: 'Создать файл/папку/хранилище. Параметры: type, id, post.',
+        delete: 'Удалить элемент.',
+        search: 'RAG-поиск по эмбеддингам. Параметры: prompt, sensitivity.',
+        logs: 'Логи хранилища. Параметры: mode, day, from, to, ext.',
+        read_log_bodies: 'Тела записей логов. Параметры: day, from, to, ext.',
+        log_index: 'Индекс логов (без content). Параметры: day, from, to.',
+        manifest: 'Манифест PWA. Параметры: handler_path.',
+        handlers: 'Дерево handlers. Параметры: path, deep.',
+    };
+
     async get_schema(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
@@ -621,11 +647,10 @@ export class $folder extends $item{
             const prop = props[name];
             if (!prop || typeof name !== 'string' || name[0] === '#' || name === 'data')
                 continue;
+            if (!publics.includes(name))
+                continue;
             const info = {
                 name,
-                isPublic: publics.includes(name),
-                hasGetter: !!prop.get?.getter,
-                hasSetter: !!prop.set?.setter,
                 type: prop.$type?.name || '',
             };
             if ('$def' in prop) {
@@ -636,19 +661,21 @@ export class $folder extends $item{
         }
         const proto = this.constructor.prototype;
         const allNames = Object.getOwnPropertyNames(proto);
-        const reserved = new Set(['constructor', 'toJSON', 'toString', 'init_reactive_services', 'data', 'DATA']);
+        const reserved = new Set(['constructor', 'toJSON', 'toString', 'init_reactive_services', 'data', 'DATA', 'R', 'reset', 'render', 'renderChildren', 'debounce', 'async', 'listen', 'unlisten', 'increaseVersion', 'sortItems', 'collect_tilde', 'parsePathSteps', 'classifyPathStep', 'build', 'inherit', 'importScript', 'stripAbsoluteImports', 'toScript', 'getDifference', 'separateInheritData', '_scriptSwitchValue', '_differenceSwitchValue', '_isNonemptyDiff', '_trimFunc', 'cosineSimilarityDense', 'filterRagData', 'validateVarName', 'log_ext', '_normalizeLogQuery', '_logMatchesFilter', '_resolveLogDays', '_logsHistory', '_logsDayFolder', '_loadLogBodiesForDays', '_findLogEntry', '_expandLogIncludes', '_runTaskAiQueue', '_task_reply_queued', 'hasUserBoundary', 'isAdmin', 'isAssignedUser', 'assertCanExecuteMethod', '_assertAdmin', '_secretPath', '_ensureSystemDir', 'getFolderToSaveFile', 'get_write_stream', 'close_write_stream', 'write_to_stream', 'resolveDistributedFolder', 'loadMergedBaseline', 'appendLogIncludes', 'read_log_entry', 'task_reply', 'clear_rag', 'download', 'get_schema', 'saveResponseFile']);
+        const toolDesc = this.constructor.TOOL_DESCRIPTIONS || {};
         const methods = [];
         for (const name of allNames) {
-            if (reserved.has(name) || name[0] === '#' || name === 'R')
+            if (reserved.has(name) || name[0] === '_' || name[0] === '#' || name === 'R')
                 continue;
             const desc = Object.getOwnPropertyDescriptor(proto, name);
             if (!desc || typeof desc.value !== 'function')
                 continue;
-            // Это метод (функция на прототипе), даже если он также в props как реактивное свойство
             const info = {
                 name,
                 isAsync: desc.value.constructor.name === 'AsyncFunction',
             };
+            if (toolDesc[name])
+                info.description = toolDesc[name];
             if (withBody) {
                 info.body = desc.value.toString();
             }
