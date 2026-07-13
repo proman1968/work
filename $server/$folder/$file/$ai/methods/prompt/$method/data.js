@@ -155,6 +155,37 @@ export default {
                     result = { error: e.message };
                 }
 
+                // Специальные методы навигации — обрабатываем до сохранения результата
+                if (call.method === 'navigate' && call.args?.path) {
+                    const targetPath = String(call.args.path);
+                    const target = await WORK.get_item(targetPath);
+                    if (target && target.path) {
+                        currentContext = target;
+                        result = { success: true, message: 'Переход в контекст: ' + target.path };
+                        // Автоматически получить схему нового контекста
+                        try {
+                            const schema = await target.get_schema?.();
+                            if (schema) {
+                                result.context = target.path;
+                                result.type = target.type;
+                                result.label = target.label;
+                                result.schema = {
+                                    className: schema.className,
+                                    properties: schema.properties,
+                                    methods: schema.methods,
+                                };
+                            }
+                        } catch {}
+                    } else {
+                        result = { error: 'Элемент не найден: ' + targetPath };
+                    }
+                }
+
+                if (call.method === 'reset_context') {
+                    currentContext = initialContext;
+                    result = { success: true, message: 'Контекст сброшен к хранилищу: ' + initialContext.path };
+                }
+
                 const resultPreview = typeof result === 'string' ? result.slice(0, 2000) : JSON.stringify(result).slice(0, 2000);
                 WORK.wsSend?.({ type: "chat.tool_result", path: wsPath, tool: call.method, result: resultPreview });
 
@@ -167,13 +198,9 @@ export default {
                     sender: model.path || 'WORK',
                 });
 
-                if (result && typeof result === 'object' && result.path && result.type) {
+                // Авто-смена контекста, если метод вернул $item
+                if (result && typeof result === 'object' && result.path && result.type && !call.method.startsWith('navigate') && call.method !== 'reset_context') {
                     currentContext = result;
-                }
-
-                if (call.method === 'reset_context') {
-                    currentContext = initialContext;
-                    result = { success: true, message: 'Контекст сброшен к хранилищу: ' + initialContext.path };
                 }
             }
 
@@ -247,9 +274,11 @@ function buildHistoryFromChat(body) {
             const hints = {
                 'get_schema': '\nИспользуй список properties и methods для выбора следующего действия.',
                 'get_property': '\nПолучено значение свойства. Можешь использовать set_property для изменения.',
+                'navigate': '\nТы перешёл в новый контекст. Используй доступные методы и свойства для выполнения задачи.',
+                'reset_context': '\nТы вернулся в домашнее хранилище.',
             };
             const hint = hints[entry.tool] || '';
-            if (entry.tool === 'get_property' || entry.tool === 'get_schema') {
+            if (entry.tool === 'get_property' || entry.tool === 'get_schema' || entry.tool === 'navigate') {
                 content = 'Результат выполнения:\n' + entry.content.slice(0, 5000);
             }
             messages.push({ role: 'user', content: content + hint });
