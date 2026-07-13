@@ -80,6 +80,10 @@ export default {
         const { execItemMethod } = await import(pathToFileURL(path.join(ROOT, "sources/host/http-server.js")).href);
         const maxIter = body.maxIterations || MAX_ITERATIONS;
 
+        // Пользователь от лица модели — для логов действий ИИ
+        const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
+        const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
+
         let iteration = 0;
         let currentContext = initialContext;
         let lastResponse = '';
@@ -204,7 +208,7 @@ export default {
                             filename: fileName,
                             post: String(content),
                             encoding: 'utf-8',
-                            user: params.user,
+                            user: aiUser,
                         });
                         const resultPath = saveResult?.path || saveResult?.logPath || '';
                         result = { success: true, message: 'Файл сохранён: ' + fileName, path: resultPath, resultPath };

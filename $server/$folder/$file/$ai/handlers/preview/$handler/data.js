@@ -97,7 +97,6 @@ export default {
                 overflow-y: auto;
                 font-family: inherit;
                 background: transparent;
-           
             }
             .pending {
                 opacity: .55;
@@ -131,7 +130,7 @@ export default {
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
             <div flex></div>
-            <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer> 
+            <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer>
             <div class="chat-group" ~for="chatGroups">
                 <div class="msg-user" horizontal>
                     <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
@@ -150,15 +149,15 @@ export default {
                     </details>
                 </div>
             </div>
-           
         </div>
 
         <div header :rainbow="pending" no-flex vertical style="padding: 4px; border-radius: 16px;" raised>
             <div id="tools" horizontal>
                 <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
+                <oda-button :icon="voiceIcon" :icon-size @tap="toggleVoiceMode" :success="voiceMode" title="Голосовой режим"></oda-button>
                 <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
                 <oda-button success icon="fontawesome:s-gears" style="border-radius: 16px; padding: 2px 4px; margin: 2px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="run"></oda-button>
-            </div>        
+            </div>
             <div class="attach-preview" ~if="files.length" horizontal>
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -189,6 +188,8 @@ export default {
     taskBody: null,
     selectedModel: '',
     act: false,
+    voiceMode: false,
+    _lastSpoken: '',
     $item: {
         $def: null,
         set(n) {
@@ -231,6 +232,9 @@ export default {
             return 'av:stop';
         return (this.value?.trim() || this.files.length) ? 'eva:f-arrow-upward' : 'av:mic';
     },
+    get voiceIcon() {
+        return this.voiceMode ? 'av:volume-up' : 'av:volume-off';
+    },
     get thread(){
         return this.$('.thread');
     },
@@ -243,6 +247,11 @@ export default {
     get selectedModelItem() {
         if (!this.selectedModel) return null;
         return WORK.get_item(this.selectedModel);
+    },
+    toggleVoiceMode() {
+        this.voiceMode = !this.voiceMode;
+        if (!this.voiceMode)
+            window.speechSynthesis?.cancel();
     },
     async selectModel(e) {
         e.stopPropagation();
@@ -287,7 +296,6 @@ export default {
                     const key = `${msg.role}:${msg.time}`;
                     if (msg.time)
                         msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    // Очистка текста ассистента от <tool_call> блоков
                     if (msg.role === 'assistant' && msg.content) {
                         msg.$cleanContent = msg.content
                             .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
@@ -302,7 +310,6 @@ export default {
                                 msg.$responseFile = null;
                             }
                         }
-                        // Загрузка файла для tool_result с resultPath (write_file)
                         if (msg.role === 'tool_result' && msg.resultPath) {
                             try {
                                 msg.$resultFile = await WORK.get_item(msg.resultPath, 'info');
@@ -424,10 +431,44 @@ export default {
         this._maybeScrollToBottom();
     },
     _onChatDone(e) {
+        // В голосовом режиме — озвучить ответ
+        if (this.voiceMode && this.streamingText) {
+            const cleanText = this.streamingText
+                .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+                .replace(/```tool_call[\s\S]*?```/gi, '')
+                .trim();
+            if (cleanText) {
+                this._lastSpoken = cleanText;
+                this._speak(cleanText);
+            }
+        }
         this.streamingText = '';
         this.pending = false;
         this.render();
         this._onChanged();
+    },
+    _speak(text) {
+        if (!('speechSynthesis' in window))
+            return;
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ru-RU';
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        const voices = window.speechSynthesis.getVoices();
+        const ruVoice = voices.find(v => v.lang.startsWith('ru'));
+        if (ruVoice)
+            utterance.voice = ruVoice;
+        utterance.onend = () => {
+            // В голосовом режиме — начать запись следующего вопроса
+            if (this.voiceMode && !this.recording && !this.pending) {
+                this.async(() => {
+                    if (!this.value?.trim() && !this.pending)
+                        this._toggleRecording();
+                }, 500);
+            }
+        };
+        window.speechSynthesis.speak(utterance);
     },
     _onChatError(e) {
         const errorMsg = e.detail?.value?.error;
@@ -462,10 +503,9 @@ export default {
             this._toggleRecording();
             return;
         }
-        // Если идёт запись — останавливаем (распознанный текст подставится автоматически)
+        // Если идёт запись — останавливаем
         if (this.recording) {
             this._toggleRecording();
-            // Ждём пока распознанный текст подставится
             this.async(() => {
                 if (this.value?.trim())
                     this.send();
@@ -482,6 +522,10 @@ export default {
         this.sending = true;
         this.pending = true;
         this.streamingText = '';
+
+        // Останавливаем TTS при отправке нового сообщения
+        if (this.voiceMode)
+            window.speechSynthesis?.cancel();
 
         // Добавляем внутренние файлы как контекст
         let promptText = text;
@@ -526,7 +570,7 @@ export default {
 
 /**
  * Контроллер записи голоса для микрочата.
- * Адаптация chatAudioController из form/chat — только распознавание речи (без отправки аудио).
+ * Адаптация chatAudioController — распознавание речи (SpeechRecognition API).
  */
 class MicAudioController {
     constructor(component) {
