@@ -5,8 +5,10 @@ import * as mime from "mime-types";
 import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
-import * as Security from '../host/security.js';
+ import * as Security from '../host/security.js';
+import { buildAiSchema } from '../modules/ai-schema.js';
 export class $folder extends $item{
+    static sourceUrl = import.meta.url;
     static PATH_STEP = {
         EMPTY: 'empty',
         TILDE: 'tilde',
@@ -128,6 +130,10 @@ export class $folder extends $item{
         super(data);
         this.parent = parent;
     }
+    /**
+     * @ai Удалить папку рекурсивно (требует права администратора)
+     * @ai.returns Строка с подтверждением удаления
+     */
     async delete(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
         if(!fs.existsSync(this.dir))
@@ -451,6 +457,11 @@ export class $folder extends $item{
             return body;
         })
     }
+    /**
+     * @ai Семантический поиск по эмбеддингам (RAG) внутри хранилища
+     * @ai.params {"prompt": "текст запроса", "sensitivity": "чувствительность 0-1"}
+     * @ai.returns Отсортированный массив релевантных результатов
+     */
     async search(params = {prompt: '', embedding: null, using: []}){
         let sensitivity = params.sensitivity || .5;
         params.embedding ??= await xenova.embedding(params.prompt);
@@ -534,6 +545,11 @@ export class $folder extends $item{
         rags = rags.sort((a,b)=>a.sim>b.sim?-1:1);
         return rags;
     }
+    /**
+     * @ai Найти дочерний элемент по имени с рекурсивным обходом
+     * @ai.params {"name": "имя элемента", "filter_function": "функция фильтра"}
+     * @ai.returns Найденный элемент или null
+     */
     async find_item(name, filter_function){
         let children = await this.children;
         let items = children.filter(filter_function);
@@ -547,6 +563,12 @@ export class $folder extends $item{
         }
         return result;
     }
+    /**
+     * Поиск текста по содержимому файлов
+     * @ai Поиск текста или регулярного выражения по файлам внутри папки
+     * @ai.params {"text": "строка поиска", "regex": "регулярное выражение", "ext": "массив расширений", "limit": "макс результатов"}
+     * @ai.returns Массив найденных совпадений [{path, line, text}]
+     */
     async find_text(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         const text = String(params.text ?? params.post ?? '');
@@ -637,6 +659,11 @@ export class $folder extends $item{
         handlers: 'Получить дерево handlers. Параметры: path (путь), deep (глубина). Возвращает дерево handlers.',
     };
 
+    /**
+     * @ai Получить схему методов и свойств текущего элемента для ИИ-агента
+     * @ai.params {"with_body": "включить исходный код методов"}
+     * @ai.returns {className, properties, methods, json_model}
+     */
     async get_schema(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
@@ -656,27 +683,14 @@ export class $folder extends $item{
             }
             properties.push(info);
         }
-        const proto = this.constructor.prototype;
-        const allNames = Object.getOwnPropertyNames(proto);
-        const reserved = new Set(['constructor', 'toJSON', 'toString', 'init_reactive_services', 'data', 'DATA', 'R', 'reset', 'render', 'renderChildren', 'debounce', 'async', 'listen', 'unlisten', 'increaseVersion', 'sortItems', 'collect_tilde', 'parsePathSteps', 'classifyPathStep', 'build', 'inherit', 'importScript', 'stripAbsoluteImports', 'toScript', 'getDifference', 'separateInheritData', '_scriptSwitchValue', '_differenceSwitchValue', '_isNonemptyDiff', '_trimFunc', 'cosineSimilarityDense', 'filterRagData', 'validateVarName', 'log_ext', '_normalizeLogQuery', '_logMatchesFilter', '_resolveLogDays', '_logsHistory', '_logsDayFolder', '_loadLogBodiesForDays', '_findLogEntry', '_expandLogIncludes', '_runTaskAiQueue', '_task_reply_queued', 'hasUserBoundary', 'isAdmin', 'isAssignedUser', 'assertCanExecuteMethod', '_assertAdmin', '_secretPath', '_ensureSystemDir', 'getFolderToSaveFile', 'get_write_stream', 'close_write_stream', 'write_to_stream', 'resolveDistributedFolder', 'loadMergedBaseline', 'appendLogIncludes', 'read_log_entry', 'task_reply', 'clear_rag', 'download', 'get_schema', 'saveResponseFile']);
-        const toolDesc = this.constructor.TOOL_DESCRIPTIONS || {};
-        const methods = [];
-        for (const name of allNames) {
-            if (reserved.has(name) || name[0] === '_' || name[0] === '#' || name === 'R')
-                continue;
-            const desc = Object.getOwnPropertyDescriptor(proto, name);
-            if (!desc || typeof desc.value !== 'function')
-                continue;
-            const info = {
-                name,
-                isAsync: desc.value.constructor.name === 'AsyncFunction',
-            };
-            if (toolDesc[name])
-                info.description = toolDesc[name];
-            if (withBody) {
-                info.body = desc.value.toString();
+        const methods = buildAiSchema(this.constructor.prototype);
+        if (withBody) {
+            const proto = this.constructor.prototype;
+            for (const m of methods) {
+                const desc = Object.getOwnPropertyDescriptor(proto, m.name);
+                if (desc?.value)
+                    m.body = desc.value.toString();
             }
-            methods.push(info);
         }
         return {
             className: this.constructor.name,
@@ -740,6 +754,11 @@ export class $folder extends $item{
         items = items.filter(f=>!f.isType);
         return items;
     }
+    /**
+     * @ai Получить информацию о структуре элемента с возможностью раскрывать дочерние
+     * @ai.params {"deep": "глубина вложенности", "mask": "фильтр по имени с * и ?", "items": "тип элементов: items/files/folders"}
+     * @ai.returns Объект с данными элемента и (опц.) дочерними элементами
+     */
     async info(p = {deep: 0}){
         p.deep = +p.deep;
         let data = await this.json_model;
@@ -912,6 +931,11 @@ export class $folder extends $item{
         return item;
     }
 
+    /**
+     * @ai Получить элемент по пути или массиву шагов (поддержка ~, @, *, .)
+     * @ai.params {"path": "путь или массив шагов", "deep": "глубина поиска"}
+     * @ai.returns Элемент, массив элементов или null
+     */
     async get_item(path = [], deep = 0, $tilde, params) {
         const item = this;
         const steps = this.constructor.parsePathSteps(path);
@@ -1047,6 +1071,11 @@ export class $folder extends $item{
     download(){
         return 'todo for $folder'
     }
+    /**
+     * @ai Сохранить несколько файлов (FormData, URL-загрузка или массив файлов)
+     * @ai.params {"post": "{files, urls, message}"}
+     * @ai.returns Объект с путём сохранённого пакета файлов
+     */
     async save_files(params = {}){
         let {post} = params;
 
@@ -1137,6 +1166,11 @@ export class $folder extends $item{
         return logs;
     }
 
+    /**
+     * @ai Сохранить файл в текущую папку с записью в историю
+     * @ai.params {"filename": "имя файла", "post": "содержимое (строка, Buffer или объект с path)"}
+     * @ai.returns Объект с путём сохранённого файла и лога истории
+     */
     async save_file(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
         if(!params.filename)
@@ -1285,6 +1319,11 @@ export class $folder extends $item{
         }
         return this;
     }
+    /**
+     * @ai Создать новый файл, папку или типизированное хранилище
+     * @ai.params {"type": "$file | $folder | $storage", "id": "имя элемента", "post": "содержимое"}
+     * @ai.returns Созданный элемент
+     */
     async create(p = {}) {
         await Security.allowAccess(this, p, Security.ACCESS_LEVEL.WRITE);
         if (p.type === '$file') {

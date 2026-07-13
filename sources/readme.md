@@ -71,8 +71,78 @@ WORK построен вокруг `$item`.
 - `embeddings/` — embeddings/RAG support (Xenova, kreuzberg).
 - `call/` — WebRTC call support.
 - `user-profile/` — клиентский UI профиля пользователя.
+- `ai-schema.js` — построение схемы методов элемента для ИИ-агента (см. ниже).
 
 В `modules/` не должны попадать базовые helpers ядра.
+
+## JSDoc @ai-разметка методов для ИИ
+
+### Назначение
+
+`modules/ai-schema.js` — утилита для построения схемы методов элемента, которая передаётся ИИ-агенту через `get_schema()`. ИИ использует эту схему для выбора подходящих методов при выполнении задач.
+
+### `buildAiSchema(proto)`
+
+Экспортируемая функция, которая:
+
+1. Обходит всю цепочку прототипов (от `$storage` до `$folder` и выше)
+2. Для каждого слоя парсит исходный файл класса через `constructor.sourceUrl`
+3. Извлекает JSDoc-теги `@ai`, `@ai.params`, `@ai.returns` из текста исходника
+4. Fallback на `static TOOL_DESCRIPTIONS` для методов без `@ai`
+5. Кэширует результат в `WeakMap` по конструктору
+
+**Критическая особенность:** `Function.prototype.toString()` в V8 НЕ сохраняет JSDoc-комментарии, поэтому парсинг идёт по исходному файлу, а не по функции в рантайме.
+
+### Теги @ai
+
+```js
+/**
+ * @ai Описание метода для ИИ-агента
+ * @ai.params {"param1": "описание параметра", "param2": "описание"}
+ * @ai.returns Описание возвращаемого значения
+ */
+async myMethod(params = {}) {
+    // ...
+}
+```
+
+### `static sourceUrl = import.meta.url`
+
+Каждый серверный класс должен содержать это статическое свойство для работы `buildAiSchema`:
+- `sources/server/folder.js` — `$folder`
+- `sources/server/storage.js` — `$storage`
+- `sources/server/file.js` — `$file`
+
+### `static TOOL_DESCRIPTIONS`
+
+Статический словарь описаний методов для методов без JSDoc `@ai`. Наследуется через spread:
+```js
+static TOOL_DESCRIPTIONS = {
+    ...$folder.TOOL_DESCRIPTIONS,  // наследование
+    newMethod: 'Описание нового метода',
+};
+```
+
+### `get_schema()` в `$folder`
+
+Метод `get_schema()` на `$folder` вызывает `buildAiSchema(this.constructor.prototype)` и возвращает:
+```json
+{
+    "className": "$storage",
+    "properties": [...],
+    "methods": [
+        {
+            "name": "find_text",
+            "description": "Поиск текста или регулярного выражения по файлам внутри папки",
+            "params": {"text": "строка поиска", "regex": "регулярное выражение"},
+            "returns": "Массив найденных совпадений [{path, line, text}]",
+            "isAsync": true,
+            "isGetter": false
+        }
+    ],
+    "json_model": {...}
+}
+```
 
 ## Public Static
 

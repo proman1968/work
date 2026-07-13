@@ -9,6 +9,20 @@ import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as Security from '../host/security.js';
 export class $file extends $folder{
+    static sourceUrl = import.meta.url;
+
+    // Описания методов, специфичных для $file (наследуются от $folder)
+    static TOOL_DESCRIPTIONS = {
+        ...$folder.TOOL_DESCRIPTIONS,
+        load: 'Загрузить содержимое файла. Параметры: encoding (кодировка). Возвращает строку или Buffer.',
+        save: 'Сохранить содержимое файла. Параметры: post (новое содержимое).',
+        edit_file: 'Точечное редактирование файла через SEARCH/REPLACE блоки. Параметры: post/diff (блоки).',
+        download: 'Скачать файл как поток. Возвращает ReadStream.',
+        get_imports: 'Получить список import-операторов из файла. Возвращает массив строк.',
+        save_includes: 'Добавить вложенные файлы к записи лога. Параметры: post (files).',
+        restore_from_history: 'Восстановить файл из истории. Только для history-файлов.',
+    };
+
     metadata = null;
     meta_file = null;
     GET = 'load';
@@ -145,6 +159,11 @@ export class $file extends $folder{
             return this.DATA.icon || ('files-color:s-' + this.ext);
         return this.DATA.icon || 'files:document';
     }
+    /**
+     * @ai Загрузить содержимое файла как строку или Buffer
+     * @ai.params {"encoding": "кодировка (utf-8, binary)"}
+     * @ai.returns Строка (при encoding) или Buffer
+     */
     async load(params = {encoding: 'utf8'}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         if(fs.existsSync(this.dir)){
@@ -173,6 +192,11 @@ export class $file extends $folder{
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         return fs.createReadStream(this.dir, params);
     }
+    /**
+     * @ai Сохранить новое содержимое файла (перезапись целиком)
+     * @ai.params {"post": "новое содержимое (строка или Buffer)"}
+     * @ai.returns this (сохранённый файл)
+     */
     async save(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
         if(this.inHistory || this.inRAG){
@@ -186,6 +210,11 @@ export class $file extends $folder{
         params.filename = this.id;
         return this.parent.save_file(params)
     }
+    /**
+     * @ai Точечное редактирование файла через SEARCH/REPLACE блоки
+     * @ai.params {"post": "блоки SEARCH/REPLACE", "diff": "альтернативное имя параметра"}
+     * @ai.returns Полный текст файла после применения правок
+     */
     async edit_file(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
         const diff = typeof params.post === 'string' ? params.post : params.diff;
@@ -253,6 +282,10 @@ export class $file extends $folder{
         }
         return result;
     }
+    /**
+     * @ai Получить список import-операторов из JS/TS файла
+     * @ai.returns Массив строк с import-операторами
+     */
     async get_imports(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         const content = await this.load({ encoding: 'utf-8' });

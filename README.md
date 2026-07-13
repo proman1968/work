@@ -345,6 +345,92 @@ $server/.../ai/.../preview/data.js     ai-preview (микрочат)
 tests/task-pipeline.test.js            регрессия пайплайна
 ```
 
+### Встроенный ИИ-агент (harness-цикл tool-call)
+
+ИИ-агент встроен **внутрь** системы WORK и работает с элементами напрямую через их методы. Это не внешний ассистент, а часть экосистемы.
+
+#### Архитектура
+
+| Компонент | Файл | Назначение |
+|-----------|------|------------|
+| **harness-цикл** | `$server/$folder/$file/$ai/methods/prompt/$method/data.js` | Цикл tool-call: ИИ → `<tool_call>` → execItemMethod → результат |
+| **SYSTEM_PROMPT** | `$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js` | Инструкции ИИ: навигация, работа с файлами, создание элементов |
+| **UI микрочата** | `$server/$folder/$file/$ai/handlers/preview/$handler/data.js` | Превью task.ai: стриминг, микрофон, TTS, файлы |
+| **стриминг** | `models/$ai/$folder/$storage/$ai/methods/streamChat/$method/data.js` | AsyncGenerator токенов от GigaChat |
+| **схема методов** | `sources/modules/ai-schema.js` | `buildAiSchema()` — парсинг `@ai` JSDoc из исходников |
+
+#### Принцип работы
+
+```
+Пользователь пишет промпт
+    ↓
+on_save триггер → метод prompt
+    ↓
+harness-цикл (до 10 итераций):
+    1. ИИ получает контекст + историю
+    2. ИИ отвечает текстом + <tool_call> блоками
+    3. Система парсит tool_call → вызывает метод контекста
+    4. Результат добавляется в историю
+    5. Повтор, пока ИИ не ответит без tool_call
+    ↓
+WS-стриминг токенов в реальном времени (chat.delta)
+```
+
+#### `get_schema()` — схема методов для ИИ
+
+Метод `get_schema()` на `$folder` возвращает описание всех доступных методов элемента. Используется ИИ для понимания, что можно делать в текущем контексте.
+
+Разметка методов через **JSDoc-теги `@ai`**:
+
+```js
+/**
+ * @ai Поиск текста по файлам
+ * @ai.params {"text": "строка поиска", "ext": "расширения"}
+ * @ai.returns Массив совпадений [{path, line, text}]
+ */
+async find_text(params = {}) { ... }
+```
+
+- `@ai` — описание (метод включается в схему)
+- `@ai.params` — JSON с описанием параметров
+- `@ai.returns` — описание возвращаемого значения
+
+Для методов без `@ai` — fallback на `static TOOL_DESCRIPTIONS`.
+
+#### Навигация ИИ
+
+ИИ перемещается по системе через `navigate(path)`:
+- `{"method": "navigate", "args": {"path": "/base/оборудование"}}` — переход к элементу
+- После перехода автоматически получается `get_schema` нового контекста
+- `{"method": "reset_context"}` — возврат к домашнему хранилищу
+
+#### Работа с файлами
+
+- `read_file(name)` — чтение содержимого файла (до 32000 символов)
+- `write_file(name, content)` — создание/перезапись файла
+- `create({type, id})` — создание файла/папки/хранилища
+- `delete()` — удаление элемента
+
+#### Создание элементов системы
+
+ИИ может создавать новые элементы:
+- **Хранилища** — `create({type: "$storage"})` + `write_file` для `data.js`
+- **Методы** — структура `имя/$method/data.js` с `execute()`
+- **Триггеры** — структура `on_save/$trigger/data.js`
+- **Обработчики** — структура `pages/form/имя/$handler/data.js`
+- **Интерфейсы** — ODA-компоненты с `template`
+
+#### Ключевые файлы ИИ
+
+```
+sources/modules/ai-schema.js                              buildAiSchema — парсинг @ai JSDoc
+sources/server/folder.js                                  get_schema(), TOOL_DESCRIPTIONS
+$server/$folder/$file/$ai/methods/prompt/$method/data.js  harness-цикл tool-call
+$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js  SYSTEM_PROMPT
+$server/$folder/$file/$ai/handlers/preview/$handler/data.js  UI микрочата
+models/$ai/$folder/$storage/$ai/methods/streamChat/...     стриминг GigaChat
+```
+
 ### Свойства объекта FS (частые геттеры)
 
 | Геттер | Значение |

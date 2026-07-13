@@ -37,8 +37,30 @@
 - `$server/$folder/$file/$ai/handlers/preview/$handler/data.js` — UI микрочата
 
 ### Следующие шаги
-- Шаг 3: Фильтрация get_schema + list()
-- Шаг 4: Function calling API (вместо парсинга текста)
-- Шаг 5: Управление контекстом диалога
-- Шаг 6: RAG-поиск перед промптом
+- Шаг 3: ✅ Универсальная разметка методов через JSDoc `@ai` + парсинг исходников (14.07.2026)
+- Шаг 4: Планирование ИИ (Chain-of-thought) — ИИ сначала составляет план, потом выполняет
+- Шаг 5: Function calling API (вместо парсинга текста)
+- Шаг 6: Управление контекстом диалога
+- Шаг 7: RAG-поиск перед промптом
 - Развитие ODA-фреймворка (слоты, компоненты форм)
+
+### Bugfix: buildAiSchema — обход цепочки прототипов (14.07.2026)
+- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$storage`/`$file`
+- **Причина:** `Object.getOwnPropertyNames(proto)` возвращает методы только собственного прототипа, не унаследованные от `$folder`
+- **Решение:** `buildAiSchema` обходит всю цепочку через `Object.getPrototypeOf()` до `Object.prototype`
+- Для каждого слоя парсит свой `constructor.sourceUrl` и `TOOL_DESCRIPTIONS`
+- Методы нижних слоёв не дублируются (контролируется через `seenNames`)
+
+### Умения строить систему (14.07.2026)
+- SYSTEM_PROMPT расширен секцией «Создание элементов системы»
+- ИИ умеет создавать: хранилища ($storage), методы ($method), триггеры ($trigger), обработчики ($handler), интерфейсы (pages/forms)
+- Инструкции описывают структуру папок и примеры кода data.js
+
+### JSDoc @ai-разметка методов (14.07.2026)
+- **`sources/modules/ai-schema.js`** — `buildAiSchema(proto)` парсит исходный файл класса через `constructor.sourceUrl`
+- Классы `$folder`, `$storage`, `$file` содержат `static sourceUrl = import.meta.url`
+- Ключевые методы помечены JSDoc-тегами `@ai`, `@ai.params`, `@ai.returns`
+- `TOOL_DESCRIPTIONS` — fallback для методов без `@ai` (наследуется через `...$folder.TOOL_DESCRIPTIONS`)
+- `get_schema()` в `$folder` использует `buildAiSchema(this.constructor.prototype)`
+- **Критическая находка**: `fn.toString()` НЕ сохраняет JSDoc-комментарии в V8 — поэтому парсим исходный файл напрямую
+- Результат кэшируется в `WeakMap` по конструктору

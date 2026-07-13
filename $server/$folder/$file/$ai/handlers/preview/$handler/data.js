@@ -13,11 +13,6 @@ export default {
                 align-items: center;
                 gap: 8px;
             }
-            .mode-switch {
-                @apply --horizontal;
-                align-items: center;
-                gap: 2px;
-            }
             .thread {
                 @apply --vertical;
                 overflow-y: auto;
@@ -69,11 +64,6 @@ export default {
                 border-radius: 4px;
                 border-left: 3px solid var(--success-color);
                 margin-top: 2px;
-            }
-            .msg-tool-label {
-                @apply --bold;
-                font-size: x-small;
-                opacity: .7;
             }
             .msg-time {
                 font-size: xx-small;
@@ -154,7 +144,7 @@ export default {
         <div header :rainbow="pending" no-flex vertical style="padding: 4px; border-radius: 16px;" raised>
             <div id="tools" horizontal>
                 <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
-                <oda-button :icon="voiceIcon" :icon-size @tap="toggleVoiceMode" :success="voiceMode" title="Голосовой режим"></oda-button>
+                <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
                 <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
                 <oda-button success icon="fontawesome:s-gears" style="border-radius: 16px; padding: 2px 4px; margin: 2px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="run"></oda-button>
             </div>
@@ -188,8 +178,9 @@ export default {
     taskBody: null,
     selectedModel: '',
     act: false,
-    voiceMode: false,
+    ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'silero'
     _lastSpoken: '',
+    _audioEl: null,
     $item: {
         $def: null,
         set(n) {
@@ -232,8 +223,31 @@ export default {
             return 'av:stop';
         return (this.value?.trim() || this.files.length) ? 'eva:f-arrow-upward' : 'av:mic';
     },
-    get voiceIcon() {
-        return this.voiceMode ? 'av:volume-up' : 'av:volume-off';
+    get ttsIcon() {
+        switch (this.ttsMode) {
+            case 'gigachat': return 'carbon:ai';
+            case 'silero': return 'carbon:chip';
+            case 'browser': return 'av:volume-up';
+            default: return 'av:volume-off';
+        }
+    },
+    get ttsLabel() {
+        switch (this.ttsMode) {
+            case 'gigachat': return 'GigaChat';
+            case 'silero': return 'Silero';
+            case 'browser': return 'Браузер';
+            default: return 'TTS выкл';
+        }
+    },
+    cycleTts() {
+        const modes = ['off', 'browser', 'gigachat', 'silero'];
+        const idx = modes.indexOf(this.ttsMode);
+        this.ttsMode = modes[(idx + 1) % modes.length];
+        // Останавливаем всё при выключении
+        if (this.ttsMode === 'off') {
+            window.speechSynthesis?.cancel();
+            if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
+        }
     },
     get thread(){
         return this.$('.thread');
@@ -247,11 +261,6 @@ export default {
     get selectedModelItem() {
         if (!this.selectedModel) return null;
         return WORK.get_item(this.selectedModel);
-    },
-    toggleVoiceMode() {
-        this.voiceMode = !this.voiceMode;
-        if (!this.voiceMode)
-            window.speechSynthesis?.cancel();
     },
     async selectModel(e) {
         e.stopPropagation();
@@ -386,10 +395,16 @@ export default {
     async selectInternalFile(e) {
         e?.stopPropagation?.();
         e?.preventDefault?.();
-        const root = await WORK.get_item('/');
+        // Используем storage_folder текущего хранилища для показа файлов
+        const storage = this.$item?.$storage || this.$item?.$parent;
+        const target = storage?.storage_folder || storage || await WORK.get_item('/');
         const tree = ODA.createElement('item-tree', {
-            $item: root,
+            $item: target,
             hideTops: 1,
+            hideRoots: 1,
+            showSize: true,
+            hideSystem: true,
+            itemsSelector: 'files',
         });
         tree.execute = async (item) => {
             const path = item.path;
@@ -431,9 +446,10 @@ export default {
         this._maybeScrollToBottom();
     },
     _onChatDone(e) {
-        // В голосовом режиме — озвучить ответ
-        if (this.voiceMode && this.streamingText) {
-            const cleanText = this.streamingText
+        // Сохраняем текст ДО очистки
+        const fullText = this.streamingText || '';
+        if (this.ttsMode !== 'off' && fullText) {
+            const cleanText = fullText
                 .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
                 .replace(/```tool_call[\s\S]*?```/gi, '')
                 .trim();
@@ -448,27 +464,89 @@ export default {
         this._onChanged();
     },
     _speak(text) {
+        switch (this.ttsMode) {
+            case 'gigachat':
+            case 'silero':
+                this._speakServer(text);
+                break;
+            case 'browser':
+            default:
+                this._speakBrowser(text);
+                break;
+        }
+    },
+    _speakBrowser(text) {
         if (!('speechSynthesis' in window))
             return;
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'ru-RU';
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
+        utterance.rate = 0.95;
+        utterance.pitch = 1.05;
         const voices = window.speechSynthesis.getVoices();
-        const ruVoice = voices.find(v => v.lang.startsWith('ru'));
-        if (ruVoice)
-            utterance.voice = ruVoice;
-        utterance.onend = () => {
-            // В голосовом режиме — начать запись следующего вопроса
-            if (this.voiceMode && !this.recording && !this.pending) {
-                this.async(() => {
-                    if (!this.value?.trim() && !this.pending)
-                        this._toggleRecording();
-                }, 500);
-            }
-        };
+        const ruVoices = voices.filter(v => v.lang?.startsWith('ru'));
+        const natural = ruVoices.find(v => /natural|online|premium|neural/i.test(v.name));
+        const female = ruVoices.find(v => /milana|irina|elena|katya|svetlana|marina|dariya|milena/i.test(v.name));
+        const voice = natural || female || ruVoices[0];
+        if (voice)
+            utterance.voice = voice;
+        utterance.onend = () => this._onSpeakEnd();
         window.speechSynthesis.speak(utterance);
+    },
+    async _speakServer(text) {
+        try {
+            const truncated = text.slice(0, 2000);
+            const modelPath = this.selectedModel || '';
+            if (!modelPath) {
+                this._speakBrowser(text);
+                return;
+            }
+            const url = location.origin + modelPath + '?tts';
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-WORK-WSID': WORK.wsid,
+                },
+                body: JSON.stringify({
+                    text: truncated,
+                    engine: this.ttsMode,
+                    voice: 'profi',
+                    modelPath: modelPath,
+                }),
+            });
+            if (!response.ok) {
+                console.warn('[tts] Server error:', response.status, await response.text());
+                this._speakBrowser(text);
+                return;
+            }
+            const blob = await response.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            if (this._audioEl)
+                this._audioEl.pause();
+            this._audioEl = new Audio(audioUrl);
+            this._audioEl.onended = () => {
+                URL.revokeObjectURL(audioUrl);
+                this._onSpeakEnd();
+            };
+            this._audioEl.onerror = () => {
+                URL.revokeObjectURL(audioUrl);
+                console.warn('[tts] Audio playback error');
+            };
+            await this._audioEl.play();
+        }
+        catch (e) {
+            console.warn('[tts] Server TTS error:', e.message);
+            this._speakBrowser(text);
+        }
+    },
+    _onSpeakEnd() {
+        if (this.ttsMode !== 'off' && !this.recording && !this.pending) {
+            this.async(() => {
+                if (!this.value?.trim() && !this.pending)
+                    this._toggleRecording();
+            }, 500);
+        }
     },
     _onChatError(e) {
         const errorMsg = e.detail?.value?.error;
@@ -480,10 +558,7 @@ export default {
         this._onChanged();
     },
     _onToolResult(e) {
-        const tool = e.detail?.value?.tool;
-        const result = e.detail?.value?.result;
-        if (tool)
-            console.log('[ai-preview] tool_result:', tool, result?.slice?.(0, 200));
+        // Обработка результатов tool-call (для будущего расширения UI)
     },
     _onChanged() {
         this.pending = false;
@@ -514,7 +589,8 @@ export default {
         }
 
         const text = String(this.value ?? '').trim();
-        if (!text || this.sending)
+        // Отправляем даже без текста, если есть файлы
+        if (this.sending)
             return;
         if (!this.$item?.path)
             return;
@@ -523,16 +599,41 @@ export default {
         this.pending = true;
         this.streamingText = '';
 
-        // Останавливаем TTS при отправке нового сообщения
-        if (this.voiceMode)
-            window.speechSynthesis?.cancel();
+        // Останавливаем TTS
+        window.speechSynthesis?.cancel();
+        if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
+
+        // Разделяем файлы: внешние (File) и внутренние (пути)
+        const externalFiles = this.files.filter(f => f instanceof File);
+        const internalFiles = this.files.filter(f => f.internalPath);
+
+        let promptText = text;
+
+        // Загружаем внешние файлы на сервер через FormData → save_files
+        if (externalFiles.length) {
+            try {
+                const formData = new FormData();
+                const messageFile = new File([text || 'Файлы без текста'], 'message.txt', { type: 'text/plain' });
+                formData.append('message', messageFile, messageFile.name);
+                for (const f of externalFiles)
+                    formData.append('file', f, f.name);
+                const storage = this.$item?.$storage || this.$item?.$parent;
+                if (storage?.fetch) {
+                    const result = await storage.fetch('save_files', {}, formData);
+                    // Добавляем пути загруженных файлов в промпт
+                    if (result?.path)
+                        promptText += (promptText ? '\n' : '') + 'Загружен файл: ' + result.path;
+                }
+            }
+            catch (e) {
+                console.warn('[ai-preview] save_files:', e.message);
+            }
+        }
 
         // Добавляем внутренние файлы как контекст
-        let promptText = text;
-        const internalFiles = this.files.filter(f => f.internalPath);
         if (internalFiles.length) {
             const paths = internalFiles.map(f => f.internalPath).join('\n');
-            promptText += '\n\nПрикреплённые файлы из системы:\n' + paths;
+            promptText += (promptText ? '\n\n' : '') + 'Прикреплённые файлы из системы:\n' + paths;
         }
 
         this.value = '';
@@ -545,7 +646,7 @@ export default {
         }, 100);
         try {
             const payload = JSON.stringify({
-                text: promptText,
+                text: promptText || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
             });
             await this.$item.fetch('prompt', {}, payload);
@@ -570,7 +671,6 @@ export default {
 
 /**
  * Контроллер записи голоса для микрочата.
- * Адаптация chatAudioController — распознавание речи (SpeechRecognition API).
  */
 class MicAudioController {
     constructor(component) {
@@ -669,7 +769,7 @@ class MicAudioController {
     }
 }
 
-/** Найти первую доступную модель $ai из дерева WORK (клиентская сторона) */
+/** Найти первую доступную модель $ai из дерева WORK */
 async function findFirstModel() {
     try {
         const children = await WORK.children;
@@ -683,7 +783,6 @@ async function findFirstModel() {
     return null;
 }
 
-/** Рекурсивно найти первый крайний элемент в дереве info */
 function findFirstLeaf(node) {
     if (!node) return null;
     const items = node.items;

@@ -4,6 +4,20 @@
 
 ## Завершённые задачи
 
+### Bugfix: buildAiSchema — обход цепочки прототипов — 14.07.2026
+- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$storage`/`$file`
+- **Причина:** `Object.getOwnPropertyNames(proto)` возвращает методы только собственного прототипа
+- **Решение:** `buildAiSchema` обходит всю цепочку через `Object.getPrototypeOf()`
+
+### JSDoc @ai-разметка методов для ИИ — 14.07.2026
+- **Критическая находка**: `Function.prototype.toString()` в V8 НЕ сохраняет JSDoc-комментарии
+- Переписан `sources/modules/ai-schema.js` — `buildAiSchema(proto)` парсит исходный файл через `constructor.sourceUrl`
+- Добавлен `static sourceUrl = import.meta.url` в `$folder`, `$storage`, `$file`
+- Ключевые методы помечены `@ai`, `@ai.params`, `@ai.returns`
+- `TOOL_DESCRIPTIONS` наследуется через `...$folder.TOOL_DESCRIPTIONS`
+- `get_schema()` переведён на `buildAiSchema` (вместо инлайн-логики с reserved-списком)
+- Убраны отладочные `console.log` из `preview/$handler/data.js` (TTS-логи)
+
 ### Bugfix: стриминг + повторные промпты — 13.07.2026
 - **Ошибка `Invalid URL`** при втором промпте в микрочате
   - Причина: `this` в `streamChat.execute` — это handler ($method), а не модель, из-за Reactor bound-функции

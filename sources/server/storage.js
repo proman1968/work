@@ -6,6 +6,18 @@ import { FS } from './index.js';
 import { $folder } from './folder.js';
 import * as Security from '../host/security.js';
 export class $storage extends $folder{
+    static sourceUrl = import.meta.url;
+
+    // Описания методов, специфичных для $storage (наследуются от $folder)
+    static TOOL_DESCRIPTIONS = {
+        ...$folder.TOOL_DESCRIPTIONS,
+        read_secret: 'Прочитать секрет из #system. Параметры: name (имя модуля). Требует ADMIN доступ.',
+        save_secret: 'Сохранить секрет в #system. Параметры: name (имя модуля), post (данные). Требует ADMIN доступ.',
+        read_log_entry: 'Получить актуальную запись лога по path. Параметры: taskPath/path/entryPath.',
+        appendLogIncludes: 'Добавить пути в includes записи лога. Параметры: entryPath, includePaths.',
+        task_reply: 'Продолжить диалог в существующей task.ai. Параметры: taskPath, post.',
+    };
+
     get $public(){
         return {
             get icon(){
@@ -264,12 +276,21 @@ export class $storage extends $folder{
         return [data, null, false];
     }
 
+    /**
+     * @ai Загрузить и объединить data.js хранилища из цепочки наследования
+     * @ai.params {"reset": "сбросить кэш перед загрузкой"}
+     * @ai.returns Объединённый объект data.js
+     */
     async load(params = {}){
         await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
         let files = await this.tilde;
         files = files.filter(f=>f.id === 'data.js');
         return $server.mergeFiles(files, params.reset);
     }
+    /**
+     * @ai Импортировать data.js хранилища как ES-модуль
+     * @ai.returns Экспорт data.js (default)
+     */
     async import(params = {}){
         let data = await this.load(params)
         return this.constructor.importScript(data);
@@ -319,6 +340,11 @@ export class $storage extends $folder{
         const script = await $server.mergeFiles(files);
         return this.constructor.importScript(script);
     }
+    /**
+     * @ai Сохранить data.js хранилища с разделением на собственные и наследуемые данные
+     * @ai.params {"post": "строка data.js (export default {...})"}
+     * @ai.returns true при успешном сохранении
+     */
     async save(params = {}){
         //await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
         let { post } = params;
@@ -538,6 +564,11 @@ export class $storage extends $folder{
      * JSON-тела записей за день или диапазон.
      * params: { day } | { from, to } | { days[] }, опционально ext / exts: 'ics' | ['ics','eml']
      */
+    /**
+     * @ai Получить тела записей логов за день или диапазон дат
+     * @ai.params {"day": "дата YYYY-MM-DD", "from": "начало диапазона", "to": "конец диапазона", "ext": "фильтр по расширению"}
+     * @ai.returns Массив записей логов с содержимым
+     */
     async read_log_bodies(dayOrParams = {}){
         const params = $storage._normalizeLogQuery(dayOrParams);
         return this._loadLogBodiesForDays(params);
@@ -689,6 +720,11 @@ export class $storage extends $folder{
     }
 
     /** Продолжение диалога в существующей task.ai (микрочат). */
+    /**
+     * @ai Продолжить диалог в существующей task.ai (отправка повторного промпта)
+     * @ai.params {"taskPath": "путь к task.ai", "post": "текст или FormData с файлами"}
+     * @ai.returns Обновлённая запись лога task.ai
+     */
     async task_reply(params = {}, post) {
         post ??= params.post;
         const taskPath = params.taskPath;
@@ -829,6 +865,11 @@ export class $storage extends $folder{
      *   index  — log_index(params)
      *   files  — список $file (*.logs) за день или диапазон без load JSON
      * Фильтры: day | from+to | days[], ext | exts
+     */
+    /**
+     * @ai Универсальный доступ к логам хранилища
+     * @ai.params {"mode": "folder|bodies|index|files", "day": "дата", "from": "начало", "to": "конец", "ext": "расширение"}
+     * @ai.returns Зависит от mode: папку дня, тела записей, индекс или список файлов
      */
     async logs(params = {}){
         params = $storage._normalizeLogQuery(params);
