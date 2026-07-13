@@ -44,14 +44,31 @@ export default {
             .msg-assistant {
                 font-size: x-small;
             }
-            .msg-tool-result {
+            .msg-reasoning {
                 font-size: xx-small;
                 @apply --content;
-                @apply --raised;
+                border-radius: 4px;
+                margin-left: 8px;
+                overflow: hidden;
+            }
+            .msg-reasoning summary {
+                @apply --bold;
+                font-size: x-small;
+                opacity: .6;
+                cursor: pointer;
+                padding: 2px 8px;
+                user-select: none;
+            }
+            .msg-reasoning[open] summary {
+                opacity: .8;
+            }
+            .msg-reasoning-content {
                 padding: 4px 8px;
+                font-size: xx-small;
+                @apply --raised;
                 border-radius: 4px;
                 border-left: 3px solid var(--success-color);
-                margin-left: 8px;
+                margin-top: 2px;
             }
             .msg-tool-label {
                 @apply --bold;
@@ -91,6 +108,26 @@ export default {
                 @apply --raised;
                 padding: 4px 8px;
             }
+            .attach-preview {
+                gap: 4px;
+                padding: 4px 8px;
+                flex-wrap: wrap;
+            }
+            .attach-chip {
+                @apply --horizontal;
+                @apply --accent-invert;
+                max-width: 150px;
+                padding: 4px 8px;
+                align-items: center;
+                border-radius: 16px;
+                gap: 4px;
+            }
+            .attach-chip label {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-size: xx-small;
+                white-space: nowrap;
+            }
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
             <div flex></div>
@@ -102,14 +139,15 @@ export default {
                 </div>
                 <div class="msg-assistant" ~for="$for.item.responses">
                     <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
-                    <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile">
-                        <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.content"></oda-markdown-viewer>
+                    <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
+                    <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
+                        <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
                         <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
                     </div>
-                    <div class="msg-tool-result" ~if="$for.$for.item.role === 'tool_result'">
-                        <div class="msg-tool-label">🔧 {{$for.$for.item.tool}}</div>
-                        <div class="msg-content">{{$for.$for.item.content}}</div>
-                    </div>
+                    <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
+                        <summary>🔧 {{$for.$for.item.tool}}</summary>
+                        <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
+                    </details>
                 </div>
             </div>
            
@@ -121,11 +159,21 @@ export default {
                 <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
                 <oda-button success icon="fontawesome:s-gears" style="border-radius: 16px; padding: 2px 4px; margin: 2px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="run"></oda-button>
             </div>        
+            <div class="attach-preview" ~if="files.length" horizontal>
+                <div class="attach-chip" ~for="files">
+                    <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
+                    <label flex>{{$for.item.name}}</label>
+                    <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
+                </div>
+            </div>
             <div class="prompt-box" horizontal content border raised>
+                <oda-button icon="icons:add" :icon-size="iconSize * .7" @tap="getFile" style="border-radius: 50%;"></oda-button>
+                <oda-button icon="icons:link" :icon-size="iconSize * .7" @tap="selectInternalFile" style="border-radius: 50%;"></oda-button>
                 <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
                     @keydown="_onKeydown"></textarea>
+                <div flex ~if="recording" style="text-align: center; align-items: center; color: var(--error-color);">⏺ {{timer}}</div>
                 <oda-button round :icon="sendIcon" :icon-size
-                    :disabled="sending" @tap="send"></oda-button>
+                    :rainbow="recording" :disabled="sending" @tap="send"></oda-button>
             </div>
         </div>
     `,
@@ -134,7 +182,10 @@ export default {
     sending: false,
     pending: false,
     recording: false,
+    recognizing: false,
+    timer: '',
     streamingText: '',
+    files: [],
     taskBody: null,
     selectedModel: '',
     act: false,
@@ -176,7 +227,9 @@ export default {
         return groups.reverse();
     },
     get sendIcon() {
-        return this.value?.trim() ? 'eva:f-arrow-upward' : 'av:mic';
+        if (this.recording)
+            return 'av:stop';
+        return (this.value?.trim() || this.files.length) ? 'eva:f-arrow-upward' : 'av:mic';
     },
     get thread(){
         return this.$('.thread');
@@ -234,6 +287,13 @@ export default {
                     const key = `${msg.role}:${msg.time}`;
                     if (msg.time)
                         msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    // Очистка текста ассистента от <tool_call> блоков
+                    if (msg.role === 'assistant' && msg.content) {
+                        msg.$cleanContent = msg.content
+                            .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+                            .replace(/```tool_call[\s\S]*?```/gi, '')
+                            .trim();
+                    }
                     if (!oldKeys.includes(key)) {
                         if (msg.role === 'assistant' && msg.responsePath) {
                             try {
@@ -242,10 +302,22 @@ export default {
                                 msg.$responseFile = null;
                             }
                         }
+                        // Загрузка файла для tool_result с resultPath (write_file)
+                        if (msg.role === 'tool_result' && msg.resultPath) {
+                            try {
+                                msg.$resultFile = await WORK.get_item(msg.resultPath, 'info');
+                            } catch {
+                                msg.$resultFile = null;
+                            }
+                        }
                     } else {
                         const oldMsg = oldChat.find(m => `${m.role}:${m.time}` === key);
                         if (oldMsg?.$responseFile)
                             msg.$responseFile = oldMsg.$responseFile;
+                        if (oldMsg?.$resultFile)
+                            msg.$resultFile = oldMsg.$resultFile;
+                        if (oldMsg?.$cleanContent)
+                            msg.$cleanContent = oldMsg.$cleanContent;
                     }
                 }
             }
@@ -278,6 +350,52 @@ export default {
             e.preventDefault();
             this.send();
         }
+    },
+    removeFile(index) {
+        this.files.splice(index, 1);
+        this.render();
+    },
+    async getFile() {
+        const fileDialog = await ODA.showFileDialog({ multiple: true });
+        if (!fileDialog?.length)
+            return;
+        for (const f of fileDialog) {
+            let n = f.name;
+            let i = n.lastIndexOf('.');
+            if (i > 0) {
+                f.label = n.substring(0, i);
+                f.ext = n.substring(i + 1);
+            }
+            if (f.type?.includes('image')) {
+                const fr = new FileReader();
+                fr.onload = () => { f.dataURL = fr.result; this.render(); };
+                fr.readAsDataURL(f);
+            }
+            if (!this.files.find(existing => existing.name === f.name))
+                this.files.push(f);
+        }
+        this.render();
+    },
+    async selectInternalFile(e) {
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
+        const root = await WORK.get_item('/');
+        const tree = ODA.createElement('item-tree', {
+            $item: root,
+            hideTops: 1,
+        });
+        tree.execute = async (item) => {
+            const path = item.path;
+            const name = item.id || path.split('/').pop();
+            const ext = name.includes('.') ? name.split('.').pop() : '';
+            const virtualFile = { name, ext, internalPath: path, label: item.label || name };
+            if (!this.files.find(f => f.internalPath === path))
+                this.files.push(virtualFile);
+            this.render();
+            const popovers = window.document.querySelectorAll('[popover]');
+            for (const p of popovers) { p.fire?.('close'); p.remove(); }
+        };
+        await WORK.showDropdown(tree, { TITLE: { label: 'Выбрать файл из системы' } }, e);
     },
     _onScroll(e) {
         this.scrollIcon = undefined;
@@ -339,6 +457,22 @@ export default {
         this._loadTaskBody();
     },
     async send() {
+        // Если нет текста и файлов — начинаем запись голоса
+        if (!this.value?.trim() && !this.files.length && !this.recording) {
+            this._toggleRecording();
+            return;
+        }
+        // Если идёт запись — останавливаем (распознанный текст подставится автоматически)
+        if (this.recording) {
+            this._toggleRecording();
+            // Ждём пока распознанный текст подставится
+            this.async(() => {
+                if (this.value?.trim())
+                    this.send();
+            }, 300);
+            return;
+        }
+
         const text = String(this.value ?? '').trim();
         if (!text || this.sending)
             return;
@@ -348,7 +482,17 @@ export default {
         this.sending = true;
         this.pending = true;
         this.streamingText = '';
+
+        // Добавляем внутренние файлы как контекст
+        let promptText = text;
+        const internalFiles = this.files.filter(f => f.internalPath);
+        if (internalFiles.length) {
+            const paths = internalFiles.map(f => f.internalPath).join('\n');
+            promptText += '\n\nПрикреплённые файлы из системы:\n' + paths;
+        }
+
         this.value = '';
+        this.files = [];
         this.render();
         this.async(() => {
             const thread = this.$('.thread');
@@ -357,7 +501,7 @@ export default {
         }, 100);
         try {
             const payload = JSON.stringify({
-                text,
+                text: promptText,
                 model: this.selectedModel || undefined,
             });
             await this.$item.fetch('prompt', {}, payload);
@@ -372,6 +516,113 @@ export default {
             this.sending = false;
         }
     },
+    _audioController: null,
+    _toggleRecording() {
+        if (!this._audioController)
+            this._audioController = new MicAudioController(this);
+        this._audioController.toggle();
+    },
+}
+
+/**
+ * Контроллер записи голоса для микрочата.
+ * Адаптация chatAudioController из form/chat — только распознавание речи (без отправки аудио).
+ */
+class MicAudioController {
+    constructor(component) {
+        this.component = component;
+    }
+    #RECOGNITION_DICTIONARY = {
+        точка: '.', запятая: ',', вопрос: '?', восклицание: '!',
+        двоеточие: ':', тире: '-', абзац: '\n', отступ: '\t',
+    };
+    timerInterval = null;
+    recognition = null;
+    mediaStream = null;
+    mediaRecorder = null;
+    final_transcript = '';
+
+    pad(val) { return (val + '').length < 2 ? '0' + val : '' + val; }
+    editInterim(s) {
+        return s.split(' ').map(word => {
+            word = word.trim();
+            return this.#RECOGNITION_DICTIONARY[word] || word;
+        }).join(' ');
+    }
+    editFinal(s) { return s.replace(/\s([\.+,?!:-])/g, '$1'); }
+
+    toggle() {
+        if (!this.component.recording)
+            this.start();
+        else
+            this.stop();
+    }
+
+    start() {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            this.final_transcript = '';
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn('[mic] SpeechRecognition не поддерживается');
+                this.component.value = 'Распознавание речи не поддерживается браузером';
+                this.component.render();
+                return;
+            }
+            this.recognition = new SpeechRecognition();
+            this.recognition.continuous = true;
+            this.recognition.interimResults = true;
+            this.recognition.maxAlternatives = 3;
+            this.recognition.lang = 'ru-RU';
+            this.recognition.onerror = ({ error }) => console.error('[mic]', error);
+            this.recognition.onend = () => {
+                this.component.value = this.final_transcript;
+                if (!this.component.recognizing) return;
+                this.recognition.start();
+            };
+            this.recognition.onresult = (e) => {
+                let interim = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    if (e.results[i].isFinal) {
+                        this.final_transcript += this.editInterim(e.results[i][0].transcript);
+                    } else {
+                        interim += e.results[i][0].transcript;
+                    }
+                }
+                this.final_transcript = this.editFinal(this.final_transcript);
+                this.component.value = this.final_transcript + (interim ? ' ' + interim : '');
+                this.component.render();
+            };
+
+            this.component.timer = '00:00';
+            this.recognition.start();
+            this.component.recognizing = true;
+
+            this.mediaStream = stream;
+            this.mediaRecorder = new MediaRecorder(stream);
+            this.mediaRecorder.start();
+            this.component.recording = true;
+
+            let totalSeconds = 0;
+            this.timerInterval = setInterval(() => {
+                ++totalSeconds;
+                this.component.timer = this.pad(Math.floor(totalSeconds / 60)) + ':' + this.pad(totalSeconds % 60);
+                if (totalSeconds > 120) this.stop();
+            }, 1000);
+        }).catch(err => {
+            console.error('[mic] getUserMedia error:', err);
+        });
+    }
+
+    stop() {
+        try { this.recognition?.stop(); } catch {}
+        this.component.recognizing = false;
+        try { this.mediaRecorder?.stop(); } catch {}
+        this.mediaStream?.getTracks().forEach(track => track.stop());
+        clearInterval(this.timerInterval);
+        this.component.recording = false;
+        this.component.value = this.final_transcript;
+        this.component.render();
+    }
 }
 
 /** Найти первую доступную модель $ai из дерева WORK (клиентская сторона) */

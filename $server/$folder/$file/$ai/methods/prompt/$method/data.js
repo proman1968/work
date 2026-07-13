@@ -181,6 +181,38 @@ export default {
                     }
                 }
 
+                if (call.method === 'read_file' && call.args?.name) {
+                    const fileName = String(call.args.name);
+                    try {
+                        const file = await currentContext._get_item?.(fileName);
+                        if (file && file.load) {
+                            const content = await file.load({ encoding: 'utf-8' });
+                            result = { name: fileName, content: String(content).slice(0, 32000), size: content?.length || 0 };
+                        } else {
+                            result = { error: 'Файл не найден: ' + fileName };
+                        }
+                    } catch (e) {
+                        result = { error: 'Не удалось прочитать файл ' + fileName + ': ' + e.message };
+                    }
+                }
+
+                if (call.method === 'write_file' && call.args?.name) {
+                    const fileName = String(call.args.name);
+                    const content = call.args.content ?? '';
+                    try {
+                        const saveResult = await currentContext.save_file?.({
+                            filename: fileName,
+                            post: String(content),
+                            encoding: 'utf-8',
+                            user: params.user,
+                        });
+                        const resultPath = saveResult?.path || saveResult?.logPath || '';
+                        result = { success: true, message: 'Файл сохранён: ' + fileName, path: resultPath, resultPath };
+                    } catch (e) {
+                        result = { error: 'Не удалось сохранить файл ' + fileName + ': ' + e.message };
+                    }
+                }
+
                 if (call.method === 'reset_context') {
                     currentContext = initialContext;
                     result = { success: true, message: 'Контекст сброшен к хранилищу: ' + initialContext.path };
@@ -190,13 +222,17 @@ export default {
                 WORK.wsSend?.({ type: "chat.tool_result", path: wsPath, tool: call.method, result: resultPreview });
 
                 const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-                body.chat.push({
+                const chatEntry = {
                     role: "tool_result",
                     content: resultStr.slice(0, 32000),
                     tool: call.method,
                     time: Date.now(),
                     sender: model.path || 'WORK',
-                });
+                };
+                // Сохраняем путь файла для показа карточки в UI
+                if (result?.resultPath)
+                    chatEntry.resultPath = result.resultPath;
+                body.chat.push(chatEntry);
 
                 // Авто-смена контекста, если метод вернул $item
                 if (result && typeof result === 'object' && result.path && result.type && !call.method.startsWith('navigate') && call.method !== 'reset_context') {
