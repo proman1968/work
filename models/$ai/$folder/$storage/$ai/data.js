@@ -38,6 +38,10 @@ export default {
                 id: 'apiKey',
                 type: 'String',
                 placeholder: 'sk-...',
+            }, {
+                id: 'token',
+                type: 'String',
+                placeholder: 'Authorization key (GigaChat OAuth)',
                 required: true,
             }, {
                 id: 'authUrl',

@@ -795,6 +795,36 @@ export class $folder extends $item{
         }
         return parent?.$parent || null;
     }
+    /** Контекстные триггеры (~triggers/*), обогащённые data.js и привязанные к владельцу */
+    get _triggers(){
+        return new AsyncPromise(async ()=>{
+            const result = {};
+            try {
+                const triggers = await this.get_item('~/triggers/*');
+                const items = Array.isArray(triggers) ? triggers : (triggers ? [triggers] : []);
+                for (const trigger of items) {
+                    await trigger.info();
+                    result[trigger.id] = trigger;
+                }
+            } catch {}
+            return result;
+        });
+    }
+    /** Контекстные методы (~methods/*), обогащённые data.js и привязанные к владельцу */
+    get _methods(){
+        return new AsyncPromise(async ()=>{
+            const result = {};
+            try {
+                const methods = await this.get_item('~/methods/*');
+                const items = Array.isArray(methods) ? methods : (methods ? [methods] : []);
+                for (const method of items) {
+                    await method.info();
+                    result[method.id] = method;
+                }
+            } catch {}
+            return result;
+        });
+    }
     get files(){
         return new AsyncPromise(async ()=>{
             let children = await this.children;

@@ -1,5 +1,6 @@
 /**
  * Серверный метод prompt для task.ai — контекстный harness цикл tool-call.
+ * this = task.ai файл (передаётся через tryHandlerMethod → execute.call(item))
  */
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -10,8 +11,8 @@ const MAX_ITERATIONS = 10;
 
 export default {
     async execute(params = {}, post) {
-        const taskAi = this.$context;
-        if (!taskAi)
+        const taskAi = params.$context || this;
+        if (!taskAi || !taskAi.load)
             throw new Error('task.ai не найден в контексте');
 
         let text = '';
@@ -48,13 +49,16 @@ export default {
         });
 
         const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
+        // Короткий путь для WS-сообщений (клиент хранит элементы по short)
+        const wsPath = taskAi.short || fullPath;
         const initialContext = taskAi.$storage || taskAi.$parent;
         if (!initialContext)
             throw new Error('Не определено хранилище-контекст для task.ai');
 
         const memContent = await loadMemFiles(initialContext);
         const contextInfo = await buildContextInfo(initialContext, params.user);
-        body.system = buildSystemPrompt(contextInfo, memContent, body.system);
+        body.context = contextInfo;
+        body.mem = memContent;
 
         const modelPath = body.model || await findModel();
         if (!modelPath) {
@@ -67,7 +71,7 @@ export default {
             });
             await writeTaskBody(fullPath, body);
             notifyChanged(fullPath);
-            WORK.wsSend?.({ type: "chat.error", path: fullPath, error: "Нет модели" });
+            WORK.wsSend?.({ type: "chat.error", path: wsPath, error: "Нет модели" });
             return { ok: true, model: false };
         }
         const model = await WORK.get_item(modelPath);
@@ -86,22 +90,22 @@ export default {
 
             let fullResponse = "";
             try {
-                const stream = await execItemMethod(model, "streamChat", { messages });
+                const stream = await execItemMethod(model, "streamChat", { messages, $ai: model });
                 for await (const token of stream) {
                     fullResponse += token;
-                    WORK.wsSend?.({ type: "chat.delta", path: fullPath, token });
+                    WORK.wsSend?.({ type: "chat.delta", path: wsPath, token });
                 }
             } catch (e) {
                 console.warn("[task.ai] streamChat error:", e.message);
-                body.chat.push({ role: "assistant", content: "Ошибка: " + e.message, time: Date.now(), sender: "WORK", error: true });
+                body.chat.push({ role: "assistant", content: "Ошибка: " + e.message, time: Date.now(), sender: model.path || 'WORK', error: true });
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
-                WORK.wsSend?.({ type: "chat.error", path: fullPath, error: e.message });
+                WORK.wsSend?.({ type: "chat.error", path: wsPath, error: e.message });
                 return { ok: false, error: e.message };
             }
 
             lastResponse = fullResponse;
-            body.chat.push({ role: "assistant", content: fullResponse, time: Date.now(), sender: "WORK" });
+            body.chat.push({ role: "assistant", content: fullResponse, time: Date.now(), sender: model.path || 'WORK' });
 
             const toolCalls = parseToolCalls(fullResponse);
 
@@ -112,26 +116,16 @@ export default {
             for (const call of toolCalls) {
                 let result;
                 try {
-                    // Обработка get_property и set_property
                     if (call.method === 'get_property' && call.args?.name) {
                         const propName = call.args.name;
-                        
-                        // Для folders/files/children запрашиваем у $storage, а не у текущего контекста
-                        let targetContext = currentContext;
-                        if (['folders', 'files', 'children'].includes(propName)) {
-                            targetContext = currentContext.$storage || currentContext;
-                        }
-                        
-                        const descriptor = Object.getOwnPropertyDescriptor(targetContext.constructor.prototype, propName);
+                        const descriptor = Object.getOwnPropertyDescriptor(currentContext.constructor.prototype, propName);
                         if (descriptor?.get) {
-                            result = descriptor.get.call(targetContext);
-                            // Если результат - Promise или AsyncPromise, выполняем await
+                            result = descriptor.get.call(currentContext);
                             if (result && typeof result === 'object' && typeof result.then === 'function') {
                                 result = await result;
                             }
                         } else {
-                            result = targetContext[propName];
-                            // Если результат - Promise или AsyncPromise, выполняем await
+                            result = currentContext[propName];
                             if (result && typeof result === 'object' && typeof result.then === 'function') {
                                 result = await result;
                             }
@@ -162,7 +156,7 @@ export default {
                 }
 
                 const resultPreview = typeof result === 'string' ? result.slice(0, 2000) : JSON.stringify(result).slice(0, 2000);
-                WORK.wsSend?.({ type: "chat.tool_result", path: fullPath, tool: call.method, result: resultPreview });
+                WORK.wsSend?.({ type: "chat.tool_result", path: wsPath, tool: call.method, result: resultPreview });
 
                 const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
                 body.chat.push({
@@ -170,14 +164,13 @@ export default {
                     content: resultStr.slice(0, 32000),
                     tool: call.method,
                     time: Date.now(),
-                    sender: "WORK",
+                    sender: model.path || 'WORK',
                 });
 
                 if (result && typeof result === 'object' && result.path && result.type) {
                     currentContext = result;
                 }
-                
-                // Обработка reset_context для возврата к домашнему контексту
+
                 if (call.method === 'reset_context') {
                     currentContext = initialContext;
                     result = { success: true, message: 'Контекст сброшен к хранилищу: ' + initialContext.path };
@@ -192,14 +185,14 @@ export default {
                 role: "assistant",
                 content: "Превышен лимит итераций. Последний ответ:\n" + lastResponse.slice(0, 2000),
                 time: Date.now(),
-                sender: "WORK",
+                sender: model.path || 'WORK',
                 error: true,
             });
         }
 
         await writeTaskBody(fullPath, body);
         notifyChanged(fullPath);
-        WORK.wsSend?.({ type: "chat.done", path: fullPath });
+        WORK.wsSend?.({ type: "chat.done", path: wsPath });
         return { ok: true, iterations: iteration };
     },
 };
@@ -235,8 +228,13 @@ function notifyChanged(fullPath) {
 
 function buildHistoryFromChat(body) {
     const messages = [];
-    if (body.system)
-        messages.push({ role: 'system', content: body.system });
+    let systemContent = body.system || '';
+    if (body.context)
+        systemContent += '\n\n## Текущий контекст\n' + body.context;
+    if (body.mem)
+        systemContent += '\n\n## Память (.mem)\n' + body.mem;
+    if (systemContent)
+        messages.push({ role: 'system', content: systemContent });
 
     const chat = body.chat || [];
     for (const entry of chat) {
@@ -245,19 +243,15 @@ function buildHistoryFromChat(body) {
         } else if (entry.role === 'assistant' && entry.content) {
             messages.push({ role: 'assistant', content: entry.content });
         } else if (entry.role === 'tool_result' && entry.content) {
-            // Форматируем tool_calls как действия от первого лица
             let content = entry.content;
             const hints = {
                 'get_schema': '\nИспользуй список properties и methods для выбора следующего действия.',
                 'get_property': '\nПолучено значение свойства. Можешь использовать set_property для изменения.',
             };
             const hint = hints[entry.tool] || '';
-            
-            // Если это JSON результат, просим ИИ описать его естественным языком
             if (entry.tool === 'get_property' || entry.tool === 'get_schema') {
                 content = 'Результат выполнения:\n' + entry.content.slice(0, 5000);
             }
-            
             messages.push({ role: 'user', content: content + hint });
         } else if (entry.prompt) {
             messages.push({ role: 'user', content: entry.prompt });
@@ -280,76 +274,7 @@ async function buildContextInfo(context, user) {
     } catch (e) {
         info = 'Контекст: ' + (context.path || '?') + '\n';
     }
-    
-    // Добавляем информацию о текущем пользователе
-    if (user?.uid || user?.$user?.id) {
-        const userId = user.uid || user.$user.id;
-        const userName = user.$user?.label || user.name || userId;
-        info += '\nТекущий пользователь:\n';
-        info += '- ID: ' + userId + '\n';
-        info += '- Имя: ' + userName + '\n';
-        
-        // Проверяем, является ли пользователь админом
-        try {
-            const isAdmin = await context.isAdmin?.({user}) || false;
-            info += '- Администратор: ' + (isAdmin ? 'да' : 'нет') + '\n';
-        } catch (e) {
-            // Игнорируем ошибки при проверке прав
-        }
-    }
-    
-    // Добавляем информацию об админах и пользователях хранилища
-    try {
-        const storageContext = context.$storage || context.$parent?.$storage;
-        if (storageContext) {
-            info += '\nХранилище: ' + storageContext.path + '\n';
-            
-            try {
-                const admins = await storageContext.admins;
-                if (admins?.length) {
-                    info += '\nАдминистраторы хранилища:\n';
-                    admins.slice(0, 5).forEach(admin => {
-                        const adminId = admin.id || admin.$user?.id || 'unknown';
-                        const adminName = admin.label || admin.name || adminId;
-                        info += '- ' + adminName + ' (' + adminId + ')\n';
-                    });
-                }
-            } catch (e) {
-                // Игнорируем ошибки
-            }
-            
-            try {
-                const users = await storageContext.users;
-                if (users?.length) {
-                    info += '\nПользователи хранилища:\n';
-                    users.slice(0, 10).forEach(u => {
-                        const userId = u.id || u.$user?.id || 'unknown';
-                        const userName = u.label || u.name || userId;
-                        info += '- ' + userName + ' (' + userId + ')\n';
-                    });
-                }
-            } catch (e) {
-                // Игнорируем ошибки
-            }
-        }
-    } catch (e) {
-        // Игнорируем ошибки при получении информации о хранилище
-    }
-    
     return info;
-}
-
-function buildSystemPrompt(contextInfo, memContent, existingSystem) {
-    let prompt = existingSystem || 'Ты - ИИ в системе WORK.\n\n' +
-        'Для списка папок: <tool>{"method": "folders"}```\n' +
-        'Для списка файлов: <tool>{"method": "files"}```\n\n' +
-        'Отвечай кратко на русском.';
-
-    prompt += '\n\nТекущий контекст: ' + contextInfo;
-    if (memContent)
-        prompt += '\n\nПамять (.mem):\n' + memContent;
-
-    return prompt;
 }
 
 async function findModel() {
@@ -377,7 +302,7 @@ function parseToolCalls(text) {
     if (!text)
         return calls;
 
-    const tagRegex = /<tool\s*([\s\S]*?)\s*(?:<\/tool_call>|```)/g;
+    const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
     let match;
     while ((match = tagRegex.exec(text)) !== null) {
         try {
@@ -388,7 +313,7 @@ function parseToolCalls(text) {
                     args: parsed.args || {},
                 });
             }
-        } catch { /* битый JSON */ }
+        } catch {}
     }
 
     if (calls.length === 0) {
@@ -402,7 +327,7 @@ function parseToolCalls(text) {
                         args: parsed.args || {},
                     });
                 }
-            } catch { /* битый JSON */ }
+            } catch {}
         }
     }
 

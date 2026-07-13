@@ -86,13 +86,10 @@ function requestBody(params, request) {
 
 async function tryHandlerMethod(item, method, params, request) {
     try {
-        let handlerItem = await item.get_item('~/methods/' + method);
-        if (Array.isArray(handlerItem))
-            handlerItem = handlerItem.find(Boolean);
-        if (!handlerItem) return undefined;
-        const data = await handlerItem.import();
-        if (typeof data?.execute === 'function') {
-            return data.execute.call({ $item: handlerItem, $context: item }, params, requestBody(params, request));
+        const handlers = await item._methods;
+        const handler = handlers?.[method];
+        if (handler && typeof handler.execute === 'function') {
+            return handler.execute.call(item, { ...params }, requestBody(params, request));
         }
     }
     catch {

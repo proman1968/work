@@ -1,35 +1,36 @@
 # Текущий контекст работы
 
-## ✅ Harness система — контекстный ИИ-агент (v4)
+## ✅ ИИ-инфраструктура — рабочее состояние (13.07.2026)
 
-### Что реализовано
+### Что работает
+- **Harness-цикл tool-call** — ИИ вызывает методы/свойства контекста через `<tool_call>` блоки
+- **Стриминг ответов** — токены GigaChat передаются через WS `chat.delta` в реальном времени
+- **Повторные промпты в микрочате** (task.ai) — работают
+- **Выбор модели** — dropdown с деревом
+- **on_save триггер** — запускает prompt при создании task.ai
+- **Загрузка .mem файлов** — долговременная память
 
-**1. Harness — контекстный цикл tool-call** (`$server/$folder/$file/$ai/handlers/methods/prompt/$method/data.js`)
-- Начальный контекст = `$storage`, где создан `task.ai`
-- ИИ вызывает **методы и свойства** текущего контекста
-- Поддержка getters: `files`, `children`, `folders` (автоматически await'ятся)
-- Если результат — `$item` (есть `path` и `type`) — становится новым контекстом
-- ИИ действует от прав пользователя (`params.user`)
+### Ключевые архитектурные решения
 
-**2. `get_schema` фильтрует** (`sources/server/folder.js`)
-- `properties` — только публичные (`isPublic: true`)
-- `methods` — только публичные методы с описаниями
-- `TOOL_DESCRIPTIONS` — статический словарь описаний
+1. **Модель передаётся через `params.$ai`** (не через `this`)
+   - Reactor bound-функция игнорирует `.call()` — `this` в `execute` остаётся handler'ом
+   - Решение: `prompt.execute` передаёт `{$ai: model}` в `execItemMethod`
+   - `streamChat.execute` принимает: `const ai = params.$ai || this`
 
-**3. System prompt объясняет**
-- Как вызвать метод/свойство
-- `get_schema` покажет доступные
-- Пример: `{"method": "files"}` — список файлов
-- `.mem` файлы — долговременная память
+2. **WS-сообщения используют `taskAi.short`** (короткий путь с `~`)
+   - Клиент хранит элементы в `CORE.$item.ITEMS` по short-пути
+   - Серверный `item.path` — полный (с `$`), `item.short` — короткий (с `~`)
+   - Все `WORK.wsSend({path: ...})` используют `wsPath = taskAi.short`
 
-### Формат tool-call
-```
-<tool_call>
-{"method": "files"}
-</tool_call>
-```
-— вызовет getter `files` и вернёт список файлов.
+### Структура файлов ИИ
+- `models/$ai/` — корневой тип
+- `models/GigaChat Pro/$ai/data.js` — конфигурация модели (baseUrl, token, protocol)
+- `models/$ai/$folder/$storage/$ai/methods/streamChat/$method/data.js` — стриминг
+- `$server/$folder/$file/$ai/methods/prompt/$method/data.js` — harness-цикл
+- `$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js` — SYSTEM_PROMPT
+- `$server/$folder/$file/$ai/handlers/preview/$handler/data.js` — UI микрочата
 
 ### Следующие шаги
-- Тестирование: "покажи список файлов" → `{"method": "files"}`
-- Проверка: файлы должны отобразиться в ответе
+- Удалить мусор `models/G`
+- Развитие ODA-фреймворка (слоты, компоненты форм)
+- RAG-поиск перед промптом

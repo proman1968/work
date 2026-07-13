@@ -2,14 +2,14 @@ import * as https from 'node:https';
 
 export default {
     async *execute(params = {}, post) {
-        const ai = this.$context;
+        const ai = params.$ai || this;
         const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
         const messages = options.messages || [];
 
         const body = {
             model: options.model || ai.model || '',
             messages,
-            max_tokens: options.maxTokens || ai.maxTokens || 4096,
+            max_tokens: options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096,
             temperature: options.temperature ?? 0.7,
             stream: true,
         };

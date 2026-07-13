@@ -1,5 +1,37 @@
 # Журнал архитектурных решений
 
+## Модель передаётся через params.$ai, а не через this — 2026-07-13
+
+**Контекст.** В `streamChat.execute` обращение `this.baseUrl` возвращало `undefined`, вызывая `new URL(undefined)` → "Invalid URL". Попытка использовать `this.import()` вызывала "is not a function".
+
+**Причина.** Reactor-прокси при вызове `handler.execute` создаёт bound-функцию через `Reactor.get`:
+```js
+if (typeof value === 'function')
+    return value.bind(target);  // bind к handler ($method)
+```
+Последующий `.call(model, ...)` на bound-функции **игнорируется** — `this` остаётся handler ($method, наследник $folder), а не моделью ($ai).
+
+**Решение.** Модель передаётся как параметр:
+```js
+// prompt.execute →
+execItemMethod(model, "streamChat", { messages, $ai: model });
+
+// streamChat.execute →
+const ai = params.$ai || this;
+```
+
+**Правило.** В любом серверном методе, вызываемом через `execItemMethod` / `tryHandlerMethod`, контекст (`this`) — это handler-элемент метода, а не целевой объект. Целевой объект нужно передавать явно через параметры.
+
+## WS-сообщения используют item.short, а не item.path — 2026-07-13
+
+**Контекст.** Стриминг не работал: текст появлялся весь сразу в конце, а не постепенно.
+
+**Причина.** Клиентский `WebSocketEvents.onmessage` ищет элемент в `CORE.$item.ITEMS[data.path]`. Ключ — это `item.short` (короткий путь с `~`, например `/users/XXX/~/ai/.task.ai`). Сервер отправлял `item.path` (полный путь с `$`, например `/users/XXX/$user/ai/.task.ai`) — совпадения не было, `item.fire('chat.delta', ...)` не вызывался.
+
+**Решение.** Все `WORK.wsSend({path: ...})` используют `wsPath = item.short` вместо полного пути.
+
+**Правило.** Серверные WS-сообщения всегда должны использовать `item.short` для поля `path`, чтобы клиент мог найти элемент в кэше `CORE.$item.ITEMS`.
+
 ## Единый тип $ai вместо $models + $provider + $llm — 2026-07-09
 
 **Контекст.** Было три типа: `$models` (корневой), `$provider` (провайдер), `$llm` (модель). Это создавало лишнюю сложность и разрывы в цепочке вызова.

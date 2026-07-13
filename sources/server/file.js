@@ -380,17 +380,11 @@ export class $file extends $folder{
         params.logPath = this.short;
         if (!params.skip_file_handler) {
             queueMicrotask(async () => {
-                // Контекстный триггер: ~/triggers/on_save/~/data.js
-                // Двойная тильда: первая ищет триггеры по типу файла, вторая — data.js внутри on_save
                 try {
-                    const dataFiles = await this.get_item('~/triggers/on_save/~/data.js');
-                    if (Array.isArray(dataFiles) && dataFiles.length) {
-                        const script = await $server.mergeFiles(dataFiles);
-                        const data = await $folder.importScript(script);
-                        if (data?.execute) {
-                            await data.execute.call($storage, params);
-                            return;
-                        }
+                    const triggers = await this._triggers;
+                    const onSave = triggers?.on_save;
+                    if (typeof onSave?.execute === 'function') {
+                        await onSave.execute({ ...params, $context: this });
                     }
                 }
                 catch (e) {

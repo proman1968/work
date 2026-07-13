@@ -1,17 +1,5 @@
 export default {
-    async function (s, d = {
-        d: 44
-      }) {
-        let a = 100;
-        let b = a + 100;
-      },
     icon: "ai:gigachat",
-    METADATA: {
-        FIELDS: {
-            id: "FIELDS",
-            icon: "iconoir:input-field"
-        }
-    },
     label: "GigaChat Pro",
     protocol: "gigachat",
     baseUrl: "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
