@@ -117,6 +117,67 @@ export default {
                 font-size: xx-small;
                 white-space: nowrap;
             }
+            .plan-block {
+                @apply --vertical;
+                gap: 4px;
+                padding: 8px;
+                margin: 4px 0;
+                border-radius: 8px;
+                border-left: 3px solid var(--info-color, #4a90d9);
+                background: var(--content-color, rgba(0,0,0,0.05));
+            }
+            .plan-header {
+                font-size: x-small;
+                font-weight: bold;
+                opacity: .8;
+                margin-bottom: 4px;
+            }
+            .plan-step {
+                @apply --horizontal;
+                gap: 6px;
+                align-items: center;
+                font-size: xx-small;
+                padding: 2px 0;
+            }
+            .plan-step-icon {
+                font-size: x-small;
+            }
+            .plan-step.done { opacity: .5; text-decoration: line-through; }
+            .plan-step.active { font-weight: bold; }
+
+            .questions-block {
+                @apply --vertical;
+                gap: 6px;
+                padding: 8px;
+                margin: 4px 0;
+                border-radius: 8px;
+                border-left: 3px solid var(--warning-color, #f0ad4e);
+                background: var(--content-color, rgba(0,0,0,0.05));
+            }
+            .question-field {
+                @apply --vertical;
+                gap: 2px;
+            }
+            .question-field label {
+                font-size: xx-small;
+                font-weight: bold;
+                opacity: .8;
+            }
+            .question-field input, .question-field textarea {
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: x-small;
+                font-family: inherit;
+                background: var(--background-color, #fff);
+                color: var(--text-color, #333);
+                outline: none;
+                min-width: 0;
+            }
+            .question-field textarea {
+                min-height: 2em;
+                resize: vertical;
+            }
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
             <div flex></div>
@@ -133,10 +194,29 @@ export default {
                         <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
                         <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
                     </div>
+                    <div class="questions-block" ~if="$for.$for.item.$questions?.length">
+                        <div class="question-field" ~for="$for.$for.item.$questions" :key="$for.item.id">
+                            <label>{{$for.item.label}}</label>
+                            <textarea ::value="$for.$for.$for.parent.$questionAnswers[$for.item.id]" 
+                                ~if="$for.item.type === 'textarea'" 
+                                placeholder="Введите ответ..."></textarea>
+                            <input type="text" ~if="$for.item.type !== 'textarea'" 
+                                ::value="$for.$for.$for.parent.$questionAnswers[$for.item.id]" 
+                                placeholder="Введите ответ...">
+                        </div>
+                        <oda-button success icon="icons:check" label="Ответить" @tap="answerQuestions('{{$for.$for.item.time}}')"></oda-button>
+                    </div>
                     <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
                         <summary>🔧 {{$for.$for.item.tool}}</summary>
                         <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
                     </details>
+                </div>
+            </div>
+            <div class="plan-block" ~if="planSteps.length">
+                <div class="plan-header">📋 План выполнения ({{planProgress}})</div>
+                <div class="plan-step" ~for="planSteps" :class="$for.item.status">
+                    <span class="plan-step-icon">{{planStepIcon($for.item.status)}}</span>
+                    <span>{{$for.item.step}}. {{$for.item.description}}</span>
                 </div>
             </div>
         </div>
@@ -178,6 +258,7 @@ export default {
     taskBody: null,
     selectedModel: '',
     act: false,
+    questionAnswers: {},
     ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'silero'
     _lastSpoken: '',
     _audioEl: null,
@@ -258,6 +339,40 @@ export default {
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },
+    get planSteps() {
+        return this.taskBody?.plan || [];
+    },
+    get planProgress() {
+        const steps = this.planSteps;
+        if (!steps.length) return '';
+        const done = steps.filter(s => s.status === 'done').length;
+        return `${done}/${steps.length}`;
+    },
+    planStepIcon(status) {
+        switch (status) {
+            case 'done': return '✅';
+            case 'in_progress': return '🔄';
+            default: return '⏳';
+        }
+    },
+    async answerQuestions(msgTime) {
+        // Найти сообщение по time
+        const msg = this.chat.find(m => String(m.time) === String(msgTime));
+        if (!msg?.$questions) return;
+        // Собрать ответы
+        const answers = [];
+        for (const q of msg.$questions) {
+            const answer = this.questionAnswers[q.id] || '';
+            if (answer.trim())
+                answers.push(`${q.label}: ${answer.trim()}`);
+        }
+        if (!answers.length) return;
+        // Отправить как промпт
+        this.value = 'Ответы на вопросы:\n' + answers.join('\n');
+        // Очистить ответы
+        this.questionAnswers = {};
+        this.send();
+    },
     get selectedModelItem() {
         if (!this.selectedModel) return null;
         return WORK.get_item(this.selectedModel);
@@ -309,7 +424,14 @@ export default {
                         msg.$cleanContent = msg.content
                             .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
                             .replace(/```tool_call[\s\S]*?```/gi, '')
+                            .replace(/<questions>[\s\S]*?<\/questions>/gi, '')
+                            .replace(/<plan>[\s\S]*?<\/plan>/gi, '')
                             .trim();
+                        // Парсинг вопросов из ответа ИИ
+                        const qMatch = msg.content.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
+                        if (qMatch) {
+                            try { msg.$questions = JSON.parse(qMatch[1]); } catch {}
+                        }
                     }
                     if (!oldKeys.includes(key)) {
                         if (msg.role === 'assistant' && msg.responsePath) {
@@ -648,8 +770,14 @@ export default {
             const payload = JSON.stringify({
                 text: promptText || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
+                act: this.act || false,
             });
-            await this.$item.fetch('prompt', {}, payload);
+            const result = await this.$item.fetch('prompt', {}, payload);
+            // Автосброс act после выполнения (если ИИ завершил действия)
+            if (this.act && result?.needsAct !== true) {
+                this.act = false;
+                this.render();
+            }
         }
         catch (e) {
             console.warn('[ai-preview] send', e.message);
