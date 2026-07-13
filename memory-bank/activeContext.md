@@ -51,6 +51,12 @@
 - Для каждого слоя парсит свой `constructor.sourceUrl` и `TOOL_DESCRIPTIONS`
 - Методы нижних слоёв не дублируются (контролируется через `seenNames`)
 
+### readme.md в контексте ИИ + автообновление (14.07.2026)
+- **Загрузка readme.md** при запуске чата — `loadReadme(storage)` в `prompt/$method/data.js`
+- readme.md из метапапки хранилища добавляется в system prompt
+- **SYSTEM_PROMPT обновлён** — ИИ обязан поддерживать readme.md при значимых изменениях
+- readme.md создаётся/обновляется через `write_file("readme.md", содержимое)`
+
 ### Умения строить систему (14.07.2026)
 - SYSTEM_PROMPT расширен секцией «Создание элементов системы»
 - ИИ умеет создавать: хранилища ($storage), методы ($method), триггеры ($trigger), обработчики ($handler), интерфейсы (pages/forms)

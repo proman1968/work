@@ -56,9 +56,11 @@ export default {
             throw new Error('Не определено хранилище-контекст для task.ai');
 
         const memContent = await loadMemFiles(initialContext);
+        const readmeContent = await loadReadme(initialContext);
         const contextInfo = await buildContextInfo(initialContext, params.user);
         body.context = contextInfo;
         body.mem = memContent;
+        body.readme = readmeContent;
 
         const modelPath = body.model || await findModel();
         if (!modelPath) {
@@ -300,6 +302,8 @@ function buildHistoryFromChat(body) {
         systemContent += '\n\n## Текущий контекст\n' + body.context;
     if (body.mem)
         systemContent += '\n\n## Память (.mem)\n' + body.mem;
+    if (body.readme)
+        systemContent += '\n\n## Описание хранилища (readme.md)\n' + body.readme;
     if (systemContent)
         messages.push({ role: 'system', content: systemContent });
 
@@ -401,6 +405,26 @@ function parseToolCalls(text) {
     }
 
     return calls;
+}
+
+/**
+ * Загрузить readme.md из метапапки хранилища (если существует).
+ * @param {object} storage — элемент $storage
+ * @returns {Promise<string>} — содержимое readme.md или пустая строка
+ */
+async function loadReadme(storage) {
+    try {
+        const meta = storage.meta_folder || storage;
+        const file = await meta._get_item?.('readme.md');
+        if (file && file.load) {
+            const content = await file.load({ encoding: 'utf-8' });
+            if (content)
+                return typeof content === 'string' ? content : String(content);
+        }
+    } catch (e) {
+        console.warn('[task.ai] loadReadme:', e.message);
+    }
+    return '';
 }
 
 async function loadMemFiles(storage) {
