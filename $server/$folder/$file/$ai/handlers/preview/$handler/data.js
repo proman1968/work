@@ -198,6 +198,10 @@ export default {
                         <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
                         <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
                     </div>
+                    <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
+                        <summary>🧠 Мысли</summary>
+                        <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
+                    </details>
                     <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
                     <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
                         <summary>🔧 {{$for.$for.item.tool}}</summary>
@@ -443,6 +447,10 @@ export default {
                         if (qMatch) {
                             try { msg.$questions = JSON.parse(qMatch[1]); } catch {}
                         }
+                        // Парсинг рассуждений из ответа ИИ
+                        const rMatch = msg.content.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
+                        if (rMatch)
+                            msg.$reasoning = rMatch[1].trim();
                     }
                     if (!oldKeys.includes(key)) {
                         if (msg.role === 'assistant' && msg.responsePath) {

@@ -33,10 +33,9 @@ ODA({is: 'oda-chat-plan',
                 transition: width 0.3s;
             }
             .steps {
-                @apply --horizontal;
-                gap: 4px;
+                @apply --vertical;
+                gap: 2px;
                 padding: 4px 8px;
-                flex-wrap: wrap;
             }
             .step {
                 @apply --horizontal;
@@ -62,8 +61,8 @@ ODA({is: 'oda-chat-plan',
             }
         </style>
         <div class="header" @tap="collapsed = !collapsed">
-            <oda-icon icon="icons:checklist" icon-size="16"></oda-icon>
-            <span flex>{{currentTitle}}</span>
+            <span>{{currentNumber}}/{{steps.length}}</span>
+            <span style="flex:1">{{currentDescription}}</span>
             <oda-icon :icon="collapsed ? 'icons:expand-more' : 'icons:expand-less'" icon-size="16"></oda-icon>
         </div>
         <div class="progress-track">
@@ -78,24 +77,30 @@ ODA({is: 'oda-chat-plan',
     `,
     steps: [],
     collapsed: true,
-    get doneCount() {
-        return this.steps.filter(s => s.status === 'done').length;
+    get currentNumber() {
+        const idx = this.steps.findIndex(s => s.status === 'in_progress');
+        if (idx >= 0) return idx + 1;
+        const pending = this.steps.findIndex(s => s.status !== 'done');
+        if (pending >= 0) return pending + 1;
+        return this.steps.length; // все выполнены
+    },
+    get isComplete() {
+        return this.steps.length > 0 && this.steps.every(s => s.status === 'done');
     },
     get progressPercent() {
-        return this.steps.length ? Math.round(this.doneCount / this.steps.length * 100) : 0;
+        if (!this.steps.length) return 0;
+        const done = this.steps.filter(s => s.status === 'done').length;
+        return Math.round(done / this.steps.length * 100);
     },
     get currentStep() {
         return this.steps.find(s => s.status === 'in_progress')
             || this.steps.find(s => s.status !== 'done')
             || null;
     },
-    get currentTitle() {
+    get currentDescription() {
+        if (this.isComplete) return 'Выполнено!';
         const step = this.currentStep;
-        if (step)
-            return `${step.step}. ${step.description}`;
-        if (this.steps.length)
-            return `План завершён (${this.doneCount}/${this.steps.length})`;
-        return '';
+        return step ? step.description : '';
     },
     stepIcon(status) {
         switch (status) {
