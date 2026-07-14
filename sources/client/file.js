@@ -53,7 +53,7 @@ export class $file extends $folder{
             return $file.previews[n.ext];
         return $file.previews[n.ext] = new AsyncPromise(async _=>{
             try{
-                let path = n.short + '/~/handlers/preview/~/data.js';
+                let path = n.short + '/~/handlers/preview/~/class.js';
                 let module = await import(path);
                 let def = module?.default;
                 def.is ??= n.ext + '-preview';

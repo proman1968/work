@@ -99,9 +99,9 @@ export const authMethods = {
         if (base64Image)
             credentials.icon = '/users//' + uid + '/$user/icon.png';
 
-        let post = CORE.$storage.toScript(credentials);
+        let post = CORE.$class.toScript(credentials);
 
-        let res = await $user_item.save({ filename: 'data.js', post, user: WORK });
+        let res = await $user_item.save({ filename: 'class.js', post, user: WORK });
         let u = await this.$users;
         (await u.children)?.forEach?.(ch => ch.children = undefined);
         u.children = undefined;

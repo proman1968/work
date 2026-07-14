@@ -1,10 +1,10 @@
 # $server/$folder/$handler/ — тип обработчиков
 
-Прототип обработчиков (handlers). Класс `$handler extends $storage` — исполняемый элемент с методом `execute()` в `data.js`.
+Прототип обработчиков (handlers). Класс `$handler extends $class` — исполняемый элемент с методом `execute()` в `class.js`.
 
 ## Структура
 
-- `data.js` — конфигурация базового обработчика
+- `class.js` — конфигурация базового обработчика
 - `$task/` — задачи по расписанию (временные маски)
 - `$trigger/` — триггеры (реакция на события)
 - `handlers/` — вложенные обработчики
@@ -18,7 +18,7 @@
 
 ## Связь с методами и триггерами
 
-- `~/methods/имя/$method/data.js` — серверный метод (наследник `$handler`)
-- `~/triggers/on_save/$trigger/data.js` — триггер сохранения файла
+- `~/methods/имя/$method/class.js` — серверный метод (наследник `$handler`)
+- `~/triggers/on_save/$trigger/class.js` — триггер сохранения файла
 
 Все они имеют `execute(params, post)` — точка входа для выполнения.

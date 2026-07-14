@@ -4,19 +4,44 @@
 
 ## Завершённые задачи
 
+### Глобальное переименование data.js → class.js — 14.07.2026
+- **Масштаб:** 159 файлов переименовано, 46 файлов кода обновлено
+- Имя `'data.js'` зашито в серверном коде ~10 местах (`f.id === 'data.js'`, `filename: 'data.js'`, `get_item('~/data.js')`)
+- Все ссылки заменены на `'class.js'`
+- Массовая замена исключала `oda/`, `torus/`, `node_modules/`, `.venv/`
+- **УРОК:** `replaceAll('data.js', 'class.js')` слишком грубо — задело клиентские файлы с динамическими путями. Пользователь исправил вручную.
+- Вспомогательные скрипты удалены после использования
+- Тесты: 15/18 проходят (3 падения в `distributed-folder.test.js` не связаны)
+
+### Глобальное переименование $storage → $class — 14.07.2026
+- **Масштаб:** 58 файлов + 6 директорий + 2 файла переименованы
+- sources/server/storage.js → class.js, sources/client/storage.js → class.js
+- 6 директорий $storage → $class
+- tests/storage/ → tests/class/
+- Заменены: $storage → $class, isStorageItem → isClassItem, nearestStorage → nearestClass, hasStorageAccess → hasClassAccess
+- Сохранено: storage_folder
+- Тесты: 15/18 проходят
+
+### Очистка остатков переименования $storage → $class, data.js → class.js — 14.07.2026
+- **Удалено 6 папок `$storage`** — дубликаты `$class` (в $server, models, services, skills)
+- **Удалено 108 файлов `data.js`** — дубликаты рядом с `class.js`
+- **Переименован 1 файл** `data.js` → `class.js` (users/CA4E097FF6C1D387/$user/)
+- **Исправлено 5 файлов** с `.$storage` → `.$class` (paas, services, $order trigger)
+- **Проверены цепочки наследования $-папок** — структура корректна: $folder → $file/$class/$handler → $method/$trigger/$structure → $base/$group/$server/$user/$device
+
 ### Bugfix: buildAiSchema — обход цепочки прототипов — 14.07.2026
-- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$storage`/`$file`
+- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$class`/`$file`
 - **Причина:** `Object.getOwnPropertyNames(proto)` возвращает методы только собственного прототипа
 - **Решение:** `buildAiSchema` обходит всю цепочку через `Object.getPrototypeOf()`
 
 ### JSDoc @ai-разметка методов для ИИ — 14.07.2026
 - **Критическая находка**: `Function.prototype.toString()` в V8 НЕ сохраняет JSDoc-комментарии
 - Переписан `sources/modules/ai-schema.js` — `buildAiSchema(proto)` парсит исходный файл через `constructor.sourceUrl`
-- Добавлен `static sourceUrl = import.meta.url` в `$folder`, `$storage`, `$file`
+- Добавлен `static sourceUrl = import.meta.url` в `$folder`, `$class`, `$file`
 - Ключевые методы помечены `@ai`, `@ai.params`, `@ai.returns`
 - `TOOL_DESCRIPTIONS` наследуется через `...$folder.TOOL_DESCRIPTIONS`
 - `get_schema()` переведён на `buildAiSchema` (вместо инлайн-логики с reserved-списком)
-- Убраны отладочные `console.log` из `preview/$handler/data.js` (TTS-логи)
+- Убраны отладочные `console.log` из `preview/$handler/class.js` (TTS-логи)
 
 ### Bugfix: стриминг + повторные промпты — 13.07.2026
 - **Ошибка `Invalid URL`** при втором промпте в микрочате
@@ -66,7 +91,7 @@
 - `_loadTaskBody`: автозапись первой найденной модели если не задана
 
 ### Bugfix: findModel is not defined — 10.07.2026
-- Добавлена `findModel()` в `prompt/$method/data.js`
+- Добавлена `findModel()` в `prompt/$method/class.js`
 - `body.model` используется первым, `findModel()` — fallback
 - Удалена устаревшая `findProvider()`
 
@@ -90,7 +115,7 @@
 - Удалены `file-handlers.js`, `skill-manager.js`, `skill-router.js`
 
 ### Серверный класс $handler — 09.07.2026
-- `sources/server/handler.js` — `class $handler extends $storage`
+- `sources/server/handler.js` — `class $handler extends $class`
 
 ### Единый тип $ai — 09.07.2026
 - Один тип `$ai`, структура `models/$ai/` + `models/GigaChat Pro/`
@@ -110,10 +135,10 @@
 - **Шаг 5: Внутренние файлы** — выбор через `item-tree` dropdown, путь добавляется в промпт
 - **Шаг 6: Действия ИИ в логах** — `write_file` использует `aiUser` (sender = имя модели)
 - **Цикл tool-call** в `prompt` method: парсит `<tool_call>...`} блоки, выполняет через `execItemMethod`, итерации до 10
-- **Загрузка `.mem`** — файлы памяти хранилища-агента в системный промт
+- **Загрузка `.mem`** — файлы памяти класса-агента в системный промт
 - **Расширенный SYSTEM_PROMPT** — описание инструментов: info, load, save_file, find_text, get_schema, logs, search, create, delete
 - **UI: навигатор + мессенджер** — item-tree слева, tool_result визуализация с 🔧
-- **Принцип:** любой `$storage` — агент, tools — его существующие методы, модели — per-task
+- **Принцип:** любой `$class` — агент, tools — его существующие методы, модели — per-task
 ### 3. Удалить мусор `models/G`
 ### 4. Дальнейшее развитие фреймворка ODA
 - Удалить `utils.js` (мёртвый файл)

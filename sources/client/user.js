@@ -1,7 +1,7 @@
 import { $folder } from './folder.js';
-import { $storage } from './storage.js';
+import { $class } from './class.js';
 
-export class $user extends $storage{
+export class $user extends $class{
     get iconColor(){
         if(this.icon[0] === '@'){
             let id = this.id;

@@ -185,7 +185,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                     if (!item[itemsSelector]?.length) {
                         item.icon = await getIcon(item);
                     }
-                    else if (item.path.includes('$storage') && item.id !== '$role') {
+                    else if (item.path.includes('$class') && item.id !== '$role') {
                         item.isCategory = true;
                     }
                     else if (item.id === '$folder') {
@@ -212,7 +212,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                     }
                 }
                 if (!~icon_idx) {
-                    if ($item.path.includes('$storage') || $item.isCustom)
+                    if ($item.path.includes('$class') || $item.isCustom)
                         return 'bootstrap:database';
                     else
                         return '';
@@ -246,11 +246,11 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             let url = null;
             switch (this.filter) {
                 case '$base': {
-                    url = location.origin + '/$server/$folder/$storage/$structure';
+                    url = location.origin + '/$server/$folder/$class/$structure';
                 } break;
                 case '$role':
                 case '$group': {
-                    url = location.origin + '/$server/$folder/$storage/$structure/$role';
+                    url = location.origin + '/$server/$folder/$class/$structure/$role';
                 } break;
             }
             if (url === null) {

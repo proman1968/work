@@ -220,7 +220,7 @@ WORK.__bind = function (data, path = '') {
             let key =  (path || data.path || (data.id + ':' + data.type)) + (data.reply?':reply':'');
             let item = CORE.$item.ITEMS[key];
             if (!item) {
-                item = CORE.$item.ITEMS[key] = Reactor.activate(new (CORE[data.type] || CORE.$storage)(data));
+                item = CORE.$item.ITEMS[key] = Reactor.activate(new (CORE[data.type] || CORE.$class)(data));
             } else {
                 Object.assign(item.DATA ??= {}, data);
                 delete item.body;
@@ -321,20 +321,35 @@ WORK.syncAuthUI = async function () {
     explorer.render?.();
 };
 
+/** Событие auth для подписчиков в той же вкладке + BroadcastChannel для других. */
+WORK.authEvents ??= (typeof EventTarget !== 'undefined') ? new EventTarget() : null;
+WORK.notifyAuth = function (payload = {}) {
+    try { WORK.AUTH_CHANNEL?.postMessage(payload); } catch {}
+    try {
+        WORK.authEvents?.dispatchEvent(new CustomEvent('auth', { detail: payload }));
+    } catch {}
+};
+
 WORK.onAuthChanged = function (payload = {}) {
     if (WORK._authReloading)
         return;
     const credUid = WORK.credentials?.uid || '';
     const newUid = payload.uid || '';
-    if (payload.reason === 'login' && newUid && newUid === credUid) {
+    if ((payload.reason === 'login' || payload.reason === 'register') && newUid && (!credUid || newUid === credUid)) {
         WORK.uid = newUid;
         WORK.syncAuthUI();
+        try {
+            WORK.authEvents?.dispatchEvent(new CustomEvent('auth', { detail: payload }));
+        } catch {}
         return;
     }
     if (payload.reason === 'logout' && !newUid && !credUid) {
         WORK.uid = '';
         WORK.USER = undefined;
         WORK.syncAuthUI();
+        try {
+            WORK.authEvents?.dispatchEvent(new CustomEvent('auth', { detail: { uid: '', reason: 'logout' } }));
+        } catch {}
         return;
     }
     WORK._authReloading = true;
@@ -367,16 +382,14 @@ WORK.login = async function(){
             const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature});
             WORK.uid = uid;
             await WORK.syncAuthUI();
-            if (!WORK.connected)
-                WORK.AUTH_CHANNEL?.postMessage({ uid, reason: 'login' });
+            WORK.notifyAuth?.({ uid, reason: 'login' });
             return res;
         }
         WORK.uid = '';
         WORK.USER = undefined;
         await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
         await WORK.syncAuthUI();
-        if (!WORK.connected)
-            WORK.AUTH_CHANNEL?.postMessage({ uid: '', reason: 'logout' });
+        WORK.notifyAuth?.({ uid: '', reason: 'logout' });
 }
 WORK.requestNotificationPermission = async function () {
     let result = false;

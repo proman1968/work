@@ -26,11 +26,11 @@ WORK построен вокруг `$item`.
 Серверная объектная модель. Эти классы отвечают за файловую систему, наследование, загрузку и сохранение данных. Каждый файл = один класс (кроме `index.js`).
 
 - `index.js` — сборка серверного `CORE` и registry `FS` (порядок инициализации классов).
-- `$server.js` — `$server` (бывший `WorkServer`): корневой серверный `$storage`, HTTP-сессии, merge `data.js`, шаблоны страниц.
+- `$server.js` — `$server` (бывший `WorkServer`): корневой серверный `$class`, HTTP-сессии, merge `class.js`, шаблоны страниц.
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, manifest, сортировка.
-- `storage.js` — `$storage`: `data.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](../docs/storage-inheritance.md).
+- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](../docs/storage-inheritance.md).
 - `file.js` — `$file`: load/save, history, restore, file-specific behavior. Переопределён `collect_tilde` — для файлов tilde ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки.
-- `llm.js` — `$llm extends $storage`: подключение к внешним языковым моделям. Методы: `chat()` (полный ответ), `streamChat()` (AsyncGenerator). Протоколы: `openai`, `anthropic`, `gigachat` (OAuth + self-signed SSL).
+- `llm.js` — `$llm extends $class`: подключение к внешним языковым моделям. Методы: `chat()` (полный ответ), `streamChat()` (AsyncGenerator). Протоколы: `openai`, `anthropic`, `gigachat` (OAuth + self-signed SSL).
 - `user.js` — `$user`: пользовательская storage-сущность.
 
 ## `client/`
@@ -39,7 +39,7 @@ WORK построен вокруг `$item`.
 
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`.
 - `folder.js` — клиентский `$folder extends $item` (из `core.js`): `url`, `open_url`, `fetch`, `get_item`, browser actions, `save_file`, `load`, `save`, `delete`, `create`.
-- `storage.js` — клиентский `$storage`: import/save `data.js`, metadata, fields, data access.
+- `class.js` — клиентский `$class`: import/save `class.js`, metadata, fields, data access.
 - `file.js` — клиентский `$file`. Переопределён `load()` — возвращает сырые данные через `WORK.fetch()` без `__bind` (для чтения JSON-файлов вроде `task.ai`). `reset()` очищает `body` и кэш.
 - `user.js` — клиентский `$user`.
 - `handler.js` — клиентская модель handler'а.
@@ -60,7 +60,7 @@ WORK построен вокруг `$item`.
 - `skill-router.js` — роутинг запросов к скиллам (эмбеддинги + keyword fallback).
 - `mail.js`, `email-utils.js` — почта и EML.
 - `push.js`, `vapid.js` — push subscriptions.
-- `babel-merge.js` — merge `data.js` по слоям наследования (через Babel AST).
+- `babel-merge.js` — merge `class.js` по слоям наследования (через Babel AST).
 - `package-install.js` — установка npm-пакетов.
 - `gen-api.js` — клиент внешнего GenAPI (генерация изображений).
 
@@ -85,7 +85,7 @@ WORK построен вокруг `$item`.
 
 Экспортируемая функция, которая:
 
-1. Обходит всю цепочку прототипов (от `$storage` до `$folder` и выше)
+1. Обходит всю цепочку прототипов (от `$class` до `$folder` и выше)
 2. Для каждого слоя парсит исходный файл класса через `constructor.sourceUrl`
 3. Извлекает JSDoc-теги `@ai`, `@ai.params`, `@ai.returns` из текста исходника
 4. Fallback на `static TOOL_DESCRIPTIONS` для методов без `@ai`
@@ -110,7 +110,7 @@ async myMethod(params = {}) {
 
 Каждый серверный класс должен содержать это статическое свойство для работы `buildAiSchema`:
 - `sources/server/folder.js` — `$folder`
-- `sources/server/storage.js` — `$storage`
+- `sources/server/class.js` — `$class`
 - `sources/server/file.js` — `$file`
 
 ### `static TOOL_DESCRIPTIONS`
@@ -128,7 +128,7 @@ static TOOL_DESCRIPTIONS = {
 Метод `get_schema()` на `$folder` вызывает `buildAiSchema(this.constructor.prototype)` и возвращает:
 ```json
 {
-    "className": "$storage",
+    "className": "$class",
     "properties": [...],
     "methods": [
         {
@@ -174,7 +174,7 @@ static TOOL_DESCRIPTIONS = {
 
 ## $llm — внешние языковые модели
 
-`$llm extends $storage` (`sources/server/llm.js`) — единый интерфейс для LLM провайдеров.
+`$llm extends $class` (`sources/server/llm.js`) — единый интерфейс для LLM провайдеров.
 
 - `chat(messages, options)` — полный ответ
 - `streamChat(messages, options)` — AsyncGenerator для стриминга
@@ -182,8 +182,8 @@ static TOOL_DESCRIPTIONS = {
 
 Структура провайдера:
 ```
-services/LLM/$llm/data.js                    — мета-тип (поля настройки)
-services/LLM/<Провайдер>/<Модель>/$llm/data.js — конкретная модель
+services/LLM/$llm/class.js                    — мета-тип (поля настройки)
+services/LLM/<Провайдер>/<Модель>/$llm/class.js — конкретная модель
 ```
 
 ## Triggers (~/triggers/on_save)
@@ -191,23 +191,23 @@ services/LLM/<Провайдер>/<Модель>/$llm/data.js — конкрет
 Триггер `on_save` — реакция на сохранение файла. Ищется через двойную тильду:
 
 ```
-~/triggers/on_save/~/data.js
+~/triggers/on_save/~/class.js
 ```
 
 - **Первая `~`** — `collect_tilde` для типа файла. Для `$file` переопределён: ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки внутри файла.
-- **Вторая `~`** — поиск `data.js` внутри мета-папок `on_save` (через `$trigger`).
-- **Результат** — массив `data.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
+- **Вторая `~`** — поиск `class.js` внутри мета-папок `on_save` (через `$trigger`).
+- **Результат** — массив `class.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
 
 Структура триггера на диске (через `steps`):
 
 ```
-$server/$folder/$file/$prompt/triggers/on_save/$trigger/data.js
+$server/$folder/$file/$prompt/triggers/on_save/$trigger/class.js
 ```
 
 - `$folder` — корневой типизатор (начало цепочки `steps`)
 - `$file/$prompt` — цепочка типов от расширения файла (`.prompt`)
 - `triggers/on_save` — папка триггера
-- `$trigger` — мета-тип (как `$handler`), содержит `data.js` с методом `execute(params)`
+- `$trigger` — мета-тип (как `$handler`), содержит `class.js` с методом `execute(params)`
 
 Вызов триггера — в `sources/server/file.js`, метод `save_to_log`, через `queueMicrotask`.
 

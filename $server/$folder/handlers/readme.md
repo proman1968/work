@@ -9,12 +9,12 @@
 
 ## pages/
 
-Структура: `pages/form/имя/$handler/data.js`
+Структура: `pages/form/имя/$handler/class.js`
 
 Каждый `$handler` — ODA-компонент с `template`, `imports`, свойствами и методами. Выполняется в браузере.
 
 Примеры:
-- `pages/form/$handler/` — форма по умолчанию (выбор формы из data.js)
+- `pages/form/$handler/` — форма по умолчанию (выбор формы из class.js)
 - `pages/form/chat/$handler/` — чат-интерфейс
 - `pages/form/folder/$handler/` — форма папки
 

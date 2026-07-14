@@ -84,14 +84,14 @@ describe('assertMethodAccess', () => {
 
 describe('assertCanExecuteMethod', () => {
     it('blocks delete for regular user', async () => {
-        class TestStorage extends CORE.$storage {
+        class TestClass extends CORE.$class {
             get admins() {
                 return [{ id: 'admin1' }];
             }
         }
-        const storage = new TestStorage({ id: 'group' });
+        const storage = new TestClass({ id: 'group' });
         storage.path = '/root/test/$group';
-        Object.defineProperty(storage, '$storage', { get: () => storage });
+        Object.defineProperty(storage, '$class', { get: () => storage });
 
         await assert.rejects(
             () => Security.assertCanExecuteMethod(storage, 'delete', { user: { uid: 'user1' } }),
@@ -100,13 +100,13 @@ describe('assertCanExecuteMethod', () => {
     });
 
     it('allows delete for admin', async () => {
-        class TestStorage extends CORE.$storage {
+        class TestClass extends CORE.$class {
             get admins() {
                 return [{ id: 'admin1' }];
             }
         }
-        const storage = new TestStorage({ id: 'group' });
-        Object.defineProperty(storage, '$storage', { get: () => storage });
+        const storage = new TestClass({ id: 'group' });
+        Object.defineProperty(storage, '$class', { get: () => storage });
 
         await Security.assertCanExecuteMethod(storage, 'delete', { user: { uid: 'admin1' } });
     });
@@ -140,13 +140,13 @@ describe('assertCanExecuteMethod', () => {
         const prev = process.env.WORK_DEV;
         process.env.WORK_DEV = 'true';
         try {
-            class TestStorage extends CORE.$storage {
+            class TestClass extends CORE.$class {
                 get admins() {
                     return [{ id: 'admin1' }];
                 }
             }
-            const storage = new TestStorage({ id: 'group' });
-            Object.defineProperty(storage, '$storage', { get: () => storage });
+            const storage = new TestClass({ id: 'group' });
+            Object.defineProperty(storage, '$class', { get: () => storage });
             await Security.assertCanExecuteMethod(storage, 'delete', { user: { uid: 'user1' } });
         }
         finally {
@@ -163,7 +163,7 @@ describe('canSee', () => {
         assert.equal(await Security.canSee({ path: '/users/$users', id: '$users' }, { user: { uid: 'u1' } }), true);
     });
 
-    it('guest sees system at WORK root, not $storage or users', async () => {
+    it('guest sees system at WORK root, not $class or users', async () => {
         const guest = { user: { ssid: 'x' } };
         assert.equal(await Security.canSee({ path: '/users//U1/$user/text', id: 'text' }, guest), false);
         assert.equal(await Security.canSee({ path: '/users//U1', id: 'U1' }, guest), false);
@@ -219,7 +219,7 @@ describe('canSee', () => {
             users: Promise.resolve([{ id: 'u1' }]),
             admins: Promise.resolve([]),
         };
-        Object.defineProperty(handler, '$storage', { get: () => storage });
+        Object.defineProperty(handler, '$class', { get: () => storage });
         Object.defineProperty(handler, 'parent', { get: () => storage });
         assert.equal(await Security.canSee(handler, { user: { uid: 'u1' } }), true);
     });
@@ -303,7 +303,7 @@ describe('canWrite', () => {
             admins: Promise.resolve([]),
         };
         const file = { path: '/root/x/$group/$structure/doc/file.txt', id: 'file.txt' };
-        Object.defineProperty(file, '$storage', { get: () => storage });
+        Object.defineProperty(file, '$class', { get: () => storage });
         assert.equal(await Security.canWrite(file, { user: { uid: 'u1' } }), true);
     });
 
@@ -320,7 +320,7 @@ describe('canWrite', () => {
         };
         const handler = new HandlerFolder({ id: '$handler' });
         handler.path = '/root/x/$group/$handler';
-        Object.defineProperty(handler, '$storage', { get: () => storage });
+        Object.defineProperty(handler, '$class', { get: () => storage });
         Object.defineProperty(handler, 'parent', { get: () => storage });
         assert.equal(await Security.canWrite(handler, { user: { uid: 'u1' } }), false);
     });
@@ -346,7 +346,7 @@ describe('filterGetItemResult', () => {
         const hidden = {
             path: '/root/secret/$group',
             id: '$group',
-            $storage: {
+            $class: {
                 path: '/root/secret/$group',
                 DATA: { '#security': { users: ['other'] } },
                 users: Promise.resolve([{ id: 'other' }]),

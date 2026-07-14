@@ -145,7 +145,7 @@ export class $file extends $folder{
             return this.constructor.historyUserLabel(this.path);
         return this.id;
     }
-    get storage_folder(){ // папка - хранилище
+    get storage_folder(){ // папка - классе
         return FS.$folder.build(`.${this.id}`, this.parent);
     }
     get name(){
@@ -302,7 +302,7 @@ export class $file extends $folder{
         }
         throw new Error(`Невозможно создание элемента типа "${p.type}" внутри файла`);
     }
-    static _logStorageKey(storage) {
+    static _logClassKey(storage) {
         if (!storage || storage === globalThis.WORK)
             return 'WORK';
         return storage.id || storage.path || storage.dir || '';
@@ -311,7 +311,7 @@ export class $file extends $folder{
     static async _writeLogTo(storage, log_param, written) {
         if (!storage?.save_file)
             return;
-        const key = $file._logStorageKey(storage);
+        const key = $file._logClassKey(storage);
         if (key && written.has(key))
             return;
         if (key)
@@ -371,7 +371,7 @@ export class $file extends $folder{
         }
         else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
             || params.filename === 'response.md' || params.filename === 'error.txt'
-            || params.filename === 'task.ai')
+            || params.filename === 'task.ai' || params.filename === 'pass.order')
             log.content = params.message ?? params.post;
         log.path = this.json_model.path;
         log.type = '$file';
@@ -391,17 +391,17 @@ export class $file extends $folder{
         }
         const log_param = Object.assign({}, params, {ignore_save_logs: true, filename: 'data.logs', post: JSON.stringify(log, null, 2), encoding: 'utf-8'})
 
-        let $storage = this.$owner || this.$parent;
+        let $class = this.$owner || this.$parent;
         const written = new Set();
 
-        await $file._writeLogTo($storage, log_param, written);
+        await $file._writeLogTo($class, log_param, written);
 
         const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
         if (authorCabinet && authorCabinet !== globalThis.WORK
-            && $file._logStorageKey(authorCabinet) !== $file._logStorageKey($storage))
+            && $file._logClassKey(authorCabinet) !== $file._logClassKey($class))
             await $file._writeLogTo(authorCabinet, log_param, written);
         if (log.receivers?.length) {
-            log.receivers = log.receivers.filter(r => r !== $storage.id);
+            log.receivers = log.receivers.filter(r => r !== $class.id);
             if (log.receivers?.length) {
                 let usersList = await WORK.$users;
                 params.receivers = await Promise.all(log.receivers.map(uid => usersList.get_item('//' + uid)));

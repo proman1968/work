@@ -8,7 +8,7 @@ export default {
                 overflow: hidden;
                 @apply --vertical;
                 @apply --content;
-
+                min-width: 200px;
                 .tools-list{
                     @apply --vertical;
 

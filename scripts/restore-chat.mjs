@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 const src = 'agent-tools/chat-svn-92788.js';
-const dst = '$server/$folder/$storage/handlers/pages/form/chat/$handler/data.js';
+const dst = '$server/$folder/$class/handlers/pages/form/chat/$handler/class.js';
 let code = fs.readFileSync(src, 'utf8');
 
 code = code.replace(

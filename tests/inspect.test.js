@@ -1,7 +1,7 @@
 import '../oda/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { $file, $folder, $storage } from '../sources/server/index.js';
+import { $file, $folder, $class } from '../sources/server/index.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 

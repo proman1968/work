@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import '../oda/reactor.js';
-import { $folder, $storage, $user, $file } from '../sources/server/index.js';
+import { $folder, $class, $user, $file } from '../sources/server/index.js';
 
 describe('fs class static steps', () => {
     for (const [name, Cls] of Object.entries({ $folder, $user, $file })) {

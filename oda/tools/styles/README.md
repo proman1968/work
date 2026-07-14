@@ -12,7 +12,7 @@
 }
 ```
 
-Не задавайте в компонентах собственные `#fff`, `rgba(0,0,0,.1)` и т.п., если задачу решает семантический класс (`content`, `light`, `accent-invert`, …).
+Не задавайте в компонентах собственные `#fff`, `rgba(0,0,0,.1)` и т.п., если задачу решает семантический хранилищ (`content`, `light`, `accent-invert`, …).
 
 ## Mixins и `@apply`
 
@@ -31,9 +31,9 @@
 
 `extractCSSRules` разворачивает `@apply` и регистрирует mixin в `cssRules`.
 
-## Атрибуты разметки (= классы темы и layout)
+## Атрибуты разметки (= хранилищы темы и layout)
 
-Каждый mixin автоматически становится **и классом, и булевым атрибутом**:
+Каждый mixin автоматически становится **и хранилищом, и булевым атрибутом**:
 
 ```css
 /* из --horizontal генерируется: */
@@ -121,7 +121,7 @@
 - `text-overflow: ellipsis` для длинных имён файлов;
 - **не** дублировать `display:flex`, `background`, `color`.
 
-Образец: [`$server/$folder/$file/$ai/handlers/preview/$handler/data.js`](../../../$server/$folder/$file/$ai/handlers/preview/$handler/data.js).
+Образец: [`$server/$folder/$file/$ai/handlers/preview/$handler/class.js`](../../../$server/$folder/$file/$ai/handlers/preview/$handler/class.js).
 
 ## Паттерн: карточка / bubble
 

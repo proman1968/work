@@ -185,7 +185,14 @@ export function createRequestHandler() {
         if (item === undefined){
             if(!path.includes('/@')){
                 if(path === '/index.html'){
-                    response.writeHead(302, { Location: encodeURI(`/~/handlers//${'explorer'}/index.html`) });
+                    response.writeHead(302, {
+
+                        Location: encodeURI(`/~/handlers//${'explorer'}/index.html`),
+
+                        // Location: encodeURI(user?.uid
+                        //     ? `/~/handlers//${'explorer'}/index.html`
+                        //     : `/paas/~/handlers//landing/`),
+                    });
                     response.end();
                     return;
                 }
@@ -338,7 +345,7 @@ export function createRequestHandler() {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';
         // }
         // else
-        if (item?.constructor === CORE.$storage && method === 'load')
+        if (item?.constructor === CORE.$class && method === 'load')
             header["Content-Type"] = 'application/javascript; charset=utf-8';
         else if (item?.constructor === CORE.$file) {
             if (method === 'download') {

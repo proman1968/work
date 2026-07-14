@@ -76,7 +76,7 @@ export class $storage extends $folder{
     }
     async execute(...params){
         let $item = Reactor.activate(this);
-        let module = await import($item.short + '/~/data.js');
+        let module = await import($item.short + '/~/class.js');
         if (module.default.execute) {
             module.default.execute.call($item, ...params);
             return;

@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 
-const path = '$server/$folder/$storage/handlers/pages/form/chat/$handler/data.js';
+const path = '$server/$folder/$class/handlers/pages/form/chat/$handler/class.js';
 const out = 'agent-tools/chat-svn-92788.js';
 const data = execSync(`svn cat "${path}" -r 92788`, { cwd: 'c:/projects/web/work', encoding: 'utf8' });
 fs.mkdirSync('agent-tools', { recursive: true });

@@ -1,41 +1,54 @@
 # Журнал архитектурных решений
 
-## Разметка методов ИИ через парсинг исходного файла, а не fn.toString() — 2026-07-14
+## Файлы метаданных элементов: data.js → class.js — 2026-07-14
 
-**Контекст.** Для построения схемы методов ИИ-агенту нужно извлекать описания из JSDoc-комментариев `@ai` у методов классов.
+**Контекст.** Все элементы платформы ($class, $handler, $method, $trigger и т.д.) имели файл метаданных с именем `data.js`. Имя зашито в серверном коде в ~10 местах: `f.id === 'data.js'`, `filename: 'data.js'`, `get_item('~/data.js')`.
 
-**Проблема.** Тесты показали: движок V8 (Node.js) **удаляет комментарии** при вызове `Function.prototype.toString()` для отдельных методов:
-```
-class Foo { /** @ai описание */ bar() {} }
-Foo.prototype.bar.toString() → "bar() {}"   ← JSDoc исчез
-```
+**Проблема.** Имя `data.js` неточно отражает суть — это не «данные», а метаданные класса (прототип элемента). Когда пользователь видит `data.js`, он не понимает, что это определение класса.
 
-**Причина.** V8 хранит байткод функции без исходных комментариев. `toString()` возвращает нормализованное представление.
+**Решение.** Переименовать `data.js` → `class.js` во всём проекте:
+1. 159 файлов переименовано
+2. 46 файлов кода обновлено — все строки `'data.js'` заменены на `'class.js'`
+3. Массовая замена исключала `oda/`, `torus/`, `node_modules/`, `.venv/`
 
-**Решение.** Парсить исходный файл класса напрямую:
-1. Каждый класс определяет `static sourceUrl = import.meta.url`
-2. `buildAiSchema(proto)` читает файл через `fs.readFileSync(fileURLToPath(sourceUrl))`
-3. Регулярное выражение находит JSDoc-блоки перед сигнатурами методов
-4. Результат кэшируется в `WeakMap` по конструктору
+**Урок (критический).** Массовая замена через `replaceAll('data.js', 'class.js')` была слишком грубой:
+- Задела клиентские файлы, где путь формировался динамически (например `import(path)` в `handler.js`)
+- Пользователь исправил оставшиеся ссылки вручную
 
-**Fallback.** Методы без `@ai` используют `static TOOL_DESCRIPTIONS` — словарь описаний. Наследуется через `...$folder.TOOL_DESCRIPTIONS`.
+**Правило.** При массовом переименовании системных имён:
+1. Никогда не использовать грубый `replaceAll` — только точечный поиск по строковым литералам
+2. Всегда исключать `oda/`, `torus/`, `node_modules/`, `.venv/`
+3. После замены — запускать тесты и проверять сервер/клиент
 
-**Правило.** Для извлечения метаданных из JSDoc-комментариев в рантайме — всегда парсить исходный файл, а не полагаться на `toString()`.
+## Серверный тип $storage переименован в $class — 2026-07-14
 
-## Модель передаётся через params.$ai, а не через this — 2026-07-13
+**Контекст.** Серверный тип `$storage` (наследник `$folder`) обеспечивал хранение данных с наследованием. Но имя `$storage` conflated (смешивало) хранилище данных и концепцию класса в смысле ООП.
 
-**Контекст.** В `streamChat.execute` обращение `this.baseUrl` возвращало `undefined`, вызывая `new URL(undefined)` → "Invalid URL". Попытка использовать `this.import()` вызывала "is not a function".
+**Решение.** Переименовать `$storage` → `$class` во всём проекте:
+- `sources/server/storage.js` → `class.js` (`class $class extends $folder`)
+- `sources/client/storage.js` → `class.js`
+- Папки метаданных: `$folder/$storage/` → `$folder/$class/`
+- `tests/storage/` → `tests/class/`
+- 58 файлов + 6 директорий переименовано
 
-**Причина.** Reactor-прокси при вызове `handler.execute` создаёт bound-функцию через `Reactor.get`:
-```js
-if (typeof value === 'function')
-    return value.bind(target);  // bind к handler ($method)
-```
-Последующий `.call(model, ...)` на bound-функции **игнорируется** — `this` остаётся handler ($method, наследник $folder), а не моделью ($ai).
+**Урок (критический).** Скрипт массовой замены `Class → Storage` сломал `oda/` — заменил `className`, `classList`, `getElementsByClassName` в браузерном коде. `oda/` была откачена пользователем вручную.
 
-**Решение.** Модель передаётся как параметр:
-```js
-// prompt.execute →
+**Правило.** `oda/`, `torus/`, `node_modules/`, `.venv/` — **запретная зона** для массовых замен. Эти библиотеки используют стандартные API (`className`, `classList`), которые нельзя трогать.
+
+## Очистка остатков переименования $storage → $class, data.js → class.js — 2026-07-14
+
+**Контекст.** После глобальных переименований `$storage` → `$class` и `data.js` → `class.js` в системе остались дубликаты: 6 папок `$storage`, 108 файлов `data.js`, 5 JS-файлов со ссылками на `.$storage`.
+
+**Решение.** Полная очистка:
+1. Удалено 6 папок `$storage` — полные дубликаты `$class` (в $server/$folder, models/$ai, models/GigaChat, services, skills)
+2. Удалено 108 файлов `data.js` — дубликаты рядом с `class.js`
+3. Переименован 1 файл `data.js` → `class.js` (users/CA4E097FF6C1D387/$user/)
+4. Исправлено 5 файлов с `.$storage` → `.$class` (paas, services, $order trigger)
+5. Проверены цепочки наследования $-папок — структура корректна
+
+**Правило.** Файлов `data.js` и папок `$storage` в системе больше нет (кроме `sources/` — запретная зона). Имя `class.js` — единственное для метаданных класса.
+
+## Разметка методов ИИ через парсинг исходного файла,
 execItemMethod(model, "streamChat", { messages, $ai: model });
 
 // streamChat.execute →
@@ -63,25 +76,25 @@ const ai = params.$ai || this;
 ```
 models/                                    — $ai (тип)
 models/$ai/                                — метапапка типа
-models/$ai/$folder/$storage/$ai/           — прототип
-  handlers/methods/streamChat/$method/data.js
-  handlers/methods/chat/$method/data.js
+models/$ai/$folder/$class/$ai/           — прототип
+  handlers/methods/streamChat/$method/class.js
+  handlers/methods/chat/$method/class.js
 models/GigaChat Pro/                       — $ai (конечная модель)
 ```
 
 **Многоэтажность.** Архитектурно поддерживается: provider → model → version. Пока всё в одном элементе. В будущем — подъём к родителю через `$parent` для настроек провайдера.
 
-## Механика вызова handlers: $method → fallback $storage — 2026-07-09
+## Механика вызова handlers: $method → fallback $class — 2026-07-09
 
 **Контекст.** `tryHandlerMethod` вызывает `import()` на папке handler'а. Но `$handler` не реализован как класс. Папки с типом `$method` — без зарегистрированного класса.
 
 **Решение.** Механика определения типа в `folder.js`:
 ```js
-file = (FS[meta] || FS.$storage)
+file = (FS[meta] || FS.$class)
 ```
-Незарегистрированные типы получают fallback на `$storage`. Значит `$method`-папки имеют `import()`, `load()` и т.д.
+Незарегистрированные типы получают fallback на `$class`. Значит `$method`-папки имеют `import()`, `load()` и т.д.
 
-**data.js с execute** должен лежать в `<method>/$method/data.js` — это SELF (последний элемент) в цепочке `collect_tilde`.
+**class.js с execute** должен лежать в `<method>/$method/class.js` — это SELF (последний элемент) в цепочке `collect_tilde`.
 
 ## Кредо «Суперсистемная система систем» — 2026-07-09
 

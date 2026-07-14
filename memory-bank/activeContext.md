@@ -30,11 +30,11 @@
 
 ### Структура файлов ИИ
 - `models/$ai/` — корневой тип
-- `models/GigaChat Pro/$ai/data.js` — конфигурация модели
-- `models/$ai/$folder/$storage/$ai/methods/streamChat/$method/data.js` — стриминг
-- `$server/$folder/$file/$ai/methods/prompt/$method/data.js` — harness-цикл
-- `$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js` — SYSTEM_PROMPT
-- `$server/$folder/$file/$ai/handlers/preview/$handler/data.js` — UI микрочата
+- `models/GigaChat Pro/$ai/class.js` — конфигурация модели
+- `models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js` — стриминг
+- `$server/$folder/$file/$ai/methods/prompt/$method/class.js` — harness-цикл
+- `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js` — SYSTEM_PROMPT
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — UI микрочата
 
 ### Следующие шаги
 - Шаг 3: ✅ Универсальная разметка методов через JSDoc `@ai` + парсинг исходников (14.07.2026)
@@ -58,28 +58,56 @@
 - **`answerQuestions(msgTime)`** — собирает ответы и отправляет как промпт
 
 ### Bugfix: buildAiSchema — обход цепочки прототипов (14.07.2026)
-- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$storage`/`$file`
+- **Баг:** `?get_schema` не показывал `@ai` метаданные для `$class`/`$file`
 - **Причина:** `Object.getOwnPropertyNames(proto)` возвращает методы только собственного прототипа, не унаследованные от `$folder`
 - **Решение:** `buildAiSchema` обходит всю цепочку через `Object.getPrototypeOf()` до `Object.prototype`
 - Для каждого слоя парсит свой `constructor.sourceUrl` и `TOOL_DESCRIPTIONS`
 - Методы нижних слоёв не дублируются (контролируется через `seenNames`)
 
 ### readme.md в контексте ИИ + автообновление (14.07.2026)
-- **Загрузка readme.md** при запуске чата — `loadReadme(storage)` в `prompt/$method/data.js`
-- readme.md из метапапки хранилища добавляется в system prompt
+- **Загрузка readme.md** при запуске чата — `loadReadme(storage)` в `prompt/$method/class.js`
+- readme.md из метапапки класса добавляется в system prompt
 - **SYSTEM_PROMPT обновлён** — ИИ обязан поддерживать readme.md при значимых изменениях
 - readme.md создаётся/обновляется через `write_file("readme.md", содержимое)`
 
 ### Умения строить систему (14.07.2026)
 - SYSTEM_PROMPT расширен секцией «Создание элементов системы»
-- ИИ умеет создавать: хранилища ($storage), методы ($method), триггеры ($trigger), обработчики ($handler), интерфейсы (pages/forms)
-- Инструкции описывают структуру папок и примеры кода data.js
+- ИИ умеет создавать: класса ($class), методы ($method), триггеры ($trigger), обработчики ($handler), интерфейсы (pages/forms)
+- Инструкции описывают структуру папок и примеры кода class.js
+
+### Глобальное переименование: $storage → $class, data.js → class.js (14.07.2026)
+
+**Контекст:** два последовательных архитектурных переименования.
+
+**Этап 1: $storage → $class (выполнено пользователем)**
+- Серверный тип `$storage` переименован в `$class` во всём проекте
+- `sources/server/storage.js` → `sources/server/class.js` (`class $class extends $folder`)
+- `index.js` импортирует из `./class.js`
+- Папки метаданных: `$folder/$storage/` → `$folder/$class/` (везде)
+- **УРОК:** скрипт массовой замены `Class → Storage` сломал `oda/` (className, classList и т.д.) — `oda/` была откачена пользователем вручную. Больше **НЕ ТРОГАТЬ** `oda/`, `torus/`, `node_modules/`, `.venv/`
+
+**Этап 2: data.js → class.js (14.07.2026)**
+- Имя `'data.js'` зашито в серверном коде ~10 местах: `f.id === 'data.js'`, `filename: 'data.js'`, `get_item('~/data.js')`
+- 159 файлов `data.js` переименовано в `class.js`
+- 46 файлов кода обновлено (ссылки `'data.js'` → `'class.js'`)
+- Массовая замена выполнена скриптом, исключая `oda/`, `torus/`, `node_modules/`, `.venv/`
+- **УРОК:** массовая замена `'data.js'` → `'class.js'` через `replaceAll('data.js', 'class.js')` была слишком грубой — задела `sources/client/storage.js` и другие клиентские файлы, где путь формировался динамически. Часть ссылок пользователь исправил руками.
+- Вспомогательные скрипты удалены после использования
+
+**Архитектурное решение:** `data.js` — это метаданные класса (не «данные»), поэтому `class.js` точнее отражает суть. Имя зашито в коде платформы и должно меняться синхронно: код + файлы.
 
 ### JSDoc @ai-разметка методов (14.07.2026)
 - **`sources/modules/ai-schema.js`** — `buildAiSchema(proto)` парсит исходный файл класса через `constructor.sourceUrl`
-- Классы `$folder`, `$storage`, `$file` содержат `static sourceUrl = import.meta.url`
+- Классы `$folder`, `$class`, `$file` содержат `static sourceUrl = import.meta.url`
 - Ключевые методы помечены JSDoc-тегами `@ai`, `@ai.params`, `@ai.returns`
 - `TOOL_DESCRIPTIONS` — fallback для методов без `@ai` (наследуется через `...$folder.TOOL_DESCRIPTIONS`)
 - `get_schema()` в `$folder` использует `buildAiSchema(this.constructor.prototype)`
 - **Критическая находка**: `fn.toString()` НЕ сохраняет JSDoc-комментарии в V8 — поэтому парсим исходный файл напрямую
 - Результат кэшируется в `WeakMap` по конструктору
+
+### Очистка остатков переименования $storage → $class, data.js → class.js (14.07.2026)
+- **Удалено 6 папок `$storage`** — полные дубликаты `$class` (в $server, models, services, skills)
+- **Удалено 108 файлов `data.js`** — дубликаты рядом с `class.js`
+- **Переименован 1 файл** `data.js` → `class.js` (users/CA4E097FF6C1D387/$user/)
+- **Исправлено 5 файлов** с `.$storage` → `.$class` (paas, services, $order trigger)
+- **Файлов `data.js` и папок `$storage` в системе больше нет** (кроме sources/ — запрещено трогать)

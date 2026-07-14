@@ -5,7 +5,7 @@ import https from 'https';
 const DATASET_DIR = './dataset';
 const TARGET_FILE = path.join(DATASET_DIR, 'text_corpus.txt');
 
-// Стабильный альтернативный источник (Русская классика, ~1.5 МБ чистого текста для старта)
+// Стабильный альтернативный источник (Русская хранилищика, ~1.5 МБ чистого текста для старта)
 const DATASET_URL = 'https://lib.ru';
 
 async function downloadCorpus() {

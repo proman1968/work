@@ -235,6 +235,42 @@ async function downloadSileroModel() {
     });
 }
 
+// ===== Qwen3-TTS (локальный сервис) =====
+
+let qwen3Session = null;
+const QWEN3_URL = 'http://localhost:8002/tts';
+
+/**
+ * Локальный TTS через Qwen3-TTS-12Hz-0.6B-Base.
+ * @param {string} text - Текст
+ * @param {object} options - { voice, speed }
+ * @returns {Promise<Buffer>} - WAV buffer
+ */
+export async function qwen3TTS(text, options = {}) {
+    const body = JSON.stringify({
+        text,
+        voice: options.voice || 'default',
+        speed: options.speed || 1.0,
+    });
+
+    let res;
+    try {
+        res = await fetch(QWEN3_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        });
+    } catch (e) {
+        throw new Error('Qwen3 TTS сервер не запущен на localhost:8002');
+    }
+
+    if (!res.ok)
+        throw new Error('Qwen3 TTS error ' + res.status + ': ' + (await res.text()).slice(0, 200));
+
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+}
+
 // ===== Универсальный интерфейс =====
 
 /**
@@ -247,6 +283,8 @@ async function downloadSileroModel() {
 export async function synthesize(text, ai, options = {}) {
     const engine = options.engine || 'gigachat';
     switch (engine) {
+        case 'qwen3':
+            return qwen3TTS(text, options);
         case 'silero':
             return sileroTTS(text, options);
         case 'gigachat':

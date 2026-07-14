@@ -5,13 +5,12 @@ export default {
             :host {
                 @apply --vertical;
                 gap: 8px;
-                padding: 8px;
                 overflow: hidden;
             }
             #tools{
                 font-size: small;
                 align-items: center;
-                gap: 8px;
+                gap: 4px;
             }
             .thread {
                 @apply --vertical;
@@ -24,14 +23,12 @@ export default {
             }
             .chat-group {
                 @apply --vertical;
-                gap: 4px;
             }
             .msg-user {
-                @apply --header;
+                @apply --info-invert;
                 @apply --raised;
                 padding: 4px 8px;
                 position: sticky;
-                border-radius: 4px;
                 top: 0;
                 z-index: 1;
                 @apply --bold;
@@ -42,7 +39,6 @@ export default {
             .msg-reasoning {
                 font-size: xx-small;
                 @apply --content;
-                border-radius: 4px;
                 margin-left: 8px;
                 overflow: hidden;
             }
@@ -61,7 +57,6 @@ export default {
                 padding: 4px 8px;
                 font-size: xx-small;
                 @apply --raised;
-                border-radius: 4px;
                 border-left: 3px solid var(--success-color);
                 margin-top: 2px;
             }
@@ -73,9 +68,6 @@ export default {
             .msg-content {
                 white-space: pre-wrap;
                 word-break: break-word;
-            }
-            .prompt-box{
-                border-radius: 16px;
             }
             .prompt {
                 border: none;
@@ -211,13 +203,7 @@ export default {
             </div>
         </div>
 
-        <div header :rainbow="pending" no-flex vertical style="padding: 4px; border-radius: 16px;" raised>
-            <div id="tools" horizontal>
-                <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
-                <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
-                <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
-                <oda-button success icon="fontawesome:s-gears" style="border-radius: 16px; padding: 2px 4px; margin: 2px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="run"></oda-button>
-            </div>
+        <div header :rainbow="pending" no-flex vertical style="padding: 2px;" raised>
             <div class="attach-preview" ~if="files.length" horizontal>
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -225,15 +211,22 @@ export default {
                     <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
                 </div>
             </div>
-            <div class="prompt-box" horizontal content border raised>
-                <oda-button icon="icons:add" :icon-size="iconSize * .7" @tap="getFile" style="border-radius: 50%;"></oda-button>
-                <oda-button icon="icons:link" :icon-size="iconSize * .7" @tap="selectInternalFile" style="border-radius: 50%;"></oda-button>
+            <div horizontal content border raised style="border-radius: 4px;">
+
                 <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
                     @keydown="_onKeydown"></textarea>
                 <div flex ~if="recording" style="text-align: center; align-items: center; color: var(--error-color);">⏺ {{timer}}</div>
                 <oda-button round :icon="sendIcon" :icon-size
                     :rainbow="recording" :disabled="sending" @tap="send"></oda-button>
             </div>
+            <div id="tools" horizontal>
+                <oda-button icon="icons:add" :icon-size @tap="getFile" style="border-radius: 50%;"></oda-button>
+                <oda-button icon="icons:link" :icon-size @tap="selectInternalFile" style="border-radius: 50%;"></oda-button>            
+                <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
+                <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
+                <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
+                <oda-button success icon="fontawesome:s-gears" style="border-radius: 4px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="Act"></oda-button>
+            </div>            
         </div>
     `,
     colorMode: 'content',
@@ -249,7 +242,7 @@ export default {
     selectedModel: '',
     act: false,
     questionAnswers: {},
-    ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'silero'
+    ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'qwen3'
     _lastSpoken: '',
     _audioEl: null,
     $item: {
@@ -297,7 +290,7 @@ export default {
     get ttsIcon() {
         switch (this.ttsMode) {
             case 'gigachat': return 'carbon:ai';
-            case 'silero': return 'carbon:chip';
+            case 'qwen3': return 'carbon:machine-learning-model';
             case 'browser': return 'av:volume-up';
             default: return 'av:volume-off';
         }
@@ -305,13 +298,13 @@ export default {
     get ttsLabel() {
         switch (this.ttsMode) {
             case 'gigachat': return 'GigaChat';
-            case 'silero': return 'Silero';
+            case 'qwen3': return 'Qwen3';
             case 'browser': return 'Браузер';
             default: return 'TTS выкл';
         }
     },
     cycleTts() {
-        const modes = ['off', 'browser', 'gigachat', 'silero'];
+        const modes = ['off', 'browser', 'gigachat', 'qwen3'];
         const idx = modes.indexOf(this.ttsMode);
         this.ttsMode = modes[(idx + 1) % modes.length];
         // Останавливаем всё при выключении
@@ -327,7 +320,7 @@ export default {
         return this.thread?.scrollTop<10 ? 'box:i-down-arrow-alt' : 'box:i-down-arrow-alt:180';
     },
     get rows() {
-        return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
+        return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
     },
     get planSteps() {
         return this.taskBody?.plan || [];
@@ -370,7 +363,7 @@ export default {
         }
         if (!answerLines.length) return;
         try {
-            const storage = this.$item?.$storage || this.$item?.$parent;
+            const storage = this.$item?.$class || this.$item?.$parent;
             if (storage?.fetch) {
                 const formData = new FormData();
                 const messageFile = new File(
@@ -536,8 +529,8 @@ export default {
     async selectInternalFile(e) {
         e?.stopPropagation?.();
         e?.preventDefault?.();
-        // Используем storage_folder текущего хранилища для показа файлов
-        const storage = this.$item?.$storage || this.$item?.$parent;
+        // Используем storage_folder текущего класса для показа файлов
+        const storage = this.$item?.$class || this.$item?.$parent;
         const target = storage?.storage_folder || storage || await WORK.get_item('/');
         const tree = ODA.createElement('item-tree', {
             $item: target,
@@ -607,7 +600,7 @@ export default {
     _speak(text) {
         switch (this.ttsMode) {
             case 'gigachat':
-            case 'silero':
+            case 'qwen3':
                 this._speakServer(text);
                 break;
             case 'browser':
@@ -758,7 +751,7 @@ export default {
                 formData.append('message', messageFile, messageFile.name);
                 for (const f of externalFiles)
                     formData.append('file', f, f.name);
-                const storage = this.$item?.$storage || this.$item?.$parent;
+                const storage = this.$item?.$class || this.$item?.$parent;
                 if (storage?.fetch) {
                     const result = await storage.fetch('save_files', {}, formData);
                     // Добавляем пути загруженных файлов в промпт

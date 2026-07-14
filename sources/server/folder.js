@@ -178,7 +178,7 @@ export class $folder extends $item{
         return (this.inherit_source || this.DATA)?.id;
     }
     get isMetaFolder(){ // признак мета папки
-        return this.isType && this.parent instanceof FS.$storage;
+        return this.isType && this.parent instanceof FS.$class;
     }
     get count(){
         return 0;
@@ -215,7 +215,7 @@ export class $folder extends $item{
                     return this.parent;
             }
 
-            if(this instanceof FS.$storage && this.$parent && this.$parent.type !== this.type){
+            if(this instanceof FS.$class && this.$parent && this.$parent.type !== this.type){
                 //наследование типизированных элементов
                 let parent = this.$parent.$parent;
                 while(parent && !ancestor){
@@ -299,7 +299,7 @@ export class $folder extends $item{
 
     get $parent(){ // поиск типизированного родителя
         let parent = this.parent;
-        if(parent instanceof FS.$storage)
+        if(parent instanceof FS.$class)
             return parent;
         return parent?.$parent;
     }
@@ -314,7 +314,7 @@ export class $folder extends $item{
             return 'skipped isInherit: ' + this.path;
         if(this.id === '.RAG')
             return 'skipped .RAG: ' + this.path;
-        let rag_target_folder = (this instanceof FS.$storage)?this:this.storage_folder;
+        let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
         let rag_folder = await rag_target_folder._get_item('.RAG');
         let clear = 'checked: ' + this.path;
         if(rag_folder) {
@@ -344,7 +344,7 @@ export class $folder extends $item{
             if(this.isType && !this.isMetaFolder/*  && Reactor.equal(this.$owner, WORK) */)
                 return {};
 
-            let rag_target_folder = (this instanceof FS.$storage)?this:this.storage_folder;
+            let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
 
 
             let rag_folder = await rag_target_folder._get_item('.RAG', FS.$folder);
@@ -458,7 +458,7 @@ export class $folder extends $item{
         })
     }
     /**
-     * @ai Семантический поиск по эмбеддингам (RAG) внутри хранилища
+     * @ai Семантический поиск по эмбеддингам (RAG) внутри класса
      * @ai.params {"prompt": "текст запроса", "sensitivity": "чувствительность 0-1"}
      * @ai.returns Отсортированный массив релевантных результатов
      */
@@ -636,9 +636,9 @@ export class $folder extends $item{
     // Статический словарь описаний серверных методов для ИИ-агента
     static TOOL_DESCRIPTIONS = {
         info: 'Получить информацию о структуре элемента. Параметры: deep (число, глубина вложенности), mask (строка, фильтр по имени с * и ?). Возвращает объект с данными элемента.',
-        load: 'Загрузить и объединить data.js элемента. Возвращает объект с данными data.js.',
-        import: 'Импортировать data.js как модуль. Возвращает экспорт data.js.',
-        save: 'Сохранить data.js элемента. Параметры: post (объект или строка с содержимым).',
+        load: 'Загрузить и объединить class.js элемента. Возвращает объект с данными class.js.',
+        import: 'Импортировать class.js как модуль. Возвращает экспорт class.js.',
+        save: 'Сохранить class.js элемента. Параметры: post (объект или строка с содержимым).',
         save_file: 'Сохранить файл. Параметры: filename (имя файла), post (содержимое). Возвращает объект файла.',
         save_files: 'Сохранить несколько файлов. Параметры: post {files, urls, message}. Возвращает массив результатов.',
         find_text: 'Поиск текста по файлам. Параметры: text (текст для поиска), ext (массив расширений), limit (макс результатов). Возвращает массив {path, line, text}.',
@@ -649,10 +649,10 @@ export class $folder extends $item{
         files: 'Получить список файлов элемента (без скрытых). Возвращает массив файлов.',
         folders: 'Получить список дочерних папок. Возвращает массив папок.',
         items: 'Получить список элементов (без метапапок). Возвращает массив элементов.',
-        create: 'Создать файл/папку/хранилище. Параметры: type ($file, $folder, $storage), id (имя), post (содержимое). Возвращает созданный элемент.',
+        create: 'Создать файл/папку/классе. Параметры: type ($file, $folder, $class), id (имя), post (содержимое). Возвращает созданный элемент.',
         delete: 'Удалить элемент. Требует ADMIN доступ. Возвращает строку с результатом.',
         search: 'RAG-поиск по эмбеддингам. Параметры: prompt (текст запроса), sensitivity (0-1). Возвращает отсортированный массив результатов.',
-        logs: 'Получить логи хранилища. Параметры: mode, day, from, to, ext. Возвращает массив логов.',
+        logs: 'Получить логи класса. Параметры: mode, day, from, to, ext. Возвращает массив логов.',
         read_log_bodies: 'Получить тела записей логов. Параметры: day, from, to, ext.',
         log_index: 'Получить индекс логов (без content). Параметры: day, from, to.',
         manifest: 'Получить манифест PWA. Параметры: handler_path. Возвращает объект манифеста.',
@@ -729,7 +729,7 @@ export class $folder extends $item{
             }
             if(!inherit && this.meta_folder){
                 // Локальная цепочка наследования внутри метапапки:
-                // meta_folder/$folder/$storage/$type/...
+                // meta_folder/$folder/$class/$type/...
                 // ВАЖНО: локальная цепочка ДОЛЖНА быть ПЕРЕД meta_folder (SELF),
                 // чтобы meta_folder всегда был последним в массиве folders
                 let localFolder = this.meta_folder.$folder;
@@ -784,10 +784,10 @@ export class $folder extends $item{
         return Object.assign({}, data, {[p.items]:items});
     }
 
-    get $storage(){
+    get $class(){
         let p = this;
         while (p) {
-            if (p instanceof FS.$storage)
+            if (p instanceof FS.$class)
                 return p;
             p = p.parent;
         }
@@ -809,12 +809,12 @@ export class $folder extends $item{
     }
     get $context(){
         let parent = this.parent;
-        while(parent instanceof FS.$storage){
+        while(parent instanceof FS.$class){
            parent = parent.parent;
         }
         return parent?.$parent || null;
     }
-    /** Контекстные триггеры (~triggers/*), обогащённые data.js и привязанные к владельцу */
+    /** Контекстные триггеры (~triggers/*), обогащённые class.js и привязанные к владельцу */
     get _triggers(){
         return new AsyncPromise(async ()=>{
             const result = {};
@@ -829,7 +829,7 @@ export class $folder extends $item{
             return result;
         });
     }
-    /** Контекстные методы (~methods/*), обогащённые data.js и привязанные к владельцу */
+    /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
     get _methods(){
         return new AsyncPromise(async ()=>{
             const result = {};
@@ -866,8 +866,8 @@ export class $folder extends $item{
                             if(meta){
                                 data = fs.statSync(path + '/' + meta);
                                 if(!data.isFile())
-                                    file = (FS[meta] || FS.$storage)
-                                    // file = $storage;
+                                    file = (FS[meta] || FS.$class)
+                                    // file = $class;
                             }
                         }
                     }
@@ -1287,9 +1287,9 @@ export class $folder extends $item{
                     socket.ws.send(JSON.stringify({path: key, initiator: initiator?.id}));
             }
         }
-        if(!(this instanceof FS.$storage)){
+        if(!(this instanceof FS.$class)){
 
-            if(this.id === 'data.js'){
+            if(this.id === 'class.js'){
                 let keys = Object.keys($server.merges).filter(key=>key.split(';').includes(this.real_dir));
                 for(let key of keys)
                    $server.merges[key] = undefined;
@@ -1320,8 +1320,8 @@ export class $folder extends $item{
         return this;
     }
     /**
-     * @ai Создать новый файл, папку или типизированное хранилище
-     * @ai.params {"type": "$file | $folder | $storage", "id": "имя элемента", "post": "содержимое"}
+     * @ai Создать новый файл, папку или типизированное классе
+     * @ai.params {"type": "$file | $folder | $class", "id": "имя элемента", "post": "содержимое"}
      * @ai.returns Созданный элемент
      */
     async create(p = {}) {
@@ -1353,7 +1353,7 @@ export class $folder extends $item{
             await folder.save();
             return folder;
         }
-        else { // $storage
+        else { // $class
             let folder = await this._get_item(p.id, FS.$folder);
             await folder.save();
             folder = await folder._get_item(p.type, FS.$folder);
@@ -1363,7 +1363,7 @@ export class $folder extends $item{
     label: '${p.id}'
 }`;
             }
-            p.filename = 'data.js';
+            p.filename = 'class.js';
             p.ignore_save_logs = true;
             const file = await folder.save_file(p);
             // folder.reset();
@@ -1390,7 +1390,7 @@ export class $folder extends $item{
                     return 1;
                 return a.id < b.id ? -1 : 1;
             }
-            if (a instanceof FS.$storage && !(b instanceof FS.$storage))
+            if (a instanceof FS.$class && !(b instanceof FS.$class))
                 return -1;
             return 1;
         });

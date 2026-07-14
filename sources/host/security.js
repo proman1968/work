@@ -105,7 +105,7 @@ export function isOwnUserCabinetPath(path = '', uid) {
     return parseUserCabinetUid(path) === uid;
 }
 
-export async function isStorageAdmin(storage, params = {}) {
+export async function isClassAdmin(storage, params = {}) {
     const uid = resolveUid(params);
     if (!uid || !storage?.admins)
         return false;
@@ -113,7 +113,7 @@ export async function isStorageAdmin(storage, params = {}) {
     return admins?.some(a => a?.id === uid) ?? false;
 }
 
-export async function isAssignedOnStorage(storage, params = {}) {
+export async function isAssignedOnClass(storage, params = {}) {
     if (!storage || !hasUserBoundary(storage))
         return false;
     const uid = resolveUid(params);
@@ -145,11 +145,11 @@ export function isWorkRootChildPath(path = '') {
     return parts.length === 1 && parts[0] !== 'users';
 }
 
-/** Любое хранилище $storage (в т.ч. $base, $node, $group …), не $file/$folder. */
-export function isStorageItem(item) {
+/** Любое классе $class (в т.ч. $base, $node, $group …), не $file/$folder. */
+export function isClassItem(item) {
     if (!item || typeof item !== 'object')
         return false;
-    if (item instanceof FS.$storage)
+    if (item instanceof FS.$class)
         return true;
     const type = item.type ?? '';
     if (!type || type === '$file' || type === '$folder' || type === '$handler')
@@ -157,15 +157,15 @@ export function isStorageItem(item) {
     return type[0] === '$';
 }
 
-/** Системный элемент в корне WORK: файлы и обычные папки, не $storage. */
+/** Системный элемент в корне WORK: файлы и обычные папки, не $class. */
 export function isWorkRootSystemChild(item) {
     const path = item?.path ?? '';
     if (!isWorkRootChildPath(path))
         return false;
-    return !isStorageItem(item);
+    return !isClassItem(item);
 }
 
-/** Элемент в метапапке хранилища (контент). */
+/** Элемент в метапапке класса (контент). */
 export function isInsideMetaFolder(item) {
     let p = item;
     while (p) {
@@ -176,21 +176,21 @@ export function isInsideMetaFolder(item) {
     const path = item?.path ?? '';
     if (isPathInsideUserCabinetMeta(path))
         return true;
-    return isPathInsideWorkStorageMeta(path);
+    return isPathInsideWorkClassMeta(path);
 }
 
 function isPathInsideUserCabinetMeta(path) {
     return /^\/users\/+(?:\/[^/]+|[^/]+)\/\$user\/.+/.test(path);
 }
 
-function isPathInsideWorkStorageMeta(path) {
+function isPathInsideWorkClassMeta(path) {
     if (is$serverPath(path) || path.startsWith('/users'))
         return false;
     return /\/\$structure\/.+/.test(path);
 }
 
-/** Путь зашёл в рабочее хранилище: /root/…/$group, не просто контейнер /root. */
-export function pathEntersDataStorage(path = '') {
+/** Путь зашёл в рабочее классе: /root/…/$group, не просто контейнер /root. */
+export function pathEntersDataClass(path = '') {
     if (is$serverPath(path) || path.startsWith('/users'))
         return false;
     const parts = path.split('/').filter(Boolean);
@@ -200,20 +200,20 @@ export function pathEntersDataStorage(path = '') {
     return dollarIdx >= 2;
 }
 
-/** Рабочее хранилище (не $server). */
-export function isDataStorage(storage) {
-    return resolveDataStorageRef(storage) != null;
+/** Рабочее классе (не $server). */
+export function isDataClass(storage) {
+    return resolveDataClassRef(storage) != null;
 }
 
-function resolveDataStorageRef(ref) {
+function resolveDataClassRef(ref) {
     if (!ref)
         return null;
     const path = ref.path ?? '';
     if (is$serverPath(path) || ref.id === '$server')
         return null;
-    if (ref instanceof FS.$storage)
+    if (ref instanceof FS.$class)
         return ref;
-    if (!pathEntersDataStorage(path))
+    if (!pathEntersDataClass(path))
         return null;
     const last = path.split('/').filter(Boolean).pop();
     if (last?.[0] === '$')
@@ -221,16 +221,16 @@ function resolveDataStorageRef(ref) {
     return null;
 }
 
-/** Ближайший $storage вверх по дереву. */
-export function nearestStorage(item) {
-    if (item?.$storage) {
-        const s = resolveDataStorageRef(item.$storage);
+/** Ближайший $class вверх по дереву. */
+export function nearestClass(item) {
+    if (item?.$class) {
+        const s = resolveDataClassRef(item.$class);
         if (s)
             return s;
     }
     let p = item;
     while (p) {
-        const s = resolveDataStorageRef(p);
+        const s = resolveDataClassRef(p);
         if (s)
             return s;
         p = p.parent;
@@ -238,22 +238,22 @@ export function nearestStorage(item) {
     return null;
 }
 
-/** Хранилище, чья метапапка содержит item. */
-export function contentStorage(item) {
+/** классе, чья метапапка содержит item. */
+export function contentClass(item) {
     let p = item;
     while (p) {
-        if (p.isMetaFolder && p.parent instanceof FS.$storage)
+        if (p.isMetaFolder && p.parent instanceof FS.$class)
             return p.parent;
         p = p.parent;
     }
     if (isPathInsideUserCabinetMeta(item?.path ?? ''))
-        return nearestStorage(item);
+        return nearestClass(item);
     return null;
 }
 
 /**
  * Система: $server, файлы/папки корня без users, пути внутри системных
- * корневых контейнеров до входа в рабочее хранилище.
+ * корневых контейнеров до входа в рабочее классе.
  */
 export function isSystemItem(item) {
     if (!item)
@@ -272,29 +272,29 @@ export function isSystemItem(item) {
     if (isWorkRootSystemChild(item))
         return true;
 
-    if (pathEntersDataStorage(path))
+    if (pathEntersDataClass(path))
         return false;
 
-    if (isWorkRootChildPath(path) && isStorageItem(item))
+    if (isWorkRootChildPath(path) && isClassItem(item))
         return false;
 
     const parts = path.split('/').filter(Boolean);
     if (!parts.length || !SYSTEM_ROOT_NAMES.has(parts[0]))
         return false;
 
-    const storage = nearestStorage(item);
-    if (!storage || !isDataStorage(storage))
+    const storage = nearestClass(item);
+    if (!storage || !isDataClass(storage))
         return true;
 
     return false;
 }
 
 function accessCache(params) {
-    return params._storageAccess ??= new Map();
+    return params._ClassAccess ??= new Map();
 }
 
-/** Доступ к $storage: назначение, pass-through или admin. */
-export async function hasStorageAccess(storage, params = {}) {
+/** Доступ к $class: назначение, pass-through или admin. */
+export async function hasClassAccess(storage, params = {}) {
     if (!storage)
         return false;
     const cache = accessCache(params);
@@ -303,15 +303,15 @@ export async function hasStorageAccess(storage, params = {}) {
         return cache.get(key);
 
     let allowed = false;
-    if (await isStorageAdmin(storage, params))
+    if (await isClassAdmin(storage, params))
         allowed = true;
-    else if (await isAssignedOnStorage(storage, params))
+    else if (await isAssignedOnClass(storage, params))
         allowed = true;
     else if (!hasUserBoundary(storage)) {
         let p = storage.parent;
         while (p) {
-            if (p instanceof FS.$storage && p !== storage) {
-                allowed = await hasStorageAccess(p, params);
+            if (p instanceof FS.$class && p !== storage) {
+                allowed = await hasClassAccess(p, params);
                 break;
             }
             p = p.parent;
@@ -340,12 +340,12 @@ async function canSeeUsersBranch(item, params) {
     return true;
 }
 
-async function canSeeDataStorageItem(item, params) {
-    const storage = contentStorage(item) || nearestStorage(item);
+async function canSeeDataClassItem(item, params) {
+    const storage = contentClass(item) || nearestClass(item);
     if (!storage)
         return false;
 
-    const access = await hasStorageAccess(storage, params);
+    const access = await hasClassAccess(storage, params);
     if (access)
         return true;
 
@@ -357,7 +357,7 @@ async function canSeeDataStorageItem(item, params) {
 
     let p = storage.parent;
     while (p) {
-        if (p instanceof FS.$storage && await hasStorageAccess(p, params))
+        if (p instanceof FS.$class && await hasClassAccess(p, params))
             return true;
         p = p.parent;
     }
@@ -380,16 +380,16 @@ async function canWriteUsersBranch(item, params) {
     return false;
 }
 
-async function canWriteDataStorageItem(item, params) {
-    const storage = contentStorage(item) || nearestStorage(item);
+async function canWriteDataClassItem(item, params) {
+    const storage = contentClass(item) || nearestClass(item);
     if (!storage)
         return false;
 
-    if (await isStorageAdmin(storage, params))
+    if (await isClassAdmin(storage, params))
         return true;
 
     if (isInsideMetaFolder(item))
-        return hasStorageAccess(storage, params);
+        return hasClassAccess(storage, params);
 
     return false;
 }
@@ -405,7 +405,7 @@ export async function canSee(item, params = {}) {
 
     const path = item.path ?? '';
 
-    if (globalThis.WORK && await isStorageAdmin(globalThis.WORK, params))
+    if (globalThis.WORK && await isClassAdmin(globalThis.WORK, params))
         return true;
 
     if (isSystemItem(item))
@@ -418,19 +418,19 @@ export async function canSee(item, params = {}) {
     if (path === '/users' || path.startsWith('/users/'))
         return canSeeUsersBranch(item, params);
 
-    if (pathEntersDataStorage(path) || (item instanceof FS.$storage && isDataStorage(item)))
-        return canSeeDataStorageItem(item, params);
+    if (pathEntersDataClass(path) || (item instanceof FS.$class && isDataClass(item)))
+        return canSeeDataClassItem(item, params);
 
-    const storage = nearestStorage(item);
-    if (storage && isDataStorage(storage))
-        return canSeeDataStorageItem(item, params);
+    const storage = nearestClass(item);
+    if (storage && isDataClass(storage))
+        return canSeeDataClassItem(item, params);
 
     return false;
 }
 
 /**
- * Право записи: системные зоны — только WORK admin; метапапка $storage — hasStorageAccess;
- * системная зона $storage — admin точки; свой users//uid/$user — владелец.
+ * Право записи: системные зоны — только WORK admin; метапапка $class — hasClassAccess;
+ * системная зона $class — admin точки; свой users//uid/$user — владелец.
  */
 export async function canWrite(item, params = {}) {
     if (!isSecurityEnabled())
@@ -442,7 +442,7 @@ export async function canWrite(item, params = {}) {
     if (!uid)
         return false;
 
-    if (globalThis.WORK && await isStorageAdmin(globalThis.WORK, params))
+    if (globalThis.WORK && await isClassAdmin(globalThis.WORK, params))
         return true;
 
     const path = item.path ?? '';
@@ -453,12 +453,12 @@ export async function canWrite(item, params = {}) {
     if (path === '/users' || path.startsWith('/users/'))
         return canWriteUsersBranch(item, params);
 
-    if (pathEntersDataStorage(path) || (item instanceof FS.$storage && isDataStorage(item)))
-        return canWriteDataStorageItem(item, params);
+    if (pathEntersDataClass(path) || (item instanceof FS.$class && isDataClass(item)))
+        return canWriteDataClassItem(item, params);
 
-    const storage = nearestStorage(item);
-    if (storage && isDataStorage(storage))
-        return canWriteDataStorageItem(item, params);
+    const storage = nearestClass(item);
+    if (storage && isDataClass(storage))
+        return canWriteDataClassItem(item, params);
 
     return false;
 }
@@ -548,7 +548,7 @@ export async function allowAccess(item, params = {}, level = ACCESS_LEVEL.READ) 
     if (!uid && level !== ACCESS_LEVEL.READ)
         throw new Error(ACCESS_DENIED);
 
-    if (globalThis.WORK && await isStorageAdmin(globalThis.WORK, params))
+    if (globalThis.WORK && await isClassAdmin(globalThis.WORK, params))
         return;
 
     switch (level) {
@@ -561,8 +561,8 @@ export async function allowAccess(item, params = {}, level = ACCESS_LEVEL.READ) 
                 throw new Error(ACCESS_DENIED);
             break;
         case ACCESS_LEVEL.ADMIN: {
-            const storage = item.$storage ?? (item instanceof FS.$storage ? item : null);
-            if (storage && await isStorageAdmin(storage, params))
+            const storage = item.$class ?? (item instanceof FS.$class ? item : null);
+            if (storage && await isClassAdmin(storage, params))
                 return;
             throw new Error(ACCESS_DENIED);
         }

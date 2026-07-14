@@ -6,7 +6,7 @@
 
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`
 - `folder.js` — клиентский `$folder`: `url`, `fetch`, `get_item`, `save_file`, `load`, `save`, `delete`, `create`
-- `storage.js` — клиентский `$storage`: import/save `data.js`, metadata, fields
+- `class.js` — клиентский `$class`: import/save `class.js`, metadata, fields
 - `file.js` — клиентский `$file`: загрузка/скачивание по HTTP
 - `user.js` — клиентский `$user`
 - `handler.js` — клиентская модель handler'а
@@ -14,4 +14,4 @@
 
 ## Принцип
 
-Один контракт с двух сторон: серверный `$storage.logs()` читает `.logs` с диска; клиентский — это HTTP-запрос. Одно имя, разное поведение.
+Один контракт с двух сторон: серверный `$class.logs()` читает `.logs` с диска; клиентский — это HTTP-запрос. Одно имя, разное поведение.

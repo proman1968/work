@@ -90,11 +90,11 @@ export default {
             return this.$item instanceof CORE.$user;
         }
     },
-    isStorage: {
+    isClass: {
         $attr: true,
         $def: false,
         get() {
-            return this.$item instanceof CORE.$storage;
+            return this.$item instanceof CORE.$class;
         }
     },
     $listeners: {

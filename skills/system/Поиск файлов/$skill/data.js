@@ -1,5 +1,5 @@
 // Surface: keywords для роутинга
-// Deep: $skill/$storage/$skill/data.js — execute, METADATA
+// Deep: $skill/$class/$skill/data.js — execute, METADATA
 export default {
     keywords: `
         поиск файлов

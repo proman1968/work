@@ -33,14 +33,14 @@ describe('execItemMethod', () => {
     });
 
     it('blocks delete for non-admin user', async () => {
-        class TestStorage extends CORE.$storage {
+        class TestClass extends CORE.$class {
             get admins() {
                 return [{ id: 'admin1' }];
             }
         }
-        const storage = new TestStorage({ id: 'group' });
+        const storage = new TestClass({ id: 'group' });
         storage.path = '/root/test/$group';
-        Object.defineProperty(storage, '$storage', { get: () => storage });
+        Object.defineProperty(storage, '$class', { get: () => storage });
         await assert.rejects(
             () => execItemMethod(storage, 'delete', { user: { uid: 'user1' } }, { method: 'GET' }),
             /Доступ запрещён/
@@ -58,14 +58,14 @@ describe('execItemMethod', () => {
     });
 
     it('passes params.post to prototype methods when request.post is empty', async () => {
-        class TestStorage extends CORE.$storage {
+        class TestClass extends CORE.$class {
             async task_reply(params, post) {
                 return { post, paramsPost: params.post };
             }
         }
-        const storage = new TestStorage({ id: '$user' });
+        const storage = new TestClass({ id: '$user' });
         storage.path = '/users/TEST/$user';
-        Object.defineProperty(storage, '$storage', { get: () => storage });
+        Object.defineProperty(storage, '$class', { get: () => storage });
         const body = {
             files: [{ originalFilename: 'sample.txt' }],
             message: { originalFilename: 'message.txt' },

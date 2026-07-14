@@ -1,13 +1,13 @@
 /**
  * $handler — серверный класс для обработчиков.
  *
- * Наследник $storage. Имеет import(), load() и все методы хранилища.
- * Отличие: $handler — это исполняемый элемент (execute в data.js),
+ * Наследник $class. Имеет import(), load() и все методы класса.
+ * Отличие: $handler — это исполняемый элемент (execute в class.js),
  * вызываемый через tryHandlerMethod или напрямую.
  *
- * Логика конкретного обработчика — в data.js (через import()).
+ * Логика конкретного обработчика — в class.js (через import()).
  */
-import { $storage } from './storage.js';
+import { $class } from './class.js';
 
-export class $handler extends $storage {
+export class $handler extends $class {
 }

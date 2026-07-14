@@ -24,6 +24,6 @@ export { $item } from '../core.js';
 export { $field } from './field.js';
 export { $folder } from './folder.js';
 export { $file };
-export { $storage } from './storage.js';
+export { $class } from './class.js';
 export { $user } from './user.js';
 export { $handler } from './handler.js';

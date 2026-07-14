@@ -1,6 +1,6 @@
-import { $storage } from './storage.js';
+import { $class } from './class.js';
 
-export class $handler extends $storage{
+export class $handler extends $class{
     get size(){
         return 0;
     }
@@ -17,7 +17,7 @@ export class $handler extends $storage{
     async execute(...params){
         let $item = Reactor.activate(this);
         $item.$context = await $item.$context;
-        let module = await import($item.short + '/~/data.js');
+        let module = await import($item.short + '/~/class.js');
         if (module.default.execute) {
             module.default.execute.call($item, ...params);
             return;

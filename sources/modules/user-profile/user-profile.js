@@ -92,7 +92,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
         return '@:' + label;
     },
     get photoColor() {
-        return this.uid.then(id => {
+        return Promise.resolve(this.uid).then(id => {
             let hash = 0;
             for (let i = 0; i < id.length; i++) {
                 hash = id.charCodeAt(i) + ((hash << 5) - hash);

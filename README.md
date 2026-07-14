@@ -1,4 +1,4 @@
-﻿# WORK — Extensible Fractal File System
+# WORK — Extensible Fractal File System
 
 ## Назначение платформы WORK (ODANT)
 
@@ -6,27 +6,27 @@
 
 ### Идея в одном абзаце
 
-Проект — **фрактальная файловая система**. Каждая папка — это `$folder` или наследник (`$storage`, `$structure`, `$user` …). У каждого хранилища есть **метапапка** с именем на `$` (у корня — `$server`). В метапапке лежит **`data.js`**: описание типа, наследование, handlers. Движок в `sources/` интерпретирует это дерево; фреймворк **ODA** в `oda/` рисует интерфейс по handler-скриптам с диска. URL = путь к объекту, метод = query-параметр (`/root/direction/group?info`).
+Проект — **фрактальная файловая система**. Каждая папка — это `$folder` или наследник (`$class`, `$structure`, `$user` …). У каждого класса есть **метапапка** с именем на `$` (у корня — `$server`). В метапапке лежит **`class.js`**: описание типа, наследование, handlers. Движок в `sources/` интерпретирует это дерево; фреймворк **ODA** в `oda/` рисует интерфейс по handler-скриптам с диска. URL = путь к объекту, метод = query-параметр (`/root/direction/group?info`).
 
 ### Три части платформы
 
 | Часть | Назначение |
 |-------|------------|
-| **`sources/`** | Ядро: HTTP-сервер, навигация `get_item`, классы FS, merge `data.js`, журнал `.logs`, auth |
+| **`sources/`** | Ядро: HTTP-сервер, навигация `get_item`, классы FS, merge `class.js`, журнал `.logs`, auth |
 | **`oda/`** | Визуальный фреймворк (Web Components, Reactor) — отображение и формы |
 | **Диск (`$server/`, `root/`, `users/` …)** | Содержимое и **самоописание системы**: типы, формы, прикладные модули |
 
-Корень репозитория — **корневое хранилище** с метапапкой **`$server`**: каталог системных типов и шаблонов, из которых собирается всё остальное.
+Корень репозитория — **корневое классе** с метапапкой **`$server`**: каталог системных типов и шаблонов, из которых собирается всё остальное.
 
 ### Что платформа даёт
 
 1. **«Папка = объект»** — файлы, группы, пользователи, структуры: общие операции `info`, `save_file`, `create`, history, logs.
 2. **Расширяемость без пересборки ядра** — новый тип, `$task` или `$handler` в `$server/…`, ядро не меняется.
-3. **Наследование** — `~` и merge `data.js` слоями (`$storage` → `$structure` → группа).
-4. **UI из `$handler`** — `~/handlers/pages/…/$handler/data.js`, исполняется **на клиенте** (ODA, `execute()`).
-5. **Секреты модулей** — `#system/{module}.json` на **элементе**; универсальные `read_secret` / `save_secret` на `$storage` (только admin).
+3. **Наследование** — `~` и merge `class.js` слоями (`$class` → `$structure` → группа).
+4. **UI из `$handler`** — `~/handlers/pages/…/$handler/class.js`, исполняется **на клиенте** (ODA, `execute()`).
+5. **Секреты модулей** — `#system/{module}.json` на **элементе**; универсальные `read_secret` / `save_secret` на `$class` (только admin).
 6. **`$task` и `$trigger`** — `$task`: задачи по расписанию (временные маски), `execute()` как у `$handler`; `$trigger`: реакция на событие. Прикладная lib в `$server/…`.
-7. **Журнал и history** — `.logs`, методы `$storage`: `logs`, `log_index`, `read_log_bodies` (движок); чат, календарь — прикладное поверх.
+7. **Журнал и history** — `.logs`, методы `$class`: `logs`, `log_index`, `read_log_bodies` (движок); чат, календарь — прикладное поверх.
 8. **Интеграции** — OnlyOffice, WebRTC, AI (`services/`), почта — модули базы, не в `sources/`.
 
 ### Типы исполнения (важно)
@@ -37,7 +37,7 @@
 | **`$task`** | Сервер | Задачи **по расписанию** (временные маски), `execute()` в контексте типа |
 | **`$trigger`** | Сервер | Реакция на событие (сохранение файла, hook) |
 
-Не путать: **`$handler` — не серверный API**. Папки `handlers/methods/…/$handler/` с `execute` на Node — **legacy**. Секреты модулей — методы `$storage`: `read_secret` / `save_secret` (admin). Прикладная lib — `$server/$folder/lib/…`.
+Не путать: **`$handler` — не серверный API**. Папки `handlers/methods/…/$handler/` с `execute` на Node — **legacy**. Секреты модулей — методы `$class`: `read_secret` / `save_secret` (admin). Прикладная lib — `$server/$folder/lib/…`.
 
 ### Граница ответственности
 
@@ -48,18 +48,18 @@ oda/         →  КАК это выглядит (UI-фреймворк)
 root/users/  →  экземпляры данных
 ```
 
-Движок не знает про email, GigaChat или чат — только `$folder`, `$storage`, `get_item`, merge и **универсальные** методы storage (`info`, `save_file`, `logs`, `log_index`, `read_secret`, `save_secret`). Прикладное **поставляется базой**: lib + `$handler` для UI.
+Движок не знает про email, GigaChat или чат — только `$folder`, `$class`, `get_item`, merge и **универсальные** методы storage (`info`, `save_file`, `logs`, `log_index`, `read_secret`, `save_secret`). Прикладное **поставляется базой**: lib + `$handler` для UI.
 
 ### Клиент и сервер — одни имена, разные реализации (важный нюанс)
 
-Классы `$folder`, `$storage`, `$file`, `$user` существуют **дважды** — это сделано **намеренно**, один контракт с двух сторон:
+Классы `$folder`, `$class`, `$file`, `$user` существуют **дважды** — это сделано **намеренно**, один контракт с двух сторон:
 
 | Класс | Сервер ([`sources/server/*.js`](sources/server/)) | Клиент ([`sources/client/*.js`](sources/client/)) |
 |-------|---------------------------------------------------|---------------------------------------------------|
-| `$storage` | реальная работа: `node:fs`, merge `data.js`, logs | прокси: `fetch('logs')`, `fetch('save')` |
+| `$class` | реальная работа: `node:fs`, merge `class.js`, logs | прокси: `fetch('logs')`, `fetch('save')` |
 | `$file` | `writeFile`, history, RAG | загрузка/скачивание по HTTP |
 
-Один файл на класс с каждой стороны: `server/folder.js` ↔ `client/folder.js` и т.д. На сервере `$storage.logs()` читает `.logs` с диска; на клиенте — это HTTP-запрос. **Одно имя, разное поведение.** При отладке держите в голове: «я сейчас в серверном `server/` или в клиентском `client/`?».
+Один файл на класс с каждой стороны: `server/folder.js` ↔ `client/folder.js` и т.д. На сервере `$class.logs()` читает `.logs` с диска; на клиенте — это HTTP-запрос. **Одно имя, разное поведение.** При отладке держите в голове: «я сейчас в серверном `server/` или в клиентском `client/`?».
 
 Глобалы тоже парные: `WORK` / `CORE` на сервере (Node) и в браузере — разные объекты.
 
@@ -121,7 +121,7 @@ npm start
 ```
 work/
 ├── sources/               ← ядро (движок)
-│   ├── server/            серверные классы FS ($item, $folder, $storage, $file, $user)
+│   ├── server/            серверные классы FS ($item, $folder, $class, $file, $user)
 │   ├── client/            клиентские классы-прокси (те же имена)
 │   ├── shared/            общее обеим граням (path-syntax, to-script, config, constants)
 │   ├── host/              серверный рантайм (work.js, HTTP/WS/STUN, WorkServer, auth, merge)
@@ -133,13 +133,13 @@ work/
 └── services/              ← внешние сервисы (AI и т.д.)
 ```
 
-**Фрактал на диске:** корень `./` = WorkServer (`$storage`), метапапка `$server/`; внутри групп — `$structure/`, файлы рядом.
+**Фрактал на диске:** корень `./` = WorkServer (`$class`), метапапка `$server/`; внутри групп — `$structure/`, файлы рядом.
 
 **Пример базы (прикладной модуль):**
 
 ```
 $server/$folder/lib/email/settings.js     ← прикладная логика (папки ящиков, SMTP lookup)
-$server/.../form/email/$handler/data.js   ← UI: fetch('read_secret', {name:'email'})
+$server/.../form/email/$handler/class.js   ← UI: fetch('read_secret', {name:'email'})
 ```
 
 Секрет модуля на элементе: `{meta}/#system/email.json`, доступ через `?read_secret&name=email` / `?save_secret&name=email`.
@@ -176,15 +176,15 @@ URL = путь к объекту FS. Первый query-параметр без 
 | `.` | **скрытое / history-контейнер** | `.data.logs`, `.message.txt`, `.RAG` |
 | прочее | **экземпляр данных** | `direction`, `group`, `report.docx` |
 
-В коде: `isType` = имя на `$`, `isHidden` = имя на `.`, `isMetaFolder` = тип внутри `$storage`.
+В коде: `isType` = имя на `$`, `isHidden` = имя на `.`, `isMetaFolder` = тип внутри `$class`.
 
 ### Сущности и типы
 
 | Тип | Класс | Что это |
 |-----|-------|---------|
 | `$folder` | `$folder` | базовая папка-объект (`info`, `save_file`, `create`, children) |
-| `$storage` | `$storage` | папка с метапапкой и `data.js`: own-тип, merge, logs, secrets |
-| `$structure` / `$group` | `$storage` | прикладные storage-типы (группа, раздел) |
+| `$class` | `$class` | папка с метапапкой и `class.js`: own-тип, merge, logs, secrets |
+| `$structure` / `$group` | `$class` | прикладные storage-типы (группа, раздел) |
 | `$user` | `$user` | каталог пользователя (`users/…`), online-статус |
 | `$file` | `$file` | файл: load/save, history, RAG |
 | `$handler` | `$handler` | UI-метод экземпляра, `execute()` на клиенте |
@@ -192,27 +192,27 @@ URL = путь к объекту FS. Первый query-параметр без 
 | `$trigger` | — | реакция на событие |
 | `$server` | — | метапапка корня: системные типы и шаблоны |
 
-`WorkServer` (корень репозитория) — это `$storage` с метапапкой `$server`. Список системных типов: `$server, $user, $handler, $trigger, $task`; прикладные типы сканируются из дерева `$folder`.
+`WorkServer` (корень репозитория) — это `$class` с метапапкой `$server`. Список системных типов: `$server, $user, $handler, $trigger, $task`; прикладные типы сканируются из дерева `$folder`.
 
 #### Прикладные типы-«затравки»
 
-Классы-наследники `$storage` как прикладные прототипы: `$base`, `$group`, `$user`, `$service`, `$skill`, `$node`, `$paas`. Это **не часть ядра** — их доменная логика живёт в дереве, не в `sources/`.
+Классы-наследники `$class` как прикладные прототипы: `$base`, `$group`, `$user`, `$service`, `$skill`, `$node`, `$paas`. Это **не часть ядра** — их доменная логика живёт в дереве, не в `sources/`.
 
-- **`$skill`** — прикладной тип (наследник `$storage`). Прототип: `skills/$skill/$storage/$skill/data.js` с базовым `execute()`.
-- **Доменная логика скилов** (роутер, исполнитель) живёт в `skills/$skill/$storage/$skill/lib/` и наследуется через `~`. **Не в `sources/`.**
+- **`$skill`** — прикладной тип (наследник `$class`). Прототип: `skills/$skill/$class/$skill/class.js` с базовым `execute()`.
+- **Доменная логика скилов** (роутер, исполнитель) живёт в `skills/$skill/$class/$skill/lib/` и наследуется через `~`. **Не в `sources/`.**
 - `sources/host/skill-router.js` и `skill-manager.js` — **временное** нарушение, подлежат переносу.
 
 #### Реакции на `save_file` (file-handlers → триггеры)
 
 **Текущее (временное):** `file-handlers.js` — статический словарь в ядре. Ядро знает прикладные имена файлов.
 
-**Цель:** ядро при `save_file` ищет триггер через наследование: `$storage.get_item('~/triggers/' + filename)`. Ядро не знает имена файлов.
+**Цель:** ядро при `save_file` ищет триггер через наследование: `$class.get_item('~/triggers/' + filename)`. Ядро не знает имена файлов.
 
 #### Прикладные типы-«затравки»
 
-Классы-наследники $storage как прикладные прототипы: $base, $group, $user, $service, $skill, $node, $paas. Это **не часть ядра** — их доменная логика живёт в дереве, не в sources/.
+Классы-наследники $class как прикладные прототипы: $base, $group, $user, $service, $skill, $node, $paas. Это **не часть ядра** — их доменная логика живёт в дереве, не в sources/.
 
-- **$skill** — прикладной тип (наследник $storage). Прототип: skills////data.js с базовым execute().
+- **$skill** — прикладной тип (наследник $class). Прототип: skills////class.js с базовым execute().
 - **Доменная логика скилов** (роутер, исполнитель) живёт в skills////lib/ и наследуется через ~. **Не в sources/.**
 - sources/host/skill-router.js и skill-manager.js — **временное** нарушение, подлежат переносу.
 
@@ -220,17 +220,17 @@ URL = путь к объекту FS. Первый query-параметр без 
 
 **Текущее (временное):** ile-handlers.js — статический словарь WORK.file_handlers в ядре. Ядро знает прикладные имена файлов.
 
-**Цель:** ядро при save_file ищет триггер через наследование: $storage.get_item('~/triggers/' + filename). Ядро не знает имена файлов.
+**Цель:** ядро при save_file ищет триггер через наследование: $class.get_item('~/triggers/' + filename). Ядро не знает имена файлов.
 
-### Метапапка и `data.js`
+### Метапапка и `class.js`
 
-Каждое хранилище содержит **метапапку** (первый каталог на `$`) с файлом **`data.js`** — `export default { … }`:
+Каждое классе содержит **метапапку** (первый каталог на `$`) с файлом **`class.js`** — `export default { … }`:
 
 - описание типа (icon, label, поля `METADATA`)
 - `#security` (admin, users)
 - handlers, наследование
 
-Движок собирает итоговый `data.js` через **merge по слоям наследования** (`mergeFiles` → `mergeScripts`, babel-merge). При сохранении (`$storage.save()`) пишется только **разница** с точкой наследования (`getDifference` + `toScript` из [`shared/to-script.js`](sources/shared/to-script.js)), а не весь объект. `to-script.js` — обратная сторона merge: объект → текст `data.js`.
+Движок собирает итоговый `class.js` через **merge по слоям наследования** (`mergeFiles` → `mergeScripts`, babel-merge). При сохранении (`$class.save()`) пишется только **разница** с точкой наследования (`getDifference` + `toScript` из [`shared/to-script.js`](sources/shared/to-script.js)), а не весь объект. `to-script.js` — обратная сторона merge: объект → текст `class.js`.
 
 ### Синтаксис путей (`get_item`)
 
@@ -251,14 +251,14 @@ URL и `get_item(path)` понимают спецшаги (метод `get_item`
 ### Наследование и merge
 
 - **`~` / tilde** — `collect_tilde()` собирает файлы со всех слоёв типа (от `$folder` базового до собственной метапапки). Так `$handler`, `lib`, `triggers` наследуются от типа к экземпляру.
-- **merge `data.js`** — слои `$storage → $structure → группа` сливаются в один объект.
+- **merge `class.js`** — слои `$class → $structure → группа` сливаются в один объект.
 - **`~` в URL** — точка входа к наследуемым ресурсам: `/path/~/handlers/pages/form/`.
 
 ### Журнал и history
 
 - Запись файла версионируется в `history`:  
   `…/{source}/history/{day}/{timestamp}.{uid}.{ext}`
-- `.logs` — журнал хранилища; методы `$storage`: `logs` (режимы `folder|bodies|index|files`), `log_index` (лёгкий срез), `read_log_bodies`.
+- `.logs` — журнал класса; методы `$class`: `logs` (режимы `folder|bodies|index|files`), `log_index` (лёгкий срез), `read_log_bodies`.
 - После `save_file` движок вызывает `WORK.file_handlers[filename]` (см. [`file-handlers.js`](sources/host/file-handlers.js)) — точка расширения (chat `message.txt`, `outbox.eml`, `phone.call`).
 - **AI-диалог в чате** — пайплайн `message.txt` → `task.ai` → GigaChat → `response.md`; подробности в разделе [AI-задачи и микрочат](#ai-задачи-и-микрочат-taskai) ниже.
 
@@ -283,7 +283,7 @@ flowchart LR
 
 1. **`message.txt`** без `receivers` → [`file-handlers.js`](sources/host/file-handlers.js) создаёт **`task.ai`** с `includes: [путь message.txt history]`.
 2. Handler **`task.ai`** (асинхронно, после `save_to_log`) → GigaChat → **`response.md`** в history → **`appendLogIncludes`** дописывает путь ответа в ту же запись `.logs`.
-3. Продолжение диалога в микрочате → метод **`task_reply`** на `$storage`: новый `message.txt`, `appendLogIncludes`, снова `task.ai`, возврат актуальной строки лога.
+3. Продолжение диалога в микрочате → метод **`task_reply`** на `$class`: новый `message.txt`, `appendLogIncludes`, снова `task.ai`, возврат актуальной строки лога.
 
 Тесты: [`tests/task-pipeline.test.js`](tests/task-pipeline.test.js).
 
@@ -302,13 +302,13 @@ flowchart LR
 
 | Компонент | Файл | Роль |
 |-----------|------|------|
-| **`chat-day`** | [`chat/…/data.js`]($server/$folder/$storage/handlers/pages/form/chat/$handler/data.js) | День ленты; **`logItems`** + **`get logs()`**; инкрементальное добавление `.logs` по WS `changed` |
+| **`chat-day`** | [`chat/…/class.js`]($server/$folder/$class/handlers/pages/form/chat/$handler/class.js) | День ленты; **`logItems`** + **`get logs()`**; инкрементальное добавление `.logs` по WS `changed` |
 | **`chat-item`** | там же | Карточка; `$item` = файл **`.logs`**; **`logData`** → `:log="previewLog"` в preview |
-| **`ai-preview`** | [`$ai/…/preview/data.js`]($server/$folder/$file/$ai/handlers/preview/$handler/data.js) | Generic UI: thread из **`log.includes`**, prompt, **`task_reply`**; **не знает** про GigaChat |
+| **`ai-preview`** | [`$ai/…/preview/class.js`]($server/$folder/$file/$ai/handlers/preview/$handler/class.js) | Generic UI: thread из **`log.includes`**, prompt, **`task_reply`**; **не знает** про GigaChat |
 
 **Правило:** доработки AI (ожидание ответа, опрос, нормализация лога) — **только в `ai-preview` и сервере**. **Не ломать** инкремент чата (`chat-day` / `chat-item`): не сбрасывать `body` у `.logs`, не перезагружать всю ленту ради микрочата.
 
-#### Серверные методы (`$storage`)
+#### Серверные методы (`$class`)
 
 | Метод | Назначение |
 |-------|------------|
@@ -338,10 +338,10 @@ flowchart LR
 
 ```
 sources/host/file-handlers.js          message.txt, task.ai handlers
-sources/server/storage.js              appendLogIncludes, task_reply, read_log_entry, _findLogEntry
+sources/server/class.js              appendLogIncludes, task_reply, read_log_entry, _findLogEntry
 sources/server/file.js                 save_to_log, log.path / includes
-$server/.../chat/$handler/data.js      chat-day, chat-item (лента)
-$server/.../ai/.../preview/data.js     ai-preview (микрочат)
+$server/.../chat/$handler/class.js      chat-day, chat-item (лента)
+$server/.../ai/.../preview/class.js     ai-preview (микрочат)
 tests/task-pipeline.test.js            регрессия пайплайна
 ```
 
@@ -353,10 +353,10 @@ tests/task-pipeline.test.js            регрессия пайплайна
 
 | Компонент | Файл | Назначение |
 |-----------|------|------------|
-| **harness-цикл** | `$server/$folder/$file/$ai/methods/prompt/$method/data.js` | Цикл tool-call: ИИ → `<tool_call>` → execItemMethod → результат |
-| **SYSTEM_PROMPT** | `$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js` | Инструкции ИИ: навигация, работа с файлами, создание элементов |
-| **UI микрочата** | `$server/$folder/$file/$ai/handlers/preview/$handler/data.js` | Превью task.ai: стриминг, микрофон, TTS, файлы |
-| **стриминг** | `models/$ai/$folder/$storage/$ai/methods/streamChat/$method/data.js` | AsyncGenerator токенов от GigaChat |
+| **harness-цикл** | `$server/$folder/$file/$ai/methods/prompt/$method/class.js` | Цикл tool-call: ИИ → `<tool_call>` → execItemMethod → результат |
+| **SYSTEM_PROMPT** | `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js` | Инструкции ИИ: навигация, работа с файлами, создание элементов |
+| **UI микрочата** | `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` | Превью task.ai: стриминг, микрофон, TTS, файлы |
+| **стриминг** | `models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js` | AsyncGenerator токенов от GigaChat |
 | **схема методов** | `sources/modules/ai-schema.js` | `buildAiSchema()` — парсинг `@ai` JSDoc из исходников |
 
 #### Принцип работы
@@ -402,22 +402,22 @@ async find_text(params = {}) { ... }
 ИИ перемещается по системе через `navigate(path)`:
 - `{"method": "navigate", "args": {"path": "/base/оборудование"}}` — переход к элементу
 - После перехода автоматически получается `get_schema` нового контекста
-- `{"method": "reset_context"}` — возврат к домашнему хранилищу
+- `{"method": "reset_context"}` — возврат к домашнему классу
 
 #### Работа с файлами
 
 - `read_file(name)` — чтение содержимого файла (до 32000 символов)
 - `write_file(name, content)` — создание/перезапись файла
-- `create({type, id})` — создание файла/папки/хранилища
+- `create({type, id})` — создание файла/папки/класса
 - `delete()` — удаление элемента
 
 #### Создание элементов системы
 
 ИИ может создавать новые элементы:
-- **Хранилища** — `create({type: "$storage"})` + `write_file` для `data.js`
-- **Методы** — структура `имя/$method/data.js` с `execute()`
-- **Триггеры** — структура `on_save/$trigger/data.js`
-- **Обработчики** — структура `pages/form/имя/$handler/data.js`
+- **класса** — `create({type: "$class"})` + `write_file` для `class.js`
+- **Методы** — структура `имя/$method/class.js` с `execute()`
+- **Триггеры** — структура `on_save/$trigger/class.js`
+- **Обработчики** — структура `pages/form/имя/$handler/class.js`
 - **Интерфейсы** — ODA-компоненты с `template`
 
 #### Ключевые файлы ИИ
@@ -425,10 +425,10 @@ async find_text(params = {}) { ... }
 ```
 sources/modules/ai-schema.js                              buildAiSchema — парсинг @ai JSDoc
 sources/server/folder.js                                  get_schema(), TOOL_DESCRIPTIONS
-$server/$folder/$file/$ai/methods/prompt/$method/data.js  harness-цикл tool-call
-$server/$folder/$file/$ai/triggers/on_save/$trigger/data.js  SYSTEM_PROMPT
-$server/$folder/$file/$ai/handlers/preview/$handler/data.js  UI микрочата
-models/$ai/$folder/$storage/$ai/methods/streamChat/...     стриминг GigaChat
+$server/$folder/$file/$ai/methods/prompt/$method/class.js  harness-цикл tool-call
+$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js  SYSTEM_PROMPT
+$server/$folder/$file/$ai/handlers/preview/$handler/class.js  UI микрочата
+models/$ai/$folder/$class/$ai/methods/streamChat/...     стриминг GigaChat
 ```
 
 ### Свойства объекта FS (частые геттеры)
@@ -438,9 +438,9 @@ models/$ai/$folder/$storage/$ai/methods/streamChat/...     стриминг Giga
 | `path` / `short` | полный путь / публичный (без `$мета`) |
 | `dir` / `real_dir` | путь на диске / реальный источник (с учётом наследования) |
 | `id` / `type` / `label` | id, тип (id метапапки), отображаемое имя |
-| `$parent` | ближайший типизированный родитель (`$storage`) |
+| `$parent` | ближайший типизированный родитель (`$class`) |
 | `$owner` | типизированный владелец метапапки |
-| `$storage` | ближайший `$storage` вверх по дереву |
+| `$class` | ближайший `$class` вверх по дереву |
 | `$context` | объект-носитель для handler/task (вне метапапок) |
 | `children` / `files` | потомки / потомки без скрытых |
 
@@ -448,7 +448,7 @@ models/$ai/$folder/$storage/$ai/methods/streamChat/...     стриминг Giga
 
 | Глобал | Сервер (Node) | Клиент (браузер) |
 |--------|---------------|-------------------|
-| `WORK` | `WorkServer` (корневой `$storage`) | корневой прокси через `fetch` |
+| `WORK` | `WorkServer` (корневой `$class`) | корневой прокси через `fetch` |
 | `CORE` | классы из [`server/index.js`](sources/server/index.js) | классы из [`client/index.js`](sources/client/index.js) |
 | `$server` | helpers/merge на сервере | — |
 
@@ -462,7 +462,7 @@ sources/
     index.js           сборка CORE: FS + экспорт классов
     item.js            $item: база (DATA, путь, isType/isHidden, genGUID)
     folder.js          $folder: дерево, children, tilde, info, save_file, get_item
-    storage.js         $storage: data.js, merge, logs, read/save_secret
+    class.js         $class: class.js, merge, logs, read/save_secret
     file.js            $file: load/save, history, RAG
     user.js            $user
     helpers.js         временные остатки: inherit, rag-утилиты, importScript
@@ -470,11 +470,11 @@ sources/
     index.js           сборка CORE для браузера
     item/folder/storage/file/user/field/handler.js   прокси через fetch
   shared/              временно: остатки до переноса в классы
-    to-script.js       объект → data.js (toScript/getDifference) — обратное к merge
+    to-script.js       объект → class.js (toScript/getDifference) — обратное к merge
     path-syntax.js     history-подписи
   host/                СЕРВЕРНЫЙ РАНТАЙМ (сервер(ы) + сервисы)
     config.js          env → константы
-    work-server.js     WorkServer extends $storage; merge; types; push
+    work-server.js     WorkServer extends $class; merge; types; push
     http-server.js     запуск HTTP/HTTPS
     request-handler.js разбор запроса, POST-тело, заголовки
     exec-item-method.js разрешение метода (класс FS → legacy handler)

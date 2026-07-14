@@ -60,10 +60,10 @@ export default {
         <div horizontal flex style="padding: 0px 2px; align-items: center;">
             <div vertical flex style="gap: 2px;">
                 <div horizontal flex> 
-                    <label :bold="$item instanceof CORE.$storage" flex>{{label}}</label>
+                    <label :bold="$item instanceof CORE.$class" flex>{{label}}</label>
                     <item-user  ~if="showAdmin" :$item="admin"></item-user>
                 </div>
-                <item-users flex ~if="showUsers && isStorage"flex :$item disabled></item-users>
+                <item-users flex ~if="showUsers && isClass"flex :$item disabled></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
         </div>
@@ -71,7 +71,7 @@ export default {
     showSize: false,
     showUsers: false,
     get showAdmin(){
-        if(!(this.$item instanceof CORE.$storage) || this.$item instanceof CORE.$user)
+        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user)
             return false
         return new AsyncPromise(async ()=>{
             let admin = await this.admin;
@@ -79,7 +79,7 @@ export default {
         })
     },
     get status(){
-        if(this.$item.constructor === CORE.$storage)
+        if(this.$item.constructor === CORE.$class)
             return this.$item.status;
         return ''
     },
@@ -125,7 +125,7 @@ export default {
         if(this.$item){
             if(this.$item instanceof CORE.$handler)
                 return 32;
-            if(this.$item instanceof CORE.$storage)
+            if(this.$item instanceof CORE.$class)
                 return 48;
             return 24;
         }

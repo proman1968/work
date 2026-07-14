@@ -21,7 +21,7 @@ const schemaCache = new WeakMap();
 /**
  * Построить схему методов прототипа для ИИ-агента.
  *
- * Обходит всю цепочку прототипов (от $storage до $folder и выше),
+ * Обходит всю цепочку прототипов (от $class до $folder и выше),
  * объединяя методы из всех слоёв наследования.
  *
  * @param {object} proto — прототип класса (например, this.constructor.prototype)
@@ -37,7 +37,7 @@ export function buildAiSchema(proto) {
     const methods = [];
     const seenNames = new Set();
 
-    // Обход цепочки прототипов: $storage → $folder → $item → Reactor → ...
+    // Обход цепочки прототипов: $class → $folder → $item → Reactor → ...
     let currentProto = proto;
     while (currentProto && currentProto !== Object.prototype && currentProto !== EventTarget.prototype) {
         const currentCtor = currentProto.constructor;

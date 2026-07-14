@@ -5,8 +5,8 @@ import * as mime from "mime-types";
 import { extractor } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
-import { $storage } from './storage.js';
-export class $user extends $storage{
+import { $class } from './class.js';
+export class $user extends $class{
     get online(){
         return !!Object.values($server?.users)?.find(u => u.uid === this.id);
     }

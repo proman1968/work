@@ -1,6 +1,6 @@
 # sources/host/ — серверный рантайм
 
-Серверная инфраструктура: запуск HTTP/HTTPS, WebSocket, авторизация, merge data.js. Эти файлы не являются частью объектной модели — они обеспечивают работу сервера.
+Серверная инфраструктура: запуск HTTP/HTTPS, WebSocket, авторизация, merge class.js. Эти файлы не являются частью объектной модели — они обеспечивают работу сервера.
 
 ## Файлы
 
@@ -10,7 +10,7 @@
 - `websocket.js` — WebSocket-события (`changed`, `chat.delta`, `chat.done`)
 - `stun.js` — локальный STUN для WebRTC
 - `auth-methods.js` — login/register/session (примешиваются в прототип `$server`)
-- `babel-merge.js` — merge `data.js` по слоям наследования (Babel AST)
+- `babel-merge.js` — merge `class.js` по слоям наследования (Babel AST)
 - `vapid.js`, `push.js` — push-уведомления
 - `mail.js`, `email-utils.js` — почта и EML
 

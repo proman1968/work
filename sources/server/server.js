@@ -3,7 +3,7 @@ import * as https from "node:https";
 import * as fs from "node:fs";
 import * as mime from "mime-types";
 import * as fsp from "node:fs/promises";
-import { $storage, $folder, $user } from './index.js';
+import { $class, $folder, $user } from './index.js';
 import { MERGE } from '../host/babel-merge.js';
 import { installPackageSpawn } from '../host/package-install.js';
 import { authMethods } from '../host/auth-methods.js';
@@ -16,7 +16,7 @@ import {
     sendPushNotification,
 } from '../host/push.js';
 
-export class $server extends $storage {
+export class $server extends $class {
     parent = null;
     path = '';
     dir = '.';
