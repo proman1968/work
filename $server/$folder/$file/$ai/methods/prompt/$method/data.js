@@ -115,7 +115,7 @@ export default {
             lastResponse = fullResponse;
             body.chat.push({ role: "assistant", content: fullResponse, time: Date.now(), sender: model.path || 'WORK' });
 
-            // Извлекаем план, если ИИ его предложил
+            // Извлекаем план из ответа ИИ
             const plan = parsePlan(fullResponse);
             if (plan) {
                 body.plan = plan;
@@ -455,7 +455,7 @@ function isDangerousMethod(method) {
 }
 
 /**
- * Извлечь план из ответа ИИ (Chain-of-thought).
+ * Извлечь план из ответа ИИ (формат <plan>[...]</plan>).
  * Формат: <plan>[{"step": 1, "description": "...", "status": "pending"}]</plan>
  * @param {string} text — ответ ИИ
  * @returns {Array|null} — массив шагов плана или null

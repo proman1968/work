@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//button,  ~/lib//chat-item, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//button, oda/components/toggle/toggle, ~/lib//chat-item, ~/lib//chat-plan, ~/lib//chat-form, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     template: /* html */`
         <style>
             :host {
@@ -118,41 +118,44 @@ export default {
                 white-space: nowrap;
             }
             .plan-block {
-                @apply --vertical;
-                gap: 4px;
-                padding: 8px;
-                margin: 4px 0;
-                border-radius: 8px;
-                border-left: 3px solid var(--info-color, #4a90d9);
-                background: var(--content-color, rgba(0,0,0,0.05));
+                font-size: xx-small;
+                @apply --content;
+                border-radius: 4px;
+                margin-left: 8px;
             }
-            .plan-header {
+            .plan-block summary {
+                @apply --bold;
                 font-size: x-small;
-                font-weight: bold;
+                opacity: .6;
+                cursor: pointer;
+                padding: 2px 8px;
+                user-select: none;
+            }
+            .plan-block[open] summary {
                 opacity: .8;
-                margin-bottom: 4px;
             }
             .plan-step {
                 @apply --horizontal;
                 gap: 6px;
                 align-items: center;
                 font-size: xx-small;
-                padding: 2px 0;
-            }
-            .plan-step-icon {
-                font-size: x-small;
+                padding: 2px 8px;
+                cursor: pointer;
             }
             .plan-step.done { opacity: .5; text-decoration: line-through; }
-            .plan-step.active { font-weight: bold; }
+            .plan-step.active { @apply --bold; }
+            .plan-step input[type="checkbox"] {
+                margin: 0;
+                cursor: pointer;
+            }
 
             .questions-block {
-                @apply --vertical;
+                font-size: x-small;
+                @apply --content;
+                border-radius: 4px;
+                margin-left: 8px;
                 gap: 6px;
-                padding: 8px;
-                margin: 4px 0;
-                border-radius: 8px;
-                border-left: 3px solid var(--warning-color, #f0ad4e);
-                background: var(--content-color, rgba(0,0,0,0.05));
+                padding: 6px 8px;
             }
             .question-field {
                 @apply --vertical;
@@ -160,25 +163,26 @@ export default {
             }
             .question-field label {
                 font-size: xx-small;
-                font-weight: bold;
+                @apply --bold;
                 opacity: .8;
             }
-            .question-field input, .question-field textarea {
-                border: 1px solid var(--border-color, #ccc);
+            .question-field input, .question-field textarea, .question-field select {
+                @apply --content;
+                @apply --raised;
                 border-radius: 4px;
                 padding: 4px 8px;
                 font-size: x-small;
                 font-family: inherit;
-                background: var(--background-color, #fff);
-                color: var(--text-color, #333);
                 outline: none;
                 min-width: 0;
+                border: none;
             }
             .question-field textarea {
                 min-height: 2em;
                 resize: vertical;
             }
         </style>
+        <oda-chat-plan ~if="planSteps.length" :steps="planSteps" @tap-step="togglePlanStep($event.detail.value)"></oda-chat-plan>
         <div class="thread" flex vertical @scroll="_onScroll">
             <div flex></div>
             <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer>
@@ -194,29 +198,11 @@ export default {
                         <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
                         <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
                     </div>
-                    <div class="questions-block" ~if="$for.$for.item.$questions?.length">
-                        <div class="question-field" ~for="$for.$for.item.$questions" :key="$for.item.id">
-                            <label>{{$for.item.label}}</label>
-                            <textarea ::value="$for.$for.$for.parent.$questionAnswers[$for.item.id]" 
-                                ~if="$for.item.type === 'textarea'" 
-                                placeholder="Введите ответ..."></textarea>
-                            <input type="text" ~if="$for.item.type !== 'textarea'" 
-                                ::value="$for.$for.$for.parent.$questionAnswers[$for.item.id]" 
-                                placeholder="Введите ответ...">
-                        </div>
-                        <oda-button success icon="icons:check" label="Ответить" @tap="answerQuestions('{{$for.$for.item.time}}')"></oda-button>
-                    </div>
+                    <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
                     <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
                         <summary>🔧 {{$for.$for.item.tool}}</summary>
                         <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
                     </details>
-                </div>
-            </div>
-            <div class="plan-block" ~if="planSteps.length">
-                <div class="plan-header">📋 План выполнения ({{planProgress}})</div>
-                <div class="plan-step" ~for="planSteps" :class="$for.item.status">
-                    <span class="plan-step-icon">{{planStepIcon($for.item.status)}}</span>
-                    <span>{{$for.item.step}}. {{$for.item.description}}</span>
                 </div>
             </div>
         </div>
@@ -350,27 +336,51 @@ export default {
     },
     planStepIcon(status) {
         switch (status) {
-            case 'done': return '✅';
-            case 'in_progress': return '🔄';
-            default: return '⏳';
+            case 'done': return 'icons:check';
+            case 'in_progress': return 'av:play-arrow';
+            default: return 'icons:radio-button-unchecked';
         }
     },
-    async answerQuestions(msgTime) {
-        // Найти сообщение по time
+    togglePlanStep(index) {
+        const steps = this.planSteps;
+        if (!steps[index]) return;
+        steps[index].status = steps[index].status === 'done' ? 'pending' : 'done';
+        this.taskBody.plan = steps;
+        // Сохранить в task.ai
+        try {
+            this.$item?.fetch('save', {}, JSON.stringify(this.taskBody, null, 2));
+        } catch {}
+        this.render();
+    },
+    async onFormAnswer(msgTime, answers) {
         const msg = this.chat.find(m => String(m.time) === String(msgTime));
         if (!msg?.$questions) return;
-        // Собрать ответы
-        const answers = [];
+        const answerLines = [];
+        const answersObj = {};
         for (const q of msg.$questions) {
-            const answer = this.questionAnswers[q.id] || '';
-            if (answer.trim())
-                answers.push(`${q.label}: ${answer.trim()}`);
+            const answer = answers[q.id];
+            if (answer !== undefined && answer !== '' && answer !== false) {
+                answersObj[q.id] = { label: q.label, value: answer, type: q.type || 'text' };
+                answerLines.push(`${q.label}: ${answer}`);
+            }
         }
-        if (!answers.length) return;
-        // Отправить как промпт
-        this.value = 'Ответы на вопросы:\n' + answers.join('\n');
-        // Очистить ответы
-        this.questionAnswers = {};
+        if (!answerLines.length) return;
+        try {
+            const storage = this.$item?.$storage || this.$item?.$parent;
+            if (storage?.fetch) {
+                const formData = new FormData();
+                const messageFile = new File(
+                    [JSON.stringify({ time: Date.now(), answers: answersObj }, null, 2)],
+                    `answers-${Date.now()}.json`,
+                    { type: 'application/json' }
+                );
+                formData.append('message', messageFile, messageFile.name);
+                await storage.fetch('save_files', {}, formData);
+            }
+        } catch (e) {
+            console.warn('[ai-preview] save answers:', e.message);
+        }
+        this.value = 'Ответы на вопросы:\n' + answerLines.join('\n');
         this.send();
     },
     get selectedModelItem() {
@@ -426,6 +436,7 @@ export default {
                             .replace(/```tool_call[\s\S]*?```/gi, '')
                             .replace(/<questions>[\s\S]*?<\/questions>/gi, '')
                             .replace(/<plan>[\s\S]*?<\/plan>/gi, '')
+                            .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
                             .trim();
                         // Парсинг вопросов из ответа ИИ
                         const qMatch = msg.content.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
