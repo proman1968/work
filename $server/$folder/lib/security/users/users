@@ -20,51 +20,86 @@ export default {
         <div class="horizontal part" no-flex>
             <item-user border ~for="users" :$item="$for.item" :icon-size @tap="selectUser" @contextmenu.capture="_userMenu"></item-user>
         </div>
+        <div flex></div>
+        <div ~if="selection.length" class="horizontal part" success-invert no-flex>
+            <oda-icon icon="eva:f-arrow-ios-back" :icon-size @tap="_clear"></oda-icon>
+            <item-user border ~for="selection" :$item="$for.item" :icon-size @tap="_remove" @contextmenu.capture="_userMenu"></item-user>
+        </div>
     `,
-    /** Роль, которую отображает компонент: 'slave' | 'master' | 'admin'. */
-    role: 'slave',
+    get $saveKey(){
+        return this.$item?.path || ''
+    },
     iconSize: 24,
+    selected_users: {
+        $def: [],
+        $save: true,
+        set(n){
+            this.users = undefined;
+            this.selected = undefined;
+        }
+    },
+    allowRemoveAccess: false,
     get all_users(){
-        if (this.role === 'master')
-            return Promise.resolve(this.$item?.masters).then(list => Array.isArray(list) ? list : []);
-        if (this.role === 'admin')
-            return Promise.resolve(this.$item?.admins).then(list => Array.isArray(list) ? list : []);
-        return this.$item?.slaves;
+        return this.$item?.users;
     },
     get users() {
-        return this.all_users;
+        return new AsyncPromise(async ()=>{
+            if (!this.selected_users)
+                return [];
+            let users = await this.all_users;
+            return users?.reduce?.((res, val) => {
+                if (!this.selected_users.includes(val.id))
+                    res.add(val);
+                return res;
+            }, []) || [];
+        })
+    },
+    get selection(){
+        return new AsyncPromise(async ()=>{
+            if (!this.selected_users)
+                return [];
+            let users = await this.all_users;
+            return users?.reduce?.((res, val) => {
+                if (this.selected_users.includes(val.id))
+                    res.add(val);
+                return res;
+            }, []) || [];
+        })
     },
     $listeners: {
         async drop(e) {
             const user = this.getUser(e.dataTransfer);
-            if (!user) return;
+            if (!user) {
+                return;
+            }
             return this.assignUser(user);
         }
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'master') {
-            security.master = user.id;
-        } else if (this.role === 'admin') {
-            security.admin = user.id;
-        } else {
-            security.slaves ??= [];
-            if (!security.slaves.includes(user.id))
-                security.slaves.push(user.id);
-        }
+        security.slaves ??= [];
+        if (!security.slaves.includes(user.id))
+            security.slaves.push(user.id);
         await this.saveSecurity(security);
     },
     async suspendUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'master') {
-            delete security.master;
-        } else if (this.role === 'admin') {
-            delete security.admin;
-        } else {
-            if (security.slaves)
-                security.slaves = security.slaves.filter(id => id !== user.id);
-        }
+        if (security.slaves)
+            security.slaves = security.slaves.filter(id => id !== user.id);
         await this.saveSecurity(security);
+    },
+    _add(e) {
+        let selected = [...this.selected_users];
+        selected.add(e.target.$item.id);
+        this.selected_users = selected;
+    },
+    _remove(e) {
+        let selected = [...this.selected_users];
+        selected.remove(e.target.$item.id);
+        this.selected_users = selected;
+    },
+    _clear(e) {
+        this.selected_users = [];
     },
     _userMenu(e) {
         e.preventDefault();
@@ -79,6 +114,7 @@ export default {
                 }
             }
         ];
+
         const menu = ODA.createElement('oda-tree',
             {
                 items,

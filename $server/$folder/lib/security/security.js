@@ -15,15 +15,7 @@ export default {
     `,
     $item: {
         $type: Object,
-        set(n) {
-            // if (n) {
-            //     n.listen('changed', (e) => {
-            //         ['admins', 'members'].forEach(key => {
-            //             n[key] = undefined;
-            //         });
-            //     })
-            // }
-        },
+        set(n) {},
     },
     get admin() {
         return new AsyncPromise(async ()=>{
@@ -43,18 +35,16 @@ export default {
         const user = JSON.parse(data);
         return (user.type === '$user') ? user : null;
     },
+    /** Прочитать текущие назначения безопасности из body класса. */
     async getSecurity() {
         const body = await this.$item.body;
-        const security = body['#security'] = {};
-
-        const admin = await this.admin;
-        security.admin = admin.id;
-
-        let users = await this.$item.users;
-        users = users.map(m => m.id);
-        security.users = users;
-
-        return security;
+        return body?.['#security'] || {};
+    },
+    /** Сохранить назначения безопасности в body класса. */
+    async saveSecurity(security) {
+        const body = await this.$item.body;
+        body['#security'] = security;
+        await this.$item.save(body);
     },
     async selectUser(e) {
         const currentTarget = e.currentTarget;

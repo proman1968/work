@@ -61,9 +61,10 @@ export default {
             <div vertical flex style="gap: 2px;">
                 <div horizontal flex> 
                     <label :bold="$item instanceof CORE.$class" flex>{{label}}</label>
-                    <item-user  ~if="showAdmin" :$item="admin"></item-user>
+                    <item-user ~if="showAdmin" :$item="admin" :icon-size="16"></item-user>
+                    <item-user ~if="showMaster" :$item="master" :icon-size="16"></item-user>
                 </div>
-                <item-users flex ~if="showUsers && isClass"flex :$item disabled></item-users>
+                <item-users flex ~if="showUsers && isClass" role="slave" :$item disabled></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
         </div>
@@ -78,6 +79,14 @@ export default {
             return admin && admin.id !== WORK.uid;
         })
     },
+    get showMaster(){
+        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user)
+            return false
+        return new AsyncPromise(async ()=>{
+            let master = await this.master;
+            return master && master.id !== WORK.uid;
+        })
+    },
     get status(){
         if(this.$item.constructor === CORE.$class)
             return this.$item.status;
@@ -86,6 +95,12 @@ export default {
     get admin(){
         return new AsyncPromise(async ()=>{
             let res = await Promise.resolve(this.$item?.admins);
+            return res?.last
+        })
+    },
+    get master(){
+        return new AsyncPromise(async ()=>{
+            let res = await Promise.resolve(this.$item?.masters);
             return res?.last
         })
     },
