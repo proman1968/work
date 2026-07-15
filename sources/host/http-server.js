@@ -89,7 +89,8 @@ async function tryHandlerMethod(item, method, params, request) {
         const handlers = await item._methods;
         const handler = handlers?.[method];
         if (handler && typeof handler.execute === 'function') {
-            return handler.execute.call(item, { ...params }, requestBody(params, request));
+            params.$context = item;
+            return handler.execute(params);
         }
     }
     catch {

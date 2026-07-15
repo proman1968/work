@@ -111,6 +111,22 @@ export class $folder extends $item{
     load(params){
         // todo сделать загрузку папки, возможно в виде архива
     }
+    /** Подпапка для сохранения файла по MIME-типу или расширению. */
+    async getFolderToSaveFile(params = {}) {
+        if(!params.filename)
+            throw new Error('Не указано имя сохраняемого файла');
+        let folder_name = mime.contentType(params.filename);
+        if(folder_name)
+            folder_name = folder_name.split('/')[0];
+        if(!folder_name || folder_name === 'application'){
+            let split = params.filename.split('.');
+            if(split.length > 1)
+                folder_name = split.pop().toLowerCase();
+            else
+                folder_name = 'etc'
+        }
+        return this._get_item(folder_name, FS.$folder);
+    }
     get users(){
         return this.parent.users;
     }

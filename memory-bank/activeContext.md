@@ -1,6 +1,25 @@
 # Текущий контекст работы
 
-## Задача: PDCA-циклы в микрочате ИИ
+## Задача: Система ролей и зон доступа (admin/master/slave)
+
+Реализована трёхуровневая система ролей в классах WORK:
+
+### Архитектура
+- **#security** в class.js: `{ admin, master, slaves: [] }` — три роли
+- **Три зоны доступа**: системная (meta_folder), управленческая (distributed_folder/$work), рабочая (meta_folder/$work)
+- **Чтение**: отдаёт все зоны по любым ролям пользователя
+- **Запись**: требует явного `params.role`, строго по зоне
+
+### Изменённые файлы:
+1. **`sources/host/security.js`** — константы ROLES/ZONES, функции isClassAdmin/isClassMaster/isClassSlave, resolveRoles, resolveZone, canSee/canWrite по зонам
+2. **`sources/server/class.js`** — метод `roles()`, метод `get_storage({role})`, getters admins/masters/slaves, save_file/get_write_stream через get_storage+getFolderToSaveFile
+3. **`sources/server/folder.js`** — метод `getFolderToSaveFile()` в $folder
+4. **`$server/$folder/handlers/pages/form/$handler/class.js`** — UI селектор ролей (кнопка с иконкой, dropdown, localStorage)
+
+### Не реализовано (отложено):
+- HTTP-фильтрация при чтении (slave не видит системные/управленческие файлы) — пропущена по решению пользователя
+
+## Предыдущая задача: PDCA-циклы в микрочате ИИ
 
 Реализован PDCA-цикл (Plan→Do→Check→Act) в микрочате WORK:
 - ИИ предлагает план → кнопки Принять/Отклонить на служебной панели

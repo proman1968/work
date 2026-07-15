@@ -21,6 +21,20 @@ export const ACCESS_LEVEL = {
     ADMIN: 'admin',
 };
 
+/** Роли пользователей в классе. */
+export const ROLES = {
+    ADMIN: 'admin',
+    MASTER: 'master',
+    SLAVE: 'slave',
+};
+
+/** Зоны доступа внутри класса. */
+export const ZONES = {
+    SYSTEM: 'system',
+    MANAGEMENT: 'management',
+    WORK: 'work',
+};
+
 /** Явная политика по имени метода; остальное — resolveMethodAccessLevel. */
 export const METHOD_ACCESS = {
     info: ACCESS_LEVEL.READ,
@@ -68,11 +82,15 @@ export function resolveUid(params = {}) {
     return user.$user?.id ?? user.uid;
 }
 
-/** На storage явно назначены users — граница подразделения. */
+/** На классе назначен хотя бы один пользователь (любая роль). */
 export function hasAssignedUsers(security) {
-    return Array.isArray(security?.users) && security.users.length > 0;
+    if (!security)
+        return false;
+    return Boolean(security.admin) || Boolean(security.master)
+        || (Array.isArray(security.slaves) && security.slaves.length > 0);
 }
 
+/** Класс имеет явные назначения пользователей — граница подразделения. */
 export function hasUserBoundary(storage) {
     return hasAssignedUsers(storage?.DATA?.['#security']);
 }
@@ -105,22 +123,56 @@ export function isOwnUserCabinetPath(path = '', uid) {
     return parseUserCabinetUid(path) === uid;
 }
 
+/** Проверка роли администратора: uid совпадает с #security.admin. */
 export async function isClassAdmin(storage, params = {}) {
     const uid = resolveUid(params);
-    if (!uid || !storage?.admins)
+    if (!uid || !storage?.DATA)
         return false;
-    const admins = await storage.admins;
-    return admins?.some(a => a?.id === uid) ?? false;
+    const adminId = storage.DATA['#security']?.admin;
+    return adminId === uid;
 }
 
+/** Проверка роли управляющего: uid совпадает с #security.master. */
+export async function isClassMaster(storage, params = {}) {
+    const uid = resolveUid(params);
+    if (!uid || !storage?.DATA)
+        return false;
+    const masterId = storage.DATA['#security']?.master;
+    return masterId === uid;
+}
+
+/** Проверка роли исполнителя: uid входит в массив #security.slaves. */
+export async function isClassSlave(storage, params = {}) {
+    const uid = resolveUid(params);
+    if (!uid || !storage?.DATA)
+        return false;
+    const slaves = storage.DATA['#security']?.slaves;
+    return Array.isArray(slaves) && slaves.includes(uid);
+}
+
+/**
+ * Все роли пользователя в данном классе.
+ * @returns {Promise<string[]>} — массив из ROLES (admin, master, slave)
+ */
+export async function resolveRoles(storage, params = {}) {
+    if (!storage)
+        return [];
+    const roles = [];
+    if (await isClassAdmin(storage, params))
+        roles.push(ROLES.ADMIN);
+    if (await isClassMaster(storage, params))
+        roles.push(ROLES.MASTER);
+    if (await isClassSlave(storage, params))
+        roles.push(ROLES.SLAVE);
+    return roles;
+}
+
+/** Назначен ли пользователь на любую роль в классе. */
 export async function isAssignedOnClass(storage, params = {}) {
     if (!storage || !hasUserBoundary(storage))
         return false;
-    const uid = resolveUid(params);
-    if (!uid || !storage.users)
-        return false;
-    const users = await storage.users;
-    return users?.some(u => u?.id === uid) ?? false;
+    const roles = await resolveRoles(storage, params);
+    return roles.length > 0;
 }
 
 /** Корень WORK (path у $server — ''). */
@@ -177,6 +229,43 @@ export function isInsideMetaFolder(item) {
     if (isPathInsideUserCabinetMeta(path))
         return true;
     return isPathInsideWorkClassMeta(path);
+}
+
+/**
+ * Определить зону элемента относительно его класса-владельца.
+ * Обходит дерево вверх от элемента до метапапки класса:
+ * — если в цепочке предков есть $work внутри цепочки наследования ($structure) → MANAGEMENT
+ * — если в цепочке предков есть $work в метапапке → WORK
+ * — если элемент внутри метапапки, но не в $work → SYSTEM
+ * — null для элементов вне классов
+ */
+export function resolveZone(item) {
+    if (!item || typeof item !== 'object')
+        return null;
+
+    let p = item;
+    let foundWork = false;
+    let hasStructureBeforeWork = false;
+
+    while (p) {
+        if (!foundWork && p.id === '$work') {
+            foundWork = true;
+        } else if (foundWork && p.id === '$structure') {
+            hasStructureBeforeWork = true;
+            break;
+        }
+        if (p.isMetaFolder && p.parent instanceof FS.$class)
+            break;
+        p = p.parent;
+    }
+
+    if (!foundWork) {
+        if (isInsideMetaFolder(item))
+            return ZONES.SYSTEM;
+        return null;
+    }
+
+    return hasStructureBeforeWork ? ZONES.MANAGEMENT : ZONES.WORK;
 }
 
 function isPathInsideUserCabinetMeta(path) {
@@ -340,28 +429,42 @@ async function canSeeUsersBranch(item, params) {
     return true;
 }
 
+/** Карта соответствия роли и зоны для чтения (отдаём объединение). */
+const READ_ZONE_BY_ROLE = {
+    [ROLES.ADMIN]: [ZONES.SYSTEM, ZONES.MANAGEMENT, ZONES.WORK],
+    [ROLES.MASTER]: [ZONES.SYSTEM, ZONES.MANAGEMENT, ZONES.WORK],
+    [ROLES.SLAVE]: [ZONES.SYSTEM, ZONES.MANAGEMENT, ZONES.WORK],
+};
+
+/** Карта соответствия роли и зоны для записи (строго по зоне). */
+const WRITE_ZONE_BY_ROLE = {
+    [ROLES.ADMIN]: ZONES.SYSTEM,
+    [ROLES.MASTER]: ZONES.MANAGEMENT,
+    [ROLES.SLAVE]: ZONES.WORK,
+};
+
 async function canSeeDataClassItem(item, params) {
     const storage = contentClass(item) || nearestClass(item);
     if (!storage)
         return false;
 
-    const access = await hasClassAccess(storage, params);
-    if (access)
-        return true;
-
-    if (isInsideMetaFolder(item))
+    // Пользователь без назначенных ролей — pass-through к родителям
+    if (!hasUserBoundary(storage)) {
+        let p = storage.parent;
+        while (p) {
+            if (p instanceof FS.$class && await hasClassAccess(p, params))
+                return true;
+            p = p.parent;
+        }
         return false;
-
-    if (!hasUserBoundary(storage))
-        return false;
-
-    let p = storage.parent;
-    while (p) {
-        if (p instanceof FS.$class && await hasClassAccess(p, params))
-            return true;
-        p = p.parent;
     }
-    return false;
+
+    const roles = await resolveRoles(storage, params);
+    if (!roles.length)
+        return false;
+
+    // Чтение: отдаём все зоны, доступные по любым ролям
+    return true;
 }
 
 async function canWriteUsersBranch(item, params) {
@@ -385,13 +488,23 @@ async function canWriteDataClassItem(item, params) {
     if (!storage)
         return false;
 
-    if (await isClassAdmin(storage, params))
-        return true;
+    // Запись требует явного указания роли
+    const role = params.role;
+    if (!role)
+        return false;
 
-    if (isInsideMetaFolder(item))
-        return hasClassAccess(storage, params);
+    // Проверяем, что пользователь действительно имеет эту роль
+    const roles = await resolveRoles(storage, params);
+    if (!roles.includes(role))
+        return false;
 
-    return false;
+    // Определяем зону элемента и сверяем с зоной записи роли
+    const zone = resolveZone(item);
+    const allowedZone = WRITE_ZONE_BY_ROLE[role];
+    if (!allowedZone)
+        return false;
+
+    return zone === allowedZone;
 }
 
 /**

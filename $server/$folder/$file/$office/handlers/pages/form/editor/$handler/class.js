@@ -9,7 +9,6 @@ export default {
     },
     $item: undefined,
     save() {
-        debugger
         this.$('oda-only-office').save();
     }
 }
@@ -24,7 +23,7 @@ ODA({
         </style>
         <iframe class="flex" style="border: none"></iframe>
     `,
-    officeUrl: 'https://work.odant.org/onlyoffice/',
+    get officeUrl() { return location.origin + '/onlyoffice/' },
     get apiUrl() { return this.officeUrl + 'web-apps/apps/api/documents/api.js' },
     get commandServiceUrl() { return this.officeUrl + 'coauthoring/CommandService.ashx' },
     get url() { return this.$item.url },
@@ -144,7 +143,6 @@ ODA({
         this.iframe.src = URL.createObjectURL(blob);
     },
     async save() {
-        debugger
         const url = this.commandServiceUrl;
         const response = await fetch(url, {
             method: 'POST',
@@ -154,6 +152,10 @@ ODA({
                 userdata: 'save file'
             })
         })
+        if (!response.ok)
+            throw new Error('File not saved')
+        const json = await response.json();
+        console.info('ONLYOFFICE forcesave response', json);
         this.$item.isChanged = false;
     }
 })

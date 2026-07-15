@@ -62,6 +62,10 @@ ODA({is: 'work-form',
                 <div flex></div>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
+                            <oda-button :icon="roleIcon" :icon-size  @tap="nextRole"
+                                style="border-radius: 4px;"
+                                center
+                            ></oda-button>
                         <div
                             ~if="view?.allowSave"
                             :disabled="saving"
@@ -180,6 +184,32 @@ ODA({is: 'work-form',
         }
     },
     focusedItem: null,
+    get roleIcon() {
+        return this.getRoleIcon(this.activeRole);
+    },
+    get roles(){
+        return this.$item?.fetch('roles');
+    },
+    async getRoleIcon(role){
+        return  ({
+            admin: 'fontawesome:s-user-shield',
+            master: 'fontawesome:s-user-tie',
+            slave: 'fontawesome:s-user-pen',
+        })[await role]
+    },
+    activeRole: {
+        $save: true,
+        async get (){
+            const roles = await this.roles;
+            return roles[0];
+        }
+    },
+    async nextRole(){
+        const roles = await this.roles;
+        const act_role = await this.activeRole;
+        let idx = roles.indexOf(act_role);
+        this.activeRole = roles[idx + 1] || roles[0];
+    },
     modal: false,
     dialog: false,
     get isTop(){
@@ -211,7 +241,8 @@ ODA({is: 'work-form',
                 if (this.view_control?.save) {
                     await this.view_control?.save();
                 } else {
-                    await this.$item.save(this.view_control?.body, {});
+                    const saveParams = this.activeRole ? {role: this.activeRole} : {};
+                    await this.$item.save(this.view_control?.body, saveParams);
                 }
             }
             catch (err) {

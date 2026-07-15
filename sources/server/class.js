@@ -332,6 +332,34 @@ export class $class extends $folder{
             throw new Error('Указана несуществующая точка наследования');
         return folder;
     }
+
+    /**
+     * Все роли пользователя в данном классе.
+     * @ai Получить список ролей текущего пользователя в классе
+     * @ai.params {"user": "объект пользователя из сессии"}
+     * @ai.returns Массив строк: 'admin', 'master', 'slave'
+     */
+    async roles(params = {}){
+        return Security.resolveRoles(this, params);
+    }
+
+    /**
+     * Папка зоны действия по роли.
+     * admin → системная зона (meta_folder)
+     * master → управленческая зона (distributed_folder/$work)
+     * slave → рабочая зона (meta_folder/$work)
+     */
+    async get_storage(params = {}){
+        const {role} = params;
+        switch(role){
+            case Security.ROLES.MASTER:
+                const dist = await this.resolveDistributedFolder();
+                return dist._get_item('$work', FS.$folder);
+            case Security.ROLES.SLAVE:
+                return this.meta_folder._get_item('$work', FS.$folder);
+        }
+        return this.meta_folder
+    }
     async loadMergedBaseline(tailSkip, files) {
         files ??= await this.get_item('~/class.js');
         files = files.slice(0, -tailSkip);
@@ -394,32 +422,14 @@ export class $class extends $folder{
 
         return true;
     }
-    async getFolderToSaveFile(params = {}) {
-        if(!params.filename)
-            throw new Error('Не указано имя сохраняемого файла');
-        let {inherit} = params;
-        let folder_name = mime.contentType(params.filename);
-        if(folder_name)
-            folder_name = folder_name.split('/')[0];
-        if(!folder_name || folder_name === 'application'){
-            let split = params.filename.split('.');
-            if(split.length > 1)
-                folder_name = split.pop().toLowerCase();
-            else
-                folder_name = 'etc'
-        }
-        let root = inherit
-            ? await this.resolveDistributedFolder()
-            : this.meta_folder;
-        return root._get_item(folder_name, FS.$folder);
-
-    }
     async save_file(params = {}){
-        const folder = await this.getFolderToSaveFile(params);
+        const storage = await this.get_storage(params);
+        const folder = await storage.getFolderToSaveFile(params);
         return folder.save_file(params);
     }
     async get_write_stream(params) {
-        const folder = await this.getFolderToSaveFile(params);
+        const storage = await this.get_storage(params);
+        const folder = await storage.getFolderToSaveFile(params);
         return folder.get_write_stream(params);
     }
     get type(){
@@ -1017,32 +1027,76 @@ export class $class extends $folder{
         return data;
     }
 
+    /** Администраторы класса: наследуемые + собственный #security.admin. */
     get admins(){
         return new AsyncPromise(async () =>{
-            let admins = await this.$parent?.admins || [];
+            let admins = Array.isArray(await this.$parent?.admins) ? [...(await this.$parent?.admins)] : [];
             await this.info();
-            let user = this.DATA['#security']?.admin;
-            if(user){
-                let users = await WORK.$users;
-                user = await users.get_item('//' + user);
-                if (user){
-                    await user.info();
-                    admins.add(user);
+            let adminId = this.DATA['#security']?.admin;
+            if(adminId){
+                let usersRoot = await WORK.$users;
+                let admin = await usersRoot.get_item('//' + adminId);
+                if (admin){
+                    await admin.info();
+                    if (!admins.find(a => a?.id === admin.id))
+                        admins.push(admin);
                 }
             }
             return admins;
         })
     }
-    get users(){
+    /** Управляющий класса: #security.master как user-объект (или null). */
+    get masters(){
         return new AsyncPromise(async ()=>{
             await this.info();
-            let users = this.DATA['#security']?.users;
-            if(users?.length){
-                let usersList = await WORK.$users;
-                users = await Promise.all(users.map(id=>usersList.get_item('//'+id)));
-                users = users.filter(Boolean);
+            let masterId = this.DATA['#security']?.master;
+            if(!masterId)
+                return [];
+            let usersRoot = await WORK.$users;
+            let master = await usersRoot.get_item('//' + masterId);
+            if (master){
+                await master.info();
+                return [master];
             }
-            return users;
+            return [];
+        })
+    }
+    /** Исполнители класса: наследуемые + собственные #security.slaves. */
+    get slaves(){
+        return new AsyncPromise(async ()=>{
+            let slaves = Array.isArray(await this.$parent?.slaves) ? [...(await this.$parent?.slaves)] : [];
+            await this.info();
+            let slaveIds = this.DATA['#security']?.slaves;
+            if(slaveIds?.length){
+                let usersRoot = await WORK.$users;
+                for (const id of slaveIds) {
+                    let slave = await usersRoot.get_item('//' + id);
+                    if (slave){
+                        await slave.info();
+                        if (!slaves.find(s => s?.id === slave.id))
+                            slaves.push(slave);
+                    }
+                }
+            }
+            return slaves;
+        })
+    }
+    /** Все назначенные пользователи класса (объединение admin + master + slaves). */
+    get users(){
+        return new AsyncPromise(async ()=>{
+            const [admins, masters, slaves] = await Promise.all([
+                this.admins,
+                this.masters,
+                this.slaves,
+            ]);
+            const all = [...admins, ...masters, ...slaves];
+            const seen = new Set();
+            return all.filter(u => {
+                if (!u?.id || seen.has(u.id))
+                    return false;
+                seen.add(u.id);
+                return true;
+            });
         })
     }
 }

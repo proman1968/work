@@ -22,7 +22,7 @@ ODA({
         </style>
         <iframe class='flex' style="border: none"></iframe>      
     `,
-    officeUrl: 'https://work.odant.org/onlyoffice/',
+    get officeUrl() { return location.origin + '/onlyoffice/' },
     get apiUrl() { return this.officeUrl + 'web-apps/apps/api/documents/api.js' },
     get commandServiceUrl() { return this.officeUrl + 'coauthoring/CommandService.ashx' },
     get url() { return this.$item.url },
