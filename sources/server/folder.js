@@ -5,7 +5,6 @@ import * as mime from "mime-types";
 import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
- import * as Security from '../host/security.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
@@ -146,12 +145,19 @@ export class $folder extends $item{
         super(data);
         this.parent = parent;
     }
+    /** Делегирование проверки доступа к классу-владельцу. */
+    async allowAccess(params = {}, level) {
+        const owner = this.$owner || this.$class;
+        if (owner && owner !== this)
+            await owner.allowAccess(params, level);
+    }
+
     /**
      * @ai Удалить папку рекурсивно (требует права администратора)
      * @ai.returns Строка с подтверждением удаления
      */
     async delete(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         if(!fs.existsSync(this.dir))
             return false;
         await fsp.rm(this.dir, {recursive: true});
@@ -586,7 +592,7 @@ export class $folder extends $item{
      * @ai.returns Массив найденных совпадений [{path, line, text}]
      */
     async find_text(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const text = String(params.text ?? params.post ?? '');
         if (!text)
             throw new Error('find_text: не указан текст поиска (params.text или params.post)');
@@ -681,7 +687,7 @@ export class $folder extends $item{
      * @ai.returns {className, properties, methods, json_model}
      */
     async get_schema(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
         const props = this[R]?.props || {};
         const properties = [];
@@ -1078,7 +1084,8 @@ export class $folder extends $item{
         else if (result?.info)
             await result?.info?.();
 
-        return Security.filterGetItemResult(result, params);
+        // TODO: фильтрация результата через canSee
+        return result;
     }
     async execute(p = {}){
         await this.info();
@@ -1188,7 +1195,7 @@ export class $folder extends $item{
      * @ai.returns Объект с путём сохранённого файла и лога истории
      */
     async save_file(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
 
@@ -1232,7 +1239,7 @@ export class $folder extends $item{
 
     write_streams = Object.create(null);
     async get_write_stream(params) {
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла')
 
@@ -1341,7 +1348,7 @@ export class $folder extends $item{
      * @ai.returns Созданный элемент
      */
     async create(p = {}) {
-        await Security.allowAccess(this, p, Security.ACCESS_LEVEL.WRITE);
+        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
         if (p.type === '$file') {
             // загрузка файла(ов)
             if (p.post?.files?.length) {

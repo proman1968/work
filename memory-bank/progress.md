@@ -4,6 +4,15 @@
 
 ## Завершённые задачи
 
+### Рефакторинг системы безопасности (admin/master/slaves) — 15.07.2026
+- **Модель:** 3 роли (admin, master, slaves), 3 зоны (SYSTEM, MANAGEMENT, WORK)
+- admin/master наследуются вниз, slave — только класс назначения
+- Запись требует params.role от клиента
+- **Этап 1 ✅:** Ядро безопасности в `$class` — roles/canSee/canWrite/allowAccess/resolveZone
+- **Этап 2 ✅:** `$folder`+`$file` — делегирование allowAccess к $owner, убран импорт security.js
+- **Изменённые файлы:** `sources/server/class.js`, `sources/server/folder.js`, `sources/server/file.js`
+- **Осталось:** HTTP-слой, клиент, удаление security.js, очистка легаси
+
 ### Глобальное переименование data.js → class.js — 14.07.2026
 - **Масштаб:** 159 файлов переименовано, 46 файлов кода обновлено
 - Имя `'data.js'` зашито в серверном коде ~10 местах (`f.id === 'data.js'`, `filename: 'data.js'`, `get_item('~/data.js')`)

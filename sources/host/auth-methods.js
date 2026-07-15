@@ -3,7 +3,6 @@ import * as fs from 'node:fs';
 import { DEV_MODE, HOST, CHALLENGE_TTL_MS } from './config.js';
 import { mailer } from './mail.js';
 import * as CORE from '../server/index.js';
-import { ensureBootstrapAdmin } from './security.js';
 import { $server } from '../server/server.js';
 
 const REGISTER_CODE_TTL_MS = 10 * 60 * 1000;
@@ -117,7 +116,7 @@ export const authMethods = {
         user.id = uid;
         user.uid = uid;
 
-        await ensureBootstrapAdmin(WORK, uid, params);
+        await WORK.ensureBootstrapAdmin(uid, params);
 
         $server.broadcastAuthChangedToSession(user, { uid, reason: 'register' });
 

@@ -4,9 +4,34 @@ import { $item } from '../core.js';
 import * as mime from "mime-types";
 import { FS } from './index.js';
 import { $folder } from './folder.js';
-import * as Security from '../host/security.js';
+
+const ACCESS_DENIED = 'Доступ запрещён';
+
 export class $class extends $folder{
     static sourceUrl = import.meta.url;
+
+    /** Роли пользователей в классе. */
+    static ROLES = { ADMIN: 'admin', MASTER: 'master', SLAVE: 'slave' };
+
+    /** Зоны доступа внутри класса. */
+    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work' };
+
+    /** Уровни доступа к методам. */
+    static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'admin' };
+
+    /** Dev-режим: enforcement безопасности отключён. */
+    static get isDevMode() {
+        const raw = process.env.WORK_DEV ?? process.env.dev;
+        if (raw == null) return false;
+        return String(raw).toLowerCase() !== 'false' && raw !== '0';
+    }
+
+    /** Проверить, что путь childPath находится внутри parentPath. */
+    static isPathInside(childPath, parentPath) {
+        if (!childPath || !parentPath) return false;
+        if (childPath === parentPath) return true;
+        return childPath.startsWith(parentPath + '/');
+    }
 
     // Описания методов, специфичных для $class (наследуются от $folder)
     static TOOL_DESCRIPTIONS = {
@@ -282,7 +307,7 @@ export class $class extends $folder{
      * @ai.returns Объединённый объект class.js
      */
     async load(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, $class.ACCESS_LEVEL.READ);
         let files = await this.tilde;
         files = files.filter(f=>f.id === 'class.js');
         return $server.mergeFiles(files, params.reset);
@@ -333,14 +358,60 @@ export class $class extends $folder{
         return folder;
     }
 
+    /** uid пользователя из params.user (сессия host). */
+    static resolveUid(params = {}) {
+        const user = params.user;
+        if (!user?.uid)
+            return null;
+        return user.$user?.id ?? user.uid;
+    }
+
+    /** На классе назначен хотя бы один пользователь (любая роль). */
+    hasAssignments() {
+        const security = this.DATA?.['#security'];
+        if (!security)
+            return false;
+        return Boolean(security.admin) || Boolean(security.master)
+            || (Array.isArray(security.slaves) && security.slaves.length > 0);
+    }
+
+    /**
+     * Первый зарегистрированный пользователь → #security.admin.
+     * Не перезаписывает уже заданного admin.
+     */
+    async ensureBootstrapAdmin(uid, params = {}) {
+        if (!uid)
+            return false;
+        await this.info({ reset: true });
+        if (this.DATA?.['#security']?.admin)
+            return false;
+        const security = Object.assign({}, this.DATA?.['#security'], { admin: uid });
+        const post = this.constructor.toScript({ '#security': security });
+        await this.save({ post, user: WORK });
+        this.reset?.();
+        return true;
+    }
+
     /**
      * Все роли пользователя в данном классе.
+     * Проверяет геттеры admins/masters/slaves (наследуемые/локальные).
      * @ai Получить список ролей текущего пользователя в классе
      * @ai.params {"user": "объект пользователя из сессии"}
      * @ai.returns Массив строк: 'admin', 'master', 'slave'
      */
-    async roles(params = {}){
-        return Security.resolveRoles(this, params);
+    async roles(params = {}) {
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            return [];
+        const roles = [];
+        const [admins, masters, slaves] = await Promise.all([this.admins, this.masters, this.slaves]);
+        if (admins.some(u => u?.id === uid))
+            roles.push($class.ROLES.ADMIN);
+        if (masters.some(u => u?.id === uid))
+            roles.push($class.ROLES.MASTER);
+        if (slaves.some(u => u?.id === uid))
+            roles.push($class.ROLES.SLAVE);
+        return roles;
     }
 
     /**
@@ -352,10 +423,10 @@ export class $class extends $folder{
     async get_storage(params = {}){
         const {role} = params;
         switch(role){
-            case Security.ROLES.MASTER:
+            case $class.ROLES.MASTER:
                 const dist = await this.resolveDistributedFolder();
                 return dist._get_item('$work', FS.$folder);
-            case Security.ROLES.SLAVE:
+            case $class.ROLES.SLAVE:
                 return this.meta_folder._get_item('$work', FS.$folder);
         }
         return this.meta_folder
@@ -374,7 +445,7 @@ export class $class extends $folder{
      * @ai.returns true при успешном сохранении
      */
     async save(params = {}){
-        //await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
+        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
         let { post } = params;
 
         const self_folder = this.meta_folder;
@@ -970,28 +1041,162 @@ export class $class extends $folder{
             fs.mkdirSync(dir, { recursive: true });
     }
 
-    hasUserBoundary(){
-        return Security.hasUserBoundary(this);
+    /**
+     * Определить зону элемента относительно текущего класса.
+     * Обходит предков элемента внутри класса:
+     * — элемент внутри distributed $work → MANAGEMENT
+     * — элемент внутри meta $work → WORK
+     * — элемент внутри метапапки, но вне $work → SYSTEM
+     */
+    resolveZone(item) {
+        if (!item || typeof item !== 'object')
+            return null;
+        let p = item;
+        while (p) {
+            if (p.id === '$work') {
+                // Проверяем, кто родитель $work
+                // distributed $work → внутри цепочки наследования ($folder)
+                // meta $work → внутри метапапки класса
+                if (p.parent && p.parent.id === '$folder')
+                    return $class.ZONES.MANAGEMENT;
+                return $class.ZONES.WORK;
+            }
+            // Достигли класса — стоп
+            if (p instanceof $class && p !== this)
+                break;
+            if (p === this)
+                break;
+            p = p.parent;
+        }
+        return $class.ZONES.SYSTEM;
     }
 
-    async isAdmin(params = {}){
-        return Security.isClassAdmin(this, params);
+    /**
+     * Видимость элемента (чтение).
+     * admin/master — видят всё от точки назначения вниз.
+     * slave — видит только класс назначения (без дочерних классов).
+     */
+    async canSee(item, params = {}) {
+        if ($class.isDevMode) return true;
+        if (!item || typeof item !== 'object') return true;
+        const uid = $class.resolveUid(params);
+        if (!uid) {
+            // Системные пути без пользователя
+            return this._isSystemPath(item);
+        }
+        // WORK admin видит всё
+        if (globalThis.WORK && await this._isWorkAdmin(params))
+            return true;
+        // Системные элементы видны всем
+        if (this._isSystemItem(item))
+            return true;
+        // Класс без назначений — pass-through к родителю
+        const roles = await this.roles(params);
+        if (!this.hasAssignments() && !roles.length) {
+            const parent = this.$parent;
+            if (parent)
+                return parent.canSee(item, params);
+            return false;
+        }
+        if (!roles.length)
+            return false;
+        // admin и master видят всё от точки вниз
+        if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.MASTER))
+            return true;
+        // slave видит только свой класс
+        if (roles.includes($class.ROLES.SLAVE))
+            return this._isSlaveVisible(item, params);
+        return false;
     }
 
-    async isAssignedUser(params = {}){
-        return Security.isAssignedOnClass(this, params);
+    /**
+     * Право записи (требует params.role).
+     * admin → SYSTEM (всё в метапапке, КРОМЕ $work)
+     * master → MANAGEMENT (distributed $work, только класс назначения)
+     * slave → WORK (meta $work, только класс назначения)
+     */
+    async canWrite(item, params = {}) {
+        if ($class.isDevMode) return true;
+        if (!item || typeof item !== 'object') return false;
+        const uid = $class.resolveUid(params);
+        if (!uid) return false;
+        if (globalThis.WORK && await this._isWorkAdmin(params))
+            return true;
+        if (this._isSystemItem(item))
+            return false;
+        const role = params.role;
+        if (!role) return false;
+        const roles = await this.roles(params);
+        if (!roles.includes(role))
+            return false;
+        const zone = this.resolveZone(item);
+        const allowedZone = {
+            [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
+            [$class.ROLES.MASTER]: $class.ZONES.MANAGEMENT,
+            [$class.ROLES.SLAVE]: $class.ZONES.WORK,
+        }[role];
+        return zone === allowedZone;
     }
 
-    async assertCanExecuteMethod(method, params = {}){
-        return Security.assertMethodAccess(this, method, params);
+    /**
+     * Единая проверка доступа: read → canSee, write → canWrite, admin → admin точки.
+     */
+    async allowAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
+        if ($class.isDevMode) return;
+        if (!params?.user) return;
+        if (params.user === globalThis.WORK) return;
+        const uid = $class.resolveUid(params);
+        if (!uid && level !== $class.ACCESS_LEVEL.READ)
+            throw new Error(ACCESS_DENIED);
+        if (globalThis.WORK && await this._isWorkAdmin(params))
+            return;
+        switch (level) {
+            case $class.ACCESS_LEVEL.READ:
+                if (!(await this.canSee(this, params)))
+                    throw new Error(ACCESS_DENIED);
+                break;
+            case $class.ACCESS_LEVEL.WRITE:
+                if (!(await this.canWrite(this, params)))
+                    throw new Error(ACCESS_DENIED);
+                break;
+            case $class.ACCESS_LEVEL.ADMIN:
+                if (globalThis.WORK && await this._isWorkAdmin(params))
+                    return;
+                throw new Error(ACCESS_DENIED);
+            default:
+                throw new Error(ACCESS_DENIED);
+        }
     }
 
-    async _assertAdmin(params = {}){
-        return Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
+    /** Проверка admin на корневом WORK. */
+    async _isWorkAdmin(params = {}) {
+        if (!globalThis.WORK) return false;
+        return globalThis.WORK !== this && await globalThis.WORK.roles?.(params).then(r => r.includes($class.ROLES.ADMIN));
+    }
+
+    /** Системный путь ($server, sources, oda, корень WORK). */
+    _isSystemPath(item) {
+        const path = item?.path ?? '';
+        if (!path) return true;
+        if (path === '/$server' || path.startsWith('/$server/')) return true;
+        if (path.startsWith('/sources') || path.startsWith('/oda')) return true;
+        return false;
+    }
+
+    _isSystemItem(item) {
+        if (!item) return false;
+        if (item === globalThis.WORK) return true;
+        return this._isSystemPath(item);
+    }
+
+    /** Slave видит элементы только своего класса (не дочерние). */
+    _isSlaveVisible(item, params) {
+        const itemClass = item.$class ?? item.$owner;
+        return itemClass === this;
     }
 
     async read_secret(params = {}){
-        await this._assertAdmin(params);
+        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;
         if (!name)
             throw new Error('Не указано имя модуля');
@@ -1008,7 +1213,7 @@ export class $class extends $folder{
     }
 
     async save_secret(params = {}){
-        await this._assertAdmin(params);
+        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;
         if (!name)
             throw new Error('Не указано имя модуля');
@@ -1045,37 +1250,39 @@ export class $class extends $folder{
             return admins;
         })
     }
-    /** Управляющий класса: #security.master как user-объект (или null). */
+    /** Управляющие класса: наследуемые + собственный #security.master. */
     get masters(){
         return new AsyncPromise(async ()=>{
+            let masters = Array.isArray(await this.$parent?.masters) ? [...(await this.$parent?.masters)] : [];
             await this.info();
             let masterId = this.DATA['#security']?.master;
-            if(!masterId)
-                return [];
-            let usersRoot = await WORK.$users;
-            let master = await usersRoot.get_item('//' + masterId);
-            if (master){
-                await master.info();
-                return [master];
+            if(masterId){
+                let usersRoot = await WORK.$users;
+                let master = await usersRoot.get_item('//' + masterId);
+                if (master){
+                    await master.info();
+                    if (!masters.find(m => m?.id === master.id))
+                        masters.push(master);
+                }
             }
-            return [];
+            return masters;
         })
     }
-    /** Исполнители класса: наследуемые + собственные #security.slaves. */
+    /** Исполнители класса: только собственные #security.slaves (НЕ наследуются). */
     get slaves(){
         return new AsyncPromise(async ()=>{
-            let slaves = Array.isArray(await this.$parent?.slaves) ? [...(await this.$parent?.slaves)] : [];
             await this.info();
             let slaveIds = this.DATA['#security']?.slaves;
-            if(slaveIds?.length){
-                let usersRoot = await WORK.$users;
-                for (const id of slaveIds) {
-                    let slave = await usersRoot.get_item('//' + id);
-                    if (slave){
-                        await slave.info();
-                        if (!slaves.find(s => s?.id === slave.id))
-                            slaves.push(slave);
-                    }
+            if(!slaveIds?.length)
+                return [];
+            let usersRoot = await WORK.$users;
+            let slaves = [];
+            for (const id of slaveIds) {
+                let slave = await usersRoot.get_item('//' + id);
+                if (slave){
+                    await slave.info();
+                    if (!slaves.find(s => s?.id === slave.id))
+                        slaves.push(slave);
                 }
             }
             return slaves;

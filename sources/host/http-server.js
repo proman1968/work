@@ -8,7 +8,6 @@ import { pipeline, Readable } from 'node:stream';
 import multiparty from 'multiparty';
 import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.js';
 import * as CORE from '../server/index.js';
-import { filterHttpTreeResult } from './security.js';
 import { $server } from '../server/server.js';
 
 function sendErrorResponse(response, error) {
@@ -338,9 +337,7 @@ export function createRequestHandler() {
 
         const isFilePayload = item?.constructor === CORE.$file
             && (!method || method === 'load' || method === 'script' || method === 'download');
-        if (!isFilePayload && (Array.isArray(result) || (result && typeof result === 'object')))
-            result = await filterHttpTreeResult(result, params, { method });
-
+        // TODO: canSee-фильтрация
         const header = { "Access-Control-Allow-Origin": "*", "mode": 'no-cors', "Content-Type": "application/json" };
         // if (method === 'load_icon') {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';

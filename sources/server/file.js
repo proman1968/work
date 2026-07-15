@@ -7,7 +7,6 @@ import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
-import * as Security from '../host/security.js';
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
 
@@ -110,7 +109,7 @@ export class $file extends $folder{
         })
     }
     async delete(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.ADMIN);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
         let chat = await this.$parent.chat();
         let row = chat.find(r=>r.path === this.path);
@@ -165,7 +164,7 @@ export class $file extends $folder{
      * @ai.returns Строка (при encoding) или Buffer
      */
     async load(params = {encoding: 'utf8'}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         if(fs.existsSync(this.dir)){
             return fsp.readFile(this.dir, params);
         }
@@ -189,7 +188,7 @@ export class $file extends $folder{
         });
     }
     async download(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         return fs.createReadStream(this.dir, params);
     }
     /**
@@ -198,7 +197,7 @@ export class $file extends $folder{
      * @ai.returns this (сохранённый файл)
      */
     async save(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(this.inHistory || this.inRAG){
             if(!fs.existsSync(this.parent.real_dir)){
                 fs.mkdirSync(this.parent.real_dir, {recursive: true});
@@ -216,7 +215,7 @@ export class $file extends $folder{
      * @ai.returns Полный текст файла после применения правок
      */
     async edit_file(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.WRITE);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         const diff = typeof params.post === 'string' ? params.post : params.diff;
         if (!diff)
             throw new Error('edit_file: не указан diff (params.post или params.diff)');
@@ -287,7 +286,7 @@ export class $file extends $folder{
      * @ai.returns Массив строк с import-операторами
      */
     async get_imports(params = {}){
-        await Security.allowAccess(this, params, Security.ACCESS_LEVEL.READ);
+        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const content = await this.load({ encoding: 'utf-8' });
         if (typeof content !== 'string')
             return [];
