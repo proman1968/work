@@ -18,6 +18,7 @@ export default {
         let text = '';
         let requestModel = '';
         let actMode = false;
+        let planAction = '';
         const raw = post ?? params.text ?? params.post ?? '';
         if (typeof raw === 'string' && raw.trim().startsWith('{')) {
             try {
@@ -25,13 +26,14 @@ export default {
                 text = String(parsed.text ?? '').trim();
                 requestModel = String(parsed.model ?? '').trim();
                 actMode = parsed.act === true;
+                planAction = String(parsed.planAction ?? '').trim();
             } catch {
                 text = String(raw).trim();
             }
         } else {
             text = String(raw).trim();
         }
-        if (!text)
+        if (!text && !planAction)
             throw new Error('Текст промпта пуст');
 
         const body = await loadTaskBody(taskAi);
@@ -43,12 +45,44 @@ export default {
 
         const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
         body.chat ??= [];
-        body.chat.push({
-            role: 'user',
-            content: text,
-            time: Date.now(),
-            sender: sender,
-        });
+
+        // Обработка действий пользователя с планом (accept / reject / continue)
+        if (planAction && body.plan) {
+            const planObj = Array.isArray(body.plan) ? { steps: body.plan, status: 'proposed' } : body.plan;
+            if (planAction === 'accept' && planObj.status === 'proposed') {
+                planObj.status = 'executing';
+                body.plan = planObj;
+                body.chat.push({
+                    role: 'user',
+                    content: 'План принят. Приступай к выполнению первого шага.',
+                    time: Date.now(),
+                    sender: sender,
+                });
+            } else if (planAction === 'reject' && planObj.status === 'proposed') {
+                body.chat.push({
+                    role: 'user',
+                    content: 'План отклонён. Уточни у пользователя, что именно не подходит, задай вопросы через блок <questions>, затем предложи исправленный план.',
+                    time: Date.now(),
+                    sender: sender,
+                });
+                body.plan = null;
+            } else if (planAction === 'continue' && planObj.status === 'completed') {
+                body.chat.push({
+                    role: 'user',
+                    content: 'Проанализируй результат и предложи план дальнейших действий.',
+                    time: Date.now(),
+                    sender: sender,
+                });
+                body.plan = null;
+            }
+        } else if (text) {
+            body.chat.push({
+                role: 'user',
+                content: text,
+                time: Date.now(),
+                sender: sender,
+            });
+        }
 
         const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
         // Короткий путь для WS-сообщений (клиент хранит элементы по short)
@@ -118,8 +152,24 @@ export default {
             // Извлекаем план из ответа ИИ
             const plan = parsePlan(fullResponse);
             if (plan) {
-                body.plan = plan;
-                WORK.wsSend?.({ type: "chat.plan", path: wsPath, plan });
+                body.plan = { steps: plan, status: 'proposed' };
+                await writeTaskBody(fullPath, body);
+                notifyChanged(fullPath);
+                WORK.wsSend?.({ type: "chat.plan", path: wsPath, plan: body.plan });
+                WORK.wsSend?.({ type: "chat.done", path: wsPath });
+                return { ok: true, plan: 'proposed' };
+            }
+
+            // Проверяем завершённость плана (все шаги done)
+            if (body.plan && body.plan.status === 'executing') {
+                const allDone = body.plan.steps?.every(s => s.status === 'done');
+                if (allDone) {
+                    body.plan.status = 'completed';
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
+                    WORK.wsSend?.({ type: "chat.done", path: wsPath });
+                    return { ok: true, plan: 'completed' };
+                }
             }
 
             const toolCalls = parseToolCalls(fullResponse);
@@ -331,8 +381,11 @@ function buildHistoryFromChat(body) {
         systemContent += '\n\n## Память (.mem)\n' + body.mem;
     if (body.readme)
         systemContent += '\n\n## Описание класса (readme.md)\n' + body.readme;
-    if (body.plan)
-        systemContent += '\n\n## Текущий план\n' + JSON.stringify(body.plan, null, 2);
+    if (body.plan) {
+                const planStatus = body.plan.status || 'executing';
+                const planSteps = body.plan.steps || body.plan;
+                systemContent += '\n\n## Текущий план (статус: ' + planStatus + ')\n' + JSON.stringify(planSteps, null, 2);
+    }
     if (systemContent)
         messages.push({ role: 'system', content: systemContent });
 

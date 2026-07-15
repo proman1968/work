@@ -8,8 +8,9 @@ export default {
         this.fire('change');
     },
     $item: undefined,
-    save(...args) {
-        console.log(args);
+    save() {
+        debugger
+        this.$('oda-only-office').save();
     }
 }
 
@@ -141,6 +142,19 @@ ODA({
         })
         const blob = new Blob([html(this.apiUrl)], { type: 'text/html' });
         this.iframe.src = URL.createObjectURL(blob);
+    },
+    async save() {
+        debugger
+        const url = this.commandServiceUrl;
+        const response = await fetch(url, {
+            method: 'POST',
+            body: JSON.stringify({
+                c: 'forcesave',
+                key: this.key,
+                userdata: 'save file'
+            })
+        })
+        this.$item.isChanged = false;
     }
 })
 

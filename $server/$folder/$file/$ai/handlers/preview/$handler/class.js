@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//button, oda/components/toggle/toggle, ~/lib//chat-item, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//button, ~/lib//chat-item, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     template: /* html */`
         <style>
             :host {
@@ -22,13 +22,41 @@ export default {
             .chat-group {
                 @apply --vertical;
             }
+            .plan-group-header {
+                @apply --info-invert;
+                @apply --raised;
+                position: sticky;
+                top: 0;
+                z-index: 2;
+            }
+            .plan-group-header .msg-user {
+                padding: 4px 8px;
+            }
+            .plan-group-exchanges {
+                @apply --vertical;
+                border-left: 3px solid var(--info-color);
+                margin-left: 8px;
+            }
+            .plan-group-completed .plan-group-header {
+                opacity: .6;
+            }
+            .plan-group-completed .plan-group-exchanges {
+                border-left-color: var(--success-color);
+            }
+            .exchange {
+                @apply --vertical;
+            }
+            .exchange .msg-user {
+                @apply --content;
+                @apply --raised;
+                padding: 8px;
+                font-size: medium;
+                opacity: .8;
+            }
             .msg-user {
                 @apply --info-invert;
                 @apply --raised;
                 padding: 4px 8px;
-                position: sticky;
-                top: 0;
-                z-index: 1;
             }
             .msg-reasoning {
                 @apply --content;
@@ -155,9 +183,8 @@ export default {
                 gap: 2px;
             }
             .question-field label {
-                font-size: xx-small;
+                font-size: medium;
                 @apply --bold;
-                opacity: .8;
             }
             .question-field input, .question-field textarea, .question-field select {
                 @apply --content;
@@ -174,33 +201,84 @@ export default {
                 resize: vertical;
             }
         </style>
-        <oda-chat-plan ~if="planSteps.length" :steps="planSteps" @tap-step="togglePlanStep($event.detail.value)"></oda-chat-plan>
         <div class="thread" flex vertical @scroll="_onScroll">
             <div flex></div>
             <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer>
-            <div class="chat-group" ~for="chatGroups">
-                <div class="msg-user" horizontal>
-                    <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
-                    <div class="msg-time" ~if="$for.item.prompt.timeText">{{$for.item.prompt.timeText}}</div>
-                </div>
-                <div class="msg-assistant" ~for="$for.item.responses">
-                    <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
-                        <summary center header horizontal><span flex>Мысли</span><oda-icon icon="icons:chevron-right" :icon-size></oda-icon></summary>
-                        <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
-                    </details>                
-                    <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
-                    <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
-                    <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
-                        <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
-                        <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
+            <div class="chat-group" ~for="chatGroups" :class="$for.item.type === 'plan' ? ($for.item.completed ? 'plan-group-completed' : '') : ''">
+                <!-- План-группа -->
+                <div ~if="$for.item.type === 'plan'" class="plan-group-container">
+                    <div class="plan-group-header">
+                        <div class="msg-user" horizontal>
+                            <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
+                            <div class="msg-time" ~if="$for.item.prompt.timeText">{{$for.item.prompt.timeText}}</div>
+                        </div>
+                        <oda-chat-plan ~if="$for.item.planSteps?.length" :steps="$for.item.planSteps" @tap-step="togglePlanStep($event.detail.value)"></oda-chat-plan>
                     </div>
-                    <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
-                    <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
-                        <summary center header horizontal><oda-icon icon="icons:chevron-right" :icon-size></oda-icon><span flex>🔧 {{$for.$for.item.tool}}</span></summary>
-                        <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
-                    </details>
+                    <div class="plan-group-exchanges">
+                        <div class="exchange" ~for="$for.item.responses">
+                            <div class="msg-user" horizontal ~if="$for.$for.item.role === 'user'">
+                                <div class="msg-content" flex>{{$for.$for.item.content}}</div>
+                                <div class="msg-time" ~if="$for.$for.item.timeText">{{$for.$for.item.timeText}}</div>
+                            </div>
+                            <div class="msg-assistant" ~if="$for.$for.item.role !== 'user'">
+                                <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
+                                    <summary center header horizontal><span flex>Мысли</span><oda-icon icon="icons:chevron-right" :icon-size></oda-icon></summary>
+                                    <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
+                                </details>
+                                <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
+                                <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
+                                <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
+                                    <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
+                                    <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
+                                </div>
+                                <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
+                                <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
+                                    <summary center header horizontal><oda-icon icon="icons:chevron-right" :icon-size></oda-icon><span flex>🔧 {{$for.$for.item.tool}}</span></summary>
+                                    <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
+                                </details>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Простая группа -->
+                <div ~if="$for.item.type !== 'plan'" class="simple-group-container">
+                    <div class="msg-user" horizontal>
+                        <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
+                        <div class="msg-time" ~if="$for.item.prompt.timeText">{{$for.item.prompt.timeText}}</div>
+                    </div>
+                    <div class="msg-assistant" ~for="$for.item.responses">
+                        <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
+                            <summary center header horizontal><span flex>Мысли</span><oda-icon icon="icons:chevron-right" :icon-size></oda-icon></summary>
+                            <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
+                        </details>
+                        <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
+                        <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
+                        <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
+                            <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
+                            <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
+                        </div>
+                        <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
+                        <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
+                            <summary center header horizontal><oda-icon icon="icons:chevron-right" :icon-size></oda-icon><span flex>🔧 {{$for.$for.item.tool}}</span></summary>
+                            <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
+                        </details>
+                    </div>
                 </div>
             </div>
+        </div>
+
+        <div class="action-bar" horizontal style="padding: 2px 4px; gap: 4px; align-items: center; border-bottom: 1px solid var(--border-color, #ccc);">
+            <div flex style="font-size: small; padding: 0 4px;" ~if="!pending && !planStatus">Готов к работе</div>
+            <div flex style="font-size: small; padding: 0 4px;" ~if="pending">ИИ отвечает…</div>
+            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'proposed'">Предложен план</div>
+            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'executing'">Выполняется…</div>
+            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'completed'">Завершено</div>
+            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'closed'">Задача закрыта</div>
+            <oda-button error ~if="pending" icon="av:stop" :icon-size label="Стоп" @tap="stopGeneration"></oda-button>
+            <oda-button success ~if="planStatus === 'proposed'" icon="icons:check" :icon-size label="Принять" @tap="acceptPlan()"></oda-button>
+            <oda-button error ~if="planStatus === 'proposed'" icon="icons:close" :icon-size label="Отклонить" @tap="rejectPlan()"></oda-button>
+            <oda-button success ~if="planStatus === 'completed'" icon="icons:check" :icon-size label="Результат" @tap="acceptResult()"></oda-button>
+            <oda-button info ~if="planStatus === 'completed'" icon="icons:refresh" :icon-size label="Продолжить" @tap="continueWork()"></oda-button>
         </div>
 
         <div header :rainbow="pending" no-flex vertical style="padding: 2px;">
@@ -274,12 +352,41 @@ export default {
     get chatGroups() {
         const groups = [];
         let current = null;
+        let planGroup = null;
         for (const msg of this.chat) {
             if (msg.role === 'user') {
-                current = { prompt: msg, responses: [] };
-                groups.push(current);
+                if (planGroup && !planGroup.completed) {
+                    // Follow-up промпт внутри план-группы — добавляем в responses
+                    planGroup.responses.push(msg);
+                } else {
+                    // Новая простая группа
+                    current = { type: 'simple', prompt: msg, responses: [] };
+                    groups.push(current);
+                    planGroup = null;
+                }
             } else if ((msg.role === 'assistant' || msg.role === 'tool_result') && current) {
-                current.responses.push(msg);
+                if (planGroup) {
+                    planGroup.responses.push(msg);
+                } else {
+                    current.responses.push(msg);
+                }
+                // Если ассистент создал план — преобразуем группу в план-группу
+                if (msg.role === 'assistant' && msg.$plan && !planGroup) {
+                    current.type = 'plan';
+                    current.planSteps = msg.$plan;
+                    const bodyPlan = this.taskBody?.plan;
+                    current.planStatus = (bodyPlan && !Array.isArray(bodyPlan) && bodyPlan.status) ? bodyPlan.status : 'proposed';
+                    current.completed = current.planStatus === 'completed' || current.planStatus === 'closed';
+                    planGroup = current;
+                }
+            }
+        }
+        // Обновляем статус план-групп из taskBody
+        for (const g of groups) {
+            if (g.type === 'plan') {
+                const bodyPlan = this.taskBody?.plan;
+                g.planStatus = (bodyPlan && !Array.isArray(bodyPlan) && bodyPlan.status) ? bodyPlan.status : 'proposed';
+                g.completed = g.planStatus === 'completed' || g.planStatus === 'closed';
             }
         }
         return groups.reverse();
@@ -335,7 +442,16 @@ export default {
         return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
     },
     get planSteps() {
-        return this.taskBody?.plan || [];
+        const plan = this.taskBody?.plan;
+        if (!plan) return [];
+        if (Array.isArray(plan)) return plan;
+        return plan.steps || [];
+    },
+    get planStatus() {
+        const plan = this.taskBody?.plan;
+        if (!plan) return '';
+        if (Array.isArray(plan)) return 'executing';
+        return plan.status || 'executing';
     },
     get planProgress() {
         const steps = this.planSteps;
@@ -459,6 +575,11 @@ export default {
                         const rMatch = msg.content.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
                         if (rMatch)
                             msg.$reasoning = rMatch[1].trim();
+                        // Парсинг плана из ответа ИИ
+                        const pMatch = msg.content.match(/<plan>\s*(\[[\s\S]*?\])\s*<\/plan>/);
+                        if (pMatch) {
+                            try { msg.$plan = JSON.parse(pMatch[1]); } catch {}
+                        }
                     }
                     if (!oldKeys.includes(key)) {
                         if (msg.role === 'assistant' && msg.responsePath) {
@@ -608,7 +729,7 @@ export default {
     },
     _onChatDone(e) {
         // Сохраняем текст ДО очистки
-        const fullText = this.streamingText || '';
+        const fullText = this.streamingText ;
         if (this.ttsMode !== 'off' && fullText) {
             const cleanText = fullText
                 .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
@@ -657,7 +778,7 @@ export default {
     async _speakServer(text) {
         try {
             const truncated = text.slice(0, 2000);
-            const modelPath = this.selectedModel || '';
+            const modelPath = this.selectedModel ;
             if (!modelPath) {
                 this._speakBrowser(text);
                 return;
@@ -1071,66 +1192,69 @@ ODA({is: 'oda-chat-form',
         <style>
             :host {
                 @apply --vertical;
-                @apply --content;
-                @apply --raised;
-                margin-left: 8px;
-                gap: 6px;
-                padding: 6px 8px;
+                @apply --light;
+                gap: 8px;
+                padding: 8px;
+                border-radius: 4px;
             }
             .field {
                 @apply --vertical;
                 gap: 2px;
             }
             .field label {
-                font-size: xx-small;
+                font-size: medium;
                 @apply --bold;
-                opacity: .8;
             }
-            .field input, .field textarea, .field select {
+            .field input[type="text"], .field input[type="number"], .field input[type="email"], .field input[type="date"], .field textarea, .field select {
                 @apply --content;
                 border-radius: 4px;
-                padding: 4px 8px;
-                font-size: x-small;
+                padding: 8px;
+                font-size: medium;
                 font-family: inherit;
                 outline: none;
                 min-width: 0;
-                border: none;
+                border: 1px solid var(--border-color, #ccc);
+            }
+            .field input[type="checkbox"] {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
             }
             .field textarea {
-                min-height: 2em;
+                min-height: 3em;
                 resize: vertical;
             }
         </style>
         <div class="field" ~for="questions">
             <label>{{$for.item.label}}</label>
             <textarea ~if="$for.item.type === 'textarea'" 
-                ::value="localAnswers[$for.item.id]" 
+                ::value="localAnswers[$for.item.id]"
                 placeholder="Введите ответ..."></textarea>
-            <select ~if="$for.item.type === 'select'" 
+            <select ~if="$for.item.type === 'select'"
                 ::value="localAnswers[$for.item.id]"
                 @change="localAnswers[$for.item.id] = $event.target.value">
                 <option value="" disabled selected>Выберите...</option>
-                <option ~for="$for.item.options">{{$for.item}}</option>
+                <option ~for="$for.item.options">{{$for.$for.item}}</option>
             </select>
-            <oda-toggle ~if="$for.item.type === 'checkbox'" 
-                ::toggled="localAnswers[$for.item.id]"
-                checked-label="Да" unchecked-label="Нет">
-            </oda-toggle>
-            <input type="number" ~if="$for.item.type === 'number'" 
-                ::value="localAnswers[$for.item.id]" 
+            <label ~if="$for.item.type === 'checkbox'" horizontal style="align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" ::checked="localAnswers[$for.item.id]">
+                <span>{{$for.item.label}}</span>
+            </label>
+            <input type="number" ~if="$for.item.type === 'number'"
+                ::value="localAnswers[$for.item.id]"
                 placeholder="Введите число...">
-            <input type="email" ~if="$for.item.type === 'email'" 
-                ::value="localAnswers[$for.item.id]" 
+            <input type="email" ~if="$for.item.type === 'email'"
+                ::value="localAnswers[$for.item.id]"
                 placeholder="email@example.com">
-            <input type="date" ~if="$for.item.type === 'date'" 
+            <input type="date" ~if="$for.item.type === 'date'"
                 ::value="localAnswers[$for.item.id]">
-            <input type="text" ~if="$for.item.type === 'text' || !$for.item.type" 
-                ::value="localAnswers[$for.item.id]" 
+            <input type="text" ~if="$for.item.type === 'text' || !$for.item.type"
+                ::value="localAnswers[$for.item.id]"
                 placeholder="Введите ответ...">
         </div>
         <oda-button success icon="icons:check" label="Ответить" @tap="submit"></oda-button>
     `,
-    imports: 'oda//button, oda/components/toggle/toggle',
+    imports: 'oda//button',
     questions: [],
     localAnswers: {},
     init() {

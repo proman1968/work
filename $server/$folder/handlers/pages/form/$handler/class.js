@@ -208,7 +208,11 @@ ODA({is: 'work-form',
         this.saving = true;
         this.async(async ()=>{
             try{
-                await this.$item.save(this.view_control?.body, {});
+                if (this.view_control?.save) {
+                    await this.view_control?.save();
+                } else {
+                    await this.$item.save(this.view_control?.body, {});
+                }
             }
             catch (err) {
                 this.saveError = err;
