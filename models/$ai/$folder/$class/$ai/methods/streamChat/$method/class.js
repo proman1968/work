@@ -1,10 +1,21 @@
 import * as https from 'node:https';
 
+/**
+ * streamChat — стриминговый чат с поддержкой function calling.
+ *
+ * Режимы:
+ * 1. Без functions — yield строк (токены content), обратная совместимость
+ * 2. С functions — yield объектов {type, content?, name?, arguments?}
+ *
+ * Формат SSE function_call (OpenAI-compatible, GigaChat):
+ *   delta.tool_calls[].function.{name, arguments}
+ */
 export default {
     async *execute(params = {}, post) {
         const ai = params.$ai || this;
         const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
         const messages = options.messages || [];
+        const useFunctions = Array.isArray(options.functions) && options.functions.length > 0;
 
         const body = {
             model: options.model || ai.model || '',
@@ -15,6 +26,13 @@ export default {
         };
         if (options.stop)
             body.stop = options.stop;
+
+        // Function calling
+        if (useFunctions) {
+            body.functions = options.functions;
+            if (options.function_call)
+                body.function_call = options.function_call;
+        }
 
         const headers = await getAuthHeaders(ai);
         const url = new URL(ai.baseUrl);
@@ -44,6 +62,10 @@ export default {
             req.end();
         });
 
+        // Аккумулятор для function_call (если поддерживается)
+        let funcCallName = '';
+        let funcCallArgs = '';
+
         for await (const chunk of res) {
             const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
             const lines = text.split('\n');
@@ -55,11 +77,51 @@ export default {
                     continue;
                 try {
                     const json = JSON.parse(jsonStr);
-                    const content = json.choices?.[0]?.delta?.content
-                        || json.choices?.[0]?.text
-                        || json.choices?.[0]?.message?.content;
-                    if (content)
-                        yield content;
+                    const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
+
+                    // Content (текст ответа)
+                    const content = delta.content || delta.text;
+                    if (content) {
+                        if (useFunctions)
+                            yield { type: 'content', content };
+                        else
+                            yield content;
+                    }
+
+                    // Function call (нативный)
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            if (tc.function?.name)
+                                funcCallName = tc.function.name;
+                            if (tc.function?.arguments)
+                                funcCallArgs += tc.function.arguments;
+                        }
+                    }
+                    // Старый формат function_call
+                    if (delta.function_call) {
+                        if (delta.function_call.name)
+                            funcCallName = delta.function_call.name;
+                        if (delta.function_call.arguments)
+                            funcCallArgs += delta.function_call.arguments;
+                    }
+
+                    // Завершение — проверяем finish_reason
+                    const finishReason = json.choices?.[0]?.finish_reason;
+                    if (finishReason === 'function_call' || (finishReason === 'stop' && funcCallName)) {
+                        let parsedArgs = {};
+                        try {
+                            parsedArgs = funcCallArgs ? JSON.parse(funcCallArgs) : {};
+                        } catch {
+                            parsedArgs = { raw: funcCallArgs };
+                        }
+                        yield {
+                            type: 'function_call',
+                            name: funcCallName,
+                            arguments: parsedArgs,
+                        };
+                        funcCallName = '';
+                        funcCallArgs = '';
+                    }
                 }
                 catch {}
             }

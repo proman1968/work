@@ -64,7 +64,7 @@ export default {
                     <item-user ~if="showAdmin" :$item="admin" :icon-size="16"></item-user>
                     <item-user ~if="showMaster" :$item="master" :icon-size="16"></item-user>
                 </div>
-                <item-users flex ~if="showUsers && isClass" role="slave" :$item disabled></item-users>
+                <item-users flex ~if="showUsers && isClass" role="slave" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
         </div>

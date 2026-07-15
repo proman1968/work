@@ -181,6 +181,11 @@ ODA({is: 'work-form',
             const view_name = this.host.default_view || this.host.view_name || n?.form;
             this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
             this.loadFormViews();
+            if (n) {
+                const role = await this.activeRole;
+                if (role)
+                    n.role = role;
+            }
         }
     },
     focusedItem: null,
