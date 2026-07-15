@@ -42,12 +42,12 @@ ODA({is: 'form-chat',
     },
     async _onSelectionChanged(e){
         const itemUsers = e.currentTarget;
-        this.receivers = (await itemUsers.selection) || [];
+        this.receivers = (await itemUsers.selectedUsers) || [];
     },
     async attached(){
         const itemUsers = this.$('item-users');
         if (itemUsers)
-            this.receivers = (await itemUsers.selection) || [];
+            this.receivers = (await itemUsers.selectedUsers) || [];
     },
     get showCallButton(){
         return this.receivers?.length

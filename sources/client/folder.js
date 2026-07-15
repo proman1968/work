@@ -53,10 +53,13 @@ export class $folder extends $item {
         path = this.short + path;
         return WORK.get_item(path, method, params);
     }
+    /** Роли текущего пользователя в данном классе (через серверный метод roles). */
+    get roles() {
+        return this.fetch('roles').then(roles => Array.isArray(roles) ? roles : []);
+    }
+    /** Проверка роли администратора. */
     get isAdmin() {
-        return Promise.resolve(this.$item.admins).then(admins => {
-            return admins.map(u => u.id).includes(WORK.uid);
-        })
+        return this.roles.then(roles => roles.includes('admin'));
     }
     get expanded() {
         return false

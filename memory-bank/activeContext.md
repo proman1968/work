@@ -1,60 +1,57 @@
 # Текущий контекст работы
 
-## Задача: Рефакторинг системы безопасности (admin/master/slaves)
+## Завершено: Рефакторинг системы безопасности + ролевая модель чата
 
-### Модель безопасности (утверждена пользователем)
+### Система безопасности (admin/master/slaves) — полностью в объектной модели
 
-Три роли: **admin**, **master**, **slaves**. Назначаются через `#security` в `class.js`:
+Три роли, назначаются через `#security` в `class.js`:
 ```js
 '#security': { admin: "UID", master: "UID", slaves: ["UID"] }
 ```
 
-| Роль | Видит (чтение) | Пишет (запись) | Наследование ролей |
-|------|---------------|----------------|-------------------|
-| admin | Всё от точки вниз | SYSTEM (всё, КРОМЕ `$work`) | Вниз на всю глубину |
-| master | Всё от точки вниз | MANAGEMENT (distributed `$work`) | Вниз на всю глубину |
-| slave | Только класс назначения | WORK (meta `$work`) | НЕ наследуется |
+| Роль | Видит (чтение) | Пишет (запись) | Наследование |
+|------|---------------|----------------|--------------|
+| admin | Всё от точки вниз | `$folder/$work` + системные папки | Вниз |
+| master | Всё от точки вниз | `distributed/$work` | Вниз |
+| slave | Только класс назначения | `meta/$work` | НЕ наследуется |
 
-### Зоны записи
-- **SYSTEM** — метапапка (всё, кроме `$work`) → admin
-- **MANAGEMENT** — distributed `$work` → master (только класс назначения)
-- **WORK** — meta `$work` → slave (только класс назначения)
+**Файлы:**
+- `sources/server/class.js` — ROLES/ZONES/ACCESS_LEVEL, roles(), canSee(), canWrite(), allowAccess(), resolveZone(), chatSource(), get_storage({role}), ensureBootstrapAdmin()
+- `sources/server/folder.js` — allowAccess() делегирует к $owner
+- `sources/server/file.js` — allowAccess() через $folder
+- `sources/host/http-server.js` — без security.js
+- `sources/host/auth-methods.js` — WORK.ensureBootstrapAdmin()
+- `sources/client/folder.js` — role через $public/$save, fetch() подставляет params.role, цвет --main-color
+- `sources/host/security.js` — УДАЛЕН
 
-### Запись требует `params.role` — клиент передаёт выбранную роль.
+### Ролевая модель чата
 
-## Завершённые этапы
+| Роль | Чат видит | Файлы пишутся в |
+|------|----------|----------------|
+| slave | Логи `$user` | `meta/$work/` |
+| master | Логи класса | `distributed/$work/` |
+| admin | Логи `$user` | `$folder/$work/` |
 
-### Этап 1: Ядро безопасности в `$class` ✅
-- `sources/server/class.js` — константы ROLES/ZONES/ACCESS_LEVEL, методы roles/canSee/canWrite/allowAccess/resolveZone
-- Геттеры masters/slaves исправлены (masters наследуется, slaves — нет)
-- Метод `roles()` переписан через геттеры
+**Файлы:**
+- `sources/server/class.js` — chatSource(params) возвращает путь к источнику логов
+- `$server/.../chat/$handler/class.js` — chat-day.logsSource запрашивает chatSource
+- `$server/$folder/lib/node/node.js` — admin (щит), master (галстук), slaves (массив)
+- `$server/$folder/lib/security/users/users.js` — свойство role, assignUser/suspendUser по роли
+- `$server/$folder/lib/security/security.js` — getSecurity/saveSecurity
 
-### Этап 2: Делегирование в `$folder` + `$file` ✅
-- Убран импорт `security.js` из `folder.js` и `file.js`
-- Добавлен `allowAccess()` в `$folder` — делегирует к `$owner`
-- Все вызовы `Security.allowAccess` заменены на `this.allowAccess`
+### Цветовая индикация
+- admin → red
+- master → green
+- slave → indigo
+- Устанавливается через `--main-color` в `set()` обработчике `role` в `$folder.$public`
 
-## Этап: Ролевая модель чата ✅
+## Текущая задача: Чистка кодовой базы
 
-### Изменения:
-- **`sources/server/class.js`**: `get_storage({role})` — admin → `$folder/$work`, `chatSource(params)` — возвращает путь к источнику логов по роли
-- **`$server/.../chat/$handler/class.js`**: `chat-day.logsSource` — запрашивает `chatSource` у сервера
-- **`sources/client/folder.js`**: свойство `role` (get/set через localStorage), `fetch()` автоподстановка `params.role`, цветовая индикация (`--main-color`: admin=red, master=green, slave=indigo)
-
-### Модель:
-| Роль | Чат видит | Файлы пишутся в | Логируется в |
-|------|----------|----------------|-------------|
-| slave | Логи `$user` | `meta/$work/` | Класс + `$user` |
-| master | Логи класса | `distributed/$work/` | Класс + `$user` |
-| admin | Логи `$user` | `$folder/$work/` | Класс + `$user` |
-
-## Все этапы завершены ✅
-
-- **Этап 3 ✅:** HTTP-слой — убраны импорты `security.js`, `ensureBootstrapAdmin` → метод `$class`
-- **Этап 4 ✅:** Клиент — `isAdmin` переписан через `roles()` (fetch), добавлен геттер `roles`
-- **Этап 5 ✅:** `sources/host/security.js` удалён
-- **Этап 6 ✅:** Легаси-методы убраны из `$class`
+1. Поиск неиспользуемых импортов и мёртвого кода
+2. Устаревшие ссылки на удалённый security.js
+3. Легаси в клиентском folder.js (isAdmin через admins)
+4. Удаление мёртвых файлов
 
 ## Технический долг
-
-- `tests/security.test.js`, `tests/auth-sessions.test.js`, `tests/class/access.test.js` — импортируют удалённый `security.js`, не работают. Нужен перенос тестов под новую объектную модель безопасности.
+- tests/security.test.js, tests/auth-sessions.test.js, tests/class/access.test.js — импортируют удалённый security.js
+- HTTP-фильтрация (canSee для info/get_item) — отключена, TODO в http-server.js
