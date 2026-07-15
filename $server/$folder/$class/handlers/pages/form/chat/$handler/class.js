@@ -816,9 +816,13 @@ ODA({is: 'chat-day',
         return this.logItems;
     },
     get logsSource(){
-        if (this.$pdp.$item instanceof CORE.$user)
-            return WORK.USER;
-        return this.$pdp.$item;
+        // Источник логов определяется сервером по роли:
+        // slave/admin → личный кабинет, master → текущий класс
+        return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource')).then(path => {
+            if (path && typeof path === 'string')
+                return WORK.get_item(path);
+            return this.$pdp.$item;
+        });
     },
     get label(){
         let date = new Date(this.day);

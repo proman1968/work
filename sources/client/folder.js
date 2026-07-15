@@ -33,6 +33,14 @@ export class $folder extends $item {
                 form: 'folder',
                 page: 'form',
             },
+            role: {
+                $def: '',
+                $save: true,
+                set(role) {
+                    const colors = { admin: 'red', master: 'green', slave: 'indigo' };
+                    document.documentElement?.style?.setProperty('--main-color', colors[role] || 'indigo');
+                }
+            },
         }
     }
     get url() {
@@ -123,6 +131,9 @@ export class $folder extends $item {
         link.click();
     }
     fetch(method, params, post_data) {
+        params ??= {};
+        if (this.role && !params.role)
+            params.role = this.role;
         return WORK.fetch?.(this.short || '/', method, params, post_data).then(res => {
             return WORK.__bind(res);
         })

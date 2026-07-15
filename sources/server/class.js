@@ -416,13 +416,15 @@ export class $class extends $folder{
 
     /**
      * Папка зоны действия по роли.
-     * admin → системная зона (meta_folder)
+     * admin → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
      * master → управленческая зона (distributed_folder/$work)
      * slave → рабочая зона (meta_folder/$work)
      */
     async get_storage(params = {}){
         const {role} = params;
         switch(role){
+            case $class.ROLES.ADMIN:
+                return this.$folder._get_item('$work', FS.$folder);
             case $class.ROLES.MASTER:
                 const dist = await this.resolveDistributedFolder();
                 return dist._get_item('$work', FS.$folder);
@@ -430,6 +432,23 @@ export class $class extends $folder{
                 return this.meta_folder._get_item('$work', FS.$folder);
         }
         return this.meta_folder
+    }
+
+    /**
+     * Источник логов чата для текущей роли пользователя.
+     * slave → личный кабинет ($user)
+     * master → текущий класс (следы работы slaves)
+     * admin → личный кабинет ($user)
+     * Возвращает путь к источнику логов.
+     */
+    async chatSource(params = {}) {
+        const roles = await this.roles(params);
+        if (roles.includes($class.ROLES.MASTER))
+            return this.path;
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            return this.path;
+        return '/users//' + uid;
     }
     async loadMergedBaseline(tailSkip, files) {
         files ??= await this.get_item('~/class.js');

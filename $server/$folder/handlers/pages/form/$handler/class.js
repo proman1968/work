@@ -202,6 +202,10 @@ ODA({is: 'work-form',
         async get (){
             const roles = await this.roles;
             return roles[0];
+        },
+        set(role) {
+            if (this.$item)
+                this.$item.role = role;
         }
     },
     async nextRole(){

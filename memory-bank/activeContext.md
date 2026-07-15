@@ -34,16 +34,27 @@
 - Добавлен `allowAccess()` в `$folder` — делегирует к `$owner`
 - Все вызовы `Security.allowAccess` заменены на `this.allowAccess`
 
-## Оставшиеся этапы
+## Этап: Ролевая модель чата ✅
 
-### Этап 3: HTTP-слой
-- `http-server.js`: убрать `filterHttpTreeResult` → метод класса
-- `auth-methods.js`: `ensureBootstrapAdmin` → в класс
+### Изменения:
+- **`sources/server/class.js`**: `get_storage({role})` — admin → `$folder/$work`, `chatSource(params)` — возвращает путь к источнику логов по роли
+- **`$server/.../chat/$handler/class.js`**: `chat-day.logsSource` — запрашивает `chatSource` у сервера
+- **`sources/client/folder.js`**: свойство `role` (get/set через localStorage), `fetch()` автоподстановка `params.role`, цветовая индикация (`--main-color`: admin=red, master=green, slave=indigo)
 
-### Этап 4: Клиент
-- `client/folder.js`: `isAdmin` → `roles()` через fetch
+### Модель:
+| Роль | Чат видит | Файлы пишутся в | Логируется в |
+|------|----------|----------------|-------------|
+| slave | Логи `$user` | `meta/$work/` | Класс + `$user` |
+| master | Логи класса | `distributed/$work/` | Класс + `$user` |
+| admin | Логи `$user` | `$folder/$work/` | Класс + `$user` |
 
-### Этап 5: Удаление `security.js`
+## Все этапы завершены ✅
 
-### Этап 6: Очистка легаси
-- `isAssignedUser`, `hasUserBoundary`, `assertCanExecuteMethod`
+- **Этап 3 ✅:** HTTP-слой — убраны импорты `security.js`, `ensureBootstrapAdmin` → метод `$class`
+- **Этап 4 ✅:** Клиент — `isAdmin` переписан через `roles()` (fetch), добавлен геттер `roles`
+- **Этап 5 ✅:** `sources/host/security.js` удалён
+- **Этап 6 ✅:** Легаси-методы убраны из `$class`
+
+## Технический долг
+
+- `tests/security.test.js`, `tests/auth-sessions.test.js`, `tests/class/access.test.js` — импортируют удалённый `security.js`, не работают. Нужен перенос тестов под новую объектную модель безопасности.
