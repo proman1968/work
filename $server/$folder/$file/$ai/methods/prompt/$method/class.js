@@ -354,7 +354,8 @@ function buildHistoryFromChat(body) {
             if (entry.tool === 'get_property' || entry.tool === 'get_schema' || entry.tool === 'navigate') {
                 content = 'Результат выполнения:\n' + entry.content.slice(0, 5000);
             }
-            messages.push({ role: 'user', content: content + hint });
+            // Нативный формат function calling: role: 'function' с name
+            messages.push({ role: 'function', name: entry.tool || 'unknown', content });
         } else if (entry.prompt) {
             messages.push({ role: 'user', content: entry.prompt });
             for (const agentPath of (entry.agent || [])) {

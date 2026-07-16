@@ -1,22 +1,15 @@
 export default {
     async execute(params = {}) {
-        debugger
-        const response = await fetch(params.file_url);
-        params.$context.save()
-
-        const event = args.find(arg => arg?.status) || args.find(arg => arg?.url);
+        const event = params.post;
         if ([2, 6].includes(event?.status) && event.url) {
             const response = await fetch(event.url);
-            if (!response.ok)
+            if (!response.ok) {
                 return JSON.stringify({ error: 1 });
-            const blob = await response.blob();
+            }
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
 
-            const file = new File([blob], this.$item.$context.name, {
-                type: blob.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            })
-            await this.$item.$context.save_file(file);
-
-            // await this.$item.$context.save(blob, {});
+            await params.$context.save({ post: buffer });
         }
         return JSON.stringify({ error: 0 });
     }

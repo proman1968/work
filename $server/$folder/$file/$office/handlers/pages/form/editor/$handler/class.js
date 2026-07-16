@@ -40,7 +40,7 @@ ODA({
         if (['pdf', 'djvu', 'xps', 'oxps'].includes(this.$item?.ext)) return 'pdf';
         return '';
     },
-    autosave: false,
+    autosave: true,
     compactHeader: false,
     compactToolbar: false,
     type: {
@@ -62,7 +62,7 @@ ODA({
         // }
     },
     get callbackUrl() {
-        return this.url + '/~/handlers/methods/onlyoffice_callback?execute';
+        return this.url + '?onlyoffice_callback';
     },
     get editorConfig() {
         return {
@@ -71,7 +71,7 @@ ODA({
             region: this.region || 'ru-RU',
             customization: {
                 autosave: this.autosave,
-                forcesave: true,
+                // forcesave: true,
                 // comments: false,
                 // compactHeader: this.compactHeader || false,
                 // compactToolbar: this.compactToolbar || false,
