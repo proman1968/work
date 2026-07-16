@@ -198,6 +198,16 @@
 - `\$server/\$folder/\$file/\$ai/triggers/on_save/\$trigger/class.js` — SYSTEM_PROMPT (327→212 строк)
 - `\$server/\$folder/\$file/\$ai/handlers/preview/\$handler/class.js` — onAction(), onCancelAction()
 
+### ИИ-инфраструктура — web_search, геолокация, functionCalling, модели — 16.07.2026 (вечер)
+- **SYSTEM_PROMPT** — удалено дублирование инструментов, упрощён <action>, убран Plan/Act
+- **web_search** — новый метод $ai (DuckDuckGo + Wikipedia), IP-геолокация для локальных запросов
+- **functionCalling** — свойство модели (Boolean), не хардкод провайдеров; z.ai=true, GigaChat=false
+- **trustLevel** — поле в METADATA (подготовка шкалы доверия 0-5)
+- **streamChat** — Math.min max_tokens(131072), пропуск functions для моделей без functionCalling
+- **z.ai/GLM-5.2** — настроен и работает (baseUrl, apiKey, maxTokens=131072)
+- **Клиент** — прокрутка (_autoFollow, пульсация), -invert кнопки, $saveKey, ошибки сети
+- **УТЕРЯНО:** SAFE_METHODS/isDangerousMethod — серверный перехват опасных методов нужно восстановить
+
 ### 3. Удалить мусор `models/G`
 ### 4. Дальнейшее развитие фреймворка ODA
 - Удалить `utils.js` (мёртвый файл)

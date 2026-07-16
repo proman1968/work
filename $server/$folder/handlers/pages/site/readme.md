@@ -12,8 +12,8 @@ Page-handler **site** — UI-витрина класса: вкладки (сам
 |------|------|
 | `$server/$folder/handlers/pages/site/$handler/class.js` | Канонический shell (вкладки, iframe, user-slot) |
 | `$server/$folder/handlers/pages/site/main/$handler/class.js` | Базовый main (hero) — наследуется всем |
-| `$server/handlers/site/$handler/class.js` | WORK-override shell (**полная копия**, не re-export) |
-| `$server/handlers/site/main/$handler/class.js` | WORK product main (hero + возможности + слои + модули) |
+| `$server/handlers/pages/site/$handler/class.js` | WORK shell: пустой `export default {}` (merge с `$folder` через `~/class.js`) |
+| `$server/handlers/pages/site/main/$handler/class.js` | WORK product main (hero + возможности + слои + модули) |
 | `sources/page.html` | Bootstrap любой page-страницы |
 
 Открытие: `{item}/~/handlers//site/index.html`  
@@ -48,24 +48,26 @@ Page-handler **site** — UI-витрина класса: вкладки (сам
 
 ## Критические грабли
 
-### 1. `$server/handlers/site` обязан быть типизированным `$handler`
+### 1. WORK `pages/site` обязан быть типизированным `$handler`
 
 Папка `site` **без** `$handler/` перехватывает `handlers//site` и отдаёт JSON / чужой модуль → MIME `application/json` у module script.
 
-Правило: любой `$server/handlers/site` = `$handler/` (+ опционально `main/$handler/`).
+Даже если override только `main/`, у `site` всё равно нужен `$handler/` (достаточно `export default {}`). Иначе `main.parent` не `$handler` → `getIndexForPage` даёт `handler=main`, `view_name=''` → гостевой редирект в `page.html` снова открывает `site` вместо main.
+
+Правило: любой `$server/handlers/pages/site` = `$handler/` (+ опционально `main/$handler/`).
 
 ### 2. Нельзя re-export shell через `export { default } from '…'`
 
 `~/class.js` мержит цепочку наследования через babel-merge, который понимает только `export default {…}`.  
 `export { default } from '…'` даёт **Duplicate export of 'default'**.
 
-WORK-override = **полная копия** shell из `$folder`, синхронизировать вручную при правках.
+Для shell достаточно пустого `export default {}` в WORK — merge подтянет канон из `$folder`. Полная копия нужна только при реальных отличиях shell.
 
 Прямой путь `…/$handler/class.js` (без `~/`) отдаёт файл как есть; `…/$handler/~/class.js` — merge с предками (в т.ч. `$folder/class.js` с testVal).
 
 ### 3. Deep search `handlers//site`
 
-С `$server/handlers/site/$handler` deep search с корня WORK находит WORK-override раньше `$folder/…/pages/site`.
+С `$server/handlers/pages/site/$handler` deep search с корня WORK находит WORK-override раньше `$folder/…/pages/site`.
 
 ## Паттерны для копирования
 
@@ -77,7 +79,7 @@ WORK-override = **полная копия** shell из `$folder`, синхрон
 ## Чеклист при правках site
 
 1. Править канон в `$folder/…/pages/site/$handler`.
-2. Скопировать shell в `$server/handlers/site/$handler` (не re-export).
-3. Не создавать `$server/handlers/site` без `$handler`.
+2. WORK `pages/site` всегда с `$handler/` (пустой `{}` или отличия shell; не re-export).
+3. Не создавать `$server/handlers/pages/site` без `$handler` — даже при override только `main`.
 4. User-slot только при `window.parent === window`.
 5. Iframe — только keep-alive + `~show`.

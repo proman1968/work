@@ -10,6 +10,7 @@
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import * as https from 'node:https';
 
 const ROOT = process.cwd();
 const MAX_ITERATIONS = 10;
@@ -63,7 +64,8 @@ export default {
         const memContent = await loadMemFiles(initialContext);
         const readmeContent = await loadReadme(initialContext);
         const contextInfo = await buildContextInfo(initialContext, params.user);
-        body.context = contextInfo;
+        const geoInfo = await getGeoByIp();
+        body.context = contextInfo + (geoInfo ? geoInfo : '');
         body.mem = memContent;
         body.readme = readmeContent;
 
@@ -98,7 +100,7 @@ export default {
 
         while (iteration < maxIter) {
             iteration++;
-            const messages = buildHistoryFromChat(body);
+            const messages = buildHistoryFromChat(body, model.functionCalling === true);
 
             // Построение functions из схемы методов контекста
             try {
@@ -111,6 +113,29 @@ export default {
                 }
             } catch (e) {
                 console.warn('[task.ai] get_schema for functions:', e.message);
+            }
+            // Методы сервисов — автозагрузка из /services/*
+            try {
+                const services = await WORK.get_item("/services/*");
+                const svcList = Array.isArray(services) ? services : (services ? [services] : []);
+                for (const svcItem of svcList) {
+                    if (svcItem.type !== "$service") continue;
+                    const schema = svcItem.SCHEMA;
+                    if (schema) {
+                        for (const [name, info] of Object.entries(schema)) {
+                            if (!functions.find(fn => fn.name === name)) {
+                                functions.push({
+                                    name,
+                                    description: info.description || name,
+                                    parameters: info.params || { type: "object", properties: {} },
+                                    _servicePath: svcItem.path,
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("[task.ai] services load:", e.message);
             }
 
             let fullResponse = "";
@@ -189,7 +214,21 @@ export default {
             for (const call of toolCalls) {
                 let result;
                 try {
-                    if (call.method === 'get_property' && call.args?.name) {
+                    // Методы сервисов — маршрутизация через _servicePath
+                    const svcFn = functions.find(fn => fn.name === call.method && fn._servicePath);
+                    if (svcFn) {
+                        try {
+                            const svcItem = await WORK.get_item(svcFn._servicePath);
+                            const svcFnMethod = svcItem[call.method];
+                            if (typeof svcFnMethod === "function") {
+                                result = await svcFnMethod.call(svcItem, call.args || {});
+                            } else {
+                                result = { error: "Method " + call.method + " not implemented" };
+                            }
+                        } catch (e) {
+                            result = { error: 'Ошибка сервиса: ' + e.message };
+                        }
+                    } else if (call.method === 'get_property' && call.args?.name) {
                         const propName = call.args.name;
                         const descriptor = Object.getOwnPropertyDescriptor(currentContext.constructor.prototype, propName);
                         if (descriptor?.get) {
@@ -291,6 +330,7 @@ export default {
                     result = { success: true, message: 'Контекст сброшен к классу: ' + initialContext.path };
                 }
 
+
                 const resultPreview = typeof result === 'string' ? result.slice(0, 2000) : JSON.stringify(result).slice(0, 2000);
                 WORK.wsSend?.({ type: "chat.tool_result", path: wsPath, tool: call.method, result: resultPreview });
 
@@ -362,7 +402,7 @@ function notifyChanged(fullPath) {
     }
 }
 
-function buildHistoryFromChat(body) {
+function buildHistoryFromChat(body, useFunctionCalling = false) {
     const messages = [];
     let systemContent = body.system || '';
     if (body.context)
@@ -410,8 +450,10 @@ function buildHistoryFromChat(body) {
             if (entry.tool === 'get_property' || entry.tool === 'get_schema' || entry.tool === 'navigate') {
                 content = 'Результат выполнения:\n' + entry.content.slice(0, 5000);
             }
-            // Нативный формат function calling: role: 'function' с name
-            messages.push({ role: 'function', name: entry.tool || 'unknown', content });
+            if (useFunctionCalling)
+                messages.push({ role: 'function', name: entry.tool || 'unknown', content });
+            else
+                messages.push({ role: 'user', content: 'Результат ' + (entry.tool || 'метода') + ':\n' + content });
         } else if (entry.prompt) {
             messages.push({ role: 'user', content: entry.prompt });
             for (const agentPath of (entry.agent || [])) {
@@ -490,6 +532,27 @@ function parseToolCalls(text) {
         }
     }
 
+    // Парсинг XML-тегов
+    if (calls.length === 0) {
+        const knownMethods = ['web_search', 'get_schema', 'get_property', 'set_property', 'navigate', 'reset_context', 'read_file', 'write_file'];
+        const xmlRegex = /<(\w+)\s+([^>]+)\/?>/g;
+        while ((match = xmlRegex.exec(text)) !== null) {
+            const tagName = match[1];
+            const attrsStr = match[2];
+            if (!knownMethods.includes(tagName))
+                continue;
+            const args = {};
+            const attrRegex = /(\w+)=["']([^"']*)["']/g;
+            let am;
+            while ((am = attrRegex.exec(attrsStr)) !== null) {
+                args[am[1]] = am[2];
+            }
+            if (Object.keys(args).length > 0) {
+                calls.push({ method: tagName, args });
+            }
+        }
+    }
+
     return calls;
 }
 
@@ -530,6 +593,39 @@ async function loadReadme(storage) {
         }
     } catch (e) {
         console.warn('[task.ai] loadReadme:', e.message);
+    }
+    return '';
+}
+
+/**
+ * Получить геолокацию по IP через ip-api.com.
+ * @returns {Promise<string>} — "Город: Москва\n" или пустая строка
+ */
+async function getGeoByIp() {
+    try {
+        const geo = await new Promise((resolve, reject) => {
+            const req = https.get('https://ip-api.com/json/?lang=ru&fields=city,regionName,lat,lon', {
+                headers: { 'User-Agent': 'WORK-AI/1.0' },
+                timeout: 5000,
+            }, (res) => {
+                if (res.statusCode < 200 || res.statusCode >= 300) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+                const chunks = [];
+                res.on('data', c => chunks.push(c));
+                res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch (e) { reject(e); } });
+            });
+            req.on('error', reject);
+            req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+        });
+        if (geo?.city) {
+            let info = 'Местоположение пользователя: ' + geo.city;
+            if (geo.regionName && geo.regionName !== geo.city)
+                info += ', ' + geo.regionName;
+            if (geo.lat && geo.lon)
+                info += ' (' + geo.lat + ', ' + geo.lon + ')';
+            return info + '\n';
+        }
+    } catch (e) {
+        console.warn('[task.ai] getGeoByIp:', e.message);
     }
     return '';
 }

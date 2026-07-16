@@ -1,70 +1,37 @@
 # Текущий контекст работы
 
-## Сессия 16.07.2026 — завершена
+## Сессия 17.07.2026 (ночью) — Сервисы как функции для ИИ
 
-### Основные изменения:
+### Главная достижение: архитектура «сервисы как функции»
 
-#### 1. Переименование `$work` → `work`
-- `sources/server/class.js`: `get_storage()` и `resolveZone()` — `'$work'` → `'work'`
-- Физические папки переименованы на диске
-- Причина: `$work` конфликтовал с `tilde`-маршрутизацией (short-path заменял `$` на `~`, создавая двойные `~`)
+Вместо хардкода `web_search` в `$ai` — методы сервисов автоматически загружаются и доступны ИИ как функции (function calling).
 
-#### 2. Логи `data.logs` — перехват в `$class.save_file`
-- `data.logs` всегда пишется в `meta_folder/logs/`, минуя `get_storage`
-- Не зависит от `role` — системная операция
+### Что реализовано:
 
-#### 3. `slave` — базовая роль для всех
-- `roles()` в `class.js` — всегда добавляет `'slave'` для залогиненного пользователя
+#### 1. Прототип `$service` (`services/$service/class.js`)
+- METADATA/STATIC: baseUrl, apiKey, capabilities
+- Любой сервис хранит конфигурацию и предоставляет методы через `methods/`
 
-#### 4. Селектор ролей в форме
-- `$server/$folder/handlers/pages/form/$handler/class.js` — динамическое переключение представлений (без `location.assign`)
-- Активное представление перемещается в начало списка
-- Смена роли → `$item.reset()` (без перезагрузки страницы)
+#### 2. Сервис SearXNG (`services/SearXNG/$service/`)
+- `class.js`: baseUrl = 'https://searx.be' (публичный инстанс), capabilities = ['search']
+- `methods/search/$method/class.js`: поиск через SearXNG JSON API (fetch, не require)
 
-#### 5. Панель управления микрочата
-- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js`:
-  - Убрана старая action-bar (6 кнопок) и кнопка Act
-  - Новая панель: одна главная кнопка + (X) для отмены (всегда видна)
-  - Кнопка скролла перенесена с нижнего тулбара
-  - Парсинг `<action>` из ответа ИИ → `actionButton`
-  - `.thread` — убран `column-reverse`, нормальное направление текста
-  - `chatGroups` — убран `.reverse()`
+#### 3. Цикл prompt (`$server/$folder/$file/$ai/methods/prompt/$method/class.js`)
+- **Автозагрузка сервисов**: загружает `/services/*`, получает методы через `get_schema()`
+- Методы сервисов добавляются в `functions` с `_servicePath` (путь к сервису)
+- **Маршрутизация**: при вызове метода — ищет `_servicePath` в functions → `execItemMethod(svcItem, method, args)`
+- **web_search полностью удалён** из цикла prompt (0 упоминаний)
+- `buildHistoryFromChat(body, useFunctionCalling)` — для моделей без FC tool_result = role: 'user'
+- Парсинг XML-тегов: `<search query="..."/>` → tool_call
 
-#### 6. SYSTEM_PROMPT обновлён
-- Добавлена секция «Управление диалогом: тег `<action>`»
-- ИИ обучен выдавать `<action>` при вопросах/планах
-- Убраны обратные кавычки из template literal (вызывали `ReferenceError`)
+#### 4. SYSTEM_PROMPT
+- `web_search` → `search` везде
+- Секция «Вызов методов (текстовый формат)» — `<tool_call>` для моделей без FC
 
-#### 7. Function calling (код готов, не протестирован)
-- `buildFunctionsFromSchema()` в `sources/modules/ai-schema.js`
-- `prompt` метод передаёт `functions` в `streamChat`
-- Fallback: текстовый парсинг `<tool_call>` сохранён
+### Незавершённые задачи:
 
-## Незавершённые задачи
-
-### 1. Баг `oda-icon` — отложено
-- Иконки залипают при переиспользовании компонента в `~for`
-- Причина: `this.bb = undefined` создаёт own data property + мутация Proxy
-
-### 2. Стандартизация имён методов/свойств
-- Методы: `snake_case`
-- Свойства: `camelCase`
-- Приватные: `_` prefix
-
-### 3. Полная проверка function calling в реальном микрочате
-
-## Сессия 16.07.2026 (продолжение) — очистка SYSTEM_PROMPT и <action>
-
-### Очистка SYSTEM_PROMPT от дублирования инструментов
-- Удалено ~115 строк: «Инструменты и контекст», «Навигация», «function calling», «Доступные функции» (12 функций), «Работа с файлами», «Создание элементов системы»
-- Заменено краткой секцией «Инструменты» (6 строк): get_schema, navigate/reset_context
-- Причина: инструменты передаются через functions (function calling), дублирование в промпте нарушало decisionLog
-
-### Упрощение тега <action>
-- Было: accept_plan, accept_result, ok
-- Стало: только однозначные вопросы да/нет
-- onAction() упрощён: отправляет «Да», onCancelAction() — «Нет»
-
-Изменённые файлы:
-- on_save/$trigger/class.js — SYSTEM_PROMPT (327→212 строк)
-- preview/$handler/class.js — onAction(), onCancelAction()
+1. **Шкала доверия** (trustLevel 0-5) — поле есть в METADATA, логики нет
+2. **Восстановить серверный перехват** опасных методов (SAFE_METHODS утерян)
+3. **Баг `oda-icon`** — отложено
+4. **Удалить старый `$ai/methods/web_search/`** — больше не используется, но файл остался
+5. **Протестировать** — нужен новый чат для проверки работы search через SearXNG

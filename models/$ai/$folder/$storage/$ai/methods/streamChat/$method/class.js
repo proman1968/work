@@ -9,7 +9,7 @@ export default {
         const body = {
             model: options.model || ai.model || '',
             messages,
-            max_tokens: options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096,
+            max_tokens: Math.min(options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096, 131072),
             temperature: options.temperature ?? 0.7,
             stream: true,
         };

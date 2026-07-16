@@ -9,6 +9,6 @@ export default {
 
     model: 'glm-5.2',
 
-    maxTokens: 1048576,
+    maxTokens: 131072,
     capabilities: ['chat', 'stream'],
 }

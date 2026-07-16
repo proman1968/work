@@ -126,6 +126,10 @@
                 0%, 100% { opacity: 1; }
                 50% { opacity: .4; }
             }
+            .btn-success { @apply --success-invert; }
+            .btn-error { @apply --error-invert; }
+            .btn-info { @apply --info-invert; }
+            .btn-warning { @apply --warning-invert; }
             .scroll-pulse {
                 animation: pulse-bg 0.8s ease infinite;
             }
@@ -276,15 +280,12 @@
         <div class="action-bar" horizontal style="padding: 0px; gap: 2px; align-items: stretch; border-bottom: 1px solid var(--border-color, #ccc);">
             <oda-button flex ~if="pending" error icon="av:stop" :icon-size="iconSize * .8" label="Остановить" @tap="stopGeneration"></oda-button>
             <oda-button flex ~if="actionButton && !pending"
-                :success="actionButton.color === 'success'"
-                :error="actionButton.color === 'error'"
-                :info="actionButton.color === 'info' || !actionButton.color"
-                :warning="actionButton.color === 'warning'"
+                :class="'btn-' + (actionButton.color || 'info')"
                 :icon="actionButton.icon || 'icons:check'"
                 :icon-size="iconSize * .8"
                 :label="actionButton.label || 'OK'"
                 @tap="onAction()"></oda-button>
-            <oda-button error ~if="actionButton && !pending" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
+            <oda-button ~if="actionButton && !pending" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
             <oda-button flex ~if="!actionButton" content :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
         </div>
 
@@ -341,6 +342,15 @@
                     item.listen('chat.done', e => this._onChatDone(e));
                     item.listen('chat.error', e => this._onChatError(e));
                     item.listen('chat.tool_result', e => this._onToolResult(e));
+                }
+                // Перечитать selectedModel из localStorage с правильным ключом
+                if (item?.short && !this.selectedModel) {
+                    try {
+                        const path = (this.host ? this.host._savePath + '/' : '') + this.localName + '[' + item.short + ']';
+                        const saved = ODA.LocalStorage.create(path).getItem('selectedModel');
+                        if (saved)
+                            this.selectedModel = saved;
+                    } catch {}
                 }
                 this._loadTaskBody();
             });
@@ -650,6 +660,7 @@
             this.chat = undefined;
             this.chatGroups = undefined;
             this.render();
+            this._autoFollow = true;
             this._maybeScrollToBottom();
         } catch (e) {
             console.warn('[ai-preview] _loadTaskBody:', e.message);
@@ -739,7 +750,12 @@
         this._focusPrompt();
     },
     _maybeScrollToBottom() {
-        if (this.thread && this._autoFollow) this.thread.scrollTop = this.thread.scrollHeight;
+        if (this.thread && this._autoFollow) {
+            this.async(() => {
+                if (this.thread)
+                    this.thread.scrollTop = this.thread.scrollHeight;
+            }, 50);
+        }
     },
     _onChatDelta(e) {
         const token = e.detail?.value?.token;
@@ -853,13 +869,18 @@
         }
     },
     _onChatError(e) {
-        const errorMsg = e.detail?.value?.error;
-        if (errorMsg)
-            console.warn('[ai-preview] chat error:', errorMsg);
+        const errorMsg = e.detail?.value?.error || 'Ошибка соединения с моделью';
+        console.warn('[ai-preview] chat error:', errorMsg);
         this.streamingText = '';
         this.pending = false;
-        this.render();
-        this._onChanged();
+        // Показываем ошибку в чате
+        this.async(() => {
+            if (this.$item) {
+                this.$item.increaseVersion?.();
+                this.$item.body = undefined;
+            }
+            this._loadTaskBody();
+        }, 100);
     },
     _onToolResult(e) {
         // Обработка результатов tool-call (для будущего расширения UI)
@@ -981,18 +1002,20 @@
 
         this.value = '';
         this.files = [];
+        this._autoFollow = true;
         this.render();
-        this.async(() => {
-            const thread = this.$('.thread');
-            if (thread)
-                thread.scrollTop = thread.scrollHeight;
-        }, 100);
+        this._maybeScrollToBottom();
         try {
             const payload = JSON.stringify({
                 text: promptText || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
             });
             const result = await this.$item.fetch('prompt', {}, payload);
+            if (result?.ok === false) {
+                this.streamingText = '⚠️ ' + (result.error || 'Ошибка запроса');
+                this.pending = false;
+                this.render();
+            }
         }
         catch (e) {
             console.warn('[ai-preview] send', e.message);

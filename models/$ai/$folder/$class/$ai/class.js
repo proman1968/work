@@ -64,6 +64,14 @@ export default {
                 id: 'capabilities',
                 type: 'String',
                 placeholder: 'chat, stream',
+            }, {
+                id: 'functionCalling',
+                type: 'Boolean',
+                placeholder: 'false',
+            }, {
+                id: 'trustLevel',
+                type: 'Number',
+                placeholder: '0',
             }],
         },
     },

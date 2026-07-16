@@ -8,10 +8,12 @@ export default {
     description: 'Провайдер z.ai',
 
     protocol: 'openai',
-    baseUrl: 'https://api.z.ai/api/coding',
+    baseUrl: 'https://api.z.ai/api/coding/paas/v4/chat/completions',
     apiKey: '730fec7eaae74c548d54ccf7cb7d4c0b.a0k83gPNmNAaM4xv',
     model: 'glm-5.2',
 
     maxTokens: 4096,
     capabilities: ['chat', 'stream'],
+    functionCalling: true,
+    trustLevel: 0,
 }
