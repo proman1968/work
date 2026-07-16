@@ -122,6 +122,13 @@
                 @apply --raised;
                 padding: 4px 8px;
             }
+            @keyframes pulse-bg {
+                0%, 100% { opacity: 1; }
+                50% { opacity: .4; }
+            }
+            .scroll-pulse {
+                animation: pulse-bg 0.8s ease infinite;
+            }
             .attach-preview {
                 gap: 4px;
                 padding: 4px 8px;
@@ -278,7 +285,7 @@
                 :label="actionButton.label || 'OK'"
                 @tap="onAction()"></oda-button>
             <oda-button error ~if="actionButton && !pending" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
-            <oda-button flex ~if="!actionButton && !pending" content :icon="scrollIcon" :icon-size @tap="scrollToggle" title="Прокрутка"></oda-button>
+            <oda-button flex ~if="!actionButton" content :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
         </div>
 
         <div header :rainbow="pending" no-flex vertical style="padding: 2px;">
@@ -318,6 +325,7 @@
         $def: '',
         $save: true,
     },
+    _autoFollow: true,  // автоскролл вниз при новых сообщениях (false = пользователь прокрутил вверх)
     actionButton: null,  // {label, color, icon, type} — управляется ИИ через <action>
     questionAnswers: {},
     ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'qwen3'
@@ -709,22 +717,29 @@
         await WORK.showDropdown(tree, { TITLE: { label: 'Выбрать файл из системы' } }, e);
     },
     _onScroll(e) {
+        const t = this.thread;
+        if (t) {
+            this._autoFollow = t.scrollTop + t.clientHeight >= t.scrollHeight - 10;
+        }
         this.scrollIcon = undefined;
         this.render();
     },
     scrollToggle() {
         if (!this.thread) return;
-        if (this.thread.scrollTop + this.thread.clientHeight >= this.thread.scrollHeight - 10) {
-            this.thread.scrollTop = this.thread.scrollHeight;
+        const atBottom = this.thread.scrollTop + this.thread.clientHeight >= this.thread.scrollHeight - 10;
+        if (atBottom) {
+            this.thread.scrollTop = 0;
+            this._autoFollow = false;
         } else {
             this.thread.scrollTop = this.thread.scrollHeight;
+            this._autoFollow = true;
         }
         this.scrollIcon = undefined;
         this.render();
         this._focusPrompt();
     },
     _maybeScrollToBottom() {
-        if (this.thread) this.thread.scrollTop = this.thread.scrollHeight;
+        if (this.thread && this._autoFollow) this.thread.scrollTop = this.thread.scrollHeight;
     },
     _onChatDelta(e) {
         const token = e.detail?.value?.token;
@@ -867,26 +882,36 @@
         this.render();
     },
     onAction() {
-        const action = this.actionButton;
-        if (!action) return;
-        // При нажатии OK — отправляем подтверждение как новый промпт
-        const actionType = action.type || 'ok';
-        if (actionType === 'accept_plan' || actionType === 'accept_result') {
-            this.value = 'Подтверждаю. Продолжай.';
-            this.send();
-        } else if (actionType === 'continue') {
-            this.value = 'Продолжай';
-            this.send();
-        } else {
-            this.value = 'OK';
-            this.send();
-        }
         this.actionButton = null;
+        // Если есть ожидающее действие — отправляем подтверждение
+        if (this.taskBody?.pendingAction) {
+            this.sending = true;
+            this.pending = true;
+            this.render();
+            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: true }))
+                .catch(e => console.warn('[ai-preview] confirm:', e.message))
+                .finally(() => { this.sending = false; });
+            return;
+        }
+        // Обычный ответ да/нет
+        this.value = 'Да';
+        this.send();
         this.render();
     },
     onCancelAction() {
         this.actionButton = null;
-        this.value = 'Отмена. Жду твоих указаний.';
+        // Если есть ожидающее действие — отправляем отказ
+        if (this.taskBody?.pendingAction) {
+            this.sending = true;
+            this.pending = true;
+            this.render();
+            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: false }))
+                .catch(e => console.warn('[ai-preview] cancel:', e.message))
+                .finally(() => { this.sending = false; });
+            return;
+        }
+        // Обычный ответ да/нет
+        this.value = 'Нет';
         this.send();
         this.render();
     },

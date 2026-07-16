@@ -188,6 +188,16 @@
 - **Расширенный SYSTEM_PROMPT** — описание инструментов: info, load, save_file, find_text, get_schema, logs, search, create, delete
 - **UI: навигатор + мессенджер** — item-tree слева, tool_result визуализация с 🔧
 - **Принцип:** любой `$class` — агент, tools — его существующие методы, модели — per-task
+### Очистка SYSTEM_PROMPT и упрощение <action> — 16.07.2026 (продолжение)
+- **Удалено ~115 строк** из SYSTEM_PROMPT: секции с описанием инструментов, навигации, создания элементов
+- **Причина:** инструменты передаются через functions (function calling), дублирование в промпте лишнее
+- **Тег <action>** упрощён: только вопросы да/нет (убраны accept_plan, accept_result, continue)
+- **Клиент:** onAction() отправляет «Да», onCancelAction() — «Нет»
+
+**Изменённые файлы:**
+- `\$server/\$folder/\$file/\$ai/triggers/on_save/\$trigger/class.js` — SYSTEM_PROMPT (327→212 строк)
+- `\$server/\$folder/\$file/\$ai/handlers/preview/\$handler/class.js` — onAction(), onCancelAction()
+
 ### 3. Удалить мусор `models/G`
 ### 4. Дальнейшее развитие фреймворка ODA
 - Удалить `utils.js` (мёртвый файл)

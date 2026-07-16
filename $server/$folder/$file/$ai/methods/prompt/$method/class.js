@@ -22,14 +22,12 @@ export default {
 
         let text = '';
         let requestModel = '';
-        let actMode = false;
         const raw = post ?? params.text ?? params.post ?? '';
         if (typeof raw === 'string' && raw.trim().startsWith('{')) {
             try {
                 const parsed = JSON.parse(raw);
                 text = String(parsed.text ?? '').trim();
                 requestModel = String(parsed.model ?? '').trim();
-                actMode = parsed.act === true;
             } catch {
                 text = String(raw).trim();
             }
@@ -186,24 +184,6 @@ export default {
 
             if (toolCalls.length === 0) {
                 break;
-            }
-
-            // Режим Plan/Act: проверяем, есть ли опасные методы
-            if (!actMode) {
-                const hasDangerous = toolCalls.some(call => isDangerousMethod(call.method));
-                if (hasDangerous) {
-                    body.chat.push({
-                        role: "assistant",
-                        content: "⚠️ Для выполнения действий (создание, изменение, удаление) нажмите кнопку **run** и повторите запрос.",
-                        time: Date.now(),
-                        sender: model.path || 'WORK',
-                    });
-                    await writeTaskBody(fullPath, body);
-                    notifyChanged(fullPath);
-                    WORK.wsSend?.({ type: "chat.ready_to_act", path: wsPath });
-                    WORK.wsSend?.({ type: "chat.done", path: wsPath });
-                    return { ok: true, iterations: iteration, needsAct: true };
-                }
             }
 
             for (const call of toolCalls) {
@@ -513,23 +493,6 @@ function parseToolCalls(text) {
     return calls;
 }
 
-// Методы, безопасные в режиме диалога (Plan) — только чтение и навигация
-const SAFE_METHODS = new Set([
-    'get_schema', 'get_property', 'navigate', 'reset_context',
-    'read_file', 'info', 'children', 'files', 'folders', 'items',
-]);
-
-/**
- * Проверить, требует ли метод режим Act (создание/изменение/удаление).
- * @param {string} method — имя метода
- * @returns {boolean} — true, если метод опасный (требует подтверждения)
- */
-function isDangerousMethod(method) {
-    if (SAFE_METHODS.has(method))
-        return false;
-    // set_property, write_file, create, delete, save, edit_file и др. — опасные
-    return true;
-}
 
 /**
  * Извлечь план из ответа ИИ (формат <plan>[...]</plan>).

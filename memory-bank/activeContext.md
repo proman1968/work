@@ -52,3 +52,19 @@
 - Приватные: `_` prefix
 
 ### 3. Полная проверка function calling в реальном микрочате
+
+## Сессия 16.07.2026 (продолжение) — очистка SYSTEM_PROMPT и <action>
+
+### Очистка SYSTEM_PROMPT от дублирования инструментов
+- Удалено ~115 строк: «Инструменты и контекст», «Навигация», «function calling», «Доступные функции» (12 функций), «Работа с файлами», «Создание элементов системы»
+- Заменено краткой секцией «Инструменты» (6 строк): get_schema, navigate/reset_context
+- Причина: инструменты передаются через functions (function calling), дублирование в промпте нарушало decisionLog
+
+### Упрощение тега <action>
+- Было: accept_plan, accept_result, ok
+- Стало: только однозначные вопросы да/нет
+- onAction() упрощён: отправляет «Да», onCancelAction() — «Нет»
+
+Изменённые файлы:
+- on_save/$trigger/class.js — SYSTEM_PROMPT (327→212 строк)
+- preview/$handler/class.js — onAction(), onCancelAction()
