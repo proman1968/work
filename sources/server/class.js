@@ -409,8 +409,9 @@ export class $class extends $folder{
             roles.push($class.ROLES.ADMIN);
         if (masters.some(u => u?.id === uid))
             roles.push($class.ROLES.MASTER);
-        if (slaves.some(u => u?.id === uid))
-            roles.push($class.ROLES.SLAVE);
+        // slave — базовая роль для любого залогиненного пользователя.
+        // Рабочие файлы и логи всегда пишутся в личный кабинет (slave зона).
+        roles.push($class.ROLES.SLAVE);
         return roles;
     }
 
@@ -424,12 +425,12 @@ export class $class extends $folder{
         const {role} = params;
         switch(role){
             case $class.ROLES.ADMIN:
-                return this.$folder._get_item('$work', FS.$folder);
+                return this.$folder._get_item('work', FS.$folder);
             case $class.ROLES.MASTER:
                 const dist = await this.resolveDistributedFolder();
-                return dist._get_item('$work', FS.$folder);
+                return dist._get_item('work', FS.$folder);
             case $class.ROLES.SLAVE:
-                return this.meta_folder._get_item('$work', FS.$folder);
+                return this.meta_folder._get_item('work', FS.$folder);
         }
         return this.meta_folder
     }
@@ -513,6 +514,12 @@ export class $class extends $folder{
         return true;
     }
     async save_file(params = {}){
+        // Логи (data.logs) — системная операция: всегда пишутся в meta_folder,
+        // минуя get_storage, чтобы не попадать в зону $work по role.
+        if (params.filename === 'data.logs') {
+            const folder = await this.meta_folder.getFolderToSaveFile(params);
+            return folder.save_file(params);
+        }
         const storage = await this.get_storage(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.save_file(params);
@@ -1072,10 +1079,10 @@ export class $class extends $folder{
             return null;
         let p = item;
         while (p) {
-            if (p.id === '$work') {
-                // Проверяем, кто родитель $work
-                // distributed $work → внутри цепочки наследования ($folder)
-                // meta $work → внутри метапапки класса
+            if (p.id === 'work') {
+                // Проверяем, кто родитель work
+                // distributed work → внутри цепочки наследования ($folder)
+                // meta work → внутри метапапки класса
                 if (p.parent && p.parent.id === '$folder')
                     return $class.ZONES.MANAGEMENT;
                 return $class.ZONES.WORK;

@@ -158,6 +158,16 @@ export class $file extends $folder{
             return this.DATA.icon || ('files-color:s-' + this.ext);
         return this.DATA.icon || 'files:document';
     }
+    get $public(){
+        return {
+            get lastModified(){
+                return this.stat?.mtime?.getTime?.();
+            },
+            get size(){
+                return this.stat?.size;
+            }
+        }
+    }
     /**
      * @ai Загрузить содержимое файла как строку или Buffer
      * @ai.params {"encoding": "кодировка (utf-8, binary)"}
@@ -333,6 +343,11 @@ export class $file extends $folder{
         params.dateTime = new Date(params.time);
         let date = params.dateTime.toISOString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
+
+        // Логи (data.logs) пишутся через _writeLogTo без role,
+        // поэтому они физически в meta_folder/logs/.
+        // this.storage_folder для них = meta_folder/logs/.data.logs — корректно.
+        // Для пользовательских файлов в $work — личная история рядом с файлом.
         let dir = this.storage_folder.dir + '/history/' + params.date;
         fs.mkdirSync(dir, { recursive: true });
         let id = params.time + '.' + uid + '.' + this.ext;

@@ -27,8 +27,15 @@ ODA({
     get apiUrl() { return this.officeUrl + 'web-apps/apps/api/documents/api.js' },
     get commandServiceUrl() { return this.officeUrl + 'coauthoring/CommandService.ashx' },
     get url() { return this.$item.url },
-    get keyTime() { return '-017' },
-    get key() { return ((this.$item?.path || '') + (this.keyTime || '')).replace(/[^A-Za-z0-9]/g, '_') },
+    get key() {
+        const str = `${location.host}_${this.$item?.path}_${this.$item?.lastModified}_${this.$item?.size}`;
+        let hash = 5381;
+        for (let i = 0; i < str.length; i++) {
+            hash = (hash * 33) ^ str.charCodeAt(i);
+        }
+        
+        return (hash >>> 0).toString(16).padStart(8, '0').substring(0, 20);
+    },
     get title() { return this.$item.name },
     get userID() { return WORK?.USER?.id },
     get userName() { return WORK?.USER?.label },

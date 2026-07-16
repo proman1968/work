@@ -1,6 +1,11 @@
 /**
  * Серверный метод prompt для task.ai — контекстный harness цикл tool-call.
  * this = task.ai файл (передаётся через tryHandlerMethod → execute.call(item))
+ *
+ * Поддерживает нативный function calling:
+ * - Схема методов контекста → functions (OpenAI-compatible)
+ * - streamChat с functions → yield {type:'content'} / {type:'function_call'}
+ * - Fallback: текстовый парсинг <tool_call> для моделей без function calling
  */
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -91,17 +96,55 @@ export default {
         let iteration = 0;
         let currentContext = initialContext;
         let lastResponse = '';
+        let functions = []; // Кэш functions для текущего контекста
 
         while (iteration < maxIter) {
             iteration++;
             const messages = buildHistoryFromChat(body);
 
-            let fullResponse = "";
+            // Построение functions из схемы методов контекста
             try {
-                const stream = await execItemMethod(model, "streamChat", { messages, $ai: model });
-                for await (const token of stream) {
-                    fullResponse += token;
-                    WORK.wsSend?.({ type: "chat.delta", path: wsPath, token });
+                const schema = await currentContext.get_schema?.();
+                if (schema?.methods) {
+                    const { buildFunctionsFromSchema } = await import(pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href);
+                    functions = buildFunctionsFromSchema(schema.methods, {
+                        exclude: ['delete', 'save_secret', 'read_secret'],
+                    });
+                }
+            } catch (e) {
+                console.warn('[task.ai] get_schema for functions:', e.message);
+            }
+
+            let fullResponse = "";
+            let nativeToolCalls = []; // Нативные function_call из стрима
+            let hasNativeFunctionCall = false;
+
+            try {
+                const streamParams = { messages, $ai: model };
+                if (functions.length > 0) {
+                    streamParams.functions = functions;
+                    // function_call: 'auto' — модель сама решает, когда вызывать функцию
+                    streamParams.function_call = 'auto';
+                }
+                const stream = await execItemMethod(model, "streamChat", streamParams);
+                for await (const chunk of stream) {
+                    if (typeof chunk === 'string') {
+                        // Токен текста (режим без functions)
+                        fullResponse += chunk;
+                        WORK.wsSend?.({ type: "chat.delta", path: wsPath, token: chunk });
+                    } else if (chunk && typeof chunk === 'object') {
+                        // Нативный function calling
+                        if (chunk.type === 'content' && chunk.content) {
+                            fullResponse += chunk.content;
+                            WORK.wsSend?.({ type: "chat.delta", path: wsPath, token: chunk.content });
+                        } else if (chunk.type === 'function_call') {
+                            nativeToolCalls.push({
+                                method: chunk.name,
+                                args: chunk.arguments || {},
+                            });
+                            hasNativeFunctionCall = true;
+                        }
+                    }
                 }
             } catch (e) {
                 console.warn("[task.ai] streamChat error:", e.message);
@@ -113,7 +156,20 @@ export default {
             }
 
             lastResponse = fullResponse;
-            body.chat.push({ role: "assistant", content: fullResponse, time: Date.now(), sender: model.path || 'WORK' });
+            // Для ассистента: если был function_call, сохраняем content + function_call
+            const assistantEntry = {
+                role: "assistant",
+                content: fullResponse,
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            };
+            if (hasNativeFunctionCall) {
+                assistantEntry.function_call = nativeToolCalls.map(c => ({
+                    name: c.method,
+                    arguments: c.args,
+                }));
+            }
+            body.chat.push(assistantEntry);
 
             // Извлекаем план из ответа ИИ
             const plan = parsePlan(fullResponse);
@@ -122,7 +178,11 @@ export default {
                 WORK.wsSend?.({ type: "chat.plan", path: wsPath, plan });
             }
 
-            const toolCalls = parseToolCalls(fullResponse);
+            // Объединяем нативные tool_calls и текстовый fallback
+            let toolCalls = nativeToolCalls;
+            if (toolCalls.length === 0) {
+                toolCalls = parseToolCalls(fullResponse);
+            }
 
             if (toolCalls.length === 0) {
                 break;
@@ -340,8 +400,24 @@ function buildHistoryFromChat(body) {
     for (const entry of chat) {
         if (entry.role === 'user' && entry.content) {
             messages.push({ role: 'user', content: entry.content });
-        } else if (entry.role === 'assistant' && entry.content) {
-            messages.push({ role: 'assistant', content: entry.content });
+        } else if (entry.role === 'assistant') {
+            // Поддержка function_call в истории ассистента
+            if (entry.function_call) {
+                // Нативный формат: assistant с function_call
+                const msg = { role: 'assistant', content: entry.content || null };
+                if (Array.isArray(entry.function_call)) {
+                    // Несколько вызовов — берём первый (основной формат OpenAI)
+                    msg.function_call = {
+                        name: entry.function_call[0].name,
+                        arguments: JSON.stringify(entry.function_call[0].arguments || {}),
+                    };
+                } else {
+                    msg.function_call = entry.function_call;
+                }
+                messages.push(msg);
+            } else if (entry.content) {
+                messages.push({ role: 'assistant', content: entry.content });
+            }
         } else if (entry.role === 'tool_result' && entry.content) {
             let content = entry.content;
             const hints = {

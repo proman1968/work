@@ -62,9 +62,9 @@ ODA({is: 'work-form',
                 <div flex></div>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
-                            <oda-button :icon="roleIcon" :icon-size  @tap="nextRole"
-                                style="border-radius: 4px;"
-                                center
+                            <oda-button :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
+                                style="font-size: xx-small;"
+                                center icon-pos="top"
                             ></oda-button>
                         <div
                             ~if="view?.allowSave"
@@ -167,9 +167,20 @@ ODA({is: 'work-form',
         }
         try {
             const root = await this.$item.fetch('handlers', {path: '//form'});
-            this.formViews = (root?.items || []).filter(item =>
+            let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.allowUse !== false
             );
+            // Активное представление — первым в списке
+            const viewId = this.view?.id || this.host?.view_name;
+            if (viewId) {
+                const idx = views.findIndex(v => v.id === viewId);
+                if (idx > 0) {
+                    const [active] = views.splice(idx, 1);
+                    views.unshift(active);
+                }
+            }
+            this.formViews = views;
+            this.render();
         } catch (err) {
             console.error(err);
             this.formViews = [];
@@ -209,8 +220,12 @@ ODA({is: 'work-form',
             return roles[0];
         },
         set(role) {
-            if (this.$item)
+            if (this.$item) {
                 this.$item.role = role;
+                // Сброс кэша класса для актуализации данных по новой роли.
+                // Представления сохраняют своё состояние и перезагружают логи.
+                this.$item.reset?.();
+            }
         }
     },
     async nextRole(){
@@ -266,11 +281,19 @@ ODA({is: 'work-form',
         e?.stopPropagation?.();
         e?.preventDefault?.();
         if (this.view?.id === handler.id) return;
-        const form_idx = window.location.href.lastIndexOf('/form') + '/form'.length;
-        const url = `${window.location.href.slice(0, form_idx)}/${handler.id}/index.html`;
-        if (url === location.href) return;
+        // Динамическое переключение: view.set() скрывает старый и показывает новый.
+        // Все представления сохраняют своё состояние в this.controls.
         this.host.view_name = handler.id;
-        location.assign(url);
+        this.view = handler;
+        // Переместить активное представление в начало списка
+        // Новый массив вместо in-place мутации — чтобы ~for пересоздал кнопки
+        const idx = this.formViews.findIndex(v => v.id === handler.id);
+        if (idx > 0) {
+            const views = [...this.formViews];
+            const [active] = views.splice(idx, 1);
+            views.unshift(active);
+            this.formViews = views;
+        }
     },
     ok(e) {
         alert('ok')

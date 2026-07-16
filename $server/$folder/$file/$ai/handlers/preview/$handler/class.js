@@ -1,4 +1,4 @@
-export default {
+﻿export default {
     imports: 'oda//button, ~/lib//chat-item, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     template: /* html */`
         <style>
@@ -17,7 +17,7 @@ export default {
                 flex: 1;
                 min-height: 0;
                 position: relative;
-                flex-direction: column-reverse;
+                
             }
             .chat-group {
                 @apply --vertical;
@@ -202,7 +202,6 @@ export default {
             }
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
-            <div flex></div>
             <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer>
             <div class="chat-group" ~for="chatGroups" :class="$for.item.type === 'plan' ? ($for.item.completed ? 'plan-group-completed' : '') : ''">
                 <!-- План-группа -->
@@ -267,18 +266,19 @@ export default {
             </div>
         </div>
 
-        <div class="action-bar" horizontal style="padding: 2px 4px; gap: 4px; align-items: center; border-bottom: 1px solid var(--border-color, #ccc);">
-            <div flex style="font-size: small; padding: 0 4px;" ~if="!pending && !planStatus">Готов к работе</div>
-            <div flex style="font-size: small; padding: 0 4px;" ~if="pending">ИИ отвечает…</div>
-            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'proposed'">Предложен план</div>
-            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'executing'">Выполняется…</div>
-            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'completed'">Завершено</div>
-            <div flex style="font-size: small; padding: 0 4px;" ~if="planStatus === 'closed'">Задача закрыта</div>
-            <oda-button error ~if="pending" icon="av:stop" :icon-size label="Стоп" @tap="stopGeneration"></oda-button>
-            <oda-button success ~if="planStatus === 'proposed'" icon="icons:check" :icon-size label="Принять" @tap="acceptPlan()"></oda-button>
-            <oda-button error ~if="planStatus === 'proposed'" icon="icons:close" :icon-size label="Отклонить" @tap="rejectPlan()"></oda-button>
-            <oda-button success ~if="planStatus === 'completed'" icon="icons:check" :icon-size label="Результат" @tap="acceptResult()"></oda-button>
-            <oda-button info ~if="planStatus === 'completed'" icon="icons:refresh" :icon-size label="Продолжить" @tap="continueWork()"></oda-button>
+        <div class="action-bar" horizontal style="padding: 0px; gap: 2px; align-items: stretch; border-bottom: 1px solid var(--border-color, #ccc);">
+            <oda-button flex ~if="pending" error icon="av:stop" :icon-size="iconSize * .8" label="Остановить" @tap="stopGeneration"></oda-button>
+            <oda-button flex ~if="actionButton && !pending"
+                :success="actionButton.color === 'success'"
+                :error="actionButton.color === 'error'"
+                :info="actionButton.color === 'info' || !actionButton.color"
+                :warning="actionButton.color === 'warning'"
+                :icon="actionButton.icon || 'icons:check'"
+                :icon-size="iconSize * .8"
+                :label="actionButton.label || 'OK'"
+                @tap="onAction()"></oda-button>
+            <oda-button error ~if="actionButton && !pending" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
+            <oda-button flex ~if="!actionButton && !pending" content :icon="scrollIcon" :icon-size @tap="scrollToggle" title="Прокрутка"></oda-button>
         </div>
 
         <div header :rainbow="pending" no-flex vertical style="padding: 2px;">
@@ -301,8 +301,6 @@ export default {
                 <oda-button icon="icons:link" :icon-size @tap="selectInternalFile" style="border-radius: 50%;"></oda-button>            
                 <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
                 <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
-                <oda-button :icon="scrollIcon" :icon-size @tap="scrollToggle"></oda-button>
-                <oda-button success icon="fontawesome:s-gears" style="border-radius: 32px;" :rainbow="act" :icon-size="iconSize * .8" @tap="act = !act" label="Act"></oda-button>
             </div>            
         </div>
     `,
@@ -320,7 +318,7 @@ export default {
         $def: '',
         $save: true,
     },
-    act: false,
+    actionButton: null,  // {label, color, icon, type} — управляется ИИ через <action>
     questionAnswers: {},
     ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'qwen3'
     _lastSpoken: '',
@@ -389,7 +387,7 @@ export default {
                 g.completed = g.planStatus === 'completed' || g.planStatus === 'closed';
             }
         }
-        return groups.reverse();
+        return groups;
     },
     get sendIcon() {
         if (this.recording)
@@ -436,10 +434,10 @@ export default {
         return this.$('.thread');
     },
     get scrollIcon() {
-        return this.thread?.scrollTop<10 ? 'box:i-down-arrow-alt' : 'box:i-down-arrow-alt:180';
+        const t = this.thread; if (!t) return 'box:i-down-arrow-alt'; const atBottom = t.scrollTop + t.clientHeight >= t.scrollHeight - 10; return atBottom ? 'box:i-up-arrow-alt' : 'box:i-down-arrow-alt';
     },
     get rows() {
-        return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
+        return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },
     get planSteps() {
         const plan = this.taskBody?.plan;
@@ -565,7 +563,13 @@ export default {
                             .replace(/<questions>[\s\S]*?<\/questions>/gi, '')
                             .replace(/<plan>[\s\S]*?<\/plan>/gi, '')
                             .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+                            .replace(/<action>[\s\S]*?<\/action>/gi, '')
                             .trim();
+                        // Парсинг action из ответа ИИ
+                        const aMatch = msg.content.match(/<action>\s*(\{[\s\S]*?\})\s*<\/action>/);
+                        if (aMatch) {
+                            try { msg.$action = JSON.parse(aMatch[1]); } catch {}
+                        }
                         // Парсинг вопросов из ответа ИИ
                         const qMatch = msg.content.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
                         if (qMatch) {
@@ -630,6 +634,10 @@ export default {
                     }
                 }
             }
+            // Обновить actionButton из последнего ответа ассистента
+            const lastAssistant = body?.chat?.filter(m => m.role === 'assistant').pop();
+            this.actionButton = lastAssistant?.$action || null;
+
             this.title = undefined;
             this.chat = undefined;
             this.chatGroups = undefined;
@@ -706,18 +714,17 @@ export default {
     },
     scrollToggle() {
         if (!this.thread) return;
-        if (this.thread.scrollTop > 10) {
-            this.thread.scrollTop = 0;
+        if (this.thread.scrollTop + this.thread.clientHeight >= this.thread.scrollHeight - 10) {
+            this.thread.scrollTop = this.thread.scrollHeight;
         } else {
-            this.thread.scrollTop = this.thread.scrollHeight - this.thread.clientHeight;
+            this.thread.scrollTop = this.thread.scrollHeight;
         }
         this.scrollIcon = undefined;
         this.render();
         this._focusPrompt();
     },
     _maybeScrollToBottom() {
-        if (this.thread && this.thread.scrollTop < 10)
-            this.thread.scrollTop = 0;
+        if (this.thread) this.thread.scrollTop = this.thread.scrollHeight;
     },
     _onChatDelta(e) {
         const token = e.detail?.value?.token;
@@ -854,6 +861,35 @@ export default {
         this.chatGroups = undefined;
         this._loadTaskBody();
     },
+    stopGeneration() {
+        this.pending = false;
+        this.streamingText = '';
+        this.render();
+    },
+    onAction() {
+        const action = this.actionButton;
+        if (!action) return;
+        // При нажатии OK — отправляем подтверждение как новый промпт
+        const actionType = action.type || 'ok';
+        if (actionType === 'accept_plan' || actionType === 'accept_result') {
+            this.value = 'Подтверждаю. Продолжай.';
+            this.send();
+        } else if (actionType === 'continue') {
+            this.value = 'Продолжай';
+            this.send();
+        } else {
+            this.value = 'OK';
+            this.send();
+        }
+        this.actionButton = null;
+        this.render();
+    },
+    onCancelAction() {
+        this.actionButton = null;
+        this.value = 'Отмена. Жду твоих указаний.';
+        this.send();
+        this.render();
+    },
     async send() {
         // Если нет текста и файлов — начинаем запись голоса
         if (!this.value?.trim() && !this.files.length && !this.recording) {
@@ -924,20 +960,14 @@ export default {
         this.async(() => {
             const thread = this.$('.thread');
             if (thread)
-                thread.scrollTop = 0;
+                thread.scrollTop = thread.scrollHeight;
         }, 100);
         try {
             const payload = JSON.stringify({
                 text: promptText || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
-                act: this.act || false,
             });
             const result = await this.$item.fetch('prompt', {}, payload);
-            // Автосброс act после выполнения (если ИИ завершил действия)
-            if (this.act && result?.needsAct !== true) {
-                this.act = false;
-                this.render();
-            }
         }
         catch (e) {
             console.warn('[ai-preview] send', e.message);
@@ -1130,6 +1160,7 @@ ODA({is: 'oda-chat-plan',
                 font-size: small;
                 cursor: pointer;
                 user-select: none;
+                
             }
             .step:hover {
                 @apply --header;
@@ -1152,7 +1183,7 @@ ODA({is: 'oda-chat-plan',
             <div class="progress-bar" :style="'width: ' + progressPercent + '%'"></div>
         </div>
         <div class="steps" ~if="!collapsed">
-            <div class="step" horizontal ~for="steps" :class="$for.item.status" :light="$for.item.status === 'done'" @tap="fire('tap-step', $for.index)">
+            <div class="step" horizontal ~for="steps" :class="$for.item.status" :light="$for.item.status === 'done'" @tap="fire('tap-step', $for.index)" style="align-items: center; gap: 4px;">
                 <oda-icon :icon="$for.item.status === 'done' ? 'icons:check-circle' : ($for.item.status === 'in_progress' ? 'av:play-circle-outline' : 'icons:radio-button-unchecked')" :icon-size></oda-icon>
                 <span flex>{{$for.item.description}}</span>
             </div>

@@ -231,7 +231,7 @@ ODA({is: 'chat-item',
     },
     async loadPreview($file) {
         if (!$file) {
-            this.previewIsReady = true;
+            this.hasPreview = true;
             return;
         }
         try {
@@ -241,7 +241,8 @@ ODA({is: 'chat-item',
             else
                 this.previewTag = 'item-node';
         }
-        catch {
+        catch (e) {
+            console.warn('[chat-item] loadPreview error:', e.message);
             this.hasPreview = false;
             this.previewTag = 'item-node';
         }

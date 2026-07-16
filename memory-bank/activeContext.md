@@ -1,45 +1,54 @@
 # Текущий контекст работы
 
-## Текущая задача: Function calling для ИИ
+## Сессия 16.07.2026 — завершена
 
-### Этап 1: streamChat — поддержка functions ✅
-- `models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js`
-- Без `functions` — yield строк (обратная совместимость)
-- С `functions` — yield объектов `{type: 'content', content}` или `{type: 'function_call', name, arguments}`
-- Парсит `delta.tool_calls[].function` и `delta.function_call` из SSE
-- Отправляет `body.functions` и `body.function_call` в API
+### Основные изменения:
 
-### Этап 2: prompt — построение functions из get_schema (НЕ НАЧАТ)
-В `$server/$folder/$file/$ai/methods/prompt/$method/class.js`:
-- Получить схему через `get_schema()` контекста
-- Преобразовать методы в формат `functions` (OpenAI-compatible)
-- Передать `functions` в `streamChat`
-- Обрабатывать `{type: 'function_call', name, arguments}` из стрима
-- Заменить `parseToolCalls` (текстовый парсинг) на нативный
+#### 1. Переименование `$work` → `work`
+- `sources/server/class.js`: `get_storage()` и `resolveZone()` — `'$work'` → `'work'`
+- Физические папки переименованы на диске
+- Причина: `$work` конфликтовал с `tilde`-маршрутизацией (short-path заменял `$` на `~`, создавая двойные `~`)
 
-### Этап 3: История диалога с function call (НЕ НАЧАТ)
-В `buildHistoryFromChat`:
-- `role: "assistant"` с `function_call`
-- `role: "function"` с результатом вызова
+#### 2. Логи `data.logs` — перехват в `$class.save_file`
+- `data.logs` всегда пишется в `meta_folder/logs/`, минуя `get_storage`
+- Не зависит от `role` — системная операция
 
-## Завершено ранее: Безопасность + чат + UI
+#### 3. `slave` — базовая роль для всех
+- `roles()` в `class.js` — всегда добавляет `'slave'` для залогиненного пользователя
 
-### Система безопасности (admin/master/slaves) — полностью в объектной модели
-- `sources/host/security.js` — УДАЛЕН
-- `sources/server/class.js` — ROLES/ZONES/ACCESS_LEVEL, roles(), canSee(), canWrite(), allowAccess(), resolveZone(), chatSource(), get_storage({role}), ensureBootstrapAdmin()
-- `sources/server/folder.js` — allowAccess() делегирует к $owner
-- `sources/client/folder.js` — role через $public/$save, fetch() подставляет params.role, цвет --main-color
+#### 4. Селектор ролей в форме
+- `$server/$folder/handlers/pages/form/$handler/class.js` — динамическое переключение представлений (без `location.assign`)
+- Активное представление перемещается в начало списка
+- Смена роли → `$item.reset()` (без перезагрузки страницы)
 
-### Ролевая модель чата
-- slave → логи `$user`, файлы в `meta/$work/`
-- master → логи класса, файлы в `distributed/$work/`
-- admin → логи `$user`, файлы в `$folder/$work/`
+#### 5. Панель управления микрочата
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js`:
+  - Убрана старая action-bar (6 кнопок) и кнопка Act
+  - Новая панель: одна главная кнопка + (X) для отмены (всегда видна)
+  - Кнопка скролла перенесена с нижнего тулбара
+  - Парсинг `<action>` из ответа ИИ → `actionButton`
+  - `.thread` — убран `column-reverse`, нормальное направление текста
+  - `chatGroups` — убран `.reverse()`
 
-### UI компоненты
-- `item-node` — admin (щит), master (галстук), slaves (массив)
-- `item-users` — два режима: чат (выбор receivers) / дерево (управление ролями)
-- Цветовая индикация: admin=red, master=green, slave=indigo
+#### 6. SYSTEM_PROMPT обновлён
+- Добавлена секция «Управление диалогом: тег `<action>`»
+- ИИ обучен выдавать `<action>` при вопросах/планах
+- Убраны обратные кавычки из template literal (вызывали `ReferenceError`)
 
-## Технический долг
-- HTTP-фильтрация (canSee для info/get_item) — отключена, TODO в http-server.js
-- Старые тесты удалены, новые не написаны
+#### 7. Function calling (код готов, не протестирован)
+- `buildFunctionsFromSchema()` в `sources/modules/ai-schema.js`
+- `prompt` метод передаёт `functions` в `streamChat`
+- Fallback: текстовый парсинг `<tool_call>` сохранён
+
+## Незавершённые задачи
+
+### 1. Баг `oda-icon` — отложено
+- Иконки залипают при переиспользовании компонента в `~for`
+- Причина: `this.bb = undefined` создаёт own data property + мутация Proxy
+
+### 2. Стандартизация имён методов/свойств
+- Методы: `snake_case`
+- Свойства: `camelCase`
+- Приватные: `_` prefix
+
+### 3. Полная проверка function calling в реальном микрочате

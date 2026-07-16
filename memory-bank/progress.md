@@ -4,6 +4,14 @@
 
 ## Завершённые задачи
 
+### Site-витрина, user-slot, guest redirect — 16.07.2026
+- Shell: tabs + iframe keep-alive + nested `main` (`view_name`)
+- Base main (hero) в `$folder`; WORK main + shell-копия в `$server/handlers/site`
+- User-slot только top-level; modal `user-profile`
+- `page.html`: гости → site контекста (кроме самого site)
+- **Уроки:** не re-export через `~/class.js` merge; `$server/handlers/site` только с `$handler/`; не менять iframe `src` на месте
+- **Док:** `$server/$folder/handlers/pages/site/readme.md`
+
 ### Рефакторинг системы безопасности (admin/master/slaves) — 15.07.2026
 - **Модель:** 3 роли (admin, master, slaves), 3 зоны (SYSTEM, MANAGEMENT, WORK)
 - admin/master наследуются вниз, slave — только класс назначения
@@ -128,6 +136,38 @@
 
 ### Единый тип $ai — 09.07.2026
 - Один тип `$ai`, структура `models/$ai/` + `models/GigaChat Pro/`
+
+### Нативный function calling для ИИ — 16.07.2026
+- **Багфикс логов:** `_writeLogTo` в `sources/server/file.js` — удалён `role` из параметров, логи пишутся от имени WORK → всегда попадают в `meta_folder/logs/`
+- **`buildFunctionsFromSchema()`** в `sources/modules/ai-schema.js` — преобразует схему методов в OpenAI-compatible functions
+- **Цикл prompt** (`$server/$folder/$file/$ai/methods/prompt/$method/class.js`):
+  - Строит `functions` из `get_schema()` контекста каждую итерацию
+  - Передаёт `functions` + `function_call:'auto'` в `streamChat`
+  - Обрабатывает `{type:'content'}` и `{type:'function_call'}` из стрима
+  - Сохраняет `function_call` в истории ассистента для нативного формата
+  - Fallback: текстовый парсинг `<tool_call>` сохранён для моделей без function calling
+- **SYSTEM_PROMPT** обновлён: убрано обучение текстовому формату `<tool_call>`, описаны инструменты через function calling
+- **Изменённые файлы:** `sources/server/file.js`, `sources/modules/ai-schema.js`, `$server/$folder/$file/$ai/methods/prompt/$method/class.js`, `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js`
+
+### Сессия 16.07.2026 — переименование $work, панель управления, function calling
+
+- **`$work` → `work`** — переименование во избежание конфликта с `tilde`-маршрутизацией
+- **`data.logs` перехват** в `$class.save_file` — логи всегда в `meta_folder/logs/`
+- **`slave` — базовая роль** — всегда добавляется в `roles()` для залогиненного пользователя
+- **Селектор ролей в форме** — динамическое переключение (без `location.assign`), активное представление первым
+- **Панель управления микрочата** — одна кнопка + (X), тег `<action>` управляется ИИ
+- **SYSTEM_PROMPT обновлён** — секция `<action>`, убраны обратные кавычки из template literal
+- **Function calling** — `buildFunctionsFromSchema()` + `prompt` передаёт `functions` в `streamChat` (код готов, не протестирован)
+- **Микрочат `.thread`** — убран `column-reverse`, нормальное направление текста
+
+**Изменённые файлы:**
+- `sources/server/class.js` — `get_storage`, `resolveZone`, `roles`, `save_file`
+- `sources/server/file.js` — восстановлен к оригиналу
+- `sources/modules/ai-schema.js` — `buildFunctionsFromSchema()`
+- `$server/$folder/handlers/pages/form/$handler/class.js` — динамическое переключение, `activeRole`
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — панель управления, `actionButton`, `.thread`
+- `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js` — SYSTEM_PROMPT с `<action>`
+- `$server/$folder/$file/$ai/methods/prompt/$method/class.js` — function calling цикл
 
 ## Незавершённое
 

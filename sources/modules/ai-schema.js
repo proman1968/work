@@ -176,3 +176,48 @@ function cleanJSDocText(text) {
         .replace(/\s+/g, ' ')
         .trim();
 }
+
+/**
+ * Построить массив functions (OpenAI-compatible) из схемы методов.
+ *
+ * Преобразует результат buildAiSchema() в формат, передаваемый в LLM:
+ *   [{name, description, parameters: {type, properties, required}}]
+ *
+ * @param {Array} methods — результат buildAiSchema(proto)
+ * @param {object} [options] — настройки
+ * @param {string[]} [options.exclude] — имена методов для исключения
+ * @returns {Array} — массив описаний функций для function calling
+ */
+export function buildFunctionsFromSchema(methods, options = {}) {
+    if (!Array.isArray(methods))
+        return [];
+    const exclude = new Set(options.exclude || []);
+    const result = [];
+    for (const m of methods) {
+        if (exclude.has(m.name))
+            continue;
+        const properties = {};
+        const required = [];
+        if (m.params && typeof m.params === 'object') {
+            for (const [key, desc] of Object.entries(m.params)) {
+                properties[key] = {
+                    type: typeof desc === 'string' && desc.includes('(число)') ? 'number' : 'string',
+                    description: typeof desc === 'string' ? desc : String(desc || ''),
+                };
+            }
+        }
+        const fn = {
+            name: m.name,
+            description: m.description || '',
+            parameters: {
+                type: 'object',
+                properties,
+                required,
+            },
+        };
+        if (m.returns)
+            fn.description += '\nВозвращает: ' + m.returns;
+        result.push(fn);
+    }
+    return result;
+}

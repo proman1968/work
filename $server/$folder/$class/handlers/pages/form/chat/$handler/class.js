@@ -218,11 +218,8 @@ ODA({is: 'oda-chat',
     get skillSelectMode(){
         return this.value === '@';
     },
-    get colorMode(){
-        return this.$pdp.$item.id === WORK.uid ? 'success':'info';
-    },
     get background(){
-        return `linear-gradient(145deg, var(--${this.colorMode}-background), var(--${this.colorMode}-color))`
+        return `linear-gradient(145deg, var(--info-background), var(--info-color))`
     },
     get url(){
         if(this.$pdp.$handler)
@@ -262,7 +259,7 @@ ODA({is: 'oda-chat',
     files: [],
     get placeholder(){
         if(this.$pdp.receivers.length)
-            return 'Сообхение для ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
+            return 'Сообщение для ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
         return 'Новая задача для ИИ ...'
     },
     clear(e){

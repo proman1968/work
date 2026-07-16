@@ -1,5 +1,31 @@
 # Журнал архитектурных решений
 
+## Function calling: нативный вместо текстового парсинга — 2026-07-16
+
+**Контекст.** ИИ-агент работал через текстовый парсинг `<tool_call>{"method":"...","args":{...}}</tool_call>` из ответа модели. Это ненадёжно: модели ломают JSON, путают кавычки, забывают теги. Платформа уже имела `streamChat` с поддержкой `functions` (OpenAI-compatible), но `prompt` метод не использовал эту возможность.
+
+**Решение.** Внедрить нативный function calling:
+1. `buildFunctionsFromSchema()` преобразует схему методов (из `get_schema`) в формат `[{name, description, parameters}]`
+2. `prompt` передаёт `functions` + `function_call:'auto'` в `streamChat`
+3. Цикл обрабатывает объекты `{type:'function_call', name, arguments}` из стрима
+4. История диалога использует стандартный формат `role:'function'` с `name`
+5. Fallback: текстовый парсинг `<tool_call>` сохранён для моделей без function calling
+
+**Правило.** Схема методов класса — это и есть список инструментов агента. Не нужно дублировать описание инструментов в системном промпте — они передаются через `functions`.
+
+## Баг: логи попадали в $work вместо meta_folder после ввода ролей — 2026-07-16
+
+**Контекст.** После внедрения `get_storage({role})` файлы сохраняются в зону `$work` по роли пользователя. Но `_writeLogTo` в `file.js` передавал `role` в `storage.save_file()`, что направляло `data.logs` тоже в `$work`.
+
+**Решение.** В `_writeLogTo` удаляем `role` из параметров и пишем от имени `globalThis.WORK`:
+```js
+const { role, ...rest } = log_param;
+const systemLogParam = { ...rest, user: globalThis.WORK };
+await storage.save_file(systemLogParam);
+```
+
+**Правило.** Логи — системная операция. Они всегда пишутся в `meta_folder/logs/` независимо от роли пользователя, сохранившего файл.
+
 ## Безопасность в объектной модели: роли admin/master/slaves — 2026-07-15
 
 **Контекст.** Прежняя система (2 роли admin/users) размазана по `security.js` (731 строка), `class.js`, `folder.js`, `client/folder.js`. Логика наследования ролей была перепутана (masters не наследовался, slaves наследовался — оба наоборот).

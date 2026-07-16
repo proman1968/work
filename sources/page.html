@@ -18,6 +18,9 @@
 </head>
 <body>
     <script type="module">
+        const item_path = "{item_path}";
+        const page_handler = "{handler}";
+
         await import(window.location.origin + '/sources/client.js');
         try{
             await WORK.login();
@@ -26,41 +29,45 @@
             console.log(e.message)
         }
 
-        const item_path = "{item_path}";
-        const $item = await WORK.get_item(item_path, 'info');
-        window.$context ??= $item;
+        if (!WORK.uid && page_handler !== 'site') {
+            const base = (!item_path || item_path === '/') ? '' : item_path.replace(/\/$/, '');
+            location.replace(location.origin + base + '/~/handlers//site/index.html');
+        } else {
+            const $item = await WORK.get_item(item_path, 'info');
+            window.$context ??= $item;
 
-        const id = $item.id;
-        let handler = "{handler}";
-        const component_name = "{handler-type}-" + handler.toLowerCase();
-        handler = await WORK.get_item($item.short + '/~/handlers//' + handler);
-        // handler = handler[0];
-        let module = await import(handler.short + `/~/class.js`);
-        module = module.default
-        module.is ??= component_name;
-        await WORK(module);
-        const el = document.createElement(module.is);
-        el.$item = $item;
-        document.body.appendChild(el);
+            const id = $item.id;
+            let handler = page_handler;
+            const component_name = "{handler-type}-" + handler.toLowerCase();
+            handler = await WORK.get_item($item.short + '/~/handlers//' + handler);
+            // handler = handler[0];
+            let module = await import(handler.short + `/~/class.js`);
+            module = module.default
+            module.is ??= component_name;
+            await WORK(module);
+            const el = document.createElement(module.is);
+            el.$item = $item;
+            document.body.appendChild(el);
 
-        el.$handler = handler;
-        let view = '{view_name}';
-        if(view)
-            el.view_name = view;
+            el.$handler = handler;
+            let view = '{view_name}';
+            if(view)
+                el.view_name = view;
 
-        window.addEventListener('pointerdown', e=>{
-            let parent = window.parent;
-            if(window !== parent){
-                for(let p of parent.document.querySelectorAll('[popover]'))
-                    p.hidePopover();
-            }
-            else{
-                for(let w of Array.from(window.frames)){
-                    for(let p of w.document.querySelectorAll('[popover]'))
+            window.addEventListener('pointerdown', e=>{
+                let parent = window.parent;
+                if(window !== parent){
+                    for(let p of parent.document.querySelectorAll('[popover]'))
                         p.hidePopover();
                 }
-            }
-        })
+                else{
+                    for(let w of Array.from(window.frames)){
+                        for(let p of w.document.querySelectorAll('[popover]'))
+                            p.hidePopover();
+                    }
+                }
+            })
+        }
     </script>
 </body>
 </html>
