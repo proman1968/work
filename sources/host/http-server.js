@@ -432,9 +432,10 @@ export function createRequestHandler() {
             else
                 response.end(result);
         }
-        else{
-            response.writeHead(204, header);
-            response.end(result);
+        else {
+            // null/undefined → 200 с телом 'null', чтобы клиентский response.json() не падал
+            response.writeHead(200, header);
+            response.end('null');
         }
     }
     catch (e) {

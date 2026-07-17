@@ -109,8 +109,11 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
 
                 let response = await fetch(url, options);
                 switch (response.status) {
+                    case 204: {
+                        // 204 No Content — нет тела для парсинга
+                        resolve(null);
+                    } break;
                     case 302:
-                    case 204:
                     case 200: {
                         let content_type_header = response.headers.get('Content-Type');
                         let res = content_type_header ? content_type_header.split(';')[0] : content_type_header;

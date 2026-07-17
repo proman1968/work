@@ -9,6 +9,7 @@ export default {
                 @apply --vertical;
                 @apply --content;
                 overflow: auto;
+                min-height: 100%;
 
                 .page {
                     @apply --flex;
@@ -19,6 +20,7 @@ export default {
                     padding: 32px 24px 48px;
                     gap: 28px;
                     box-sizing: border-box;
+                    flex: 1;
                 }
                 .hero {
                     @apply --horizontal;
@@ -98,6 +100,71 @@ export default {
                 .module:hover {
                     @apply --active;
                 }
+                .site-footer {
+                    margin-top: auto;
+                    border-top: 1px solid color-mix(in oklab, var(--dark-background) 45%, transparent);
+                    padding: 36px 24px 28px;
+                    box-sizing: border-box;
+                }
+                .footer-inner {
+                    @apply --vertical;
+                    max-width: 920px;
+                    width: 100%;
+                    margin: 0 auto;
+                    gap: 28px;
+                }
+                .footer-cols {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                    gap: 24px 32px;
+                }
+                .footer-col {
+                    @apply --vertical;
+                    gap: 10px;
+                }
+                .footer-col h3 {
+                    margin: 0;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    letter-spacing: 0.06em;
+                    text-transform: uppercase;
+                    opacity: 0.55;
+                }
+                .footer-col a {
+                    color: inherit;
+                    text-decoration: none;
+                    font-size: 0.9rem;
+                    line-height: 1.4;
+                    opacity: 0.8;
+                }
+                .footer-col a:hover {
+                    opacity: 1;
+                    text-decoration: underline;
+                }
+                .footer-bottom {
+                    @apply --horizontal;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px 24px;
+                    padding-top: 20px;
+                    border-top: 1px solid color-mix(in oklab, var(--dark-background) 35%, transparent);
+                    font-size: 0.85rem;
+                    opacity: 0.65;
+                }
+                .footer-legal {
+                    @apply --horizontal;
+                    flex-wrap: wrap;
+                    gap: 8px 16px;
+                }
+                .footer-legal a {
+                    color: inherit;
+                    text-decoration: none;
+                }
+                .footer-legal a:hover {
+                    text-decoration: underline;
+                    opacity: 1;
+                }
             }
         </style>
         <div class="page">
@@ -140,6 +207,16 @@ export default {
                 </div>
             </div>
         </div>
+        <footer class="site-footer">
+            <div class="footer-inner">
+                <div class="footer-bottom">
+                    <span>© {{year}} {{$item.label}}. Все права защищены.</span>
+                    <div class="footer-legal">
+                        <a ~for="footerLegal" :href="$for.item.href" @tap.prevent>{{$for.item.label}}</a>
+                    </div>
+                </div>
+            </div>
+        </footer>
     `,
     pitch: 'Файло-ориентированная веб-платформа: структура папок одновременно является данными, API и точкой входа в UI. WORK — PaaS-решение на базе ODANT для цифровой работы организаций.',
     benefits: [
@@ -188,6 +265,14 @@ export default {
             return items.filter(i => i instanceof CORE.$class);
         });
     },
+    get year() {
+        return new Date().getFullYear();
+    },
+    footerLegal: [
+        { label: 'Пользовательское соглашение', href: '#terms' },
+        { label: 'Конфиденциальность', href: '#privacy' },
+        { label: 'Cookies', href: '#cookies' },
+    ],
     open_module(item) {
         const url = item.url + '/~/handlers//site/index.html';
         window.open(url, '_blank');

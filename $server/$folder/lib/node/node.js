@@ -68,34 +68,17 @@ export default {
     `,
     showSize: false,
     showUsers: false,
-    get showAdmin(){
-        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user)
-            return false
-        return new AsyncPromise(async ()=>{
-            let admin = await this.admin;
-            return admin && admin.id !== WORK.uid;
-        })
-    },
     get showBoss(){
         if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
             return new AsyncPromise(async ()=>{
-                let boss = await this.boss;
-                return boss && boss.id !== WORK.uid;
+                return !!await this.boss;
             })
         }
-
     },
     get status(){
         if(this.$item.constructor === CORE.$class)
             return this.$item.status;
         return ''
-    },
-    get admin(){
-        return new AsyncPromise(async ()=>{
-            if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
-            let res = await Promise.resolve(this.$item?.admins);
-            return res?.last
-        })
     },
     get boss(){
         return new AsyncPromise(async ()=>{
