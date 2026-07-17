@@ -39,6 +39,18 @@ export class $class extends $folder{
     get admins(){
         return this.fetch('admins');
     }
+    get bosses(){
+        return this.fetch('bosses');
+    }
+    get admin(){
+        return this.fetch('admin');
+    }
+    get boss(){
+        return this.fetch('boss');
+    }
+    get users(){
+        return this.fetch('users');
+    }
     import(){
         return import((this.short || '/') + '?load' + `&version=${this.__version}`).then(module => module?.default);
     }

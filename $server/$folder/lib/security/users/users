@@ -7,7 +7,6 @@ export default {
                 @apply --horizontal;
                 flex-wrap: wrap;
                 justify-content: space-between;
-                padding: 4px;
                 gap: 8px;
             }
             .part {

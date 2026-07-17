@@ -7,7 +7,6 @@ export default {
                 @apply --horizontal;
                 flex-wrap: wrap;
                 justify-content: space-between;
-                padding: 4px;
                 gap: 8px;
             }
             .part {
@@ -54,11 +53,11 @@ export default {
         });
     },
     get _sourceUsers() {
-        if (this.role === 'master')
-            return Promise.resolve(this.$item?.masters).then(list => Array.isArray(list) ? list : []);
-        if (this.role === 'admin')
+        if (this.role === 'BOSS')
+            return Promise.resolve(this.$item?.bosses).then(list => Array.isArray(list) ? list : []);
+        if (this.role === 'ADMIN')
             return Promise.resolve(this.$item?.admins).then(list => Array.isArray(list) ? list : []);
-        return Promise.resolve(this.$item?.slaves).then(list => Array.isArray(list) ? list : []);
+        return Promise.resolve(this.$item?.users).then(list => Array.isArray(list) ? list : []);
     },
     _tap(e) {
         if (!this.selectMode)
@@ -87,25 +86,25 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'master')
-            security.master = user.id;
-        else if (this.role === 'admin')
-            security.admin = user.id;
+        if (this.role === 'BOSS')
+            security.BOSS = user.id;
+        else if (this.role === 'ADMIN')
+            security.ADMIN = user.id;
         else {
-            security.slaves ??= [];
-            if (!security.slaves.includes(user.id))
-                security.slaves.push(user.id);
+            security.USERS ??= [];
+            if (!security.USERS.includes(user.id))
+                security.USERS.push(user.id);
         }
         await this.saveSecurity(security);
     },
     async suspendUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'master')
-            delete security.master;
-        else if (this.role === 'admin')
-            delete security.admin;
-        else if (security.slaves)
-            security.slaves = security.slaves.filter(id => id !== user.id);
+        if (this.role === 'BOSS')
+            delete security.BOSS;
+        else if (this.role === 'ADMIN')
+            delete security.ADMIN;
+        else if (security.USERS)
+            security.USERS = security.USERS.filter(id => id !== user.id);
         await this.saveSecurity(security);
     },
     _userMenu(e) {

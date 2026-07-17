@@ -208,9 +208,9 @@ ODA({is: 'work-form',
     },
     async getRoleIcon(role){
         return  ({
-            admin: 'fontawesome:s-user-shield',
-            master: 'fontawesome:s-user-tie',
-            slave: 'fontawesome:s-user-pen',
+            ADMIN: 'fontawesome:s-user-shield',
+            BOSS: 'fontawesome:s-user-tie',
+            USER: 'fontawesome:s-user-pen',
         })[await role]
     },
     activeRole: {

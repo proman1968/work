@@ -356,6 +356,7 @@ ODA({is: 'oda-chat',
     },
     focusedItem: null,
     $item: null,
+    awaitTask: false,
     send(e){
         this.$('#ribbon').scrollDown = true;
         const formData = new FormData();
@@ -374,6 +375,7 @@ ODA({is: 'oda-chat',
             const isAI = !isForeign && !hasReceivers;
             let file;
             if (isAI) {
+                this.awaitTask = true;
                 params.message = this.value || '';
                 const body = JSON.stringify({
                     title: this.value || '',
@@ -746,7 +748,7 @@ ODA({is: 'chat-day',
             files = files ? [files] : [];
         }
         files = await Promise.all(files.map(f => Promise.resolve(f)));
-        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs'))));
+        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.ai'))));
     },
     async _onLogsChangedRun(e){
         await this._bindLogsFolder();
@@ -756,13 +758,22 @@ ODA({is: 'chat-day',
         if (!this._logsInit)
             return;
         const initiator = e?.detail?.initiator ?? e?.detail?.value?.initiator;
-        if (initiator && initiator !== '.RAG' && String(initiator).endsWith('.logs')) {
+        if (initiator && initiator !== '.RAG' && (String(initiator).endsWith('.logs') || String(initiator).endsWith('.ai'))) {
             try {
                 let file = await folder.get_item('/' + initiator, 'info');
-                if (file?.id?.endsWith?.('.logs') && !this.logItems.some(i => i.id === file.id)) {
+                if ((file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.ai')) && !this.logItems.some(i => i.id === file.id)) {
                     this.logItems.push(file);
                     this._scrollRibbonDown();
-                    if(initiator.split('.')[1] === WORK.uid){
+                    const chat = this.$pdp.$pdp;
+                    if (file?.id?.endsWith?.('.ai') && chat?.awaitTask) {
+                        this.async(()=>{
+                            let last = this.$$('chat-item').last;
+                            if(last) {
+                                last.expanded = true;
+                                chat.awaitTask = false;
+                            }
+                        }, 1000)
+                    } else if(file?.id?.endsWith?.('.logs') && initiator.split('.')[1] === WORK.uid){
                         this.async(()=>{
                             let last = this.$$('chat-item').last;
                             if(last)
@@ -803,6 +814,18 @@ ODA({is: 'chat-day',
             this.logItems = await this._fetchLogFiles();
             this.render();
             this._scrollRibbonDown();
+            // Раскрыть последний .ai только если ожидается новая задача
+            const chat = this.$pdp.$pdp;
+            if (chat?.awaitTask && this.last) {
+                this.async(() => {
+                    const items = this.$$('chat-item');
+                    const lastItem = items.last;
+                    if (lastItem && lastItem.$file?.id?.endsWith('.ai')) {
+                        lastItem.expanded = true;
+                        chat.awaitTask = false;
+                    }
+                }, 500);
+            }
         }).catch(e => {
             console.warn('[chat-day] logs', e.message);
             this._logsInit = false;
@@ -814,7 +837,7 @@ ODA({is: 'chat-day',
     },
     get logsSource(){
         // Источник логов определяется сервером по роли:
-        // slave/admin → личный кабинет, master → текущий класс
+        // USER/admin → личный кабинет, boss → текущий класс
         return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource')).then(path => {
             if (path && typeof path === 'string')
                 return WORK.get_item(path);

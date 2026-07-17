@@ -126,6 +126,18 @@ export class $folder extends $item{
         }
         return this._get_item(folder_name, FS.$folder);
     }
+    get admins(){
+        return this.parent.admins;
+    }
+    get bosses(){
+        return this.parent.bosses;
+    }
+    get admin(){
+        return this.parent.admin;
+    }
+    get boss(){
+        return this.parent.boss;
+    }
     get users(){
         return this.parent.users;
     }

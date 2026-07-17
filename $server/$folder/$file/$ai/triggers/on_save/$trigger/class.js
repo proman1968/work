@@ -184,24 +184,6 @@
 - Если метод вернёт элемент, он станет новым контекстом.
 - Для прямого перехода используй navigate с path.
 - Для возврата к домашнему классу — reset_context.
-## Вызов методов (текстовый формат)
-
-Если function calling недоступен, вызывай методы через текстовый формат:
-<tool_call>{"method":"web_search","args":{"query":"погода завтра"}}</tool_call>
-
-Не описывай процесс вызова текстом — выводи tool_call сразу.
-При поиске погоды, новостей и другой информации — вызывай web_search автоматически.
-
-## Доступные методы
-- web_search — поиск в интернете (query)
-- get_schema — свойства и методы текущего элемента
-- get_property — прочитать свойство (name)
-- set_property — записать свойство (name, value)
-- navigate — перейти в контекст (path)
-- reset_context — вернуться в домашний класс
-- read_file — прочитать файл (name)
-- write_file — записать файл (name, content)
-
 ## Поддержание документации класса (readme.md)
 
 В метапапке каждого класса может быть файл readme.md — описание класса для тебя и пользователей.
@@ -296,7 +278,10 @@ export default {
         if (!body.system) {
             body.system = SYSTEM_PROMPT;
             body.chat = [];
-            body.model = await findModel();
+            const { pathToFileURL } = await import('node:url');
+            const { join } = await import('node:path');
+            const { findFirstModel } = await import(pathToFileURL(join(process.cwd(), 'sources/modules/ai-schema.js')).href);
+            body.model = await findFirstModel();
             try {
                 const fsp = await import('node:fs/promises');
                 await fsp.writeFile('.' + taskFile.path, JSON.stringify(body, null, 4), 'utf-8');
@@ -313,23 +298,3 @@ export default {
         }
     },
 };
-
-async function findModel() {
-    try {
-        const children = await WORK.children;
-        const aiRoot = children?.find(el => el.type === '$ai');
-        if (!aiRoot) return null;
-        const tree = await aiRoot.info({ deep: -1 });
-        return findFirstLeaf(tree)?.path || null;
-    } catch (e) {
-        console.warn('[ai] findModel:', e.message);
-    }
-    return null;
-}
-
-function findFirstLeaf(node) {
-    if (!node) return null;
-    const items = node.items;
-    if (!items?.length) return node;
-    return findFirstLeaf(items[0]);
-}

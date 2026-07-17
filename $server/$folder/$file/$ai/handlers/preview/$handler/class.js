@@ -5,6 +5,7 @@
             :host {
                 @apply --vertical;
                 overflow: hidden;
+                @apply --content;
             }
             #tools{
                 font-size: small;
@@ -57,34 +58,6 @@
                 @apply --info-invert;
                 @apply --raised;
                 padding: 4px 8px;
-            }
-            .msg-reasoning {
-                @apply --content;
-                overflow: hidden;
-            }
-            .msg-reasoning summary {
-                @apply --bold;
-                font-size: x-small;
-                opacity: .6;
-                cursor: pointer;
-                padding: 2px 8px;
-                user-select: none;
-            }
-            .msg-reasoning summary oda-icon {
-                transition: transform 0.2s;
-            }
-            .msg-reasoning[open] summary oda-icon {
-                transform: rotate(90deg);
-            }
-            .msg-reasoning[open] summary {
-                opacity: .8;
-            }
-            .msg-reasoning-content {
-                font-size: small;
-                padding: 4px 8px;
-                @apply --raised;
-                border-left: 3px solid var(--success-color);
-                margin-top: 2px;
             }
             .msg-time {
                 font-size: xx-small;
@@ -167,6 +140,7 @@
             }
             .plan-block[open] summary {
                 opacity: .8;
+                padding: 2px;
             }
             .plan-step {
                 @apply --horizontal;
@@ -213,83 +187,26 @@
             }
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
-            <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer>
-            <div class="chat-group" ~for="chatGroups" :class="$for.item.type === 'plan' ? ($for.item.completed ? 'plan-group-completed' : '') : ''">
-                <!-- План-группа -->
-                <div ~if="$for.item.type === 'plan'" class="plan-group-container">
-                    <div class="plan-group-header">
-                        <div class="msg-user" horizontal>
-                            <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
-                            <div class="msg-time" ~if="$for.item.prompt.timeText">{{$for.item.prompt.timeText}}</div>
-                        </div>
-                        <oda-chat-plan ~if="$for.item.planSteps?.length" :steps="$for.item.planSteps" @tap-step="togglePlanStep($event.detail.value)"></oda-chat-plan>
-                    </div>
-                    <div class="plan-group-exchanges">
-                        <div class="exchange" ~for="$for.item.responses">
-                            <div class="msg-user" horizontal ~if="$for.$for.item.role === 'user'">
-                                <div class="msg-content" flex>{{$for.$for.item.content}}</div>
-                                <div class="msg-time" ~if="$for.$for.item.timeText">{{$for.$for.item.timeText}}</div>
-                            </div>
-                            <div class="msg-assistant" ~if="$for.$for.item.role !== 'user'">
-                                <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
-                                    <summary center header horizontal><span flex>Мысли</span><oda-icon icon="icons:chevron-right" :icon-size></oda-icon></summary>
-                                    <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
-                                </details>
-                                <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
-                                <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
-                                <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
-                                    <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
-                                    <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
-                                </div>
-                                <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
-                                <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
-                                    <summary center header horizontal><oda-icon icon="icons:chevron-right" :icon-size></oda-icon><span flex>🔧 {{$for.$for.item.tool}}</span></summary>
-                                    <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
-                                </details>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <!-- Простая группа -->
-                <div ~if="$for.item.type !== 'plan'" class="simple-group-container">
-                    <div class="msg-user" horizontal>
-                        <div class="msg-content" flex>{{$for.item.prompt.content}}</div>
-                        <div class="msg-time" ~if="$for.item.prompt.timeText">{{$for.item.prompt.timeText}}</div>
-                    </div>
-                    <div class="msg-assistant" ~for="$for.item.responses">
-                        <details class="msg-reasoning" ~if="$for.$for.item.$reasoning">
-                            <summary center header horizontal><span flex>Мысли</span><oda-icon icon="icons:chevron-right" :icon-size></oda-icon></summary>
-                            <div class="msg-reasoning-content">{{$for.$for.item.$reasoning}}</div>
-                        </details>
-                        <chat-item ~if="$for.$for.item.$responseFile" visible history compact :$file="$for.$for.item.$responseFile" style="padding: 0px;"></chat-item>
-                        <chat-item ~if="$for.$for.item.$resultFile" visible history compact :$file="$for.$for.item.$resultFile" style="padding: 0px;"></chat-item>
-                        <div :error="$for.$for.item.error" ~if="!$for.$for.item.$responseFile && !$for.$for.item.$resultFile && $for.$for.item.role !== 'tool_result' && ($for.$for.item.$cleanContent || $for.$for.item.error)">
-                            <oda-markdown-viewer ~if="!$for.$for.item.error" :value="$for.$for.item.$cleanContent"></oda-markdown-viewer>
-                            <div class="msg-content" ~if="$for.$for.item.error">{{$for.$for.item.content}}</div>
-                        </div>
-                        <oda-chat-form ~if="$for.$for.item.$questions?.length" :questions="$for.$for.item.$questions" @answer="onFormAnswer($for.$for.item.time, $event.detail.value)"></oda-chat-form>
-                        <details class="msg-reasoning" ~if="$for.$for.item.role === 'tool_result'">
-                            <summary center header horizontal><oda-icon icon="icons:chevron-right" :icon-size></oda-icon><span flex>🔧 {{$for.$for.item.tool}}</span></summary>
-                            <div class="msg-reasoning-content">{{$for.$for.item.content}}</div>
-                        </details>
-                    </div>
-                </div>
-            </div>
+            <oda-chat-ribbon flex :blocks="ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>   
+            <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer> 
         </div>
-
-        <div class="action-bar" horizontal style="padding: 0px; gap: 2px; align-items: stretch; border-bottom: 1px solid var(--border-color, #ccc);">
-            <oda-button flex ~if="pending" error icon="av:stop" :icon-size="iconSize * .8" label="Остановить" @tap="stopGeneration"></oda-button>
-            <oda-button flex ~if="actionButton && !pending"
+        
+        <div ~if="activeTask" class="task-group" vertical style="border: 1px solid var(--info-color); border-radius: 4px; margin: 2px;">
+            <oda-chat-plan :steps="activeTask.plan" :steps-readonly="true"></oda-chat-plan>
+            <oda-chat-ribbon flex :blocks="activeTask.ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>
+        </div>
+        <div class="action-bar" border horizontal style="padding: 0px; gap: 2px; align-items: stretch; margin: 2px;">
+            <oda-button flex ~if="actionButton"
                 :class="'btn-' + (actionButton.color || 'info')"
                 :icon="actionButton.icon || 'icons:check'"
                 :icon-size="iconSize * .8"
                 :label="actionButton.label || 'OK'"
                 @tap="onAction()"></oda-button>
-            <oda-button ~if="actionButton && !pending" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
-            <oda-button flex ~if="!actionButton" content :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
+            <oda-button ~if="actionButton" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
+            <oda-button flex ~if="!actionButton" :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
         </div>
 
-        <div header :rainbow="pending" no-flex vertical style="padding: 2px;">
+        <div light :rainbow="pending" no-flex vertical style="padding: 2px;">
             <div class="attach-preview" ~if="files.length" horizontal>
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -297,12 +214,13 @@
                     <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
                 </div>
             </div>
-            <div class="prompt-container" horizontal content style="border-radius: 4px;">
+            <div class="prompt-container" horizontal content>
                 <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
                     @keydown="_onKeydown"></textarea>
                 <div flex ~if="recording" style="text-align: center; align-items: center; color: var(--error-color);">⏺ {{timer}}</div>
                 <oda-button round :icon="sendIcon" :icon-size
-                    :rainbow="recording" :disabled="sending" @tap="send"></oda-button>
+                    :rainbow="recording || pending" :disabled="sending" 
+                    @tap="pending ? stopGeneration() : send()"></oda-button>
             </div>
             <div id="tools" horizontal>
                 <oda-button icon="icons:add" :icon-size @tap="getFile" style="border-radius: 50%;"></oda-button>
@@ -362,52 +280,12 @@
     get title() {
         return this.taskBody?.title || 'task';
     },
-    get chat() {
-        return this.taskBody?.chat || [];
-    },
-    get chatGroups() {
-        const groups = [];
-        let current = null;
-        let planGroup = null;
-        for (const msg of this.chat) {
-            if (msg.role === 'user') {
-                if (planGroup && !planGroup.completed) {
-                    // Follow-up промпт внутри план-группы — добавляем в responses
-                    planGroup.responses.push(msg);
-                } else {
-                    // Новая простая группа
-                    current = { type: 'simple', prompt: msg, responses: [] };
-                    groups.push(current);
-                    planGroup = null;
-                }
-            } else if ((msg.role === 'assistant' || msg.role === 'tool_result') && current) {
-                if (planGroup) {
-                    planGroup.responses.push(msg);
-                } else {
-                    current.responses.push(msg);
-                }
-                // Если ассистент создал план — преобразуем группу в план-группу
-                if (msg.role === 'assistant' && msg.$plan && !planGroup) {
-                    current.type = 'plan';
-                    current.planSteps = msg.$plan;
-                    const bodyPlan = this.taskBody?.plan;
-                    current.planStatus = (bodyPlan && !Array.isArray(bodyPlan) && bodyPlan.status) ? bodyPlan.status : 'proposed';
-                    current.completed = current.planStatus === 'completed' || current.planStatus === 'closed';
-                    planGroup = current;
-                }
-            }
-        }
-        // Обновляем статус план-групп из taskBody
-        for (const g of groups) {
-            if (g.type === 'plan') {
-                const bodyPlan = this.taskBody?.plan;
-                g.planStatus = (bodyPlan && !Array.isArray(bodyPlan) && bodyPlan.status) ? bodyPlan.status : 'proposed';
-                g.completed = g.planStatus === 'completed' || g.planStatus === 'closed';
-            }
-        }
-        return groups;
+    get ribbon() {
+        return this.taskBody?.ribbon || [];
     },
     get sendIcon() {
+        if (this.pending)
+            return 'av:stop';
         if (this.recording)
             return 'av:stop';
         return (this.value?.trim() || this.files.length) ? 'eva:f-arrow-upward' : 'av:mic';
@@ -495,11 +373,12 @@
         this._focusPrompt();
     },
     async onFormAnswer(msgTime, answers) {
-        const msg = this.chat.find(m => String(m.time) === String(msgTime));
-        if (!msg?.$questions) return;
+        const ribbon = this.taskBody?.ribbon || [];
+        const msg = ribbon.find(m => String(m.time) === String(msgTime));
+        if (!msg?.questions) return;
         const answerLines = [];
         const answersObj = {};
-        for (const q of msg.$questions) {
+        for (const q of msg.questions) {
             const answer = answers[q.id];
             if (answer !== undefined && answer !== '' && answer !== false) {
                 answersObj[q.id] = { label: q.label, value: answer, type: q.type || 'text' };
@@ -524,6 +403,9 @@
         }
         this.value = 'Ответы на вопросы:\n' + answerLines.join('\n');
         this.send();
+    },
+    get activeTask() {
+        return this.taskBody?.ribbon?.filter(b => b.type === 'task')?.find(t => t.state === 'active') || null;
     },
     get selectedModelItem() {
         if (!this.selectedModel) return null;
@@ -567,66 +449,27 @@
             if (raw instanceof Blob)
                 raw = await raw.text();
             const body = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            if (body?.chat) {
-                const oldChat = this.taskBody?.chat || [];
-                const oldKeys = oldChat.map(m => `${m.role}:${m.time}`);
-                for (const msg of body.chat) {
-                    const key = `${msg.role}:${msg.time}`;
-                    if (msg.time)
-                        msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    if (msg.role === 'assistant' && msg.content) {
-                        msg.$cleanContent = msg.content
-                            .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
-                            .replace(/```tool_call[\s\S]*?```/gi, '')
-                            .replace(/<questions>[\s\S]*?<\/questions>/gi, '')
-                            .replace(/<plan>[\s\S]*?<\/plan>/gi, '')
-                            .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
-                            .replace(/<action>[\s\S]*?<\/action>/gi, '')
-                            .trim();
-                        // Парсинг action из ответа ИИ
-                        const aMatch = msg.content.match(/<action>\s*(\{[\s\S]*?\})\s*<\/action>/);
-                        if (aMatch) {
-                            try { msg.$action = JSON.parse(aMatch[1]); } catch {}
-                        }
-                        // Парсинг вопросов из ответа ИИ
-                        const qMatch = msg.content.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
-                        if (qMatch) {
-                            try { msg.$questions = JSON.parse(qMatch[1]); } catch {}
-                        }
-                        // Парсинг рассуждений из ответа ИИ
-                        const rMatch = msg.content.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
-                        if (rMatch)
-                            msg.$reasoning = rMatch[1].trim();
-                        // Парсинг плана из ответа ИИ
-                        const pMatch = msg.content.match(/<plan>\s*(\[[\s\S]*?\])\s*<\/plan>/);
-                        if (pMatch) {
-                            try { msg.$plan = JSON.parse(pMatch[1]); } catch {}
+            // Работаем только с ribbon — единый формат
+            body.ribbon ??= [];
+            const oldRibbon = this.taskBody?.ribbon || [];
+            const oldKeys = oldRibbon.map(m => `${m.role}:${m.time}`);
+            for (const msg of body.ribbon) {
+                const key = `${msg.role}:${msg.time}`;
+                if (msg.time)
+                    msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                // Сохраняем $file для блоков с resultPath (карточка файла)
+                if (!oldKeys.includes(key)) {
+                    if (msg.type === 'tool_result' && msg.resultPath) {
+                        try {
+                            msg.$file = await WORK.get_item(msg.resultPath, 'info');
+                        } catch {
+                            msg.$file = null;
                         }
                     }
-                    if (!oldKeys.includes(key)) {
-                        if (msg.role === 'assistant' && msg.responsePath) {
-                            try {
-                                msg.$responseFile = await WORK.get_item(msg.responsePath, 'info');
-                            } catch {
-                                msg.$responseFile = null;
-                            }
-                        }
-                        if (msg.role === 'tool_result' && msg.resultPath) {
-                            try {
-                                msg.$resultFile = await WORK.get_item(msg.resultPath, 'info');
-                            } catch {
-                                msg.$resultFile = null;
-                            }
-                        }
-                    } else {
-                        const oldMsg = oldChat.find(m => `${m.role}:${m.time}` === key);
-                        if (oldMsg?.$responseFile)
-                            msg.$responseFile = oldMsg.$responseFile;
-                        if (oldMsg?.$resultFile)
-                            msg.$resultFile = oldMsg.$resultFile;
-                        if (oldMsg?.$cleanContent)
-                            msg.$cleanContent = oldMsg.$cleanContent;
-                    }
+                } else {
+                    const oldMsg = oldRibbon.find(m => `${m.role || m.type}:${m.time}` === key);
+                    if (oldMsg?.$file)
+                        msg.$file = oldMsg.$file;
                 }
             }
             this.taskBody = body;
@@ -652,13 +495,14 @@
                     }
                 }
             }
-            // Обновить actionButton из последнего ответа ассистента
-            const lastAssistant = body?.chat?.filter(m => m.role === 'assistant').pop();
-            this.actionButton = lastAssistant?.$action || null;
+            // Обновить actionButton: из pendingAction (серверное подтверждение) или последнего action-блока
+            if (body.pendingAction) {
+                this.actionButton = { label: 'Подтвердить', color: 'warning', icon: 'icons:check' };
+            } else {
+                const lastAction = body.ribbon?.filter(m => m.type === 'action').pop();
+                this.actionButton = lastAction || null;
+            }
 
-            this.title = undefined;
-            this.chat = undefined;
-            this.chatGroups = undefined;
             this.render();
             this._autoFollow = true;
             this._maybeScrollToBottom();
@@ -892,9 +736,6 @@
             this.$item.increaseVersion?.();
             this.$item.body = undefined;
         }
-        this.title = undefined;
-        this.chat = undefined;
-        this.chatGroups = undefined;
         this._loadTaskBody();
     },
     stopGeneration() {
@@ -904,7 +745,17 @@
     },
     onAction() {
         this.actionButton = null;
-        // Если есть ожидающее действие — отправляем подтверждение
+        // Если есть ожидающий план — отправляем подтверждение
+        if (this.taskBody?.pendingPlan) {
+            this.sending = true;
+            this.pending = true;
+            this.render();
+            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: true }))
+                .catch(e => console.warn('[ai-preview] confirm plan:', e.message))
+                .finally(() => { this.sending = false; });
+            return;
+        }
+        // Если есть ожидающее опасное действие — отправляем подтверждение
         if (this.taskBody?.pendingAction) {
             this.sending = true;
             this.pending = true;
@@ -921,7 +772,17 @@
     },
     onCancelAction() {
         this.actionButton = null;
-        // Если есть ожидающее действие — отправляем отказ
+        // Если есть ожидающий план — отказ
+        if (this.taskBody?.pendingPlan) {
+            this.sending = true;
+            this.pending = true;
+            this.render();
+            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: false }))
+                .catch(e => console.warn('[ai-preview] cancel plan:', e.message))
+                .finally(() => { this.sending = false; });
+            return;
+        }
+        // Если есть ожидающее опасное действие — отказ
         if (this.taskBody?.pendingAction) {
             this.sending = true;
             this.pending = true;
@@ -1157,6 +1018,126 @@ function findFirstLeaf(node) {
 }
 
 // === Встроенные компоненты (только для микрочата ИИ) ===
+
+ODA({ is: 'oda-chat-ribbon',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                overflow-y: auto;
+                flex: 1;
+                min-height: 0;
+                scroll-behavior: smooth;
+            }
+            .ribbon {
+                @apply --vertical;
+            }
+            .msg-user {
+                @apply --info-invert;
+                @apply --raised;
+                padding: 4px 8px;
+            }
+            .msg-user .msg-time {
+                font-size: xx-small;
+                opacity: .5;
+            }
+            .block-assistant {
+                @apply --vertical;
+                gap: 2px;
+            }
+            .block-container {
+                @apply --vertical;
+            }
+        </style>
+        <div class="ribbon" ~for="blocks">
+            <!-- Блок пользователя -->
+            <div class="msg-user" horizontal ~if="$for.item.role === 'user'">
+                <div class="msg-content" flex>{{$for.item.content}}</div>
+                <div class="msg-time" ~if="$for.item.timeText">{{$for.item.timeText}}</div>
+            </div>
+            <!-- Блок ассистента: контейнер с ~is -->
+            <div class="block-assistant" ~if="!$for.item.role && $for.item.type !== 'action' && blockTag($for.item.type)">
+                <oda-chat-details ~if="$for.item.type === 'details'" :label="$for.item.label">{{$for.item.content}}</oda-chat-details>
+                <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" @tap-step="fire('tap-step', $event.detail.value)"></oda-chat-plan>
+                <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" completed></oda-chat-plan>
+                <oda-markdown-viewer ~if="$for.item.type === 'text' && $for.item.content" :value="$for.item.content"></oda-markdown-viewer>
+                <div :error="true" ~if="$for.item.type === 'text' && $for.item.error">{{$for.item.content}}</div>
+                <oda-chat-form ~if="$for.item.type === 'form'" :questions="$for.item.questions" @answer="fire('answer', { time: $for.item.time, value: $event.detail.value })"></oda-chat-form>
+                <oda-chat-details ~if="$for.item.type === 'tool_result'" :label="$for.item.label || ('🔧 ' + $for.item.tool)">{{$for.item.content}}</oda-chat-details>
+                <chat-item ~if="$for.item.type === 'file' && $for.item.$file" visible history compact :$file="$for.item.$file" style="padding: 0px;"></chat-item>
+            </div>
+        </div>
+    `,
+    imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    blocks: [],
+    blockTag(type) {
+        const tags = {
+            details: 'oda-chat-details',
+            block: 'oda-chat-plan',
+            text: 'oda-markdown-viewer',
+            form: 'oda-chat-form',
+            tool_result: 'oda-chat-details',
+            file: 'chat-item',
+        };
+        return tags[type] || '';
+    },
+});
+
+ODA({is: 'oda-chat-details',
+    template: /*html*/`
+        <style>
+            :host {
+                overflow: hidden;
+                display: block;
+            }
+            details {
+                @apply --light;
+            }
+            summary {
+                @apply --bold;
+                font-size: x-small;
+                opacity: .6;
+                cursor: pointer;
+                user-select: none;
+                @apply --horizontal;
+                align-items: center;
+                gap: 4px;
+                padding: 2px 8px;
+            }
+            summary oda-icon {
+                transition: transform 0.2s;
+            }
+            details[open] summary oda-icon {
+                transform: rotate(90deg);
+            }
+            details[open] summary {
+                opacity: .8;
+            }
+            .details-content {
+                font-size: small;
+                padding: 4px 8px;
+                @apply --raised;
+                border-left: 3px solid var(--success-color);
+                margin-top: 2px;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+        </style>
+        <details>
+            <summary>
+                <oda-icon icon="icons:chevron-right" :icon-size></oda-icon>
+                <span flex>{{label}}</span>
+            </summary>
+            <div class="details-content"><slot></slot></div>
+        </details>
+    `,
+    imports: 'oda//icon',
+    label: '',
+    open: {
+        $def: false,
+        $attr: true,
+    },
+});
 
 ODA({is: 'oda-chat-plan',
     template: /*html*/`

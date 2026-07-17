@@ -1,8 +1,8 @@
 export default {
     label: "Base",
     "#security": {
-        supervisor: "CA4E097FF6C1D387", 
-        users: ["635243546352435"]
+        BOSS: "CA4E097FF6C1D387", 
+        USERS: ["635243546352435"]
     },
     METADATA: {
         FIELDS: {

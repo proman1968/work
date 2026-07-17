@@ -23,7 +23,7 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        security.admin = user.id;
+        security.ADMIN = user.id;
 
         this.$item.save(undefined, {});
     }

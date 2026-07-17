@@ -8,8 +8,6 @@ export default {
                 @apply --horizontal;
                 overflow: hidden;
                 @apply --flex;
-                border-top-left-radius: 8px;
-                border-bottom-left-radius: 8px;
                 padding: 2px;
             }
             :host(:hover){
@@ -58,13 +56,12 @@ export default {
             }
         </style>
         <div horizontal flex style="padding: 0px 2px; align-items: center;">
-            <div vertical flex style="gap: 2px;">
+            <div vertical flex>
                 <div horizontal flex> 
                     <label :bold="$item instanceof CORE.$class" flex>{{label}}</label>
-                    <item-user ~if="showAdmin" :$item="admin" :icon-size="16"></item-user>
-                    <item-user ~if="showMaster" :$item="master" :icon-size="16"></item-user>
+                    <item-user ~if="showBoss" :$item="boss" icon-size="24"></item-user>
                 </div>
-                <item-users flex ~if="showUsers && isClass" role="slave" :$item :select-mode="false"></item-users>
+                <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
         </div>
@@ -79,13 +76,14 @@ export default {
             return admin && admin.id !== WORK.uid;
         })
     },
-    get showMaster(){
-        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user)
-            return false
-        return new AsyncPromise(async ()=>{
-            let master = await this.master;
-            return master && master.id !== WORK.uid;
-        })
+    get showBoss(){
+        if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
+            return new AsyncPromise(async ()=>{
+                let boss = await this.boss;
+                return boss && boss.id !== WORK.uid;
+            })
+        }
+
     },
     get status(){
         if(this.$item.constructor === CORE.$class)
@@ -94,14 +92,15 @@ export default {
     },
     get admin(){
         return new AsyncPromise(async ()=>{
+            if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
             let res = await Promise.resolve(this.$item?.admins);
             return res?.last
         })
     },
-    get master(){
+    get boss(){
         return new AsyncPromise(async ()=>{
-            let res = await Promise.resolve(this.$item?.masters);
-            return res?.last
+            if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
+            return await Promise.resolve(this.$item?.boss);
         })
     },
     label: {

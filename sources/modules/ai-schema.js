@@ -13,6 +13,31 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
+ * Найти первую доступную модель $ai из дерева WORK.
+ * Единая функция для всех потребителей: prompt, on_save, preview handler.
+ * @returns {Promise<string|null>} — путь к модели или null
+ */
+export async function findFirstModel() {
+    try {
+        const children = await WORK.children;
+        const aiRoot = children?.find(el => el.type === '$ai');
+        if (!aiRoot) return null;
+        const tree = await aiRoot.info({ deep: -1 });
+        return _findFirstLeaf(tree)?.path || null;
+    } catch (e) {
+        console.warn('[ai-schema] findFirstModel:', e.message);
+    }
+    return null;
+}
+
+function _findFirstLeaf(node) {
+    if (!node) return null;
+    const items = node.items;
+    if (!items?.length) return node;
+    return _findFirstLeaf(items[0]);
+}
+
+/**
  * Кэш схем по конструктору класса.
  * Предотвращает повторное чтение и парсинг исходного файла.
  */

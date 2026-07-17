@@ -37,7 +37,7 @@ export class $folder extends $item {
                 $def: '',
                 $save: true,
                 set(role) {
-                    const colors = { admin: 'red', master: 'green', slave: 'indigo' };
+                    const colors = { ADMIN: 'red', BOSS: 'green', USER: 'indigo' };
                     document.documentElement?.style?.setProperty('--main-color', colors[role] || 'indigo');
                 }
             },
@@ -59,7 +59,7 @@ export class $folder extends $item {
     }
     /** Проверка роли администратора. */
     get isAdmin() {
-        return this.roles.then(roles => roles.includes('admin'));
+        return this.roles.then(roles => roles.includes('ADMIN'));
     }
     get expanded() {
         return false
@@ -77,6 +77,12 @@ export class $folder extends $item {
         return this.get_item('/@users');
     }
     get admins() {
+        return null;
+    }
+    get admin() {
+        return null;
+    }
+    get boss() {
         return null;
     }
     reset() {

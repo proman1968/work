@@ -1,3 +1,15 @@
+## Стабилизация: подтверждение опасных действий + chat/ribbon — 2026-07-17
+
+**Контекст.** Подтверждение опасных действий было объявлено в коде (`DANGEROUS_METHODS`, `TRUST_AUTOCONFIRM`), но не реализовано — константы висели мёртвым грузом. Клиент отправлял `{confirm:true}`, но сервер его не обрабатывал. Одновременно в клиенте оставались обращения к старому `body.chat` при наличии нового `body.ribbon`, что вызывало silent-ошибки (`onFormAnswer` → `this.chat` → undefined).
+
+**Решение.**
+1. `prompt.execute()` — при обнаружении опасных методов и `trustLevel < 3`: сохранение в `body.pendingAction`, WS `chat.action`, прерывание цикла
+2. При следующем вызове с `{confirm:true}` — выполнение отложенных вызовов через `executeToolCall()`, при `{confirm:false}` — tool_result "отменено"
+3. Рефакторинг: вынос `executeToolCall()`, `buildFunctionsList()`, `pushToolResult()`, `sendToolResultWs()` — единые функции вместо дублирования
+4. Клиент: `onFormAnswer` ищет в `taskBody.ribbon`, `_loadTaskBody` работает только с `ribbon`, убраны мёртвые `this.chat`/`this.chatGroups`
+
+**Правило.** Опасные действия (write_file, set_property, save_file, delete, create) требуют подтверждения при `trustLevel < 3`. При `trustLevel ≥ 3` — автоподтверждение. Единый формат ленты — `body.ribbon`, `body.chat` не существует.
+
 ## functionCalling — свойство модели вместо хардкода провайдеров — 2026-07-16
 
 **Контекст.** streamChat проверял ai.protocol !== "gigachat" для пропуска functions. Это нарушает принцип: универсальный код не должен знать о конкретных провайдерах.

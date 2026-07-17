@@ -4,6 +4,44 @@
 
 ## Завершённые задачи
 
+### Стабилизация ИИ-инфраструктуры — 17.07.2026 (вечер)
+
+- **Разминификация `buildHistoryFromRibbon`** — функция в одну строку (стр. 425) разбита на читаемый код с JSDoc
+- **Подтверждение опасных действий (сервер)** — `DANGEROUS_METHODS` + `TRUST_AUTOCONFIRM` теперь работают:
+  - При `trustLevel < 3` опасные методы сохраняются в `body.pendingAction`, WS `chat.action`
+  - При подтверждении — выполнение через `executeToolCall()`, при отказе — tool_result "отменено"
+  - Парсинг `confirm` из входящего JSON
+- **Рефакторинг `execute()` в `prompt`** — разбит на 9 нумерованных секций:
+  - `executeToolCall()` — единая функция выполнения tool_call (контекст, сервисы, навигация)
+  - `buildFunctionsList()` — построение functions из схемы + сервисов
+  - `pushToolResult()`, `sendToolResultWs()` — устранение дублирования
+- **Починить смешение `chat`/`ribbon` в клиенте:**
+  - `onFormAnswer()` — поиск в `taskBody.ribbon` (было `this.chat` → undefined)
+  - `msg.$questions` → `msg.questions`
+  - `_loadTaskBody()` — работает только с `body.ribbon`
+  - `_onChanged()` — убраны мёртвые `this.chat`, `this.chatGroups`
+  - `activeTask` getter — `t.status` → `t.state`
+  - `parseResponseToRibbon()` — создаёт `type:'action'` и `type:'block'` с `action:true`
+- **Удаление дубликатов `$storage`:**
+  - `models/$ai/$folder/$storage/` — удалён
+  - `models/GigaChat/$ai/$folder/$storage/` — удалён
+
+**Изменённые файлы:**
+- `$server/$folder/$file/$ai/methods/prompt/$method/class.js` — рефакторинг + подтверждение действий
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — исправление chat/ribbon
+
+### Архитектурная чистота ИИ (Вектор A) — 17.07.2026
+- **Сервис Weather** — погода wttr.in вынесена из web_search в `services/Weather/$service/`
+- **SearXNG очищен** — убрана погода, метод `web_search` → `search` (чистый DuckDuckGo)
+- **web_search удалён** — папка `$ai/methods/web_search/` целиком удалена
+- **SYSTEM_PROMPT очищен** — убраны секции «Доступные методы» и «Вызов методов (текстовый формат)»
+- **pendingAction + trustLevel** — серверная логика подтверждения опасных действий:
+  - `DANGEROUS_METHODS` = write_file, set_property, save_file, delete, create
+  - `TRUST_AUTOCONFIRM = 3` — автоподтверждение при trustLevel ≥ 3
+  - При trustLevel < 3 — `body.pendingAction` + `chat.action` → ждёт `{confirm: true/false}`
+- **Динамический parseToolCalls** — убран хардкод `knownMethods`, сверка с `functions`
+- **findFirstModel()** — вынесена в `sources/modules/ai-schema.js`, удалено дублирование из prompt и on_save
+
 ### Site-витрина, user-slot, guest redirect — 16.07.2026
 - Shell: tabs + iframe keep-alive + nested `main` (`view_name`)
 - Base main (hero) в `$folder`; WORK main + shell-копия в `$server/handlers/site`
