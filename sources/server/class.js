@@ -437,18 +437,22 @@ export class $class extends $folder{
 
     /**
      * Источник логов чата для текущей роли пользователя.
+     * Приоритет: params.role (выбранная в UI) → фактические роли.
      * USER → личный кабинет ($user)
      * ADMIN и BOSS → текущий класс
-     * Возвращает путь к источнику логов.
      */
     async chatSource(params = {}) {
+        const uid = $class.resolveUid(params);
+        // Явно выбранная роль в UI имеет приоритет
+        if (params.role === $class.ROLES.USER)
+            return uid ? '/users//' + uid : this.path;
+        if (params.role === $class.ROLES.ADMIN || params.role === $class.ROLES.BOSS)
+            return this.path;
+        // Fallback: без role — по фактическим ролям
         const roles = await this.roles(params);
         if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS))
             return this.path;
-        const uid = $class.resolveUid(params);
-        if (!uid)
-            return this.path;
-        return '/users//' + uid;
+        return uid ? '/users//' + uid : this.path;
     }
     /**
      * Элемент-источник логов для текущей роли (this или $user).

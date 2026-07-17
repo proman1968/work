@@ -43,6 +43,17 @@ export default {
                 flex-shrink: 1;
                 min-width: 0;
             }
+            #tools oda-button {
+                transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+            /* Анимация появления представлений — чистый fade */
+            ::slotted([slot="main"]) {
+                animation: view-fade-in 0.5s ease;
+            }
+            @keyframes view-fade-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
         </style>
         <work-form :$item flex :view_name></work-form>
     `,
@@ -55,6 +66,15 @@ ODA({is: 'work-form',
     imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree',
     extends: 'oda-app-layout',
     template: /* html */`
+        <style>
+            ::slotted([slot="main"]) {
+                animation: view-fade-in 0.5s ease;
+            }
+            @keyframes view-fade-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+        </style>
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance;">
                 <div :flex="ODA.states?.mobileMode"></div>
@@ -102,7 +122,7 @@ ODA({is: 'work-form',
                                 :title="$for.item.label"
                                 :info-invert="view?.id === $for.item.id"
                                 :light="view?.id !== $for.item.id"
-                                style="border-radius: 4px;"
+                                ~style="'border-radius: 4px; order: ' + viewOrder($for.item.id)"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             ></oda-button>
@@ -170,15 +190,6 @@ ODA({is: 'work-form',
             let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.allowUse !== false
             );
-            // Активное представление — первым в списке
-            const viewId = this.view?.id || this.host?.view_name;
-            if (viewId) {
-                const idx = views.findIndex(v => v.id === viewId);
-                if (idx > 0) {
-                    const [active] = views.splice(idx, 1);
-                    views.unshift(active);
-                }
-            }
             this.formViews = views;
             this.render();
         } catch (err) {
@@ -222,9 +233,23 @@ ODA({is: 'work-form',
         set(role) {
             if (this.$item) {
                 this.$item.role = role;
-                // Сброс кэша класса для актуализации данных по новой роли.
-                // Представления сохраняют своё состояние и перезагружают логи.
+                // Сброс кэша класса для актуализации данных по новой роли
                 this.$item.reset?.();
+                // Сброс кэша представлений — каждое пересоздаётся заново,
+                // чтобы перезагрузить логи и данные по новой роли
+                for (const id in this.controls) {
+                    const el = this.controls[id];
+                    if (el?.isConnected)
+                        el.remove();
+                }
+                this.controls = {};
+                this.view_control = undefined;
+                // Пересоздать текущее представление
+                if (this.view) {
+                    const view = this.view;
+                    this.view = undefined;
+                    this.async(() => { this.view = view; });
+                }
             }
         }
     },
@@ -277,23 +302,44 @@ ODA({is: 'work-form',
             }
         }, 100)
     },
+    /** CSS order для кнопки представления: активное — 0, остальные — 1+ */
+    viewOrder(id) {
+        if (this.view?.id === id)
+            return 0;
+        const idx = this.formViews.findIndex(v => v.id === id);
+        return idx > 0 ? idx : 99;
+    },
     switchView(handler, e) {
         e?.stopPropagation?.();
         e?.preventDefault?.();
         if (this.view?.id === handler.id) return;
-        // Динамическое переключение: view.set() скрывает старый и показывает новый.
-        // Все представления сохраняют своё состояние в this.controls.
+        // FLIP-анимация: First — записываем позиции кнопок до смены
+        const tools = this.$('#tools');
+        const buttons = tools ? [...tools.querySelectorAll('oda-button')] : [];
+        const firstRects = new Map();
+        for (const btn of buttons)
+            firstRects.set(btn, btn.getBoundingClientRect());
+        // Меняем view → Reactor обновляет order → кнопки перемещаются
         this.host.view_name = handler.id;
         this.view = handler;
-        // Переместить активное представление в начало списка
-        // Новый массив вместо in-place мутации — чтобы ~for пересоздал кнопки
-        const idx = this.formViews.findIndex(v => v.id === handler.id);
-        if (idx > 0) {
-            const views = [...this.formViews];
-            const [active] = views.splice(idx, 1);
-            views.unshift(active);
-            this.formViews = views;
-        }
+        // FLIP: после обновления DOM — вычисляем дельту и анимируем
+        this.async(() => {
+            for (const btn of buttons) {
+                const firstRect = firstRects.get(btn);
+                if (!firstRect) continue;
+                const lastRect = btn.getBoundingClientRect();
+                const deltaX = firstRect.left - lastRect.left;
+                if (Math.abs(deltaX) < 1) continue;
+                // Invert: мгновенно смещаем на старую позицию
+                btn.style.transition = 'none';
+                btn.style.transform = `translateX(${deltaX}px)`;
+                // Play: убираем transform — кнопка плавно возвращается
+                requestAnimationFrame(() => {
+                    btn.style.transition = '';
+                    btn.style.transform = '';
+                });
+            }
+        }, 50);
     },
     ok(e) {
         alert('ok')
@@ -304,6 +350,7 @@ ODA({is: 'work-form',
     controls: {},
     view: {
         async set(n) {
+            if (!n) return;
             let el = this.controls[n.id];
             for (let id in this.controls) {
                 let old = this.controls[id];
