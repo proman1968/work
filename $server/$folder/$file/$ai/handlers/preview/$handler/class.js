@@ -20,40 +20,6 @@
                 position: relative;
                 
             }
-            .chat-group {
-                @apply --vertical;
-            }
-            .plan-group-header {
-                @apply --info-invert;
-                @apply --raised;
-                position: sticky;
-                top: 0;
-                z-index: 2;
-            }
-            .plan-group-header .msg-user {
-                padding: 4px 8px;
-            }
-            .plan-group-exchanges {
-                @apply --vertical;
-                border-left: 3px solid var(--info-color);
-                margin-left: 8px;
-            }
-            .plan-group-completed .plan-group-header {
-                opacity: .6;
-            }
-            .plan-group-completed .plan-group-exchanges {
-                border-left-color: var(--success-color);
-            }
-            .exchange {
-                @apply --vertical;
-            }
-            .exchange .msg-user {
-                @apply --content;
-                @apply --raised;
-                padding: 8px;
-                font-size: medium;
-                opacity: .8;
-            }
             .msg-user {
                 @apply --info-invert;
                 @apply --raised;
@@ -192,7 +158,7 @@
         </div>
         
         <div ~if="activeTask" class="task-group" vertical style="border: 1px solid var(--info-color); border-radius: 4px; margin: 2px;">
-            <oda-chat-plan :steps="activeTask.steps" :steps-readonly="true"></oda-chat-plan>
+            <oda-chat-plan :steps="activeTask.steps"></oda-chat-plan>
             <oda-chat-ribbon flex :blocks="activeTask.ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>
         </div>
         <div class="action-bar" border horizontal style="padding: 0px; gap: 2px; align-items: stretch; margin: 2px;">
@@ -246,7 +212,7 @@
     },
     _autoFollow: true,  // автоскролл вниз при новых сообщениях (false = пользователь прокрутил вверх)
     actionButton: null,  // {label, color, icon, type} — управляется ИИ через <action>
-    questionAnswers: {},
+    iconSize: 24,
     ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'qwen3'
     _lastSpoken: '',
     _audioEl: null,
@@ -334,43 +300,6 @@
     },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
-    },
-    get planSteps() {
-        const plan = this.taskBody?.plan;
-        if (!plan) return [];
-        if (Array.isArray(plan)) return plan;
-        return plan.steps || [];
-    },
-    get planStatus() {
-        const plan = this.taskBody?.plan;
-        if (!plan) return '';
-        if (Array.isArray(plan)) return 'executing';
-        return plan.status || 'executing';
-    },
-    get planProgress() {
-        const steps = this.planSteps;
-        if (!steps.length) return '';
-        const done = steps.filter(s => s.status === 'done').length;
-        return `${done}/${steps.length}`;
-    },
-    planStepIcon(status) {
-        switch (status) {
-            case 'done': return 'icons:check';
-            case 'in_progress': return 'av:play-arrow';
-            default: return 'icons:radio-button-unchecked';
-        }
-    },
-    togglePlanStep(index) {
-        const steps = this.planSteps;
-        if (!steps[index]) return;
-        steps[index].status = steps[index].status === 'done' ? 'pending' : 'done';
-        this.taskBody.plan = steps;
-        // Сохранить в task.ai
-        try {
-            this.$item?.fetch('save', {}, JSON.stringify(this.taskBody, null, 2));
-        } catch {}
-        this.render();
-        this._focusPrompt();
     },
     async onFormAnswer(msgTime, answers) {
         const ribbon = this.taskBody?.ribbon || [];
@@ -576,7 +505,6 @@
         if (t) {
             this._autoFollow = t.scrollTop + t.clientHeight >= t.scrollHeight - 10;
         }
-        this.scrollIcon = undefined;
         this.render();
     },
     scrollToggle() {
@@ -589,7 +517,6 @@
             this.thread.scrollTop = this.thread.scrollHeight;
             this._autoFollow = true;
         }
-        this.scrollIcon = undefined;
         this.render();
         this._focusPrompt();
     },
@@ -1058,11 +985,7 @@ ODA({ is: 'oda-chat-ribbon',
             <!-- Блок ассистента: контейнер с ~is -->
             <div class="block-assistant" ~if="!$for.item.role && $for.item.type !== 'action' && blockTag($for.item.type)">
                 <oda-chat-details ~if="$for.item.type === 'details'" :label="$for.item.label">{{$for.item.content}}</oda-chat-details>
-                <div class="plan-proposal" ~if="$for.item.type === 'block' && $for.item.steps && !$for.item.confirmed">
-                    <div class="plan-header">📋 Есть план</div>
-                    <oda-markdown-viewer :value="planToText($for.item.steps)"></oda-markdown-viewer>
-                </div>
-                <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" completed></oda-chat-plan>
+                <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" @tap-step="fire('tap-step', $event.detail.value)"></oda-chat-plan>
                 <oda-markdown-viewer ~if="$for.item.type === 'text' && $for.item.content" :value="$for.item.content"></oda-markdown-viewer>
                 <div :error="true" ~if="$for.item.type === 'text' && $for.item.error">{{$for.item.content}}</div>
                 <oda-chat-form ~if="$for.item.type === 'form'" :questions="$for.item.questions" @answer="fire('answer', { time: $for.item.time, value: $event.detail.value })"></oda-chat-form>
@@ -1076,7 +999,7 @@ ODA({ is: 'oda-chat-ribbon',
     blockTag(type) {
         const tags = {
             details: 'oda-chat-details',
-            block: 'plan-proposal',
+            block: 'oda-chat-plan',
             text: 'oda-markdown-viewer',
             form: 'oda-chat-form',
             tool_result: 'oda-chat-details',
@@ -1297,7 +1220,7 @@ ODA({is: 'oda-chat-form',
                 ::value="localAnswers[$for.item.id]"
                 @change="localAnswers[$for.item.id] = $event.target.value">
                 <option value="" disabled selected>Выберите...</option>
-                <option ~for="$for.item.options">{{$for.$for.item}}</option>
+                <option ~for="$for.item.options">{{$for.item}}</option>
             </select>
             <label ~if="$for.item.type === 'checkbox'" horizontal style="align-items: center; gap: 8px; cursor: pointer;">
                 <input type="checkbox" ::checked="localAnswers[$for.item.id]">

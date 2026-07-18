@@ -59,7 +59,7 @@ export default {
             <div vertical flex>
                 <div horizontal flex> 
                     <label :bold="$item instanceof CORE.$class" flex>{{label}}</label>
-                    <item-user ~if="showBoss" :$item="boss" icon-size="24"></item-user>
+                    <item-user ~if="showBoss" :$item="boss" icon-size="16"></item-user>
                 </div>
                 <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>

@@ -256,14 +256,17 @@ export default {
                         const allDone = planBlock.steps.every(s => s.status === 'done');
                         if (allDone) {
                             activeTask.state = 'completed';
-                            // Кнопка «Принять» для итогового результата
-                            ribbonTarget.push({
-                                type: 'action',
-                                label: 'Принять',
-                                color: 'success',
-                                time: Date.now(),
-                                sender: model.path || 'WORK',
-                            });
+                            // Кнопка «Принять» — прикрепить к последнему текстовому блоку
+                            const actionData = { text: 'Принять', color: 'success' };
+                            let lastText = null;
+                            for (let i = ribbonTarget.length - 1; i >= 0; i--) {
+                                if (ribbonTarget[i].type === 'text') { lastText = ribbonTarget[i]; break; }
+                            }
+                            if (lastText) {
+                                lastText.action = actionData;
+                            } else {
+                                ribbonTarget.push({ type: 'text', content: '', action: actionData, time: Date.now(), sender: model.path || 'WORK' });
+                            }
                             WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
                         }
                     }
@@ -749,12 +752,23 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         } catch {}
     }
 
-    // 3. <action>{...}</action> → action (кнопка да/нет)
+    // 3. <action>{...}</action> → прикрепить action к последнему текстовому блоку
     const actionMatch = remaining.match(/<action>\s*(\{[\s\S]*?\})\s*<\/action>/);
     if (actionMatch) {
         try {
             const action = JSON.parse(actionMatch[1]);
-            blocks.push({ type: 'action', label: action.label || 'OK', color: action.color || 'info', time, sender });
+            const actionData = { text: action.label || 'OK', color: action.color || 'info' };
+            // Найти последний текстовый блок и прикрепить action к нему
+            let lastText = null;
+            for (let i = blocks.length - 1; i >= 0; i--) {
+                if (blocks[i].type === 'text') { lastText = blocks[i]; break; }
+            }
+            if (lastText) {
+                lastText.action = actionData;
+            } else {
+                // Если текстового блока нет — создать пустой с action
+                blocks.push({ type: 'text', content: '', action: actionData, time, sender });
+            }
         } catch {}
         remaining = remaining.replace(/<action>[\s\S]*?<\/action>/g, '');
     }
