@@ -87,6 +87,7 @@ async function tryHandlerMethod(item, method, params, request) {
     try {
         const handlers = await item._methods;
         const handler = handlers?.[method];
+        if (method === "tts") console.log("[tryHandlerMethod] handlers:", Object.keys(handlers||{}), "handler:", !!handler, "hasExecute:", !!(handler?.execute));
         if (handler && typeof handler.execute === 'function') {
             params.$context = item;
             return handler.execute(params);
@@ -100,28 +101,35 @@ async function tryHandlerMethod(item, method, params, request) {
 
 function resolveClassMethod(item, method, params, request) {
     const post = requestBody(params, request);
-    if (!(method in item)) {
-        let prop;
-        let t = item;
-        while (t && !prop) {
-            prop = Object.getOwnPropertyDescriptor(t, method);
-            t = t.__proto__;
-        }
-        if (prop) {
-            if (prop.value) {
-                if (typeof prop.value === 'function')
-                    return prop.value.call(item, params, post);
-                return prop.value;
-            }
-            else if (prop.set && post)
-                return prop.set.call(item, post);
-        }
-        return null;
+    // Обход цепочки прототипов через Object.getPrototypeOf (не __proto__,
+    // который может перехватываться Reactor-прокси)
+    let prop;
+    let t = item;
+    while (t && !prop) {
+        prop = Object.getOwnPropertyDescriptor(t, method);
+        t = Object.getPrototypeOf(t);
     }
-    const handler = item[method];
-    if (typeof handler === 'function')
-        return handler.call(item, params, post);
-    return handler;
+    if (prop) {
+        if (prop.value) {
+            if (typeof prop.value === 'function')
+                return prop.value.call(item, params, post);
+            return prop.value;
+        }
+        else if (prop.get)
+            return prop.get.call(item);
+        else if (prop.set && post)
+            return prop.set.call(item, post);
+    }
+    // Fallback: попытка прямого доступа (для Reactor-прокси)
+    try {
+        const handler = item[method];
+        if (handler !== undefined) {
+            if (typeof handler === 'function')
+                return handler.call(item, params, post);
+            return handler;
+        }
+    } catch {}
+    return null;
 }
 
 export function execItemMethod(item, method, params, request) {
@@ -133,7 +141,9 @@ export function execItemMethod(item, method, params, request) {
         return item;
 
     const runMethod = async () => {
+        if (method === "tts") console.log("[execItemMethod] tts called, item:", item?.path, "params.post:", JSON.stringify(params.post)?.slice(0,200));
         const classResult = resolveClassMethod(item, method, params, request);
+        if (method === "tts") console.log("[execItemMethod] classResult:", classResult, "type:", typeof classResult);
         if (classResult !== null)
             return classResult;
 
@@ -401,6 +411,9 @@ export function createRequestHandler() {
             else {
                 result = JSON.stringify(result, null, +params.space || 2);
             }
+        }
+        else if (Buffer.isBuffer(result)) {
+            header["Content-Type"] = "audio/wav";
         }
         else if (typeof result === 'object') {
             if (result?.constructor.name === 'bound R')

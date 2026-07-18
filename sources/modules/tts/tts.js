@@ -1,186 +1,121 @@
 /**
- * Серверный модуль TTS (Text-to-Speech)
- * Два движка: GigaChat API и Silero ONNX (локально)
+ * TTS (Text-to-Speech) — Silero ONNX (локально).
+ *
+ * Модель скачивается при первом запуске (~20МБ) в models/silero-tts.onnx.
+ * Токенизатор: таблица фонем Silero для русского языка.
  */
 import * as https from 'node:https';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// ===== GigaChat TTS =====
-
-/**
- * Синтез речи через GigaChat API
- * @param {string} text - Текст для озвучки
- * @param {object} ai - Объект модели (с authUrl, token, scope)
- * @param {object} options - { voice: 'profi' | 'comfortable', format: 'wav' | 'opus' }
- * @returns {Promise<Buffer>} - Аудио данные
- */
-export async function gigachatTTS(text, ai, options = {}) {
-    const voice = options.voice || 'profi'; // profi — женский, comfortable — мужской
-    const format = options.format || 'wav';
-
-    // Получаем токен (переиспользуем из streamChat)
-    if (!ai.accessToken || ai.accessToken.expires_at <= Date.now())
-        ai.accessToken = await gigachatAuth(ai);
-
-    const body = JSON.stringify({
-        model: 'GigaChat-2:tts',
-        input: text,
-        voice,
-        format,
-    });
-
-    return new Promise((resolve, reject) => {
-        const req = https.request({
-            hostname: 'gigachat.devices.sberbank.ru',
-            port: 443,
-            path: '/api/v1/tts',
-            method: 'POST',
-            agent: new https.Agent({ rejectUnauthorized: false }),
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': format === 'opus' ? 'audio/ogg' : 'audio/wav',
-                'Authorization': 'Bearer ' + ai.accessToken.access_token,
-            },
-        }, (res) => {
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                const buffer = Buffer.concat(chunks);
-                if (res.statusCode < 200 || res.statusCode >= 300) {
-                    reject(new Error('GigaChat TTS error ' + res.statusCode + ': ' + buffer.toString('utf-8').slice(0, 500)));
-                    return;
-                }
-                resolve(buffer);
-            });
-        });
-        req.on('error', reject);
-        req.write(body);
-        req.end();
-    });
-}
-
-async function gigachatAuth(ai) {
-    const url = new URL(ai.authUrl);
-    return new Promise((resolve, reject) => {
-        const req = https.request({
-            hostname: url.hostname,
-            port: url.port || 9443,
-            path: url.pathname,
-            method: 'POST',
-            agent: new https.Agent({ rejectUnauthorized: false }),
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
-                'RqUID': crypto.randomUUID(),
-                'Authorization': 'Bearer ' + ai.token,
-            },
-        }, (res) => {
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
-                }
-                catch (e) {
-                    reject(new Error('GigaChat auth parse error: ' + e.message));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.write('scope=' + ai.scope);
-        req.end();
-    });
-}
-
-// ===== Silero TTS (ONNX, локально) =====
-
 let sileroSession = null;
 const SILERO_MODEL_PATH = path.join(process.cwd(), 'models', 'silero-tts.onnx');
 
+// Таблица фонем Silero (русский)
+// Источник: silero/data/dict/ru_dict.txt + символы модели
+const SYMBOLS = [
+    '_', '^', '$', '—', ' ', 'А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', 'З',
+    'И', 'Й', 'К', 'Л', 'М', 'Н', 'О', 'П', 'Р', 'С', 'Т', 'У', 'Ф',
+    'Х', 'Ц', 'Ч', 'Ш', 'Щ', 'Ъ', 'Ы', 'Ь', 'Э', 'Ю', 'Я', 'а', 'б',
+    'в', 'г', 'д', 'е', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о',
+    'п', 'р', 'с', 'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы',
+    'ь', 'э', 'ю', 'я', 'ё', 'Ё', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
+    'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+    'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g',
+    'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+    'u', 'v', 'w', 'x', 'y', 'z', '.', ',', '!', '?', '-', ':', ';',
+    '"', "'", '(', ')', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    '0',
+];
+const SYMBOL_TO_ID = {};
+SYMBOLS.forEach((s, i) => { SYMBOL_TO_ID[s] = i; });
+
 /**
- * Локальный TTS через Silero (ONNX)
- * Модель скачивается при первом запуске (~20МБ)
+ * Токенизация текста для Silero TTS.
+ * Преобразует текст в массив ID фонем.
+ * @param {string} text — текст для озвучки
+ * @returns {number[]} — массив ID токенов
+ */
+function tokenize(text) {
+    const tokens = [];
+    // Начальный токен
+    tokens.push(SYMBOL_TO_ID['^'] ?? 1);
+    for (const ch of text) {
+        const id = SYMBOL_TO_ID[ch];
+        if (id !== undefined)
+            tokens.push(id);
+    }
+    // Конечный токен
+    tokens.push(SYMBOL_TO_ID['$'] ?? 2);
+    return tokens;
+}
+
+/**
+ * Локальный TTS через Silero (ONNX).
+ * @param {string} text — текст для озвучки
+ * @param {object} options — { sampleRate, speakerId, speed }
+ * @returns {Promise<Buffer>} — WAV buffer
  */
 export async function sileroTTS(text, options = {}) {
-    const ort = await import('onnxruntime-node');
-    const sampleRate = options.sampleRate || 16000;
+    const sampleRate = options.sampleRate || 48000;
+    const speakerId = options.speakerId ?? 0;
+    const speed = options.speed ?? 1.0;
 
     // Загружаем модель при первом вызове
     if (!sileroSession) {
         await downloadSileroModel();
+        const ort = await import('onnxruntime-node');
         sileroSession = await ort.InferenceSession.create(SILERO_MODEL_PATH);
         console.log('[tts] Silero модель загружена');
     }
 
-    // Токенизация текста (простейший токенизатор для русского)
+    const ort = await import('onnxruntime-node');
     const tokens = tokenize(text);
+    const tokenCount = tokens.length;
 
-    // Подготовка входов для Silero
-    const inputIds = new Int64Array(tokens);
-    const inputLen = new Int64Array([tokens.length]);
-    const speaker = new Int64Array([0]); // speaker id
+    // Входы Silero v3/v4: x, x_lengths, sid(s), speed
+    const inputIds = BigInt64Array.from(tokens.map(Number));
+    const inputLen = BigInt64Array.from([BigInt(tokenCount)]);
+    const speaker = BigInt64Array.from([BigInt(speakerId)]);
+    const speedArr = Float32Array.from([speed]);
 
     const feeds = {
-        input: new ort.Tensor('int64', inputIds, [1, tokens.length]),
-        input_lengths: new ort.Tensor('int64', inputLen, [1]),
-        sid: new ort.Tensor('int64', speaker, [1]),
+        x: new ort.Tensor('int64', inputIds, [1, tokenCount]),
+        x_lengths: new ort.Tensor('int64', inputLen, [1]),
     };
+    // Разные версии модели имеют разные имена входов
+    if (sileroSession.inputNames.includes('sid'))
+        feeds.sid = new ort.Tensor('int64', speaker, [1]);
+    if (sileroSession.inputNames.includes('sids'))
+        feeds.sids = new ort.Tensor('int64', speaker, [1]);
+    if (sileroSession.inputNames.includes('speed'))
+        feeds.speed = new ort.Tensor('float32', speedArr, [1]);
 
     const results = await sileroSession.run(feeds);
-    const audio = results.audio.data;
-    const audioBuffer = floatToWav(audio, sampleRate);
-    return audioBuffer;
+    // Имя выхода: 'audio' или 'y'
+    const audioKey = results.audio ? 'audio' : (results.y ? 'y' : Object.keys(results)[0]);
+    const audio = results[audioKey].data;
+    return floatToWav(audio, sampleRate);
 }
 
 /**
- * Простейший токенизатор для Silero TTS (русский)
- */
-function tokenize(text) {
-    // Silero использует numbered phonemes — нужна таблица
-    // Для прототипа используем коды символов
-    const tokens = [];
-    for (const ch of text.toLowerCase()) {
-        const code = ch.charCodeAt(0);
-        if (code >= 1072 && code <= 1103) { // а-я
-            tokens.push(code - 1072 + 1); // 1-32
-        } else if (ch === 'ё') {
-            tokens.push(7); // ё = ж-1
-        } else if (ch === ' ') {
-            tokens.push(0);
-        } else if (ch === '.') {
-            tokens.push(33);
-        } else if (ch === ',') {
-            tokens.push(34);
-        } else if (ch === '?') {
-            tokens.push(35);
-        } else if (ch === '!') {
-            tokens.push(36);
-        }
-    }
-    return tokens.length ? tokens : [0];
-}
-
-/**
- * Конвертация float32 array в WAV buffer
+ * Конвертация Float32Array в WAV buffer.
  */
 function floatToWav(float32Array, sampleRate) {
     const buffer = Buffer.alloc(44 + float32Array.length * 2);
-    // WAV header
     buffer.write('RIFF', 0);
     buffer.writeUInt32LE(36 + float32Array.length * 2, 4);
     buffer.write('WAVE', 8);
     buffer.write('fmt ', 12);
     buffer.writeUInt32LE(16, 16);
-    buffer.writeUInt16LE(1, 20);  // PCM
-    buffer.writeUInt16LE(1, 22);  // mono
+    buffer.writeUInt16LE(1, 20);   // PCM
+    buffer.writeUInt16LE(1, 22);   // mono
     buffer.writeUInt32LE(sampleRate, 24);
     buffer.writeUInt32LE(sampleRate * 2, 28);
     buffer.writeUInt16LE(2, 32);
     buffer.writeUInt16LE(16, 34);
     buffer.write('data', 36);
     buffer.writeUInt32LE(float32Array.length * 2, 40);
-    // PCM data
     for (let i = 0; i < float32Array.length; i++) {
         const s = Math.max(-1, Math.min(1, float32Array[i]));
         buffer.writeInt16LE(Math.round(s * 32767), 44 + i * 2);
@@ -189,7 +124,7 @@ function floatToWav(float32Array, sampleRate) {
 }
 
 /**
- * Скачивание модели Silero TTS
+ * Скачивание модели Silero TTS.
  */
 async function downloadSileroModel() {
     if (fs.existsSync(SILERO_MODEL_PATH))
@@ -199,96 +134,39 @@ async function downloadSileroModel() {
         fs.mkdirSync(dir, { recursive: true });
 
     console.log('[tts] Скачивание Silero TTS модели...');
-    // Silero TTS v3.1 (ru)
     const url = 'https://models.silero.ai/voice_recognition/silero_v3_1_ru_latest.onnx';
-    // Альтернативная ссылка
-    // const url = 'https://huggingface.co/silero/silero-models/resolve/main/models/v3_1_ru/silero_v3_1_ru_latest.onnx';
 
     return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(SILERO_MODEL_PATH);
-        const req = https.get(url, (res) => {
-            if (res.statusCode === 302 || res.statusCode === 301) {
-                // Редирект
-                const redirectUrl = res.headers.location;
-                https.get(redirectUrl, (res2) => {
-                    res2.pipe(file);
-                    file.on('finish', () => {
-                        file.close();
-                        console.log('[tts] Silero модель скачана');
-                        resolve();
-                    });
-                }).on('error', reject);
-                return;
-            }
-            if (res.statusCode !== 200) {
-                reject(new Error('Не удалось скачать Silero: ' + res.statusCode));
-                return;
-            }
-            res.pipe(file);
-            file.on('finish', () => {
-                file.close();
-                console.log('[tts] Silero модель скачана');
-                resolve();
-            });
-        });
-        req.on('error', reject);
+        const download = (downloadUrl) => {
+            https.get(downloadUrl, (res) => {
+                if (res.statusCode === 302 || res.statusCode === 301) {
+                    download(res.headers.location);
+                    return;
+                }
+                if (res.statusCode !== 200) {
+                    reject(new Error('Не удалось скачать Silero: ' + res.statusCode));
+                    return;
+                }
+                const file = fs.createWriteStream(SILERO_MODEL_PATH);
+                res.pipe(file);
+                file.on('finish', () => {
+                    file.close();
+                    console.log('[tts] Silero модель скачана');
+                    resolve();
+                });
+                file.on('error', reject);
+            }).on('error', reject);
+        };
+        download(url);
     });
 }
 
-// ===== Qwen3-TTS (локальный сервис) =====
-
-let qwen3Session = null;
-const QWEN3_URL = 'http://localhost:8002/tts';
-
 /**
- * Локальный TTS через Qwen3-TTS-12Hz-0.6B-Base.
- * @param {string} text - Текст
- * @param {object} options - { voice, speed }
- * @returns {Promise<Buffer>} - WAV buffer
+ * Синтез речи — единственный метод.
+ * @param {string} text — текст
+ * @param {object} options — { sampleRate, speakerId, speed }
+ * @returns {Promise<Buffer>} — WAV buffer
  */
-export async function qwen3TTS(text, options = {}) {
-    const body = JSON.stringify({
-        text,
-        voice: options.voice || 'default',
-        speed: options.speed || 1.0,
-    });
-
-    let res;
-    try {
-        res = await fetch(QWEN3_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body,
-        });
-    } catch (e) {
-        throw new Error('Qwen3 TTS сервер не запущен на localhost:8002');
-    }
-
-    if (!res.ok)
-        throw new Error('Qwen3 TTS error ' + res.status + ': ' + (await res.text()).slice(0, 200));
-
-    const arrayBuffer = await res.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-}
-
-// ===== Универсальный интерфейс =====
-
-/**
- * Синтез речи — универсальный метод
- * @param {string} text - Текст
- * @param {object} ai - Объект модели
- * @param {object} options - { engine: 'gigachat' | 'silero', voice, format }
- * @returns {Promise<Buffer>} - WAV/opus buffer
- */
-export async function synthesize(text, ai, options = {}) {
-    const engine = options.engine || 'gigachat';
-    switch (engine) {
-        case 'qwen3':
-            return qwen3TTS(text, options);
-        case 'silero':
-            return sileroTTS(text, options);
-        case 'gigachat':
-        default:
-            return gigachatTTS(text, ai, options);
-    }
+export async function synthesize(text, options = {}) {
+    return sileroTTS(text, options);
 }

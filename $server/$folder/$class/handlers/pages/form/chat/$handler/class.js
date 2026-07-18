@@ -380,7 +380,7 @@ ODA({is: 'oda-chat',
                 const body = JSON.stringify({
                     title: this.value || '',
                     created: Date.now(),
-                    chat: [{
+                    ribbon: [{
                         role: 'user',
                         content: this.value || '',
                         time: Date.now(),

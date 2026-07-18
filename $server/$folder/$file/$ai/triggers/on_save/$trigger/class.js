@@ -45,10 +45,10 @@
 
 При получении сложной задачи (2+ шагов) ты ОБЯЗАН:
 1. **Plan** — рассуждать и предложить план. ВСЕ шаги имеют status:"proposed". НЕ приступай к выполнению!
-2. **Ждать** — пользователь увидит кнопки «Принять»/«Отказаться». Не выполняй действия, пока план не принят.
-3. **Do** — после принятия плана приступай к выполнению. Обновляй статусы шагов: "in_progress" → "done".
-4. **Check** — когда все шаги выполнены, покажи результат.
-5. **Act** — пользователь увидит кнопки «Принять результат»/«Продолжить».
+2. **Ждать** — пользователь увидит план с кнопкой <action> «Начать?». Не выполняй действия, пока план не подтверждён.
+3. **Do** — после подтверждения плана приступай к выполнению. Обновляй статусы шагов: "proposed" → "in_progress" → "done". Отправляй обновлённый <plan> с актуальными статусами после каждого шага.
+4. **Check** — когда все шаги выполнены (все status:"done"), покажи результат и добавь <action> «Принять».
+5. **Act** — пользователь нажимает «Принять» — задача завершена.
 
 ### 1. Рассуждения (процесс мышления):
 <reasoning>
@@ -71,7 +71,7 @@
 1. <reasoning> — краткие рассуждения
 2. Описание плана своими словами
 3. <plan> с шагами status:"proposed"
-4. Добавь <action> для вопроса да/нет (например: "Начать?")
+4. Добавь <action> «Начать» для подтверждения плана
 5. Жди ответа
 НЕ задавай вопросы при конкретной задаче!
 
@@ -101,6 +101,12 @@
 затем я подготовлю структуру, напишу содержимое и сохраню готовый файл.
 <action>
 {"label": "Начать", "color": "success"}
+</action>
+
+### После завершения плана:
+Когда все шаги выполнены (все status:"done"), покажи итоговый результат и добавь:
+<action>
+{"label": "Принять", "color": "success"}
 </action>
 
 ## Вопросы пользователю
@@ -170,7 +176,6 @@
 ### Правила:
 - Используй <action> ТОЛЬКО когда реально нужен ответ да/нет и ты ждёшь его
 - НЕ добавляй <action> после обычных ответов
-- НЕ добавляй <action> после завершения работы
 - НЕ задавай вопросы если ответ очевиден — просто действуй
 - Не задавай вопросы текстом без <action> — пользователь не сможет быстро ответить
 
@@ -184,6 +189,7 @@
 - Если метод вернёт элемент, он станет новым контекстом.
 - Для прямого перехода используй navigate с path.
 - Для возврата к домашнему классу — reset_context.
+
 ## Поддержание документации класса (readme.md)
 
 В метапапке каждого класса может быть файл readme.md — описание класса для тебя и пользователей.
@@ -216,7 +222,7 @@
 - Инициируй действия ТОЛЬКО если пользователь явно попросил
 - Исключение: можешь продолжать уже запущенные цепочки вызовов до их завершения
 - Веди себя сдержано, но приветливо
-- Не предлагай ничего proprio motu — только реагируй на запросы
+- Не предлагай ничего по собственной инициативе — только реагируй на запросы
 - Отвечай кратко, по делу, на русском.
 - Не более 10 итераций на задачу.
 
@@ -247,12 +253,9 @@ export default {
     label: 'on_save (.ai)',
     icon: 'carbon:ai',
     async execute(params = {}) {
-        // this — триггер on_save
-        // params.$context — history-файл (.task.ai/h)
         const taskFile = params.$context;
         if (!taskFile) return;
 
-        // Загружаем тело task.ai
         let body;
         try {
             const raw = await taskFile.load({ encoding: 'utf-8' });
@@ -261,23 +264,21 @@ export default {
 
         if (!body) return;
 
-        // Если уже есть ответ assistant — не запускаем повторно
-        const hasAssistant = body?.chat?.some?.(m => m.role === 'assistant');
+        body.ribbon ??= [];
+        const hasAssistant = body.ribbon.some(m => m.role === 'assistant');
         if (hasAssistant) return;
 
-        // Извлекаем первый запрос пользователя
         let firstPrompt = '';
-        if (body?.chat?.[0]?.role === 'user') {
-            firstPrompt = String(body.chat[0].content ?? '').trim();
+        const firstUser = body.ribbon.find(m => m.role === 'user');
+        if (firstUser) {
+            firstPrompt = String(firstUser.content ?? '').trim();
         } else {
-            firstPrompt = String(body?.chat?.[0]?.prompt ?? body?.title ?? '').trim();
+            firstPrompt = String(body?.title ?? '').trim();
         }
         if (!firstPrompt) return;
 
-        // Добавляем системный промпт, модель, очищаем chat (prompt добавит сообщение сам)
         if (!body.system) {
             body.system = SYSTEM_PROMPT;
-            body.chat = [];
             const { pathToFileURL } = await import('node:url');
             const { join } = await import('node:path');
             const { findFirstModel } = await import(pathToFileURL(join(process.cwd(), 'sources/modules/ai-schema.js')).href);
@@ -288,7 +289,6 @@ export default {
             } catch {}
         }
 
-        // Запускаем метод prompt этого же файла
         const methods = await taskFile._methods;
         const prompt = methods?.prompt;
         if (typeof prompt?.execute === 'function') {

@@ -192,7 +192,7 @@
         </div>
         
         <div ~if="activeTask" class="task-group" vertical style="border: 1px solid var(--info-color); border-radius: 4px; margin: 2px;">
-            <oda-chat-plan :steps="activeTask.plan" :steps-readonly="true"></oda-chat-plan>
+            <oda-chat-plan :steps="activeTask.steps" :steps-readonly="true"></oda-chat-plan>
             <oda-chat-ribbon flex :blocks="activeTask.ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>
         </div>
         <div class="action-bar" border horizontal style="padding: 0px; gap: 2px; align-items: stretch; margin: 2px;">
@@ -1058,7 +1058,10 @@ ODA({ is: 'oda-chat-ribbon',
             <!-- Блок ассистента: контейнер с ~is -->
             <div class="block-assistant" ~if="!$for.item.role && $for.item.type !== 'action' && blockTag($for.item.type)">
                 <oda-chat-details ~if="$for.item.type === 'details'" :label="$for.item.label">{{$for.item.content}}</oda-chat-details>
-                <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" @tap-step="fire('tap-step', $event.detail.value)"></oda-chat-plan>
+                <div class="plan-proposal" ~if="$for.item.type === 'block' && $for.item.steps && !$for.item.confirmed">
+                    <div class="plan-header">📋 Есть план</div>
+                    <oda-markdown-viewer :value="planToText($for.item.steps)"></oda-markdown-viewer>
+                </div>
                 <oda-chat-plan ~if="$for.item.type === 'block'" :steps="$for.item.steps" completed></oda-chat-plan>
                 <oda-markdown-viewer ~if="$for.item.type === 'text' && $for.item.content" :value="$for.item.content"></oda-markdown-viewer>
                 <div :error="true" ~if="$for.item.type === 'text' && $for.item.error">{{$for.item.content}}</div>
@@ -1073,7 +1076,7 @@ ODA({ is: 'oda-chat-ribbon',
     blockTag(type) {
         const tags = {
             details: 'oda-chat-details',
-            block: 'oda-chat-plan',
+            block: 'plan-proposal',
             text: 'oda-markdown-viewer',
             form: 'oda-chat-form',
             tool_result: 'oda-chat-details',

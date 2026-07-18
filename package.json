@@ -30,6 +30,7 @@
     "mime-types": "^3.0.2",
     "multiparty": "^4.2.3",
     "nodemailer": "^8.0.4",
+    "onnxruntime-node": "^1.27.0",
     "stun": "^1.1.0",
     "web-push": "^3.6.7",
     "ws": "^8.21.0",

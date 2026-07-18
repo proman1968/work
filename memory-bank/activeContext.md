@@ -1,43 +1,41 @@
 # Текущий контекст работы
 
-## Сессия 17.07.2026 (вечер) — Стабилизация ИИ-инфраструктуры
+## Сессия 17.07.2026 (поздний вечер) — Развитие ИИ-архитектуры
 
 ### Что сделано:
 
-#### Задача 1: Разминификация `buildHistoryFromRibbon`
-- Функция была сжата в одну строку (стр. 425) — разбита на читаемый код с JSDoc
-- Логика сохранена: system prompt → обход ribbon → типизированные блоки → messages
-- Добавлены комментарии для каждого типа блока
+#### Анализ ИИ-инфраструктуры
+- Изучены все ключевые файлы: prompt method, on_save trigger, preview handler, streamChat, ai-schema, модели, сервисы
+- Обнаружено 6 проблем: критический баг, мёртвый код, незавершённый функционал
 
-#### Задача 2: Подтверждение опасных действий (сервер)
-- **`DANGEROUS_METHODS`** (write_file, set_property, save_file, delete, create) теперь реально работают
-- При `trustLevel < TRUST_AUTOCONFIRM (3)` опасные вызовы не выполняются сразу
-- Вызовы сохраняются в `body.pendingAction`, клиент получает `chat.action` через WS
-- При подтверждении `{confirm: true}` — вызовы выполняются через `executeToolCall()`
-- При отказе `{confirm: false}` — добавляется tool_result "отменено пользователем"
-- **Рефакторинг `execute()`:**
-  - Логика разбита на нумерованные секции (1–9)
-  - Выполнение tool_call вынесено в `executeToolCall()` — единая функция
-  - Построение functions вынесено в `buildFunctionsList()`
-  - Добавлены `pushToolResult()` и `sendToolResultWs()` — устранение дублирования
-- `parseResponseToRibbon()` теперь создаёт блоки `type:'action'` и `type:'block'` (с `action:true`)
+#### Этап 1: Починка on_save trigger (критический баг)
+- `body.chat` → `body.ribbon` во всём триггере
+- Извлечение первого промпта: `ribbon.find(m => m.role === 'user')` вместо `body.chat[0]`
+- Проверка ответа: `ribbon.some(m => m.role === 'assistant')` вместо `body.chat.some`
+- Убрано `body.chat = []` (мёртвое поле)
 
-#### Задача 3: Починить смешение `chat`/`ribbon` в клиенте
-- `onFormAnswer()` — ищет сообщение в `this.taskBody.ribbon` (было `this.chat`)
-- `msg.$questions` → `msg.questions` (имя поля в новом формате)
-- `_loadTaskBody()` — убраны обращения к `body.chat`, работает только с `body.ribbon`
-- `actionButton` — обновляется из `pendingAction` (серверное подтверждение) или последнего action-блока
-- `_onChanged()` — убраны мёртвые `this.chat = undefined`, `this.chatGroups = undefined`
-- `activeTask` getter — исправлено `t.status` → `t.state` (поле в ribbon)
+#### Этап 2: Удаление мёртвого кода pendingPlan
+- `onAction()` — убран блок `if (this.taskBody?.pendingPlan)` (сервер никогда не устанавливает pendingPlan)
+- `onCancelAction()` — убран аналогичный блок
+- Остался только `pendingAction` — серверное подтверждение опасных действий
 
-#### Задача 4: Удаление дубликатов `$storage`
-- `models/$ai/$folder/$storage/` — удалён (дубликат `$class`)
-- `models/GigaChat/$ai/$folder/$storage/` — удалён (дубликат `$class`)
-- Проверка: поиск `$storage` в `models/*.js` — 0 результатов
+#### Этап 3: Завершение плана на сервере
+- Исправлен баг: `blocks.find(b => b.type === 'plan_created')` → `blocks.find(b => b.type === 'block' && b.steps)` (parseResponseToRibbon создаёт `type: 'block'`, не `plan_created`)
+- При обновлении шагов: если есть активная задача — шаги обновляются в ней, а не в `body.plan`
+- Проверка завершения: `planBlock.steps.every(s => s.status === 'done')` → `activeTask.state = 'completed'`
+- WS-событие `chat.plan_completed` при завершении
 
-### Незавершённые задачи (из прошлой сессии):
+#### Этап 4: Обновление SYSTEM_PROMPT
+- PDCA-цикл: обновлены описания шагов — подтверждение через `<action>`, обновление статусов `proposed → in_progress → done`, автоматическое завершение
+- "proprio motu" → "по собственной инициативе" (русский язык)
+
+### Изменённые файлы:
+- `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js` — body.chat→body.ribbon, SYSTEM_PROMPT
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — удаление pendingPlan
+- `$server/$folder/$file/$ai/methods/prompt/$method/class.js` — завершение плана, исправление planBlock
+
+### Незавершённые задачи:
 1. **Протестировать** — нужен запуск сервера и новый чат
-2. **Этап 3:** Отчёт о выполнении (`plan_completed` блок) — при завершении всех шагов
-3. **System PROMPT** — обновить описание под новую модель блоков
-4. **Завершение задачи:** при выполнении всех шагов плана → `activeTask.state = 'completed'`
-5. **Старые .ai файлы** — обратная совместимость отсутствует
+2. **Дублирование findFirstModel** — локальная копия в preview handler (технический долг)
+3. **Старые .ai файлы** — обратная совместимость отсутствует
+4. **plan_completed блок** — опционально: визуальный отчёт о завершении плана в ленте

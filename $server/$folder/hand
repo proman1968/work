@@ -6,7 +6,7 @@ export default {
             :host {
                 @apply --flex;
                 @apply --vertical;
-                overflow: hidden;
+                overflow: hidde/paas/v4n;
             }
             .save-error-icon {
                 anchor-name: --error-icon;
@@ -43,8 +43,8 @@ export default {
                 flex-shrink: 1;
                 min-width: 0;
             }
-            
-                to { opacity: 1; }
+            #tools oda-button {
+                transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             }
         </style>
         <work-form :$item flex :view_name></work-form>
@@ -59,12 +59,12 @@ ODA({is: 'work-form',
     extends: 'oda-app-layout',
     template: /* html */`
         <style>
-            .view-enter {
+            ::slotted([slot="main"]) {
                 animation: view-fade-in 0.5s ease;
             }
             @keyframes view-fade-in {
-                from { opacity: 0; }
-                to { opacity: 1; }
+                from { clip-path: polygon(0 0, 0 0, 0 0, 0 0); }
+                to { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
             }
         </style>
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
@@ -114,7 +114,7 @@ ODA({is: 'work-form',
                                 :title="$for.item.label"
                                 :info-invert="view?.id === $for.item.id"
                                 :light="view?.id !== $for.item.id"
-                                style="border-radius: 4px;"
+                                ~style="'border-radius: 4px; order: ' + viewOrder($for.item.id)"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             ></oda-button>
@@ -265,6 +265,7 @@ ODA({is: 'work-form',
                     this.save();
                 } break;
             }
+            // this.$item.isChanged = false;
         }
         this.parentElement?.fire('close', true);
         if (!this.modal)
@@ -293,12 +294,44 @@ ODA({is: 'work-form',
             }
         }, 100)
     },
+    /** CSS order для кнопки представления: активное — 0, остальные — 1+ */
+    viewOrder(id) {
+        if (this.view?.id === id)
+            return 0;
+        const idx = this.formViews.findIndex(v => v.id === id);
+        return idx > 0 ? idx : 99;
+    },
     switchView(handler, e) {
         e?.stopPropagation?.();
         e?.preventDefault?.();
         if (this.view?.id === handler.id) return;
+        // FLIP-анимация: First — записываем позиции кнопок до смены
+        const tools = this.$('#tools');
+        const buttons = tools ? [...tools.querySelectorAll('oda-button')] : [];
+        const firstRects = new Map();
+        for (const btn of buttons)
+            firstRects.set(btn, btn.getBoundingClientRect());
+        // Меняем view → Reactor обновляет order → кнопки перемещаются
         this.host.view_name = handler.id;
         this.view = handler;
+        // FLIP: после обновления DOM — вычисляем дельту и анимируем
+        this.async(() => {
+            for (const btn of buttons) {
+                const firstRect = firstRects.get(btn);
+                if (!firstRect) continue;
+                const lastRect = btn.getBoundingClientRect();
+                const deltaX = firstRect.left - lastRect.left;
+                if (Math.abs(deltaX) < 1) continue;
+                // Invert: мгновенно смещаем на старую позицию
+                btn.style.transition = 'none';
+                btn.style.transform = `translateX(${deltaX}px)`;
+                // Play: убираем transform — кнопка плавно возвращается
+                requestAnimationFrame(() => {
+                    btn.style.transition = '';
+                    btn.style.transform = '';
+                });
+            }
+        }, 50);
     },
     ok(e) {
         alert('ok')

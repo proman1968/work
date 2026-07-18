@@ -4,6 +4,33 @@
 
 ## Завершённые задачи
 
+### Развитие ИИ-архитектуры — 17.07.2026 (поздний вечер)
+
+- **Починка on_save trigger (критический баг)** — триггер работал со старым форматом `body.chat`, который больше не существует. Заменён на `body.ribbon` во всём триггере: извлечение промпта через `ribbon.find(m => m.role === 'user')`, проверка ответа через `ribbon.some(m => m.role === 'assistant')`
+- **Удаление мёртвого кода pendingPlan** — клиентский `onAction()`/`onCancelAction()` содержали проверки `pendingPlan`, которое сервер никогда не устанавливал. Удалены оба блока, остался только `pendingAction`
+- **Завершение плана на сервере** — исправлен баг: `plan_created` → `block` (parseResponseToRibbon создаёт `type:'block'`). Добавлена проверка завершения: все шаги `done` → `activeTask.state = 'completed'` + WS `chat.plan_completed`
+- **SYSTEM_PROMPT обновлён** — PDCA-цикл переписан: подтверждение через `<action>`, обновление статусов, автоматическое завершение. Латынь заменена на русский
+
+**Изменённые файлы:**
+- `$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js` — body.chat→body.ribbon, SYSTEM_PROMPT
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — удаление pendingPlan
+- `$server/$folder/$file/$ai/methods/prompt/$method/class.js` — завершение плана, исправление planBlock
+
+### TTS: единый локальный движок Silero ONNX — 17.07.2026
+
+- **Убраны все движки TTS** кроме Silero ONNX: GigaChat TTS, Qwen3 TTS, browser speechSynthesis удалены
+- **`sources/modules/tts/tts.js`** — перезаписан целиком: только `sileroTTS()` + `synthesize()`, корректная таблица фонем Silero
+- **Серверный метод `?tts`** — создан `$server/$folder/$file/$ai/methods/tts/$method/class.js`: POST `{text}` -> WAV Buffer
+- **`sources/host/http-server.js`** — добавлена обработка `Buffer.isBuffer(result)` -> `Content-Type: audio/wav`
+- **Клиент `preview/$handler`** — упрощён до одной кнопки TTS (вкл/выкл): `ttsMode` (4 режима) -> `ttsEnabled` (boolean), убраны _speakBrowser, _speakServer
+- **Зависимость:** `onnxruntime-node` установлен через npm
+
+**Изменённые файлы:**
+- `sources/modules/tts/tts.js` — полная перезапись
+- `$server/$folder/$file/$ai/methods/tts/$method/class.js` — новый файл
+- `sources/host/http-server.js` — Buffer -> audio/wav
+- `$server/$folder/$file/$ai/handlers/preview/$handler/class.js` — упрощение TTS UI
+
 ### Стабилизация ИИ-инфраструктуры — 17.07.2026 (вечер)
 
 - **Разминификация `buildHistoryFromRibbon`** — функция в одну строку (стр. 425) разбита на читаемый код с JSDoc

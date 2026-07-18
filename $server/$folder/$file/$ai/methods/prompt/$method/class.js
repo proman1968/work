@@ -150,7 +150,13 @@ export default {
 
         // === 7. Добавление user-сообщения и обработка плана ===
         if (text) {
-            body.ribbon.push({ role: 'user', content: text, time: Date.now(), sender });
+            // Проверка дублирования: если последний user-блок содержит тот же текст — не добавляем
+            const lastUser = [...body.ribbon].reverse().find(b => b.role === 'user');
+            const isDuplicate = lastUser && lastUser.content === text
+                && (Date.now() - (lastUser.time || 0)) < 10000;
+            if (!isDuplicate) {
+                body.ribbon.push({ role: 'user', content: text, time: Date.now(), sender });
+            }
 
             // Подтверждение плана через текст → создать task
             const lastBlock = [...body.ribbon].reverse().find(b => b.type === 'block' && b.steps && b.action);
@@ -239,9 +245,28 @@ export default {
                     ribbonTarget.push(block);
                 }
 
-                const planBlock = blocks.find(b => b.type === 'plan_created');
+                // Обновление плана: блок с шагами от модели
+                const planBlock = blocks.find(b => b.type === 'block' && b.steps);
                 if (planBlock) {
-                    body.plan = planBlock.steps;
+                    // Если есть активная задача — обновляем шаги в ней
+                    const activeTask = [...body.ribbon].reverse().find(b => b.type === 'task' && b.state === 'active');
+                    if (activeTask) {
+                        activeTask.steps = planBlock.steps;
+                        // Проверка завершения: все шаги выполнены
+                        const allDone = planBlock.steps.every(s => s.status === 'done');
+                        if (allDone) {
+                            activeTask.state = 'completed';
+                            // Кнопка «Принять» для итогового результата
+                            ribbonTarget.push({
+                                type: 'action',
+                                label: 'Принять',
+                                color: 'success',
+                                time: Date.now(),
+                                sender: model.path || 'WORK',
+                            });
+                            WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
+                        }
+                    }
                     WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: planBlock.steps });
                 }
 
@@ -591,8 +616,6 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false) {
         systemContent += '\n\n## Память (.mem)\n' + body.mem;
     if (body.readme)
         systemContent += '\n\n## Описание класса (readme.md)\n' + body.readme;
-    if (body.plan)
-        systemContent += '\n\n## Текущий план\n' + JSON.stringify(body.plan, null, 2);
     if (systemContent)
         messages.push({ role: 'system', content: systemContent });
 
