@@ -16,7 +16,7 @@ users/*/
 **/.RAG/
 **/*.webm
 **/history/
-
+**/work/
 # OS / IDE
 .DS_Store
 Thumbs.db
