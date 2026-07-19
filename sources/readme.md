@@ -28,7 +28,7 @@ WORK построен вокруг `$item`.
 - `index.js` — сборка серверного `CORE` и registry `FS` (порядок инициализации классов).
 - `$server.js` — `$server` (бывший `WorkServer`): корневой серверный `$class`, HTTP-сессии, merge `class.js`, шаблоны страниц.
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, manifest, сортировка.
-- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](../docs/storage-inheritance.md).
+- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](/docs/storage-inheritance.md/~/handlers/pages/form/).
 - `file.js` — `$file`: load/save, history, restore, file-specific behavior. Переопределён `collect_tilde` — для файлов tilde ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки.
 - `llm.js` — `$llm extends $class`: подключение к внешним языковым моделям. Методы: `chat()` (полный ответ), `streamChat()` (AsyncGenerator). Протоколы: `openai`, `anthropic`, `gigachat` (OAuth + self-signed SSL).
 - `user.js` — `$user`: пользовательская storage-сущность.
