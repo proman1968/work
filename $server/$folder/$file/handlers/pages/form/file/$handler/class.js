@@ -6,42 +6,22 @@ export default {
         <style>
             :host{
                 @apply --vertical;
+                overflow: hidden;
             }
             object{
                 border: none;
             }
         </style>
-        <object content :data="url" flex @load></object>        
+        <div ~is="fileControl" :$item :data="url" content flex></div>
     `,
     $public:{
-        allowSave: true,
+        allowSave: false,
     },
+    get label(){
+        return this.$item?.ext?.toUpperCase?.();
+    },
+    fileControl: 'object',
     get url(){
         return this.$item?.url + '/~/handlers/pages/open/index.html';
-    },
-    _onChange(e){
-        let body =  e.detail.value;
-        if(!this.$item.body || this.$item.body !== body){
-            this.$item.body = body;
-            this.$item.isChanged = true;
-        }
-    },
-    _onLoad(e){
-        e.target.contentDocument.addEventListener("change", this._onChange.bind(this));
-        e.target.contentWindow.addEventListener('pointerdown', e => {
-            let h = e.target;
-            while (h && !h.hasAttribute('popover')) {
-                h = h.host || h.parentElement;
-            }
-            const popovers = top.document.querySelectorAll('[popover]');
-            for (let p of popovers) {
-                if (h) {
-                    if (h === p)
-                        h = undefined;
-                    continue;
-                }
-                p.remove();
-            }
-        })
     }
 }

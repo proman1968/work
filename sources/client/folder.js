@@ -37,7 +37,7 @@ export class $folder extends $item {
                 $def: '',
                 $save: true,
                 set(role) {
-                    const colors = { ADMIN: 'red', BOSS: 'green', USER: 'indigo' };
+                    const colors = { ADMIN: 'darkred', BOSS: 'blue', USER: 'indigo' };
                     document.documentElement?.style?.setProperty('--main-color', colors[role] || 'indigo');
                 }
             },

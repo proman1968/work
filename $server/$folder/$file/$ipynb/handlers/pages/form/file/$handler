@@ -1,0 +1,33 @@
+export default {
+    imports: 'oda//tools/jupyter/jupyter.js',
+    fileControl: 'oda-jupyter-viewer'
+}
+
+ODA({
+    is: 'oda-jupyter-viewer',
+    template: /* html */`
+        <style>
+            :host {
+                @apply --flex;
+            }
+        </style>
+        <oda-jupyter class="flex" @change.stop @changed.stop="_change" :file_path></oda-jupyter>
+    `,
+    _change(e){
+        this.$item.isChanged = true;
+        this.fire('change', JSON.stringify(this.$('oda-jupyter')?.notebook?.data));
+    },
+    get file_path() {
+        if(this.$item) {
+            return this.$item.url;
+        }
+    },
+    $item: {
+        $def: null,
+        set(n) {
+            if (n) {
+                this.$item = n;
+            }
+        }
+    }
+})

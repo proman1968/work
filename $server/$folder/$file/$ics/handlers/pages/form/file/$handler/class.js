@@ -1,9 +1,5 @@
 export default {
-    imports: 'oda//app-layout',
-    extends: 'oda-app-layout',
-    template: /* html */`
-            <oda-calendar-event-form slot="main" class="flex" :$item></oda-calendar-event-form>
-        `
+    fileControl: 'oda-calendar-event-form'
 }
 
 ODA({
@@ -15,6 +11,7 @@ ODA({
                 padding: 8px;
                 gap: 8px;
                 min-width: 320px;
+                overflow: auto;
             }
             fieldset{
                 border: 1px solid var(--border-color);
@@ -148,18 +145,15 @@ ODA({
     },
     parseICSDate(dateStr) {
         if (dateStr.includes(':')) return dateStr;
-        // Парсим ICS дату
         const year = parseInt(dateStr.substring(0, 4));
-        const month = parseInt(dateStr.substring(4, 6)) - 1; // Месяцы в JS 0-11
+        const month = parseInt(dateStr.substring(4, 6)) - 1;
         const day = parseInt(dateStr.substring(6, 8));
         const hour = parseInt(dateStr.substring(9, 11));
         const minute = parseInt(dateStr.substring(11, 13));
         const second = parseInt(dateStr.substring(13, 15) || '0');
 
-        // Создаём Date объект в UTC
         const date = new Date(Date.UTC(year, month, day, hour, minute, second));
 
-        // Получаем локальное время
         const localYear = date.getFullYear();
         const localMonth = String(date.getMonth() + 1).padStart(2, '0');
         const localDay = String(date.getDate()).padStart(2, '0');

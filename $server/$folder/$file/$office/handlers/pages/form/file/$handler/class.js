@@ -1,13 +1,9 @@
 export default {
-    extends: 'oda-app-layout',
-    template: /* html */`
-        <oda-only-office slot="main" class="flex" @change.stop @changed.stop="_change" :$item></oda-only-office>
-    `,
+    fileControl: 'oda-only-office',
     _change(e) {
         this.$item.isChanged = true;
         this.fire('change');
-    },
-    $item: undefined
+    }
 }
 
 ODA({
@@ -40,8 +36,6 @@ ODA({
         return '';
     },
     autosave: true,
-    compactHeader: false,
-    compactToolbar: false,
     type: {
         $def: 'desktop',
         $list: ['desktop', 'embedded', 'mobile']
@@ -49,16 +43,10 @@ ODA({
     lang: {
         $def: 'ru',
         $list: ['en', 'ru', 'de', 'fr'],
-        // get() {
-        //     return ODA.language.split('-')[0];
-        // }
     },
     region: {
         $def: 'ru-RU',
         $list: ['en-US', 'ru-RU', 'de-DE', 'fr-FR'],
-        // get() {
-        //     return ODA.language
-        // }
     },
     get callbackUrl() {
         return this.url + '/~/handlers/methods/onlyoffice_callback?execute';
@@ -70,10 +58,6 @@ ODA({
             region: this.region || 'ru-RU',
             customization: {
                 autosave: this.autosave,
-                // forcesave: true,
-                // comments: false,
-                // compactHeader: this.compactHeader || false,
-                // compactToolbar: this.compactToolbar || false
             },
             user: {
                 id: this.userID || '',
@@ -97,15 +81,6 @@ ODA({
                     edit: true,
                     download: true,
                     print: true,
-                    // chat: true,
-                    // copy: true,
-                    // deleteCommentAuthorOnly: false,
-                    // editCommentAuthorOnly: false,
-                    // fillForms: true,
-                    // modifyContentControl: true,
-                    // modifyFilter: true,
-                    // protect: true,
-                    // review: true
                 }
             },
             editorConfig: this.editorConfig,
@@ -129,8 +104,6 @@ ODA({
     set $item(n) {
         n.oo_key = this.key;
         n.oo_commandServiceUrl = this.commandServiceUrl;
-        console.log(this.key.length, ' / 128 - ', this.key);
-        console.log(this.config);
         this.iframe = this.$('iframe');
         this.iframe.addEventListener('load', () => {
             this.docEditor = new this.iframe.contentWindow.DocsAPI.DocEditor('editor', this.config);

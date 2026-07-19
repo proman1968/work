@@ -1,14 +1,24 @@
 export default {
     imports: 'oda//code-editor, oda//app-layout, oda//tools/icons/icons-tree/icons-tree.js',
-    extends:'oda-app-layout',
+    fileControl: 'oda-devs-viewer',
+    allowSave: true,
+}
+
+ODA({
+    is: 'oda-devs-viewer',
+    extends: 'oda-app-layout',
     template: /* html */`
-        <oda-code-editor slot="main"  class="flex" @change :src></oda-code-editor>
+        <oda-code-editor slot="main" class="flex" @change :src></oda-code-editor>
         <oda-icons-tree slot="right-panel" light label="Icons" icon="carbon:image" style="height: 0px;"></oda-icons-tree>
     `,
-    _onChange(e){
-        // this.$item.isChanged = true;
+    $item: {
+        $def: null,
+        set(n) {
+            if (n) {
+                this.$item = n;
+            }
+        }
     },
-    $item:null,
     get src(){
         if(this.$item){
             return this.$item.load().then(src=>{
@@ -18,4 +28,4 @@ export default {
             })
         }
     }
-}
+})
