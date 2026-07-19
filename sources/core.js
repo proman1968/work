@@ -4,7 +4,7 @@
  * Браузерная логика (fetch, save_file, body, url) — в sources/client/folder.js.
  * Серверная специфика (fs) — в sources/server/*.
  *
- * Reactor доступен глобально из oda/reactor.js.
+ * Reactor доступен глобально из sources/reactor.js.
  */
 export class $item extends Reactor {
     constructor(data = {}) {

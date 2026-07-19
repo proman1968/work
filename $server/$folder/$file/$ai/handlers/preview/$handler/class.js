@@ -151,25 +151,28 @@
                 font-size: small;
             }
         </style>
-        <div class="thread" flex vertical @scroll="_onScroll">
-            <oda-chat-ribbon no-flex :blocks="ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>   
-            <div light vertical class="streaming" ~if="streamingText">
+        <microchat-ribbon :ribbon @answer="onFormAnswer($event.detail.time, $event.detail.value)"></microchat-ribbon> 
+        <microchat-panel></microchat-panel>
+        <div light class="thread" flex vertical @scroll="_onScroll">
+              
+            <div vertical class="streaming" ~if="streamingText">
                 <div rainbow style="padding: 4px;">Думаю...</div>
                 <div style="padding: 4px;">{{streamingText}} </div>
             </div> 
         </div>
-        <div class="action-bar" border horizontal style="padding: 0px; gap: 2px; align-items: stretch; margin: 2px;">
-            <oda-button flex ~if="actionButton"
-                :class="'btn-' + (actionButton.color || 'info')"
-                :icon="actionButton.icon || 'icons:check'"
-                :icon-size="iconSize * .8"
-                :label="actionButton.label || 'OK'"
-                @tap="onAction()"></oda-button>
-            <oda-button ~if="actionButton" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
-            <oda-button flex ~if="!actionButton" :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
-        </div>
 
-        <div light :rainbow="pending" no-flex vertical style="padding: 2px;">
+
+        <div header :rainbow="pending" no-flex vertical style="padding: 2px; gap: 2px;">
+            <div  border horizontal style="padding: 2px; align-items: stretch;">
+                <oda-button flex ~if="actionButton"
+                    :class="'btn-' + (actionButton.color || 'info')"
+                    :icon="actionButton.icon || 'icons:check'"
+                    :icon-size="iconSize * .8"
+                    :label="actionButton.label || 'OK'"
+                    @tap="onAction()"></oda-button>
+                <oda-button ~if="actionButton" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8" @tap="onCancelAction()" style="border-radius: 0;"></oda-button>
+                <oda-button flex ~if="!actionButton" :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="scrollToggle" title="Прокрутка"></oda-button>
+            </div>
             <div class="attach-preview" ~if="files.length" horizontal>
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -296,7 +299,7 @@
         const t = this.thread; if (!t) return 'box:i-down-arrow-alt'; const atBottom = t.scrollTop + t.clientHeight >= t.scrollHeight - 10; return atBottom ? 'box:i-up-arrow-alt' : 'box:i-down-arrow-alt';
     },
     get rows() {
-        return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
+        return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
     },
     async onFormAnswer(msgTime, answers) {
         const ribbon = this.taskBody?.ribbon || [];
@@ -943,7 +946,7 @@ function findFirstLeaf(node) {
 
 // === Встроенные компоненты (только для микрочата ИИ) ===
 
-ODA({ is: 'oda-chat-ribbon',
+ODA({ is: 'microchat-ribbon',
     template: /*html*/`
         <style>
             :host {
@@ -960,6 +963,8 @@ ODA({ is: 'oda-chat-ribbon',
                 @apply --info-invert;
                 @apply --raised;
                 padding: 4px 8px;
+                position: sticky:
+                top: 0px;
             }
             .msg-user .msg-time {
                 font-size: xx-small;
@@ -973,7 +978,7 @@ ODA({ is: 'oda-chat-ribbon',
                 @apply --vertical;
             }
         </style>
-        <div class="ribbon" ~for="blocks">
+        <div class="ribbon" ~for="ribbon">
             <!-- Блок пользователя -->
             <div class="msg-user" horizontal ~if="$for.item.role === 'user'">
                 <div class="msg-content" flex>{{$for.item.content}}</div>
@@ -992,7 +997,7 @@ ODA({ is: 'oda-chat-ribbon',
         </div>
     `,
     imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
-    blocks: [],
+    ribbon: [],
     blockTag(type) {
         const tags = {
             details: 'oda-chat-details',

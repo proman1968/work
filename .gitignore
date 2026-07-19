@@ -17,6 +17,9 @@ users/*/
 **/*.webm
 **/history/
 **/work/
+
+# Progress snapshots (mirror of WORK history pattern)
+.progress.md/history/
 # OS / IDE
 .DS_Store
 Thumbs.db

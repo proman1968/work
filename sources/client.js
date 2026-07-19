@@ -1,6 +1,6 @@
 import "../oda/oda.js";
 import * as CORE from "./client/index.js";
-import { Reactor } from "../oda/reactor.js";
+import { Reactor } from "./reactor.js";
 import { RTCCaller } from "./modules/call/call.js";
 import "./modules/user-profile/user-profile.js";
 window.RTCCaller = RTCCaller;

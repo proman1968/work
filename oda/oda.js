@@ -1,5 +1,5 @@
 import ODAStyles from './tools/styles/styles.js';
-import {Reactor} from './reactor.js';
+import {Reactor} from '../sources/reactor.js';
 document.body.style.visibility = 'hidden';
 
 const domParser = new DOMParser();
