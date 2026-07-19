@@ -129,7 +129,6 @@ function resolveClassMethod(item, method, params, request) {
             return handler;
         }
     } catch {}
-    return null;
 }
 
 export function execItemMethod(item, method, params, request) {
@@ -144,7 +143,7 @@ export function execItemMethod(item, method, params, request) {
         if (method === "tts") console.log("[execItemMethod] tts called, item:", item?.path, "params.post:", JSON.stringify(params.post)?.slice(0,200));
         const classResult = resolveClassMethod(item, method, params, request);
         if (method === "tts") console.log("[execItemMethod] classResult:", classResult, "type:", typeof classResult);
-        if (classResult !== null)
+        if (classResult !== undefined)
             return classResult;
 
         const handlerResult = await tryHandlerMethod(item, method, params, request);

@@ -57,10 +57,6 @@
                 font-size: x-small;
                 padding: 4px 8px;
             }
-            .streaming {
-                @apply --raised;
-                padding: 4px 8px;
-            }
             @keyframes pulse-bg {
                 0%, 100% { opacity: 1; }
                 50% { opacity: .4; }
@@ -151,15 +147,16 @@
                 min-height: 2em;
                 resize: vertical;
             }
+            .streaming{
+                font-size: small;
+            }
         </style>
         <div class="thread" flex vertical @scroll="_onScroll">
-            <oda-chat-ribbon flex :blocks="ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>   
-            <oda-markdown-viewer class="streaming" ~if="streamingText" :value="streamingText"></oda-markdown-viewer> 
-        </div>
-        
-        <div ~if="activeTask" class="task-group" vertical style="border: 1px solid var(--info-color); border-radius: 4px; margin: 2px;">
-            <oda-chat-plan :steps="activeTask.steps"></oda-chat-plan>
-            <oda-chat-ribbon flex :blocks="activeTask.ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>
+            <oda-chat-ribbon no-flex :blocks="ribbon" @answer="onFormAnswer($event.detail.time, $event.detail.value)"></oda-chat-ribbon>   
+            <div light vertical class="streaming" ~if="streamingText">
+                <div rainbow style="padding: 4px;">Думаю...</div>
+                <div style="padding: 4px;">{{streamingText}} </div>
+            </div> 
         </div>
         <div class="action-bar" border horizontal style="padding: 0px; gap: 2px; align-items: stretch; margin: 2px;">
             <oda-button flex ~if="actionButton"
