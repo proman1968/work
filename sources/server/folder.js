@@ -1311,6 +1311,13 @@ export class $folder extends $item{
     get time(){
         return this.stat.mtime?.getTime() || 0;
     }
+    /** Роли пользователя делегируются классу-владельцу ($class). */
+    async roles(params = {}) {
+        const cls = this.$class;
+        if (cls && cls !== this)
+            return cls.roles(params);
+        return [];
+    }
     reset(initiator){
         this[R].cache = {};
         let key = this.short;

@@ -10,7 +10,7 @@ ODA({ is: 'oda-markdown-viewer',
             @import url("/oda/components/editors/markdown/markdown-viewer/lib/preset.css");
             {{''}}
         </style>
-        <div ~html style="padding: 0px 4px;"></div>
+        <div ~html style="padding: 0px 16px;"></div>
     `,
     value: String,
     get html(){
