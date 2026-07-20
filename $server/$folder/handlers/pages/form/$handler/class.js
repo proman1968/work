@@ -74,7 +74,7 @@ ODA({is: 'work-form',
                 <div flex></div>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
-                            <oda-button :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
+                            <oda-button ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
                                 style="font-size: xx-small;"
                                 center icon-pos="top"
                             ></oda-button>
@@ -106,18 +106,17 @@ ODA({is: 'work-form',
 
                         </div>
                         <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center; gap: 8px; border-bottom: 1px solid;">
-                            <oda-button
+                            <item-node
                                 ~for="formViews"
-                                :icon="$for.item.icon || 'files:file'"
+                                :$item="$for.item"
+                                :hide-label="view?.id !== $for.item.id"
                                 :icon-size
-                                :label="view?.id === $for.item.id ? view.label : ''"
-                                :title="$for.item.label"
-                                :info-invert="view?.id === $for.item.id"
-                                :light="view?.id !== $for.item.id"
-                                style="border-radius: 4px;"
+                                :content="view?.id === $for.item.id"
+                                :raised="view?.id === $for.item.id"
+                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.45, borderRadius: '4px' }"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
-                            ></oda-button>
+                            ></item-node>
                         </div>
                     </div>
                 </div>
@@ -182,6 +181,16 @@ ODA({is: 'work-form',
             let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.allowUse !== false
             );
+            // Для handler'а 'file' подставляем icon/label из конкретного открытого файла,
+            // чтобы отображать расширение (например 'JSON') и соответствующую иконку
+            const ext = this.$item?.ext;
+            for (const v of views) {
+                v.$context = this.$item;
+                if (v.id === 'file' && ext) {
+                    v.icon = 'files-color:s-' + ext;
+                    v.label = ext.toUpperCase();
+                }
+            }
             this.formViews = views;
             this.render();
         } catch (err) {
@@ -208,6 +217,12 @@ ODA({is: 'work-form',
     },
     get roles(){
         return this.$item?.fetch('roles');
+    },
+    get showRoleSelector() {
+        return new AsyncPromise(async () => {
+            const roles = await this.roles;
+            return Array.isArray(roles) && roles.length > 1;
+        });
     },
     async getRoleIcon(role){
         return  ({
@@ -318,7 +333,7 @@ ODA({is: 'work-form',
             }
             if (!el) {
                 await n?.import?.(`class.js`);
-                el =  ODA.createComponent('item-' + n.id, { $item: this.$item, slot: 'main', $handler: n });
+                el =  ODA.createComponent('item-' + n.id, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
                 this.controls[n.id] = el;
                 this.appendChild(el);
             }

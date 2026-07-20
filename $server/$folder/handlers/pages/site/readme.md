@@ -40,7 +40,7 @@ Page-handler **site** — UI-витрина класса: вкладки (сам
 
 ## Гости: редирект на site
 
-В [`sources/page.html`](../../../../sources/page.html) после `WORK.login()`:
+В [`sources/page.html`](/sources/page.html/~/handlers/pages/form/) после `WORK.login()`:
 
 - если `!WORK.uid` и `{handler} !== 'site'` → `location.replace(…/~/handlers//site/index.html)` контекста;
 - site и `site/*` (в т.ч. main в iframe) гостю доступны;

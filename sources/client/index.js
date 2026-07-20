@@ -20,6 +20,10 @@ export function fixMdHistoryLinks(md) {
     return $file.fixMdHistoryLinks(md);
 }
 
+export function fixWorkMdLinks(md, basePath) {
+    return $file.fixWorkMdLinks(md, basePath);
+}
+
 export { $item } from '../core.js';
 export { $field } from './field.js';
 export { $folder } from './folder.js';

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import '../oda/reactor.js';
-import { fixMdHistoryLinks } from '../sources/client/index.js';
+import { fixMdHistoryLinks, fixWorkMdLinks } from '../sources/client/index.js';
 import { $item } from '../sources/core.js';
 import { $file, $folder } from '../sources/server/index.js';
 
@@ -59,5 +59,34 @@ describe('path-syntax', () => {
         const fixed = fixMdHistoryLinks(md);
         assert.match(fixed, /\[21:03 \| document \(6\)\.pptx\]/);
         assert.doesNotMatch(fixed, /\[21:03\|CA4E097FF6C1D387\]/);
+    });
+
+    it('fixWorkMdLinks rewrites relative markdown href to WORK form', () => {
+        const md = 'See [page](../../../../sources/page.html) please';
+        const base = '/$server/$folder/handlers/pages/site/readme.md';
+        const fixed = fixWorkMdLinks(md, base);
+        assert.match(fixed, /\[page\]\(\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
+    });
+
+    it('fixWorkMdLinks linkifies path-like backticks and skips bare names', () => {
+        const md = 'Use `sources/core.js` and `node.js` and keep ```\nsources/core.js\n```';
+        const fixed = fixWorkMdLinks(md, '/readme.md');
+        assert.match(fixed, /\[sources\/core\.js\]\(\/sources\/core\.js\/~\/handlers\/pages\/form\/\)/);
+        assert.doesNotMatch(fixed, /\[`sources\/core\.js`\]/);
+        assert.match(fixed, /`node\.js`/);
+        assert.doesNotMatch(fixed, /\[`node\.js`\]/);
+        assert.match(fixed, /```\nsources\/core\.js\n```/);
+    });
+
+    it('fixWorkMdLinks skips documentation samples and templates', () => {
+        const md = '`.progress.md/history/TIME.USER.md` and `history/<date>/время.uid.ext` and `file → history`';
+        const fixed = fixWorkMdLinks(md, '/rules.md');
+        assert.equal(fixed, md);
+        assert.doesNotMatch(fixed, /\[`/);
+    });
+
+    it('fixWorkMdLinks leaves existing WORK and external links', () => {
+        const md = '[a](/rules.md/~/handlers/pages/form/) [b](https://example.com) [c](#anchor)';
+        assert.equal(fixWorkMdLinks(md, '/'), md);
     });
 });

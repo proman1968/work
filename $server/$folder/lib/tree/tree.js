@@ -68,6 +68,7 @@ export default {
             $list: ['tools', 'handlers', 'both']
         },
         hideSystem: false,
+        hideReadme: false,
     },
     items: [],
     get step() {
@@ -92,6 +93,8 @@ export default {
         let items = (await $item?.[this.itemsSelector]) || [];
         if(this.hideSystem)
             items = items.filter(f=>!f.isType)
+        if(this.hideReadme)
+            items = items.filter(f => !/^readme\.md$/i.test(f.id))
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -337,9 +340,11 @@ ODA({is: 'oda-tree-node',
     },
     get items() {
         return new AsyncPromise(async ()=>{
-            let items = (this.$item?.[this.$pdp.itemsSelector] || []);
+            let items = (await this.$item?.[this.$pdp.itemsSelector]) || [];
             if(this.$pdp.hideSystem)
                 items = items.filter(f=>!f.isType)
+            if(this.$pdp.hideReadme)
+                items = items.filter(f => !/^readme\.md$/i.test(f.id))
             this.$item?.addEventListener?.('changed', e=>{
                 this.items = undefined;
                 this.async(async ()=>{

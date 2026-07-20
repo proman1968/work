@@ -54,11 +54,21 @@ export default {
                 white-space: nowrap;
                 align-self: center;
             }
+            .readme-help{
+                @apply --no-flex;
+                opacity: .55;
+                margin-left: 2px;
+                cursor: pointer;
+            }
+            .readme-help:hover{
+                opacity: 1;
+            }
         </style>
-        <div horizontal flex style="padding: 0px 2px; align-items: center;">
+        <div horizontal flex style="align-items: center;">
             <div vertical flex>
                 <div horizontal flex> 
-                    <label :bold="$item instanceof CORE.$class" flex>{{label}}</label>
+                    <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
+                    <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-user ~if="showBoss" :$item="boss" icon-size="16"></item-user>
                 </div>
                 <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
@@ -68,6 +78,43 @@ export default {
     `,
     showSize: false,
     showUsers: false,
+    hideLabel: false,
+    get readmeItem() {
+        return new AsyncPromise(async () => {
+            if (!this.$item) return null;
+            let items = this.$item.items;
+            if (items?.then) items = await items;
+            if (Array.isArray(items)) {
+                const found = items.find(f => /^readme\.md$/i.test(f.id));
+                if (found) return found;
+            }
+            if (typeof this.$item.get_item === 'function') {
+                try {
+                    const readme = await this.$item.get_item('readme.md');
+                    if (readme && !Array.isArray(readme)) return readme;
+                } catch {}
+            }
+            return null;
+        })
+    },
+    get hasReadme() {
+        return new AsyncPromise(async () => !!(await this.readmeItem));
+    },
+    async openReadme(e) {
+        e?.stopPropagation?.();
+        const readme = await this.readmeItem;
+        if (!readme) return;
+        readme.$context = this.topHost?.$item;
+        if (typeof readme.execute === 'function')
+            await readme.execute();
+        else if (window.execute)
+            await window.execute(Reactor.activate(readme));
+        let h = this;
+        while (h && h.localName !== 'item-menu') {
+            h = h.host || h.parentElement;
+        }
+        h?.parentElement?.fire('close');
+    },
     get showBoss(){
         if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
             return new AsyncPromise(async ()=>{
@@ -86,10 +133,26 @@ export default {
             return await Promise.resolve(this.$item?.boss);
         })
     },
+    get icon() {
+        if (this.$item instanceof CORE.$handler && this.$item?.id === 'file') {
+            const ctx = this.topHost?.$item;
+            if (ctx?.ext)
+                return 'files-color:s-' + ctx.ext;
+        }
+        return this.$item?.icon || this.default || 'files:file';
+    },
     label: {
         get() {
             if (this._customLabel != null && this._customLabel !== '')
                 return this._customLabel;
+            // Для handler'а 'file' показываем расширение конкретного файла из контекста
+            if (this.$item instanceof CORE.$handler && this.$item?.id === 'file') {
+                const ctx = this.topHost?.$item;
+                if (ctx?.ext) {
+                    const prefix = this.$item?.allowSave ? 'edit' : 'view';
+                    return prefix + ' (' + ctx.ext.toLowerCase() + ')';
+                }
+            }
             return this.$item?.label;
         },
         set(n) {

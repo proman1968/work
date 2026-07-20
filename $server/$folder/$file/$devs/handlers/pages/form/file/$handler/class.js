@@ -19,13 +19,20 @@ ODA({
             }
         }
     },
-    get src(){
-        if(this.$item){
-            return this.$item.load().then(src=>{
-                if(typeof src === 'object')
+    get src() {
+        if (this.$item) {
+            return this.$item.load().then(src => {
+                if (typeof src === 'object')
                     src = JSON.stringify(src, undefined, 4);
                 return src;
             })
         }
-    }
+    },
+    _onChange(e) {
+        const body = e.detail.value;
+        if (!this.$item.body || (this.$item.body !== body)) {
+            this.$item.body = body;
+            this.$item.isChanged = true;
+        }
+    },
 })

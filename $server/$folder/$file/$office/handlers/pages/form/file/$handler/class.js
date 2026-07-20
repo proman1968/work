@@ -1,29 +1,40 @@
 export default {
+    allowSave: true,
     fileControl: 'oda-only-office',
     _change(e) {
         this.$item.isChanged = true;
         this.fire('change');
+    },
+    save() {
+        this.$('oda-only-office').save();
     }
 }
 
 ODA({
     is: 'oda-only-office',
-    template: `
+    template: /*html*/`
         <style>
-            :host{
+            :host {
+                @apply --flex;
                 @apply --vertical;
                 position: relative;
-                @apply --flex;
             }
         </style>
-        <iframe class='flex' style="border: none"></iframe>      
+        <iframe class="flex" style="border: none"></iframe>
     `,
     get officeUrl() { return location.origin + '/onlyoffice/' },
     get apiUrl() { return this.officeUrl + 'web-apps/apps/api/documents/api.js' },
     get commandServiceUrl() { return this.officeUrl + 'coauthoring/CommandService.ashx' },
     get url() { return this.$item.url },
-    get keyTime() { return '-017' },
-    get key() { return ((this.$item?.path || '') + (this.keyTime || '')).replace(/[^A-Za-z0-9]/g, '_') },
+    get key() {
+        const str = `${location.host}_${this.$item?.path}_${this.$item?.lastModified}_${this.$item?.size}`;
+        let hash = 5381;
+        for (let i = 0; i < str.length; i++) {
+            hash = (hash * 33) ^ str.charCodeAt(i);
+        }
+
+        return (hash >>> 0).toString(16).padStart(8, '0').substring(0, 20);
+    },
     get title() { return this.$item.name },
     get userID() { return WORK?.USER?.id },
     get userName() { return WORK?.USER?.label },
@@ -49,7 +60,7 @@ ODA({
         $list: ['en-US', 'ru-RU', 'de-DE', 'fr-FR'],
     },
     get callbackUrl() {
-        return this.url + '/~/handlers/methods/onlyoffice_callback?execute';
+        return this.url + '?onlyoffice_callback';
     },
     get editorConfig() {
         return {
@@ -85,8 +96,8 @@ ODA({
             },
             editorConfig: this.editorConfig,
             events: {
-                onAppReady() {
-                    console.info('ONLYOFFICE app ready', config);
+                onAppReady(event) {
+                    console.info('ONLYOFFICE app ready', event);
                 },
                 onDocumentReady() {
                     console.info('ONLYOFFICE document ready');
@@ -95,8 +106,9 @@ ODA({
                     console.error('ONLYOFFICE error', event);
                 },
                 onDocumentStateChange: (event) => {
-                    console.error('ONLYOFFICE change', event);
-                    this.fire('changed', event);
+                    console.info('ONLYOFFICE change', event);
+                    this.$item.isChanged = true;
+                    this.host.fire('changed', event);
                 }
             }
         }
@@ -110,11 +122,27 @@ ODA({
         })
         const blob = new Blob([html(this.apiUrl)], { type: 'text/html' });
         this.iframe.src = URL.createObjectURL(blob);
+    },
+    async save() {
+        const url = this.commandServiceUrl;
+        const response = await fetch(url, {
+            method: 'POST',
+            body: JSON.stringify({
+                c: 'forcesave',
+                key: this.key,
+                userdata: 'save file'
+            })
+        })
+        if (!response.ok)
+            throw new Error('File not saved')
+        const json = await response.json();
+        console.info('ONLYOFFICE forcesave response', json);
+        this.$item.isChanged = false;
     }
 })
 
 const html = (apiUrl) => {
-    return `
+    return /*html*/`
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
