@@ -19,10 +19,10 @@
 
 ## 4. Из чего это состоит
 
-- `class.js` — схема `TYPES` блоков ribbon (prompt, thinking, action, form, questions, task, tool…)
-- `methods/prompt/$method/` — серверный harness PDCA / tools / ACL / контекст пары
-- `triggers/on_save/$trigger/` — bootstrap system prompt и первый `prompt.execute`
-- `handlers/preview/$handler/` — микрочат (лента, панель, формы)
+- `class.js` — схема `TYPES` блоков ribbon (контракт данных диалога для UI и harness)
+- `methods/prompt/$method/` — серверный harness PDCA, tools, ACL, контекст пары (исполнение задачи ИИ)
+- `triggers/on_save/$trigger/` — реакция на сохранение файла (вход в цикл агента)
+- `handlers/preview/$handler/` — микрочат: лента, панель, формы (управление задачей человеком)
 
 ## 5. В каком это состоянии
 
