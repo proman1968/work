@@ -1100,6 +1100,12 @@ ODA({ is: 'microchat-ribbon',
                 min-height: 0;
                 scroll-behavior: smooth;
             }
+            /* Внутри task: не схлопываться в 0px из-за flex:1 + min-height:0 */
+            :host([embedded]) {
+                flex: none;
+                min-height: auto;
+                overflow: visible;
+            }
             .ribbon {
                 @apply --vertical;
                 gap: 4px;
@@ -1121,6 +1127,11 @@ ODA({ is: 'microchat-ribbon',
     imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer, ~/lib/chat-item/chat-item',
     items: [],
     streamingText: '',
+    embedded: {
+        $def: false,
+        $type: Boolean,
+        $attr: true,
+    },
     viewTag(item) {
         return ribbonViewTag(item);
     },
@@ -1430,7 +1441,7 @@ ODA({ is: 'microchat-view-task',
                 @apply --content;
                 @apply --raised;
                 gap: 0;
-                overflow: hidden;
+                overflow: visible;
             }
             .header {
                 @apply --horizontal;
@@ -1476,7 +1487,8 @@ ODA({ is: 'microchat-view-task',
                 padding: 4px 0 4px 8px;
                 border-left: 2px solid var(--border-color, #ccc);
                 margin: 4px 8px;
-                min-height: 0;
+                min-height: auto;
+                overflow: visible;
             }
         </style>
         <div class="header" @tap="collapsed = !collapsed" horizontal>
@@ -1496,6 +1508,7 @@ ODA({ is: 'microchat-view-task',
         </div>
         <div class="nested" ~if="nestedItems.length">
             <microchat-ribbon
+                embedded
                 :items="nestedItems"
                 @answer="fire('answer', $event.detail)"
                 @action-accept="fire('action-accept', $event.detail)"
@@ -1505,7 +1518,15 @@ ODA({ is: 'microchat-view-task',
         </div>
     `,
     imports: 'oda//icon',
-    item: null,
+    item: {
+        $def: null,
+        set(v) {
+            // Открытый AskQuestion/form в nested — сразу показать (не только кнопку панели)
+            if (v && Array.isArray(v.ribbon)
+                && v.ribbon.some(b => (b.type === 'questions' || b.type === 'form') && !b.answered))
+                this.collapsed = false;
+        },
+    },
     collapsed: {
         $def: true,
         $type: Boolean,
