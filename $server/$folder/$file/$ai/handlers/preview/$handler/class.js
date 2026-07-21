@@ -1492,9 +1492,30 @@ ODA({ is: 'microchat-view-task',
             }
             .ask {
                 @apply --vertical;
+                gap: 10px;
                 margin: 4px 8px 8px;
+                padding: 8px;
                 min-height: auto;
                 overflow: visible;
+                @apply --light;
+                border-radius: 4px;
+            }
+            .ask-field { @apply --vertical; gap: 4px; }
+            .ask-label { font-size: small; @apply --bold; }
+            .ask-options { @apply --vertical; gap: 4px; }
+            .ask-option {
+                @apply --content;
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 6px;
+                padding: 8px 10px;
+                font-size: small;
+                cursor: pointer;
+                user-select: none;
+            }
+            .ask-option:hover { @apply --header; }
+            .ask-option.selected {
+                border-color: var(--success-color, #2e7d32);
+                background: color-mix(in srgb, var(--success-color, #2e7d32) 12%, transparent);
             }
         </style>
         <div class="header" @tap="collapsed = !collapsed" horizontal>
@@ -1512,9 +1533,16 @@ ODA({ is: 'microchat-view-task',
                 <span flex>{{$for.item.description}}</span>
             </div>
         </div>
-        <!-- AskQuestion/form — прямо в task, не через nested ribbon (~is) -->
-        <div class="ask" ~if="openAsk?.fields?.length">
-            <oda-chat-form :questions="openAsk.fields" hide-submit></oda-chat-form>
+        <!-- AskQuestion: native options (без oda-chat-form) -->
+        <div class="ask" ~if="hasOpenAsk">
+            <div class="ask-field" ~for="openAskFields">
+                <div class="ask-label">{{$for.item.label || $for.item.id}}</div>
+                <div class="ask-options" ~if="$for.item.type === 'select'">
+                    <div class="ask-option" ~for="askOptionRows($for.item)"
+                        ~class="selected: $for.item.field.value === $for.item.opt"
+                        @tap="selectAskOption($for.item.field, $for.item.opt)">{{$for.item.opt}}</div>
+                </div>
+            </div>
         </div>
         <div class="nested" ~if="otherNested.length">
             <microchat-ribbon
@@ -1530,8 +1558,12 @@ ODA({ is: 'microchat-view-task',
     imports: 'oda//icon',
     item: {
         $def: null,
+        get() {
+            return this._taskItem || null;
+        },
         set(v) {
-            // Открытый AskQuestion/form — сразу показать шаги + форму
+            this._taskItem = v || null;
+            // Открытый AskQuestion — сразу показать шаги + options
             if (v && Array.isArray(v.ribbon)
                 && v.ribbon.some(b => (b.type === 'questions' || b.type === 'form') && !b.answered))
                 this.collapsed = false;
@@ -1547,13 +1579,19 @@ ODA({ is: 'microchat-view-task',
     get nestedItems() {
         return normalizeRibbon(this.item?.ribbon || []);
     },
-    /** Первый неотвеченный questions|form — для inline UI */
+    /** Первый неотвеченный questions|form */
     get openAsk() {
         return this.nestedItems.find(b =>
             (b.type === 'questions' || b.type === 'form') && !b.answered && b.fields?.length
         ) || null;
     },
-    /** Nested без открытых ask (normalizeRibbon каждый раз копирует — не сравниваем по !==) */
+    get hasOpenAsk() {
+        return !!(this.openAsk && this.openAsk.fields && this.openAsk.fields.length);
+    },
+    get openAskFields() {
+        return this.openAsk?.fields || [];
+    },
+    /** Nested без открытых ask */
     get otherNested() {
         return this.nestedItems.filter(b =>
             !((b.type === 'questions' || b.type === 'form') && !b.answered)
@@ -1578,6 +1616,24 @@ ODA({ is: 'microchat-view-task',
         if (status === 'done') return 'icons:check-circle';
         if (status === 'in_progress') return 'av:play-circle-outline';
         return 'icons:radio-button-unchecked';
+    },
+    askOptionRows(field) {
+        if (!field?.options?.length) return [];
+        return field.options.map(opt => ({ field, opt: String(opt) }));
+    },
+    selectAskOption(field, opt) {
+        if (!field) return;
+        field.value = opt;
+        // Синхрон в исходный taskBody.ribbon (normalizeRibbon — shallow fields)
+        const raw = this._taskItem?.ribbon;
+        if (Array.isArray(raw)) {
+            for (const b of raw) {
+                if ((b.type !== 'questions' && b.type !== 'form') || b.answered) continue;
+                const f = (b.fields || []).find(x => x.id === field.id);
+                if (f) f.value = opt;
+            }
+        }
+        this.render?.();
     },
 });
 

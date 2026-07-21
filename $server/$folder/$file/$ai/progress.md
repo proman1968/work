@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [22.07.2026] UI: AskQuestion options — native HTML в `microchat-view-task` (без `oda-chat-form`); `item` get/set через `_taskItem`. Данные questions были, UI form не рисовался.
 - [22.07.2026] UI: AskQuestion рисуется inline в task (`openAsk` + `oda-chat-form`); починен get/set `questions` (пустой ~for). Nested ribbon больше не прячет options.
 - [22.07.2026] UI: nested AskQuestion был с высотой 0 (`microchat-ribbon` flex:1 внутри task) — `embedded` + авто-раскрытие task; options снова видны под «1/4».
 - [22.07.2026] Do после «Уточнить»: `write_file`/`read_file` в списке FC (раньше не было в get_schema); clarify-шаг → done + next; пустые answers не гонят LLM; nested history без дубля system.
