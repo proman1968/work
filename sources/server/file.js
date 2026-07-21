@@ -385,7 +385,7 @@ export class $file extends $folder{
         }
         else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
             || params.filename === 'response.md' || params.filename === 'error.txt'
-            || params.filename === 'task.ai' || params.filename === 'pass.order')
+            || params.filename === 'task.ai' || params.filename === 'pass.order' || params.filename === 'proposal.json')
             log.content = params.message ?? params.post;
         log.path = this.json_model.path;
         log.type = '$file';

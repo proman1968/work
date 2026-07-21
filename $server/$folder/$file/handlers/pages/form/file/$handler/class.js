@@ -1,10 +1,8 @@
 export default {
-    get icon(){
-        return 'files:document'
-    },
     template: /*html*/ `
         <style>
             :host{
+                @apply --flex;
                 @apply --vertical;
                 overflow: hidden;
             }
@@ -17,11 +15,8 @@ export default {
     $public:{
         allowSave: false,
     },
-    get label(){
-        return this.$item?.ext?.toUpperCase?.();
-    },
     fileControl: 'object',
     get url(){
-        return this.$item?.url + '/~/handlers/pages/open/index.html';
+        return this.$context?.url + '/~/handlers/pages/open/index.html';
     }
 }

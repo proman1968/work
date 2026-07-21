@@ -1,7 +1,7 @@
 export default {
     icon: 'icons:home',
     label: 'Главная',
-    imports: 'oda//icon, ~/lib//icon, ~/lib//node',
+    imports: 'oda//icon, ~/lib//icon, ~/lib//node, oda//button, ~/lib//editor-builder',
     template: /* html */`
         <style>
             :host {
@@ -198,6 +198,22 @@ export default {
                 </div>
             </div>
 
+            <div ~if="proposalDone" class="section">
+                <div class="card">
+                    <b>Заявка отправлена</b>
+                    <span ~if="proposalResult?.proposal?.url">Адрес: {{proposalResult.proposal.url}}</span>
+                </div>
+            </div>
+
+            <div ~if="tariffCards?.length" class="section">
+                <h2>Тарифы</h2>
+                <div class="grid">
+                    <div ~for="tariffCards">
+                        <main-page-tariff-card :item="$for.item" @click="selectTariff($for.item)"></main-page-tariff-card>
+                    </div>
+                </div>
+            </div>
+
             <div ~if="modules?.length" class="section">
                 <h2>Модули</h2>
                 <div class="modules">
@@ -259,6 +275,26 @@ export default {
             text: 'Чат, документы, звонки, календарь, почта и ИИ-память в одной модели.'
         }
     ],
+    tariffCards: [],
+    paasOfferingPath: '/Offerings/PaaS',
+    selectedPlan: null,
+    proposalForm: null,
+    proposalValues: null,
+    proposalErrors: null,
+    proposalBusy: false,
+    proposalDone: false,
+    proposalResult: null,
+    _authPop: null,
+    _onAuth: null,
+    async attached() {
+        try {
+            const res = await WORK.fetch(this.paasOfferingPath, 'getPlans');
+            this.tariffCards = res?.plans || [];
+        }
+        catch (e) {
+            console.warn('[main] getPlans:', e.message);
+        }
+    },
     get modules() {
         return new AsyncPromise(async () => {
             const items = (await this.$item?.items) || [];
@@ -276,5 +312,168 @@ export default {
     open_module(item) {
         const url = item.url + '/~/handlers//site/index.html';
         window.open(url, '_blank');
-    }
+    },
+    selectTariff(item) {
+        this.selectedPlan = item;
+        this.proposalDone = false;
+        this.proposalResult = null;
+        if (!WORK.uid) {
+            this._askAuth().then(() => {
+                if (WORK.uid) this._openProposalForm(item);
+            });
+            return;
+        }
+        this._openProposalForm(item);
+    },
+    async _openProposalForm(item) {
+        try {
+            this.proposalForm = await WORK.fetch(this.paasOfferingPath, 'getProposalForm', { planId: item.id }, {});
+            this.proposalValues = { ...(this.proposalForm?.values || {}), planId: item.id };
+            const builder = ODA.createComponent('work-editor-builder');
+            builder.descriptor = this.proposalForm;
+            builder.values = this.proposalValues;
+            builder.addEventListener('change', (e) => {
+                this.proposalValues = e.detail?.values || this.proposalValues;
+                if (e.detail?.id === 'subdomain')
+                    this._refreshPreview(builder);
+            });
+            WORK.showModal(builder, {
+                TITLE: { label: 'Заявка · ' + item.id },
+                BUTTONS: [{
+                    label: 'Отправить',
+                    success: true,
+                    action: async () => this._submitProposal(builder),
+                }],
+            });
+        }
+        catch (e) {
+            console.error(e);
+        }
+    },
+    async _refreshPreview(builder) {
+        const values = await builder.getValues();
+        const check = await WORK.fetch(this.paasOfferingPath, 'validateProposal', {}, values);
+        if (check?.normalized?.url) {
+            values.previewUrl = check.normalized.url;
+            builder.setValues(values);
+        }
+    },
+    async _submitProposal(builder) {
+        if (this.proposalBusy) return false;
+        this.proposalBusy = true;
+        try {
+            const values = await builder.getValues();
+            const check = await WORK.fetch(this.paasOfferingPath, 'validateProposal', {}, values);
+            if (!check?.valid) {
+                builder.setErrors(check.errors || {});
+                return false;
+            }
+            this.proposalResult = await WORK.fetch(this.paasOfferingPath, 'submitProposal', {}, values);
+            this.proposalDone = true;
+            return true;
+        }
+        catch (e) {
+            builder.setErrors({ _form: e.message || String(e) });
+            return false;
+        }
+        finally {
+            this.proposalBusy = false;
+        }
+    },
+    async _askAuth() {
+        if (this._authPop) return;
+        const profile = ODA.createComponent('user-profile');
+        const onAuth = (e) => {
+            if (!(e?.detail?.uid ?? e?.data?.uid)) return;
+            this._closeAuth();
+        };
+        this._onAuth = onAuth;
+        WORK.authEvents?.addEventListener('auth', onAuth);
+        WORK.AUTH_CHANNEL?.addEventListener('message', onAuth);
+        try {
+            const pending = WORK.showModal(profile, {
+                TITLE: { label: 'Вход или регистрация' },
+                allowClose: true,
+                BUTTONS: [],
+            });
+            await Promise.resolve();
+            this._authPop = [...document.querySelectorAll('[popover]')].at(-1) || null;
+            await pending;
+        }
+        catch {}
+        finally {
+            WORK.authEvents?.removeEventListener('auth', onAuth);
+            WORK.AUTH_CHANNEL?.removeEventListener('message', onAuth);
+            this._authPop = null;
+            this._onAuth = null;
+        }
+    },
+    _closeAuth() {
+        const pop = this._authPop;
+        this._authPop = null;
+        try {
+            pop?.fire?.('close', { value: true });
+            pop?.hidePopover?.();
+            pop?.remove?.();
+        }
+        catch {}
+    },
+    detached() {
+        if (this._onAuth) {
+            WORK.authEvents?.removeEventListener('auth', this._onAuth);
+            WORK.AUTH_CHANNEL?.removeEventListener('message', this._onAuth);
+        }
+        this._closeAuth();
+    },
 }
+ODA({
+    is: 'main-page-tariff-card',
+    template: /* html */`
+        <style>
+            :host {
+                @apply --vertical;
+                gap: 10px;
+                padding: 20px;
+                border-radius: 16px;
+                border: 1px solid rgba(255,255,255,0.12);
+                background: rgba(8, 15, 28, 0.45);
+                cursor: pointer;
+                transition: border-color 0.15s, transform 0.15s, background 0.15s;
+                min-height: 280px;
+                box-sizing: border-box;
+            }
+            :host(:hover) {
+                border-color: rgba(94, 234, 212, 0.45);
+                transform: translateY(-2px);
+            }
+            .name { font-size: 1.2rem; font-weight: 700; margin: 0; }
+            .price {
+                font-size: 1.05rem;
+                color: #5eead4;
+                font-weight: 600;
+            }
+            .price small {
+                font-size: 0.75rem;
+                font-weight: 500;
+                color: rgba(232,238,247,0.55);
+            }
+            ul {
+                margin: 0;
+                padding-left: 1.1rem;
+                @apply --flex;
+                @apply --vertical;
+                gap: 6px;
+                font-size: 0.9rem;
+                color: rgba(232,238,247,0.78);
+                line-height: 1.35;
+                flex: 1;
+            }
+        </style>
+        <p class="name">{{item?.id}}</p>
+        <div class="price">{{item?.priceLabel}} <small>{{item?.priceHint}}</small></div>
+        <ul>
+            <li ~for="item?.includes">{{$for.item}}</li>
+        </ul>
+    `,
+    item: null,
+})

@@ -20,7 +20,14 @@ export default {
     set $item(n){
         if(n){
             n.load().then(content=>{
-                this.value = content
+                const base = n.short || n.path || '';
+                const File = CORE.$file || n.constructor;
+                let text = content;
+                if (typeof File.fixWorkMdLinks === 'function')
+                    text = File.fixWorkMdLinks(text, base);
+                if (typeof File.fixMdHistoryLinks === 'function')
+                    text = File.fixMdHistoryLinks(text);
+                this.value = text;
             })
         }
     },

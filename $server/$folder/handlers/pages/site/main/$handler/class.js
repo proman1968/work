@@ -53,5 +53,5 @@ export default {
         return this.$item?.label
             ? `Раздел «${this.$item.label}» в системе WORK.`
             : 'Раздел системы WORK.';
-    }
+    },
 }

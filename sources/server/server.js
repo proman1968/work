@@ -120,8 +120,12 @@ export class $server extends $class {
     getIndexForPage(folder, context){
         let handler = folder;
         let page = handler;
-        while(page?.parent?.type === '$handler')
-            page = page?.parent;
+        // Поднимаемся к корневому handler внутри pages (структура handlers/pages/<page>[/<view>]).
+        // Проверка parent.id !== 'pages' надёжнее проверки type === '$handler',
+        // потому что промежуточные папки (например form) при наследовании могут
+        // иметь тип $folder, если у них нет собственной метапапки $handler.
+        while (page?.parent && page.parent.id !== 'pages')
+            page = page.parent;
         context ??= page.parent?.$parent;
         if(!context)
             throw new Error('Context not found')

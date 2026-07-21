@@ -68,6 +68,7 @@ export default {
             $list: ['tools', 'handlers', 'both']
         },
         hideSystem: false,
+        hideReadme: false,
     },
     items: [],
     get step() {
@@ -92,6 +93,8 @@ export default {
         let items = (await $item?.[this.itemsSelector]) || [];
         if(this.hideSystem)
             items = items.filter(f=>!f.isType)
+        if(this.hideReadme)
+            items = items.filter(f => !/^readme\.md$/i.test(f.id))
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -337,9 +340,11 @@ ODA({is: 'oda-tree-node',
     },
     get items() {
         return new AsyncPromise(async ()=>{
-            let items = (this.$item?.[this.$pdp.itemsSelector] || []);
+            let items = (await this.$item?.[this.$pdp.itemsSelector]) || [];
             if(this.$pdp.hideSystem)
                 items = items.filter(f=>!f.isType)
+            if(this.$pdp.hideReadme)
+                items = items.filter(f => !/^readme\.md$/i.test(f.id))
             this.$item?.addEventListener?.('changed', e=>{
                 this.items = undefined;
                 this.async(async ()=>{
@@ -356,11 +361,12 @@ ODA({is: 'oda-tree-node',
         })
     },
     get expanderIcon() {
+        // expanded/items читать синхронно — иначе ODA не трекает зависимость
+        // (чтение внутри AsyncPromise microtask не инвалидирует геттер)
+        const icon = 'icons:chevron-right' + (this.expanded ? ':90' : '');
+        const itemsPromise = this.items;
         return new AsyncPromise(async ()=>{
-            let icon = 'icons:chevron-right';
-            if (this.expanded)
-                icon += ':90'
-            let items = await this.items;
+            let items = await itemsPromise;
             if (!items?.length)
                 return '';
             return icon;
