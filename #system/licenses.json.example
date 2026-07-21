@@ -1,0 +1,5 @@
+{
+  "privateKey": "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----",
+  "trustAnchors": []
+}

@@ -105,6 +105,8 @@ WORK решает проблему управления организацион
 
 | Путь | Назначение |
 |---|---|
+| `SYS/` | Системный слой: Billing (кошелёк, ЮKassa), Licenses (self-signed `.lic`). PROTECTED-зона |
+| `Offerings/` | Продуктовые услуги: базовый `$offering` (заявки) + PaaS (proposals, provision) |
 | `models/` | AI-модели: GigaChat, z.ai и др. (подключение к внешним LLM) |
 | `services/` | Внешние сервисы: SearXNG, Weather, ArgoCD (интеграции) |
 | `skills/` | Скиллы ИИ: зарегистрированные способности (маршрутизация, исполнение) |

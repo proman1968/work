@@ -435,5 +435,5 @@ export default {
             WORK.authEvents?.removeEventListener('auth', this._boundAuth);
             WORK.AUTH_CHANNEL?.removeEventListener('message', this._boundAuth);
         }
-    }
+    },
 }

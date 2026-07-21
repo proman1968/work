@@ -361,11 +361,12 @@ ODA({is: 'oda-tree-node',
         })
     },
     get expanderIcon() {
+        // expanded/items читать синхронно — иначе ODA не трекает зависимость
+        // (чтение внутри AsyncPromise microtask не инвалидирует геттер)
+        const icon = 'icons:chevron-right' + (this.expanded ? ':90' : '');
+        const itemsPromise = this.items;
         return new AsyncPromise(async ()=>{
-            let icon = 'icons:chevron-right';
-            if (this.expanded)
-                icon += ':90'
-            let items = await this.items;
+            let items = await itemsPromise;
             if (!items?.length)
                 return '';
             return icon;

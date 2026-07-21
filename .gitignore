@@ -4,6 +4,8 @@ node_modules/
 /#system/mail.json
 /#system/vapid_keys.json
 /#system/settings.json
+/#system/licenses.json
+/#system/yookassa.json
 /services/AI/GigaChat/$service/#system/settings.json
 .env
 

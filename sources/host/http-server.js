@@ -9,6 +9,8 @@ import multiparty from 'multiparty';
 import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
+import { verifyWebhook } from './yookassa.js';
+import { recordRequest } from './stats-collector.js';
 
 function sendErrorResponse(response, error) {
     if (DEV_MODE) {
@@ -156,6 +158,15 @@ export function execItemMethod(item, method, params, request) {
     return runMethod();
 }
 
+function readRequestBody(request) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        request.on('data', chunk => chunks.push(chunk));
+        request.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        request.on('error', reject);
+    });
+}
+
 export function createRequestHandler() {
     return async function request_handler(request, response) {
 
@@ -165,6 +176,36 @@ export function createRequestHandler() {
         let user = $server.get_user(cookies.ssid);
         const url = new URL(`https://${request.headers.host || HOST}` + request.url);
         let path = decodeURIComponent(url.pathname);
+
+        recordRequest({ bytesIn: Number(request.headers['content-length'] || 0) });
+
+        if (request.method === 'POST' && path === '/api/billing/yookassa/webhook') {
+            const raw = await readRequestBody(request);
+            let body;
+            try { body = JSON.parse(raw); }
+            catch { body = {}; }
+            let ykConfig = {};
+            try {
+                ykConfig = await WORK.read_secret({ name: 'yookassa', user: globalThis.WORK }) || {};
+            }
+            catch {}
+            const check = verifyWebhook(body, request.headers, ykConfig);
+            if (!check.ok) {
+                response.writeHead(400, { 'Content-Type': 'application/json' });
+                response.end(JSON.stringify({ error: check.reason }));
+                return;
+            }
+            const billing = await WORK.get_item('/SYS/Billing', 0, undefined, { user: globalThis.WORK });
+            const methods = await billing?._methods;
+            await methods?.creditWallet?.execute({ user: globalThis.WORK, $context: billing }, {
+                event: check.event,
+                paymentId: check.payment?.id,
+                object: check.payment,
+            });
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ ok: true }));
+            return;
+        }
 
         // console.log(request.url)
 
