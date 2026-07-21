@@ -2,9 +2,8 @@
 
 ## Последние изменения
 
-- [22.07.2026] UI: AskQuestion options — native HTML в `microchat-view-task` (без `oda-chat-form`); `item` get/set через `_taskItem`. Данные questions были, UI form не рисовался.
-- [22.07.2026] UI: AskQuestion рисуется inline в task (`openAsk` + `oda-chat-form`); починен get/set `questions` (пустой ~for). Nested ribbon больше не прячет options.
-- [22.07.2026] UI: nested AskQuestion был с высотой 0 (`microchat-ribbon` flex:1 внутри task) — `embedded` + авто-раскрытие task; options снова видны под «1/4».
+- [22.07.2026] UI: откат костылей (`_taskItem` / native ask / openAsk) — ломали план; оставлены `item: null`, `collapsed: false`, nested `embedded` + get/set `questions` у `oda-chat-form`.
+- [22.07.2026] Do после «Уточнить»: `write_file`/`read_file` в списке FC; clarify→done; GigaChat FC + AskQuestion select inject.
 - [22.07.2026] Do после «Уточнить»: `write_file`/`read_file` в списке FC (раньше не было в get_schema); clarify-шаг → done + next; пустые answers не гонят LLM; nested history без дубля system.
 - [22.07.2026] Function calling + Cursor AskQuestion: GigaChat Light/Pro `functionCalling: true`; idle clarify → select+options (не text «Что уточнить?»); `MAX_IDLE_PROPOSE=1`; preview radio options.
 - [22.07.2026] MVP harness: контекст пары user/class (readme, .mem, логи) + ACL USER/BOSS/ADMIN + confirm для ADMIN system-modify — агент видит факты операций и не пишет мимо роли; вход через `triggers/on_save`, не file-handlers.

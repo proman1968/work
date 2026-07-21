@@ -31,7 +31,7 @@
 - ✅ GigaChat Light/Pro: `functionCalling: true` (tools уходят в API)
 - ✅ Контекст пары class+user (readme, .mem, логи)
 - ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN modify
-- ✅ Preview: action / form / questions (AskQuestion native options в task)
+- ✅ Preview: action / form / questions (nested `embedded`, form questions get/set)
 - 🔧 spawn_agent / skills как tools harness
 - ❌ host file-handlers / skill-router (запрещены как костыль)
 
