@@ -285,7 +285,9 @@ export default {
             ? await loadContextBundle(userStorage, logWindow)
             : { readme: '', mem: '', logs: '', path: '' };
         const contextInfo = await buildContextInfo(initialContext, params.user);
-        const roleLine = params.role ? ('Роль: ' + params.role + '\n') : '';
+        const role = normalizeRole(params.role);
+        body.role = role;
+        const roleLine = 'Роль: ' + role + '\n';
         const geoInfo = await getGeoByIp();
         body.context = roleLine + contextInfo + (geoInfo || '');
         body.classBundle = classBundle;
@@ -504,23 +506,45 @@ export default {
                     break;
             }
 
-            // === Проверка опасных методов ===
+            // === ACL роли: не-ADMIN не меняет типизаторы / class.js ===
+            const role = normalizeRole(body.role || params.role);
+            const allowedCalls = [];
+            for (const call of toolCalls) {
+                const block = roleBlocksTool(role, call);
+                if (block) {
+                    pushToolResult(ribbonTarget, call, { error: block }, model);
+                    sendToolResultWs(wsPath, call, { error: block });
+                } else {
+                    allowedCalls.push(call);
+                }
+            }
+            toolCalls = allowedCalls;
+            if (!toolCalls.length) {
+                await writeTaskBody(fullPath, body);
+                continue;
+            }
+
+            // === Подтверждение: dangerous (trust) или ADMIN system-modify ===
             const trustLevel = Number(model.trustLevel || 0);
             const hasDangerous = toolCalls.some(c => DANGEROUS_METHODS.includes(c.method));
+            const hasSystemModify = toolCalls.some(isSystemModifyCall);
+            const needsConfirm = (hasDangerous && trustLevel < TRUST_AUTOCONFIRM)
+                || (role === 'ADMIN' && hasSystemModify);
 
-            if (hasDangerous && trustLevel < TRUST_AUTOCONFIRM) {
-                // Сохранить вызовы в pendingAction, запросить подтверждение
+            if (needsConfirm) {
                 body.pendingAction = {
                     calls: toolCalls,
                     contextPath: currentContext.path || '',
                 };
                 const descLines = toolCalls
-                    .filter(c => DANGEROUS_METHODS.includes(c.method))
+                    .filter(c => DANGEROUS_METHODS.includes(c.method) || isSystemModifyCall(c))
                     .map(c => '• ' + c.method + '(' + Object.keys(c.args || {}).join(', ') + ')');
                 WORK.wsSend?.({
                     type: 'chat.action',
                     path: wsPath,
-                    label: 'Подтвердить действия',
+                    label: role === 'ADMIN' && hasSystemModify
+                        ? 'Подтвердить изменение класса'
+                        : 'Подтвердить действия',
                     description: descLines.join('\n'),
                 });
                 await writeTaskBody(fullPath, body);
@@ -899,10 +923,11 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
     const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
 
-    // 1. System prompt: базовый + контекст + пара class/user
+    // 1. System prompt: базовый + контекст + пара class/user + ACL роли
     let systemContent = body.system || '';
     if (body.context)
         systemContent += '\n\n## Текущий контекст\n' + body.context;
+    systemContent += formatRoleAclForSystem(body.role);
     systemContent += formatPairContextForSystem(body.classBundle, body.userBundle, {
         mem: body.mem,
         readme: body.readme,
@@ -1501,6 +1526,10 @@ export {
     formatLogSummary,
     formatPairContextForSystem,
     normalizeLogWindow,
+    normalizeRole,
+    formatRoleAclForSystem,
+    isSystemModifyCall,
+    roleBlocksTool,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -1800,6 +1829,69 @@ function parseToolCalls(text, functions = []) {
     }
 
     return calls;
+}
+
+/** Канонические роли WORK */
+function normalizeRole(role) {
+    const r = String(role || 'USER').toUpperCase().trim();
+    if (r === 'ADMIN' || r === 'BOSS' || r === 'USER')
+        return r;
+    return 'USER';
+}
+
+/**
+ * Политика роли для system prompt (USER / BOSS / ADMIN).
+ * @param {string} role
+ */
+function formatRoleAclForSystem(role) {
+    const r = normalizeRole(role);
+    let out = '\n\n## Права роли (' + r + ')\n';
+    out += 'Действуй строго в зоне роли. Tools вызываются с role=' + r + '. Не повышай роль.\n';
+    if (r === 'ADMIN') {
+        out += 'ADMIN: можно наращивать класс (class.js, handlers, methods, triggers, структура метапапки).\n';
+        out += 'MODIFY-PATH: при изменении типизаторов/системы сначала <plan> + «Начать», затем tools; опасные/system-modify ждут confirm пользователя.\n';
+        out += 'Не правь sources/ ядра без явного запроса и отдельного подтверждения.\n';
+    } else if (r === 'BOSS') {
+        out += 'BOSS: цели и процессы узла, рабочие артефакты управленческой зоны. Запрещено: class.js, handlers/triggers типизаторов, #system/secrets.\n';
+        out += 'Изменение системы класса — только через ADMIN.\n';
+    } else {
+        out += 'USER: личная рабочая зона ($work кабинета), свои файлы и логи. Запрещено: типизаторы класса, class.js, handlers, системные $-элементы.\n';
+    }
+    return out;
+}
+
+/**
+ * Вызов меняет типизатор / class.js / handlers (нужен ADMIN + confirm).
+ * @param {{ method?: string, args?: object }} call
+ */
+function isSystemModifyCall(call) {
+    if (!call?.method)
+        return false;
+    if (call.method === 'save')
+        return true;
+    const p = String(
+        call.args?.name || call.args?.filename || call.args?.path || call.args?.target || '',
+    );
+    if (!p)
+        return false;
+    if (/class\.js$/i.test(p))
+        return true;
+    if (/(^|\/)(\$|handlers\/|triggers\/|methods\/)/i.test(p))
+        return true;
+    return false;
+}
+
+/**
+ * Блок для не-ADMIN при попытке system-modify.
+ * @returns {string|null} текст ошибки или null
+ */
+function roleBlocksTool(role, call) {
+    const r = normalizeRole(role);
+    if (r === 'ADMIN')
+        return null;
+    if (isSystemModifyCall(call))
+        return 'Роль ' + r + ': изменение типизаторов/class.js/handlers только для ADMIN';
+    return null;
 }
 
 /**
