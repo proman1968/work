@@ -20,8 +20,14 @@ import * as https from 'node:https';
 
 const ROOT = process.cwd();
 const MAX_ITERATIONS = 10;
+const MAX_IDLE_DO = Infinity; // idle retry до общего maxIter; не сдаёмся early
+const MAX_IDLE_PROPOSE = 2; // пустые Do на clarify → inject questions, не maxIter
+const CONTEXT_LOG_DAYS = 7;
+const CONTEXT_LOG_MAX_ROWS = 60;
+const CONTEXT_LOG_LINE_MAX = 160;
 // Опасные методы — требуют подтверждения через <action> при trustLevel < 3
 const DANGEROUS_METHODS = ['write_file', 'set_property', 'save_file', 'delete', 'create'];
+const ASK_USER_METHOD = 'ask_user';
 // Уровень доверия для автоподтверждения опасных действий
 const TRUST_AUTOCONFIRM = 3;
 
@@ -162,21 +168,29 @@ export default {
             const actionRibbon = open?.ribbon || body.ribbon;
             const acceptLabel = openAction?.button?.label || 'Начать';
             const textNorm = String(text || '').trim().toLowerCase();
-            const acceptWords = ['начать', 'да', 'продолжить', 'ок', 'подтвердить', 'принять'];
+            const acceptWords = ['начать', 'да', 'продолжить', 'ок', 'подтвердить', 'принять', 'выполнить', 'уточнить'];
             const rejectWords = ['нет', 'отмена', 'отменить', 'отказ'];
             const textIsAccept = textNorm && (
                 acceptWords.some(w => textNorm.includes(w)) || textNorm === acceptLabel.toLowerCase()
             );
             const textIsReject = textNorm && rejectWords.some(w => textNorm === w || textNorm.startsWith(w));
             const isAcceptPlan = body.pendingPlan && (confirm === true || textIsAccept);
-            const isFormSubmit = !body.pendingPlan && openAction?.fields?.length
+            const isFormSubmit = !body.pendingPlan
+                && (openAction?.type === 'form' || openAction?.type === 'questions' || openAction?.fields?.length)
                 && (confirm === true || textIsAccept);
-            const isAcceptFinal = !body.pendingPlan && !isFormSubmit && openAction
+            const finalLabel = openAction?.button?.label || '';
+            const isAcceptFinal = !body.pendingPlan && !isFormSubmit && openAction?.type === 'action'
+                && (/принять|готово/i.test(finalLabel) || openAction.title === 'Отчёт')
+                && (confirm === true || textIsAccept);
+            // «Выполнить» / confirm шага — только action без fields
+            const isStepConfirm = !body.pendingPlan && !isFormSubmit && !isAcceptFinal
+                && openAction?.type === 'action'
+                && !/^начать\??$/i.test(finalLabel)
                 && (confirm === true || textIsAccept);
             const isReject = (body.pendingPlan || openAction) && (confirm === false || textIsReject);
 
             if (isAcceptPlan) {
-                const promptContent = text?.trim() || acceptLabel;
+                const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 // Факт согласия — в корневой ленте (перед task)
                 pushClosingPrompt(body.ribbon, promptContent, sender, answers);
                 text = ''; // не дублировать prompt в §7
@@ -198,24 +212,35 @@ export default {
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isFormSubmit) {
-                // Ответы на поля action — prompt с answers, продолжаем LLM
-                const promptContent = text?.trim() || acceptLabel;
+                // Ответы на поля — prompt только Q:A; блок формы закрываем
+                const promptContent = formatPromptWithAnswers('', answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
-                // Зафиксировать value в fields открытого action
                 if (answers && openAction.fields) {
                     for (const f of openAction.fields) {
                         if (answers[f.id] !== undefined)
                             f.value = answers[f.id];
                     }
                 }
+                openAction.answered = true;
+                text = '';
+                await writeTaskBody(fullPath, body);
+                notifyChanged(fullPath);
+            } else if (isStepConfirm) {
+                const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
+                pushClosingPrompt(actionRibbon, promptContent, sender, answers);
                 text = '';
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isAcceptFinal) {
-                // «Принять» по завершённому task — закрывающий prompt в той же ленте, что action
-                const promptContent = text?.trim() || acceptLabel;
+                // «Принять» — задача выполнена
+                const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
                 text = '';
+                const doneTask = activeTaskFind(body)
+                    || [...(body.ribbon || [])].reverse().find(b => b.type === 'task' && b.state === 'completed');
+                if (doneTask)
+                    doneTask.state = 'completed';
+                body.pendingPlan = null;
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
                 WORK.wsSend?.({ type: 'chat.done', path: wsPath });
@@ -229,7 +254,7 @@ export default {
                 notifyChanged(fullPath);
                 WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                 return { ok: true, rejected: true };
-            } else if ((openAction || body.pendingPlan) && text && !isAcceptPlan && !isFormSubmit) {
+            } else if ((openAction || body.pendingPlan) && text && !isAcceptPlan && !isFormSubmit && !isStepConfirm) {
                 // Любой другой prompt закрывает открытый action; план снимаем
                 body.pendingPlan = null;
             } else if ((openAction || body.pendingPlan) && !text && confirm === undefined) {
@@ -252,25 +277,41 @@ export default {
             }
         }
 
-        // === 8. Загрузка контекста, памяти, readme ===
-        const memContent = await loadMemFiles(initialContext);
-        const readmeContent = await loadReadme(initialContext);
+        // === 8. Контекст пары class + user (readme, mem, логи) ===
+        const logWindow = normalizeLogWindow(body.logWindow);
+        const classBundle = await loadContextBundle(initialContext, logWindow);
+        const userStorage = await resolveUserStorage(params);
+        const userBundle = userStorage && userStorage !== initialContext
+            ? await loadContextBundle(userStorage, logWindow)
+            : { readme: '', mem: '', logs: '', path: '' };
         const contextInfo = await buildContextInfo(initialContext, params.user);
+        const roleLine = params.role ? ('Роль: ' + params.role + '\n') : '';
         const geoInfo = await getGeoByIp();
-        body.context = contextInfo + (geoInfo || '');
-        body.mem = memContent;
-        body.readme = readmeContent;
+        body.context = roleLine + contextInfo + (geoInfo || '');
+        body.classBundle = classBundle;
+        body.userBundle = userBundle;
+        // legacy поля — класс (совместимость)
+        body.mem = classBundle.mem || '';
+        body.readme = classBundle.readme || '';
 
         // === 9. Основной цикл tool-call ===
         let iteration = 0;
         let lastResponse = '';
+        let idleDoStreak = 0;
+        let forceDoReminder = false;
 
         while (iteration < maxIter) {
             iteration++;
-            const messages = buildHistoryFromRibbon(body, model.functionCalling === true);
+            const messages = buildHistoryFromRibbon(body, model.functionCalling === true, { forceDoReminder });
+            forceDoReminder = false;
 
             // Построение functions из схемы методов контекста
             let functions = await buildFunctionsList(currentContext);
+            if (activeTaskFind(body)) {
+                console.log('[task.ai] Do: functions', functions.length, currentContext?.path || currentContext?.type || '');
+                if (!functions.length)
+                    console.warn('[task.ai] Do: functions empty for context', currentContext?.path || currentContext?.type);
+            }
 
             let fullResponse = '';
             let toolCalls = [];
@@ -325,55 +366,120 @@ export default {
                 let blocks = parsed.blocks || [];
                 const activeTask = [...body.ribbon].reverse().find(b => b.type === 'task' && b.state === 'active');
                 let waitingForUser = false;
+                // Do: не коммитим steps до выхода из idle — усечённый <plan> не должен схлопывать UI
+                let deferredDoSteps = null;
 
                 if (parsed.pendingPlan) {
                     if (activeTask) {
-                        // Do-фаза: обновляем steps, не предлагаем снова «Начать»
-                        activeTask.steps = parsed.pendingPlan.steps;
-                        const allDone = parsed.pendingPlan.steps.every(s => s.status === 'done');
+                        // Do-фаза: merge preview; commit после idle-check
+                        const merged = normalizePlanSteps(activeTask.steps, parsed.pendingPlan.steps);
+                        parsed.pendingPlan.steps = merged;
+                        const allDone = merged.every(s => s.status === 'done');
                         if (allDone) {
+                            activeTask.steps = merged;
                             activeTask.state = 'completed';
-                            blocks = blocks.filter(b => b.type !== 'action' || b.fields?.length);
-                            if (!blocks.some(b => b.type === 'action' && !b.fields?.length)) {
-                                blocks.push({
-                                    type: 'action',
-                                    title: '',
-                                    content: formatPlanMarkdown(parsed.pendingPlan.steps, 'Принять результат?'),
-                                    button: { label: 'Принять', color: 'success' },
-                                    time: Date.now(),
-                                    sender: model.path || 'WORK',
-                                });
+                            deferredDoSteps = null;
+                            blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: true });
+                            for (const a of blocks.filter(b => b.type === 'action')) {
+                                if (!a.content)
+                                    a.content = formatPlanMarkdown(activeTask.steps, 'Принять результат?');
+                                a.title = 'Отчёт';
+                                a.time = a.time || Date.now();
+                                a.sender = a.sender || model.path || 'WORK';
                             }
                             waitingForUser = true;
                             WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
+                            WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: merged });
                         } else {
-                            // Исполнение: убрать повторный «Начать», оставить action с fields
-                            blocks = blocks.filter(b => b.type !== 'action' || b.fields?.length);
-                            if (blocks.some(b => b.type === 'action' && b.fields?.length))
+                            deferredDoSteps = merged;
+                            blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: false });
+                            if (blocks.some(isInteractiveBlock))
                                 waitingForUser = true;
                         }
                     } else {
+                        // Plan-фаза: action title План / Начать
+                        parsed.pendingPlan.steps = normalizeProposedSteps(parsed.pendingPlan.steps);
                         body.pendingPlan = parsed.pendingPlan;
-                        waitingForUser = blocks.some(b => b.type === 'action') || true;
-                    }
-                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: parsed.pendingPlan.steps });
-                } else if (blocks.some(b => b.type === 'action') && !activeTask) {
-                    waitingForUser = true;
-                } else if (blocks.some(b => b.type === 'action') && activeTask) {
-                    // action в task: оставить form-fields или «Принять»; иначе убрать
-                    const keep = blocks.filter(b =>
-                        b.type === 'action' && (
-                            b.fields?.length
-                            || /принять|готово/i.test(b.button?.label || '')
-                        )
-                    );
-                    const nonAction = blocks.filter(b => b.type !== 'action');
-                    if (keep.length) {
-                        blocks = [...nonAction, ...keep];
+                        blocks = normalizeInteractiveBlocks(blocks, { phase: 'plan' });
+                        for (const a of blocks.filter(b => b.type === 'action')) {
+                            a.title = 'План';
+                            a.time = a.time || Date.now();
+                            a.sender = a.sender || model.path || 'WORK';
+                            if (!a.content && parsed.pendingPlan.steps?.length)
+                                a.content = formatPlanMarkdown(parsed.pendingPlan.steps, '');
+                        }
                         waitingForUser = true;
-                    } else {
-                        blocks = nonAction;
+                        WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: parsed.pendingPlan.steps });
                     }
+                } else if (blocks.some(isInteractiveBlock) && !activeTask) {
+                    blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: false });
+                    if (blocks.some(isInteractiveBlock))
+                        waitingForUser = true;
+                } else if (blocks.some(isInteractiveBlock) && activeTask) {
+                    const allDone = activeTask.steps?.length && activeTask.steps.every(s => s.status === 'done');
+                    blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone });
+                    if (blocks.some(isInteractiveBlock))
+                        waitingForUser = true;
+                }
+
+                toolCalls = nativeToolCalls;
+                if (toolCalls.length === 0)
+                    toolCalls = parseToolCalls(fullResponse, functions);
+
+                // ask_user → questions + waitingForUser (как Cursor AskQuestion)
+                const askCall = toolCalls.find(c => c.method === ASK_USER_METHOD);
+                if (askCall) {
+                    const qBlock = questionsFromAskUser(askCall.args, model.path || 'WORK');
+                    blocks = normalizeInteractiveBlocks(
+                        [...blocks.filter(b => b.type !== 'questions' && b.type !== 'form'), qBlock],
+                        { phase: 'do', allDone: false },
+                    );
+                    waitingForUser = blocks.some(isInteractiveBlock);
+                    toolCalls = [];
+                }
+
+                // Idle Do: крутим до maxIter с forceDoReminder (questions или tools)
+                if (toolCalls.length === 0 && !waitingForUser && shouldContinueDo(activeTask, waitingForUser, toolCalls)) {
+                    if (!functions.length) {
+                        ribbonTarget.push({
+                            type: 'error',
+                            content: 'Нет доступных инструментов в текущем контексте — план нельзя выполнить.',
+                            time: Date.now(),
+                            sender: model.path || 'WORK',
+                        });
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                        return { ok: false, error: 'no_tools' };
+                    }
+                    idleDoStreak++;
+                    const phase = getDoStepPhase(activeTask);
+                    const cur = activeTask.steps?.find(s => s.status === 'in_progress')
+                        || activeTask.steps?.find(s => s.status === 'proposed');
+                    // Inject только в propose — не после уже данных ответов (execute + clarify-step)
+                    if (phase === 'propose' && idleDoStreak >= MAX_IDLE_PROPOSE) {
+                        if (deferredDoSteps)
+                            activeTask.steps = deferredDoSteps;
+                        ribbonTarget.push(makeClarifyQuestions(
+                            activeTask.steps?.find(s => s.status === 'in_progress')
+                                || activeTask.steps?.find(s => s.status === 'proposed')
+                                || cur,
+                            model.path || 'WORK',
+                        ));
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                        return { ok: true, pendingActionConfirm: true };
+                    }
+                    // Idle retry: без write/notify — иначе UI моргает; steps не коммитим
+                    forceDoReminder = true;
+                    continue;
+                }
+
+                idleDoStreak = 0;
+                if (deferredDoSteps && activeTask && activeTask.state === 'active') {
+                    activeTask.steps = deferredDoSteps;
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: deferredDoSteps });
                 }
 
                 for (const block of blocks) {
@@ -393,10 +499,6 @@ export default {
                     WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                     return { ok: true, pendingPlan: !!body.pendingPlan, pendingActionConfirm: true };
                 }
-
-                toolCalls = nativeToolCalls;
-                if (toolCalls.length === 0)
-                    toolCalls = parseToolCalls(fullResponse, functions);
 
                 if (toolCalls.length === 0)
                     break;
@@ -505,7 +607,66 @@ async function buildFunctionsList(currentContext) {
         console.warn('[task.ai] services load:', e.message);
     }
 
+    // Уточнение у пользователя — как Cursor AskQuestion (вопросы + options)
+    if (!functions.find(fn => fn.name === ASK_USER_METHOD)) {
+        functions.push({
+            name: ASK_USER_METHOD,
+            description: 'Уточняющие вопросы с вариантами ответа (AskQuestion). PROPOSE: вызови с questions[].options (2–5 вариантов). Не «Начать», не textarea без options.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    questions: {
+                        type: 'array',
+                        description: 'Вопросы: id, prompt, options (строки, 2–5)',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                prompt: { type: 'string', description: 'Текст вопроса' },
+                                options: { type: 'array', items: { type: 'string' } },
+                                allow_multiple: { type: 'boolean' },
+                            },
+                            required: ['id', 'prompt', 'options'],
+                        },
+                    },
+                    fields: {
+                        type: 'array',
+                        description: 'Legacy: id, label, type, options',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                label: { type: 'string' },
+                                type: { type: 'string' },
+                                options: { type: 'array', items: { type: 'string' } },
+                            },
+                        },
+                    },
+                    question: { type: 'string', description: 'Один вопрос без options (нежелательно)' },
+                    label: { type: 'string', description: 'Текст кнопки (Уточнить)' },
+                },
+            },
+        });
+    }
+
     return functions;
+}
+
+/**
+ * Params для вызова метода из tool_call: ACL role как у пользователя.
+ * @param {object} call — { method, args }
+ * @param {object} params — inbound prompt params (user, role)
+ * @param {object} [opts]
+ * @param {object} [opts.aiUser] — если задан, user = aiUser (логи write_file)
+ */
+function buildToolMethodParams(call, params, opts = {}) {
+    const args = (call && call.args && typeof call.args === 'object') ? call.args : {};
+    const out = { ...args, role: params?.role };
+    if (opts.aiUser)
+        out.user = opts.aiUser;
+    else
+        out.user = params?.user;
+    return out;
 }
 
 /**
@@ -514,7 +675,7 @@ async function buildFunctionsList(currentContext) {
  * @param {object} currentContext — текущий контекст
  * @param {object} initialContext — домашний контекст (для reset_context)
  * @param {Array} functions — список доступных функций
- * @param {object} params — параметры запроса (с user)
+ * @param {object} params — параметры запроса (с user, role)
  * @param {object} aiUser — пользователь от лица модели
  * @returns {Promise<{result: any, newContext: object}>}
  */
@@ -522,6 +683,9 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
     let result;
 
     try {
+        if (call.method === ASK_USER_METHOD)
+            return { result: { ok: true, deferred: 'ask_user' }, newContext: currentContext };
+
         // Методы сервисов — маршрутизация через _servicePath
         const svcFn = functions.find(fn => fn.name === call.method && fn._servicePath);
         if (svcFn) {
@@ -529,7 +693,7 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
                 const svcItem = await WORK.get_item(svcFn._servicePath);
                 const svcFnMethod = svcItem[call.method];
                 if (typeof svcFnMethod === 'function') {
-                    result = await svcFnMethod.call(svcItem, call.args || {});
+                    result = await svcFnMethod.call(svcItem, buildToolMethodParams(call, params));
                 } else {
                     result = { error: 'Метод ' + call.method + ' не реализован' };
                 }
@@ -562,7 +726,7 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
         } else {
             const fn = currentContext[call.method];
             if (typeof fn === 'function') {
-                result = await fn.call(currentContext, { ...call.args, user: params.user });
+                result = await fn.call(currentContext, buildToolMethodParams(call, params));
             } else if (fn !== undefined) {
                 result = await fn;
             } else {
@@ -619,12 +783,11 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
         const fileName = String(call.args.name);
         const content = call.args.content ?? '';
         try {
-            const saveResult = await currentContext.save_file?.({
-                filename: fileName,
-                post: String(content),
-                encoding: 'utf-8',
-                user: aiUser,
-            });
+            const saveResult = await currentContext.save_file?.(buildToolMethodParams(
+                { method: 'save_file', args: { filename: fileName, post: String(content), encoding: 'utf-8' } },
+                params,
+                { aiUser },
+            ));
             const resultPath = saveResult?.path || saveResult?.logPath || '';
             result = { success: true, message: 'Файл сохранён: ' + fileName, path: resultPath, resultPath };
         } catch (e) {
@@ -732,17 +895,18 @@ function notifyChanged(fullPath) {
  * @param {boolean} useFunctionCalling — использовать нативный формат function calling
  * @returns {Array} — массив сообщений для streamChat
  */
-function buildHistoryFromRibbon(body, useFunctionCalling = false) {
+function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
+    const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
 
-    // 1. System prompt: базовый + контекст + память + readme
+    // 1. System prompt: базовый + контекст + пара class/user
     let systemContent = body.system || '';
     if (body.context)
         systemContent += '\n\n## Текущий контекст\n' + body.context;
-    if (body.mem)
-        systemContent += '\n\n## Память (.mem)\n' + body.mem;
-    if (body.readme)
-        systemContent += '\n\n## Описание класса (readme.md)\n' + body.readme;
+    systemContent += formatPairContextForSystem(body.classBundle, body.userBundle, {
+        mem: body.mem,
+        readme: body.readme,
+    });
     if (body.pendingPlan?.steps)
         systemContent += '\n\n## Предложенный план (ожидает подтверждения пользователем)\n' + JSON.stringify(body.pendingPlan.steps);
 
@@ -750,13 +914,25 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false) {
     if (activeTask) {
         const cur = activeTask.steps?.find(s => s.status === 'in_progress')
             || activeTask.steps?.find(s => s.status === 'proposed');
+        const phase = getDoStepPhase(activeTask);
         systemContent += '\n\n## Исполнение задачи (Do)\n';
         systemContent += 'Активный план: «' + (activeTask.label || 'План') + '».\n';
         systemContent += 'Шаги: ' + JSON.stringify(activeTask.steps || []) + '\n';
         if (cur)
-            systemContent += 'Сейчас выполняй шаг ' + cur.step + ': «' + cur.description + '».\n';
-        systemContent += 'Начни с <reasoning>, затем действуй (tool calls). НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
-        systemContent += 'Обновляй <plan> со статусами шагов после прогресса. <action> «Принять» — только когда все steps status:"done".\n';
+            systemContent += 'Сейчас шаг ' + cur.step + ': «' + cur.description + '».\n';
+        systemContent += 'PDCA: после confirm («Начать»/форма/«Выполнить») сразу tool calls по текущему шагу; questions — только если без данных нельзя.\n';
+        systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
+        systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
+        if (phase === 'execute')
+            systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (write_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
+        else if (phase === 'propose')
+            systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не write_file до ответов.\n';
+        if (forceDoReminder) {
+            if (phase === 'propose')
+                systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не write_file.\n';
+            else
+                systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови write_file (или другой tool) для текущего шага. Не повторяй только reasoning и не ставь «Начать».\n';
+        }
     }
     if (systemContent)
         messages.push({ role: 'system', content: systemContent });
@@ -792,7 +968,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false) {
             continue;
 
         // Action — UI-кнопка, в LLM не шлём
-        if (entry.type === 'action')
+        if (entry.type === 'action' || entry.type === 'form' || entry.type === 'questions')
             continue;
 
         // Ошибка
@@ -877,13 +1053,15 @@ function findOpenActionFlat(ribbon) {
         const b = ribbon[i];
         if (b.type === 'prompt' || b.role === 'user')
             return null;
-        if (b.type === 'action')
+        if (b.type === 'action' || b.type === 'form' || b.type === 'questions') {
+            if (b.answered) continue;
             return b;
+        }
     }
     return null;
 }
 
-/** Открытый action = последний action, после которого нет prompt (корневая лента или ribbon task).
+/** Открытый interactive = последний action|form|questions без последующего prompt.
  *  @returns {{ action: object, ribbon: array }|null}
  */
 function findOpenAction(ribbon) {
@@ -909,16 +1087,426 @@ function pushClosingPrompt(ribbon, content, sender, answers) {
     }
 }
 
-/** Первый шаг in_progress, остальные proposed (кроме уже done) */
-function prepareStepsForStart(steps) {
-    if (!Array.isArray(steps)) return [];
-    return steps.map((s, i) => {
-        const step = { ...s };
-        if (step.status === 'done') return step;
-        step.status = i === 0 ? 'in_progress' : 'proposed';
-        return step;
-    });
+/** Ответы формы: только «вопрос: ответ» (без label кнопки). Без answers — label как есть. */
+function formatPromptWithAnswers(label, answers, fields) {
+    const head = String(label || '').trim();
+    if (!answers || typeof answers !== 'object')
+        return head;
+    const byId = Array.isArray(fields)
+        ? Object.fromEntries(fields.map(f => [f.id, String(f.label || f.id).replace(/[:：]+\s*$/, '')]))
+        : {};
+    const lines = [];
+    for (const [id, v] of Object.entries(answers)) {
+        if (v === undefined || v === null || String(v).trim() === '')
+            continue;
+        lines.push((byId[id] || id) + ': ' + v);
+    }
+    if (!lines.length)
+        return head;
+    return lines.join('\n');
 }
+
+const INTERACTIVE_TYPES = new Set(['action', 'form', 'questions']);
+
+function isInteractiveBlock(b) {
+    return b && INTERACTIVE_TYPES.has(b.type);
+}
+
+/** Do: оставить form/questions с fields; action без «Начать» / голого «Уточнить» */
+function keepDoInteractive(b) {
+    if (!isInteractiveBlock(b)) return false;
+    if (b.type === 'form' || b.type === 'questions')
+        return !!(b.fields?.length);
+    const label = String(b.button?.label || '').trim();
+    if (/^начать\??$/i.test(label)) return false;
+    if (/^(уточнить|продолжить)$/i.test(label)) return false;
+    return !!label;
+}
+
+/**
+ * Нормализация интерактивных блоков: action | form | questions.
+ * @param {Array} blocks
+ * @param {{ phase: 'plan'|'do', allDone?: boolean }} opts
+ */
+function normalizeInteractiveBlocks(blocks, opts = {}) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    const phase = opts.phase === 'do' ? 'do' : 'plan';
+    const allDone = !!opts.allDone;
+    const out = [];
+
+    for (const b of list) {
+        if (!isInteractiveBlock(b)) {
+            out.push(b);
+            continue;
+        }
+
+        if (b.type === 'form' || b.type === 'questions') {
+            if (phase === 'plan' || allDone)
+                continue; // уточнение/форма — не на Plan и не на Отчёте
+            if (!b.fields?.length)
+                continue;
+            const block = {
+                ...b,
+                button: { ...(b.button || {}) },
+            };
+            if (b.type === 'questions' && !String(block.button.label || '').trim())
+                block.button.label = 'Уточнить';
+            if (b.type === 'form' && !String(block.button.label || '').trim())
+                block.button.label = 'Продолжить';
+            block.button.color = block.button.color || 'success';
+            out.push(block);
+            continue;
+        }
+
+        // legacy: action с fields → questions
+        if (b.type === 'action' && b.fields?.length && phase === 'do' && !allDone) {
+            out.push({
+                ...b,
+                type: 'questions',
+                button: {
+                    ...(b.button || {}),
+                    label: b.button?.label || 'Уточнить',
+                    color: b.button?.color || 'success',
+                },
+            });
+            continue;
+        }
+
+        // action — только подтверждение, без fields
+        const action = {
+            ...b,
+            type: 'action',
+            button: { ...(b.button || {}) },
+        };
+        delete action.fields;
+
+        if (phase === 'plan') {
+            action.title = 'План';
+            action.button.label = 'Начать';
+            action.button.color = action.button.color || 'success';
+            out.push(action);
+            continue;
+        }
+        if (allDone) {
+            action.title = 'Отчёт';
+            action.button.label = 'Принять';
+            action.button.color = action.button.color || 'success';
+            out.push(action);
+            continue;
+        }
+        if (!keepDoInteractive(action))
+            continue;
+        action.title = action.title || 'Действие';
+        if (!String(action.button.label || '').trim())
+            action.button.label = 'Выполнить';
+        action.button.color = action.button.color || 'success';
+        out.push(action);
+    }
+
+    if (phase === 'plan' && !out.some(b => b.type === 'action')) {
+        out.push({
+            type: 'action',
+            title: 'План',
+            content: '',
+            button: { label: 'Начать', color: 'success' },
+        });
+    }
+    if (phase === 'do' && allDone && !out.some(b => b.type === 'action')) {
+        out.push({
+            type: 'action',
+            title: 'Отчёт',
+            content: 'Принять результат?',
+            button: { label: 'Принять', color: 'success' },
+        });
+    }
+    return out;
+}
+
+/** @deprecated alias */
+function keepDoAction(b) {
+    return keepDoInteractive(b);
+}
+
+/** @deprecated alias */
+function normalizeActionBlocks(blocks, opts) {
+    return normalizeInteractiveBlocks(blocks, opts);
+}
+
+/**
+ * Активная task в корневой ленте (Do).
+ * @returns {object|undefined}
+ */
+function activeTaskFind(body) {
+    return (body?.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
+}
+
+/**
+ * Шаг уточнения данных (форма), не исполнение tools.
+ * @param {{ description?: string }} step
+ */
+function stepNeedsClarify(step) {
+    const d = String(step?.description || '');
+    return /уточн|спроси|тема|выбор|параметр|данн/i.test(d);
+}
+
+/** Boilerplate prose/title опросника — не показывать */
+function stripBoilerplateContent(text) {
+    const t = String(text || '').trim();
+    if (!t) return '';
+    if (/^(уточнение|уточните параметры|заполните поля|уточните данные)\.?$/i.test(t))
+        return '';
+    return t;
+}
+
+/**
+ * Fallback-опросник (после idle propose): короткий вопрос, не dump шага.
+ * @param {{ description?: string }} step
+ * @param {string} [sender]
+ */
+function makeClarifyQuestions(step, sender = 'WORK') {
+    return {
+        type: 'questions',
+        title: '',
+        content: '',
+        fields: [normalizeFieldMeta({ id: 'details', label: 'Что уточнить?', type: 'text' })],
+        button: { label: 'Уточнить', color: 'success' },
+        time: Date.now(),
+        sender,
+    };
+}
+
+/**
+ * Cursor AskQuestion item → field meta.
+ * @param {object} q
+ */
+function mapAskQuestionToField(q) {
+    if (!q || typeof q !== 'object') return null;
+    const id = q.id || q.name || String(Math.random()).slice(2, 8);
+    const label = String(q.prompt || q.label || q.question || id).trim() || id;
+    let options = Array.isArray(q.options) ? q.options : undefined;
+    if (options) {
+        options = options.map(opt => {
+            if (typeof opt === 'string') return opt;
+            if (opt && typeof opt === 'object') return opt.label || opt.text || opt.value || String(opt);
+            return String(opt);
+        }).filter(Boolean);
+    }
+    let type = q.type;
+    if (!type)
+        type = options?.length ? 'select' : 'text';
+    if (options?.length && type !== 'select' && type !== 'checkbox')
+        type = 'select';
+    const field = { id, label, type };
+    if (options?.length)
+        field.options = options;
+    return field;
+}
+
+/**
+ * Tool ask_user.args → блок type questions (AskQuestion-совместимо).
+ * @param {object} args
+ * @param {string} [sender]
+ */
+function questionsFromAskUser(args = {}, sender = 'WORK') {
+    let fields = [];
+    if (Array.isArray(args.questions) && args.questions.length)
+        fields = args.questions.map(mapAskQuestionToField).filter(Boolean);
+    else if (Array.isArray(args.fields) && args.fields.length)
+        fields = args.fields.map(mapAskQuestionToField).filter(Boolean);
+    if (!fields.length && (args.question || args.prompt)) {
+        fields = [{
+            id: 'clarify',
+            label: String(args.question || args.prompt),
+            type: 'text',
+        }];
+    }
+    if (!fields.length)
+        fields = [{ id: 'details', label: 'Что уточнить?', type: 'text' }];
+    const btn = String(args.label || args.button || 'Уточнить').trim() || 'Уточнить';
+    return {
+        type: 'questions',
+        title: stripBoilerplateContent(args.title),
+        content: stripBoilerplateContent(args.content),
+        fields: fields.map(normalizeFieldMeta),
+        button: { label: btn, color: 'success' },
+        time: Date.now(),
+        sender,
+    };
+}
+
+/**
+ * Фаза текущего шага: после Начать (пустой ribbon) / user prompt / tools → execute.
+ * Clarify-шаг на пустом ribbon → propose (форма).
+ * @returns {'propose'|'execute'|'done'}
+ */
+function getDoStepPhase(activeTask) {
+    if (!activeTask?.steps?.length) return 'done';
+    if (activeTask.steps.every(s => s.status === 'done')) return 'done';
+    const cur = activeTask.steps.find(s => s.status === 'in_progress')
+        || activeTask.steps.find(s => s.status === 'proposed');
+    const ribbon = activeTask.ribbon || [];
+    const last = [...ribbon].reverse().find(b =>
+        b.type === 'prompt' || b.role === 'user'
+        || b.type === 'tool' || b.type === 'tool_result'
+        || b.type === 'action' || b.type === 'form' || b.type === 'questions'
+    );
+    // Пустой ribbon после «Начать»: clarify → PROPOSE, иначе EXECUTE
+    if (!last) {
+        if (cur && stepNeedsClarify(cur)) return 'propose';
+        return 'execute';
+    }
+    if (last.type === 'prompt' || last.role === 'user') return 'execute';
+    if (last.type === 'tool' || last.type === 'tool_result') return 'execute';
+    if (last.type === 'action' || last.type === 'form' || last.type === 'questions') return 'propose';
+    return 'propose';
+}
+
+/** Idle всегда retry; стоп только общим maxIter цикла */
+function nextIdleDoAction(streak) {
+    return 'retry';
+}
+
+/** Синонимы статусов шага → proposed | in_progress | done */
+function normalizeStepStatus(status) {
+    const s = String(status || '').toLowerCase().trim();
+    if (s === 'done' || s === 'complete' || s === 'completed' || s === 'finished')
+        return 'done';
+    if (s === 'in_progress' || s === 'running' || s === 'in-progress')
+        return 'in_progress';
+    return 'proposed';
+}
+
+/** Plan-фаза: все шаги proposed (с сохранением описания/номера) */
+function normalizeProposedSteps(steps) {
+    if (!Array.isArray(steps)) return [];
+    return steps.map((s, i) => ({
+        step: s.step != null ? s.step : i + 1,
+        description: s.description || '',
+        status: 'proposed',
+    }));
+}
+
+/**
+ * Merge prev+next и выровнять статусы:
+ * - не схлопывать план: усечённый next сохраняет шаги из prev;
+ * - done только префиксом (по порядку);
+ * - ровно один in_progress у первого не-done (если есть незакрытые).
+ */
+function normalizePlanSteps(prevSteps, nextSteps) {
+    const next = Array.isArray(nextSteps) ? nextSteps : [];
+    const prev = Array.isArray(prevSteps) ? prevSteps : [];
+    if (!next.length && !prev.length) return [];
+
+    let merged;
+    if (!prev.length) {
+        merged = next.map((s, i) => ({
+            step: s.step != null ? s.step : i + 1,
+            description: s.description || '',
+            status: normalizeStepStatus(s.status),
+        }));
+    } else if (!next.length) {
+        merged = prev.map((s, i) => ({
+            step: s.step != null ? s.step : i + 1,
+            description: s.description || '',
+            status: normalizeStepStatus(s.status),
+        }));
+    } else {
+        // База — prev (длина плана); next только обновляет по номеру шага (без fallback next[i])
+        merged = prev.map((p, i) => {
+            const n = p.step != null
+                ? next.find(x => x.step === p.step)
+                : next[i];
+            return {
+                step: p.step != null ? p.step : i + 1,
+                description: (n && n.description) || p.description || '',
+                status: normalizeStepStatus(n && n.status != null ? n.status : p.status),
+            };
+        });
+        const seen = new Set(merged.map(s => s.step));
+        for (const n of next) {
+            if (n.step == null || seen.has(n.step)) continue;
+            merged.push({
+                step: n.step,
+                description: n.description || '',
+                status: normalizeStepStatus(n.status),
+            });
+            seen.add(n.step);
+        }
+        merged.sort((a, b) => Number(a.step) - Number(b.step));
+    }
+
+    // Откатить «дыры»: done после незакрытого → proposed
+    let seenIncomplete = false;
+    for (const step of merged) {
+        if (seenIncomplete) {
+            if (step.status === 'done')
+                step.status = 'proposed';
+        } else if (step.status !== 'done') {
+            seenIncomplete = true;
+        }
+    }
+
+    // Ровно один in_progress — первый не-done
+    let placed = false;
+    for (const step of merged) {
+        if (step.status === 'done') continue;
+        step.status = placed ? 'proposed' : 'in_progress';
+        placed = true;
+    }
+    return merged;
+}
+
+/** Старт Do: нормализовать и поставить in_progress на первый незакрытый */
+function prepareStepsForStart(steps) {
+    return normalizePlanSteps([], steps);
+}
+
+/**
+ * Active Do без подтверждения и без tool calls — цикл должен продолжаться, а не выходить.
+ * @returns {boolean}
+ */
+function shouldContinueDo(activeTask, waitingForUser, toolCalls) {
+    if (waitingForUser) return false;
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) return false;
+    if (!activeTask || activeTask.state !== 'active') return false;
+    const steps = activeTask.steps;
+    if (!Array.isArray(steps) || !steps.length) return false;
+    if (steps.every(s => s.status === 'done')) return false;
+    return true;
+}
+
+export {
+    normalizeStepStatus,
+    normalizeProposedSteps,
+    normalizePlanSteps,
+    prepareStepsForStart,
+    shouldContinueDo,
+    normalizeFieldMeta,
+    formatPromptWithAnswers,
+    nextIdleDoAction,
+    getDoStepPhase,
+    stepNeedsClarify,
+    makeClarifyQuestions,
+    questionsFromAskUser,
+    mapAskQuestionToField,
+    stripBoilerplateContent,
+    formatPlanMarkdown,
+    keepDoAction,
+    keepDoInteractive,
+    normalizeActionBlocks,
+    normalizeInteractiveBlocks,
+    isInteractiveBlock,
+    parseResponseToRibbon,
+    buildToolMethodParams,
+    formatLogSummary,
+    formatPairContextForSystem,
+    normalizeLogWindow,
+    MAX_IDLE_DO,
+    MAX_IDLE_PROPOSE,
+    ASK_USER_METHOD,
+    CONTEXT_LOG_DAYS,
+    CONTEXT_LOG_MAX_ROWS,
+};
 
 /**
  * Markdown-оформление предложения плана для action.content.
@@ -928,7 +1516,7 @@ function formatPlanMarkdown(steps, prose) {
     const parts = [];
     const hasSteps = Array.isArray(steps) && steps.length;
     if (hasSteps) {
-        parts.push('## План', '');
+        // Без «## План» — title action уже «План»
         for (const s of steps) {
             const n = s.step != null ? s.step : '';
             const desc = s.description || '';
@@ -958,8 +1546,7 @@ function extractShortCta(prose) {
 }
 
 /**
- * Разобрать ответ ИИ на типизированные блоки для ленты чата.
- * План + prose + <action> → один action с MD-content (кнопка только в panel).
+ * Разобрать ответ ИИ на типизированные блоки: action | form | questions.
  * @returns {{ blocks: Array, pendingPlan: object|null }}
  */
 function parseResponseToRibbon(text, sender = 'WORK') {
@@ -980,7 +1567,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
     }
     remaining = remaining.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '');
 
-    // 2. <plan> → pendingPlan; текст до плана — prose
+    // 2. <plan> → pendingPlan
     const planMatch = remaining.match(/<plan>\s*(\[[\s\S]*?\])\s*<\/plan>/);
     if (planMatch) {
         try {
@@ -999,61 +1586,117 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         } catch {}
     }
 
-    // 3. <action> → метаданные кнопки панели (не отдельный пустой блок)
+    // 3. <action> → метаданные кнопки подтверждения
     const actionMatch = remaining.match(/<action>\s*(\{[\s\S]*?\})\s*<\/action>/);
     if (actionMatch) {
         try {
             const action = JSON.parse(actionMatch[1]);
             actionMeta = {
                 label: action.label || action.text || 'OK',
-                color: action.color || 'info',
+                color: action.color || 'success',
                 title: action.title || '',
             };
         } catch {}
         remaining = remaining.replace(/<action>[\s\S]*?<\/action>/g, '');
     }
 
-    // 4. <questions> → метамодель полей для action (не отдельный тип form)
-    let formFields = null;
+    // 4. <questions> → опросник
+    let questionFields = null;
     const questionsMatch = remaining.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
     if (questionsMatch) {
         try {
             const questions = JSON.parse(questionsMatch[1]);
             if (Array.isArray(questions) && questions.length)
-                formFields = questions.map(normalizeFieldMeta);
+                questionFields = questions.map(normalizeFieldMeta);
         } catch {}
         remaining = remaining.replace(/<questions>[\s\S]*?<\/questions>/g, '');
     }
 
-    // 5. tool_call — не в ленту
+    // 5. <form> → форма ввода данных
+    let formFields = null;
+    const formMatch = remaining.match(/<form>\s*(\[[\s\S]*?\])\s*<\/form>/);
+    if (formMatch) {
+        try {
+            const fields = JSON.parse(formMatch[1]);
+            if (Array.isArray(fields) && fields.length)
+                formFields = fields.map(normalizeFieldMeta);
+        } catch {}
+        remaining = remaining.replace(/<form>[\s\S]*?<\/form>/g, '');
+    }
+
+    // 6. tool_call — не в ленту
     remaining = remaining.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
     remaining = remaining.replace(/```tool_call[\s\S]*?```/g, '');
 
-    // 6. Остаточный текст — prose для action или отдельный text
     const cleanText = remaining.trim();
     if (cleanText)
         proseParts.push(cleanText);
-
     const prose = proseParts.join('\n\n').trim();
 
-    // 7. План / action / форма → один блок action (описание + fields + button)
-    if (pendingPlan || actionMeta || formFields) {
-        const steps = pendingPlan?.steps || null;
-        const content = formatPlanMarkdown(steps, prose);
-        const block = {
+    // 7. Разнести типы: plan/action confirm vs questions vs form
+    if (pendingPlan) {
+        blocks.push({
             type: 'action',
-            title: pendingPlan ? '' : (actionMeta?.title || ''),
-            content: content || prose || (formFields ? 'Заполните поля' : 'Подтвердите действие'),
+            title: 'План',
+            content: formatPlanMarkdown(pendingPlan.steps, prose) || prose || '',
             button: {
-                label: actionMeta?.label || (pendingPlan ? 'Начать' : (formFields ? 'Продолжить' : 'OK')),
+                label: 'Начать',
                 color: actionMeta?.color || 'success',
             },
             time,
             sender,
-        };
-        if (formFields)
-            block.fields = formFields;
-        blocks.push(block);
+        });
+        // questions/form на фазе плана — не в тот же ход (уточнение после Начать)
+    } else if (questionFields?.length) {
+        blocks.push({
+            type: 'questions',
+            title: stripBoilerplateContent(actionMeta?.title),
+            content: stripBoilerplateContent(prose),
+            fields: questionFields,
+            button: {
+                label: actionMeta?.label || 'Уточнить',
+                color: actionMeta?.color || 'success',
+            },
+            time,
+            sender,
+        });
+    } else if (formFields?.length) {
+        blocks.push({
+            type: 'form',
+            title: stripBoilerplateContent(actionMeta?.title),
+            content: stripBoilerplateContent(prose),
+            fields: formFields,
+            button: {
+                label: actionMeta?.label || 'Продолжить',
+                color: actionMeta?.color || 'success',
+            },
+            time,
+            sender,
+        });
+    } else if (actionMeta) {
+        // Голый «Уточнить»/«Продолжить» без полей — не action confirm
+        const label = String(actionMeta.label || '');
+        if (!/^(уточнить|продолжить)$/i.test(label.trim())) {
+            let title = actionMeta.title || '';
+            if (!title) {
+                if (/принять|готово/i.test(label)) title = 'Отчёт';
+                else if (/выполнить|подтвердить/i.test(label)) title = 'Действие';
+                else title = 'Действие';
+            }
+            blocks.push({
+                type: 'action',
+                title,
+                content: prose || 'Подтвердите действие',
+                button: {
+                    label: actionMeta.label,
+                    color: actionMeta.color || 'success',
+                },
+                time,
+                sender,
+            });
+        } else if (prose) {
+            blocks.push({ type: 'text', content: prose, time, sender });
+        }
     } else if (prose) {
         blocks.push({ type: 'text', content: prose, time, sender });
     }
@@ -1076,8 +1719,12 @@ function normalizeFieldMeta(q) {
             return String(opt);
         });
     }
-    if (q.value !== undefined)
+    if (field.type === 'checkbox')
+        field.value = q.value !== undefined && q.value !== null ? !!q.value : false;
+    else if (q.value !== undefined && q.value !== null)
         field.value = q.value;
+    else
+        field.value = '';
     return field;
 }
 
@@ -1153,6 +1800,153 @@ function parseToolCalls(text, functions = []) {
     }
 
     return calls;
+}
+
+/**
+ * Окно логов для контекста пары.
+ * @param {object} [raw]
+ * @returns {{ days: number, maxRows: number }}
+ */
+function normalizeLogWindow(raw = {}) {
+    const d = raw?.days != null && raw.days !== '' ? Number(raw.days) : CONTEXT_LOG_DAYS;
+    const m = raw?.maxRows != null && raw.maxRows !== '' ? Number(raw.maxRows) : CONTEXT_LOG_MAX_ROWS;
+    const days = Math.min(30, Math.max(1, Number.isFinite(d) ? d : CONTEXT_LOG_DAYS));
+    const maxRows = Math.min(200, Math.max(5, Number.isFinite(m) ? m : CONTEXT_LOG_MAX_ROWS));
+    return { days, maxRows };
+}
+
+/**
+ * Сжать записи логов в текст для system prompt.
+ * @param {Array} rows
+ * @param {{ maxRows?: number, lineMax?: number }} [opts]
+ */
+function formatLogSummary(rows, opts = {}) {
+    const maxRows = opts.maxRows ?? CONTEXT_LOG_MAX_ROWS;
+    const lineMax = opts.lineMax ?? CONTEXT_LOG_LINE_MAX;
+    if (!Array.isArray(rows) || !rows.length)
+        return '';
+    const slice = rows.slice(0, maxRows);
+    const lines = [];
+    for (const row of slice) {
+        const t = row.time ? new Date(row.time).toISOString().slice(0, 16).replace('T', ' ') : '';
+        const who = row.user || row.sender || row.uid || '';
+        const path = row.path || row.short || row.id || '';
+        const ext = row.ext || '';
+        let label = [t, who, ext, path].filter(Boolean).join(' | ');
+        if (label.length > lineMax)
+            label = label.slice(0, lineMax - 1) + '…';
+        lines.push('- ' + label);
+    }
+    if (rows.length > maxRows)
+        lines.push('- … ещё ' + (rows.length - maxRows) + ' записей');
+    return lines.join('\n');
+}
+
+/**
+ * Блоки ## Класс / ## Пользователь для system (с legacy mem/readme класса).
+ */
+function formatPairContextForSystem(classBundle, userBundle, legacy = {}) {
+    let out = '';
+    const cls = classBundle && typeof classBundle === 'object' ? classBundle : null;
+    const usr = userBundle && typeof userBundle === 'object' ? userBundle : null;
+    const classReadme = (cls && cls.readme) || legacy.readme || '';
+    const classMem = (cls && cls.mem) || legacy.mem || '';
+    const classLogs = (cls && cls.logs) || '';
+    const classPath = (cls && cls.path) || '';
+
+    if (classPath || classReadme || classMem || classLogs) {
+        out += '\n\n## Класс';
+        if (classPath)
+            out += '\nПуть: ' + classPath;
+        if (classReadme)
+            out += '\n\n### readme.md\n' + classReadme;
+        if (classMem)
+            out += '\n\n### Память (.mem)\n' + classMem;
+        if (classLogs)
+            out += '\n\n### Логи класса\n' + classLogs;
+    }
+
+    if (usr && (usr.path || usr.readme || usr.mem || usr.logs)) {
+        out += '\n\n## Пользователь';
+        if (usr.path)
+            out += '\nПуть: ' + usr.path;
+        if (usr.readme)
+            out += '\n\n### readme.md\n' + usr.readme;
+        if (usr.mem)
+            out += '\n\n### Память (.mem)\n' + usr.mem;
+        if (usr.logs)
+            out += '\n\n### Логи пользователя\n' + usr.logs;
+    }
+    return out;
+}
+
+/**
+ * $user storage по params.user.
+ * @param {object} params
+ */
+async function resolveUserStorage(params = {}) {
+    const uid = params.user?.uid || params.user?.$user?.id || params.user?.id;
+    if (!uid || typeof WORK?.get_item !== 'function')
+        return null;
+    try {
+        let item = await WORK.get_item('/users/' + uid);
+        if (!item)
+            item = await WORK.get_item('/users//' + uid);
+        return item || null;
+    } catch (e) {
+        console.warn('[task.ai] resolveUserStorage:', e.message);
+        return null;
+    }
+}
+
+/**
+ * Бандл контекста storage: readme + mem + сжатые логи.
+ * Логи читаются с самого storage (без chatSource redirect).
+ * @param {object} storage
+ * @param {{ days?: number, maxRows?: number }} [windowOpts]
+ */
+async function loadContextBundle(storage, windowOpts = {}) {
+    const { days, maxRows } = normalizeLogWindow(windowOpts);
+    if (!storage) {
+        return { path: '', readme: '', mem: '', logs: '' };
+    }
+    const path = storage.path || storage.short || '';
+    const readme = await loadReadme(storage);
+    const mem = await loadMemFiles(storage);
+    let logs = '';
+    try {
+        logs = await loadLogSummary(storage, { days, maxRows });
+    } catch (e) {
+        console.warn('[task.ai] loadContextBundle logs:', e.message);
+    }
+    return { path, readme, mem, logs };
+}
+
+/**
+ * Сжатые логи storage за N дней (напрямую, без _logSource).
+ */
+async function loadLogSummary(storage, opts = {}) {
+    const { days, maxRows } = normalizeLogWindow(opts);
+    if (!storage)
+        return '';
+    const to = new Date();
+    const from = new Date(to);
+    from.setDate(from.getDate() - (days - 1));
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+    let rows = [];
+    if (typeof storage._loadLogBodiesForDays === 'function') {
+        let query = { from: fromStr, to: toStr };
+        if (typeof storage.constructor?._normalizeLogQuery === 'function')
+            query = storage.constructor._normalizeLogQuery(query);
+        rows = await storage._loadLogBodiesForDays(query);
+    } else if (typeof storage.logs === 'function') {
+        // fallback: mode bodies (может уйти в chatSource — только если нет _loadLogBodiesForDays)
+        rows = await storage.logs({ mode: 'bodies', from: fromStr, to: toStr });
+    }
+    if (!Array.isArray(rows))
+        rows = rows ? [rows] : [];
+    return formatLogSummary(rows, { maxRows });
 }
 
 /**
