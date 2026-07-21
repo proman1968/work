@@ -1490,6 +1490,12 @@ ODA({ is: 'microchat-view-task',
                 min-height: auto;
                 overflow: visible;
             }
+            .ask {
+                @apply --vertical;
+                margin: 4px 8px 8px;
+                min-height: auto;
+                overflow: visible;
+            }
         </style>
         <div class="header" @tap="collapsed = !collapsed" horizontal>
             <span info style="border-radius: 16px; padding: 2px 4px;">{{currentNumber}}/{{steps.length}}</span>
@@ -1506,10 +1512,14 @@ ODA({ is: 'microchat-view-task',
                 <span flex>{{$for.item.description}}</span>
             </div>
         </div>
-        <div class="nested" ~if="nestedItems.length">
+        <!-- AskQuestion/form — прямо в task, не через nested ribbon (~is) -->
+        <div class="ask" ~if="openAsk?.fields?.length">
+            <oda-chat-form :questions="openAsk.fields" hide-submit></oda-chat-form>
+        </div>
+        <div class="nested" ~if="otherNested.length">
             <microchat-ribbon
                 embedded
-                :items="nestedItems"
+                :items="otherNested"
                 @answer="fire('answer', $event.detail)"
                 @action-accept="fire('action-accept', $event.detail)"
                 @action-reject="fire('action-reject', $event.detail)"
@@ -1521,7 +1531,7 @@ ODA({ is: 'microchat-view-task',
     item: {
         $def: null,
         set(v) {
-            // Открытый AskQuestion/form в nested — сразу показать (не только кнопку панели)
+            // Открытый AskQuestion/form — сразу показать шаги + форму
             if (v && Array.isArray(v.ribbon)
                 && v.ribbon.some(b => (b.type === 'questions' || b.type === 'form') && !b.answered))
                 this.collapsed = false;
@@ -1536,6 +1546,18 @@ ODA({ is: 'microchat-view-task',
     },
     get nestedItems() {
         return normalizeRibbon(this.item?.ribbon || []);
+    },
+    /** Первый неотвеченный questions|form — для inline UI */
+    get openAsk() {
+        return this.nestedItems.find(b =>
+            (b.type === 'questions' || b.type === 'form') && !b.answered && b.fields?.length
+        ) || null;
+    },
+    /** Nested без открытых ask (normalizeRibbon каждый раз копирует — не сравниваем по !==) */
+    get otherNested() {
+        return this.nestedItems.filter(b =>
+            !((b.type === 'questions' || b.type === 'form') && !b.answered)
+        );
     },
     get headerLabel() {
         return this.item?.label || this.item?.content || 'План';
@@ -1753,13 +1775,23 @@ ODA({is: 'oda-chat-form',
         <oda-button ~if="!hideSubmit" success icon="icons:check" label="Ответить" @tap="submit"></oda-button>
     `,
     imports: 'oda//button',
+    /** Явный get/set — кастомный set без хранения оставлял ~for пустым */
     questions: {
         $def: [],
+        get() {
+            return this._questionsList || [];
+        },
         set(v) {
-            this._normalizeQuestions(v);
+            const list = Array.isArray(v) ? v : [];
+            this._normalizeQuestions(list);
+            this._questionsList = list;
         },
     },
-    hideSubmit: false,
+    hideSubmit: {
+        $def: false,
+        $type: Boolean,
+        $attr: true,
+    },
     init() {
         this._normalizeQuestions(this.questions);
     },
@@ -1768,7 +1800,10 @@ ODA({is: 'oda-chat-form',
         return field.options.map(opt => ({ field, opt }));
     },
     selectOption(field, opt) {
-        if (field) field.value = opt;
+        if (field) {
+            field.value = opt;
+            this.render?.();
+        }
     },
     _normalizeQuestions(list) {
         if (!Array.isArray(list)) return;
