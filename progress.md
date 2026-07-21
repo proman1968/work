@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [22.07.2026] task.ai: harness `write_file` в FC + clarify→execute после ответов (Do до файла).
 - [22.07.2026] task.ai: GigaChat `functionCalling` + Cursor AskQuestion idle (select+options, не text).
 - [22.07.2026] MVP `$ai`/task.ai: контекст пары user/class, ACL ролей, ADMIN modify+confirm; вход через `triggers/on_save`. Документация уровня `$ai` по `rules.md`.
 - [21.07.2026] Исправлен misuse `AsyncPromise`: оставлен только для прерывания реактивности (one-shot `??=` и циклы FS `ancestor`/`items`/`children`/`files`/`folders`/`tilde`). UI и производные геттеры переведены на обычный `Promise`, чтобы deps снова подписывались. Правило зафиксировано в `README.md` §3.1.

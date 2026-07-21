@@ -663,7 +663,25 @@
     onAction() {
         const open = findOpenAction(this.taskBody?.ribbon);
         const label = open?.button?.label || (this.taskBody?.pendingPlan ? 'Начать' : 'Да');
-        const answers = collectFieldAnswers(open);
+        // Sync ответов из view (normalizeRibbon — shallow copy; fields обычно shared)
+        let answers = collectFieldAnswers(open);
+        if (!answers && open?.fields?.length) {
+            const viewOpen = findOpenAction(this.ribbonItems);
+            const viewAnswers = collectFieldAnswers(viewOpen);
+            if (viewAnswers) {
+                for (const f of open.fields) {
+                    if (viewAnswers[f.id] !== undefined)
+                        f.value = viewAnswers[f.id];
+                }
+                answers = collectFieldAnswers(open);
+            }
+        }
+        // questions/form без выбора — не слать пустой «Уточнить»
+        if (open && (open.type === 'questions' || open.type === 'form' || open.fields?.length)
+            && open.type !== 'action' && !answers) {
+            console.warn('[ai-preview] выберите варианты ответа перед «' + label + '»');
+            return;
+        }
         this.actionButton = null;
         // Если есть ожидающий план / открытый action — автоprompt с текстом кнопки (+ answers)
         if (this.taskBody?.pendingPlan || open) {

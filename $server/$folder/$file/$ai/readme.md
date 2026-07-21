@@ -27,6 +27,7 @@
 ## 5. В каком это состоянии
 
 - ✅ PDCA harness, ask_user, idle propose inject (Cursor AskQuestion: select+options)
+- ✅ Harness FC tools: `write_file` / `read_file` / `ask_user` / `navigate` (не только get_schema)
 - ✅ GigaChat Light/Pro: `functionCalling: true` (tools уходят в API)
 - ✅ Контекст пары class+user (readme, .mem, логи)
 - ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN modify

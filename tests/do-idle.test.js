@@ -9,6 +9,8 @@ import {
     stepNeedsClarify,
     makeClarifyQuestions,
     questionsFromAskUser,
+    ensureHarnessFunctions,
+    advanceAfterClarifyAnswers,
     formatPlanMarkdown,
     keepDoAction,
     buildToolMethodParams,
@@ -225,6 +227,48 @@ describe('buildToolMethodParams', () => {
         assert.equal(p.role, 'BOSS');
         assert.equal(p.user, aiUser);
         assert.equal(p.filename, 'x.html');
+    });
+});
+
+describe('ensureHarnessFunctions', () => {
+    it('adds write_file read_file ask_user for FC', () => {
+        const fns = ensureHarnessFunctions([]);
+        const names = fns.map(f => f.name);
+        assert.ok(names.includes('write_file'));
+        assert.ok(names.includes('read_file'));
+        assert.ok(names.includes(ASK_USER_METHOD));
+        assert.ok(names.includes('navigate'));
+        const wf = fns.find(f => f.name === 'write_file');
+        assert.ok(wf.parameters.required.includes('name'));
+        assert.ok(wf.parameters.required.includes('content'));
+        // idempotent
+        assert.equal(ensureHarnessFunctions(fns).filter(f => f.name === 'write_file').length, 1);
+    });
+});
+
+describe('advanceAfterClarifyAnswers', () => {
+    it('marks clarify step done and advances next', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Уточнить тему презентации', status: 'in_progress' },
+                { step: 2, description: 'Создать структуру', status: 'proposed' },
+            ],
+        };
+        advanceAfterClarifyAnswers(task);
+        assert.equal(task.steps[0].status, 'done');
+        assert.equal(task.steps[1].status, 'in_progress');
+    });
+
+    it('ignores non-clarify execute steps', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Создать структуру слайдов', status: 'in_progress' },
+                { step: 2, description: 'Сохранить', status: 'proposed' },
+            ],
+        };
+        advanceAfterClarifyAnswers(task);
+        assert.equal(task.steps[0].status, 'in_progress');
+        assert.equal(task.steps[1].status, 'proposed');
     });
 });
 

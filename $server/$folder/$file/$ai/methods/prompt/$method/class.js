@@ -31,6 +31,49 @@ const ASK_USER_METHOD = 'ask_user';
 // Уровень доверия для автоподтверждения опасных действий
 const TRUST_AUTOCONFIRM = 3;
 
+/** Tools harness (не из get_schema / TOOL_DESCRIPTIONS) — иначе FC не видит write_file */
+const HARNESS_FUNCTIONS = [
+    {
+        name: 'write_file',
+        description: 'Создать или перезаписать файл в текущем контексте. name — имя файла, content — текст.',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: { type: 'string', description: 'Имя файла, например presentation.html' },
+                content: { type: 'string', description: 'Содержимое файла' },
+            },
+            required: ['name', 'content'],
+        },
+    },
+    {
+        name: 'read_file',
+        description: 'Прочитать файл в текущем контексте по name.',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: { type: 'string', description: 'Имя файла' },
+            },
+            required: ['name'],
+        },
+    },
+    {
+        name: 'navigate',
+        description: 'Перейти в элемент по абсолютному path.',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Путь элемента WORK' },
+            },
+            required: ['path'],
+        },
+    },
+    {
+        name: 'reset_context',
+        description: 'Вернуться в домашний класс текущей задачи.',
+        parameters: { type: 'object', properties: {} },
+    },
+];
+
 export default {
     async execute(params = {}, post) {
         const taskAi = params.$context || this;
@@ -212,6 +255,12 @@ export default {
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isFormSubmit) {
+                // questions/form без ответов — не крутим LLM
+                const needFields = openAction?.type === 'questions' || openAction?.type === 'form'
+                    || openAction?.fields?.length;
+                if (needFields && (!answers || !Object.keys(answers).length)) {
+                    return { ok: true, pendingActionConfirm: true, error: 'need_answers' };
+                }
                 // Ответы на поля — prompt только Q:A; блок формы закрываем
                 const promptContent = formatPromptWithAnswers('', answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
@@ -222,6 +271,10 @@ export default {
                     }
                 }
                 openAction.answered = true;
+                // Clarify-шаг закрыт ответами → следующий in_progress (EXECUTE)
+                const doTask = activeTaskFind(body);
+                if (doTask)
+                    advanceAfterClarifyAnswers(doTask);
                 text = '';
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
@@ -633,7 +686,21 @@ async function buildFunctionsList(currentContext) {
         console.warn('[task.ai] services load:', e.message);
     }
 
-    // Уточнение у пользователя — как Cursor AskQuestion (вопросы + options)
+    ensureHarnessFunctions(functions);
+    return functions;
+}
+
+/**
+ * Гарантировать write_file / read_file / ask_user / navigate в списке FC.
+ * get_schema их не отдаёт (write_file — синтетический в executeToolCall).
+ * @param {Array} functions
+ * @returns {Array}
+ */
+function ensureHarnessFunctions(functions = []) {
+    for (const fn of HARNESS_FUNCTIONS) {
+        if (!functions.find(f => f.name === fn.name))
+            functions.push({ ...fn });
+    }
     if (!functions.find(fn => fn.name === ASK_USER_METHOD)) {
         functions.push({
             name: ASK_USER_METHOD,
@@ -675,8 +742,22 @@ async function buildFunctionsList(currentContext) {
             },
         });
     }
-
     return functions;
+}
+
+/**
+ * После ответов на clarify-шаг: done → следующий proposed становится in_progress.
+ * @param {{ steps?: Array }} activeTask
+ */
+function advanceAfterClarifyAnswers(activeTask) {
+    if (!activeTask?.steps?.length) return;
+    const cur = activeTask.steps.find(s => s.status === 'in_progress')
+        || activeTask.steps.find(s => s.status === 'proposed');
+    if (!cur || !stepNeedsClarify(cur)) return;
+    cur.status = 'done';
+    const next = activeTask.steps.find(s => s.status === 'proposed');
+    if (next)
+        next.status = 'in_progress';
 }
 
 /**
@@ -925,45 +1006,48 @@ function notifyChanged(fullPath) {
 function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
     const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
+    const historyOnly = !!opts.historyOnly;
 
-    // 1. System prompt: базовый + контекст + пара class/user + ACL роли
-    let systemContent = body.system || '';
-    if (body.context)
-        systemContent += '\n\n## Текущий контекст\n' + body.context;
-    systemContent += formatRoleAclForSystem(body.role);
-    systemContent += formatPairContextForSystem(body.classBundle, body.userBundle, {
-        mem: body.mem,
-        readme: body.readme,
-    });
-    if (body.pendingPlan?.steps)
-        systemContent += '\n\n## Предложенный план (ожидает подтверждения пользователем)\n' + JSON.stringify(body.pendingPlan.steps);
+    // 1. System prompt (не для вложенной ленты task — иначе дубли ACL mid-history)
+    if (!historyOnly) {
+        let systemContent = body.system || '';
+        if (body.context)
+            systemContent += '\n\n## Текущий контекст\n' + body.context;
+        systemContent += formatRoleAclForSystem(body.role);
+        systemContent += formatPairContextForSystem(body.classBundle, body.userBundle, {
+            mem: body.mem,
+            readme: body.readme,
+        });
+        if (body.pendingPlan?.steps)
+            systemContent += '\n\n## Предложенный план (ожидает подтверждения пользователем)\n' + JSON.stringify(body.pendingPlan.steps);
 
-    const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
-    if (activeTask) {
-        const cur = activeTask.steps?.find(s => s.status === 'in_progress')
-            || activeTask.steps?.find(s => s.status === 'proposed');
-        const phase = getDoStepPhase(activeTask);
-        systemContent += '\n\n## Исполнение задачи (Do)\n';
-        systemContent += 'Активный план: «' + (activeTask.label || 'План') + '».\n';
-        systemContent += 'Шаги: ' + JSON.stringify(activeTask.steps || []) + '\n';
-        if (cur)
-            systemContent += 'Сейчас шаг ' + cur.step + ': «' + cur.description + '».\n';
-        systemContent += 'PDCA: после confirm («Начать»/форма/«Выполнить») сразу tool calls по текущему шагу; questions — только если без данных нельзя.\n';
-        systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
-        systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
-        if (phase === 'execute')
-            systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (write_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
-        else if (phase === 'propose')
-            systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не write_file до ответов.\n';
-        if (forceDoReminder) {
-            if (phase === 'propose')
-                systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не write_file.\n';
-            else
-                systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови write_file (или другой tool) для текущего шага. Не повторяй только reasoning и не ставь «Начать».\n';
+        const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
+        if (activeTask) {
+            const cur = activeTask.steps?.find(s => s.status === 'in_progress')
+                || activeTask.steps?.find(s => s.status === 'proposed');
+            const phase = getDoStepPhase(activeTask);
+            systemContent += '\n\n## Исполнение задачи (Do)\n';
+            systemContent += 'Активный план: «' + (activeTask.label || 'План') + '».\n';
+            systemContent += 'Шаги: ' + JSON.stringify(activeTask.steps || []) + '\n';
+            if (cur)
+                systemContent += 'Сейчас шаг ' + cur.step + ': «' + cur.description + '».\n';
+            systemContent += 'PDCA: после confirm («Начать»/форма/«Выполнить») сразу tool calls по текущему шагу; questions — только если без данных нельзя.\n';
+            systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
+            systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
+            if (phase === 'execute')
+                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (write_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
+            else if (phase === 'propose')
+                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не write_file до ответов.\n';
+            if (forceDoReminder) {
+                if (phase === 'propose')
+                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не write_file.\n';
+                else
+                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови write_file (или другой tool) для текущего шага. Не повторяй только reasoning и не ставь «Начать».\n';
+            }
         }
+        if (systemContent)
+            messages.push({ role: 'system', content: systemContent });
     }
-    if (systemContent)
-        messages.push({ role: 'system', content: systemContent });
 
     // 2. Обход блоков ленты
     const ribbon = body.ribbon || [];
@@ -1017,7 +1101,11 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             }
             messages.push({ role: 'assistant', content: '<plan>' + JSON.stringify(entry.steps) + '</plan>' });
             if (entry.type === 'task' && Array.isArray(entry.ribbon) && entry.ribbon.length) {
-                messages.push(...buildHistoryFromRibbon({ ribbon: entry.ribbon, system: '' }, useFunctionCalling));
+                messages.push(...buildHistoryFromRibbon(
+                    { ribbon: entry.ribbon },
+                    useFunctionCalling,
+                    { historyOnly: true },
+                ));
             }
             continue;
         }
@@ -1065,7 +1153,11 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 messages.push({ role: 'assistant', content: pendingAssistant });
                 pendingAssistant = '';
             }
-            messages.push(...buildHistoryFromRibbon({ ribbon: entry.ribbon, system: '' }, useFunctionCalling));
+            messages.push(...buildHistoryFromRibbon(
+                { ribbon: entry.ribbon || [] },
+                useFunctionCalling,
+                { historyOnly: true },
+            ));
         }
     }
 
@@ -1545,6 +1637,8 @@ export {
     makeClarifyQuestions,
     questionsFromAskUser,
     mapAskQuestionToField,
+    ensureHarnessFunctions,
+    advanceAfterClarifyAnswers,
     stripBoilerplateContent,
     formatPlanMarkdown,
     keepDoAction,
