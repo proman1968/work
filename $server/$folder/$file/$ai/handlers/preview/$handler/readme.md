@@ -19,14 +19,16 @@
 | `prompt` | `microchat-view-prompt` |
 | `thinking` | `microchat-view-thinking` |
 | `text` | `microchat-view-text` |
-| `action` | `microchat-view-action` — MD + опционально `fields` (метамодель); **кнопка только на панели** |
+| `action` | `microchat-view-action` — MD + `title` (План/Отчёт/Действие); **без fields**; кнопка на панели |
+| `form` | `microchat-view-form` — MD + `fields` (ввод данных); кнопка на панели |
+| `questions` | `microchat-view-questions` — MD + `fields` (опросник); кнопка на панели |
 | `task` | `microchat-view-task` (план + steps + вложенный ribbon) |
 | `file` | `microchat-view-file` |
 | `tool` | `microchat-view-tool` |
 | `tool_result` | `microchat-view-tool_result` |
 | `error` | `microchat-view-error` |
 
-`action` — предложение: `content` (MD), опционально `fields[]` (id/label/type/options/value), `button`. Открытый = последний action без последующего `prompt`. Кнопка панели шлёт `{ text: label, confirm: true, answers? }`.
+Открытый interactive = последний `action`|`form`|`questions` без последующего `prompt`. Кнопка панели шлёт `{ text: label, confirm: true, answers? }`.
 
 `task` появляется после prompt-принятия плана. В `task.ribbon` — исполнение (thinking / action с fields / tools).
 
@@ -45,3 +47,5 @@
 - ✅ схема TYPES в `$ai/class.js`
 - ✅ visualizers + ribbon/panel/streaming
 - ✅ harness пишет новые type; action = MD; стоп до confirm
+- ✅ questions answered-режим; select как варианты (radio-стиль)
+- ✅ контракт ролей/контекста — в [`$ai/readme.md`](/$server/$folder/$file/$ai/readme.md/~/handlers/pages/form/)
