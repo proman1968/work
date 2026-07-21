@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [22.07.2026] task.ai: GigaChat `functionCalling` + Cursor AskQuestion idle (select+options, не text).
 - [22.07.2026] MVP `$ai`/task.ai: контекст пары user/class, ACL ролей, ADMIN modify+confirm; вход через `triggers/on_save`. Документация уровня `$ai` по `rules.md`.
 - [21.07.2026] Исправлен misuse `AsyncPromise`: оставлен только для прерывания реактивности (one-shot `??=` и циклы FS `ancestor`/`items`/`children`/`files`/`folders`/`tilde`). UI и производные геттеры переведены на обычный `Promise`, чтобы deps снова подписывались. Правило зафиксировано в `README.md` §3.1.
 - [20.07.2026] Исправлено открытие форм с конкретным представлением (`~/handlers/pages/form/file/`). Причина: метод `getIndexForPage()` в `sources/server/server.js` ненадёжно определял корневой handler через проверку `parent.type === '$handler'` — промежуточная папка `form` при наследовании (из-за новой `$devs/handlers/pages/form`) получила тип `$folder` вместо `$handler`. Решение: замена проверки на структурную `parent.id !== 'pages'`, так как структура путей всегда `handlers/pages/<page>[/<view>]`. Теперь `page_handler`, `component_name` и `view_name` генерируются корректно для всех вариантов.

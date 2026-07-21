@@ -26,10 +26,11 @@
 
 ## 5. В каком это состоянии
 
-- ✅ PDCA harness, ask_user, idle propose inject
+- ✅ PDCA harness, ask_user, idle propose inject (Cursor AskQuestion: select+options)
+- ✅ GigaChat Light/Pro: `functionCalling: true` (tools уходят в API)
 - ✅ Контекст пары class+user (readme, .mem, логи)
 - ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN modify
-- ✅ Preview: action / form / questions
+- ✅ Preview: action / form / questions (radio options)
 - 🔧 spawn_agent / skills как tools harness
 - ❌ host file-handlers / skill-router (запрещены как костыль)
 

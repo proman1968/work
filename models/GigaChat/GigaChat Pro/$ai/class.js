@@ -11,5 +11,6 @@ export default {
     model: 'GigaChat-Pro',
 
     maxTokens: 4096,
-    capabilities: ['chat', 'stream'],
+    capabilities: ['chat', 'stream', 'functions'],
+    functionCalling: true,
 }

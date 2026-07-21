@@ -13,4 +13,7 @@ export default {
     authUrl: 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
     token: 'MDE5YjJjZGUtMjUyYy03ZTY5LWE0ZDEtMzQyNzQxODBiYTFhOjAzMGY5MDhiLTIyMWYtNDY1Ny04ZDE2LWU4NWQxYjA2YTc5Mw==',
     scope: 'GIGACHAT_API_PERS',
+
+    /** Native tools / ask_user через streamChat (OpenAI-compatible functions) */
+    functionCalling: true,
 }

@@ -15,7 +15,16 @@ export default {
         text: {
             extends: 'TYPES.prompt',
         },
+        /** Подтверждение: План / Отчёт / Действие — без полей формы */
         action: {
+            extends: 'TYPES.prompt',
+            fields: [
+                { id: 'title', type: 'string', options: ['План', 'Отчёт', 'Действие'] },
+                { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+            ],
+        },
+        /** Ввод данных через форму */
+        form: {
             extends: 'TYPES.prompt',
             fields: [
                 { id: 'title', type: 'string' },
@@ -31,6 +40,26 @@ export default {
                         { id: 'value' },
                     ],
                 },
+            ],
+        },
+        /** Опросник уточнения */
+        questions: {
+            extends: 'TYPES.prompt',
+            fields: [
+                { id: 'title', type: 'string' },
+                { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+                {
+                    id: 'fields',
+                    type: 'array',
+                    fields: [
+                        { id: 'id', type: 'string' },
+                        { id: 'label', type: 'string' },
+                        { id: 'type', options: ['text', 'textarea', 'select', 'checkbox', 'number', 'email', 'date'] },
+                        { id: 'options', type: 'array' },
+                        { id: 'value' },
+                    ],
+                },
+                { id: 'step', type: 'number' },
             ],
         },
         step: {

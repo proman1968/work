@@ -21,7 +21,7 @@ import * as https from 'node:https';
 const ROOT = process.cwd();
 const MAX_ITERATIONS = 10;
 const MAX_IDLE_DO = Infinity; // idle retry до общего maxIter; не сдаёмся early
-const MAX_IDLE_PROPOSE = 2; // пустые Do на clarify → inject questions, не maxIter
+const MAX_IDLE_PROPOSE = 1; // 1 idle на clarify → Cursor AskQuestion inject (не ждать Light)
 const CONTEXT_LOG_DAYS = 7;
 const CONTEXT_LOG_MAX_ROWS = 60;
 const CONTEXT_LOG_LINE_MAX = 160;
@@ -431,7 +431,9 @@ export default {
                 // ask_user → questions + waitingForUser (как Cursor AskQuestion)
                 const askCall = toolCalls.find(c => c.method === ASK_USER_METHOD);
                 if (askCall) {
-                    const qBlock = questionsFromAskUser(askCall.args, model.path || 'WORK');
+                    const curStep = activeTask?.steps?.find(s => s.status === 'in_progress')
+                        || activeTask?.steps?.find(s => s.status === 'proposed');
+                    const qBlock = questionsFromAskUser(askCall.args, model.path || 'WORK', curStep);
                     blocks = normalizeInteractiveBlocks(
                         [...blocks.filter(b => b.type !== 'questions' && b.type !== 'form'), qBlock],
                         { phase: 'do', allDone: false },
@@ -655,7 +657,7 @@ async function buildFunctionsList(currentContext) {
                     },
                     fields: {
                         type: 'array',
-                        description: 'Legacy: id, label, type, options',
+                        description: 'Legacy: id, label, options (обязательны). Без options harness подставит AskQuestion fallback.',
                         items: {
                             type: 'object',
                             properties: {
@@ -664,11 +666,12 @@ async function buildFunctionsList(currentContext) {
                                 type: { type: 'string' },
                                 options: { type: 'array', items: { type: 'string' } },
                             },
+                            required: ['id', 'label', 'options'],
                         },
                     },
-                    question: { type: 'string', description: 'Один вопрос без options (нежелательно)' },
                     label: { type: 'string', description: 'Текст кнопки (Уточнить)' },
                 },
+                required: ['questions'],
             },
         });
     }
@@ -1284,16 +1287,49 @@ function stripBoilerplateContent(text) {
 }
 
 /**
- * Fallback-опросник (после idle propose): короткий вопрос, не dump шага.
- * @param {{ description?: string }} step
+ * Fallback Cursor AskQuestion (idle propose / пустой ask_user): только select + options.
+ * @param {{ description?: string }} [step]
  * @param {string} [sender]
  */
 function makeClarifyQuestions(step, sender = 'WORK') {
+    const d = String(step?.description || '');
+    let fields;
+    if (/презентац|слайд/i.test(d)) {
+        fields = [
+            {
+                id: 'topic',
+                label: 'Тема презентации?',
+                type: 'select',
+                options: ['Система WORK', 'Инновации в бизнесе', 'ИИ в образовании', 'Экология'],
+            },
+            {
+                id: 'slides',
+                label: 'Сколько слайдов?',
+                type: 'select',
+                options: ['5', '8', '12', '15'],
+            },
+        ];
+    } else {
+        fields = [
+            {
+                id: 'focus',
+                label: 'Что важнее уточнить?',
+                type: 'select',
+                options: ['Цель и аудитория', 'Формат результата', 'Объём / сроки', 'Ограничения и стиль'],
+            },
+            {
+                id: 'format',
+                label: 'Формат результата?',
+                type: 'select',
+                options: ['Файл в WORK', 'Краткий текст', 'Структура / план', 'Другое'],
+            },
+        ];
+    }
     return {
         type: 'questions',
         title: '',
         content: '',
-        fields: [normalizeFieldMeta({ id: 'details', label: 'Что уточнить?', type: 'text' })],
+        fields: fields.map(normalizeFieldMeta),
         button: { label: 'Уточнить', color: 'success' },
         time: Date.now(),
         sender,
@@ -1301,7 +1337,7 @@ function makeClarifyQuestions(step, sender = 'WORK') {
 }
 
 /**
- * Cursor AskQuestion item → field meta.
+ * Cursor AskQuestion item → field meta (только с options → select).
  * @param {object} q
  */
 function mapAskQuestionToField(q) {
@@ -1316,37 +1352,32 @@ function mapAskQuestionToField(q) {
             return String(opt);
         }).filter(Boolean);
     }
-    let type = q.type;
-    if (!type)
-        type = options?.length ? 'select' : 'text';
-    if (options?.length && type !== 'select' && type !== 'checkbox')
-        type = 'select';
-    const field = { id, label, type };
-    if (options?.length)
-        field.options = options;
-    return field;
+    if (!options || options.length < 2)
+        return null;
+    return { id, label, type: 'select', options };
+}
+
+/** Поле пригодно для Cursor AskQuestion UI */
+function isAskQuestionField(f) {
+    return f && f.type === 'select' && Array.isArray(f.options) && f.options.length >= 2;
 }
 
 /**
  * Tool ask_user.args → блок type questions (AskQuestion-совместимо).
+ * Без options / пустой args → makeClarifyQuestions (не text).
  * @param {object} args
  * @param {string} [sender]
+ * @param {{ description?: string }} [step]
  */
-function questionsFromAskUser(args = {}, sender = 'WORK') {
+function questionsFromAskUser(args = {}, sender = 'WORK', step = null) {
     let fields = [];
     if (Array.isArray(args.questions) && args.questions.length)
         fields = args.questions.map(mapAskQuestionToField).filter(Boolean);
     else if (Array.isArray(args.fields) && args.fields.length)
         fields = args.fields.map(mapAskQuestionToField).filter(Boolean);
-    if (!fields.length && (args.question || args.prompt)) {
-        fields = [{
-            id: 'clarify',
-            label: String(args.question || args.prompt),
-            type: 'text',
-        }];
-    }
+    fields = fields.filter(isAskQuestionField);
     if (!fields.length)
-        fields = [{ id: 'details', label: 'Что уточнить?', type: 'text' }];
+        return makeClarifyQuestions(step, sender);
     const btn = String(args.label || args.button || 'Уточнить').trim() || 'Уточнить';
     return {
         type: 'questions',

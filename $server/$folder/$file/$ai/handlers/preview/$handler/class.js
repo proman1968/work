@@ -153,12 +153,12 @@
         </style>
         <microchat-ribbon flex
             :items="ribbonItems"
+            :streaming-text="streamingText"
             @scroll="_onScroll"
             @answer="onFormAnswer($event.detail.time, $event.detail.value)"
             @action-accept="onViewActionAccept($event.detail.item)"
             @action-reject="onViewActionReject($event.detail.item)"
         ></microchat-ribbon>
-        <microchat-streaming ~if="streamingText" :text="streamingText"></microchat-streaming>
         <microchat-panel no-flex
             :action-button="actionButton"
             :pending="pending"
@@ -522,6 +522,8 @@
             return;
         this.streamingText += token;
         this.render();
+        // Стрим в конце ленты — держим хвост внизу viewport
+        this._autoFollow = true;
         this._maybeScrollToBottom();
     },
     _onChatDone(e) {
@@ -940,7 +942,7 @@ function findFirstLeaf(node) {
 
 const RIBBON_VIEW_TYPES = new Set([
     'prompt', 'thinking', 'text', 'action', 'task',
-    'file', 'tool', 'tool_result', 'form', 'error',
+    'file', 'tool', 'tool_result', 'form', 'questions', 'error',
 ]);
 
 /** Открытый action = последний action без последующего prompt */
@@ -950,8 +952,10 @@ function findOpenActionFlat(ribbon) {
         const b = ribbon[i];
         if (b.type === 'prompt' || b.role === 'user')
             return null;
-        if (b.type === 'action')
+        if (b.type === 'action' || b.type === 'form' || b.type === 'questions') {
+            if (b.answered) continue;
             return b;
+        }
     }
     return null;
 }
@@ -966,13 +970,19 @@ function findOpenAction(ribbon) {
     return findOpenActionFlat(ribbon);
 }
 
-/** Собрать answers из action.fields[].value */
+/** Собрать answers из action.fields[].value (только непустые) */
 function collectFieldAnswers(action) {
     if (!action?.fields?.length) return null;
     const answers = {};
-    for (const f of action.fields)
-        answers[f.id] = f.value;
-    return answers;
+    let has = false;
+    for (const f of action.fields) {
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '')
+            continue;
+        answers[f.id] = v;
+        has = true;
+    }
+    return has ? answers : null;
 }
 
 /** Legacy → схема TYPES (тонкий адаптер для старых task.ai) */
@@ -990,11 +1000,27 @@ function normalizeRibbonItem(raw) {
         item.ribbon = Array.isArray(item.ribbon) ? item.ribbon : [];
     }
     if (item.type === 'form') {
-        item.type = 'action';
         item.fields = item.fields || item.questions || [];
-        delete item.questions;
         item.button = item.button || { label: 'Продолжить', color: 'success' };
-        item.content = item.content || 'Заполните поля';
+        if (/^(уточните параметры|заполните поля|уточните данные)\.?$/i.test(String(item.content || '').trim()))
+            item.content = '';
+    }
+    if (item.type === 'questions') {
+        item.fields = item.fields || item.questions || [];
+        item.button = item.button || { label: 'Уточнить', color: 'success' };
+        if (/^(уточните параметры|заполните поля|уточните данные)\.?$/i.test(String(item.content || '').trim()))
+            item.content = '';
+        if (/^(уточнение)$/i.test(String(item.title || '').trim()))
+            item.title = '';
+    }
+    // legacy: action с fields → questions
+    if (item.type === 'action' && item.fields?.length) {
+        item.type = 'questions';
+        item.button = item.button || { label: 'Уточнить', color: 'success' };
+    }
+    if (item.type === 'action') {
+        delete item.fields;
+        delete item.questions;
     }
     if (item.type === 'text' && item.error)
         item.type = 'error';
@@ -1017,10 +1043,28 @@ function normalizeRibbonItem(raw) {
 
 function normalizeRibbon(list) {
     if (!Array.isArray(list)) return [];
-    return list.map(normalizeRibbonItem);
+    const items = list.map(normalizeRibbonItem);
+    // questions/form + последующий prompt → answered; сам prompt с answers не дублируем в UI
+    for (let i = 0; i < items.length; i++) {
+        const b = items[i];
+        if (b.type !== 'questions' && b.type !== 'form') continue;
+        const hasFollowPrompt = items.slice(i + 1).some(x => x.type === 'prompt' || x.role === 'user');
+        if (b.answered || hasFollowPrompt)
+            b.answered = true;
+    }
+    for (let i = 1; i < items.length; i++) {
+        const prev = items[i - 1];
+        const cur = items[i];
+        if (!(cur.type === 'prompt' || cur.role === 'user')) continue;
+        if (!cur.answers || typeof cur.answers !== 'object') continue;
+        if ((prev.type === 'questions' || prev.type === 'form') && prev.answered)
+            cur._hideInView = true;
+    }
+    return items;
 }
 
 function ribbonViewTag(item) {
+    if (item?._hideInView) return '';
     const type = item?.type;
     if (!type || !RIBBON_VIEW_TYPES.has(type)) return '';
     return 'microchat-view-' + type;
@@ -1054,9 +1098,11 @@ ODA({ is: 'microchat-ribbon',
                 @tap-step="fire('tap-step', $event.detail)"
             ></div>
         </div>
+        <microchat-streaming ~if="streamingText" :text="streamingText"></microchat-streaming>
     `,
     imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer, ~/lib/chat-item/chat-item',
     items: [],
+    streamingText: '',
     viewTag(item) {
         return ribbonViewTag(item);
     },
@@ -1201,6 +1247,19 @@ ODA({ is: 'microchat-view-prompt',
                 padding: 4px 8px;
                 position: sticky;
                 top: 0;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .sender {
+                flex-shrink: 0;
+                margin-top: 2px;
+            }
+            .msg-body {
+                @apply --horizontal;
+                flex: 1;
+                min-width: 0;
+                align-items: flex-start;
+                gap: 8px;
             }
             .msg-content {
                 white-space: pre-wrap;
@@ -1209,12 +1268,31 @@ ODA({ is: 'microchat-view-prompt',
             .msg-time {
                 font-size: xx-small;
                 opacity: .5;
+                flex-shrink: 0;
             }
         </style>
-        <div class="msg-content" flex>{{item?.content}}</div>
-        <div class="msg-time" ~if="item?.timeText">{{item.timeText}}</div>
+        <oda-icon class="sender" icon="icons:account-circle" icon-size="24"></oda-icon>
+        <div class="msg-body" flex>
+            <div class="msg-content" flex>{{displayContent}}</div>
+            <div class="msg-time" ~if="item?.timeText">{{item.timeText}}</div>
+        </div>
     `,
+    imports: 'oda//icon',
     item: null,
+    get displayContent() {
+        const c = String(this.item?.content || '');
+        const answers = this.item?.answers;
+        if (!answers || typeof answers !== 'object')
+            return c;
+        if (c.includes('\n'))
+            return c;
+        const lines = Object.entries(answers)
+            .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+            .map(([k, v]) => k + ': ' + v);
+        if (!lines.length)
+            return c;
+        return (c ? c + '\n' : '') + lines.join('\n');
+    },
 });
 
 ODA({ is: 'microchat-view-thinking',
@@ -1245,12 +1323,85 @@ ODA({ is: 'microchat-view-action',
         </style>
         <div class="title" ~if="item?.title">{{item.title}}</div>
         <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
-        <oda-chat-form ~if="item?.fields?.length"
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+});
+
+ODA({ is: 'microchat-view-form',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --raised;
+                gap: 4px;
+                padding: 6px 8px;
+            }
+            .title { @apply --bold; font-size: small; }
+            .qa { @apply --vertical; gap: 6px; }
+            .qa-row { @apply --vertical; gap: 2px; }
+            .qa-q { font-size: small; @apply --bold; }
+            .qa-a { font-size: small; white-space: pre-wrap; }
+        </style>
+        <div class="title" ~if="item?.title">{{item.title}}</div>
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+        <div class="qa" ~if="item?.answered && item?.fields?.length">
+            <div class="qa-row" ~for="item.fields">
+                <div class="qa-q">{{$for.item.label || $for.item.id}}</div>
+                <div class="qa-a">{{formatAnswer($for.item)}}</div>
+            </div>
+        </div>
+        <oda-chat-form ~if="!item?.answered && item?.fields?.length"
             :questions="item.fields"
             :hide-submit="true"></oda-chat-form>
     `,
     imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     item: null,
+    formatAnswer(f) {
+        if (!f) return '';
+        if (f.type === 'checkbox') return f.value ? 'да' : 'нет';
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '') return '—';
+        return String(v).trim();
+    },
+});
+
+ODA({ is: 'microchat-view-questions',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --raised;
+                gap: 4px;
+                padding: 6px 8px;
+            }
+            .title { @apply --bold; font-size: small; }
+            .qa { @apply --vertical; gap: 6px; }
+            .qa-row { @apply --vertical; gap: 2px; }
+            .qa-q { font-size: small; @apply --bold; }
+            .qa-a { font-size: small; white-space: pre-wrap; }
+        </style>
+        <div class="title" ~if="item?.title">{{item.title}}</div>
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+        <div class="qa" ~if="item?.answered && item?.fields?.length">
+            <div class="qa-row" ~for="item.fields">
+                <div class="qa-q">{{$for.item.label || $for.item.id}}</div>
+                <div class="qa-a">{{formatAnswer($for.item)}}</div>
+            </div>
+        </div>
+        <oda-chat-form ~if="!item?.answered && item?.fields?.length"
+            :questions="item.fields"
+            :hide-submit="true"></oda-chat-form>
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+    formatAnswer(f) {
+        if (!f) return '';
+        if (f.type === 'checkbox') return f.value ? 'да' : 'нет';
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '') return '—';
+        return String(v).trim();
+    },
 });
 
 ODA({ is: 'microchat-view-task',
@@ -1337,7 +1488,10 @@ ODA({ is: 'microchat-view-task',
     `,
     imports: 'oda//icon',
     item: null,
-    collapsed: false,
+    collapsed: {
+        $def: true,
+        $type: Boolean,
+    },
     get steps() {
         return this.item?.steps || [];
     },
@@ -1424,15 +1578,6 @@ ODA({ is: 'microchat-view-tool_result',
     },
 });
 
-ODA({ is: 'microchat-view-form',
-    // Legacy: форма теперь внутри action.fields
-    template: /*html*/`
-        <oda-chat-form :questions="item?.fields || item?.questions || []"
-            :hide-submit="true"></oda-chat-form>
-    `,
-    item: null,
-});
-
 ODA({ is: 'microchat-view-error',
     template: /*html*/`
         <style>
@@ -1510,9 +1655,9 @@ ODA({is: 'oda-chat-form',
                 padding: 8px;
                 border-radius: 4px;
             }
-            .field { @apply --vertical; gap: 2px; }
+            .field { @apply --vertical; gap: 4px; }
             .field label { font-size: medium; @apply --bold; }
-            .field input[type="text"], .field input[type="number"], .field input[type="email"], .field input[type="date"], .field textarea, .field select {
+            .field input[type="text"], .field input[type="number"], .field input[type="email"], .field input[type="date"], .field textarea {
                 @apply --content;
                 border-radius: 4px;
                 padding: 8px;
@@ -1524,18 +1669,32 @@ ODA({is: 'oda-chat-form',
             }
             .field input[type="checkbox"] { width: 20px; height: 20px; cursor: pointer; }
             .field textarea { min-height: 3em; resize: vertical; }
+            .options { @apply --vertical; gap: 4px; }
+            .option {
+                @apply --content;
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 6px;
+                padding: 8px 10px;
+                font-size: medium;
+                cursor: pointer;
+                user-select: none;
+            }
+            .option:hover { @apply --header; }
+            .option.selected {
+                border-color: var(--success-color, #2e7d32);
+                background: color-mix(in srgb, var(--success-color, #2e7d32) 12%, transparent);
+            }
         </style>
         <div class="field" ~for="questions">
             <label ~if="$for.item.type !== 'checkbox'">{{$for.item.label}}</label>
             <textarea ~if="$for.item.type === 'textarea'"
                 ::value="$for.item.value"
                 placeholder="Введите ответ..."></textarea>
-            <select ~if="$for.item.type === 'select'"
-                ::value="$for.item.value"
-                @change="$for.item.value = $event.target.value">
-                <option value="" disabled>Выберите...</option>
-                <option ~for="$for.item.options" :value="$for.item">{{$for.item}}</option>
-            </select>
+            <div class="options" ~if="$for.item.type === 'select' && $for.item.options?.length">
+                <div class="option" ~for="indexedOptions($for.item)"
+                    ~class="selected: $for.item.field.value === $for.item.opt"
+                    @tap="selectOption($for.item.field, $for.item.opt)">{{$for.item.opt}}</div>
+            </div>
             <label ~if="$for.item.type === 'checkbox'" horizontal style="align-items: center; gap: 8px; cursor: pointer;">
                 <input type="checkbox" ::checked="$for.item.value">
                 <span>{{$for.item.label}}</span>
@@ -1555,10 +1714,27 @@ ODA({is: 'oda-chat-form',
         <oda-button ~if="!hideSubmit" success icon="icons:check" label="Ответить" @tap="submit"></oda-button>
     `,
     imports: 'oda//button',
-    questions: [],
+    questions: {
+        $def: [],
+        set(v) {
+            this._normalizeQuestions(v);
+        },
+    },
     hideSubmit: false,
     init() {
-        for (const q of this.questions) {
+        this._normalizeQuestions(this.questions);
+    },
+    indexedOptions(field) {
+        if (!field?.options?.length) return [];
+        return field.options.map(opt => ({ field, opt }));
+    },
+    selectOption(field, opt) {
+        if (field) field.value = opt;
+    },
+    _normalizeQuestions(list) {
+        if (!Array.isArray(list)) return;
+        for (const q of list) {
+            if (!q || typeof q !== 'object') continue;
             if (q.type === 'select' && Array.isArray(q.options)) {
                 q.options = q.options.map(opt => {
                     if (typeof opt === 'string') return opt;
@@ -1566,7 +1742,7 @@ ODA({is: 'oda-chat-form',
                     return String(opt);
                 });
             }
-            if (q.value === undefined)
+            if (q.value === undefined || q.value === null)
                 q.value = q.type === 'checkbox' ? false : '';
         }
     },
