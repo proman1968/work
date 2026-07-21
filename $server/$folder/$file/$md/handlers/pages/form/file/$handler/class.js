@@ -1,6 +1,7 @@
 export default {
-    imports: '/oda//markdown-viewer/markdown-viewer.js',
-    fileControl: 'oda-md-viewer'
+    imports: '/oda//markdown/markdown.js',
+    fileControl: 'oda-md-viewer',
+    allowSave: true
 }
 
 ODA({
@@ -8,14 +9,16 @@ ODA({
     template: /*html*/`
         <style>
             :host{
+                @apply --flex;
                 @apply --vertical;
                 overflow: auto;
-                @apply --flex;
             }
         </style>
-        <oda-markdown-viewer :value flex></oda-markdown-viewer>
+        <oda-button slot="top-panel" :icon="editMode ? 'carbon:view' : 'carbon:edit'" :title="editMode ? 'view' : 'edit'" @tap="changeMode"></oda-button>
+        <oda-markdown :value :edit-mode flex @change="_onChanged"></oda-markdown>
     `,
     value: '',
+    editMode: false,
     $item: {
         $def: null,
         set(n) {
@@ -30,12 +33,24 @@ ODA({
                             text = File.fixMdHistoryLinks(text);
                         this.value = text;
                     };
-                    if (content?.DATA instanceof Blob)
+                    if (content?.DATA instanceof Blob) {
                         content.DATA.text().then(text => apply(text));
-                    else
+                    }
+                    else {
                         apply(content);
+                    }
                 })
             }
         }
+    },
+    _onChanged(e) {
+        const body = e.detail.value;
+        if (!this.$item.body || (this.$item.body !== body)) {
+            this.$item.body = body;
+            this.$item.isChanged = true;
+        }
+    },
+    changeMode(e) {
+        this.editMode = !this.editMode;
     }
 })

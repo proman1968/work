@@ -1,7 +1,6 @@
 # Прогресс: item-tree
 
 ## Последние изменения
-- [2026-07-21] `expanderIcon`: `expanded`/`items` синхронно в геттере — иначе ODA не трекает deps (чтение в AsyncPromise), chevron не крутился при expand
 - [2026-07-20] Фильтр `readme.md` только при `hideReadme` — в explorer файлы снова видны; меню handlers передаёт флаг само
 - [2026-07-20] В `getItems` и `oda-tree-node.items` добавлен фильтр `readme.md` — документация уровня не попадает в навигационный список; данные `$item.items` не очищаются
 

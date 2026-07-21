@@ -64,8 +64,7 @@ export default {
         return this.$item?.fetch('handlers', {path: this.path});
     },
     get handlersReadme() {
-        return new AsyncPromise(async () => {
-            const root = await this.handlersRoot;
+        return Promise.resolve(this.handlersRoot).then(async root => {
             if (!root) return null;
             let items = root.items;
             if (items?.then) items = await items;
@@ -83,7 +82,7 @@ export default {
         })
     },
     get hasHandlersReadme() {
-        return new AsyncPromise(async () => !!(await this.handlersReadme));
+        return Promise.resolve(this.handlersReadme).then(r => !!r);
     },
     async openHandlersReadme(e) {
         e?.stopPropagation?.();

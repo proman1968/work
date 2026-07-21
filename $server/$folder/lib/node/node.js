@@ -80,10 +80,8 @@ export default {
     showUsers: false,
     hideLabel: false,
     get readmeItem() {
-        return new AsyncPromise(async () => {
-            if (!this.$item) return null;
-            let items = this.$item.items;
-            if (items?.then) items = await items;
+        if (!this.$item) return null;
+        return Promise.resolve(this.$item.items).then(async items => {
             if (Array.isArray(items)) {
                 const found = items.find(f => /^readme\.md$/i.test(f.id));
                 if (found) return found;
@@ -98,7 +96,7 @@ export default {
         })
     },
     get hasReadme() {
-        return new AsyncPromise(async () => !!(await this.readmeItem));
+        return Promise.resolve(this.readmeItem).then(r => !!r);
     },
     async openReadme(e) {
         e?.stopPropagation?.();
@@ -117,9 +115,7 @@ export default {
     },
     get showBoss(){
         if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
-            return new AsyncPromise(async ()=>{
-                return !!await this.boss;
-            })
+            return Promise.resolve(this.boss).then(b => !!b);
         }
     },
     get status(){
@@ -128,10 +124,8 @@ export default {
         return ''
     },
     get boss(){
-        return new AsyncPromise(async ()=>{
-            if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
-            return await Promise.resolve(this.$item?.boss);
-        })
+        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
+        return Promise.resolve(this.$item?.boss);
     },
     get icon() {
         if (this.$item instanceof CORE.$handler && this.$item?.id === 'file') {

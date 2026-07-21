@@ -287,10 +287,10 @@ export default {
         }
     },
     get sub_items() {
-        return new AsyncPromise(async () => {
-            if (!this.$item) return [];
-            return ((await this.$item.items) || []).filter(i => i instanceof CORE.$class);
-        });
+        if (!this.$item) return [];
+        return Promise.resolve(this.$item.items).then(items =>
+            (items || []).filter(i => i instanceof CORE.$class)
+        );
     },
     isSelf(item) {
         return item === this.$item || item?.short === this.$item?.short;
@@ -435,5 +435,5 @@ export default {
             WORK.authEvents?.removeEventListener('auth', this._boundAuth);
             WORK.AUTH_CHANNEL?.removeEventListener('message', this._boundAuth);
         }
-    },
+    }
 }

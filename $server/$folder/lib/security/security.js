@@ -18,8 +18,7 @@ export default {
         set(n) {},
     },
     get admin() {
-        return new AsyncPromise(async ()=>{
-            let admins = await Promise.resolve(this.$item?.admins);
+        return Promise.resolve(this.$item?.admins).then(admins => {
             return this.admin = admins?.length ? admins.last : null;
         })
     },

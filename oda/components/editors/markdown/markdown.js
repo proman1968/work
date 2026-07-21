@@ -1,9 +1,9 @@
 import './markdown-editor/markdown-editor.js';
 import './markdown-viewer/markdown-viewer.js';
 ODA({is: 'oda-markdown', imports: 'oda//splitter',
-    template:`
+    template: /*html*/`
         <style>
-            :host{
+            :host {
                 @apply --horizontal;
                 @apply --flex;
                 overflow: hidden;
@@ -24,7 +24,7 @@ ODA({is: 'oda-markdown', imports: 'oda//splitter',
     `,
     value: '',
     _value: '',
-    url:{
+    url: {
         $type: String,
         async set(n) {
             this.value = await fetch(n).then(r => r.text());
@@ -32,7 +32,7 @@ ODA({is: 'oda-markdown', imports: 'oda//splitter',
     },
     editMode: {
         $def: false,
-        set(n){
+        set(n) {
             this._isReady = false;
             if (n) {
                 this.async(() => {
@@ -47,10 +47,10 @@ ODA({is: 'oda-markdown', imports: 'oda//splitter',
         }
     },
     readOnly: false,
-    get editor(){
+    get editor() {
         return this.$('oda-markdown-editor');
     },
-    get viewer(){
+    get viewer() {
         return this.$('oda-markdown-viewer');
     },
     _onDblclick() {

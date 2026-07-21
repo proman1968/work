@@ -65,23 +65,20 @@ export class $class extends $folder{
         return result;
     }
     get metadata() {
-        return new AsyncPromise(async ()=>{
-            let body = await this.body;
+        return Promise.resolve(this.body).then(body => {
             if (!body?.METADATA)
                 body.METADATA = {};
             return body?.METADATA;
         })
     }
     get $fields(){
-        return new AsyncPromise(async ()=>{
-            let meta = await this.metadata;
+        return Promise.resolve(this.metadata).then(meta => {
             meta.FIELDS ??= {id: 'FIELDS', icon: 'iconoir:input-field', fields: []}
             return new CORE.$field(meta.FIELDS, this);
         })
     }
     get $statics(){
-        return new AsyncPromise(async ()=>{
-            let meta = await this.metadata;
+        return Promise.resolve(this.metadata).then(meta => {
             meta.STATIC ??= {id: 'STATIC', icon: 'carbon:tree-view-alt', fields: []}
             return new CORE.$field(meta.STATIC, this);
         })

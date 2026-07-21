@@ -7,6 +7,6 @@ export default{
         
     `,
     list:[
-        '/users', '/nodes', '/support', '/paas'
+        '/users', '/MARKET', '/support'
     ]  
 }

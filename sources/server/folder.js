@@ -218,8 +218,7 @@ export class $folder extends $item{
         return 0;
     }
     get size(){
-        return new AsyncPromise(async ()=>{
-            let items = await this.items;
+        return Promise.resolve(this.items).then(async items => {
             let sizes = await Promise.all(items.map(f=>f.size));
             return sizes.sum();
         })
@@ -370,7 +369,7 @@ export class $folder extends $item{
         return res
     }
     get rag(){
-        return new AsyncPromise(async _=>{
+        return (async _=>{
             if(this.id === '.RAG')
                 return {}
             if(this.inherit_source)
@@ -489,7 +488,7 @@ export class $folder extends $item{
                 // fs.writeFileSync(RAG.real_dir, text, {encoding: 'utf-8'});
             }
             return body;
-        })
+        })()
     }
     /**
      * @ai Семантический поиск по эмбеддингам (RAG) внутри класса
@@ -830,16 +829,10 @@ export class $folder extends $item{
 
     static server_item = true;
     get triggers(){
-        return new AsyncPromise(async ()=>{
-            let files = await this.tilde;
-            return files.find(f=>f.id === 'triggers');
-        })
+        return Promise.resolve(this.tilde).then(files => files.find(f=>f.id === 'triggers'));
     }
     get lib(){
-        return new AsyncPromise(async ()=>{
-            let files = await this.tilde;
-            return files.find(f=>f.id === 'lib');
-        })
+        return Promise.resolve(this.tilde).then(files => files.find(f=>f.id === 'lib'));
     }
     get $context(){
         let parent = this.parent;
@@ -850,7 +843,7 @@ export class $folder extends $item{
     }
     /** Контекстные триггеры (~triggers/*), обогащённые class.js и привязанные к владельцу */
     get _triggers(){
-        return new AsyncPromise(async ()=>{
+        return (async ()=>{
             const result = {};
             try {
                 const triggers = await this.get_item('~/triggers/*');
@@ -861,11 +854,11 @@ export class $folder extends $item{
                 }
             } catch {}
             return result;
-        });
+        })();
     }
     /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
     get _methods(){
-        return new AsyncPromise(async ()=>{
+        return (async ()=>{
             const result = {};
             try {
                 const methods = await this.get_item('~/methods/*');
@@ -876,7 +869,7 @@ export class $folder extends $item{
                 }
             } catch {}
             return result;
-        });
+        })();
     }
     get files(){
         return new AsyncPromise(async ()=>{

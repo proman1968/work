@@ -1,7 +1,0 @@
-{
-  "shopId": "000000",
-  "secretKey": "test_…",
-  "returnUrl": "https://work.example.org/SYS/Billing/~/handlers//dashboard/?payment=done",
-  "webhookPath": "/api/billing/yookassa/webhook",
-  "webhookSecret": ""
-}

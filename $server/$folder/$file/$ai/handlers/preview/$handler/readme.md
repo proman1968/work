@@ -1,47 +1,47 @@
+# Preview микрочата (task.ai)
 
-Этот компонент "микрочат" является представлением  файла task.ai.
+Визуализатор файла `.ai` по схеме [`$ai/class.js`](/$server/$folder/$file/$ai/class.js/~/handlers/pages/form/).
 
-Главный компонент должен состоять из 2- модулей:
-microchat-ribbon - показывает массив ribbon: []
-microchat-panel - показывает все необходимые инструменты для взаимодействия с ИИ.
+## Состав
 
-microchat-ribbon состояит из 2-х частей
-1. сама лента, которая отображает блоки ribbon в соответствии с их типом с помощью специальных представлений, переключаемых через ~if
-1.1. mictochat-view-prompt (запрос пользователя);
-1.2. microchat-view-thinking (мысли ИИ):
-1.3. microchat-view-text (ответы ИИ):
-1.4. microchat-view-action (представление для описания и согласование действия с пользователем через панель действий)
-1.5. microchat-view-task (представление управления выполнением задачи, с планом и его контролем, содержит внутри вложенный microchat-ribbon)
-Это основной набор представлений, но со временем он будет расти....
-type в структуре task.ai должен строго соответвовать именам представлений
-(mictochat-view-prompt -> type==="prompt")
+| Модуль | Назначение |
+|--------|------------|
+| `microchat-ribbon` | лента блоков `ribbon[]` |
+| `microchat-streaming` | стриминг ответа |
+| `microchat-panel` | actions / input / settings |
 
-1. microchat-strimming , которая отображается только при стриминге
+## Контракт type → view
 
-microchat-panel состоит из 3-х зон
-1. панель действий
-2. панель ввода (текст, файлы, изображения, звук)
-3. панель настоек (выбор сети, )Для начала определим общую структуру.
-Этот компонент представляет собой визуализатор файла task.ai.
-Главный компонент должен состоять из 2- модулей:
-microchat-ribbon - показывает массив ribbon: []
-microchat-panel - показывает все необходимые инструменты для взаимодействия с ИИ.
+`type` блока = суффикс компонента: `microchat-view-<type>`.
 
-microchat-ribbon состояит из 2-х частей
-1. сама лента, которая отображает блоки ribbon в соответствии с их типом с помощью специальных представлений, переключаемых через ~if
-1.1. mictochat-view-prompt (запрос пользователя);
-1.2. microchat-view-thinking (мысли ИИ):
-1.3. microchat-view-text (ответы ИИ):
-1.4. microchat-view-action (представление для описания и согласование действия с пользователем через панель действий)
-1.5. microchat-view-task (представление управления выполнением задачи, с планом и его контролем, содержит внутри вложенный microchat-ribbon)
-Это основной набор представлений, но со временем он будет расти....
-type в структуре task.ai должен строго соответвовать именам представлений
-(mictochat-view-prompt -> type==="prompt")
+| type | компонент |
+|------|-----------|
+| `prompt` | `microchat-view-prompt` |
+| `thinking` | `microchat-view-thinking` |
+| `text` | `microchat-view-text` |
+| `action` | `microchat-view-action` — MD + опционально `fields` (метамодель); **кнопка только на панели** |
+| `task` | `microchat-view-task` (план + steps + вложенный ribbon) |
+| `file` | `microchat-view-file` |
+| `tool` | `microchat-view-tool` |
+| `tool_result` | `microchat-view-tool_result` |
+| `error` | `microchat-view-error` |
 
-2. microchat-strimming , которая отображается только при стриминге
+`action` — предложение: `content` (MD), опционально `fields[]` (id/label/type/options/value), `button`. Открытый = последний action без последующего `prompt`. Кнопка панели шлёт `{ text: label, confirm: true, answers? }`.
 
-microchat-panel состоит из 3-х зон
-1. панель действий
-2. панель ввода (текст, файлы, изображения, звук)
-3. панель настоек (выбор сети, уровни доверия, вкл tts)
+`task` появляется после prompt-принятия плана. В `task.ribbon` — исполнение (thinking / action с fields / tools).
 
+## Legacy-адаптер
+
+При рендере старых файлов:
+
+- `role:'user'` → `prompt`
+- `details` / `reasoning` → `thinking`
+- `block` → `task`
+- `form` / `questions` → `action` + `fields`
+- `text` + `error` → `error`
+
+## Состояние
+
+- ✅ схема TYPES в `$ai/class.js`
+- ✅ visualizers + ribbon/panel/streaming
+- ✅ harness пишет новые type; action = MD; стоп до confirm

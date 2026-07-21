@@ -339,16 +339,14 @@ ODA({is: 'oda-tree-node',
         }
     },
     get items() {
-        return new AsyncPromise(async ()=>{
-            let items = (await this.$item?.[this.$pdp.itemsSelector]) || [];
+        return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
+            let items = raw || [];
             if(this.$pdp.hideSystem)
                 items = items.filter(f=>!f.isType)
             if(this.$pdp.hideReadme)
                 items = items.filter(f => !/^readme\.md$/i.test(f.id))
             this.$item?.addEventListener?.('changed', e=>{
-                this.items = undefined;
                 this.async(async ()=>{
-                    this.render();
                     this.$item.expanded = true;
                     if(e.detail.value){
                         let item = (await this.items)?.find(f=>f.id === e.detail.value);
@@ -361,16 +359,10 @@ ODA({is: 'oda-tree-node',
         })
     },
     get expanderIcon() {
-        // expanded/items читать синхронно — иначе ODA не трекает зависимость
-        // (чтение внутри AsyncPromise microtask не инвалидирует геттер)
-        const icon = 'icons:chevron-right' + (this.expanded ? ':90' : '');
-        const itemsPromise = this.items;
-        return new AsyncPromise(async ()=>{
-            let items = await itemsPromise;
-            if (!items?.length)
-                return '';
-            return icon;
-        })
+        let icon = 'icons:chevron-right';
+        if (this.expanded)
+            icon += ':90'
+        return Promise.resolve(this.items).then(items => items?.length ? icon : '');
     },
     iconChecked: 'icons:check-box',
     iconUnchecked: 'icons:check-box-outline-blank',

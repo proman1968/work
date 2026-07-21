@@ -489,12 +489,9 @@ ODA({is: 'oda-tree-item',
         }
     },
     get items() {
-        return new AsyncPromise(async ()=>{
-            let items = (this.row?.[this.$pdp.itemsSelector] || []);
+        return Promise.resolve(this.row?.[this.$pdp.itemsSelector] || []).then(items => {
             this.row?.addEventListener?.('changed', e=>{
-                this.items = undefined;
                 this.async(async ()=>{
-                    this.render();
                     this.row.expanded = true;
                     if(e.detail.value){
                         let item = (await this.items)?.find(f=>f.id === e.detail.value);
@@ -507,15 +504,10 @@ ODA({is: 'oda-tree-item',
         })
     },
     get expanderIcon() {
-        return new AsyncPromise(async ()=>{
-            let icon = 'icons:chevron-right';
-            if (this.expanded)
-                icon += ':90'
-            let items = await this.items;
-            if (!items?.length)
-                return '';
-            return icon;
-        })
+        let icon = 'icons:chevron-right';
+        if (this.expanded)
+            icon += ':90'
+        return Promise.resolve(this.items).then(items => items?.length ? icon : '');
     },
     iconChecked: 'icons:check-box',
     iconUnchecked: 'icons:check-box-outline-blank',

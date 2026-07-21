@@ -43,9 +43,6 @@ export default {
                 flex-shrink: 1;
                 min-width: 0;
             }
-            
-                to { opacity: 1; }
-            }
         </style>
         <work-form :$item flex :view_name></work-form>
     `,
@@ -72,6 +69,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
                 <div flex></div>
+                <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
                             <oda-button ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
@@ -219,10 +217,9 @@ ODA({is: 'work-form',
         return this.$item?.fetch('roles');
     },
     get showRoleSelector() {
-        return new AsyncPromise(async () => {
-            const roles = await this.roles;
-            return Array.isArray(roles) && roles.length > 1;
-        });
+        return Promise.resolve(this.roles).then(roles =>
+            Array.isArray(roles) && roles.length > 1
+        );
     },
     async getRoleIcon(role){
         return  ({

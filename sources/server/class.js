@@ -14,7 +14,7 @@ export class $class extends $folder{
     static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER' };
 
     /** Зоны доступа внутри класса. */
-    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work', PROTECTED: 'protected' };
+    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work' };
 
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
@@ -1037,7 +1037,7 @@ export class $class extends $folder{
         }
     }
     get structure(){
-        return new AsyncPromise(async ()=>{
+        return (async ()=>{
             let item = await this.info();
             let result = {
                 id: item.id,
@@ -1061,7 +1061,7 @@ export class $class extends $folder{
             if(!result.items.length)
                 delete result.items;
             return result;
-        })
+        })()
     }
     get settings(){
         if(this.meta_folder){
@@ -1087,21 +1087,14 @@ export class $class extends $folder{
             fs.mkdirSync(dir, { recursive: true });
     }
 
-    /** Путь под /SYS/ — защищённая зона (read: root ADMIN, write: только WORK). */
-    _isSysProtectedPath(item) {
-        const path = item?.path ?? '';
-        return path === '/SYS' || path.startsWith('/SYS/');
-    }
-
     /**
+     * Определить зону элемента относительно текущего класса.
      * Обходит предков элемента внутри класса:
      * — элемент внутри distributed $work → MANAGEMENT
      * — элемент внутри meta $work → WORK
      * — элемент внутри метапапки, но вне $work → SYSTEM
      */
     resolveZone(item) {
-        if (this._isSysProtectedPath(item))
-            return $class.ZONES.PROTECTED;
         if (!item || typeof item !== 'object')
             return null;
         let p = item;
@@ -1132,10 +1125,6 @@ export class $class extends $folder{
     async canSee(item, params = {}) {
         if ($class.isDevMode) return true;
         if (!item || typeof item !== 'object') return true;
-        if (this._isSysProtectedPath(item)) {
-            if (params.user === globalThis.WORK) return true;
-            return await this._isWorkAdmin(params);
-        }
         const uid = $class.resolveUid(params);
         if (!uid) {
             // Системные пути без пользователя
@@ -1175,8 +1164,6 @@ export class $class extends $folder{
     async canWrite(item, params = {}) {
         if ($class.isDevMode) return true;
         if (!item || typeof item !== 'object') return false;
-        if (this._isSysProtectedPath(item))
-            return params.user === globalThis.WORK;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
         if (globalThis.WORK && await this._isWorkAdmin(params))
@@ -1207,11 +1194,8 @@ export class $class extends $folder{
         const uid = $class.resolveUid(params);
         if (!uid && level !== $class.ACCESS_LEVEL.READ)
             throw new Error(ACCESS_DENIED);
-        if (globalThis.WORK && await this._isWorkAdmin(params)) {
-            if (level === $class.ACCESS_LEVEL.WRITE && this._isSysProtectedPath(this))
-                throw new Error(ACCESS_DENIED);
+        if (globalThis.WORK && await this._isWorkAdmin(params))
             return;
-        }
         switch (level) {
             case $class.ACCESS_LEVEL.READ:
                 if (!(await this.canSee(this, params)))
@@ -1296,8 +1280,7 @@ export class $class extends $folder{
 
     /** Один администратор класса (из #security.ADMIN, без наследования). */
     get admin(){
-        return new AsyncPromise(async () => {
-            await this.info();
+        return Promise.resolve(this.info()).then(async () => {
             const uid = this.DATA['#security']?.ADMIN;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
@@ -1308,8 +1291,7 @@ export class $class extends $folder{
     }
     /** Один управляющий класса (из #security.BOSS, без наследования). */
     get boss(){
-        return new AsyncPromise(async () => {
-            await this.info();
+        return Promise.resolve(this.info()).then(async () => {
             const uid = this.DATA['#security']?.BOSS;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
@@ -1320,8 +1302,7 @@ export class $class extends $folder{
     }
     /** Исполнители класса (из #security.USERS, без наследования). */
     get users(){
-        return new AsyncPromise(async () => {
-            await this.info();
+        return Promise.resolve(this.info()).then(async () => {
             const ids = this.DATA['#security']?.USERS;
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
@@ -1356,12 +1337,11 @@ export class $class extends $folder{
     }
     /** Все назначенные пользователи класса (объединение admins + bosses + users). */
     get assignedUsers(){
-        return new AsyncPromise(async () => {
-            const [admins, bosses, users] = await Promise.all([
-                this.admins,
-                this.bosses,
-                this.users,
-            ]);
+        return Promise.all([
+            Promise.resolve(this.admins),
+            Promise.resolve(this.bosses),
+            Promise.resolve(this.users),
+        ]).then(([admins, bosses, users]) => {
             const all = [...admins, ...bosses, ...users];
             const seen = new Set();
             return all.filter(u => {

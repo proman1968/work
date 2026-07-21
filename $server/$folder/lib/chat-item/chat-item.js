@@ -224,10 +224,9 @@ ODA({is: 'chat-item',
     get fileLabel() {
         if (this._includeFile?.path)
             return CORE.historyEntryLabel(this._includeFile.path);
-        return new AsyncPromise(async ()=>{
-            let body = await this.itemBody;
-            return body?.path ? CORE.historyEntryLabel(body.path) : '';
-        })
+        return Promise.resolve(this.itemBody).then(body =>
+            body?.path ? CORE.historyEntryLabel(body.path) : ''
+        );
     },
     async loadPreview($file) {
         if (!$file) {
@@ -257,8 +256,7 @@ ODA({is: 'chat-item',
         get() {
             if (this._includeFile)
                 return this._includeFile;
-            return new AsyncPromise(async ()=>{
-                let body = await this.itemBody;
+            return Promise.resolve(this.itemBody).then(async body => {
                 if (!body?.path)
                     return null;
                 let $file = await WORK.get_item(body.path, 'info');
@@ -322,8 +320,7 @@ ODA({is: 'chat-item',
         }
     },
     get sender() {
-        return new AsyncPromise(async ()=>{
-            let body = await this.itemBody;
+        return Promise.resolve(this.itemBody).then(async body => {
             if (!body?.sender) {
                 this.senderIsReady = true;
                 return null;
