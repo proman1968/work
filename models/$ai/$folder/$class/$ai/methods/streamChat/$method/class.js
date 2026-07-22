@@ -9,7 +9,65 @@ import * as https from 'node:https';
  *
  * Формат SSE function_call (OpenAI-compatible, GigaChat):
  *   delta.tool_calls[].function.{name, arguments}
+ *   GigaChat часто отдаёт arguments уже объектом — не делать += в строку.
  */
+
+/**
+ * Накопить arguments FC: string-чанки склеиваются, object → JSON (GigaChat).
+ * @param {string} acc
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function appendFunctionArgs(acc, value) {
+    if (value == null || value === '')
+        return acc || '';
+    if (typeof value === 'object') {
+        let next = '';
+        try {
+            next = JSON.stringify(value);
+        } catch {
+            return acc || '';
+        }
+        if (!acc)
+            return next;
+        try {
+            const base = JSON.parse(acc);
+            if (base && typeof base === 'object' && !Array.isArray(base))
+                return JSON.stringify(Object.assign({}, base, value));
+        } catch {}
+        return next;
+    }
+    return (acc || '') + String(value);
+}
+
+/**
+ * Разобрать накопленные arguments; мусор "[object Object]" → {}.
+ * @param {string|object} acc
+ * @returns {object}
+ */
+export function parseFunctionArgs(acc) {
+    if (acc == null || acc === '')
+        return {};
+    if (typeof acc === 'object' && !Array.isArray(acc))
+        return sanitizeParsedArgs(acc);
+    const s = String(acc);
+    if (s === '[object Object]')
+        return {};
+    try {
+        return sanitizeParsedArgs(JSON.parse(s));
+    } catch {
+        return { raw: s };
+    }
+}
+
+function sanitizeParsedArgs(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        return {};
+    if (parsed.raw === '[object Object]' && Object.keys(parsed).length === 1)
+        return {};
+    return parsed;
+}
+
 export default {
     async *execute(params = {}, post) {
         const ai = params.$ai || this;
@@ -69,12 +127,7 @@ export default {
         const flushFunctionCall = function* () {
             if (!funcCallName)
                 return;
-            let parsedArgs = {};
-            try {
-                parsedArgs = funcCallArgs ? JSON.parse(funcCallArgs) : {};
-            } catch {
-                parsedArgs = { raw: funcCallArgs };
-            }
+            const parsedArgs = parseFunctionArgs(funcCallArgs);
             yield {
                 type: 'function_call',
                 name: funcCallName,
@@ -111,16 +164,16 @@ export default {
                         for (const tc of delta.tool_calls) {
                             if (tc.function?.name)
                                 funcCallName = tc.function.name;
-                            if (tc.function?.arguments)
-                                funcCallArgs += tc.function.arguments;
+                            if (tc.function?.arguments != null)
+                                funcCallArgs = appendFunctionArgs(funcCallArgs, tc.function.arguments);
                         }
                     }
                     // Старый формат function_call
                     if (delta.function_call) {
                         if (delta.function_call.name)
                             funcCallName = delta.function_call.name;
-                        if (delta.function_call.arguments)
-                            funcCallArgs += delta.function_call.arguments;
+                        if (delta.function_call.arguments != null)
+                            funcCallArgs = appendFunctionArgs(funcCallArgs, delta.function_call.arguments);
                     }
 
                     // Завершение — function_call | tool_calls | stop с накопленным именем
@@ -131,6 +184,20 @@ export default {
                         || (finishReason === 'stop' && funcCallName)
                     ) {
                         yield* flushFunctionCall();
+                    }
+
+                    // Usage (часто в финальном chunk GigaChat / OpenAI stream)
+                    if (json.usage) {
+                        const u = json.usage;
+                        const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
+                        const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
+                        const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
+                        yield {
+                            type: 'usage',
+                            prompt_tokens: promptTokens,
+                            completion_tokens: completionTokens,
+                            total_tokens: totalTokens,
+                        };
                     }
                 }
                 catch {}

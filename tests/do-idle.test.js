@@ -58,8 +58,9 @@ describe('formatPromptWithAnswers', () => {
             { id: 'topic', label: 'Тема презентации:' },
             { id: 'slides_count', label: 'Сколько слайдов?:' },
         ]);
-        assert.equal(text, 'Тема презентации: work\nСколько слайдов?: 12');
+        assert.equal(text, 'Тема презентации: work\nСколько слайдов: 12');
         assert.ok(!text.includes('Уточнить'));
+        assert.ok(!text.includes('?:'));
         assert.ok(!text.includes('::'));
     });
 
@@ -220,7 +221,7 @@ describe('buildToolMethodParams', () => {
         assert.equal(p.name, 'a.html');
     });
 
-    it('uses aiUser for write_file but keeps user role', () => {
+    it('uses aiUser for save_file but keeps user role', () => {
         const user = { uid: 'u1' };
         const aiUser = { uid: 'GigaChat', isAI: true, $user: user };
         const p = buildToolMethodParams(
@@ -235,18 +236,21 @@ describe('buildToolMethodParams', () => {
 });
 
 describe('ensureHarnessFunctions', () => {
-    it('adds write_file read_file ask_user for FC', () => {
+    it('adds save_file read_file ask_user for FC', () => {
         const fns = ensureHarnessFunctions([]);
         const names = fns.map(f => f.name);
-        assert.ok(names.includes('write_file'));
+        assert.ok(names.includes('save_file'));
         assert.ok(names.includes('read_file'));
         assert.ok(names.includes(ASK_USER_METHOD));
         assert.ok(names.includes('navigate'));
-        const wf = fns.find(f => f.name === 'write_file');
-        assert.ok(wf.parameters.required.includes('name'));
-        assert.ok(wf.parameters.required.includes('content'));
-        // idempotent
-        assert.equal(ensureHarnessFunctions(fns).filter(f => f.name === 'write_file').length, 1);
+        const sf = fns.find(f => f.name === 'save_file');
+        assert.ok(sf.parameters.required.includes('filename'));
+        assert.ok(sf.parameters.required.includes('post'));
+        // idempotent + overwrite schema duplicate
+        assert.equal(ensureHarnessFunctions(fns).filter(f => f.name === 'save_file').length, 1);
+        const withSchema = ensureHarnessFunctions([{ name: 'save_file', parameters: { required: ['x'] } }]);
+        assert.equal(withSchema.filter(f => f.name === 'save_file').length, 1);
+        assert.ok(withSchema.find(f => f.name === 'save_file').parameters.required.includes('filename'));
     });
 });
 

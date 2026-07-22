@@ -53,22 +53,22 @@ describe('MVP e2e: USER working task', () => {
         assert.ok(system.includes('/users/u1/note.md'));
 
         const gate = gateToolCalls('USER', [
-            { method: 'write_file', args: { name: 'presentation.html' } },
+            { method: 'save_file', args: { filename: 'presentation.html' } },
             { method: 'save', args: {} },
             { method: 'create', args: { name: 'handlers/x' } },
         ]);
         assert.equal(gate.allowed.length, 1);
-        assert.equal(gate.allowed[0].args.name, 'presentation.html');
+        assert.equal(gate.allowed[0].args.filename, 'presentation.html');
         assert.equal(gate.blocked.length, 2);
         assert.equal(gate.needsConfirm, false);
-        assert.equal(callNeedsTrustConfirm({ method: 'write_file', args: { name: 'presentation.html' } }), false);
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'presentation.html' } }), false);
     });
 
     it('pushToolResult adds file block with work resultPath', () => {
         const ribbon = [];
         pushToolResult(
             ribbon,
-            { method: 'write_file', args: { name: 'presentation.html' } },
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
             {
                 success: true,
                 name: 'presentation.html',
@@ -126,22 +126,23 @@ describe('MVP e2e: ADMIN modify class', () => {
 
         const gate = gateToolCalls('ADMIN', [
             { method: 'save', args: {} },
-            { method: 'write_file', args: { name: 'handlers/methods/foo/$method/class.js' } },
-            { method: 'write_file', args: { name: 'readme.md' } },
+            { method: 'save_file', args: { filename: 'handlers/methods/foo/$method/class.js' } },
+            { method: 'save_file', args: { filename: 'readme.md' } },
         ]);
         assert.equal(gate.blocked.length, 0);
         assert.equal(gate.allowed.length, 3);
         assert.equal(gate.needsConfirm, true);
         assert.ok(isSystemModifyCall(gate.allowed[0]));
         assert.ok(isSystemModifyCall(gate.allowed[1]));
-        assert.equal(callNeedsTrustConfirm({ method: 'write_file', args: { name: 'class.js' } }), true);
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'class.js' } }), true);
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'readme.md' } }), false);
         assert.equal(callNeedsTrustConfirm({ method: 'write_file', args: { name: 'readme.md' } }), false);
     });
 
     it('BOSS cannot save class.js even if ask_user succeeded', () => {
         const gate = gateToolCalls('BOSS', [
             { method: 'save', args: {} },
-            { method: 'write_file', args: { name: 'plan.md' } },
+            { method: 'save_file', args: { filename: 'plan.md' } },
         ]);
         assert.equal(gate.blocked.length, 1);
         assert.equal(gate.allowed.length, 1);

@@ -1,53 +1,51 @@
 # Preview микрочата (task.ai)
 
-Визуализатор файла `.ai` по схеме [`$ai/class.js`](/$server/$folder/$file/$ai/class.js/~/handlers/pages/form/).
+Декларативная проекция [`TYPES`](/$server/$folder/$file/$ai/class.js/~/handlers/pages/form/) на ODA-views.
+
+## Принцип
+
+```
+body.ribbon[]  →  ~for  →  ~is microchat-view-<type>  +  ~props block
+```
+
+Один `body` в памяти. Harness / WS мутируют — Reactor рисует. Без `normalizeRibbon` на render, без `:item` / sync / `openAsk`.
 
 ## Состав
 
 | Модуль | Назначение |
 |--------|------------|
-| `microchat-ribbon` | лента блоков `ribbon[]` |
-| `microchat-streaming` | стриминг ответа |
-| `microchat-panel` | actions / input / settings |
+| shell (`export default`) | load, WS, `open` / `confirm` / `send`, model, mic/TTS |
+| `microchat-ribbon` | `~for` + `~is` + `~props` |
+| `microchat-panel` | кнопка openInteractive + input |
+| `microchat-view-*` | props = поля TYPES |
+| `microchat-field` | одно поле Ask; `:field` = объект из `body` |
 
 ## Контракт type → view
-
-`type` блока = суффикс компонента: `microchat-view-<type>`.
 
 | type | компонент |
 |------|-----------|
 | `prompt` | `microchat-view-prompt` |
 | `thinking` | `microchat-view-thinking` |
 | `text` | `microchat-view-text` |
-| `action` | `microchat-view-action` — MD + `title` (План/Отчёт/Действие); **без fields**; кнопка на панели |
-| `form` | `microchat-view-form` — MD + `fields` (ввод данных); кнопка на панели |
-| `questions` | `microchat-view-questions` — MD + `fields` (опросник); кнопка на панели |
-| `task` | `microchat-view-task` (план + steps + вложенный ribbon) |
-| `file` | `microchat-view-file` |
-| `tool` | `microchat-view-tool` |
-| `tool_result` | `microchat-view-tool_result` |
-| `error` | `microchat-view-error` |
+| `action` | `microchat-view-action` — MD + title; кнопка на панели |
+| `form` / `questions` | fields через `microchat-field`; кнопка на панели |
+| `task` | steps + nested `<microchat-ribbon :items="ribbon">` |
+| `file` / `tool` / `tool_result` / `error` | соответствующие view |
 
-Открытый interactive = последний `action`|`form`|`questions` без последующего `prompt`. Кнопка панели шлёт `{ text: label, confirm: true, answers? }`.
+`task` не особый случай: вложенный `ribbon` снова проходит тот же диспетч — Ask внутри task = обычный `microchat-view-questions`.
 
-`task` появляется после prompt-принятия плана. В `task.ribbon` — исполнение (thinking / action с fields / tools / `file` после write_file).
+## Panel
 
-## Legacy-адаптер
+`open` = последний unanswered `action`|`form`|`questions` (в т.ч. в `task.ribbon`).  
+`confirm(true)` → `{ text: button.label, confirm: true, answers? }` из тех же `fields` на `body`.
 
-При рендере старых файлов:
+## Legacy
 
-- `role:'user'` → `prompt`
-- `details` / `reasoning` → `thinking`
-- `block` → `task`
-- `form` / `questions` → `action` + `fields`
-- `text` + `error` → `error`
+`migrateRibbon` один раз на load (`role→prompt`, `block→task`, `answered` по следующему prompt). Не в render path.
 
 ## Состояние
 
-- ✅ схема TYPES в `$ai/class.js`
-- ✅ visualizers + ribbon/panel/streaming
-- ✅ harness пишет новые type; action = MD; стоп до confirm
-- ✅ questions answered-режим; select как варианты (radio-стиль)
-- ✅ nested `task.ribbon`: `$file` hydrate + `tool_result`/`file` карточки
-- ✅ AskQuestion options inline в `microchat-view-task` (native, не oda-chat-form)
-- ✅ контракт ролей/контекста — в [`$ai/readme.md`](/$server/$folder/$file/$ai/readme.md/~/handlers/pages/form/)
+- ✅ `~is` + `~props` = TYPES
+- ✅ task = nested ribbon
+- ✅ Ask = `microchat-view-questions` + `microchat-field`
+- ✅ один `open` / `confirm` / `send`

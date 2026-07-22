@@ -31,7 +31,7 @@
 - ✅ GigaChat Light/Pro: `functionCalling: true` (tools уходят в API)
 - ✅ Контекст пары class+user (readme, .mem, логи)
 - ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN/system-modify (обычный write_file без confirm)
-- ✅ Preview: action / form / questions; nested file card после write_file
+- ✅ Preview: declarative `~is`/`~props` по TYPES; task = nested ribbon; Ask = view-questions
 - ✅ MVP e2e path: план → Начать → options → Уточнить → write_file → блок `file`
 - 🔧 spawn_agent / skills как tools harness
 - ❌ host file-handlers / skill-router (запрещены как костыль)

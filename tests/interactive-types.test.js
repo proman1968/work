@@ -58,6 +58,24 @@ describe('parseResponseToRibbon types', () => {
         assert.equal(blocks.some(isInteractiveBlock), false);
         assert.ok(blocks.some(b => b.type === 'text'));
     });
+
+    it('ask_user tag → questions; raw XML stripped from text', () => {
+        const { blocks } = parseResponseToRibbon(
+            `Сначала уточню параметры.
+<ask_user>{"questions":[{"id":"topic","prompt":"Тема","options":["A","B"]}]}</ask_user>
+<function_caller></function_caller>`,
+            'AI',
+        );
+        const q = blocks.find(b => b.type === 'questions');
+        assert.ok(q);
+        assert.ok(q.fields?.length >= 1);
+        assert.equal(q.fields[0].id, 'topic');
+        const text = blocks.filter(b => b.type === 'text').map(b => b.content).join('\n');
+        assert.ok(!text.includes('<ask_user>'));
+        assert.ok(!text.includes('</ask_user>'));
+        assert.ok(!text.includes('function_caller'));
+        assert.ok(!text.includes('"questions"'));
+    });
 });
 
 describe('normalizeInteractiveBlocks', () => {

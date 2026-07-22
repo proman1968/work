@@ -8,7 +8,7 @@
  * - Fallback: текстовый парсинг <tool_call> для моделей без function calling
  *
  * Подтверждение опасных действий:
- * - Обычный write_file выполняется сразу (MVP e2e до файла)
+ * - Обычный save_file выполняется сразу (MVP e2e до файла)
  * - callNeedsTrustConfirm / system-modify / trustLevel < TRUST_AUTOCONFIRM → pendingAction
  * - При подтверждении ({confirm:true}) — вызовы выполняются, цикл продолжается
  * - При отказе ({confirm:false}) — tool_result "отменено", цикл продолжается
@@ -25,36 +25,58 @@ const MAX_IDLE_PROPOSE = 1; // 1 idle на clarify → Cursor AskQuestion inject
 const CONTEXT_LOG_DAYS = 7;
 const CONTEXT_LOG_MAX_ROWS = 60;
 const CONTEXT_LOG_LINE_MAX = 160;
-// Опасные методы — требуют подтверждения при trustLevel < 3 (обычный write_file — нет)
-const DANGEROUS_METHODS = ['write_file', 'set_property', 'save_file', 'delete', 'create'];
+// Опасные методы — требуют подтверждения при trustLevel < 3 (обычный save_file — нет)
+const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 'create'];
 const ASK_USER_METHOD = 'ask_user';
 // Уровень доверия для автоподтверждения опасных действий
 const TRUST_AUTOCONFIRM = 3;
 
+function isFileWriteMethod(method) {
+    return method === 'save_file' || method === 'write_file';
+}
+
+/** Битые args после ""+object → "[object Object]" в streamChat */
+function isBrokenFcArgs(args) {
+    if (!args || typeof args !== 'object')
+        return false;
+    return args.raw === '[object Object]';
+}
+
+/** Args для history/API: без мусора raw:"[object Object]" */
+function sanitizeToolArgsForHistory(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args))
+        return {};
+    if (args.raw === '[object Object]') {
+        const { raw, ...rest } = args;
+        return Object.keys(rest).length ? rest : {};
+    }
+    return args;
+}
+
 /**
  * Нужен ли trust/confirm gate для вызова.
- * Обычный write_file — сразу; system-modify write и прочие DANGEROUS — да.
+ * Обычный save_file — сразу; system-modify write и прочие DANGEROUS — да.
  */
 function callNeedsTrustConfirm(call) {
     if (!call?.method)
         return false;
-    if (call.method === 'write_file')
+    if (isFileWriteMethod(call.method))
         return isSystemModifyCall(call);
     return DANGEROUS_METHODS.includes(call.method);
 }
 
-/** Tools harness (не из get_schema / TOOL_DESCRIPTIONS) — иначе FC не видит write_file */
+/** Tools harness (не из get_schema / TOOL_DESCRIPTIONS) — иначе FC не видит save_file */
 const HARNESS_FUNCTIONS = [
     {
-        name: 'write_file',
-        description: 'Создать или перезаписать файл в текущем контексте. name — имя файла, content — текст.',
+        name: 'save_file',
+        description: 'Создать или перезаписать файл в текущем контексте. filename — имя файла, post — текст (алиасы name/content тоже принимаются).',
         parameters: {
             type: 'object',
             properties: {
-                name: { type: 'string', description: 'Имя файла, например presentation.html' },
-                content: { type: 'string', description: 'Содержимое файла' },
+                filename: { type: 'string', description: 'Имя файла, например presentation.html' },
+                post: { type: 'string', description: 'Содержимое файла' },
             },
-            required: ['name', 'content'],
+            required: ['filename', 'post'],
         },
     },
     {
@@ -249,6 +271,8 @@ export default {
                 // Факт согласия — в корневой ленте (перед task)
                 pushClosingPrompt(body.ribbon, promptContent, sender, answers);
                 text = ''; // не дублировать prompt в §7
+                if (openAction)
+                    openAction.answered = true;
                 const plan = body.pendingPlan;
                 const steps = prepareStepsForStart(plan.steps || []);
                 const task = {
@@ -293,6 +317,8 @@ export default {
             } else if (isStepConfirm) {
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
+                if (openAction)
+                    openAction.answered = true;
                 text = '';
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
@@ -300,6 +326,8 @@ export default {
                 // «Принять» — задача выполнена
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
+                if (openAction)
+                    openAction.answered = true;
                 text = '';
                 const doneTask = activeTaskFind(body)
                     || [...(body.ribbon || [])].reverse().find(b => b.type === 'task' && b.state === 'completed');
@@ -382,6 +410,7 @@ export default {
 
             let fullResponse = '';
             let toolCalls = [];
+            let turnUsage = null;
 
             {
                 // Обычный режим — стриминг от модели
@@ -409,6 +438,12 @@ export default {
                                     args: chunk.arguments || {},
                                 });
                                 hasNativeFunctionCall = true;
+                            } else if (chunk.type === 'usage') {
+                                turnUsage = {
+                                    prompt: Number(chunk.prompt_tokens) || 0,
+                                    completion: Number(chunk.completion_tokens) || 0,
+                                    total: Number(chunk.total_tokens) || 0,
+                                };
                             }
                         }
                     }
@@ -513,6 +548,14 @@ export default {
                     toolCalls = [];
                 }
 
+                // EXECUTE после ответов: повторный ask_user/questions — не ждать, стрипать → idle reminder
+                if (activeTask && getDoStepPhase(activeTask) === 'execute' && taskHasClarifyAnswers(activeTask)) {
+                    if (waitingForUser || blocks.some(b => b.type === 'questions' || b.type === 'form')) {
+                        blocks = blocks.filter(b => b.type !== 'questions' && b.type !== 'form');
+                        waitingForUser = false;
+                    }
+                }
+
                 // Idle Do: крутим до maxIter с forceDoReminder (questions или tools)
                 if (toolCalls.length === 0 && !waitingForUser && shouldContinueDo(activeTask, waitingForUser, toolCalls)) {
                     if (!functions.length) {
@@ -541,6 +584,7 @@ export default {
                                 || cur,
                             model.path || 'WORK',
                         ));
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
@@ -552,16 +596,18 @@ export default {
                             activeTask.steps = deferredDoSteps;
                         ribbonTarget.push({
                             type: 'error',
-                            content: 'Модель не вызвала tool (write_file) за ' + MAX_IDLE_DO + ' попыток.',
+                            content: 'Модель не вызвала tool (save_file) за ' + MAX_IDLE_DO + ' попыток.',
                             time: Date.now(),
                             sender: model.path || 'WORK',
                         });
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                         return { ok: false, error: 'idle_execute' };
                     }
                     // Idle retry: без write/notify — иначе UI моргает; steps не коммитим
+                    applyTurnUsage(body, ribbonTarget, turnUsage, model);
                     forceDoReminder = true;
                     continue;
                 }
@@ -581,6 +627,7 @@ export default {
                     }
                     ribbonTarget.push(block);
                 }
+                applyTurnUsage(body, ribbonTarget, turnUsage, model);
 
                 // Открытый action / план — стоп до prompt пользователя
                 if (waitingForUser) {
@@ -596,6 +643,34 @@ export default {
 
             // === ACL роли: не-ADMIN не меняет типизаторы / class.js ===
             const role = normalizeRole(body.role || params.role);
+            // Битые FC args ([object Object]) — не исполнять, не крутить idle вхолостую
+            const validCalls = [];
+            let hadBrokenFc = false;
+            for (const call of toolCalls) {
+                if (isBrokenFcArgs(call.args)
+                    || (isFileWriteMethod(call.method) && !(call.args?.filename || call.args?.name))) {
+                    hadBrokenFc = true;
+                    const msg = isBrokenFcArgs(call.args)
+                        ? 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}) с валидными аргументами.'
+                        : 'save_file: нужен filename или name. Вызови save_file({filename, post}).';
+                    pushToolResult(ribbonTarget, { ...call, args: sanitizeToolArgsForHistory(call.args) }, { error: msg }, model);
+                    sendToolResultWs(wsPath, call, { error: msg });
+                } else {
+                    validCalls.push(call);
+                }
+            }
+            toolCalls = validCalls;
+            if (!toolCalls.length) {
+                if (hadBrokenFc && shouldContinueDo(activeTaskFind(body), false, [])) {
+                    forceDoReminder = true;
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
+                    continue;
+                }
+                await writeTaskBody(fullPath, body);
+                continue;
+            }
+
             const allowedCalls = [];
             for (const call of toolCalls) {
                 const block = roleBlocksTool(role, call);
@@ -613,7 +688,7 @@ export default {
             }
 
             // === Подтверждение: dangerous (trust) или ADMIN system-modify ===
-            // Обычный write_file (presentation.html и т.п.) — без confirm (MVP e2e).
+            // Обычный save_file (presentation.html и т.п.) — без confirm (MVP e2e).
             const trustLevel = Number(model.trustLevel || 0);
             const hasDangerous = toolCalls.some(callNeedsTrustConfirm);
             const hasSystemModify = toolCalls.some(isSystemModifyCall);
@@ -725,14 +800,17 @@ async function buildFunctionsList(currentContext) {
 }
 
 /**
- * Гарантировать write_file / read_file / ask_user / navigate в списке FC.
- * get_schema их не отдаёт (write_file — синтетический в executeToolCall).
+ * Гарантировать save_file / read_file / ask_user / navigate в списке FC.
+ * get_schema может отдать save_file — harness-версия (filename/post) перекрывает.
  * @param {Array} functions
  * @returns {Array}
  */
 function ensureHarnessFunctions(functions = []) {
     for (const fn of HARNESS_FUNCTIONS) {
-        if (!functions.find(f => f.name === fn.name))
+        const idx = functions.findIndex(f => f.name === fn.name);
+        if (idx >= 0)
+            functions[idx] = { ...fn };
+        else
             functions.push({ ...fn });
     }
     if (!functions.find(fn => fn.name === ASK_USER_METHOD)) {
@@ -779,6 +857,17 @@ function ensureHarnessFunctions(functions = []) {
     return functions;
 }
 
+/** В ленте задачи есть ответы пользователя после clarify (prompt.answers). */
+function taskHasClarifyAnswers(activeTask) {
+    const ribbon = activeTask?.ribbon || [];
+    return ribbon.some(b =>
+        (b.type === 'prompt' || b.role === 'user')
+        && b.answers
+        && typeof b.answers === 'object'
+        && Object.keys(b.answers).length > 0
+    );
+}
+
 /**
  * После ответов на clarify-шаг: done → следующий proposed становится in_progress.
  * @param {{ steps?: Array }} activeTask
@@ -799,7 +888,7 @@ function advanceAfterClarifyAnswers(activeTask) {
  * @param {object} call — { method, args }
  * @param {object} params — inbound prompt params (user, role)
  * @param {object} [opts]
- * @param {object} [opts.aiUser] — если задан, user = aiUser (логи write_file)
+ * @param {object} [opts.aiUser] — если задан, user = aiUser (логи save_file)
  */
 function buildToolMethodParams(call, params, opts = {}) {
     const args = (call && call.args && typeof call.args === 'object') ? call.args : {};
@@ -823,6 +912,44 @@ function buildToolMethodParams(call, params, opts = {}) {
  */
 async function executeToolCall(call, currentContext, initialContext, functions, params, aiUser) {
     let result;
+
+    // save_file / write_file (алиас) — до generic dispatch (у $user нет write_file)
+    if (isFileWriteMethod(call.method)) {
+        if (isBrokenFcArgs(call.args)) {
+            return {
+                result: { error: 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}).' },
+                newContext: currentContext,
+            };
+        }
+        const fileName = call.args?.filename || call.args?.name;
+        const content = call.args?.post ?? call.args?.content ?? '';
+        if (!fileName)
+            return { result: { error: 'save_file: нужен filename или name' }, newContext: currentContext };
+        try {
+            await currentContext.save_file?.(buildToolMethodParams(
+                { method: 'save_file', args: { filename: String(fileName), post: String(content), encoding: 'utf-8' } },
+                params,
+                { aiUser },
+            ));
+            const base = String(currentContext.path || '').replace(/\/+$/, '');
+            const resultPath = base ? (base + '/' + fileName) : String(fileName);
+            return {
+                result: {
+                    success: true,
+                    message: 'Файл сохранён: ' + fileName,
+                    path: resultPath,
+                    resultPath,
+                    name: fileName,
+                },
+                newContext: currentContext,
+            };
+        } catch (e) {
+            return {
+                result: { error: 'Не удалось сохранить файл ' + fileName + ': ' + e.message },
+                newContext: currentContext,
+            };
+        }
+    }
 
     try {
         if (call.method === ASK_USER_METHOD)
@@ -921,30 +1048,6 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
         }
     }
 
-    if (call.method === 'write_file' && call.args?.name) {
-        const fileName = String(call.args.name);
-        const content = call.args.content ?? '';
-        try {
-            await currentContext.save_file?.(buildToolMethodParams(
-                { method: 'save_file', args: { filename: fileName, post: String(content), encoding: 'utf-8' } },
-                params,
-                { aiUser },
-            ));
-            // Рабочий файл (не history/log.path) — для карточки microchat-view-file
-            const base = String(currentContext.path || '').replace(/\/+$/, '');
-            const resultPath = base ? (base + '/' + fileName) : fileName;
-            result = {
-                success: true,
-                message: 'Файл сохранён: ' + fileName,
-                path: resultPath,
-                resultPath,
-                name: fileName,
-            };
-        } catch (e) {
-            result = { error: 'Не удалось сохранить файл ' + fileName + ': ' + e.message };
-        }
-    }
-
     if (call.method === 'reset_context') {
         newContext = initialContext;
         result = { success: true, message: 'Контекст сброшен к классу: ' + initialContext.path };
@@ -976,6 +1079,7 @@ function pushToolResult(ribbonTarget, call, result, model) {
         label: '🔧 ' + call.method,
         content: resultStr.slice(0, 32000),
         tool: call.method,
+        args: call.args || {},
         ok: !isError,
         time,
         sender,
@@ -984,15 +1088,50 @@ function pushToolResult(ribbonTarget, call, result, model) {
         chatEntry.resultPath = result.resultPath;
     ribbonTarget.push(chatEntry);
     // Карточка файла рядом с tool_result (MVP e2e → microchat-view-file)
-    if (call.method === 'write_file' && !isError && result?.resultPath) {
+    if (isFileWriteMethod(call.method) && !isError && result?.resultPath) {
         ribbonTarget.push({
             type: 'file',
             path: result.resultPath,
-            name: result.name || call.args?.name || '',
+            name: result.name || call.args?.filename || call.args?.name || '',
             time,
             sender,
         });
     }
+}
+
+/**
+ * Записать usage хода на последний AI-блок и накопить в body.usage.
+ * @param {object} body
+ * @param {Array} ribbonTarget
+ * @param {{ prompt?: number, completion?: number, total?: number }|null} turnUsage
+ * @param {object} model
+ */
+function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
+    if (!turnUsage || !(turnUsage.total || turnUsage.prompt || turnUsage.completion))
+        return;
+    const ctxWin = Number(model?.contextWindow || model?.context_window || model?.maxContext || 128000) || 128000;
+    const prompt = Number(turnUsage.prompt) || 0;
+    const completion = Number(turnUsage.completion) || 0;
+    const total = Number(turnUsage.total) || (prompt + completion);
+    const contextPct = ctxWin > 0 ? Math.min(100, Math.round((prompt / ctxWin) * 100)) : 0;
+    const usage = { prompt, completion, total, contextPct, contextWindow: ctxWin };
+
+    if (Array.isArray(ribbonTarget)) {
+        for (let i = ribbonTarget.length - 1; i >= 0; i--) {
+            const b = ribbonTarget[i];
+            if (b && (b.type === 'text' || b.type === 'thinking' || b.type === 'action' || b.type === 'error' || b.type === 'tool_result')) {
+                b.usage = usage;
+                break;
+            }
+        }
+    }
+
+    body.usage = body.usage || { prompt: 0, completion: 0, total: 0 };
+    body.usage.prompt = (Number(body.usage.prompt) || 0) + prompt;
+    body.usage.completion = (Number(body.usage.completion) || 0) + completion;
+    body.usage.total = (Number(body.usage.total) || 0) + total;
+    body.usage.contextPct = contextPct;
+    body.usage.contextWindow = ctxWin;
 }
 
 /**
@@ -1050,8 +1189,8 @@ function notifyChanged(fullPath) {
  * - {type:'action'} → пропускается (кнопки UI)
  * - {type:'form'} → пропускается
  * - {type:'error'} → assistant error text
- * - {type:'tool_result'} → function/user message с результатом
- * - {type:'tool'} → краткая пометка assistant
+ * - {type:'tool_result'} → FC: assistant.function_call + role:function; иначе user с текстом
+ * - {type:'tool'} → FC: пропуск (пара из tool_result); иначе краткая пометка assistant
  *
  * @param {object} body — тело task.ai (с ribbon, system, context и т.д.)
  * @param {boolean} useFunctionCalling — использовать нативный формат function calling
@@ -1089,14 +1228,14 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
             systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
             if (phase === 'execute')
-                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (write_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
+                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (save_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
             else if (phase === 'propose')
-                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не write_file до ответов.\n';
+                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не save_file до ответов.\n';
             if (forceDoReminder) {
                 if (phase === 'propose')
-                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не write_file.\n';
+                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
                 else
-                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови write_file (или другой tool) для текущего шага. Не повторяй только reasoning и не ставь «Начать».\n';
+                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови native function save_file({filename, post}). Не пиши <ask_user>, не prose и не reasoning без tool. Не «Начать».\n';
             }
         }
         if (systemContent)
@@ -1176,6 +1315,9 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
 
         // Вызов инструмента (если сохранён в ленте)
         if (entry.type === 'tool') {
+            // FC: пару function_call + function строим из tool_result (не prose «Вызов …»)
+            if (useFunctionCalling)
+                continue;
             if (pendingAssistant) {
                 messages.push({ role: 'assistant', content: pendingAssistant });
                 pendingAssistant = '';
@@ -1191,7 +1333,15 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 pendingAssistant = '';
             }
             if (useFunctionCalling) {
-                messages.push({ role: 'function', name: entry.tool || 'unknown', content: entry.content });
+                const fnName = entry.tool || 'unknown';
+                const fnArgs = sanitizeToolArgsForHistory(entry.args);
+                // GigaChat: каждый role:function обязан иметь предшествующий assistant.function_call
+                messages.push({
+                    role: 'assistant',
+                    content: '',
+                    function_call: { name: fnName, arguments: fnArgs },
+                });
+                messages.push({ role: 'function', name: fnName, content: entry.content });
             } else {
                 messages.push({
                     role: 'user',
@@ -1267,7 +1417,7 @@ function formatPromptWithAnswers(label, answers, fields) {
     if (!answers || typeof answers !== 'object')
         return head;
     const byId = Array.isArray(fields)
-        ? Object.fromEntries(fields.map(f => [f.id, String(f.label || f.id).replace(/[:：]+\s*$/, '')]))
+        ? Object.fromEntries(fields.map(f => [f.id, String(f.label || f.id).replace(/[?？]*[:：]*\s*$/, '')]))
         : {};
     const lines = [];
     for (const [id, v] of Object.entries(answers)) {
@@ -1771,6 +1921,7 @@ export {
     nextIdleDoAction,
     getDoStepPhase,
     stepNeedsClarify,
+    taskHasClarifyAnswers,
     makeClarifyQuestions,
     questionsFromAskUser,
     mapAskQuestionToField,
@@ -1794,6 +1945,8 @@ export {
     roleBlocksTool,
     callNeedsTrustConfirm,
     pushToolResult,
+    isBrokenFcArgs,
+    sanitizeToolArgsForHistory,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -1924,14 +2077,39 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         remaining = remaining.replace(/<form>[\s\S]*?<\/form>/g, '');
     }
 
-    // 6. tool_call — не в ленту
+    // 5b. <ask_user>…</ask_user> — модель пишет tool текстом; → questions, не prose
+    let askUserFields = null;
+    const askUserMatch = remaining.match(/<ask_user>\s*([\s\S]*?)\s*<\/ask_user>/i);
+    if (askUserMatch) {
+        try {
+            const raw = askUserMatch[1].trim();
+            const parsedAsk = JSON.parse(raw);
+            const args = Array.isArray(parsedAsk)
+                ? { questions: parsedAsk }
+                : (parsedAsk && typeof parsedAsk === 'object' ? parsedAsk : {});
+            const qBlock = questionsFromAskUser(args, sender, null);
+            if (qBlock?.fields?.length)
+                askUserFields = qBlock.fields;
+        } catch {}
+        remaining = remaining.replace(/<ask_user>[\s\S]*?<\/ask_user>/gi, '');
+    }
+
+    // 6. tool_call / мусор FC в prose — не в ленту
     remaining = remaining.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
     remaining = remaining.replace(/```tool_call[\s\S]*?```/g, '');
+    remaining = remaining.replace(/```ask_user[\s\S]*?```/gi, '');
+    remaining = remaining.replace(/<function(?:\s[^>]*)?>[\s\S]*?<\/function>/gi, '');
+    remaining = remaining.replace(/<\/?function_caller>/gi, '');
+    remaining = remaining.replace(/<\/?function\s+caller[^>]*>/gi, '');
 
     const cleanText = remaining.trim();
     if (cleanText)
         proseParts.push(cleanText);
     const prose = proseParts.join('\n\n').trim();
+
+    // Prefer <questions>; иначе поля из <ask_user>
+    if (!questionFields?.length && askUserFields?.length)
+        questionFields = askUserFields;
 
     // 7. Разнести типы: plan/action confirm vs questions vs form
     if (pendingPlan) {
