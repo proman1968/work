@@ -2,6 +2,14 @@
 
 ## Последние изменения
 
+- [22.07.2026] Правило артефактов: один конечный filename + перезапись (file→history); запрет presentation.struct.md и т.п. в SYSTEM_PROMPT/harness/rules.
+- [22.07.2026] History-файл: label = прото-имя; справа в item-node мелко dateTime. Причина: «18:12 | GigaChat Light» неинформативно.
+- [22.07.2026] Граница хода: `clear_stream` после durable + после tools; unclosed `<reasoning>` → thinking. Причина: стрим копился через turns, 6-е «Мысли» только в UI.
+- [22.07.2026] Harness: единый `commitDurableBlocks` сразу после parse (до idle/inject) — reasoning не зависит от веток.
+- [22.07.2026] Idle PROPOSE inject: `commitIdleContent` перед `makeClarifyQuestions` — reasoning до формы не пропадает.
+- [22.07.2026] Клиентский `WORK.get_item`: default `info` → всегда `$item`; контент только через `load`. Карточка файла + idle после ok save_file + strip FC-хвоста в post.
+- [22.07.2026] Idle EXECUTE: reasoning (`thinking`/`text`) коммитится в ленту на retry/stop; deferred plan без tools не двигает шаги. Причина: стрим пропадал при `chat.done` с одним error.
+- [22.07.2026] harness `save_file`: в ленту только history `log.path` из return, без invented `context/filename`. Причина: фейковый path ломал карточку файла.
 - [22.07.2026] MVP e2e до файла: write без confirm, file-блок, FC tool_calls/flush, plan≥4 для презентации, nested $file.
 - [22.07.2026] task.ai: harness `write_file` в FC + clarify→execute после ответов (Do до файла).
 - [22.07.2026] task.ai: GigaChat `functionCalling` + Cursor AskQuestion idle (select+options, не text).

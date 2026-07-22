@@ -14,6 +14,7 @@
 2. [`methods/prompt`](/$server/$folder/$file/$ai/methods/prompt/$method/class.js/~/handlers/pages/form/) собирает system: роль, бандлы class+user, PDCA; стримит модель с functions из `get_schema` + services + `ask_user`.
 3. Tools выполняются с `params.role`. USER/BOSS не меняют типизаторы/`class.js`. ADMIN system-modify всегда через `pendingAction` confirm.
 4. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/): ribbon, questions/form/action, nested task.
+5. Артефакты Do: один конечный `filename` (перезапись); history пишет платформа. Не `*.struct.*` / draft рядом с финалом.
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
 

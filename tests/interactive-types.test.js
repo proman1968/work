@@ -76,6 +76,28 @@ describe('parseResponseToRibbon types', () => {
         assert.ok(!text.includes('function_caller'));
         assert.ok(!text.includes('"questions"'));
     });
+
+    it('unclosed reasoning → thinking (stream cut mid-tag)', () => {
+        const { blocks } = parseResponseToRibbon(
+            `<reasoning>\nТема известна, пишу структуру слайдов.`,
+            'AI',
+        );
+        const th = blocks.filter(b => b.type === 'thinking');
+        assert.equal(th.length, 1);
+        assert.ok(th[0].content.includes('пишу структуру'));
+        assert.ok(!th[0].content.includes('<reasoning>'));
+    });
+
+    it('closed + trailing unclosed reasoning both kept', () => {
+        const { blocks } = parseResponseToRibbon(
+            `<reasoning>Первый блок</reasoning>\n<reasoning>\nВторой без закрытия`,
+            'AI',
+        );
+        const th = blocks.filter(b => b.type === 'thinking');
+        assert.equal(th.length, 2);
+        assert.equal(th[0].content, 'Первый блок');
+        assert.ok(th[1].content.includes('Второй'));
+    });
 });
 
 describe('normalizeInteractiveBlocks', () => {

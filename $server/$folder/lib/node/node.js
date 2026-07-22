@@ -54,6 +54,14 @@ export default {
                 white-space: nowrap;
                 align-self: center;
             }
+            .history-time{
+                @apply --no-flex;
+                font-size: xx-small;
+                opacity: .55;
+                margin-left: 6px;
+                white-space: nowrap;
+                align-self: center;
+            }
             .readme-help{
                 @apply --no-flex;
                 opacity: .55;
@@ -68,6 +76,7 @@ export default {
             <div vertical flex>
                 <div horizontal flex> 
                     <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
+                    <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-user ~if="showBoss" :$item="boss" icon-size="16"></item-user>
                 </div>
@@ -79,6 +88,15 @@ export default {
     showSize: false,
     showUsers: false,
     hideLabel: false,
+    get historyTime() {
+        const path = this.$item?.path;
+        if (!path || !String(path).includes('/history/'))
+            return '';
+        const parse = CORE.$file?.parseHistoryEntryPath || this.$item?.constructor?.parseHistoryEntryPath;
+        if (typeof parse !== 'function')
+            return '';
+        return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
+    },
     get readmeItem() {
         if (!this.$item) return null;
         return Promise.resolve(this.$item.items).then(async items => {

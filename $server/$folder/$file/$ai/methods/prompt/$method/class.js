@@ -53,6 +53,17 @@ function sanitizeToolArgsForHistory(args) {
     return args;
 }
 
+/** Хвост битого FC в конце post (`}\n</function>` и т.п.) — не писать в файл */
+function stripFcTrailer(text) {
+    let s = String(text ?? '');
+    // Только явный мусор FC, не голый «}» (иначе ломается JSON body)
+    s = s.replace(/(?:\r?\n)?\}\s*<\/function>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?<\/function>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?\}\s*<\/tool_call>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?<\/tool_call>\s*$/i, '');
+    return s;
+}
+
 /**
  * Нужен ли trust/confirm gate для вызова.
  * Обычный save_file — сразу; system-modify write и прочие DANGEROUS — да.
@@ -69,12 +80,12 @@ function callNeedsTrustConfirm(call) {
 const HARNESS_FUNCTIONS = [
     {
         name: 'save_file',
-        description: 'Создать или перезаписать файл в текущем контексте. filename — имя файла, post — текст (алиасы name/content тоже принимаются).',
+        description: 'Создать или перезаписать файл. filename — конечное имя артефакта (напр. presentation.html); перезаписывай ТО ЖЕ имя на каждом шаге — history пишется сама. Не создавай промежуточные *.struct.*/*.draft.*/outline.md.',
         parameters: {
             type: 'object',
             properties: {
-                filename: { type: 'string', description: 'Имя файла, например presentation.html' },
-                post: { type: 'string', description: 'Содержимое файла' },
+                filename: { type: 'string', description: 'Конечное имя файла (одно на артефакт), например presentation.html' },
+                post: { type: 'string', description: 'Полное содержимое файла (текущая версия)' },
             },
             required: ['filename', 'post'],
         },
@@ -556,6 +567,12 @@ export default {
                     }
                 }
 
+                // Инвариант: thinking/text в ленту СРАЗУ — до idle/inject/error/continue.
+                // Иначе стрим виден в UI, а при chat.done пропадает (дыры по веткам).
+                blocks = commitDurableBlocks(ribbonTarget, blocks);
+                // Граница хода: один visual stream = один model turn (не копить через tools/idle)
+                WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+
                 // Idle Do: крутим до maxIter с forceDoReminder (questions или tools)
                 if (toolCalls.length === 0 && !waitingForUser && shouldContinueDo(activeTask, waitingForUser, toolCalls)) {
                     if (!functions.length) {
@@ -565,6 +582,7 @@ export default {
                             time: Date.now(),
                             sender: model.path || 'WORK',
                         });
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
@@ -591,9 +609,18 @@ export default {
                         return { ok: true, pendingActionConfirm: true };
                     }
                     // EXECUTE idle: после MAX_IDLE_DO — явная ошибка, не выжигать maxIter
+                    // Не коммитим deferredDoSteps — prose/<plan> без tools не двигает шаги
                     if (phase === 'execute' && nextIdleDoAction(idleDoStreak) === 'stop') {
-                        if (deferredDoSteps)
+                        if (mayCommitDeferredOnIdleExecuteStop() && deferredDoSteps)
                             activeTask.steps = deferredDoSteps;
+                        // Уже был ok save_file в этом Do — не врём «не вызвала tool»
+                        if (taskHasSuccessfulSave(activeTask)) {
+                            applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                            return { ok: true };
+                        }
                         ribbonTarget.push({
                             type: 'error',
                             content: 'Модель не вызвала tool (save_file) за ' + MAX_IDLE_DO + ' попыток.',
@@ -606,8 +633,10 @@ export default {
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                         return { ok: false, error: 'idle_execute' };
                     }
-                    // Idle retry: без write/notify — иначе UI моргает; steps не коммитим
+                    // Idle retry: steps не коммитим; durable уже в ленте; стрим уже сброшен
                     applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
                     forceDoReminder = true;
                     continue;
                 }
@@ -726,6 +755,9 @@ export default {
             }
 
             await writeTaskBody(fullPath, body);
+            // Карточка файла / tool_result в UI + чистый стрим до следующего model turn
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
         }
 
         if (iteration >= maxIter && lastResponse) {
@@ -868,6 +900,16 @@ function taskHasClarifyAnswers(activeTask) {
     );
 }
 
+/** Уже был успешный save_file в ribbon задачи (не путать с idle «не вызвала tool»). */
+function taskHasSuccessfulSave(activeTask) {
+    const ribbon = activeTask?.ribbon || [];
+    return ribbon.some(b =>
+        b?.type === 'tool_result'
+        && isFileWriteMethod(b.tool)
+        && b.ok
+    );
+}
+
 /**
  * После ответов на clarify-шаг: done → следующий proposed становится in_progress.
  * @param {{ steps?: Array }} activeTask
@@ -922,17 +964,23 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
             };
         }
         const fileName = call.args?.filename || call.args?.name;
-        const content = call.args?.post ?? call.args?.content ?? '';
+        const content = stripFcTrailer(call.args?.post ?? call.args?.content ?? '');
         if (!fileName)
             return { result: { error: 'save_file: нужен filename или name' }, newContext: currentContext };
         try {
-            await currentContext.save_file?.(buildToolMethodParams(
+            const saved = await currentContext.save_file?.(buildToolMethodParams(
                 { method: 'save_file', args: { filename: String(fileName), post: String(content), encoding: 'utf-8' } },
                 params,
                 { aiUser },
             ));
-            const base = String(currentContext.path || '').replace(/\/+$/, '');
-            const resultPath = base ? (base + '/' + fileName) : String(fileName);
+            // Канон: history-файл из return save_file (log.path), не context/filename
+            const resultPath = saved?.path || saved?.logFullPath;
+            if (!resultPath) {
+                return {
+                    result: { error: 'save_file: нет history path в ответе' },
+                    newContext: currentContext,
+                };
+            }
             return {
                 result: {
                     success: true,
@@ -1100,6 +1148,40 @@ function pushToolResult(ribbonTarget, call, result, model) {
 }
 
 /**
+ * Durable-блоки хода (thinking/text) → лента. Возвращает остальные блоки.
+ * Вызывать ОДИН раз после parse, до idle/inject/error — иначе стрим пропадает.
+ * @param {Array} ribbonTarget
+ * @param {Array} blocks
+ * @returns {Array} blocks без thinking/text
+ */
+function commitDurableBlocks(ribbonTarget, blocks) {
+    if (!Array.isArray(blocks))
+        return [];
+    if (!Array.isArray(ribbonTarget))
+        return blocks.filter(b => b?.type !== 'thinking' && b?.type !== 'text');
+    const rest = [];
+    for (const b of blocks) {
+        if (b?.type === 'thinking' || b?.type === 'text')
+            ribbonTarget.push(b);
+        else
+            rest.push(b);
+    }
+    return rest;
+}
+
+/** @deprecated alias — используй commitDurableBlocks */
+function commitIdleContent(ribbonTarget, blocks) {
+    const before = Array.isArray(ribbonTarget) ? ribbonTarget.length : 0;
+    commitDurableBlocks(ribbonTarget, blocks);
+    return Array.isArray(ribbonTarget) ? ribbonTarget.length - before : 0;
+}
+
+/** Idle EXECUTE stop: не принимать deferred plan без tools (регрессия: «3/4» без save_file). */
+function mayCommitDeferredOnIdleExecuteStop() {
+    return false;
+}
+
+/**
  * Записать usage хода на последний AI-блок и накопить в body.usage.
  * @param {object} body
  * @param {Array} ribbonTarget
@@ -1117,12 +1199,19 @@ function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
     const usage = { prompt, completion, total, contextPct, contextWindow: ctxWin };
 
     if (Array.isArray(ribbonTarget)) {
-        for (let i = ribbonTarget.length - 1; i >= 0; i--) {
-            const b = ribbonTarget[i];
-            if (b && (b.type === 'text' || b.type === 'thinking' || b.type === 'action' || b.type === 'error' || b.type === 'tool_result')) {
-                b.usage = usage;
-                break;
+        // Prefer thinking (summary «Мысли») — action/text без usage в UI теряли статистику
+        const prefer = ['thinking', 'text', 'tool_result', 'error', 'action'];
+        let placed = false;
+        for (const t of prefer) {
+            for (let i = ribbonTarget.length - 1; i >= 0; i--) {
+                const b = ribbonTarget[i];
+                if (b?.type === t) {
+                    b.usage = usage;
+                    placed = true;
+                    break;
+                }
             }
+            if (placed) break;
         }
     }
 
@@ -1228,14 +1317,14 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
             systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
             if (phase === 'execute')
-                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (save_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
+                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (save_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>. Артефакт: один конечный filename, перезапись того же имени (не *.struct.*/draft).\n';
             else if (phase === 'propose')
                 systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не save_file до ответов.\n';
             if (forceDoReminder) {
                 if (phase === 'propose')
                     systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
                 else
-                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови native function save_file({filename, post}). Не пиши <ask_user>, не prose и не reasoning без tool. Не «Начать».\n';
+                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови native function save_file({filename, post}) с КОНЕЧНЫМ именем артефакта (то же имя, что уже в задаче / presentation.html). Не промежуточные файлы. Не <ask_user>, не prose без tool. Не «Начать».\n';
             }
         }
         if (systemContent)
@@ -1945,6 +2034,12 @@ export {
     roleBlocksTool,
     callNeedsTrustConfirm,
     pushToolResult,
+    executeToolCall,
+    commitDurableBlocks,
+    commitIdleContent,
+    mayCommitDeferredOnIdleExecuteStop,
+    taskHasSuccessfulSave,
+    stripFcTrailer,
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,
     MAX_IDLE_DO,
@@ -2013,6 +2108,14 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         blocks.push({ type: 'thinking', label: 'Мысли', content: m[1].trim(), time, sender });
     }
     remaining = remaining.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '');
+    // Незакрытый <reasoning> в конце стрима — всё равно в «Мысли», иначе пропадает при clear/done
+    const unclosedReasoning = remaining.match(/<reasoning>([\s\S]*)$/i);
+    if (unclosedReasoning) {
+        const body = unclosedReasoning[1].trim();
+        if (body)
+            blocks.push({ type: 'thinking', label: 'Мысли', content: body, time, sender });
+        remaining = remaining.slice(0, unclosedReasoning.index).trimEnd();
+    }
 
     // 2. <plan> → pendingPlan (balanced brackets — не резать на ] внутри description)
     const planExtract = extractBalancedJsonArray(remaining, '<plan>', '</plan>');

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import '../oda/reactor.js';
+import '../sources/reactor.js';
 import { fixMdHistoryLinks, fixWorkMdLinks } from '../sources/client/index.js';
 import { $item } from '../sources/core.js';
 import { $file, $folder } from '../sources/server/index.js';
@@ -33,20 +33,24 @@ describe('path-syntax', () => {
         assert.equal($item.isHiddenId('.history'), true);
     });
 
-    it('parseHistoryEntryPath reads timestamp uid and source file', () => {
+    it('parseHistoryEntryPath reads timestamp uid date and source file', () => {
         const path = '/root/direction/$group/text/.document (6).pptx/history/2026-06-21/1782064530427.CA4E097FF6C1D387.pptx';
         const p = $file.parseHistoryEntryPath(path);
         assert.equal(p.timestamp, '1782064530427');
         assert.equal(p.userId, 'CA4E097FF6C1D387');
         assert.equal(p.fileName, 'document (6).pptx');
+        assert.equal(p.date, '2026-06-21');
+        assert.equal(p.dateShort, '21.06');
         assert.match(p.time, /^\d{2}:\d{2}$/);
+        assert.match(p.dateTime, /21\.06 \d{2}:\d{2}/);
     });
 
-    it('historyEntryLabel uses source file name not uid', () => {
+    it('historyEntryLabel is proto file name only', () => {
         const path = '/root/text/.message.txt/history/2026-06-21/1782064530427.CA4E097FF6C1D387.txt';
         const label = $file.historyEntryLabel(path);
-        assert.match(label, /^\d{2}:\d{2} \| message\.txt$/);
+        assert.equal(label, 'message.txt');
         assert.doesNotMatch(label, /CA4E097FF6C1D387/);
+        assert.doesNotMatch(label, /\|/);
     });
 
     it('historyUserLabel uses uid when no user list', () => {
@@ -54,18 +58,18 @@ describe('path-syntax', () => {
         assert.match($file.historyUserLabel(path), / \| CA4E097FF6C1D387$/);
     });
 
-    it('fixMdHistoryLinks replaces uid with file name when path has parentheses', () => {
+    it('fixMdHistoryLinks replaces uid with proto file name', () => {
         const md = '[21:03|CA4E097FF6C1D387](/root/direction/$group/pptx/.document%20(6).pptx/history/2026-06-21/1782065020664.CA4E097FF6C1D387.pptx/~/handlers/pages/form/index.html)';
         const fixed = fixMdHistoryLinks(md);
-        assert.match(fixed, /\[21:03 \| document \(6\)\.pptx\]/);
-        assert.doesNotMatch(fixed, /\[21:03\|CA4E097FF6C1D387\]/);
+        assert.match(fixed, /^\[document \(6\)\.pptx\]\(/);
+        assert.doesNotMatch(fixed, /^\[.*CA4E097FF6C1D387.*\]\(/);
     });
 
     it('fixWorkMdLinks rewrites relative markdown href to WORK form', () => {
         const md = 'See [page](../../../../sources/page.html) please';
         const base = '/$server/$folder/handlers/pages/site/readme.md';
         const fixed = fixWorkMdLinks(md, base);
-        assert.match(fixed, /\[page\]\(\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
+        assert.match(fixed, /\[page\]\(\/\$server\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
     });
 
     it('fixWorkMdLinks linkifies path-like backticks and skips bare names', () => {

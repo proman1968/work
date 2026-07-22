@@ -15,6 +15,9 @@ import {
     keepDoAction,
     buildToolMethodParams,
     normalizeActionBlocks,
+    commitDurableBlocks,
+    commitIdleContent,
+    mayCommitDeferredOnIdleExecuteStop,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -46,6 +49,64 @@ describe('nextIdleDoAction', () => {
         assert.equal(nextIdleDoAction(2), 'retry');
         assert.equal(nextIdleDoAction(3), 'stop');
         assert.equal(nextIdleDoAction(99), 'stop');
+    });
+});
+
+describe('commitDurableBlocks', () => {
+    it('pushes thinking/text and returns the rest', () => {
+        const ribbon = [];
+        const rest = commitDurableBlocks(ribbon, [
+            { type: 'thinking', content: 'рассуждение' },
+            { type: 'text', content: 'проза' },
+            { type: 'questions', fields: [{ id: 'a' }] },
+            { type: 'form', fields: [{ id: 'b' }] },
+            { type: 'action', button: { label: 'Начать' } },
+            { type: 'error', content: 'x' },
+        ]);
+        assert.equal(ribbon.length, 2);
+        assert.equal(ribbon[0].type, 'thinking');
+        assert.equal(ribbon[1].type, 'text');
+        assert.deepEqual(rest.map(b => b.type), ['questions', 'form', 'action', 'error']);
+    });
+
+    it('handles empty / non-array', () => {
+        assert.deepEqual(commitDurableBlocks([], null), []);
+        assert.deepEqual(commitDurableBlocks(null, [{ type: 'thinking' }, { type: 'action' }]), [
+            { type: 'action' },
+        ]);
+    });
+
+    it('single commit then inject: no duplicate thinking', () => {
+        const ribbon = [];
+        let blocks = [
+            { type: 'thinking', content: 'нужны тема и слайды' },
+            { type: 'text', content: 'уточню' },
+        ];
+        blocks = commitDurableBlocks(ribbon, blocks);
+        ribbon.push(makeClarifyQuestions({ description: 'Уточнить тему' }, 'WORK'));
+        // happy-path push of rest would not re-add thinking
+        for (const b of blocks) ribbon.push(b);
+        assert.equal(ribbon.filter(b => b.type === 'thinking').length, 1);
+        assert.equal(ribbon.filter(b => b.type === 'text').length, 1);
+        assert.equal(ribbon[ribbon.length - 1].type, 'questions');
+    });
+});
+
+describe('commitIdleContent', () => {
+    it('alias still counts pushed durable blocks', () => {
+        const ribbon = [];
+        const n = commitIdleContent(ribbon, [
+            { type: 'thinking', content: 'x' },
+            { type: 'questions', fields: [] },
+        ]);
+        assert.equal(n, 1);
+        assert.equal(ribbon[0].type, 'thinking');
+    });
+});
+
+describe('mayCommitDeferredOnIdleExecuteStop', () => {
+    it('never applies deferred plan steps on idle execute stop', () => {
+        assert.equal(mayCommitDeferredOnIdleExecuteStop(), false);
     });
 });
 

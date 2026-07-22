@@ -35,7 +35,7 @@ export class $file extends $folder{
         this.id = parts.pop();
         parts.pop();
         if (parts.pop() === 'history')
-            return this.constructor.historyUserLabelAsync(this.path);
+            return this.constructor.historyEntryLabel(this.path);
         return this.id;
     }
     get ext(){
@@ -72,26 +72,32 @@ export class $file extends $folder{
         const parts = path.split('/');
         const id = parts.pop();
         if (!id) return null;
-        parts.pop();
+        const date = parts.pop() || '';
         if (parts.pop() !== 'history') return null;
         const sourceId = parts.pop() || '';
         const extDot = id.lastIndexOf('.');
         const name = extDot > 0 ? id.slice(0, extDot) : id;
         const nameParts = name.split('.');
         const timestamp = nameParts[0];
-        const userId = nameParts.length > 1 ? nameParts[1] : '';
+        const userId = nameParts.length > 1 ? nameParts.slice(1).join('.') : '';
         const fileName = sourceId.startsWith('.') ? sourceId.slice(1) : sourceId;
         const ms = +timestamp;
         const time = Number.isFinite(ms)
             ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
-        return { timestamp, userId, fileName, time };
+        let dateShort = '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            const [, m, d] = date.split('-');
+            dateShort = `${d}.${m}`;
+        }
+        const dateTime = [dateShort, time].filter(Boolean).join(' ');
+        return { timestamp, userId, fileName, time, date, dateShort, dateTime };
     }
 
     static historyEntryLabel(path) {
         const p = this.parseHistoryEntryPath(path);
         if (!p) return '';
-        return p.fileName ? `${p.time} | ${p.fileName}` : p.time;
+        return p.fileName || p.time || '';
     }
 
     static historyUserLabel(path) {

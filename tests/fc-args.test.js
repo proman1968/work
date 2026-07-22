@@ -7,6 +7,8 @@ import {
 import {
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,
+    stripFcTrailer,
+    taskHasSuccessfulSave,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
 describe('appendFunctionArgs', () => {
@@ -75,5 +77,49 @@ describe('isBrokenFcArgs / sanitizeToolArgsForHistory', () => {
             sanitizeToolArgsForHistory({ filename: 'a.html', post: 'x' }),
             { filename: 'a.html', post: 'x' },
         );
+    });
+});
+
+describe('stripFcTrailer', () => {
+    it('removes trailing } and </function>', () => {
+        const html = '<html><body>ok</body></html>';
+        assert.equal(stripFcTrailer(html + '\n}\n</function>'), html);
+        assert.equal(stripFcTrailer(html + '}\n</function>'), html);
+        assert.equal(stripFcTrailer(html), html);
+    });
+
+    it('does not strip bare closing brace from JSON', () => {
+        assert.equal(stripFcTrailer('{"a":1}'), '{"a":1}');
+    });
+
+    it('handles empty', () => {
+        assert.equal(stripFcTrailer(''), '');
+        assert.equal(stripFcTrailer(null), '');
+    });
+});
+
+describe('taskHasSuccessfulSave', () => {
+    it('true when ok save_file tool_result in ribbon', () => {
+        assert.equal(taskHasSuccessfulSave({
+            ribbon: [
+                { type: 'tool_result', tool: 'save_file', ok: true },
+            ],
+        }), true);
+        assert.equal(taskHasSuccessfulSave({
+            ribbon: [
+                { type: 'tool_result', tool: 'write_file', ok: true },
+            ],
+        }), true);
+    });
+
+    it('false when missing, not ok, or other tool', () => {
+        assert.equal(taskHasSuccessfulSave({ ribbon: [] }), false);
+        assert.equal(taskHasSuccessfulSave({
+            ribbon: [{ type: 'tool_result', tool: 'save_file', ok: false }],
+        }), false);
+        assert.equal(taskHasSuccessfulSave({
+            ribbon: [{ type: 'tool_result', tool: 'ask_user', ok: true }],
+        }), false);
+        assert.equal(taskHasSuccessfulSave(null), false);
     });
 });

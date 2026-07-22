@@ -68,14 +68,15 @@ ODA({is: 'work-form',
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance;">
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
+                <oda-button ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
+                    style="font-size: xx-small;"
+                    center icon-pos="top"
+                ></oda-button>
                 <div flex></div>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
-                            <oda-button ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
-                                style="font-size: xx-small;"
-                                center icon-pos="top"
-                            ></oda-button>
+    
                         <div
                             ~if="view?.allowSave"
                             :disabled="saving"

@@ -18,6 +18,7 @@ import {
     getDoStepPhase,
     stepNeedsClarify,
     pushToolResult,
+    executeToolCall,
     parseResponseToRibbon,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
@@ -64,7 +65,8 @@ describe('MVP e2e: USER working task', () => {
         assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'presentation.html' } }), false);
     });
 
-    it('pushToolResult adds file block with work resultPath', () => {
+    it('pushToolResult adds file block with history resultPath', () => {
+        const historyPath = '/users/u1/$user/text/.presentation.html/history/2026-07-22/1784729198845.GigaChat.html';
         const ribbon = [];
         pushToolResult(
             ribbon,
@@ -72,17 +74,59 @@ describe('MVP e2e: USER working task', () => {
             {
                 success: true,
                 name: 'presentation.html',
-                path: '/users/u1/presentation.html',
-                resultPath: '/users/u1/presentation.html',
+                path: historyPath,
+                resultPath: historyPath,
             },
             { path: 'models/GigaChat' },
         );
         assert.equal(ribbon.length, 2);
         assert.equal(ribbon[0].type, 'tool_result');
-        assert.equal(ribbon[0].resultPath, '/users/u1/presentation.html');
+        assert.equal(ribbon[0].resultPath, historyPath);
         assert.equal(ribbon[1].type, 'file');
-        assert.equal(ribbon[1].path, '/users/u1/presentation.html');
+        assert.equal(ribbon[1].path, historyPath);
         assert.equal(ribbon[1].name, 'presentation.html');
+    });
+
+    it('executeToolCall uses save_file history path, not context/filename', async () => {
+        const historyPath = '/users/u1/$user/text/.presentation.html/history/2026-07-22/1.GigaChat.html';
+        const ctx = {
+            path: '/users/u1',
+            async save_file() {
+                return { path: historyPath, type: '$file' };
+            },
+        };
+        const { result } = await executeToolCall(
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
+            ctx,
+            ctx,
+            [],
+            { user: { uid: 'u1' }, role: 'USER' },
+            { uid: 'GigaChat', isAI: true },
+        );
+        assert.equal(result.success, true);
+        assert.equal(result.resultPath, historyPath);
+        assert.equal(result.path, historyPath);
+        assert.notEqual(result.resultPath, '/users/u1/presentation.html');
+    });
+
+    it('executeToolCall errors when save_file has no history path', async () => {
+        const ctx = {
+            path: '/users/u1',
+            async save_file() {
+                return true;
+            },
+        };
+        const { result } = await executeToolCall(
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
+            ctx,
+            ctx,
+            [],
+            { user: { uid: 'u1' }, role: 'USER' },
+        );
+        assert.ok(result.error);
+        assert.ok(String(result.error).includes('history path'));
+        assert.equal(result.resultPath, undefined);
+        assert.notEqual(result.path, '/users/u1/presentation.html');
     });
 
     it('XML questions without options are dropped (idle inject path)', () => {

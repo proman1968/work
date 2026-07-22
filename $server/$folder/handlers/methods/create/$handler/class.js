@@ -203,7 +203,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 let data = null;
                 if ($item.path) {
                     try {
-                        data = await WORK.get_item($item.path + '/class.js');
+                        data = await WORK.get_item($item.path + '/class.js', 'load');
 
                         icon_idx = data.indexOf('icon:');
                     }

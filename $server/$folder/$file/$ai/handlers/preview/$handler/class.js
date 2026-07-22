@@ -1,6 +1,6 @@
 ﻿/**
- * Preview task.ai — декларативная проекция body → microchat-view-* через ~is + ~props.
- * Один body в памяти; harness/WS мутируют — Reactor рисует.
+ * Preview task.ai — data → getters → binds (rules Part B).
+ * JSON файла в this.data; ribbon :data="$for.item"; view читает this.data.
  */
 
 const VIEW_TYPES = new Set([
@@ -71,36 +71,6 @@ function migrateRibbon(ribbon) {
     }
 }
 
-async function hydrateFiles(ribbon, old = []) {
-    if (!Array.isArray(ribbon)) return;
-    const oldKeys = old.map(m => `${m.type}:${m.time}`);
-    for (const msg of ribbon) {
-        const key = `${msg.type}:${msg.time}`;
-        const filePath = msg.type === 'file' ? msg.path
-            : (msg.type === 'tool_result' ? msg.resultPath : '');
-        if (filePath) {
-            const prev = old.find(m => `${m.type}:${m.time}` === key);
-            if (!oldKeys.includes(key) || !prev?.$file) {
-                try {
-                    msg.$file = await WORK.get_item(filePath, 'info');
-                } catch {
-                    try {
-                        msg.$file = await WORK.get_item(filePath);
-                    } catch {
-                        msg.$file = null;
-                    }
-                }
-            } else {
-                msg.$file = prev.$file;
-            }
-        }
-        if (msg.type === 'task' && Array.isArray(msg.ribbon)) {
-            const prevRibbon = old.find(m => m.type === 'task' && m.time === msg.time)?.ribbon || [];
-            await hydrateFiles(msg.ribbon, prevRibbon);
-        }
-    }
-}
-
 function viewTag(item) {
     const t = item?.type;
     return t && VIEW_TYPES.has(t) ? 'microchat-view-' + t : '';
@@ -135,13 +105,13 @@ export default {
             }
         </style>
         <microchat-ribbon flex
-            :items="body?.ribbon || []"
+            :items
             :streaming-text="streamingText"
             @scroll="_onScroll"
             @confirm="confirm(true)"
             @cancel="confirm(false)"
         ></microchat-ribbon>
-        <microchat-panel no-flex
+        <microchat-panel info-invert no-flex
             :pending="pending"
             :recording="recording"
             :timer="timer"
@@ -156,7 +126,7 @@ export default {
             :sending="sending"
             :usage-text="usageText"
             :context-pct="contextPct"
-            :pending-action="!!body?.pendingAction"
+            :pending-action="!!data?.pendingAction"
             @action="confirm(true)"
             @cancel-action="confirm(false)"
             @send="pending ? stopGeneration() : send()"
@@ -168,7 +138,7 @@ export default {
         ></microchat-panel>
     `,
     colorMode: 'content',
-    body: null,
+    data: null,
     value: '',
     sending: false,
     pending: false,
@@ -192,6 +162,7 @@ export default {
                     item.listen('chat.delta', e => this._onDelta(e));
                     item.listen('chat.done', e => this._onDone(e));
                     item.listen('chat.error', e => this._onError(e));
+                    item.listen('chat.clear_stream', e => this._onClearStream(e));
                 }
                 if (item?.short && !this.selectedModel) {
                     try {
@@ -205,10 +176,11 @@ export default {
         },
     },
     get $saveKey() { return this.$item?.short; },
-    get title() { return this.body?.title || 'task'; },
+    get title() { return this.data?.title || 'task'; },
+    get items() { return this.data?.ribbon || []; },
 
     get open() {
-        return openInteractive(this.body?.ribbon);
+        return openInteractive(this.data?.ribbon);
     },
     get rows() {
         return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
@@ -224,7 +196,7 @@ export default {
         return ({ gigachat: 'carbon:ai', qwen3: 'carbon:machine-learning-model', browser: 'av:volume-up' })[this.ttsMode] || 'av:volume-off';
     },
     get usageText() {
-        const u = this.body?.usage;
+        const u = this.data?.usage;
         if (!u) return '';
         const fmt = n => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n || 0));
         const parts = [];
@@ -235,7 +207,7 @@ export default {
         return parts.join(' · ');
     },
     get contextPct() {
-        const p = Number(this.body?.usage?.contextPct);
+        const p = Number(this.data?.usage?.contextPct);
         return Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : 0;
     },
 
@@ -246,12 +218,10 @@ export default {
         try {
             let raw = await this.$item.load();
             if (raw instanceof Blob) raw = await raw.text();
-            const body = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            body.ribbon ??= [];
-            migrateRibbon(body.ribbon);
-            const old = this.body?.ribbon || [];
-            await hydrateFiles(body.ribbon, old);
-            this.body = body;
+            const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            data.ribbon ??= [];
+            migrateRibbon(data.ribbon);
+            this.data = data;
             await this._ensureModel();
             this._autoFollow = true;
             this._scrollBottom();
@@ -260,18 +230,18 @@ export default {
         }
     },
     async _ensureModel() {
-        if (this.body?.model) {
-            this.selectedModel = this.body.model;
+        if (this.data?.model) {
+            this.selectedModel = this.data.model;
             return;
         }
         if (!this.selectedModel) {
             const path = await findFirstModel();
             if (path) this.selectedModel = path;
         }
-        if (this.selectedModel && this.body) {
-            this.body.model = this.selectedModel;
+        if (this.selectedModel && this.data) {
+            this.data.model = this.selectedModel;
             try {
-                await this.$item.fetch('save', {}, JSON.stringify(this.body));
+                await this.$item.fetch('save', {}, JSON.stringify(this.data));
             } catch {}
         }
     },
@@ -288,14 +258,19 @@ export default {
     confirm(ok = true) {
         const open = this.open;
         const label = open?.button?.label
-            || (this.body?.pendingPlan ? (ok ? 'Начать' : 'Нет') : (ok ? 'Подтвердить' : 'Нет'));
+            || (this.data?.pendingPlan ? (ok ? 'Начать' : 'Нет') : (ok ? 'Подтвердить' : 'Нет'));
         if (ok && open && (open.type === 'questions' || open.type === 'form') && open.fields?.length) {
             if (!answersFrom(open.fields)) {
-                console.warn('[ai-preview] выберите варианты перед «' + label + '»');
+                open.needAnswers = true;
+                clearTimeout(this._needAnswersTimer);
+                this._needAnswersTimer = setTimeout(() => {
+                    if (open) open.needAnswers = false;
+                }, 2500);
                 return;
             }
+            open.needAnswers = false;
         }
-        if (!this.body?.pendingAction && !this.body?.pendingPlan && !open) {
+        if (!this.data?.pendingAction && !this.data?.pendingPlan && !open) {
             this.value = ok ? 'Да' : 'Нет';
             this.send();
             return;
@@ -405,6 +380,11 @@ export default {
         this.streamingText += token;
         this._autoFollow = true;
         this._scrollBottom();
+    },
+    /** Idle retry: сбросить стрим, pending оставить — ход ещё идёт */
+    _onClearStream() {
+        this.streamingText = '';
+        this._reload();
     },
     _onDone() {
         const full = this.streamingText;
@@ -517,9 +497,9 @@ export default {
         });
         tree.execute = async (item) => {
             this.selectedModel = item.path;
-            if (this.body) {
-                this.body.model = item.path;
-                try { await this.$item.fetch('save', {}, JSON.stringify(this.body, null, 2)); } catch {}
+            if (this.data) {
+                this.data.model = item.path;
+                try { await this.$item.fetch('save', {}, JSON.stringify(this.data, null, 2)); } catch {}
             }
             for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
             this._focus();
@@ -549,12 +529,22 @@ async function findFirstModel() {
 ODA({ is: 'microchat-ribbon',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; overflow-y: auto; flex: 1; min-height: 0; scroll-behavior: smooth; }
-            :host([embedded]) { flex: none; min-height: auto; overflow: visible; }
+            :host {
+                @apply --vertical;
+                overflow-y: auto;
+                flex: 1;
+                min-height: 0;
+                scroll-behavior: smooth;
+            }
+            :host([embedded]) {
+                flex: none;
+                min-height: auto;
+                overflow: visible;
+            }
             .ribbon { @apply --vertical; }
         </style>
         <div class="ribbon" ~for="items">
-            <div ~is="tag($for.item)" ~if="visible($for.item)" ~props="$for.item"
+            <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
                 @confirm="fire('confirm')" @cancel="fire('cancel')"></div>
         </div>
         <microchat-streaming ~if="streamingText" :text="streamingText"></microchat-streaming>
@@ -565,7 +555,6 @@ ODA({ is: 'microchat-ribbon',
     tag(item) { return viewTag(item); },
     visible(item) {
         if (!item || !viewTag(item)) return false;
-        // Отвеченные questions/form — только prompt-пузырь, без дубля .qa
         if ((item.type === 'questions' || item.type === 'form') && item.answered)
             return false;
         return true;
@@ -602,18 +591,29 @@ ODA({ is: 'microchat-panel',
                 @apply --horizontal; @apply --accent-invert; max-width: 150px;
                 padding: 4px 8px; align-items: center; gap: 4px; border-radius: 8px;
             }
-            .attach-chip label { overflow: hidden; text-overflow: ellipsis; font-size: xx-small; white-space: nowrap; }
-            .tools { @apply --horizontal; align-items: center; gap: 2px; font-size: small; }
+            .attach-chip label {
+                overflow: hidden; text-overflow: ellipsis; font-size: xx-small; white-space: nowrap;
+            }
+            .tools { @apply --horizontal; align-items: center; font-size: small; }
+            .ctx-wrap { position: relative; flex-shrink: 0; }
             .ctx-btn {
-                width: 28px; height: 28px; border-radius: 50%; border: none; padding: 0;
-                cursor: default; flex-shrink: 0;
+                width: 20px; height: 20px; border-radius: 50%; border: none; padding: 0;
+                cursor: pointer; flex-shrink: 0;
                 display: flex; align-items: center; justify-content: center;
                 background:
-                    radial-gradient(circle at center, var(--content-background, #fff) 55%, transparent 56%),
-                    conic-gradient(var(--info-color, #5c6bc0) calc(var(--pct, 0) * 1%), var(--dark-background, #ddd) 0);
+                    radial-gradient(circle at center, var(--content-background, #fff) 46%, transparent 47%),
+                    conic-gradient(
+                        var(--accent-color, #303f9f) calc(var(--pct, 0) * 1%),
+                        #90a4ae 0
+                    );
             }
             .ctx-btn span {
-                font-size: 8px; line-height: 1; opacity: .75; pointer-events: none;
+                font-size: 7px; line-height: 1; font-weight: 600; opacity: .9; pointer-events: none;
+            }
+            .ctx-tip {
+                position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+                white-space: nowrap; padding: 4px 8px; border-radius: 8px; font-size: x-small;
+                @apply --dark-invert; @apply --raised; z-index: 2; pointer-events: none;
             }
         </style>
         <div ~if="pendingAction" horizontal style="gap: 4px; padding: 0 2px;">
@@ -636,14 +636,18 @@ ODA({ is: 'microchat-panel',
                 <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
             </div>
             <div class="tools">
-                <item-node :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="fire('select-model', $event)"></item-node>
-                <button class="ctx-btn" ~style="'--pct:' + (contextPct || 0)" :title="usageText || 'Контекст'"
-                    ~if="usageText || contextPct">
-                    <span>{{contextPct || 0}}%</span>
-                </button>
+                <item-node no-flex :icon-size="iconSize * .8" :$item="selectedModelItem"
+                    @pointerdown.stop="fire('select-model', $event)"></item-node>
+                <div class="ctx-wrap" ~if="usageText || contextPct">
+                    <button class="ctx-btn" ~style="'--pct:' + (contextPct || 0)"
+                        :title="usageText || 'Контекст'" @tap.stop="statsOpen = !statsOpen">
+                        <span>{{contextPct || 0}}%</span>
+                    </button>
+                    <div class="ctx-tip" ~if="statsOpen">{{usageText || (contextPct + '% ctx')}}</div>
+                </div>
                 <div flex></div>
-                <oda-button icon="icons:attachment" :icon-size @tap="fire('get-file')" style="border-radius: 50%;"
-                    title="Прикрепить файл"></oda-button>
+                <oda-button icon="icons:attachment" :icon-size @tap="fire('get-file')"
+                    style="border-radius: 50%;" title="Прикрепить файл"></oda-button>
                 <oda-button :icon="ttsIcon" :icon-size @tap="fire('cycle-tts')" :success="ttsMode !== 'off'"
                     style="border-radius: 50%;" title="Режим разговора"></oda-button>
                 <oda-button :icon="sendIcon" :icon-size :rainbow="recording || pending" :disabled="sending"
@@ -667,11 +671,17 @@ ODA({ is: 'microchat-panel',
     sending: false,
     usageText: '',
     contextPct: 0,
+    statsOpen: false,
 });
 
-// ─── views (TYPES = props) ───────────────────────────────────────────
+// ─── views: :data → getters ──────────────────────────────────────────
+
+ODA({ is: 'microchat-view',
+    data: null,
+});
 
 ODA({ is: 'microchat-view-prompt',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host {
@@ -686,13 +696,13 @@ ODA({ is: 'microchat-view-prompt',
         <div flex class="msg">{{content}}</div>
         <div class="time" ~if="timeText">{{timeText}}</div>
     `,
-    imports: 'oda//icon',
-    content: '',
-    timeText: '',
-    type: 'prompt',
+    imports: '~/lib//icon',
+    get content() { return this.data?.content || ''; },
+    get timeText() { return this.data?.timeText || ''; },
 });
 
 ODA({ is: 'microchat-view-thinking',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host { overflow: hidden; display: block; }
@@ -714,22 +724,21 @@ ODA({ is: 'microchat-view-thinking',
         </style>
         <details>
             <summary>
-                <oda-icon icon="icons:chevron-right" icon-size="16"></oda-icon>
-                <span flex>{{label || 'Мысли'}}</span>
+                <oda-icon icon="icons:chevron-right" :icon-size></oda-icon>
+                <span flex>{{label}}</span>
                 <div class="usage" ~if="usageLine">{{usageLine}}</div>
             </summary>
             <div class="details-content">{{content}}</div>
         </details>
     `,
     imports: 'oda//icon',
-    label: 'Мысли',
-    content: '',
-    usage: null,
-    type: 'thinking',
-    get usageLine() { return formatUsageLine(this.usage); },
+    get label() { return this.data?.label || 'Мысли'; },
+    get content() { return this.data?.content || ''; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 ODA({ is: 'microchat-view-text',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host { @apply --horizontal; gap: 8px; padding: 2px 4px; align-items: flex-start; }
@@ -742,24 +751,31 @@ ODA({ is: 'microchat-view-text',
         <div class="usage" ~if="usageLine">{{usageLine}}</div>
     `,
     imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
-    content: '',
-    usage: null,
-    type: 'text',
-    get usageLine() { return formatUsageLine(this.usage); },
+    get content() { return this.data?.content || ''; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 ODA({ is: 'microchat-view-action',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; @apply --raised; gap: 6px; padding: 8px; border-radius: 12px; margin: 2px 4px; }
+            :host {
+                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
+                border-radius: 12px; margin: 2px 4px;
+            }
+            .head { @apply --horizontal; align-items: center; gap: 8px; }
             .title { @apply --bold; font-size: small; }
+            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
             .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
             .btn-success { @apply --success-invert; }
             .btn-error { @apply --error-invert; }
             .btn-info { @apply --info-invert; }
             .btn-warning { @apply --warning-invert; }
         </style>
-        <div class="title" ~if="title">{{title}}</div>
+        <div class="head" ~if="title || usageLine">
+            <div class="title" flex ~if="title">{{title}}</div>
+            <div class="usage" ~if="usageLine">{{usageLine}}</div>
+        </div>
         <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
         <div class="actions" ~if="!answered">
             <oda-button flex
@@ -771,17 +787,21 @@ ODA({ is: 'microchat-view-action',
         </div>
     `,
     imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
-    title: '',
-    content: '',
-    button: null,
-    answered: false,
-    type: 'action',
+    get title() { return this.data?.title || ''; },
+    get content() { return this.data?.content || ''; },
+    get button() { return this.data?.button || null; },
+    get answered() { return !!this.data?.answered; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 ODA({ is: 'microchat-view-form',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; @apply --raised; gap: 6px; padding: 8px; border-radius: 12px; margin: 2px 4px; }
+            :host {
+                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
+                border-radius: 12px; margin: 2px 4px;
+            }
             .title { @apply --bold; font-size: small; }
             .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
             .btn-success { @apply --success-invert; }
@@ -804,30 +824,38 @@ ODA({ is: 'microchat-view-form',
         </div>
     `,
     imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
-    title: '',
-    content: '',
-    fields: [],
-    button: null,
-    answered: false,
-    type: 'form',
+    get title() { return this.data?.title || ''; },
+    get content() { return this.data?.content || ''; },
+    get fields() { return this.data?.fields || []; },
+    get button() { return this.data?.button || null; },
 });
 
 ODA({ is: 'microchat-view-questions',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; @apply --raised; gap: 6px; padding: 8px; border-radius: 12px; margin: 2px 4px; }
+            :host {
+                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
+                border-radius: 12px; margin: 2px 4px;
+            }
             .title { @apply --bold; font-size: small; }
             .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
+            .hint { font-size: x-small; color: var(--error-color, #c62828); padding: 0 2px; }
             .btn-success { @apply --success-invert; }
             .btn-error { @apply --error-invert; }
             .btn-info { @apply --info-invert; }
             .btn-warning { @apply --warning-invert; }
+            :host([need-answers]) {
+                outline: 2px solid var(--error-color, #c62828);
+                outline-offset: 1px;
+            }
         </style>
         <div class="title" ~if="title">{{title}}</div>
         <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
         <div ~for="fields">
             <microchat-field :field="$for.item"></microchat-field>
         </div>
+        <div class="hint" ~if="needAnswers">Выберите варианты или введите «другое…»</div>
         <div class="actions">
             <oda-button flex
                 :class="'btn-' + (button?.color || 'success')"
@@ -838,15 +866,19 @@ ODA({ is: 'microchat-view-questions',
         </div>
     `,
     imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
-    title: '',
-    content: '',
-    fields: [],
-    button: null,
-    answered: false,
-    type: 'questions',
+    get title() { return this.data?.title || ''; },
+    get content() { return this.data?.content || ''; },
+    get fields() { return this.data?.fields || []; },
+    get button() { return this.data?.button || null; },
+    get answered() { return !!this.data?.answered; },
+    needAnswers: {
+        $attr: true,
+        get() { return !!this.data?.needAnswers; },
+        set(v) { if (this.data) this.data.needAnswers = !!v; },
+    },
 });
 
-/** Одно поле Ask — :field = объект из body.fields (мутация value на месте) */
+/** :field = объект из data.fields (мутация value на месте) */
 ODA({ is: 'microchat-field',
     template: /*html*/`
         <style>
@@ -854,7 +886,8 @@ ODA({ is: 'microchat-field',
             label { font-size: medium; @apply --bold; }
             .opt {
                 @apply --content; border: 1px solid var(--border-color, #ccc); border-radius: 6px;
-                padding: 8px 10px; font-size: medium; cursor: pointer; user-select: none;
+                padding: 4px 8px; font-size: small; cursor: pointer; user-select: none;
+                white-space: normal; max-width: 100%;
             }
             .opt:hover { @apply --header; }
             .opt.selected {
@@ -863,15 +896,20 @@ ODA({ is: 'microchat-field',
             }
             input, textarea {
                 @apply --content; border: 1px solid var(--border-color, #ccc); border-radius: 4px;
-                padding: 8px; font-size: medium; font-family: inherit; outline: none;
+                padding: 6px 8px; font-size: small; font-family: inherit; outline: none;
+                min-width: 6em; flex: 1 1 8em;
             }
             textarea { min-height: 3em; resize: vertical; }
+            .other { flex: 1 1 8em; min-width: 6em; }
         </style>
         <label ~if="field?.type !== 'checkbox'">{{fieldLabel}}</label>
-        <div ~if="field?.type === 'select'" class="vertical" style="gap: 4px;">
+        <div ~if="field?.type === 'select'" class="horizontal"
+            style="gap: 4px; flex-wrap: wrap; align-items: center;">
             <div class="opt" ~for="field.options || []"
                 ~class="{selected: field.value === $for.item}"
                 @tap="pick($for.item)">{{$for.item}}</div>
+            <input class="other" type="text" placeholder="другое…"
+                :value="otherValue" @input="onOther($event)" @tap.stop>
         </div>
         <textarea ~if="field?.type === 'textarea'" ::value="field.value" placeholder="Введите ответ..."></textarea>
         <input type="text" ~if="field?.type === 'text' || !field?.type"
@@ -888,61 +926,79 @@ ODA({ is: 'microchat-field',
     get fieldLabel() {
         return String(this.field?.label || '').replace(/[?？]*[:：]*\s*$/, '') || 'Да';
     },
+    get otherValue() {
+        const v = this.field?.value;
+        if (v == null || v === '') return '';
+        const opts = this.field?.options || [];
+        return opts.includes(v) ? '' : String(v);
+    },
     pick(opt) {
         if (this.field) this.field.value = opt;
+        this.render();
+    },
+    onOther(e) {
+        const v = String(e?.target?.value ?? '').trim();
+        if (this.field) this.field.value = v;
         this.render();
     },
 });
 
 ODA({ is: 'microchat-view-task',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host { @apply --vertical; @apply --content; @apply --raised; overflow: visible; }
-            .header { @apply --horizontal; @apply --bold; font-size: small; padding: 4px 8px; cursor: pointer; align-items: center; gap: 6px; user-select: none; }
+            .header {
+                @apply --horizontal; @apply --bold; font-size: small; padding: 4px 8px;
+                cursor: pointer; align-items: center; gap: 6px; user-select: none;
+            }
             .header:hover { @apply --header; }
             .track { height: 3px; @apply --dark; }
             .bar { height: 100%; background: var(--success-color); transition: width .3s; }
             .steps { @apply --vertical; gap: 2px; padding: 4px 8px; }
-            .step { @apply --horizontal; @apply --raised; gap: 8px; align-items: center; font-size: small; padding: 2px 4px; }
+            .step {
+                @apply --horizontal; @apply --raised; gap: 8px; align-items: center;
+                font-size: small; padding: 2px 4px;
+            }
             .step.done { opacity: .5; text-decoration: line-through; }
             .step.in_progress { @apply --accent; @apply --bold; }
-            .nested { @apply --vertical; padding: 4px 0 4px 8px; border-left: 2px solid var(--border-color, #ccc); margin: 4px 8px; overflow: visible; }
+            .nested {
+                @apply --vertical; padding: 4px 0 4px 8px;
+                border-left: 2px solid var(--border-color, #ccc); margin-left: 2px; overflow: visible;
+            }
         </style>
         <div class="header" @tap="collapsed = !collapsed" horizontal>
-            <span info style="border-radius: 16px; padding: 2px 4px;">{{current}}/{{(steps || []).length}}</span>
-            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{label || content || 'План'}}</span>
-            <oda-icon icon="icons:chevron-right" icon-size="16"
+            <span info style="border-radius: 16px; padding: 2px 4px;">{{current}}/{{steps.length}}</span>
+            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{label}}</span>
+            <oda-icon icon="icons:chevron-right" :icon-size
                 ~style="collapsed ? '' : 'transform: rotate(90deg);'"></oda-icon>
         </div>
         <div class="track"><div class="bar" ~style="'width:' + progress + '%'"></div></div>
         <div class="steps" ~if="!collapsed">
-            <div class="step" horizontal ~for="steps || []" :class="$for.item.status">
+            <div class="step" horizontal ~for="steps" :class="$for.item.status">
                 <oda-icon :icon="stepIcon($for.item.status)" icon-size="16"></oda-icon>
                 <span flex>{{$for.item.description}}</span>
             </div>
         </div>
-        <div class="nested" ~if="(ribbon || []).length">
-            <microchat-ribbon embedded :items="ribbon || []"
+        <div class="nested" ~if="items.length">
+            <microchat-ribbon embedded :items
                 @confirm="fire('confirm')" @cancel="fire('cancel')"></microchat-ribbon>
         </div>
     `,
     imports: 'oda//icon',
-    label: '',
-    content: '',
-    state: 'active',
-    steps: [],
-    ribbon: [],
     collapsed: true,
-    type: 'task',
+    get label() { return this.data?.label || this.data?.content || 'План'; },
+    get steps() { return this.data?.steps || []; },
+    get items() { return this.data?.ribbon || []; },
     get current() {
-        const s = this.steps || [];
+        const s = this.steps;
         const i = s.findIndex(x => x.status === 'in_progress');
         if (i >= 0) return i + 1;
         const p = s.findIndex(x => x.status !== 'done');
         return p >= 0 ? p + 1 : s.length;
     },
     get progress() {
-        const s = this.steps || [];
+        const s = this.steps;
         if (!s.length) return 0;
         return Math.round(s.filter(x => x.status === 'done').length / s.length * 100);
     },
@@ -954,6 +1010,7 @@ ODA({ is: 'microchat-view-task',
 });
 
 ODA({ is: 'microchat-view-file',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host {
@@ -962,41 +1019,40 @@ ODA({ is: 'microchat-view-file',
                 font-size: small; border-radius: 8px; margin: 2px 4px;
             }
         </style>
-        <item-node flex auto-run :$item="fileItem" :label="fileLabel"></item-node>
+        <item-node flex auto-run :$item></item-node>
     `,
     imports: '~/lib//node',
-    path: '',
-    name: '',
-    $file: null,
-    type: 'file',
-    get fileItem() {
-        if (this.$file) return this.$file;
-        if (this.path) {
-            try { return WORK.get_item(this.path); } catch { return null; }
-        }
-        return null;
-    },
-    get fileLabel() {
-        return this.name || this.$file?.label || this.$file?.name || this.path?.split('/')?.pop() || 'file';
+    get path() { return this.data?.path || ''; },
+    /** get_item → $item (info); id fallback для history-имён с пробелами */
+    get $item() {
+        if (!this.path) return null;
+        return WORK.get_item(this.path, 'info').then(item => {
+            if (item && !item.id && item.path) {
+                item.DATA ??= {};
+                item.DATA.id = item.path.split('/').pop();
+            }
+            return item;
+        });
     },
 });
 
 ODA({ is: 'microchat-view-tool',
+    extends: 'microchat-view',
     template: /*html*/`
         <details style="font-size: small;">
             <summary>🔧 {{name || 'tool'}}</summary>
             <pre style="margin: 4px; white-space: pre-wrap;">{{argsText}}</pre>
         </details>
     `,
-    name: '',
-    args: null,
-    type: 'tool',
+    get name() { return this.data?.name || ''; },
+    get args() { return this.data?.args ?? null; },
     get argsText() {
         try { return JSON.stringify(this.args ?? {}, null, 2); } catch { return String(this.args); }
     },
 });
 
 ODA({ is: 'microchat-view-tool_result',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
             :host { overflow: hidden; display: block; }
@@ -1018,40 +1074,37 @@ ODA({ is: 'microchat-view-tool_result',
         </style>
         <details>
             <summary>
-                <oda-icon icon="icons:chevron-right" icon-size="16"></oda-icon>
-                <span flex>{{ok === false ? '❌' : '✅'}} {{label || tool || 'result'}}</span>
+                <oda-icon icon="icons:chevron-right" :icon-size></oda-icon>
+                <span flex>{{ok === false ? '❌' : '✅'}} {{label}}</span>
                 <div class="usage" ~if="usageLine">{{usageLine}}</div>
             </summary>
             <pre class="details-content">{{content}}</pre>
         </details>
     `,
     imports: 'oda//icon',
-    tool: '',
-    label: '',
-    content: '',
-    ok: true,
-    resultPath: '',
-    $file: null,
-    usage: null,
-    type: 'tool_result',
-    get usageLine() { return formatUsageLine(this.usage); },
+    get tool() { return this.data?.tool || ''; },
+    get label() { return this.data?.label || this.data?.tool || 'result'; },
+    get content() { return this.data?.content || ''; },
+    get ok() { return this.data?.ok !== false; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 ODA({ is: 'microchat-view-error',
+    extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host { @apply --horizontal; gap: 8px; align-items: flex-start; }
-            .body { min-width: 0; padding: 6px 8px; font-size: small; white-space: pre-wrap; }
+            :host {
+                @apply --horizontal; gap: 2px; align-items: flex-start;
+                @apply --error; padding: 6px 8px; font-size: small;
+            }
+            .body { min-width: 0; white-space: pre-wrap; }
             .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; padding-top: 6px; }
         </style>
-        <div flex class="body" error>{{content}}</div>
+        <div flex class="body">{{content}}</div>
         <div class="usage" ~if="usageLine">{{usageLine}}</div>
     `,
-    content: '',
-    code: '',
-    usage: null,
-    type: 'error',
-    get usageLine() { return formatUsageLine(this.usage); },
+    get content() { return this.data?.content || ''; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 // ─── mic ─────────────────────────────────────────────────────────────

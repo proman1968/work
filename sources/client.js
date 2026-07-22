@@ -54,7 +54,9 @@ globalThis.WORK = function (prototype = {}){
 }
 WORK.genGUID = CORE.$item.genGUID;
 WORK.$item = CORE.$item;
-WORK.get_item = function (path = '/', method = '', params = {}){
+/** Контракт: get_item → всегда $item (info). Контент файла — явно 'load' или item.load(). */
+WORK.get_item = function (path = '/', method = 'info', params = {}){
+    method = method || 'info';
     let url = location.origin + path;
     return WORK.fetch(url, method, params).then(data=>{
         return WORK.__bind(data, path);
