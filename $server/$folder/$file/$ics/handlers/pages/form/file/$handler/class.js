@@ -1,4 +1,5 @@
 export default {
+    allowSave: true,
     fileControl: 'oda-calendar-event-form'
 }
 
@@ -6,25 +7,25 @@ ODA({
     is: 'oda-calendar-event-form',
     template: /* html */`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 padding: 8px;
                 gap: 8px;
                 min-width: 320px;
                 overflow: auto;
             }
-            fieldset{
+            fieldset {
                 border: 1px solid var(--border-color);
                 border-radius: 4px;
                 padding: 2px 8px;
                 margin: 0px;
                 min-width: 0px;
             }
-            legend{
+            legend {
                 font-size: small;
                 padding: 0px 4px;
             }
-            input, textarea{
+            input, textarea {
                 border: none;
                 outline: none;
                 background-color: transparent;
@@ -34,15 +35,15 @@ ODA({
                 padding: 4px 0px;
                 box-sizing: border-box;
             }
-            textarea{
+            textarea {
                 resize: vertical;
                 min-height: 60px;
             }
-            .row{
+            .row {
                 @apply --horizontal;
                 gap: 8px;
             }
-            .row > fieldset{
+            .row > fieldset {
                 @apply --flex;
             }
             .box {
@@ -79,9 +80,11 @@ ODA({
     on_input(e, i) {
         e.stopPropagation();
         this.events[i][e.target.id] = e.target.value;
-        if (this.$item)
+        const body = JSON.stringify(this.events);
+        if (!this.$item.body || (this.$item.body !== body)) {
+            this.$item.body = body;
             this.$item.isChanged = true;
-        this.fire('change', JSON.stringify(this.events));
+        }
     },
     events: undefined,
     body: {

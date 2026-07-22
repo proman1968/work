@@ -37,20 +37,18 @@ export default {
         }
     },
     get availableUsers() {
-        return new AsyncPromise(async () => {
-            const all = await this._sourceUsers;
+        return Promise.resolve(this._sourceUsers).then(all => {
             if (!this.selectMode)
                 return all;
             return all?.filter(u => !this.selected_users.includes(u.id)) || [];
         });
     },
     get selectedUsers() {
-        return new AsyncPromise(async () => {
-            if (!this.selectMode)
-                return [];
-            const all = await this._sourceUsers;
-            return all?.filter(u => this.selected_users.includes(u.id)) || [];
-        });
+        if (!this.selectMode)
+            return [];
+        return Promise.resolve(this._sourceUsers).then(all =>
+            all?.filter(u => this.selected_users.includes(u.id)) || []
+        );
     },
     get _sourceUsers() {
         if (this.role === 'BOSS')

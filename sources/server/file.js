@@ -61,8 +61,7 @@ export class $file extends $folder{
     }
 
     get svg_icons_list(){
-        return new AsyncPromise(async ()=>{
-            let svgString = await this.load();
+        return Promise.resolve(this.load()).then(svgString => {
             const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
             let items = doc.querySelectorAll('symbol[id]');
             return Array.from(items.map(r=>r.id));
@@ -103,10 +102,7 @@ export class $file extends $folder{
         })
     }
     get rag(){
-        return new AsyncPromise(async ()=>{
-            let rag = await this.parent.rag;
-            return rag?.[this.id];
-        })
+        return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
     }
     async delete(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
@@ -385,7 +381,7 @@ export class $file extends $folder{
         }
         else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
             || params.filename === 'response.md' || params.filename === 'error.txt'
-            || params.filename === 'task.ai' || params.filename === 'pass.order' || params.filename === 'proposal.json')
+            || params.filename === 'task.ai' || params.filename === 'pass.order')
             log.content = params.message ?? params.post;
         log.path = this.json_model.path;
         log.type = '$file';

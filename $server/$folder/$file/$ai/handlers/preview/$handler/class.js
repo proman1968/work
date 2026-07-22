@@ -14,70 +14,25 @@
             .thread {
                 @apply --vertical;
                 overflow-y: auto;
-                scrollbar-gutter: stable;
                 scroll-behavior: smooth;
                 flex: 1;
                 min-height: 0;
-                min-width: 0;
                 position: relative;
-                padding: 8px 12px;
-                box-sizing: border-box;
+                
             }
-            .sticky-chrome {
-                position: sticky;
-                top: 0;
-                z-index: 5;
-                @apply --vertical;
-                @apply --content;
-                gap: 0;
-                width: 100%;
-                min-width: 0;
-                max-width: 100%;
-                box-sizing: border-box;
-                padding-bottom: 4px;
-                margin-bottom: 4px;
-                border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, .1));
-            }
-            .chrome-prompt {
-                @apply --horizontal;
+            .msg-user {
                 @apply --info-invert;
-                align-items: flex-start;
-                gap: 10px;
-                margin: 6px 0;
-                padding: 10px 12px;
-                border-radius: 10px;
-                border: 1px solid var(--info-color, #5c6bc0);
-                box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+                @apply --raised;
+                padding: 4px 8px;
             }
-            .chrome-prompt oda-icon {
-                flex-shrink: 0;
-                margin-top: 2px;
+            .msg-time {
+                font-size: xx-small;
+                opacity: .5;
+                margin-top: 4px;
             }
-            .chrome-prompt .msg-body {
-                @apply --vertical;
-                flex: 1;
-                min-width: 0;
-                gap: 2px;
-            }
-            .chrome-prompt .msg-content {
+            .msg-content {
                 white-space: pre-wrap;
                 word-break: break-word;
-            }
-            .chrome-prompt .msg-time {
-                font-size: xx-small;
-                opacity: .55;
-                align-self: flex-end;
-            }
-            .chrome-crumb {
-                font-size: x-small;
-                opacity: .65;
-                padding: 4px 0 0;
-            }
-            .action-bar {
-                @apply --horizontal;
-                padding: 2px;
-                gap: 2px;
-                align-items: stretch;
             }
             .prompt-container {
                 border: 1px solid transparent;
@@ -196,62 +151,41 @@
                 font-size: small;
             }
         </style>
-        <div class="thread" flex vertical @scroll="_onScroll">
-            <div class="sticky-chrome" ~if="chromePrompt || chromePlan">
-                <div class="chrome-crumb" ~if="chromeBreadcrumb">{{chromeBreadcrumb}}</div>
-                <div class="chrome-prompt" horizontal ~if="chromePrompt">
-                    <oda-icon icon="icons:account-circle" icon-size="22"></oda-icon>
-                    <div class="msg-body" flex vertical>
-                        <div class="msg-content">{{chromePrompt.content}}</div>
-                        <div class="msg-time" ~if="chromePrompt.timeText">{{chromePrompt.timeText}}</div>
-                    </div>
-                </div>
-                <oda-chat-plan ~if="chromePlan" :steps="chromePlan" collapsed></oda-chat-plan>
-            </div>
-            <microchat-ribbon :ribbon="ribbonView" :hide-task-plan-time="focusTaskTime"
-                :active-form-time="activeFormTime"
-                @answer="onFormAnswer($event.detail.time, $event.detail.value)"></microchat-ribbon>
-            <div vertical class="streaming" ~if="streamingText">
-                <div rainbow style="padding: 4px;">Думаю...</div>
-                <div style="padding: 4px;">{{streamingText}}</div>
-            </div>
-        </div>
-
-        <div header :rainbow="pending" no-flex vertical style="padding: 2px; gap: 2px;">
-            <div class="action-bar" border horizontal>
-                <oda-button flex ~if="actionButton"
-                    :class="'btn-' + (actionButton.color || 'info')"
-                    :icon="actionButton.icon || 'icons:check'"
-                    :icon-size="iconSize * .8"
-                    :label="actionButton.label || 'OK'"
-                    @tap="onAction()"></oda-button>
-                <oda-button ~if="actionButton" :class="'btn-error'" icon="icons:close" :icon-size="iconSize * .8"
-                    style="border-radius: 0;" @tap="onCancelAction()"></oda-button>
-                <oda-button flex ~if="!actionButton" :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''"
-                    @tap="scrollToggle" title="Прокрутка"></oda-button>
-            </div>
-            <div class="attach-preview" ~if="files.length" horizontal>
-                <div class="attach-chip" ~for="files">
-                    <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
-                    <label flex>{{$for.item.name}}</label>
-                    <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
-                </div>
-            </div>
-            <div class="prompt-container" horizontal content>
-                <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
-                    @keydown="_onKeydown"></textarea>
-                <div flex ~if="recording" style="text-align: center; align-items: center; color: var(--error-color);">⏺ {{timer}}</div>
-                <oda-button round :icon="sendIcon" :icon-size
-                    :rainbow="recording || pending" :disabled="sending" 
-                    @tap="pending ? stopGeneration() : send()"></oda-button>
-            </div>
-            <div id="tools" horizontal>
-                <oda-button icon="icons:add" :icon-size @tap="getFile" style="border-radius: 50%;"></oda-button>
-                <oda-button icon="icons:link" :icon-size @tap="selectInternalFile" style="border-radius: 50%;"></oda-button>            
-                <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="selectModel"></item-node>
-                <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
-            </div>            
-        </div>
+        <microchat-ribbon flex
+            :items="ribbonItems"
+            :streaming-text="streamingText"
+            @scroll="_onScroll"
+            @answer="onFormAnswer($event.detail.time, $event.detail.value)"
+            @action-accept="onViewActionAccept($event.detail.item)"
+            @action-reject="onViewActionReject($event.detail.item)"
+        ></microchat-ribbon>
+        <microchat-panel no-flex
+            :action-button="actionButton"
+            :pending="pending"
+            :recording="recording"
+            :timer="timer"
+            :files="files"
+            ::value="value"
+            :rows="rows"
+            :send-icon="sendIcon"
+            :scroll-icon="scrollIcon"
+            :icon-size="iconSize"
+            :selected-model-item="selectedModelItem"
+            :tts-icon="ttsIcon"
+            :tts-label="ttsLabel"
+            :tts-mode="ttsMode"
+            :sending="sending"
+            @action="onAction()"
+            @cancel-action="onCancelAction()"
+            @scroll-toggle="scrollToggle"
+            @send="pending ? stopGeneration() : send()"
+            @get-file="getFile"
+            @select-internal="selectInternalFile($event.detail?.value || $event)"
+            @select-model="selectModel($event.detail?.value || $event)"
+            @cycle-tts="cycleTts"
+            @remove-file="removeFile($event.detail.index ?? $event.detail.value?.index)"
+            @keydown-prompt="_onKeydown($event.detail?.value || $event)"
+        ></microchat-panel>
     `,
     colorMode: 'content',
     value: '',
@@ -268,8 +202,7 @@
         $save: true,
     },
     _autoFollow: true,  // автоскролл вниз при новых сообщениях (false = пользователь прокрутил вверх)
-    actionButton: null,  // {label, color, icon, kind} — trailing action | questions
-    activeFormTime: null, // time блока questions, форма раскрыта после кнопки
+    actionButton: null,  // {label, color, icon, type} — управляется ИИ через <action>
     iconSize: 24,
     ttsMode: 'off',  // 'off' | 'browser' | 'gigachat' | 'qwen3'
     _lastSpoken: '',
@@ -307,38 +240,8 @@
     get ribbon() {
         return this.taskBody?.ribbon || [];
     },
-    /** Deepest active task + path предков */
-    get focusInfo() {
-        return findDeepestActiveTask(this.ribbon);
-    },
-    get activeTask() {
-        return this.focusInfo?.task || null;
-    },
-    get focusTaskTime() {
-        const t = this.activeTask?.time;
-        return t == null ? null : t;
-    },
-    get chromeBreadcrumb() {
-        const path = this.focusInfo?.path;
-        if (!path?.length || path.length < 2) return '';
-        return path.map(t => t.title || t.label || 'Задача').join(' › ');
-    },
-    /** Последний prompt из focus ribbon (с подъёмом к корню) */
-    get chromePrompt() {
-        return findChromePrompt(this.ribbon, this.focusInfo);
-    },
-    /** План deepest active task — в sticky-chrome */
-    get chromePlan() {
-        const task = this.activeTask;
-        if (!task) return null;
-        const plan = task.plan || task.steps;
-        return Array.isArray(plan) && plan.length ? plan : null;
-    },
-    /** Лента: без chrome-prompt, без control-prompt (Начать/Да/Отмена) */
-    get ribbonView() {
-        return stripControlPrompts(
-            stripPromptFromRibbon(this.ribbon, this.chromePrompt)
-        );
+    get ribbonItems() {
+        return normalizeRibbon(this.ribbon);
     },
     get sendIcon() {
         if (this.pending)
@@ -383,8 +286,14 @@
     attached() {
         this._focusPrompt();
     },
-    get thread(){
-        return this.$('.thread');
+    get thread() {
+        return this.$('microchat-ribbon');
+    },
+    onViewActionAccept(item) {
+        this.onAction();
+    },
+    onViewActionReject(item) {
+        this.onCancelAction();
     },
     get scrollIcon() {
         const t = this.thread; if (!t) return 'box:i-down-arrow-alt'; const atBottom = t.scrollTop + t.clientHeight >= t.scrollHeight - 10; return atBottom ? 'box:i-up-arrow-alt' : 'box:i-down-arrow-alt';
@@ -393,45 +302,18 @@
         return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
     },
     async onFormAnswer(msgTime, answers) {
-        const msg = findBlockByTime(this.taskBody?.ribbon || [], msgTime);
-        const fields = getQuestionFields(msg);
-        if (!fields.length) return;
-        const answerLines = [];
-        const answersObj = {};
-        for (const q of fields) {
-            const answer = answers[q.id];
-            if (answer !== undefined && answer !== '' && answer !== false) {
-                answersObj[q.id] = { label: q.label, value: answer, type: q.type || 'String' };
-                answerLines.push(`${q.label}: ${answer}`);
+        // Legacy path — предпочтительно кнопка панели + action.fields
+        const open = findOpenAction(this.taskBody?.ribbon);
+        if (open?.fields?.length && answers) {
+            for (const f of open.fields) {
+                if (answers[f.id] !== undefined)
+                    f.value = answers[f.id];
             }
         }
-        if (!answerLines.length) return;
-        msg.answered = true;
-        msg.resolved = true;
-        this.activeFormTime = null;
-        this.actionButton = null;
-        try {
-            await this.$item?.fetch?.('save', {}, JSON.stringify(this.taskBody, null, 2));
-        } catch (e) {
-            console.warn('[ai-preview] save answered form:', e.message);
-        }
-        try {
-            const storage = this.$item?.$class || this.$item?.$parent;
-            if (storage?.fetch) {
-                const formData = new FormData();
-                const messageFile = new File(
-                    [JSON.stringify({ time: Date.now(), answers: answersObj }, null, 2)],
-                    `answers-${Date.now()}.json`,
-                    { type: 'application/json' }
-                );
-                formData.append('message', messageFile, messageFile.name);
-                await storage.fetch('save_files', {}, formData);
-            }
-        } catch (e) {
-            console.warn('[ai-preview] save answers:', e.message);
-        }
-        this.value = 'Ответы на вопросы:\n' + answerLines.join('\n');
-        this.send();
+        this.onAction();
+    },
+    get activeTask() {
+        return this.taskBody?.ribbon?.filter(b => b.type === 'task')?.find(t => t.state === 'active') || null;
     },
     get selectedModelItem() {
         if (!this.selectedModel) return null;
@@ -475,15 +357,15 @@
             if (raw instanceof Blob)
                 raw = await raw.text();
             const body = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            // Работаем только с ribbon — единый формат
             body.ribbon ??= [];
-            normalizeRibbon(body.ribbon);
             const oldRibbon = this.taskBody?.ribbon || [];
-            const oldKeys = oldRibbon.map(ribbonBlockKey);
-            await hydrateRibbonFiles(body.ribbon, oldRibbon, oldKeys);
+            await this._hydrateRibbonFiles(body.ribbon, oldRibbon);
             this.taskBody = body;
             if (this.taskBody?.model) {
                 this.selectedModel = this.taskBody.model;
             } else if (this.selectedModel) {
+                // Используем сохранённую в localStorage модель
                 this.taskBody.model = this.selectedModel;
                 try {
                     await this.$item.fetch('save', {}, JSON.stringify(this.taskBody));
@@ -502,14 +384,58 @@
                     }
                 }
             }
-            // Кнопка: trailing action или неотвеченный questions
-            this._syncGateButton(body.ribbon);
+            // Обновить actionButton: pendingAction или открытый action (без status)
+            if (body.pendingAction) {
+                this.actionButton = { label: 'Подтвердить', color: 'warning', icon: 'icons:check' };
+            } else {
+                const openAction = findOpenAction(body.ribbon);
+                if (openAction || body.pendingPlan) {
+                    const src = openAction || {};
+                    this.actionButton = {
+                        label: src.button?.label || src.title || src.label || (body.pendingPlan ? 'Начать' : 'OK'),
+                        color: src.button?.color || 'info',
+                        icon: 'icons:check',
+                    };
+                } else {
+                    this.actionButton = null;
+                }
+            }
 
             this.render();
             this._autoFollow = true;
             this._maybeScrollToBottom();
         } catch (e) {
             console.warn('[ai-preview] _loadTaskBody:', e.message);
+        }
+    },
+    /**
+     * Резолв $file для file / tool_result; рекурсия в task.ribbon (Do-путь).
+     */
+    async _hydrateRibbonFiles(ribbon, oldRibbon = []) {
+        if (!Array.isArray(ribbon))
+            return;
+        const oldKeys = oldRibbon.map(m => `${m.role || m.type}:${m.time}`);
+        for (const msg of ribbon) {
+            const key = `${msg.role || msg.type}:${msg.time}`;
+            if (msg.time)
+                msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            if (!oldKeys.includes(key)) {
+                if ((msg.type === 'tool_result' && msg.resultPath) || (msg.type === 'file' && msg.path)) {
+                    try {
+                        msg.$file = await WORK.get_item(msg.resultPath || msg.path, 'info');
+                    } catch {
+                        msg.$file = null;
+                    }
+                }
+            } else {
+                const oldMsg = oldRibbon.find(m => `${m.role || m.type}:${m.time}` === key);
+                if (oldMsg?.$file)
+                    msg.$file = oldMsg.$file;
+            }
+            if (msg.type === 'task' && Array.isArray(msg.ribbon)) {
+                const oldNested = oldRibbon.find(m => m.type === 'task' && `${m.role || m.type}:${m.time}` === key)?.ribbon || [];
+                await this._hydrateRibbonFiles(msg.ribbon, oldNested);
+            }
         }
     },
     _onKeydown(e) {
@@ -607,6 +533,8 @@
             return;
         this.streamingText += token;
         this.render();
+        // Стрим в конце ленты — держим хвост внизу viewport
+        this._autoFollow = true;
         this._maybeScrollToBottom();
     },
     _onChatDone(e) {
@@ -743,92 +671,87 @@
         this.streamingText = '';
         this.render();
     },
-    _syncGateButton(ribbon) {
-        const gate = findTrailingGate(ribbon || this.taskBody?.ribbon);
-        if (!gate) {
-            this.actionButton = null;
-            return;
-        }
-        if (gate.type === 'questions') {
-            this.activeFormTime = gate.time;
-            this.actionButton = {
-                label: gate.action || 'Заполнить',
-                color: gate.color || 'info',
-                icon: 'icons:assignment',
-                title: gate.title,
-                kind: 'questions',
-                time: gate.time,
-            };
-            return;
-        }
-        this.actionButton = {
-            label: gate.action || gate.title || 'OK',
-            color: gate.color || 'info',
-            icon: 'icons:check',
-            title: gate.title,
-            kind: 'action',
-            time: gate.time,
-        };
-    },
     onAction() {
-        const gate = findTrailingGate(this.taskBody?.ribbon);
-        if (gate?.type === 'questions') {
-            // Поля уже в карточке — кнопка панели = submit формы
-            this.activeFormTime = gate.time;
-            this.render();
-            this.async(() => {
-                const form = this.$$?.('oda-chat-form')?.[0] || this.$?.('oda-chat-form');
-                if (form?.submit) {
-                    form.submit();
-                    return;
+        const open = findOpenAction(this.taskBody?.ribbon);
+        const label = open?.button?.label || (this.taskBody?.pendingPlan ? 'Начать' : 'Да');
+        // Sync ответов из view (normalizeRibbon — shallow copy; fields обычно shared)
+        let answers = collectFieldAnswers(open);
+        if (!answers && open?.fields?.length) {
+            const viewOpen = findOpenAction(this.ribbonItems);
+            const viewAnswers = collectFieldAnswers(viewOpen);
+            if (viewAnswers) {
+                for (const f of open.fields) {
+                    if (viewAnswers[f.id] !== undefined)
+                        f.value = viewAnswers[f.id];
                 }
-                form?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-            }, 50);
+                answers = collectFieldAnswers(open);
+            }
+        }
+        // questions/form без выбора — не слать пустой «Уточнить»
+        if (open && (open.type === 'questions' || open.type === 'form' || open.fields?.length)
+            && open.type !== 'action' && !answers) {
+            console.warn('[ai-preview] выберите варианты ответа перед «' + label + '»');
+            const taskView = this.$?.('microchat-view-task');
+            if (taskView) {
+                taskView.askHint = 'Выберите варианты ответа';
+                taskView.collapsed = false;
+                taskView.render?.();
+            }
             return;
         }
-        const label = this.actionButton?.label || gate?.action || 'OK';
         this.actionButton = null;
-        if (gate?.type === 'action') {
+        // Если есть ожидающий план / открытый action — автоprompt с текстом кнопки (+ answers)
+        if (this.taskBody?.pendingPlan || open) {
             this.sending = true;
             this.pending = true;
             this.render();
-            // Кнопка = обычный prompt (текст = label)
-            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: true, text: label }))
+            const payload = { text: label, confirm: true };
+            if (answers)
+                payload.answers = answers;
+            this.$item.fetch('prompt', {}, JSON.stringify(payload))
+                .catch(e => console.warn('[ai-preview] confirm plan:', e.message))
+                .finally(() => { this.sending = false; });
+            return;
+        }
+        // Если есть ожидающее опасное действие — отправляем подтверждение
+        if (this.taskBody?.pendingAction) {
+            this.sending = true;
+            this.pending = true;
+            this.render();
+            this.$item.fetch('prompt', {}, JSON.stringify({ text: 'Подтвердить', confirm: true }))
                 .catch(e => console.warn('[ai-preview] confirm:', e.message))
                 .finally(() => { this.sending = false; });
             return;
         }
-        this.value = label;
+        // Обычный ответ да/нет
+        this.value = 'Да';
         this.send();
         this.render();
     },
     onCancelAction() {
-        const gate = findTrailingGate(this.taskBody?.ribbon);
-        if (gate?.type === 'questions') {
-            // Отмена формы — тоже prompt
-            gate.resolved = true;
-            this.activeFormTime = null;
-            this.actionButton = null;
+        this.actionButton = null;
+        // Если есть ожидающий план / открытый action — отказ текстом кнопки
+        if (this.taskBody?.pendingPlan || findOpenAction(this.taskBody?.ribbon)) {
             this.sending = true;
             this.pending = true;
             this.render();
-            this.$item.fetch('prompt', {}, JSON.stringify({ text: 'Отмена' }))
-                .catch(e => console.warn('[ai-preview] cancel form:', e.message))
+            this.$item.fetch('prompt', {}, JSON.stringify({ text: 'Нет', confirm: false }))
+                .catch(e => console.warn('[ai-preview] cancel plan:', e.message))
                 .finally(() => { this.sending = false; });
             return;
         }
-        this.actionButton = null;
-        this.activeFormTime = null;
-        if (gate?.type === 'action') {
+        // Если есть ожидающее опасное действие — отказ
+        if (this.taskBody?.pendingAction) {
             this.sending = true;
             this.pending = true;
             this.render();
-            this.$item.fetch('prompt', {}, JSON.stringify({ confirm: false, text: 'Отмена' }))
+            this.$item.fetch('prompt', {}, JSON.stringify({ text: 'Нет', confirm: false }))
                 .catch(e => console.warn('[ai-preview] cancel:', e.message))
                 .finally(() => { this.sending = false; });
             return;
         }
-        this.value = 'Отмена';
+        // Обычный ответ да/нет
+        this.value = 'Нет';
         this.send();
         this.render();
     },
@@ -1052,245 +975,134 @@ function findFirstLeaf(node) {
     return findFirstLeaf(items[0]);
 }
 
-function ribbonBlockKey(m) {
-    return `${m.type || m.role || ''}:${m.time}`;
-}
+const RIBBON_VIEW_TYPES = new Set([
+    'prompt', 'thinking', 'text', 'action', 'task',
+    'file', 'tool', 'tool_result', 'form', 'questions', 'error',
+]);
 
-/** Нормализация legacy-блоков в памяти (role → type и т.п.) */
-function normalizeRibbon(ribbon) {
-    if (!Array.isArray(ribbon)) return;
-    for (const msg of ribbon) {
-        if (!msg) continue;
-        if (msg.role === 'user' && !msg.type)
-            msg.type = 'prompt';
-        if (msg.role === 'assistant' && !msg.type)
-            msg.type = 'text';
-        if (msg.type === 'details')
-            msg.type = 'reasoning';
-        if (msg.type === 'form')
-            msg.type = 'questions';
-        if (msg.type === 'questions')
-            normalizeQuestionsBlock(msg);
-        if (msg.type === 'action') {
-            if (msg.plan)
-                delete msg.plan; // plan только у task
-            // legacy: title скопирован из label → мусор title:"Да" action:"Да"
-            const label = String(msg.action || msg.label || '').trim();
-            const title = String(msg.title || '').trim();
-            const content = String(msg.content || '').trim();
-            if (title && label && title === label && !content)
-                delete msg.title;
-        }
-        if (msg.type === 'task') {
-            if (!msg.title && msg.label)
-                msg.title = msg.label;
-            if (!msg.plan && msg.steps)
-                msg.plan = msg.steps;
-            msg.ribbon ??= [];
-            normalizeRibbon(msg.ribbon);
-        }
-        if (msg.time)
-            msg.timeText = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-}
-
-const LEGACY_FIELD_TYPES = {
-    text: 'String', string: 'String', email: 'String',
-    textarea: 'Text', text_area: 'Text',
-    number: 'Number',
-    checkbox: 'Boolean', boolean: 'Boolean', bool: 'Boolean',
-    date: 'DateTime', datetime: 'DateTime',
-    select: 'Select',
-};
-
-function normalizeQuestionField(f) {
-    if (!f || typeof f !== 'object') return null;
-    const id = f.id || f.name;
-    if (!id) return null;
-    const raw = String(f.type || 'String');
-    const type = LEGACY_FIELD_TYPES[raw.toLowerCase()] || (/^[A-Z]/.test(raw) ? raw : 'String');
-    const out = { id: String(id), type, label: f.label || f.name || String(id) };
-    if (f.placeholder != null) out.placeholder = f.placeholder;
-    if (f.required != null) out.required = !!f.required;
-    if (Array.isArray(f.options)) {
-        out.options = f.options.map(o => typeof o === 'string' ? o : (o?.label || o?.text || o?.value || String(o)));
-    }
-    if (Array.isArray(f.fields))
-        out.fields = f.fields.map(normalizeQuestionField).filter(Boolean);
-    return out;
-}
-
-function normalizeQuestionsBlock(msg) {
-    if (!msg) return;
-    msg.title ??= 'Уточните';
-    msg.action ??= 'Заполнить';
-    msg.color ??= 'info';
-    let fields = Array.isArray(msg.fields) ? msg.fields
-        : (Array.isArray(msg.questions) ? msg.questions : []);
-    msg.fields = fields.map(normalizeQuestionField).filter(Boolean);
-    if (!msg.content && typeof msg.description === 'string')
-        msg.content = msg.description;
-}
-
-function getQuestionFields(msg) {
-    if (!msg) return [];
-    if (Array.isArray(msg.fields) && msg.fields.length)
-        return msg.fields;
-    if (Array.isArray(msg.questions))
-        return msg.questions.map(normalizeQuestionField).filter(Boolean);
-    return [];
-}
-
-/**
- * Самая глубокая active task + path предков (от корня к focus).
- * @returns {{ task: object, path: object[] } | null}
- */
-function findDeepestActiveTask(ribbon, path = []) {
+/** Открытый action = последний action без последующего prompt */
+function findOpenActionFlat(ribbon) {
     if (!Array.isArray(ribbon)) return null;
     for (let i = ribbon.length - 1; i >= 0; i--) {
         const b = ribbon[i];
-        if (b?.type === 'task' && b.state === 'active') {
-            const nextPath = [...path, b];
-            const nested = findDeepestActiveTask(b.ribbon || [], nextPath);
-            if (nested) return nested;
-            return { task: b, path: nextPath };
-        }
-    }
-    return null;
-}
-
-/** Короткий текст кнопки панели — не sticky-chrome и не пузырь в ленте */
-function isControlPrompt(content) {
-    const t = String(content || '').trim().toLowerCase();
-    if (!t || t.length > 48) return false;
-    return [
-        'начать', 'отмена', 'да', 'нет', 'ок', 'ok',
-        'подтвердить', 'принять', 'продолжить', 'заполнить',
-    ].includes(t);
-}
-
-/** Карточка action в ленте только если есть смысл (не пустой дубль кнопки «Да») */
-function actionHasRibbonBody(item) {
-    if (!item || item.type !== 'action') return false;
-    if (String(item.content || '').trim()) return true;
-    const title = String(item.title || '').trim();
-    const label = String(item.action || item.label || '').trim();
-    if (!title) return false;
-    if (title === label) return false;
-    return true;
-}
-
-/** Последний содержательный prompt (не «Начать»/«Да»/«Отмена») */
-function findChromePrompt(rootRibbon, focusInfo) {
-    const ribbons = [];
-    if (focusInfo?.task) {
-        ribbons.push(focusInfo.task.ribbon || []);
-        for (let i = (focusInfo.path?.length || 0) - 2; i >= 0; i--)
-            ribbons.push(focusInfo.path[i].ribbon || []);
-    }
-    ribbons.push(rootRibbon || []);
-    for (const r of ribbons) {
-        if (!Array.isArray(r)) continue;
-        for (let i = r.length - 1; i >= 0; i--) {
-            const b = r[i];
-            if (b?.type !== 'prompt' && b?.role !== 'user') continue;
-            if (isControlPrompt(b.content)) continue;
+        if (b.type === 'prompt' || b.role === 'user')
+            return null;
+        if (b.type === 'action' || b.type === 'form' || b.type === 'questions') {
+            if (b.answered) continue;
             return b;
         }
     }
     return null;
 }
 
-function stripControlPrompts(ribbon) {
-    if (!Array.isArray(ribbon)) return ribbon || [];
-    return ribbon.reduce((acc, b) => {
-        if ((b.type === 'prompt' || b.role === 'user') && isControlPrompt(b.content))
-            return acc;
-        if (b.type === 'task' && Array.isArray(b.ribbon)) {
-            acc.push({ ...b, ribbon: stripControlPrompts(b.ribbon) });
-            return acc;
-        }
-        acc.push(b);
-        return acc;
-    }, []);
-}
-
-function stripPromptFromRibbon(ribbon, prompt) {
-    if (!prompt || !Array.isArray(ribbon)) return ribbon || [];
-    return ribbon.reduce((acc, b) => {
-        if (b === prompt) return acc;
-        if ((b.type === 'prompt' || b.role === 'user') && b.time === prompt.time)
-            return acc;
-        if (b.type === 'task' && Array.isArray(b.ribbon)) {
-            acc.push({ ...b, ribbon: stripPromptFromRibbon(b.ribbon, prompt) });
-            return acc;
-        }
-        acc.push(b);
-        return acc;
-    }, []);
-}
-
-function findBlockByTime(ribbon, time) {
-    if (!Array.isArray(ribbon) || time == null) return null;
-    for (const b of ribbon) {
-        if (String(b.time) === String(time)) return b;
-        if (b.type === 'task' && Array.isArray(b.ribbon)) {
-            const nested = findBlockByTime(b.ribbon, time);
-            if (nested) return nested;
-        }
+function findOpenAction(ribbon) {
+    if (!Array.isArray(ribbon)) return null;
+    const lastTask = [...ribbon].reverse().find(b => b.type === 'task');
+    if (lastTask?.ribbon?.length) {
+        const nested = findOpenActionFlat(lastTask.ribbon);
+        if (nested) return nested;
     }
-    return null;
+    return findOpenActionFlat(ribbon);
 }
 
-/** Кнопка: trailing action или неотвеченный questions в focus ribbon */
-function findTrailingGate(ribbon) {
-    if (!Array.isArray(ribbon) || !ribbon.length) return null;
-    const focus = findDeepestActiveTask(ribbon);
-    const target = (focus?.task && Array.isArray(focus.task.ribbon) && focus.task.ribbon.length)
-        ? focus.task.ribbon
-        : ribbon;
-    const last = target[target.length - 1];
-    if (!last) return null;
-    if (last.type === 'action' && !last.resolved) return last;
-    if (last.type === 'questions' && !last.answered && !last.resolved) return last;
-    return null;
-}
-
-/** @deprecated use findTrailingGate */
-function findTrailingAction(ribbon) {
-    const g = findTrailingGate(ribbon);
-    return g?.type === 'action' ? g : null;
-}
-
-async function hydrateRibbonFiles(ribbon, oldRibbon, oldKeys) {
-    if (!Array.isArray(ribbon)) return;
-    for (const msg of ribbon) {
-        const key = ribbonBlockKey(msg);
-        if (!oldKeys.includes(key)) {
-            if (msg.type === 'tool_result' && msg.resultPath) {
-                try {
-                    msg.$file = await WORK.get_item(msg.resultPath, 'info');
-                } catch {
-                    msg.$file = null;
-                }
-            }
-            if (msg.type === 'file' && msg.path && !msg.$file) {
-                try {
-                    msg.$file = await WORK.get_item(msg.path, 'info');
-                } catch {
-                    msg.$file = null;
-                }
-            }
-        } else {
-            const oldMsg = oldRibbon.find(m => ribbonBlockKey(m) === key);
-            if (oldMsg?.$file)
-                msg.$file = oldMsg.$file;
-        }
-        if (msg.type === 'task' && Array.isArray(msg.ribbon)) {
-            const nestedOld = oldRibbon.find(m => ribbonBlockKey(m) === key)?.ribbon || [];
-            await hydrateRibbonFiles(msg.ribbon, nestedOld, nestedOld.map(ribbonBlockKey));
-        }
+/** Собрать answers из action.fields[].value (только непустые) */
+function collectFieldAnswers(action) {
+    if (!action?.fields?.length) return null;
+    const answers = {};
+    let has = false;
+    for (const f of action.fields) {
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '')
+            continue;
+        answers[f.id] = v;
+        has = true;
     }
+    return has ? answers : null;
+}
+
+/** Legacy → схема TYPES (тонкий адаптер для старых task.ai) */
+function normalizeRibbonItem(raw) {
+    if (!raw || typeof raw !== 'object') return raw;
+    const item = { ...raw };
+    if (item.role === 'user' && !item.type)
+        item.type = 'prompt';
+    if (item.type === 'details' || item.type === 'reasoning')
+        item.type = 'thinking';
+    if (item.type === 'block') {
+        item.type = 'task';
+        item.label = item.label || item.content || 'План';
+        item.state = item.state || 'active';
+        item.ribbon = Array.isArray(item.ribbon) ? item.ribbon : [];
+    }
+    if (item.type === 'form') {
+        item.fields = item.fields || item.questions || [];
+        item.button = item.button || { label: 'Продолжить', color: 'success' };
+        if (/^(уточните параметры|заполните поля|уточните данные)\.?$/i.test(String(item.content || '').trim()))
+            item.content = '';
+    }
+    if (item.type === 'questions') {
+        item.fields = item.fields || item.questions || [];
+        item.button = item.button || { label: 'Уточнить', color: 'success' };
+        if (/^(уточните параметры|заполните поля|уточните данные)\.?$/i.test(String(item.content || '').trim()))
+            item.content = '';
+        if (/^(уточнение)$/i.test(String(item.title || '').trim()))
+            item.title = '';
+    }
+    // legacy: action с fields → questions
+    if (item.type === 'action' && item.fields?.length) {
+        item.type = 'questions';
+        item.button = item.button || { label: 'Уточнить', color: 'success' };
+    }
+    if (item.type === 'action') {
+        delete item.fields;
+        delete item.questions;
+    }
+    if (item.type === 'text' && item.error)
+        item.type = 'error';
+    if (!item.type && item.role === 'assistant')
+        item.type = item.error ? 'error' : 'text';
+    if (item.time && !item.timeText)
+        item.timeText = new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (item.type === 'task' && Array.isArray(item.ribbon))
+        item.ribbon = normalizeRibbon(item.ribbon);
+    if (item.type === 'task' && Array.isArray(item.steps)) {
+        item.steps = item.steps.map(s => {
+            const step = { ...s };
+            if (step.status === 'running') step.status = 'in_progress';
+            if (step.status === 'complete') step.status = 'done';
+            return step;
+        });
+    }
+    return item;
+}
+
+function normalizeRibbon(list) {
+    if (!Array.isArray(list)) return [];
+    const items = list.map(normalizeRibbonItem);
+    // questions/form + последующий prompt → answered; сам prompt с answers не дублируем в UI
+    for (let i = 0; i < items.length; i++) {
+        const b = items[i];
+        if (b.type !== 'questions' && b.type !== 'form') continue;
+        const hasFollowPrompt = items.slice(i + 1).some(x => x.type === 'prompt' || x.role === 'user');
+        if (b.answered || hasFollowPrompt)
+            b.answered = true;
+    }
+    for (let i = 1; i < items.length; i++) {
+        const prev = items[i - 1];
+        const cur = items[i];
+        if (!(cur.type === 'prompt' || cur.role === 'user')) continue;
+        if (!cur.answers || typeof cur.answers !== 'object') continue;
+        if ((prev.type === 'questions' || prev.type === 'form') && prev.answered)
+            cur._hideInView = true;
+    }
+    return items;
+}
+
+function ribbonViewTag(item) {
+    if (item?._hideInView) return '';
+    const type = item?.type;
+    if (!type || !RIBBON_VIEW_TYPES.has(type)) return '';
+    return 'microchat-view-' + type;
 }
 
 // === Встроенные компоненты (только для микрочата ИИ) ===
@@ -1300,211 +1112,629 @@ ODA({ is: 'microchat-ribbon',
         <style>
             :host {
                 @apply --vertical;
+                overflow-y: auto;
+                flex: 1;
+                min-height: 0;
+                scroll-behavior: smooth;
+            }
+            :host([embedded]) {
+                flex: none;
+                min-height: auto;
+                overflow: visible;
             }
             .ribbon {
                 @apply --vertical;
-            }
-            .msg-user {
-                @apply --horizontal;
-                @apply --info-invert;
-                align-items: flex-start;
-                gap: 10px;
-                margin: 6px 0;
-                padding: 10px 12px;
-                border-radius: 10px;
-                border: 1px solid var(--info-color, #5c6bc0);
-                box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
-            }
-            .msg-user oda-icon {
-                flex-shrink: 0;
-                margin-top: 2px;
-            }
-            .msg-user .msg-body {
-                @apply --vertical;
-                flex: 1;
-                min-width: 0;
-                gap: 2px;
-            }
-            .msg-user .msg-content {
-                white-space: pre-wrap;
-                word-break: break-word;
-            }
-            .msg-user .msg-time {
-                font-size: xx-small;
-                opacity: .55;
-                align-self: flex-end;
-            }
-            .block-assistant {
-                @apply --vertical;
-                gap: 2px;
-            }
-            .action-card {
-                @apply --vertical;
-                @apply --content;
-                gap: 6px;
-                margin: 4px 0;
-                padding: 10px 12px;
-                font-size: small;
-                opacity: 1;
-                overflow: visible;
-                border: 2px solid var(--info-color, #5c6bc0);
-                border-radius: 8px;
-                box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
-            }
-            .action-card.color-success { border-color: var(--success-color, #43a047); }
-            .action-card.color-warning { border-color: var(--warning-color, #fb8c00); }
-            .action-card.color-error { border-color: var(--error-color, #e53935); }
-            .action-card.color-info { border-color: var(--info-color, #5c6bc0); }
-            .action-card.resolved {
-                opacity: .5;
-                border-style: dashed;
-            }
-            .action-title {
-                @apply --horizontal;
-                @apply --bold;
-                align-items: center;
-                gap: 8px;
-                font-size: medium;
-                padding: 2px 0;
-            }
-            .action-title oda-icon {
-                flex-shrink: 0;
-            }
-            .task-block {
-                @apply --vertical;
                 gap: 4px;
-                padding: 2px 0;
-                margin: 2px 0;
-            }
-            .task-title {
-                @apply --bold;
-                font-size: x-small;
-                opacity: .6;
-                padding: 2px 6px;
+                padding: 4px 0;
             }
         </style>
-        <div class="ribbon" ~for="ribbon">
-            <div class="msg-user" horizontal ~if="$for.item.type === 'prompt' || $for.item.role === 'user'">
-                <oda-icon icon="icons:account-circle" icon-size="22"></oda-icon>
-                <div class="msg-body" flex vertical>
-                    <div class="msg-content">{{$for.item.content}}</div>
-                    <div class="msg-time" ~if="$for.item.timeText">{{$for.item.timeText}}</div>
+        <div class="ribbon" ~for="items">
+            <div ~is="viewTag($for.item)"
+                ~if="viewTag($for.item)"
+                :item="$for.item"
+                @answer="fire('answer', $event.detail)"
+                @action-accept="fire('action-accept', $event.detail)"
+                @action-reject="fire('action-reject', $event.detail)"
+                @tap-step="fire('tap-step', $event.detail)"
+            ></div>
+        </div>
+        <microchat-streaming ~if="streamingText" :text="streamingText"></microchat-streaming>
+    `,
+    imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer, ~/lib/chat-item/chat-item',
+    items: [],
+    streamingText: '',
+    embedded: {
+        $def: false,
+        $type: Boolean,
+        $attr: true,
+    },
+    viewTag(item) {
+        return ribbonViewTag(item);
+    },
+});
+
+ODA({ is: 'microchat-streaming',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                font-size: small;
+            }
+        </style>
+        <div vertical light style="padding: 4px;">
+            <div rainbow style="padding: 4px;">Думаю...</div>
+            <div style="padding: 4px; white-space: pre-wrap;">{{text}}</div>
+        </div>
+    `,
+    text: '',
+});
+
+ODA({ is: 'microchat-panel',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                gap: 2px;
+                padding: 2px;
+            }
+            #tools {
+                font-size: small;
+                align-items: center;
+            }
+            .prompt-container {
+                border: 1px solid transparent;
+                transition: border-color 0.2s;
+            }
+            .prompt-container:focus-within {
+                border-color: var(--border-color, #ccc);
+            }
+            .prompt {
+                border: none;
+                outline: none;
+                resize: none;
+                min-width: 0;
+                padding: 8px;
+                max-height: 10em;
+                overflow-y: auto;
+                font-family: inherit;
+                background: transparent;
+            }
+            @keyframes pulse-bg {
+                0%, 100% { opacity: 1; }
+                50% { opacity: .4; }
+            }
+            .btn-success { @apply --success-invert; }
+            .btn-error { @apply --error-invert; }
+            .btn-info { @apply --info-invert; }
+            .btn-warning { @apply --warning-invert; }
+            .scroll-pulse {
+                animation: pulse-bg 0.8s ease infinite;
+            }
+            .attach-preview {
+                gap: 4px;
+                padding: 4px 8px;
+                flex-wrap: wrap;
+            }
+            .attach-chip {
+                @apply --horizontal;
+                @apply --accent-invert;
+                max-width: 150px;
+                padding: 4px 8px;
+                align-items: center;
+                gap: 4px;
+            }
+            .attach-chip label {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-size: xx-small;
+                white-space: nowrap;
+            }
+        </style>
+        <div header :rainbow="pending" vertical style="padding: 2px; gap: 2px;">
+            <div border horizontal class="zone-actions" style="padding: 2px; align-items: stretch;">
+                <oda-button flex ~if="actionButton"
+                    :class="'btn-' + (actionButton.color || 'info')"
+                    :icon="actionButton.icon || 'icons:check'"
+                    :icon-size="iconSize * .8"
+                    :label="actionButton.label || 'OK'"
+                    @tap="fire('action')"></oda-button>
+                <oda-button ~if="actionButton" class="btn-error" icon="icons:close" :icon-size="iconSize * .8" @tap="fire('cancel-action')" style="border-radius: 0;"></oda-button>
+                <oda-button flex ~if="!actionButton" :icon="scrollIcon" :icon-size :class="pending ? 'scroll-pulse' : ''" @tap="fire('scroll-toggle')" title="Прокрутка"></oda-button>
+            </div>
+            <div class="attach-preview zone-input" ~if="files.length" horizontal>
+                <div class="attach-chip" ~for="files">
+                    <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
+                    <label flex>{{$for.item.name}}</label>
+                    <oda-button icon-size="16" icon="icons:close" @tap="fire('remove-file', { index: $for.index })"></oda-button>
                 </div>
             </div>
-            <div class="block-assistant" ~if="isAssistantBlock($for.item)">
-                <oda-chat-details ~if="$for.item.type === 'reasoning' || $for.item.type === 'details'"
-                    :label="$for.item.label || 'Мысли'">{{$for.item.content}}</oda-chat-details>
-                <oda-chat-plan ~if="$for.item.type === 'block'"
-                    :steps="$for.item.steps || $for.item.plan"
-                    @tap-step="fire('tap-step', $event.detail.value)"></oda-chat-plan>
-                <oda-markdown-viewer ~if="$for.item.type === 'text' && $for.item.content && !$for.item.error"
-                    :value="$for.item.content"></oda-markdown-viewer>
-                <div :error="true" ~if="$for.item.type === 'text' && $for.item.error">{{$for.item.content}}</div>
-                <div class="action-card" ~if="isQuestionsCard($for.item)"
-                    ~class="actionCardClass($for.item)">
-                    <div class="action-title" horizontal>
-                        <oda-icon icon="icons:help-outline" icon-size="20"></oda-icon>
-                        <span flex>{{$for.item.title || 'Уточните'}}</span>
-                    </div>
-                    <oda-markdown-viewer ~if="$for.item.content" :value="$for.item.content"></oda-markdown-viewer>
-                    <oda-chat-form ~if="isFormOpen($for.item)"
-                        :fields="questionFields($for.item)"
-                        :title="$for.item.title || 'Уточните'"
-                        @answer="fire('answer', { time: $for.item.time, value: $event.detail.value })"></oda-chat-form>
-                </div>
-                <oda-chat-details ~if="$for.item.type === 'tool_call'"
-                    :label="'⚙ ' + ($for.item.method || 'tool')">{{formatArgs($for.item.args)}}</oda-chat-details>
-                <oda-chat-details ~if="$for.item.type === 'tool_result'"
-                    :label="$for.item.label || ('🔧 ' + $for.item.tool)">{{$for.item.content}}</oda-chat-details>
-                <div class="action-card" ~if="$for.item.type === 'action' && actionHasRibbonBody($for.item)"
-                    ~class="actionCardClass($for.item)">
-                    <div class="action-title" horizontal ~if="$for.item.title && $for.item.title !== $for.item.action">
-                        <oda-icon :icon="actionIcon($for.item)" icon-size="20"></oda-icon>
-                        <span flex>{{$for.item.title}}</span>
-                    </div>
-                    <oda-markdown-viewer ~if="$for.item.content" :value="$for.item.content"></oda-markdown-viewer>
-                </div>
-                <div class="task-block" ~if="$for.item.type === 'task'">
-                    <div class="task-title" ~if="!isFocusTaskPlan($for.item)">{{$for.item.title || $for.item.label || 'Задача'}} · {{$for.item.state || ''}}</div>
-                    <oda-chat-plan ~if="!isFocusTaskPlan($for.item) && ($for.item.plan || $for.item.steps)"
-                        :steps="$for.item.plan || $for.item.steps"
-                        @tap-step="fire('tap-step', $event.detail.value)"></oda-chat-plan>
-                    <microchat-ribbon ~if="$for.item.ribbon?.length" :ribbon="$for.item.ribbon"
-                        :hide-task-plan-time="hideTaskPlanTime"
-                        :active-form-time="activeFormTime"
-                        @answer="fire('answer', $event.detail)"></microchat-ribbon>
-                </div>
-                <chat-item ~if="$for.item.type === 'file' && $for.item.$file" visible history compact
-                    :$file="$for.item.$file" style="padding: 0px;"></chat-item>
+            <div class="prompt-container zone-input" horizontal content>
+                <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
+                    @keydown="fire('keydown-prompt', $event)"></textarea>
+                <div flex ~if="recording" style="text-align: center; align-items: center; color: var(--error-color);">⏺ {{timer}}</div>
+                <oda-button round :icon="sendIcon" :icon-size
+                    :rainbow="recording || pending" :disabled="sending"
+                    @tap="fire('send')"></oda-button>
+            </div>
+            <div id="tools" class="zone-settings" horizontal>
+                <oda-button icon="icons:add" :icon-size @tap="fire('get-file')" style="border-radius: 50%;"></oda-button>
+                <oda-button icon="icons:link" :icon-size @tap="fire('select-internal', $event)" style="border-radius: 50%;"></oda-button>
+                <item-node flex :icon-size="iconSize * .8" :$item="selectedModelItem" @pointerdown.stop="fire('select-model', $event)"></item-node>
+                <oda-button :icon="ttsIcon" :icon-size @tap="fire('cycle-tts')" :label="ttsLabel" :success="ttsMode !== 'off'" title="Озвучка"></oda-button>
             </div>
         </div>
     `,
-    imports: 'oda//icon, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
-    ribbon: [],
-    /** time deepest active task — plan этого task спрятан (в sticky-chrome) */
-    hideTaskPlanTime: null,
-    /** time questions-блока с раскрытой формой */
-    activeFormTime: null,
-    isFocusTaskPlan(item) {
-        return this.hideTaskPlanTime != null
-            && item?.type === 'task'
-            && String(item.time) === String(this.hideTaskPlanTime);
+    imports: 'oda//button, oda//icon, ~/lib//tree',
+    actionButton: null,
+    pending: false,
+    recording: false,
+    timer: '',
+    files: [],
+    value: '',
+    rows: 2,
+    sendIcon: 'av:mic',
+    scrollIcon: 'box:i-down-arrow-alt',
+    iconSize: 24,
+    selectedModelItem: null,
+    ttsIcon: 'av:volume-off',
+    ttsLabel: 'TTS выкл',
+    ttsMode: 'off',
+    sending: false,
+});
+
+ODA({ is: 'microchat-view-prompt',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --horizontal;
+                @apply --info-invert;
+                @apply --raised;
+                padding: 4px 8px;
+                position: sticky;
+                top: 0;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .sender {
+                flex-shrink: 0;
+                margin-top: 2px;
+            }
+            .msg-body {
+                @apply --horizontal;
+                flex: 1;
+                min-width: 0;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .msg-content {
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .msg-time {
+                font-size: xx-small;
+                opacity: .5;
+                flex-shrink: 0;
+            }
+        </style>
+        <item-icon class="sender" :$item="WORK.USER"  default="icons:account-circle" icon-size="16"></item-icon>
+        <div class="msg-body" flex>
+            <div class="msg-content" flex>{{displayContent}}</div>
+            <div class="msg-time" ~if="item?.timeText">{{item.timeText}}</div>
+        </div>
+    `,
+    imports: 'oda//icon',
+    item: null,
+    get displayContent() {
+        const c = String(this.item?.content || '');
+        const answers = this.item?.answers;
+        if (!answers || typeof answers !== 'object')
+            return c;
+        if (c.includes('\n'))
+            return c;
+        const lines = Object.entries(answers)
+            .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+            .map(([k, v]) => k + ': ' + v);
+        if (!lines.length)
+            return c;
+        return (c ? c + '\n' : '') + lines.join('\n');
     },
-    isQuestionsCard(item) {
-        return item?.type === 'questions' || item?.type === 'form';
+});
+
+ODA({ is: 'microchat-view-thinking',
+    template: /*html*/`
+        <oda-chat-details :label="item?.label || 'Мысли'">{{item?.content}}</oda-chat-details>
+    `,
+    item: null,
+});
+
+ODA({ is: 'microchat-view-text',
+    template: /*html*/`
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+});
+
+ODA({ is: 'microchat-view-action',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --raised;
+                gap: 4px;
+                padding: 6px 8px;
+            }
+            .title { @apply --bold; font-size: small; }
+        </style>
+        <div class="title" ~if="item?.title">{{item.title}}</div>
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+});
+
+ODA({ is: 'microchat-view-form',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --raised;
+                gap: 4px;
+                padding: 6px 8px;
+            }
+            .title { @apply --bold; font-size: small; }
+            .qa { @apply --vertical; gap: 6px; }
+            .qa-row { @apply --vertical; gap: 2px; }
+            .qa-q { font-size: small; @apply --bold; }
+            .qa-a { font-size: small; white-space: pre-wrap; }
+        </style>
+        <div class="title" ~if="item?.title">{{item.title}}</div>
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+        <div class="qa" ~if="item?.answered && item?.fields?.length">
+            <div class="qa-row" ~for="item.fields">
+                <div class="qa-q">{{$for.item.label || $for.item.id}}</div>
+                <div class="qa-a">{{formatAnswer($for.item)}}</div>
+            </div>
+        </div>
+        <oda-chat-form ~if="!item?.answered && item?.fields?.length"
+            :questions="item.fields"
+            :hide-submit="true"></oda-chat-form>
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+    formatAnswer(f) {
+        if (!f) return '';
+        if (f.type === 'checkbox') return f.value ? 'да' : 'нет';
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '') return '—';
+        return String(v).trim();
     },
-    isFormOpen(item) {
-        // Поля сразу в карточке — не прятать за кнопкой панели
-        if (!this.isQuestionsCard(item) || item.answered || item.resolved) return false;
-        return true;
+});
+
+ODA({ is: 'microchat-view-questions',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --raised;
+                gap: 4px;
+                padding: 6px 8px;
+            }
+            .title { @apply --bold; font-size: small; }
+            .qa { @apply --vertical; gap: 6px; }
+            .qa-row { @apply --vertical; gap: 2px; }
+            .qa-q { font-size: small; @apply --bold; }
+            .qa-a { font-size: small; white-space: pre-wrap; }
+        </style>
+        <div class="title" ~if="item?.title">{{item.title}}</div>
+        <oda-markdown-viewer ~if="item?.content" :value="item.content"></oda-markdown-viewer>
+        <div class="qa" ~if="item?.answered && item?.fields?.length">
+            <div class="qa-row" ~for="item.fields">
+                <div class="qa-q">{{$for.item.label || $for.item.id}}</div>
+                <div class="qa-a">{{formatAnswer($for.item)}}</div>
+            </div>
+        </div>
+        <oda-chat-form ~if="!item?.answered && item?.fields?.length"
+            :questions="item.fields"
+            :hide-submit="true"></oda-chat-form>
+    `,
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    item: null,
+    formatAnswer(f) {
+        if (!f) return '';
+        if (f.type === 'checkbox') return f.value ? 'да' : 'нет';
+        const v = f.value;
+        if (v === undefined || v === null || String(v).trim() === '') return '—';
+        return String(v).trim();
     },
-    questionFields(item) {
-        return getQuestionFields(item);
+});
+
+ODA({ is: 'microchat-view-task',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --content;
+                @apply --raised;
+                gap: 0;
+                overflow: visible;
+            }
+            .header {
+                @apply --horizontal;
+                @apply --bold;
+                font-size: small;
+                padding: 4px 8px;
+                cursor: pointer;
+                align-items: center;
+                gap: 6px;
+                user-select: none;
+                overflow: hidden;
+            }
+            .header:hover { @apply --header; }
+            .progress-track {
+                height: 3px;
+                @apply --dark;
+                overflow: hidden;
+            }
+            .progress-bar {
+                height: 100%;
+                background: var(--success-color);
+                transition: width 0.3s;
+            }
+            .steps {
+                @apply --vertical;
+                gap: 2px;
+                padding: 4px 8px;
+            }
+            .step {
+                @apply --horizontal;
+                @apply --raised;
+                gap: 8px;
+                align-items: center;
+                font-size: small;
+                cursor: pointer;
+                user-select: none;
+            }
+            .step:hover { @apply --header; }
+            .step.done { opacity: .5; text-decoration: line-through; }
+            .step.in_progress { @apply --accent; @apply --bold; }
+            .nested {
+                @apply --vertical;
+                padding: 4px 0 4px 8px;
+                border-left: 2px solid var(--border-color, #ccc);
+                margin: 4px 8px;
+                min-height: auto;
+                overflow: visible;
+            }
+            .ask {
+                @apply --vertical;
+                margin: 4px 8px 8px;
+                padding: 8px;
+                gap: 10px;
+                min-height: auto;
+                overflow: visible;
+                @apply --light;
+                border-radius: 4px;
+            }
+            .ask-field { @apply --vertical; gap: 4px; }
+            .ask-field label { font-size: medium; @apply --bold; }
+            .ask-options { @apply --vertical; gap: 4px; }
+            .ask-option {
+                @apply --content;
+                border: 1px solid var(--border-color, #ccc);
+                border-radius: 6px;
+                padding: 8px 10px;
+                font-size: medium;
+                cursor: pointer;
+                user-select: none;
+            }
+            .ask-option:hover { @apply --header; }
+            .ask-option.selected {
+                border-color: var(--success-color, #2e7d32);
+                background: color-mix(in srgb, var(--success-color, #2e7d32) 12%, transparent);
+            }
+            .ask-hint {
+                font-size: small;
+                color: var(--error-color, #c62828);
+                padding: 0 2px;
+            }
+        </style>
+        <div class="header" @tap="collapsed = !collapsed" horizontal>
+            <span info style="border-radius: 16px; padding: 2px 4px;">{{currentNumber}}/{{steps.length}}</span>
+            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{headerLabel}}</span>
+            <oda-icon icon="icons:chevron-right" :icon-size ~style="collapsed ? 'transition: transform 0.2s;' : 'transform: rotate(90deg); transition: transform 0.2s;'"></oda-icon>
+        </div>
+        <div class="progress-track">
+            <div class="progress-bar" :style="'width: ' + progressPercent + '%'"></div>
+        </div>
+        <div class="steps" ~if="!collapsed">
+            <div class="step" horizontal ~for="steps" :class="$for.item.status"
+                @tap="fire('tap-step', $for.index)" style="align-items: center; gap: 4px;">
+                <oda-icon :icon="stepIcon($for.item.status)" :icon-size></oda-icon>
+                <span flex>{{$for.item.description}}</span>
+            </div>
+        </div>
+        <!-- AskQuestion: native options по item.ribbon (не oda-chat-form / не nested ~is) -->
+        <div class="ask" ~if="askFields.length">
+            <div class="ask-field" ~for="askFields">
+                <label>{{$for.item.label}}</label>
+                <div class="ask-options">
+                    <div class="ask-option" ~for="askOptions($for.item)"
+                        ~class="selected: isAskSelected($for.item.field, $for.item.opt)"
+                        @tap="selectAskOption($for.item.field, $for.item.opt)">{{$for.item.opt}}</div>
+                </div>
+            </div>
+            <div class="ask-hint" ~if="askHint">{{askHint}}</div>
+        </div>
+        <div class="nested" ~if="otherNested.length">
+            <microchat-ribbon
+                embedded
+                :items="otherNested"
+                @answer="fire('answer', $event.detail)"
+                @action-accept="fire('action-accept', $event.detail)"
+                @action-reject="fire('action-reject', $event.detail)"
+                @tap-step="fire('tap-step', $event.detail)"
+            ></microchat-ribbon>
+        </div>
+    `,
+    imports: 'oda//icon',
+    item: {
+        $def: null,
+        set(v) {
+            // Открытый AskQuestion/form — сразу показать шаги + форму
+            if (v && Array.isArray(v.ribbon)
+                && v.ribbon.some(b => (b.type === 'questions' || b.type === 'form') && !b.answered))
+                this.collapsed = false;
+            this.askHint = '';
+        },
     },
-    actionHasRibbonBody,
-    isAssistantBlock(item) {
-        if (!item) return false;
-        if (item.type === 'prompt' || item.role === 'user') return false;
-        if (item.type === 'action' && !actionHasRibbonBody(item)) return false;
-        return !!this.blockTag(item.type) || item.type === 'action' || item.type === 'task';
+    collapsed: {
+        $def: false,
+        $type: Boolean,
     },
-    blockTag(type) {
-        const tags = {
-            reasoning: 'oda-chat-details',
-            details: 'oda-chat-details',
-            block: 'oda-chat-plan',
-            text: 'oda-markdown-viewer',
-            questions: 'action-card',
-            form: 'action-card',
-            tool_call: 'oda-chat-details',
-            tool_result: 'oda-chat-details',
-            action: 'action-card',
-            task: 'task-block',
-            file: 'chat-item',
-        };
-        return tags[type] || '';
+    askHint: '',
+    get steps() {
+        return this.item?.steps || [];
     },
-    actionCardClass(item) {
-        const color = item?.color || 'info';
-        const done = item?.resolved || item?.answered;
-        return (done ? 'resolved ' : '') + 'color-' + color;
+    /** Сырой questions/form из item.ribbon — без normalizeRibbon-копий */
+    get openAsk() {
+        const ribbon = this.item?.ribbon;
+        if (!Array.isArray(ribbon)) return null;
+        return ribbon.find(b =>
+            (b.type === 'questions' || b.type === 'form')
+            && !b.answered
+            && Array.isArray(b.fields)
+            && b.fields.length
+        ) || null;
     },
-    actionIcon(item) {
-        switch (item?.color) {
-            case 'success': return 'icons:check-circle';
-            case 'warning': return 'icons:warning';
-            case 'error': return 'icons:error';
-            default: return 'icons:flag';
-        }
+    get askFields() {
+        const fields = this.openAsk?.fields;
+        if (!Array.isArray(fields)) return [];
+        return fields.filter(f => f && f.type === 'select' && Array.isArray(f.options) && f.options.length >= 2);
     },
-    formatArgs(args) {
-        if (!args) return '';
-        try {
-            return typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-        } catch {
-            return String(args);
-        }
+    get nestedItems() {
+        return normalizeRibbon(this.item?.ribbon || []);
     },
+    /** Nested без открытых ask */
+    get otherNested() {
+        return this.nestedItems.filter(b =>
+            !((b.type === 'questions' || b.type === 'form') && !b.answered)
+        );
+    },
+    askOptions(field) {
+        if (!field?.options?.length) return [];
+        return field.options.map(opt => ({
+            field,
+            opt: typeof opt === 'string' ? opt : String(opt?.label || opt?.text || opt?.value || opt),
+        }));
+    },
+    isAskSelected(field, opt) {
+        return field && String(field.value ?? '') === String(opt);
+    },
+    selectAskOption(field, opt) {
+        if (!field) return;
+        field.value = opt;
+        this.askHint = '';
+        this.render();
+    },
+    get headerLabel() {
+        return this.item?.label || this.item?.content || 'План';
+    },
+    get currentNumber() {
+        const idx = this.steps.findIndex(s => s.status === 'in_progress');
+        if (idx >= 0) return idx + 1;
+        const pending = this.steps.findIndex(s => s.status !== 'done');
+        if (pending >= 0) return pending + 1;
+        return this.steps.length;
+    },
+    get progressPercent() {
+        if (!this.steps.length) return 0;
+        const done = this.steps.filter(s => s.status === 'done').length;
+        return Math.round(done / this.steps.length * 100);
+    },
+    stepIcon(status) {
+        if (status === 'done') return 'icons:check-circle';
+        if (status === 'in_progress') return 'av:play-circle-outline';
+        return 'icons:radio-button-unchecked';
+    },
+});
+
+ODA({ is: 'microchat-view-file',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --horizontal;
+                @apply --raised;
+                padding: 4px 8px;
+                align-items: center;
+                gap: 6px;
+                font-size: small;
+            }
+        </style>
+        <chat-item ~if="item?.$file" visible history compact :$file="item.$file" style="padding: 0;"></chat-item>
+        <div ~if="!item?.$file" horizontal style="align-items: center; gap: 6px;">
+            <oda-icon icon="files:file" icon-size="16"></oda-icon>
+            <span>{{item?.name || item?.path || 'file'}}</span>
+        </div>
+    `,
+    imports: 'oda//icon, ~/lib/chat-item/chat-item',
+    item: null,
+});
+
+ODA({ is: 'microchat-view-tool',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --light;
+                padding: 4px 8px;
+                font-size: small;
+                gap: 2px;
+            }
+            .name { @apply --bold; }
+            .args { opacity: .7; font-size: xx-small; white-space: pre-wrap; word-break: break-word; }
+        </style>
+        <div class="name">🔧 {{item?.name || item?.content || 'tool'}}</div>
+        <div class="args" ~if="argsText">{{argsText}}</div>
+    `,
+    item: null,
+    get argsText() {
+        const args = this.item?.args;
+        if (args == null) return '';
+        return typeof args === 'string' ? args : JSON.stringify(args, null, 2);
+    },
+});
+
+ODA({ is: 'microchat-view-tool_result',
+    template: /*html*/`
+        <chat-item ~if="item?.$file" visible history compact :$file="item.$file" style="padding: 0;"></chat-item>
+        <oda-chat-details ~if="!item?.$file" :label="label">{{item?.content}}</oda-chat-details>
+    `,
+    item: null,
+    get label() {
+        const ok = this.item?.ok;
+        const prefix = ok === false ? '❌ ' : (ok === true ? '✅ ' : '🔧 ');
+        return this.item?.label || (prefix + (this.item?.tool || 'result'));
+    },
+});
+
+ODA({ is: 'microchat-view-error',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --error-invert;
+                @apply --raised;
+                padding: 4px 8px;
+                font-size: small;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .code { font-size: xx-small; opacity: .7; }
+        </style>
+        <div class="code" ~if="item?.code">{{item.code}}</div>
+        <div>{{item?.content}}</div>
+    `,
+    item: null,
 });
 
 ODA({is: 'oda-chat-details',
@@ -1514,9 +1744,7 @@ ODA({is: 'oda-chat-details',
                 overflow: hidden;
                 display: block;
             }
-            details {
-                @apply --light;
-            }
+            details { @apply --light; }
             summary {
                 @apply --bold;
                 font-size: x-small;
@@ -1528,15 +1756,9 @@ ODA({is: 'oda-chat-details',
                 gap: 4px;
                 padding: 2px 8px;
             }
-            summary oda-icon {
-                transition: transform 0.2s;
-            }
-            details[open] summary oda-icon {
-                transform: rotate(90deg);
-            }
-            details[open] summary {
-                opacity: .8;
-            }
+            summary oda-icon { transition: transform 0.2s; }
+            details[open] summary oda-icon { transform: rotate(90deg); }
+            details[open] summary { opacity: .8; }
             .details-content {
                 font-size: small;
                 padding: 4px 8px;
@@ -1563,255 +1785,102 @@ ODA({is: 'oda-chat-details',
     },
 });
 
-ODA({is: 'oda-chat-plan',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical;
-                @apply --content;
-                @apply --raised;
-                overflow: hidden;
-                gap: 0;
-                width: 100%;
-                max-width: 100%;
-                min-width: 0;
-                box-sizing: border-box;
-            }
-            oda-button{
-                padding: 2px;
-            }
-            .header {
-                @apply --horizontal;
-                @apply --bold;
-                font-size: small;
-                padding: 4px 8px;
-                cursor: pointer;
-                align-items: center;
-                gap: 6px;
-                user-select: none;
-                overflow: hidden;
-                min-width: 0;
-            }
-            .header:hover {
-                @apply --header;
-            }
-            .progress-track {
-                height: 3px;
-                @apply --dark;
-                overflow: hidden;
-            }
-            .progress-bar {
-                height: 100%;
-                background: var(--success-color);
-                transition: width 0.3s;
-            }
-            .steps {
-                @apply --vertical;
-                gap: 2px;
-                padding: 4px 8px;
-                min-width: 0;
-            }
-            .step {
-                @apply --horizontal;
-                @apply --raised;
-                gap: 8px;
-                align-items: center;
-                font-size: small;
-                cursor: pointer;
-                user-select: none;
-                min-width: 0;
-            }
-            .step > span {
-                min-width: 0;
-                word-break: break-word;
-            }
-            .step:hover {
-                @apply --header;
-            }
-            .step.done {
-                opacity: .5;
-                text-decoration: line-through;
-            }
-            .step.active {
-                @apply --accent;
-                @apply --bold;
-            }
-        </style>
-        <div class="header" @tap="collapsed = !collapsed" horizontal>
-            <span info style="border-radius: 16px; padding: 2px 4px; flex-shrink: 0;">{{currentNumber}}/{{steps.length}}</span>
-            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden; min-width: 0;">{{currentDescription}}</span>
-            <oda-icon icon="icons:chevron-right" :icon-size ~style="collapsed ? 'transition: transform 0.2s;' : 'transform: rotate(90deg); transition: transform 0.2s;'"></oda-icon>
-        </div>
-        <div class="progress-track">
-            <div class="progress-bar" :style="'width: ' + progressPercent + '%'"></div>
-        </div>
-        <div class="steps" ~if="!collapsed">
-            <div class="step" horizontal ~for="steps" :class="$for.item.status" :light="$for.item.status === 'done'" @tap="fire('tap-step', $for.index)" style="align-items: center; gap: 4px;">
-                <oda-icon :icon="$for.item.status === 'done' ? 'icons:check-circle' : ($for.item.status === 'in_progress' ? 'av:play-circle-outline' : 'icons:radio-button-unchecked')" :icon-size></oda-icon>
-                <span flex>{{$for.item.description}}</span>
-            </div>
-        </div>
-    `,
-    steps: [],
-    collapsed: {
-        $def: true,
-        $type: Boolean,
-        $attr: true,
-    },
-    get currentNumber() {
-        const idx = this.steps.findIndex(s => s.status === 'in_progress');
-        if (idx >= 0) return idx + 1;
-        const pending = this.steps.findIndex(s => s.status !== 'done');
-        if (pending >= 0) return pending + 1;
-        return this.steps.length;
-    },
-    get isComplete() {
-        return this.steps.length > 0 && this.steps.every(s => s.status === 'done');
-    },
-    get progressPercent() {
-        if (!this.steps.length) return 0;
-        const done = this.steps.filter(s => s.status === 'done').length;
-        return Math.round(done / this.steps.length * 100);
-    },
-    get currentStep() {
-        return this.steps.find(s => s.status === 'in_progress')
-            || this.steps.find(s => s.status !== 'done')
-            || null;
-    },
-    get currentDescription() {
-        if (this.isComplete) return 'Выполнено!';
-        const step = this.currentStep;
-        return step ? step.description : '';
-    },
-});
-
-/** Нормализованный type поля для UI */
-function fieldUiType(f) {
-    const t = f?.type || 'String';
-    if (t === 'checkbox' || t === 'boolean' || t === 'Boolean') return 'Boolean';
-    if (t === 'textarea' || t === 'Text') return 'Text';
-    if (t === 'number' || t === 'Number') return 'Number';
-    if (t === 'select' || t === 'Select') return 'Select';
-    if (t === 'date' || t === 'datetime' || t === 'DateTime') return 'DateTime';
-    return 'String';
-}
-
 ODA({is: 'oda-chat-form',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
+                @apply --light;
+                gap: 8px;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            .field { @apply --vertical; gap: 4px; }
+            .field label { font-size: medium; @apply --bold; }
+            .field input[type="text"], .field input[type="number"], .field input[type="email"], .field input[type="date"], .field textarea {
                 @apply --content;
-                align-self: stretch;
-                width: 100%;
-                gap: 12px;
-                margin-top: 8px;
-                padding: 0;
-                box-sizing: border-box;
-            }
-            .fields {
-                @apply --vertical;
-                gap: 12px;
-            }
-            .field {
-                @apply --vertical;
-                gap: 6px;
-            }
-            .field > label {
-                font-size: small;
-                opacity: .8;
-            }
-            .field input, .field textarea, .field select {
-                @apply --content;
-                border-radius: 8px;
-                padding: 8px 10px;
+                border-radius: 4px;
+                padding: 8px;
                 font-size: medium;
                 font-family: inherit;
                 outline: none;
                 min-width: 0;
-                width: 100%;
-                box-sizing: border-box;
                 border: 1px solid var(--border-color, #ccc);
             }
+            .field input[type="checkbox"] { width: 20px; height: 20px; cursor: pointer; }
             .field textarea { min-height: 3em; resize: vertical; }
-            .check-row {
-                @apply --horizontal;
-                align-items: center;
-                gap: 8px;
-                cursor: pointer;
-                font-size: medium;
-            }
-            .check-row input {
-                width: 18px;
-                height: 18px;
-                flex-shrink: 0;
-            }
-            .submit {
-                margin-top: 4px;
+            .options { @apply --vertical; gap: 4px; }
+            .option {
+                @apply --content;
+                border: 1px solid var(--border-color, #ccc);
                 border-radius: 6px;
-                width: 100%;
+                padding: 8px 10px;
+                font-size: medium;
+                cursor: pointer;
+                user-select: none;
+            }
+            .option:hover { @apply --header; }
+            .option.selected {
+                border-color: var(--success-color, #2e7d32);
+                background: color-mix(in srgb, var(--success-color, #2e7d32) 12%, transparent);
             }
         </style>
-        <div class="fields" vertical>
-            <div class="field" ~for="fields">
-                <label ~if="fieldUiType($for.item) !== 'Boolean'">{{$for.item.label}}</label>
-                <input ~if="fieldUiType($for.item) === 'String'" type="text"
-                    ::value="localAnswers[$for.item.id]" :placeholder="$for.item.placeholder || ''">
-                <input ~if="fieldUiType($for.item) === 'Number'" type="number"
-                    ::value="localAnswers[$for.item.id]" :placeholder="$for.item.placeholder || ''">
-                <input ~if="fieldUiType($for.item) === 'DateTime'" type="datetime-local"
-                    ::value="localAnswers[$for.item.id]">
-                <textarea ~if="fieldUiType($for.item) === 'Text'"
-                    ::value="localAnswers[$for.item.id]" :placeholder="$for.item.placeholder || ''"></textarea>
-                <select ~if="fieldUiType($for.item) === 'Select'"
-                    ::value="localAnswers[$for.item.id]"
-                    @change="localAnswers[$for.item.id] = $event.target.value">
-                    <option value="" disabled>Выберите...</option>
-                    <option ~for="$for.item.options || []" :value="$for.item">{{$for.item}}</option>
-                </select>
-                <label class="check-row" ~if="fieldUiType($for.item) === 'Boolean'" horizontal>
-                    <input type="checkbox" ::checked="localAnswers[$for.item.id]">
-                    <span>{{$for.item.label}}</span>
-                </label>
+        <div class="field" ~for="questions">
+            <label ~if="$for.item.type !== 'checkbox'">{{$for.item.label}}</label>
+            <textarea ~if="$for.item.type === 'textarea'"
+                ::value="$for.item.value"
+                placeholder="Введите ответ..."></textarea>
+            <div class="options" ~if="$for.item.type === 'select' && $for.item.options?.length">
+                <div class="option" ~for="indexedOptions($for.item)"
+                    ~class="selected: $for.item.field.value === $for.item.opt"
+                    @tap="selectOption($for.item.field, $for.item.opt)">{{$for.item.opt}}</div>
             </div>
+            <label ~if="$for.item.type === 'checkbox'" horizontal style="align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" ::checked="$for.item.value">
+                <span>{{$for.item.label}}</span>
+            </label>
+            <input type="number" ~if="$for.item.type === 'number'"
+                ::value="$for.item.value"
+                placeholder="Введите число...">
+            <input type="email" ~if="$for.item.type === 'email'"
+                ::value="$for.item.value"
+                placeholder="email@example.com">
+            <input type="date" ~if="$for.item.type === 'date'"
+                ::value="$for.item.value">
+            <input type="text" ~if="$for.item.type === 'text' || !$for.item.type"
+                ::value="$for.item.value"
+                placeholder="Введите ответ...">
         </div>
-        <oda-button class="submit" flex success icon="icons:check" label="Ответить"
-            style="width: 100%;" @tap="submit"></oda-button>
+        <oda-button ~if="!hideSubmit" success icon="icons:check" label="Ответить" @tap="submit"></oda-button>
     `,
     imports: 'oda//button',
-    title: 'Уточните',
-    localAnswers: {},
-    fields: {
+    /** Прямой массив полей — без get/set буфера (иначе bind с openAsk/item.fields молчит) */
+    questions: {
         $def: [],
-        set(n) {
-            this._sync(n);
-        },
+        $type: Array,
     },
-    fieldUiType,
-    attached() {
-        this._sync(this.fields);
+    hideSubmit: {
+        $def: false,
+        $type: Boolean,
+        $attr: true,
     },
-    _sync(fields) {
-        const list = Array.isArray(fields) ? fields : [];
-        const next = { ...this.localAnswers };
-        for (const q of list) {
-            const id = q?.id || q?.name;
-            if (!id) continue;
-            if (next[id] === undefined || next[id] === null)
-                next[id] = fieldUiType(q) === 'Boolean' ? false : '';
+    indexedOptions(field) {
+        if (!field?.options?.length) return [];
+        return field.options.map(opt => ({
+            field,
+            opt: typeof opt === 'string' ? opt : String(opt?.label || opt?.text || opt?.value || opt),
+        }));
+    },
+    selectOption(field, opt) {
+        if (field) {
+            field.value = opt;
+            this.render?.();
         }
-        this.localAnswers = next;
     },
     submit() {
         const answers = {};
-        for (const q of this.fields || []) {
-            const id = q.id || q.name;
-            if (!id) continue;
-            const v = this.localAnswers[id];
-            answers[id] = v === undefined || v === null
-                ? (fieldUiType(q) === 'Boolean' ? false : '')
-                : v;
-        }
+        for (const q of (this.questions || []))
+            answers[q.id] = q.value;
         this.fire('answer', answers);
     },
 });

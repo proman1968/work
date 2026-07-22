@@ -66,6 +66,24 @@ export default {
         let funcCallName = '';
         let funcCallArgs = '';
 
+        const flushFunctionCall = function* () {
+            if (!funcCallName)
+                return;
+            let parsedArgs = {};
+            try {
+                parsedArgs = funcCallArgs ? JSON.parse(funcCallArgs) : {};
+            } catch {
+                parsedArgs = { raw: funcCallArgs };
+            }
+            yield {
+                type: 'function_call',
+                name: funcCallName,
+                arguments: parsedArgs,
+            };
+            funcCallName = '';
+            funcCallArgs = '';
+        };
+
         for await (const chunk of res) {
             const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
             const lines = text.split('\n');
@@ -105,27 +123,23 @@ export default {
                             funcCallArgs += delta.function_call.arguments;
                     }
 
-                    // Завершение — проверяем finish_reason
+                    // Завершение — function_call | tool_calls | stop с накопленным именем
                     const finishReason = json.choices?.[0]?.finish_reason;
-                    if (finishReason === 'function_call' || (finishReason === 'stop' && funcCallName)) {
-                        let parsedArgs = {};
-                        try {
-                            parsedArgs = funcCallArgs ? JSON.parse(funcCallArgs) : {};
-                        } catch {
-                            parsedArgs = { raw: funcCallArgs };
-                        }
-                        yield {
-                            type: 'function_call',
-                            name: funcCallName,
-                            arguments: parsedArgs,
-                        };
-                        funcCallName = '';
-                        funcCallArgs = '';
+                    if (
+                        finishReason === 'function_call'
+                        || finishReason === 'tool_calls'
+                        || (finishReason === 'stop' && funcCallName)
+                    ) {
+                        yield* flushFunctionCall();
                     }
                 }
                 catch {}
             }
         }
+
+        // Flush в конце стрима (finish_reason мог не прийти / потеряться на chunk boundary)
+        if (useFunctions && funcCallName)
+            yield* flushFunctionCall();
     },
 };
 

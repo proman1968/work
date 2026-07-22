@@ -50,6 +50,9 @@ export class $folder extends $item {
         return new URL(this.url + '/~/handlers//' + this.page + '/index.html').href;
     }
     get_item(path, method, params = {}) {
+        path = String(path ?? '');
+        if (path && !/^[\/~?]/.test(path))
+            path = '/' + path;
         path = this.short + path;
         return WORK.get_item(path, method, params);
     }
