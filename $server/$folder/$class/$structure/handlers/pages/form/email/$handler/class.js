@@ -214,38 +214,38 @@ ODA({
             </div>
         </div>
         <div class="editor" vertical flex>
-            <div ~if="current" vertical flex>
+            <div ~if="accounts[index]" vertical flex>
                 <fieldset>
                     <legend>Адрес e-mail</legend>
-                    <input type="email" placeholder="name@example.com" ::value="current.address">
+                    <input type="email" placeholder="name@example.com" ::value="accounts[index].address">
                 </fieldset>
                 <div class="presets" horizontal>
                     <oda-button ~for="presetList" @tap="applyPreset($for.item.id)">{{$for.item.label}}</oda-button>
                 </div>
                 <fieldset>
                     <legend>Исходящая (SMTP)</legend>
-                    <input placeholder="smtp.example.com" ::value="current.smtp.host">
+                    <input placeholder="smtp.example.com" ::value="accounts[index].smtp.host">
                     <div class="row" horizontal>
                         <fieldset class="port">
                             <legend>Порт</legend>
-                            <input type="number" ::value="current.smtp.port">
+                            <input type="number" ::value="accounts[index].smtp.port">
                         </fieldset>
                         <label horizontal style="gap:4px; align-items:center;">
-                            <oda-checkbox ::value="current.smtp.secure"></oda-checkbox>
+                            <oda-checkbox ::value="accounts[index].smtp.secure"></oda-checkbox>
                             <span>SSL/TLS</span>
                         </label>
                     </div>
                 </fieldset>
                 <fieldset>
                     <legend>Входящая (IMAP)</legend>
-                    <input placeholder="imap.example.com" ::value="current.imap.host">
+                    <input placeholder="imap.example.com" ::value="accounts[index].imap.host">
                     <div class="row" horizontal>
                         <fieldset class="port">
                             <legend>Порт</legend>
-                            <input type="number" ::value="current.imap.port">
+                            <input type="number" ::value="accounts[index].imap.port">
                         </fieldset>
                         <label horizontal style="gap:4px; align-items:center;">
-                            <oda-checkbox ::value="current.imap.secure"></oda-checkbox>
+                            <oda-checkbox ::value="accounts[index].imap.secure"></oda-checkbox>
                             <span>SSL/TLS</span>
                         </label>
                     </div>
@@ -253,16 +253,16 @@ ODA({
                 <div class="row" horizontal>
                     <fieldset flex>
                         <legend>Логин</legend>
-                        <input placeholder="user@example.com" ::value="current.auth.user">
+                        <input placeholder="user@example.com" ::value="accounts[index].auth.user">
                     </fieldset>
                     <fieldset flex>
                         <legend>Пароль</legend>
-                        <input type="password" placeholder="••••••••" ::value="current.auth.pass">
+                        <input type="password" placeholder="••••••••" ::value="accounts[index].auth.pass">
                     </fieldset>
                 </div>
                 <oda-button error icon="icons:delete" @tap="removeAccount" style="align-self:flex-start; margin-top:8px;">Удалить ящик</oda-button>
             </div>
-            <div ~if="!current" class="empty" flex>Выберите ящик или нажмите «+»</div>
+            <div ~if="!accounts[index]" class="empty" flex>Выберите ящик или нажмите «+»</div>
         </div>
     `,
     accounts: [],
@@ -270,9 +270,10 @@ ODA({
     get presetList() {
         return Object.entries(MAIL_PRESETS).map(([id, p]) => ({ id, label: p.label }));
     },
-    get current() {
-        return this.accounts[this.index] || null;
-    },
+    // get current() {
+    //     return this.accounts[this.index] || null;
+    // },
+    // нужно смотреть reactor
     addAccount() {
         this.accounts.push(emptyMailbox(''));
         this.index = this.accounts.length - 1;
@@ -497,7 +498,9 @@ ODA({
         );
     },
     attached() {
-        this.init();
+        this.async(() => {
+            this.init();
+        });
     },
     async init() {
         await this.loadSettings();
@@ -646,11 +649,6 @@ ODA({
             return;
         const settings = this._settings || await this.$item.fetch('read_secret', { name: 'email' });
         const box = settings?.mailboxes?.[address];
-        const folder = await this.$item.get_item('~/email/' + address);
-        if (!folder) {
-            alert('Папка ящика не найдена. Сохраните настройки — будет создана email/' + address);
-            return;
-        }
         const eml = defaultEml({
             from: box?.auth?.user || address,
             to: this.compose.to,
@@ -660,7 +658,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await folder.save_file(new File([eml], 'outbox.eml', { type: 'message/rfc822' }), { encoding: 'utf-8' });
+            await this.$item.save_file(new File([eml], 'send.eml', { type: 'message/rfc822' }), { encoding: 'utf-8' });
             this.composing = false;
             this.folder = 'outbox';
             await this.refreshMessages();

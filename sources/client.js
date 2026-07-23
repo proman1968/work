@@ -54,7 +54,9 @@ globalThis.WORK = function (prototype = {}){
 }
 WORK.genGUID = CORE.$item.genGUID;
 WORK.$item = CORE.$item;
-WORK.get_item = function (path = '/', method = '', params = {}){
+/** Контракт: get_item → всегда $item (info). Контент файла — явно 'load' или item.load(). */
+WORK.get_item = function (path = '/', method = 'info', params = {}){
+    method = method || 'info';
     let url = location.origin + path;
     return WORK.fetch(url, method, params).then(data=>{
         return WORK.__bind(data, path);
@@ -560,11 +562,11 @@ class WebSocketEvents {
 }
 
 WORK.get_$user = function (uid = WORK.uid){
-    return WORK.get_item('/users//' + uid);
+    return WORK.get_item('/USERS//' + uid);
 }
 
 WORK.$users = function (){
-    return WORK.get_item('/users/*');
+    return WORK.get_item('/USERS/*');
 }
 
 
@@ -773,7 +775,7 @@ WORK.renderSVG = async (svg) => {
 Object.defineProperty(WORK, 'users', {
     get(){ //todo надо сбрасывать при появлении новых пользователей на сервере
         return WORK._users ??= new AsyncPromise(async _=>{
-            let res = await WORK.get_item('/users');
+            let res = await WORK.get_item('/USERS');
             return res.children;
         });
     }

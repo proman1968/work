@@ -64,7 +64,7 @@ describe('execItemMethod', () => {
             }
         }
         const storage = new TestClass({ id: '$user' });
-        storage.path = '/users/TEST/$user';
+        storage.path = '/USERS/TEST/$user';
         Object.defineProperty(storage, '$class', { get: () => storage });
         const body = {
             files: [{ originalFilename: 'sample.txt' }],

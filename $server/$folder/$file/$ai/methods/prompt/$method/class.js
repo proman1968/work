@@ -8,8 +8,8 @@
  * - Fallback: текстовый парсинг <tool_call> для моделей без function calling
  *
  * Подтверждение опасных действий:
- * - При trustLevel < TRUST_AUTOCONFIRM опасные методы не выполняются сразу
- * - Вызовы сохраняются в body.pendingAction, клиент получает chat.action
+ * - Обычный save_file выполняется сразу (MVP e2e до файла)
+ * - callNeedsTrustConfirm / system-modify / trustLevel < TRUST_AUTOCONFIRM → pendingAction
  * - При подтверждении ({confirm:true}) — вызовы выполняются, цикл продолжается
  * - При отказе ({confirm:false}) — tool_result "отменено", цикл продолжается
  */
@@ -20,31 +20,72 @@ import * as https from 'node:https';
 
 const ROOT = process.cwd();
 const MAX_ITERATIONS = 10;
-const MAX_IDLE_DO = Infinity; // idle retry до общего maxIter; не сдаёмся early
+const MAX_IDLE_DO = 3; // пустые EXECUTE-ходы → ошибка, не выжигать maxIter
 const MAX_IDLE_PROPOSE = 1; // 1 idle на clarify → Cursor AskQuestion inject (не ждать Light)
 const CONTEXT_LOG_DAYS = 7;
 const CONTEXT_LOG_MAX_ROWS = 60;
 const CONTEXT_LOG_LINE_MAX = 160;
-// Опасные методы — требуют подтверждения через <action> при trustLevel < 3
-const DANGEROUS_METHODS = ['write_file', 'set_property', 'save_file', 'delete', 'create'];
+// Опасные методы — требуют подтверждения при trustLevel < 3 (обычный save_file — нет)
+const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 'create'];
 const ASK_USER_METHOD = 'ask_user';
 // Уровень доверия для автоподтверждения опасных действий
 const TRUST_AUTOCONFIRM = 3;
 
-/** Tools harness (не из get_schema / TOOL_DESCRIPTIONS) — иначе FC не видит write_file */
+function isFileWriteMethod(method) {
+    return method === 'save_file' || method === 'write_file';
+}
+
+/** Битые args после ""+object → "[object Object]" в streamChat */
+function isBrokenFcArgs(args) {
+    if (!args || typeof args !== 'object')
+        return false;
+    return args.raw === '[object Object]';
+}
+
+/** id похож на имя файла (presentation.html), а не на класс (MARKET). */
+function looksLikeFileId(id) {
+    const s = String(id ?? '').trim();
+    if (!s || s[0] === '$')
+        return false;
+    return /\.[A-Za-z0-9]{1,16}$/.test(s);
+}
+
+/** Args для history/API: без мусора raw:"[object Object]" */
+function sanitizeToolArgsForHistory(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args))
+        return {};
+    if (args.raw === '[object Object]') {
+        const { raw, ...rest } = args;
+        return Object.keys(rest).length ? rest : {};
+    }
+    return args;
+}
+
+/** Хвост битого FC в конце post (`}\n</function>` и т.п.) — не писать в файл */
+function stripFcTrailer(text) {
+    let s = String(text ?? '');
+    // Только явный мусор FC, не голый «}» (иначе ломается JSON body)
+    s = s.replace(/(?:\r?\n)?\}\s*<\/function>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?<\/function>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?\}\s*<\/tool_call>\s*$/i, '');
+    s = s.replace(/(?:\r?\n)?<\/tool_call>\s*$/i, '');
+    return s;
+}
+
+/**
+ * Нужен ли trust/confirm gate для вызова.
+ * Обычный save_file — сразу; system-modify write и прочие DANGEROUS — да.
+ */
+function callNeedsTrustConfirm(call) {
+    if (!call?.method)
+        return false;
+    if (isFileWriteMethod(call.method))
+        return isSystemModifyCall(call);
+    return DANGEROUS_METHODS.includes(call.method);
+}
+
+/** Tools: только то, чего нет в get_schema (@ai). ask_user — всегда harness. */
 const HARNESS_FUNCTIONS = [
-    {
-        name: 'write_file',
-        description: 'Создать или перезаписать файл в текущем контексте. name — имя файла, content — текст.',
-        parameters: {
-            type: 'object',
-            properties: {
-                name: { type: 'string', description: 'Имя файла, например presentation.html' },
-                content: { type: 'string', description: 'Содержимое файла' },
-            },
-            required: ['name', 'content'],
-        },
-    },
     {
         name: 'read_file',
         description: 'Прочитать файл в текущем контексте по name.',
@@ -73,6 +114,20 @@ const HARNESS_FUNCTIONS = [
         parameters: { type: 'object', properties: {} },
     },
 ];
+
+/** Fallback save_file только если schema не отдала @ai-method */
+const HARNESS_SAVE_FILE = {
+    name: 'save_file',
+    description: 'Создать или перезаписать файл. filename — конечное имя артефакта; перезаписывай ТО ЖЕ имя — history пишется сама. Возвращает history path снимка.',
+    parameters: {
+        type: 'object',
+        properties: {
+            filename: { type: 'string', description: 'Конечное имя файла (одно на артефакт)' },
+            post: { type: 'string', description: 'Полное содержимое файла (текущая версия)' },
+        },
+        required: ['filename', 'post'],
+    },
+};
 
 export default {
     async execute(params = {}, post) {
@@ -114,6 +169,8 @@ export default {
             throw new Error('Не определено классе-контекст для task.ai');
 
         body.ribbon ??= [];
+        // После «Выполнить» / confirm pendingAction — сразу forceDoReminder на первом turn
+        let resumeDoForce = false;
 
         // Миграция legacy user → type:prompt
         for (const m of body.ribbon) {
@@ -175,12 +232,23 @@ export default {
 
             if (confirm === true) {
                 // Выполнить отложенные вызовы
+                const doTask = lastTask || activeTaskFind(body);
+                const stepBefore = doTask?.steps?.find(s => s.status === 'in_progress')
+                    || doTask?.steps?.find(s => s.status === 'proposed')
+                    || null;
+                let hadOkSave = false;
                 for (const call of body.pendingAction.calls || []) {
                     const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
                     currentContext = newContext;
                     pushToolResult(ribbonTarget, call, result, model);
                     sendToolResultWs(wsPath, call, result);
+                    if (isFileWriteMethod(call.method) && !(result && typeof result === 'object' && result.error))
+                        hadOkSave = true;
                 }
+                if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore))
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
+                if (doTask && shouldContinueDo(doTask, false, []) && getDoStepPhase(doTask) === 'execute')
+                    resumeDoForce = true;
             } else {
                 // Отмена — добавить tool_result "отменено" для каждого вызова
                 for (const call of body.pendingAction.calls || []) {
@@ -237,6 +305,8 @@ export default {
                 // Факт согласия — в корневой ленте (перед task)
                 pushClosingPrompt(body.ribbon, promptContent, sender, answers);
                 text = ''; // не дублировать prompt в §7
+                if (openAction)
+                    openAction.answered = true;
                 const plan = body.pendingPlan;
                 const steps = prepareStepsForStart(plan.steps || []);
                 const task = {
@@ -252,6 +322,8 @@ export default {
                 body.ribbon.push(task);
                 ribbonTarget = task.ribbon;
                 body.pendingPlan = null;
+                const firstStep = steps.find(s => s.status === 'in_progress') || steps[0];
+                pushStepAnnounce(ribbonTarget, firstStep, model.path || 'WORK');
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isFormSubmit) {
@@ -273,21 +345,31 @@ export default {
                 openAction.answered = true;
                 // Clarify-шаг закрыт ответами → следующий in_progress (EXECUTE)
                 const doTask = activeTaskFind(body);
-                if (doTask)
+                if (doTask) {
                     advanceAfterClarifyAnswers(doTask);
+                    const nextCur = doTask.steps?.find(s => s.status === 'in_progress')
+                        || doTask.steps?.find(s => s.status === 'proposed');
+                    pushStepAnnounce(actionRibbon, nextCur, model.path || 'WORK');
+                }
                 text = '';
+                resumeDoForce = true;
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isStepConfirm) {
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
+                if (openAction)
+                    openAction.answered = true;
                 text = '';
+                resumeDoForce = true;
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isAcceptFinal) {
                 // «Принять» — задача выполнена
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
+                if (openAction)
+                    openAction.answered = true;
                 text = '';
                 const doneTask = activeTaskFind(body)
                     || [...(body.ribbon || [])].reverse().find(b => b.type === 'task' && b.state === 'completed');
@@ -353,11 +435,15 @@ export default {
         let iteration = 0;
         let lastResponse = '';
         let idleDoStreak = 0;
-        let forceDoReminder = false;
+        // «Выполнить» / confirm опасных tools → сразу EXECUTE pressure на первом turn
+        let forceDoReminder = !!resumeDoForce;
 
         while (iteration < maxIter) {
             iteration++;
-            const messages = buildHistoryFromRibbon(body, model.functionCalling === true, { forceDoReminder });
+            const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
+                forceDoReminder,
+                protocol: model.protocol,
+            });
             forceDoReminder = false;
 
             // Построение functions из схемы методов контекста
@@ -370,6 +456,7 @@ export default {
 
             let fullResponse = '';
             let toolCalls = [];
+            let turnUsage = null;
 
             {
                 // Обычный режим — стриминг от модели
@@ -379,8 +466,16 @@ export default {
                 try {
                     const streamParams = { messages, $ai: model };
                     if (functions.length > 0) {
-                        streamParams.functions = functions;
-                        streamParams.function_call = 'auto';
+                        const doTask = activeTaskFind(body);
+                        const doCur = doTask?.steps?.find(s => s.status === 'in_progress')
+                            || doTask?.steps?.find(s => s.status === 'proposed');
+                        const doPhase = doTask ? getDoStepPhase(doTask) : null;
+                        ensureNamedFunction(functions, 'save_file', HARNESS_SAVE_FILE);
+                        const mode = resolveFunctionCallMode(doPhase, doCur, functions);
+                        const prepared = prepareFunctionsForStream(functions, messages, mode);
+                        streamParams.functions = prepared.functions;
+                        streamParams.function_call = prepared.function_call;
+                        functions = prepared.functions;
                     }
                     const stream = await execItemMethod(model, 'streamChat', streamParams);
                     for await (const chunk of stream) {
@@ -397,6 +492,12 @@ export default {
                                     args: chunk.arguments || {},
                                 });
                                 hasNativeFunctionCall = true;
+                            } else if (chunk.type === 'usage') {
+                                turnUsage = {
+                                    prompt: Number(chunk.prompt_tokens) || 0,
+                                    completion: Number(chunk.completion_tokens) || 0,
+                                    total: Number(chunk.total_tokens) || 0,
+                                };
                             }
                         }
                     }
@@ -416,52 +517,85 @@ export default {
 
                 lastResponse = fullResponse;
 
-                // Разбор ответа: thinking / form / единый action(MD) / pendingPlan
+                // Разбор ответа: thinking / form / единый action(MD) / pendingPlan / subplan
                 const parsed = parseResponseToRibbon(fullResponse, model.path || 'WORK');
                 let blocks = parsed.blocks || [];
                 const activeTask = [...body.ribbon].reverse().find(b => b.type === 'task' && b.state === 'active');
                 let waitingForUser = false;
                 // Do: не коммитим steps до выхода из idle — усечённый <plan> не должен схлопывать UI
                 let deferredDoSteps = null;
+                const turnHasThinking = blocks.some(b => b.type === 'thinking');
+
+                // Tools раньше plan-allDone — иначе модель «рисует» 4/4 до факта
+                toolCalls = nativeToolCalls;
+                if (toolCalls.length === 0)
+                    toolCalls = parseToolCalls(fullResponse, functions);
+
+                // Подплан: декомпозиция текущего шага (без tools)
+                if (activeTask && parsed.pendingSubplan?.length && toolCalls.length === 0) {
+                    const curStep = activeTask.steps?.find(s => s.status === 'in_progress')
+                        || activeTask.steps?.find(s => s.status === 'proposed');
+                    if (expandStepWithSubplan(activeTask, curStep, parsed.pendingSubplan)) {
+                        parsed.pendingPlan = null;
+                        const nextCur = activeTask.steps.find(s => s.status === 'in_progress');
+                        pushStepAnnounce(ribbonTarget, nextCur, model.path || 'WORK');
+                        WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: activeTask.steps });
+                        blocks = commitDurableBlocks(ribbonTarget, blocks);
+                        WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        forceDoReminder = true;
+                        idleDoStreak = 0;
+                        continue;
+                    }
+                }
 
                 if (parsed.pendingPlan) {
                     if (activeTask) {
-                        // Do-фаза: merge preview; commit после idle-check
-                        const merged = normalizePlanSteps(activeTask.steps, parsed.pendingPlan.steps);
-                        parsed.pendingPlan.steps = merged;
-                        const allDone = merged.every(s => s.status === 'done');
-                        if (allDone) {
-                            activeTask.steps = merged;
+                        // Статусы done — только по факту harness (модель не рисует 4/4)
+                        const capped = applyHarnessDoneCap(activeTask.steps, parsed.pendingPlan.steps, false);
+                        parsed.pendingPlan.steps = capped;
+                        const harnessAllDone = (activeTask.steps || []).length
+                            && activeTask.steps.every(s => s.status === 'done');
+                        if (harnessAllDone) {
+                            activeTask.steps = capped;
                             activeTask.state = 'completed';
                             deferredDoSteps = null;
                             blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: true });
                             for (const a of blocks.filter(b => b.type === 'action')) {
-                                if (!a.content)
-                                    a.content = formatPlanMarkdown(activeTask.steps, 'Принять результат?');
+                                a.content = formatPlanMarkdown(activeTask.steps, 'Принять результат?') || a.content;
                                 a.title = 'Отчёт';
                                 a.time = a.time || Date.now();
                                 a.sender = a.sender || model.path || 'WORK';
                             }
                             waitingForUser = true;
                             WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
-                            WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: merged });
+                            WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: capped });
                         } else {
-                            deferredDoSteps = merged;
+                            deferredDoSteps = capped;
                             blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: false });
+                            for (const a of blocks.filter(b => b.type === 'action')) {
+                                a.content = formatPlanMarkdown(capped, '') || a.content;
+                            }
                             if (blocks.some(isInteractiveBlock))
                                 waitingForUser = true;
                         }
                     } else {
-                        // Plan-фаза: action title План / Начать
-                        parsed.pendingPlan.steps = normalizeProposedSteps(parsed.pendingPlan.steps);
+                        // Plan-фаза: action title План / Начать; не принимать 1-шаговый усечённый план
+                        const lastUser = [...body.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
+                        const userText = lastUser?.content || '';
+                        parsed.pendingPlan.steps = ensureMinimumPlanSteps(
+                            normalizeProposedSteps(parsed.pendingPlan.steps),
+                            userText,
+                        );
                         body.pendingPlan = parsed.pendingPlan;
                         blocks = normalizeInteractiveBlocks(blocks, { phase: 'plan' });
                         for (const a of blocks.filter(b => b.type === 'action')) {
                             a.title = 'План';
                             a.time = a.time || Date.now();
                             a.sender = a.sender || model.path || 'WORK';
-                            if (!a.content && parsed.pendingPlan.steps?.length)
-                                a.content = formatPlanMarkdown(parsed.pendingPlan.steps, '');
+                            a.content = formatPlanMarkdown(parsed.pendingPlan.steps, '') || a.content;
                         }
                         waitingForUser = true;
                         WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: parsed.pendingPlan.steps });
@@ -477,10 +611,6 @@ export default {
                         waitingForUser = true;
                 }
 
-                toolCalls = nativeToolCalls;
-                if (toolCalls.length === 0)
-                    toolCalls = parseToolCalls(fullResponse, functions);
-
                 // ask_user → questions + waitingForUser (как Cursor AskQuestion)
                 const askCall = toolCalls.find(c => c.method === ASK_USER_METHOD);
                 if (askCall) {
@@ -495,6 +625,27 @@ export default {
                     toolCalls = [];
                 }
 
+                // EXECUTE после ответов: повторный ask_user/questions — не ждать, стрипать → idle reminder
+                if (activeTask && getDoStepPhase(activeTask) === 'execute' && taskHasClarifyAnswers(activeTask)) {
+                    if (waitingForUser || blocks.some(b => b.type === 'questions' || b.type === 'form')) {
+                        blocks = blocks.filter(b => b.type !== 'questions' && b.type !== 'form');
+                        waitingForUser = false;
+                    }
+                }
+
+                // Execute без reasoning + tools: не блокируем tool, но требуем reasoning на idle
+                if (activeTask && getDoStepPhase(activeTask) === 'execute'
+                    && toolCalls.length === 0 && !waitingForUser && !turnHasThinking
+                    && shouldContinueDo(activeTask, false, [])) {
+                    // пустой prose без мыслей — idle с nudge
+                }
+
+                // Инвариант: thinking/text в ленту СРАЗУ — до idle/inject/error/continue.
+                // Иначе стрим виден в UI, а при chat.done пропадает (дыры по веткам).
+                blocks = commitDurableBlocks(ribbonTarget, blocks);
+                // Граница хода: один visual stream = один model turn (не копить через tools/idle)
+                WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+
                 // Idle Do: крутим до maxIter с forceDoReminder (questions или tools)
                 if (toolCalls.length === 0 && !waitingForUser && shouldContinueDo(activeTask, waitingForUser, toolCalls)) {
                     if (!functions.length) {
@@ -504,6 +655,7 @@ export default {
                             time: Date.now(),
                             sender: model.path || 'WORK',
                         });
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
@@ -523,20 +675,64 @@ export default {
                                 || cur,
                             model.path || 'WORK',
                         ));
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                         return { ok: true, pendingActionConfirm: true };
                     }
-                    // Idle retry: без write/notify — иначе UI моргает; steps не коммитим
+                    // EXECUTE idle: после MAX_IDLE_DO — диагностика + human gate «Выполнить» (не тупик)
+                    // Не коммитим deferredDoSteps — prose/<plan> без tools не двигает шаги
+                    if (phase === 'execute' && nextIdleDoAction(idleDoStreak) === 'stop') {
+                        if (mayCommitDeferredOnIdleExecuteStop() && deferredDoSteps)
+                            activeTask.steps = deferredDoSteps;
+                        // Silent ok только если план уже весь done (не «был хоть один save»)
+                        const planStillOpen = shouldContinueDo(activeTask, false, []);
+                        if (taskHasSuccessfulSave(activeTask) && !planStillOpen) {
+                            applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                            return { ok: true };
+                        }
+                        const stepHint = cur?.description
+                            ? ' («' + cur.description + '»)'
+                            : '';
+                        ribbonTarget.push({
+                            type: 'error',
+                            content: planStillOpen
+                                ? 'План не завершён: выполни текущий шаг' + stepHint + ' через tool (файл — save_file; класс — create).'
+                                : 'Модель не вызвала tool за ' + MAX_IDLE_DO + ' попыток.',
+                            time: Date.now(),
+                            sender: model.path || 'WORK',
+                        });
+                        if (planStillOpen) {
+                            ribbonTarget.push(makeIdleExecuteResumeAction(cur, model.path || 'WORK'));
+                            applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                            return { ok: true, pendingActionConfirm: true };
+                        }
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                        return { ok: false, error: 'idle_execute' };
+                    }
+                    // Idle retry: steps не коммитим; durable уже в ленте; стрим уже сброшен
+                    applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
                     forceDoReminder = true;
                     continue;
                 }
 
                 idleDoStreak = 0;
                 if (deferredDoSteps && activeTask && activeTask.state === 'active') {
-                    activeTask.steps = deferredDoSteps;
-                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: deferredDoSteps });
+                    // Не даём deferred <plan> нарисовать лишние done поверх факта
+                    activeTask.steps = applyHarnessDoneCap(activeTask.steps, deferredDoSteps, false);
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: activeTask.steps });
                 }
 
                 for (const block of blocks) {
@@ -548,6 +744,7 @@ export default {
                     }
                     ribbonTarget.push(block);
                 }
+                applyTurnUsage(body, ribbonTarget, turnUsage, model);
 
                 // Открытый action / план — стоп до prompt пользователя
                 if (waitingForUser) {
@@ -563,6 +760,34 @@ export default {
 
             // === ACL роли: не-ADMIN не меняет типизаторы / class.js ===
             const role = normalizeRole(body.role || params.role);
+            // Битые FC args ([object Object]) — не исполнять, не крутить idle вхолостую
+            const validCalls = [];
+            let hadBrokenFc = false;
+            for (const call of toolCalls) {
+                if (isBrokenFcArgs(call.args)
+                    || (isFileWriteMethod(call.method) && !(call.args?.filename || call.args?.name))) {
+                    hadBrokenFc = true;
+                    const msg = isBrokenFcArgs(call.args)
+                        ? 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}) с валидными аргументами.'
+                        : 'save_file: нужен filename или name. Вызови save_file({filename, post}).';
+                    pushToolResult(ribbonTarget, { ...call, args: sanitizeToolArgsForHistory(call.args) }, { error: msg }, model);
+                    sendToolResultWs(wsPath, call, { error: msg });
+                } else {
+                    validCalls.push(call);
+                }
+            }
+            toolCalls = validCalls;
+            if (!toolCalls.length) {
+                if (hadBrokenFc && shouldContinueDo(activeTaskFind(body), false, [])) {
+                    forceDoReminder = true;
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
+                    continue;
+                }
+                await writeTaskBody(fullPath, body);
+                continue;
+            }
+
             const allowedCalls = [];
             for (const call of toolCalls) {
                 const block = roleBlocksTool(role, call);
@@ -580,8 +805,9 @@ export default {
             }
 
             // === Подтверждение: dangerous (trust) или ADMIN system-modify ===
+            // Обычный save_file (presentation.html и т.п.) — без confirm (MVP e2e).
             const trustLevel = Number(model.trustLevel || 0);
-            const hasDangerous = toolCalls.some(c => DANGEROUS_METHODS.includes(c.method));
+            const hasDangerous = toolCalls.some(callNeedsTrustConfirm);
             const hasSystemModify = toolCalls.some(isSystemModifyCall);
             const needsConfirm = (hasDangerous && trustLevel < TRUST_AUTOCONFIRM)
                 || (role === 'ADMIN' && hasSystemModify);
@@ -592,7 +818,7 @@ export default {
                     contextPath: currentContext.path || '',
                 };
                 const descLines = toolCalls
-                    .filter(c => DANGEROUS_METHODS.includes(c.method) || isSystemModifyCall(c))
+                    .filter(c => callNeedsTrustConfirm(c) || isSystemModifyCall(c))
                     .map(c => '• ' + c.method + '(' + Object.keys(c.args || {}).join(', ') + ')');
                 WORK.wsSend?.({
                     type: 'chat.action',
@@ -609,14 +835,111 @@ export default {
             }
 
             // === Выполнение вызовов ===
-            for (const call of toolCalls) {
-                const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
-                currentContext = newContext;
-                pushToolResult(ribbonTarget, call, result, model);
-                sendToolResultWs(wsPath, call, result);
+            {
+                const doTask = activeTaskFind(body);
+                let stepBefore = doTask?.steps?.find(s => s.status === 'in_progress')
+                    || doTask?.steps?.find(s => s.status === 'proposed')
+                    || null;
+
+                // Fill-шаг → подплан по N из answers (или блок save без subplan)
+                if (doTask && stepBefore && stepNeedsContentFill(stepBefore)) {
+                    const fill = ensureFillSubplan(doTask, stepBefore);
+                    if (fill.expanded) {
+                        WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
+                        stepBefore = doTask.steps.find(s => s.status === 'in_progress')
+                            || doTask.steps.find(s => s.status === 'proposed');
+                        pushStepAnnounce(ribbonTarget, stepBefore, model.path || 'WORK');
+                    } else if (fill.blocked && toolCalls.some(c => isFileWriteMethod(c.method))) {
+                        for (const call of toolCalls.filter(c => isFileWriteMethod(c.method))) {
+                            pushToolResult(ribbonTarget, call, { error: fill.message }, model);
+                            sendToolResultWs(wsPath, call, { error: fill.message });
+                        }
+                        toolCalls = toolCalls.filter(c => !isFileWriteMethod(c.method));
+                        if (!toolCalls.length) {
+                            forceDoReminder = true;
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            continue;
+                        }
+                    }
+                }
+
+                if (doTask && stepBefore)
+                    pushStepAnnounce(ribbonTarget, stepBefore, model.path || 'WORK');
+                let hadOkSave = false;
+                let hadOkTool = false;
+                let lastWriteArgs = null;
+                for (const call of toolCalls) {
+                    const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
+                    currentContext = newContext;
+                    pushToolResult(ribbonTarget, call, result, model);
+                    sendToolResultWs(wsPath, call, result);
+                    const ok = !(result && typeof result === 'object' && result.error);
+                    if (ok)
+                        hadOkTool = true;
+                    if (isFileWriteMethod(call.method) && ok) {
+                        hadOkSave = true;
+                        lastWriteArgs = call.args || null;
+                        if (isStubWriteContent(call.args?.post ?? call.args?.content)) {
+                            ribbonTarget.push({
+                                type: 'error',
+                                content: 'Содержимое похоже на заглушку — шаг не закрыт. Наполни артефакт (по подшагам), перезапиши тот же filename.',
+                                time: Date.now(),
+                                sender: model.path || 'WORK',
+                            });
+                        }
+                    }
+                }
+                let stepped = false;
+                if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore, lastWriteArgs)) {
+                    stepped = true;
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
+                }
+                // Один шаг за ход: после advance — подплан fill / announce / Принять только когда контент готов
+                if (stepped && doTask) {
+                    let nextCur = doTask.steps.find(s => s.status === 'in_progress')
+                        || doTask.steps.find(s => s.status === 'proposed');
+                    if (nextCur && stepNeedsContentFill(nextCur)) {
+                        const fill = ensureFillSubplan(doTask, nextCur);
+                        if (fill.expanded) {
+                            WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
+                            nextCur = doTask.steps.find(s => s.status === 'in_progress')
+                                || doTask.steps.find(s => s.status === 'proposed');
+                        }
+                    }
+                    if (allContentWorkDone(doTask) && finalizeAcceptOnlySteps(doTask)) {
+                        doTask.state = 'completed';
+                        ribbonTarget.push({
+                            type: 'action',
+                            title: 'Отчёт',
+                            content: formatPlanMarkdown(doTask.steps, 'Принять результат?') || 'Готово. Принять результат?',
+                            button: { label: 'Принять', color: 'success' },
+                            time: Date.now(),
+                            sender: model.path || 'WORK',
+                        });
+                        WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
+                        WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+                        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                        return { ok: true, pendingActionConfirm: true };
+                    }
+                    pushStepAnnounce(ribbonTarget, nextCur, model.path || 'WORK');
+                    await writeTaskBody(fullPath, body);
+                    notifyChanged(fullPath);
+                    WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+                    forceDoReminder = true;
+                    continue;
+                }
+                if (hadOkTool && doTask && shouldContinueDo(doTask, false, []) && getDoStepPhase(doTask) === 'execute')
+                    forceDoReminder = true;
             }
 
             await writeTaskBody(fullPath, body);
+            // Карточка файла / tool_result в UI + чистый стрим до следующего model turn
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
         }
 
         if (iteration >= maxIter && lastResponse) {
@@ -641,7 +964,7 @@ export default {
 
 /**
  * Построить список functions (OpenAI-compatible) из схемы методов контекста
- * и схем сервисов /services/*.
+ * и схем сервисов /SERVICES/*.
  * @param {object} currentContext — текущий элемент-контекст
  * @returns {Promise<Array>} — массив описаний функций
  */
@@ -661,9 +984,9 @@ async function buildFunctionsList(currentContext) {
         console.warn('[task.ai] get_schema for functions:', e.message);
     }
 
-    // Методы сервисов — автозагрузка из /services/*
+    // Методы сервисов — автозагрузка из /SERVICES/*
     try {
-        const services = await WORK.get_item('/services/*');
+        const services = await WORK.get_item('/SERVICES/*');
         const svcList = Array.isArray(services) ? services : (services ? [services] : []);
         for (const svcItem of svcList) {
             if (svcItem.type !== '$service')
@@ -691,8 +1014,98 @@ async function buildFunctionsList(currentContext) {
 }
 
 /**
- * Гарантировать write_file / read_file / ask_user / navigate в списке FC.
- * get_schema их не отдаёт (write_file — синтетический в executeToolCall).
+ * Upsert функции по точному имени (write_file ≠ save_file).
+ * @param {Array} functions
+ * @param {string} name
+ * @param {object} template
+ * @param {{ prepend?: boolean }} [opts]
+ * @returns {Array}
+ */
+function ensureNamedFunction(functions = [], name, template, opts = {}) {
+    if (!Array.isArray(functions) || !name || !template)
+        return functions;
+    const idx = functions.findIndex(f => f?.name === name);
+    if (idx >= 0) {
+        if (opts.prepend && idx > 0) {
+            const [existing] = functions.splice(idx, 1);
+            functions.unshift(existing);
+        }
+        return functions;
+    }
+    const copy = { ...template, name };
+    if (opts.prepend)
+        functions.unshift(copy);
+    else
+        functions.push(copy);
+    return functions;
+}
+
+/**
+ * Имена FC из messages (assistant.function_call / role:function).
+ * @param {Array} messages
+ * @returns {string[]}
+ */
+function collectFunctionNamesFromMessages(messages = []) {
+    const names = new Set();
+    for (const m of messages || []) {
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.role === 'function' && m.name)
+            names.add(String(m.name));
+        const fc = m.function_call;
+        if (fc?.name)
+            names.add(String(fc.name));
+        if (Array.isArray(m.tool_calls)) {
+            for (const tc of m.tool_calls) {
+                const n = tc?.function?.name || tc?.name;
+                if (n)
+                    names.add(String(n));
+            }
+        }
+    }
+    return [...names];
+}
+
+/**
+ * Stub для имени из history, которого нет в schema.
+ * @param {string} name
+ */
+function stubFunctionForHistory(name) {
+    if (name === 'save_file')
+        return { ...HARNESS_SAVE_FILE };
+    return {
+        name,
+        description: name,
+        parameters: { type: 'object', properties: {} },
+    };
+}
+
+/**
+ * Подготовить functions к stream: history names + force save_file первым.
+ * @param {Array} functions
+ * @param {Array} messages
+ * @param {'auto'|{name:string}} functionCall
+ * @returns {{ functions: Array, function_call: 'auto'|{name:string} }}
+ */
+function prepareFunctionsForStream(functions = [], messages = [], functionCall = 'auto') {
+    const list = Array.isArray(functions) ? [...functions] : [];
+    for (const name of collectFunctionNamesFromMessages(messages)) {
+        if (!list.some(f => f?.name === name))
+            list.push(stubFunctionForHistory(name));
+    }
+    let mode = functionCall;
+    if (mode && typeof mode === 'object' && mode.name === 'save_file') {
+        // Канон harness-схемы (schema save_file иногда даёт 422 у GigaChat)
+        const rest = list.filter(f => f?.name !== 'save_file');
+        rest.unshift({ ...HARNESS_SAVE_FILE });
+        return { functions: rest, function_call: { name: 'save_file' } };
+    }
+    return { functions: list, function_call: mode };
+}
+
+/**
+ * Гарантировать ask_user + недостающие helpers.
+ * save_file — по имени (write_file не замена для force FC).
  * @param {Array} functions
  * @returns {Array}
  */
@@ -701,6 +1114,7 @@ function ensureHarnessFunctions(functions = []) {
         if (!functions.find(f => f.name === fn.name))
             functions.push({ ...fn });
     }
+    ensureNamedFunction(functions, 'save_file', HARNESS_SAVE_FILE);
     if (!functions.find(fn => fn.name === ASK_USER_METHOD)) {
         functions.push({
             name: ASK_USER_METHOD,
@@ -745,6 +1159,27 @@ function ensureHarnessFunctions(functions = []) {
     return functions;
 }
 
+/** В ленте задачи есть ответы пользователя после clarify (prompt.answers). */
+function taskHasClarifyAnswers(activeTask) {
+    const ribbon = activeTask?.ribbon || [];
+    return ribbon.some(b =>
+        (b.type === 'prompt' || b.role === 'user')
+        && b.answers
+        && typeof b.answers === 'object'
+        && Object.keys(b.answers).length > 0
+    );
+}
+
+/** Уже был успешный save_file в ribbon задачи (не путать с idle «не вызвала tool»). */
+function taskHasSuccessfulSave(activeTask) {
+    const ribbon = activeTask?.ribbon || [];
+    return ribbon.some(b =>
+        b?.type === 'tool_result'
+        && isFileWriteMethod(b.tool)
+        && b.ok
+    );
+}
+
 /**
  * После ответов на clarify-шаг: done → следующий proposed становится in_progress.
  * @param {{ steps?: Array }} activeTask
@@ -761,11 +1196,256 @@ function advanceAfterClarifyAnswers(activeTask) {
 }
 
 /**
+ * После ok save_file в EXECUTE: закрыть шаг, на котором был save (не clarify).
+ * Не двигает done для stub-контента и для fill-шага без подплана (слайды).
+ * @param {{ steps?: Array }} activeTask
+ * @param {{ step?: number }|null} [stepRef]
+ * @param {{ post?: string }|null} [writeArgs] — args save (для stub-проверки)
+ * @returns {boolean}
+ */
+function advanceAfterSuccessfulSave(activeTask, stepRef = null, writeArgs = null) {
+    if (!activeTask?.steps?.length) return false;
+    let target = null;
+    if (stepRef != null && stepRef.step != null)
+        target = activeTask.steps.find(s => s.step === stepRef.step) || null;
+    if (!target) {
+        target = activeTask.steps.find(s => s.status === 'in_progress')
+            || activeTask.steps.find(s => s.status === 'proposed');
+    }
+    if (!target || stepNeedsClarify(target)) return false;
+    if (target.status === 'done') return false;
+    // Fill-шаг целиком (ещё не разбит на «Слайд N») — не закрывать одним save
+    if (stepNeedsContentFill(target) && !stepLooksLikeSlideSubstep(target))
+        return false;
+    // Подшаг слайда / наполнения: stub-контент не закрывает шаг (структуру можно короткой)
+    if (stepLooksLikeSlideSubstep(target) && isStubWriteContent(writeArgs?.post ?? writeArgs?.content))
+        return false;
+    target.status = 'done';
+    for (const s of activeTask.steps) {
+        if (s !== target && s.status === 'in_progress')
+            s.status = 'proposed';
+    }
+    const next = activeTask.steps.find(s => s.status === 'proposed');
+    if (next)
+        next.status = 'in_progress';
+    return true;
+}
+
+/** Шаг наполнения контента (нужен подплан / по-элементная работа). */
+function stepNeedsContentFill(step) {
+    if (stepLooksLikeSlideSubstep(step)) return false;
+    return /заполнить|наполнить|слайд|содержан|деталями|контент|дополнить/i
+        .test(String(step?.description || ''));
+}
+
+/** Подшаг вида «Слайд N». */
+function stepLooksLikeSlideSubstep(step) {
+    return /^слайд\s+\d+/i.test(String(step?.description || '').trim());
+}
+
+/** N из answers clarify (slides / count). */
+function getFillCountFromTask(activeTask) {
+    const ribbon = activeTask?.ribbon || [];
+    for (let i = ribbon.length - 1; i >= 0; i--) {
+        const a = ribbon[i]?.answers;
+        if (!a || typeof a !== 'object') continue;
+        const raw = a.slides ?? a.count ?? a.n ?? a.items;
+        const n = parseInt(String(raw ?? ''), 10);
+        if (n >= 2 && n <= 40) return n;
+    }
+    return 0;
+}
+
+/** Пустышка / список «Слайд k из N» без реального текста. */
+function isStubWriteContent(post) {
+    const s = String(post || '').trim();
+    if (!s) return true;
+    if (s.length < 280) return true;
+    const slideDivs = (s.match(/<div[^>]*>\s*Слайд\s+\d+/gi) || []).length;
+    if (slideDivs >= 2 && s.length < 1200) return true;
+    if (/Слайд\s+\d+\s+из\s+\d+/i.test(s) && s.length < 900) return true;
+    return false;
+}
+
+/**
+ * На fill-шаге: развернуть в N подшагов из answers, либо заблокировать save без subplan.
+ * @returns {{ expanded: boolean, blocked: boolean, message?: string }}
+ */
+function ensureFillSubplan(activeTask, cur) {
+    if (!activeTask?.steps?.length || !cur) return { expanded: false, blocked: false };
+    if (!stepNeedsContentFill(cur) || stepLooksLikeSlideSubstep(cur))
+        return { expanded: false, blocked: false };
+    if (activeTask.steps.some(stepLooksLikeSlideSubstep))
+        return { expanded: false, blocked: false };
+    const n = getFillCountFromTask(activeTask);
+    if (n >= 2) {
+        const parts = Array.from({ length: n }, (_, i) => ({
+            description: 'Слайд ' + (i + 1),
+        }));
+        if (expandStepWithSubplan(activeTask, cur, parts))
+            return { expanded: true, blocked: false };
+    }
+    return {
+        expanded: false,
+        blocked: true,
+        message: 'Шаг наполнения требует <subplan> (по элементам / слайдам). Не сохраняй всё одним stub save.',
+    };
+}
+
+/** Все не-accept шаги done — можно закрыть «Проверить и принять». */
+function allContentWorkDone(activeTask) {
+    if (!activeTask?.steps?.length) return false;
+    return activeTask.steps.every(s =>
+        normalizeStepStatus(s.status) === 'done' || stepIsAcceptOnly(s));
+}
+
+/** Число шагов со статусом done. */
+function countDoneSteps(steps) {
+    if (!Array.isArray(steps)) return 0;
+    return steps.filter(s => normalizeStepStatus(s.status) === 'done').length;
+}
+
+/**
+ * Модель не может нарисовать лишние done: cap по факту harness.
+ * @param {Array} prevSteps — уже зафиксированные harness
+ * @param {Array} nextSteps — предложение модели
+ * @param {boolean} [allowOneMoreDone] — этот turn закрыл один шаг (tool/clarify)
+ */
+function applyHarnessDoneCap(prevSteps, nextSteps, allowOneMoreDone = false) {
+    const maxDone = countDoneSteps(prevSteps) + (allowOneMoreDone ? 1 : 0);
+    const merged = normalizePlanSteps(prevSteps, nextSteps);
+    let done = 0;
+    for (const s of merged) {
+        if (s.status === 'done') {
+            done++;
+            if (done > maxDone)
+                s.status = 'proposed';
+        }
+    }
+    let placed = false;
+    for (const step of merged) {
+        if (step.status === 'done') continue;
+        step.status = placed ? 'proposed' : 'in_progress';
+        placed = true;
+    }
+    return merged;
+}
+
+/** Шаг «только проверить/принять» — без write-tool. */
+function stepIsAcceptOnly(step) {
+    return /проверить|принять|готов|финальн|отчёт/i.test(String(step?.description || ''));
+}
+
+/**
+ * Оставшиеся шаги только accept-only → пометить done (Check → Принять).
+ * @returns {boolean} все steps done
+ */
+function finalizeAcceptOnlySteps(activeTask) {
+    if (!activeTask?.steps?.length) return false;
+    for (const s of activeTask.steps) {
+        if (normalizeStepStatus(s.status) === 'done') continue;
+        if (!stepIsAcceptOnly(s)) return false;
+        s.status = 'done';
+    }
+    return activeTask.steps.every(s => normalizeStepStatus(s.status) === 'done');
+}
+
+/**
+ * Объявление текущего шага в ленту задачи.
+ * @returns {object|null} блок text
+ */
+function pushStepAnnounce(ribbon, step, sender = 'WORK') {
+    if (!Array.isArray(ribbon) || !step) return null;
+    const n = step.step != null ? step.step : '?';
+    const desc = String(step.description || '').trim();
+    const content = 'Выполняю шаг ' + n + (desc ? ': «' + desc + '»' : '');
+    const last = ribbon[ribbon.length - 1];
+    if (last?.type === 'text' && last.stepAnnounce && last.content === content)
+        return last;
+    const block = {
+        type: 'text',
+        content,
+        time: Date.now(),
+        sender,
+        stepAnnounce: true,
+    };
+    ribbon.push(block);
+    return block;
+}
+
+/**
+ * Декомпозиция текущего шага в подшаги (на его месте в плане).
+ * @returns {boolean}
+ */
+function expandStepWithSubplan(activeTask, cur, substeps) {
+    if (!activeTask?.steps?.length || !cur) return false;
+    const raw = Array.isArray(substeps) ? substeps : [];
+    const parts = raw.map((s) => ({
+        description: typeof s === 'string' ? s : (s?.description || ''),
+        status: 'proposed',
+    })).filter(s => s.description);
+    if (parts.length < 2) return false;
+    const idx = activeTask.steps.findIndex(s => s.step === cur.step);
+    if (idx < 0) return false;
+    const before = activeTask.steps.slice(0, idx).map(s => ({
+        description: s.description || '',
+        status: 'done',
+    }));
+    const after = activeTask.steps.slice(idx + 1).map(s => ({
+        description: s.description || '',
+        status: 'proposed',
+    }));
+    parts[0].status = 'in_progress';
+    activeTask.steps = [...before, ...parts, ...after].map((s, i) => ({
+        step: i + 1,
+        description: s.description || '',
+        status: normalizeStepStatus(s.status),
+    }));
+    let placed = false;
+    for (const step of activeTask.steps) {
+        if (step.status === 'done') continue;
+        step.status = placed ? 'proposed' : 'in_progress';
+        placed = true;
+    }
+    return true;
+}
+
+/**
+ * Рабочий path файла из history-path save_file.
+ * `…/text/.presentation.html/history/…` → `…/text/presentation.html`
+ */
+function workPathFromHistoryPath(historyPath, fileName) {
+    const hp = String(historyPath || '');
+    const name = String(fileName || '').trim();
+    const m = hp.match(/^(.*)\/\.([^/]+)\/history\//);
+    if (m)
+        return m[1] + '/' + (name || m[2]);
+    if (name && hp) {
+        const base = hp.replace(/\/\.?[^/]+$/, '');
+        if (base && base !== hp)
+            return base.replace(/\/$/, '') + '/' + name;
+    }
+    return name ? name : hp;
+}
+
+/**
+ * Описание текущего шага плана (in_progress → первый не-done → последний).
+ * @param {Array<{status?: string, description?: string}>} steps
+ * @returns {string}
+ */
+function currentStepDescription(steps) {
+    if (!Array.isArray(steps) || !steps.length) return '';
+    const i = steps.findIndex(x => x.status === 'in_progress');
+    const step = i >= 0 ? steps[i] : (steps.find(x => x.status !== 'done') || steps[steps.length - 1]);
+    return step?.description || '';
+}
+
+/**
  * Params для вызова метода из tool_call: ACL role как у пользователя.
  * @param {object} call — { method, args }
  * @param {object} params — inbound prompt params (user, role)
  * @param {object} [opts]
- * @param {object} [opts.aiUser] — если задан, user = aiUser (логи write_file)
+ * @param {object} [opts.aiUser] — если задан, user = aiUser (логи save_file)
  */
 function buildToolMethodParams(call, params, opts = {}) {
     const args = (call && call.args && typeof call.args === 'object') ? call.args : {};
@@ -789,6 +1469,64 @@ function buildToolMethodParams(call, params, opts = {}) {
  */
 async function executeToolCall(call, currentContext, initialContext, functions, params, aiUser) {
     let result;
+
+    // create с id-файлом — до dispatch (иначе $folder.create / ошибочный класс)
+    if (call.method === 'create') {
+        const id = String(call.args?.id ?? call.args?.name ?? '').trim();
+        const type = call.args?.type;
+        if (looksLikeFileId(id) || type === '$file' || type === '$folder') {
+            return {
+                result: {
+                    error: 'create создаёт только класс. Файл — save_file({ filename, post }); папки появляются при save_file',
+                },
+                newContext: currentContext,
+            };
+        }
+    }
+
+    // save_file / write_file (алиас) — до generic dispatch (у $user нет write_file)
+    if (isFileWriteMethod(call.method)) {
+        if (isBrokenFcArgs(call.args)) {
+            return {
+                result: { error: 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}).' },
+                newContext: currentContext,
+            };
+        }
+        const fileName = call.args?.filename || call.args?.name;
+        const content = stripFcTrailer(call.args?.post ?? call.args?.content ?? '');
+        if (!fileName)
+            return { result: { error: 'save_file: нужен filename или name' }, newContext: currentContext };
+        try {
+            const saved = await currentContext.save_file?.(buildToolMethodParams(
+                { method: 'save_file', args: { filename: String(fileName), post: String(content), encoding: 'utf-8' } },
+                params,
+                { aiUser },
+            ));
+            // Канон: history-файл из return save_file (log.path), не context/filename
+            const resultPath = saved?.path || saved?.logFullPath;
+            if (!resultPath) {
+                return {
+                    result: { error: 'save_file: нет history path в ответе' },
+                    newContext: currentContext,
+                };
+            }
+            return {
+                result: {
+                    success: true,
+                    message: 'Файл сохранён: ' + fileName,
+                    path: resultPath,
+                    resultPath,
+                    name: fileName,
+                },
+                newContext: currentContext,
+            };
+        } catch (e) {
+            return {
+                result: { error: 'Не удалось сохранить файл ' + fileName + ': ' + e.message },
+                newContext: currentContext,
+            };
+        }
+    }
 
     try {
         if (call.method === ASK_USER_METHOD)
@@ -887,22 +1625,6 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
         }
     }
 
-    if (call.method === 'write_file' && call.args?.name) {
-        const fileName = String(call.args.name);
-        const content = call.args.content ?? '';
-        try {
-            const saveResult = await currentContext.save_file?.(buildToolMethodParams(
-                { method: 'save_file', args: { filename: fileName, post: String(content), encoding: 'utf-8' } },
-                params,
-                { aiUser },
-            ));
-            const resultPath = saveResult?.path || saveResult?.logPath || '';
-            result = { success: true, message: 'Файл сохранён: ' + fileName, path: resultPath, resultPath };
-        } catch (e) {
-            result = { error: 'Не удалось сохранить файл ' + fileName + ': ' + e.message };
-        }
-    }
-
     if (call.method === 'reset_context') {
         newContext = initialContext;
         result = { success: true, message: 'Контекст сброшен к классу: ' + initialContext.path };
@@ -927,18 +1649,107 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
 function pushToolResult(ribbonTarget, call, result, model) {
     const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     const isError = result && typeof result === 'object' && result.error;
+    const sender = model.path || 'WORK';
+    const time = Date.now();
     const chatEntry = {
         type: 'tool_result',
         label: '🔧 ' + call.method,
         content: resultStr.slice(0, 32000),
         tool: call.method,
+        args: call.args || {},
         ok: !isError,
-        time: Date.now(),
-        sender: model.path || 'WORK',
+        time,
+        sender,
     };
     if (result?.resultPath)
         chatEntry.resultPath = result.resultPath;
     ribbonTarget.push(chatEntry);
+    // Карточка файла = history path из save_file (канон §1.6), не прокси filename
+    if (isFileWriteMethod(call.method) && !isError && result?.resultPath) {
+        ribbonTarget.push({
+            type: 'file',
+            path: result.resultPath,
+            name: result.name || call.args?.filename || call.args?.name || '',
+            time,
+            sender,
+        });
+    }
+}
+
+/**
+ * Durable-блоки хода (thinking/text) → лента. Возвращает остальные блоки.
+ * Вызывать ОДИН раз после parse, до idle/inject/error — иначе стрим пропадает.
+ * @param {Array} ribbonTarget
+ * @param {Array} blocks
+ * @returns {Array} blocks без thinking/text
+ */
+function commitDurableBlocks(ribbonTarget, blocks) {
+    if (!Array.isArray(blocks))
+        return [];
+    if (!Array.isArray(ribbonTarget))
+        return blocks.filter(b => b?.type !== 'thinking' && b?.type !== 'text');
+    const rest = [];
+    for (const b of blocks) {
+        if (b?.type === 'thinking' || b?.type === 'text')
+            ribbonTarget.push(b);
+        else
+            rest.push(b);
+    }
+    return rest;
+}
+
+/** @deprecated alias — используй commitDurableBlocks */
+function commitIdleContent(ribbonTarget, blocks) {
+    const before = Array.isArray(ribbonTarget) ? ribbonTarget.length : 0;
+    commitDurableBlocks(ribbonTarget, blocks);
+    return Array.isArray(ribbonTarget) ? ribbonTarget.length - before : 0;
+}
+
+/** Idle EXECUTE stop: не принимать deferred plan без tools (регрессия: «3/4» без save_file). */
+function mayCommitDeferredOnIdleExecuteStop() {
+    return false;
+}
+
+/**
+ * Записать usage хода на последний AI-блок и накопить в body.usage.
+ * @param {object} body
+ * @param {Array} ribbonTarget
+ * @param {{ prompt?: number, completion?: number, total?: number }|null} turnUsage
+ * @param {object} model
+ */
+function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
+    if (!turnUsage || !(turnUsage.total || turnUsage.prompt || turnUsage.completion))
+        return;
+    const ctxWin = Number(model?.contextWindow || model?.context_window || model?.maxContext || 128000) || 128000;
+    const prompt = Number(turnUsage.prompt) || 0;
+    const completion = Number(turnUsage.completion) || 0;
+    const total = Number(turnUsage.total) || (prompt + completion);
+    const contextPct = ctxWin > 0 ? Math.min(100, Math.round((prompt / ctxWin) * 100)) : 0;
+    const usage = { prompt, completion, total, contextPct, contextWindow: ctxWin };
+
+    if (Array.isArray(ribbonTarget)) {
+        // Prefer thinking (summary «Мысли») — action/text без usage в UI теряли статистику
+        const prefer = ['thinking', 'text', 'tool_result', 'error', 'action'];
+        let placed = false;
+        for (const t of prefer) {
+            for (let i = ribbonTarget.length - 1; i >= 0; i--) {
+                const b = ribbonTarget[i];
+                if (b?.type === t) {
+                    b.usage = usage;
+                    placed = true;
+                    break;
+                }
+            }
+            if (placed) break;
+        }
+    }
+
+    body.usage = body.usage || { prompt: 0, completion: 0, total: 0 };
+    body.usage.prompt = (Number(body.usage.prompt) || 0) + prompt;
+    body.usage.completion = (Number(body.usage.completion) || 0) + completion;
+    body.usage.total = (Number(body.usage.total) || 0) + total;
+    body.usage.contextPct = contextPct;
+    body.usage.contextWindow = ctxWin;
 }
 
 /**
@@ -996,8 +1807,8 @@ function notifyChanged(fullPath) {
  * - {type:'action'} → пропускается (кнопки UI)
  * - {type:'form'} → пропускается
  * - {type:'error'} → assistant error text
- * - {type:'tool_result'} → function/user message с результатом
- * - {type:'tool'} → краткая пометка assistant
+ * - {type:'tool_result'} → FC: assistant.function_call + role:function; иначе user с текстом
+ * - {type:'tool'} → FC: пропуск (пара из tool_result); иначе краткая пометка assistant
  *
  * @param {object} body — тело task.ai (с ribbon, system, context и т.д.)
  * @param {boolean} useFunctionCalling — использовать нативный формат function calling
@@ -1007,6 +1818,10 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
     const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
     const historyOnly = !!opts.historyOnly;
+    const protocol = opts.protocol || '';
+    const fcStyle = protocol === 'gigachat' ? 'gigachat' : 'openai';
+    let toolCallSeq = opts._toolCallSeq || { n: 0 };
+    const childOpts = { ...opts, historyOnly: true, protocol, _toolCallSeq: toolCallSeq };
 
     // 1. System prompt (не для вложенной ленты task — иначе дубли ACL mid-history)
     if (!historyOnly) {
@@ -1033,16 +1848,25 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 systemContent += 'Сейчас шаг ' + cur.step + ': «' + cur.description + '».\n';
             systemContent += 'PDCA: после confirm («Начать»/форма/«Выполнить») сразу tool calls по текущему шагу; questions — только если без данных нельзя.\n';
             systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
-            systemContent += 'Обновляй <plan> со статусами. Нельзя done у N, пока 1…N−1 не done. Один in_progress. «Принять» — когда все done.\n';
+            systemContent += 'Протокол шага: объявление «Выполняю шаг N» (система пишет сама) → <reasoning> → tool ИЛИ <subplan> (декомпозиция). За один ход закрывается максимум один шаг.\n';
+            systemContent += 'Статусы done ставит система по факту (tool/форма), не рисуй все done в <plan>. «Принять» — когда harness закрыл все шаги.\n';
+            systemContent += 'Сложный шаг — <subplan>[{"description":"..."},…] вместо одного прыжка. Не закрывай N и N+1 одним save.\n';
             if (phase === 'execute')
-                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО вызови tool (write_file / create / нужный метод) по текущему шагу. Не заканчивай только reasoning или <plan>.\n';
+                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО <reasoning> и native tool по текущему шагу ИЛИ <subplan>. Файл — tool save_file; класс — create. Запрещены JS-вызов save_file(…) и <function calling>. Fallback: <tool_call>{"method":"save_file","args":{…}}</tool_call>. Не prose «готово» без факта.\n';
             else if (phase === 'propose')
-                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не write_file до ответов.\n';
+                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не save_file до ответов.\n';
             if (forceDoReminder) {
                 if (phase === 'propose')
-                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не write_file.\n';
-                else
-                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови write_file (или другой tool) для текущего шага. Не повторяй только reasoning и не ставь «Начать».\n';
+                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
+                else {
+                    const stepLabel = cur?.description ? '«' + cur.description + '»' : 'текущий';
+                    const fn = artifactFilenameFromStep(cur);
+                    systemContent += 'СТОП: прошлый ответ без tool calls. Текущий шаг: ' + stepLabel
+                        + '. Сейчас <reasoning> + native tool save_file (или <subplan>). Не печатай save_file(…) / <function calling>.';
+                    if (fn)
+                        systemContent += ' Fallback: <tool_call>{"method":"save_file","args":{"filename":"' + fn + '","post":"…полный HTML…"}}</tool_call>';
+                    systemContent += '. Не «Начать».\n';
+                }
             }
         }
         if (systemContent)
@@ -1104,7 +1928,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 messages.push(...buildHistoryFromRibbon(
                     { ribbon: entry.ribbon },
                     useFunctionCalling,
-                    { historyOnly: true },
+                    childOpts,
                 ));
             }
             continue;
@@ -1122,6 +1946,9 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
 
         // Вызов инструмента (если сохранён в ленте)
         if (entry.type === 'tool') {
+            // FC: пару function_call + function строим из tool_result (не prose «Вызов …»)
+            if (useFunctionCalling)
+                continue;
             if (pendingAssistant) {
                 messages.push({ role: 'assistant', content: pendingAssistant });
                 pendingAssistant = '';
@@ -1137,7 +1964,8 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 pendingAssistant = '';
             }
             if (useFunctionCalling) {
-                messages.push({ role: 'function', name: entry.tool || 'unknown', content: entry.content });
+                const id = 'call_' + (entry.tool || 'fn') + '_' + (toolCallSeq.n++);
+                messages.push(...formatToolResultMessages(entry, fcStyle, id));
             } else {
                 messages.push({
                     role: 'user',
@@ -1156,7 +1984,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             messages.push(...buildHistoryFromRibbon(
                 { ribbon: entry.ribbon || [] },
                 useFunctionCalling,
-                { historyOnly: true },
+                childOpts,
             ));
         }
     }
@@ -1164,7 +1992,88 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     if (pendingAssistant)
         messages.push({ role: 'assistant', content: pendingAssistant });
 
+    // User-nudge: слабые модели чаще слушают role:user, чем system STOP
+    if (!historyOnly && forceDoReminder) {
+        const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
+        if (activeTask && getDoStepPhase(activeTask) === 'execute') {
+            const cur = activeTask.steps?.find(s => s.status === 'in_progress')
+                || activeTask.steps?.find(s => s.status === 'proposed');
+            appendDoForceNudge(messages, cur);
+        }
+    }
+
     return messages;
+}
+
+/**
+ * Короткий user-nudge для EXECUTE forceDoReminder.
+ * @param {Array} messages
+ * @param {{ description?: string, step?: number }|null} step
+ */
+function appendDoForceNudge(messages, step) {
+    if (!Array.isArray(messages)) return messages;
+    const label = step?.description ? '«' + step.description + '»' : 'текущему шагу';
+    const content = 'СТОП: нужен tool call по ' + label
+        + '. Файл — native tool save_file (function calling API); класс — create.'
+        + ' Не печатай save_file(…) / <function calling> / <tool_call> текстом.';
+    messages.push({ role: 'user', content });
+    return messages;
+}
+
+/**
+ * Human gate после idle EXECUTE stop — resume текущего шага.
+ * @param {{ description?: string, step?: number }|null} cur
+ * @param {string} [sender]
+ */
+function makeIdleExecuteResumeAction(cur, sender = 'WORK') {
+    const stepLabel = cur?.description || 'текущий шаг';
+    return {
+        type: 'action',
+        title: 'Действие',
+        content: formatPlanMarkdown(
+            cur ? [{ step: cur.step || 1, description: stepLabel, status: 'in_progress' }] : [],
+            'Модель не вызвала tool. Нажми «Выполнить», чтобы продолжить шаг.',
+        ),
+        button: { label: 'Выполнить', color: 'success' },
+        time: Date.now(),
+        sender,
+    };
+}
+
+/**
+ * Сообщения LLM для одного tool_result: gigachat legacy vs OpenAI tools.
+ * @param {{ tool?: string, args?: object, content?: string, label?: string }} entry
+ * @param {'gigachat'|'openai'} style
+ * @param {string} callId
+ * @returns {Array<object>}
+ */
+function formatToolResultMessages(entry, style, callId) {
+    const fnName = entry.tool || 'unknown';
+    const fnArgs = sanitizeToolArgsForHistory(entry.args);
+    const argsStr = typeof fnArgs === 'string' ? fnArgs : JSON.stringify(fnArgs || {});
+    if (style === 'gigachat') {
+        return [
+            {
+                role: 'assistant',
+                content: '',
+                function_call: { name: fnName, arguments: fnArgs },
+            },
+            { role: 'function', name: fnName, content: entry.content },
+        ];
+    }
+    const id = callId || ('call_' + fnName + '_0');
+    return [
+        {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+                id,
+                type: 'function',
+                function: { name: fnName, arguments: argsStr },
+            }],
+        },
+        { role: 'tool', tool_call_id: id, content: entry.content },
+    ];
 }
 
 function findOpenActionFlat(ribbon) {
@@ -1213,7 +2122,7 @@ function formatPromptWithAnswers(label, answers, fields) {
     if (!answers || typeof answers !== 'object')
         return head;
     const byId = Array.isArray(fields)
-        ? Object.fromEntries(fields.map(f => [f.id, String(f.label || f.id).replace(/[:：]+\s*$/, '')]))
+        ? Object.fromEntries(fields.map(f => [f.id, String(f.label || f.id).replace(/[?？]*[:：]*\s*$/, '')]))
         : {};
     const lines = [];
     for (const [id, v] of Object.entries(answers)) {
@@ -1369,6 +2278,44 @@ function stepNeedsClarify(step) {
     return /уточн|спроси|тема|выбор|параметр|данн/i.test(d);
 }
 
+/**
+ * Имя артефакта из описания шага (presentation.html).
+ * @param {{ description?: string }|null} step
+ * @returns {string}
+ */
+function artifactFilenameFromStep(step) {
+    const d = String(step?.description || '');
+    const m = d.match(/\b([\w.-]+\.[A-Za-z0-9]{1,16})\b/);
+    return m ? m[1] : '';
+}
+
+/**
+ * EXECUTE-шаг создания/записи файла → форс GigaChat function_call save_file.
+ * @param {{ description?: string }|null} step
+ * @param {Array<{name?: string}>} [functions]
+ */
+function stepNeedsForcedSaveFile(step, functions = []) {
+    if (!step || stepNeedsClarify(step))
+        return false;
+    if (!artifactFilenameFromStep(step))
+        return false;
+    return (functions || []).some(fn => fn?.name === 'save_file');
+}
+
+/**
+ * Режим function_call для streamChat.
+ * Force только если в functions уже есть save_file (после ensureNamedFunction).
+ * @param {string|null|undefined} phase
+ * @param {{ description?: string }|null} step
+ * @param {Array} [functions]
+ * @returns {'auto'|{name: string}}
+ */
+function resolveFunctionCallMode(phase, step, functions = []) {
+    if (phase === 'execute' && stepNeedsForcedSaveFile(step, functions))
+        return { name: 'save_file' };
+    return 'auto';
+}
+
 /** Boilerplate prose/title опросника — не показывать */
 function stripBoilerplateContent(text) {
     const t = String(text || '').trim();
@@ -1509,8 +2456,10 @@ function getDoStepPhase(activeTask) {
     return 'propose';
 }
 
-/** Idle всегда retry; стоп только общим maxIter цикла */
+/** Idle EXECUTE: retry до MAX_IDLE_DO, затем stop */
 function nextIdleDoAction(streak) {
+    if (streak >= MAX_IDLE_DO)
+        return 'stop';
     return 'retry';
 }
 
@@ -1532,6 +2481,85 @@ function normalizeProposedSteps(steps) {
         description: s.description || '',
         status: 'proposed',
     }));
+}
+
+/** Канон из system prompt (on_save) для «сделай презентацию» */
+const PRESENTATION_PLAN_STEPS = [
+    { step: 1, description: 'Уточнить тему и структуру', status: 'proposed' },
+    { step: 2, description: 'Создать структуру слайдов', status: 'proposed' },
+    { step: 3, description: 'Написать содержимое', status: 'proposed' },
+    { step: 4, description: 'Сохранить файл', status: 'proposed' },
+];
+
+/**
+ * Plan-фаза: не принимать усечённый <plan> от модели.
+ * Презентация + <4 шагов → канон 4; иначе >=2 как есть; 1 шаг → generic 3.
+ */
+function ensureMinimumPlanSteps(steps, userText = '') {
+    const normalized = normalizeProposedSteps(steps);
+    const hint = [userText, ...normalized.map(s => s.description || '')].join(' ');
+    if (/презентац|слайд/i.test(hint) && normalized.length < 4)
+        return PRESENTATION_PLAN_STEPS.map(s => ({ ...s }));
+    if (normalized.length >= 2)
+        return normalized;
+    const firstDesc = (normalized[0] && normalized[0].description) || 'Уточнить детали';
+    return normalizeProposedSteps([
+        { step: 1, description: firstDesc, status: 'proposed' },
+        { step: 2, description: 'Выполнить основную работу', status: 'proposed' },
+        { step: 3, description: 'Сохранить или оформить результат', status: 'proposed' },
+    ]);
+}
+
+/**
+ * JSON-массив между тегами: скобки с учётом строк (не non-greedy до первого ]).
+ * @returns {{ raw: string, index: number, end: number } | null}
+ */
+function extractBalancedJsonArray(text, openTag = '<plan>', closeTag = '</plan>') {
+    if (!text) return null;
+    const openIdx = text.indexOf(openTag);
+    if (openIdx < 0) return null;
+    let i = openIdx + openTag.length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== '[') return null;
+    const start = i;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escape = true;
+                continue;
+            }
+            if (ch === '"')
+                inString = false;
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '[')
+            depth++;
+        else if (ch === ']') {
+            depth--;
+            if (depth === 0) {
+                const closeIdx = text.indexOf(closeTag, i + 1);
+                if (closeIdx < 0) return null;
+                return {
+                    raw: text.slice(start, i + 1),
+                    index: openIdx,
+                    end: closeIdx + closeTag.length,
+                };
+            }
+        }
+    }
+    return null;
 }
 
 /**
@@ -1626,6 +2654,8 @@ function shouldContinueDo(activeTask, waitingForUser, toolCalls) {
 export {
     normalizeStepStatus,
     normalizeProposedSteps,
+    ensureMinimumPlanSteps,
+    extractBalancedJsonArray,
     normalizePlanSteps,
     prepareStepsForStart,
     shouldContinueDo,
@@ -1634,11 +2664,34 @@ export {
     nextIdleDoAction,
     getDoStepPhase,
     stepNeedsClarify,
+    artifactFilenameFromStep,
+    stepNeedsForcedSaveFile,
+    resolveFunctionCallMode,
+    taskHasClarifyAnswers,
     makeClarifyQuestions,
     questionsFromAskUser,
     mapAskQuestionToField,
     ensureHarnessFunctions,
+    ensureNamedFunction,
+    collectFunctionNamesFromMessages,
+    prepareFunctionsForStream,
     advanceAfterClarifyAnswers,
+    advanceAfterSuccessfulSave,
+    countDoneSteps,
+    applyHarnessDoneCap,
+    stepIsAcceptOnly,
+    finalizeAcceptOnlySteps,
+    pushStepAnnounce,
+    expandStepWithSubplan,
+    workPathFromHistoryPath,
+    stepNeedsContentFill,
+    stepLooksLikeSlideSubstep,
+    getFillCountFromTask,
+    isStubWriteContent,
+    ensureFillSubplan,
+    allContentWorkDone,
+    currentStepDescription,
+    formatToolResultMessages,
     stripBoilerplateContent,
     formatPlanMarkdown,
     keepDoAction,
@@ -1655,9 +2708,29 @@ export {
     formatRoleAclForSystem,
     isSystemModifyCall,
     roleBlocksTool,
+    callNeedsTrustConfirm,
+    pushToolResult,
+    executeToolCall,
+    commitDurableBlocks,
+    commitIdleContent,
+    mayCommitDeferredOnIdleExecuteStop,
+    taskHasSuccessfulSave,
+    stripFcTrailer,
+    isBrokenFcArgs,
+    sanitizeToolArgsForHistory,
+    makeIdleExecuteResumeAction,
+    appendDoForceNudge,
+    parseToolCalls,
+    parseJsObjectLiteral,
+    parseJsStyleToolCallAt,
+    parseXmlToolCallAt,
+    parseXmlTagAttrs,
+    isXmlAttrValueEnd,
+    buildHistoryFromRibbon,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
+    TRUST_AUTOCONFIRM,
     CONTEXT_LOG_DAYS,
     CONTEXT_LOG_MAX_ROWS,
 };
@@ -1701,15 +2774,16 @@ function extractShortCta(prose) {
 
 /**
  * Разобрать ответ ИИ на типизированные блоки: action | form | questions.
- * @returns {{ blocks: Array, pendingPlan: object|null }}
+ * @returns {{ blocks: Array, pendingPlan: object|null, pendingSubplan: Array|null }}
  */
 function parseResponseToRibbon(text, sender = 'WORK') {
     const blocks = [];
     let pendingPlan = null;
+    let pendingSubplan = null;
     let actionMeta = null;
     const time = Date.now();
     if (!text)
-        return { blocks, pendingPlan };
+        return { blocks, pendingPlan, pendingSubplan };
 
     let remaining = text;
     const proseParts = [];
@@ -1720,14 +2794,34 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         blocks.push({ type: 'thinking', label: 'Мысли', content: m[1].trim(), time, sender });
     }
     remaining = remaining.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '');
+    // Незакрытый <reasoning> в конце стрима — всё равно в «Мысли», иначе пропадает при clear/done
+    const unclosedReasoning = remaining.match(/<reasoning>([\s\S]*)$/i);
+    if (unclosedReasoning) {
+        const body = unclosedReasoning[1].trim();
+        if (body)
+            blocks.push({ type: 'thinking', label: 'Мысли', content: body, time, sender });
+        remaining = remaining.slice(0, unclosedReasoning.index).trimEnd();
+    }
 
-    // 2. <plan> → pendingPlan
-    const planMatch = remaining.match(/<plan>\s*(\[[\s\S]*?\])\s*<\/plan>/);
-    if (planMatch) {
+    // 1b. <subplan> → декомпозиция текущего шага
+    const subExtract = extractBalancedJsonArray(remaining, '<subplan>', '</subplan>');
+    if (subExtract) {
         try {
-            const steps = JSON.parse(planMatch[1]);
+            const steps = JSON.parse(subExtract.raw);
+            if (Array.isArray(steps) && steps.length) {
+                pendingSubplan = steps;
+                remaining = remaining.slice(0, subExtract.index) + remaining.slice(subExtract.end);
+            }
+        } catch {}
+    }
+
+    // 2. <plan> → pendingPlan (balanced brackets — не резать на ] внутри description)
+    const planExtract = extractBalancedJsonArray(remaining, '<plan>', '</plan>');
+    if (planExtract) {
+        try {
+            const steps = JSON.parse(planExtract.raw);
             if (Array.isArray(steps)) {
-                const beforePlan = remaining.slice(0, planMatch.index).trim();
+                const beforePlan = remaining.slice(0, planExtract.index).trim();
                 if (beforePlan)
                     proseParts.push(beforePlan);
                 pendingPlan = {
@@ -1735,7 +2829,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
                     label: 'План',
                     content: steps.map(s => s.description).filter(Boolean).join('; '),
                 };
-                remaining = remaining.slice(planMatch.index + planMatch[0].length);
+                remaining = remaining.slice(planExtract.end);
             }
         } catch {}
     }
@@ -1754,14 +2848,20 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         remaining = remaining.replace(/<action>[\s\S]*?<\/action>/g, '');
     }
 
-    // 4. <questions> → опросник
+    // 4. <questions> → опросник (только AskQuestion: select+options; иначе null → idle inject)
     let questionFields = null;
     const questionsMatch = remaining.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
     if (questionsMatch) {
         try {
             const questions = JSON.parse(questionsMatch[1]);
-            if (Array.isArray(questions) && questions.length)
-                questionFields = questions.map(normalizeFieldMeta);
+            if (Array.isArray(questions) && questions.length) {
+                questionFields = questions
+                    .map(q => mapAskQuestionToField(q))
+                    .filter(isAskQuestionField)
+                    .map(normalizeFieldMeta);
+                if (!questionFields.length)
+                    questionFields = null;
+            }
         } catch {}
         remaining = remaining.replace(/<questions>[\s\S]*?<\/questions>/g, '');
     }
@@ -1778,14 +2878,41 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         remaining = remaining.replace(/<form>[\s\S]*?<\/form>/g, '');
     }
 
-    // 6. tool_call — не в ленту
+    // 5b. <ask_user>…</ask_user> — модель пишет tool текстом; → questions, не prose
+    let askUserFields = null;
+    const askUserMatch = remaining.match(/<ask_user>\s*([\s\S]*?)\s*<\/ask_user>/i);
+    if (askUserMatch) {
+        try {
+            const raw = askUserMatch[1].trim();
+            const parsedAsk = JSON.parse(raw);
+            const args = Array.isArray(parsedAsk)
+                ? { questions: parsedAsk }
+                : (parsedAsk && typeof parsedAsk === 'object' ? parsedAsk : {});
+            const qBlock = questionsFromAskUser(args, sender, null);
+            if (qBlock?.fields?.length)
+                askUserFields = qBlock.fields;
+        } catch {}
+        remaining = remaining.replace(/<ask_user>[\s\S]*?<\/ask_user>/gi, '');
+    }
+
+    // 6. tool_call / мусор FC в prose — не в ленту
     remaining = remaining.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
     remaining = remaining.replace(/```tool_call[\s\S]*?```/g, '');
+    remaining = remaining.replace(/```ask_user[\s\S]*?```/gi, '');
+    remaining = remaining.replace(/<function(?:\s+|_)calling>[\s\S]*?<\/function(?:\s+|_)calling>/gi, '');
+    remaining = remaining.replace(/<function(?:\s[^>]*)?>[\s\S]*?<\/function>/gi, '');
+    remaining = remaining.replace(/<\/?function_caller>/gi, '');
+    remaining = remaining.replace(/<\/?function\s+caller[^>]*>/gi, '');
+    remaining = stripJsStyleToolProse(remaining);
 
     const cleanText = remaining.trim();
     if (cleanText)
         proseParts.push(cleanText);
     const prose = proseParts.join('\n\n').trim();
+
+    // Prefer <questions>; иначе поля из <ask_user>
+    if (!questionFields?.length && askUserFields?.length)
+        questionFields = askUserFields;
 
     // 7. Разнести типы: plan/action confirm vs questions vs form
     if (pendingPlan) {
@@ -1855,7 +2982,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         blocks.push({ type: 'text', content: prose, time, sender });
     }
 
-    return { blocks, pendingPlan };
+    return { blocks, pendingPlan, pendingSubplan };
 }
 
 /** Нормализация поля формы (метамодель) */
@@ -1896,6 +3023,169 @@ async function buildContextInfo(context, user) {
     return info;
 }
 
+/**
+ * Разобрать JS-object literal args: {filename:"a.html", post:"…"} (ключи без кавычек).
+ * @param {string} src
+ * @returns {object|null}
+ */
+function parseJsObjectLiteral(src) {
+    const s = String(src ?? '').trim();
+    if (!s.startsWith('{') || !s.endsWith('}'))
+        return null;
+    try {
+        const asJson = JSON.parse(s);
+        if (asJson && typeof asJson === 'object' && !Array.isArray(asJson))
+            return asJson;
+    } catch { /* JS-style keys */ }
+    const out = {};
+    let i = 1;
+    while (i < s.length - 1) {
+        while (i < s.length && /[\s,]/.test(s[i])) i++;
+        if (i >= s.length - 1 || s[i] === '}')
+            break;
+        let key = '';
+        if (s[i] === '"' || s[i] === "'") {
+            const q = s[i++];
+            let esc = false;
+            while (i < s.length) {
+                const c = s[i++];
+                if (esc) { key += c; esc = false; continue; }
+                if (c === '\\') { esc = true; continue; }
+                if (c === q) break;
+                key += c;
+            }
+            while (i < s.length && /\s/.test(s[i])) i++;
+            if (s[i] !== ':')
+                return null;
+            i++;
+        } else {
+            const m = s.slice(i).match(/^([A-Za-z_]\w*)\s*:/);
+            if (!m)
+                return null;
+            key = m[1];
+            i += m[0].length;
+        }
+        while (i < s.length && /\s/.test(s[i])) i++;
+        if (i >= s.length)
+            return null;
+        if (s[i] === '"' || s[i] === "'") {
+            const q = s[i++];
+            let val = '';
+            let esc = false;
+            while (i < s.length) {
+                const c = s[i++];
+                if (esc) { val += c; esc = false; continue; }
+                if (c === '\\') { esc = true; continue; }
+                if (c === q) break;
+                val += c;
+            }
+            out[key] = val;
+        } else if (s[i] === '{') {
+            const nested = extractBalancedObject(s, i);
+            if (!nested)
+                return null;
+            const nestedObj = parseJsObjectLiteral(nested.literal);
+            if (!nestedObj)
+                return null;
+            out[key] = nestedObj;
+            i = nested.end;
+        } else {
+            const m = s.slice(i).match(/^(true|false|null|-?\d+(?:\.\d+)?)/);
+            if (!m)
+                return null;
+            const raw = m[1];
+            out[key] = raw === 'true' ? true : raw === 'false' ? false : raw === 'null' ? null : Number(raw);
+            i += raw.length;
+        }
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Вырезать `{…}` с учётом строк и вложенности, начиная с индекса `{`.
+ * @returns {{ literal: string, end: number }|null} end — индекс после `}`
+ */
+function extractBalancedObject(text, startIdx) {
+    if (!text || text[startIdx] !== '{')
+        return null;
+    let depth = 0;
+    let inStr = false;
+    let quote = '';
+    let escape = false;
+    for (let i = startIdx; i < text.length; i++) {
+        const c = text[i];
+        if (inStr) {
+            if (escape) { escape = false; continue; }
+            if (c === '\\') { escape = true; continue; }
+            if (c === quote) inStr = false;
+            continue;
+        }
+        if (c === '"' || c === "'") {
+            inStr = true;
+            quote = c;
+            continue;
+        }
+        if (c === '{')
+            depth++;
+        else if (c === '}') {
+            depth--;
+            if (depth === 0)
+                return { literal: text.slice(startIdx, i + 1), end: i + 1 };
+        }
+    }
+    return null;
+}
+
+/**
+ * Найти call `name({…})` начиная с индекса имени; вернуть { method, args, end }.
+ */
+function parseJsStyleToolCallAt(text, nameStart, method) {
+    if (!text || nameStart < 0 || !method)
+        return null;
+    let i = nameStart + method.length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== '(')
+        return null;
+    i++;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const bal = extractBalancedObject(text, i);
+    if (!bal)
+        return null;
+    i = bal.end;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== ')')
+        return null;
+    const args = parseJsObjectLiteral(bal.literal);
+    if (!args || !Object.keys(args).length)
+        return null;
+    return { method, args, end: i + 1 };
+}
+
+/** Убрать голые tool-вызовы name({…}) из prose ленты. */
+function stripJsStyleToolProse(text) {
+    if (!text)
+        return text;
+    const names = ['save_file', 'write_file', 'create', 'ask_user', 'navigate', 'read_file', 'reset_context'];
+    let out = String(text);
+    for (const name of names) {
+        const re = new RegExp('\\b' + name + '\\s*\\(', 'g');
+        const ranges = [];
+        let sm;
+        while ((sm = re.exec(out)) !== null) {
+            if (sm.index > 0 && out[sm.index - 1] === '<')
+                continue;
+            const parsed = parseJsStyleToolCallAt(out, sm.index, name);
+            if (parsed)
+                ranges.push([sm.index, parsed.end]);
+        }
+        for (let r = ranges.length - 1; r >= 0; r--) {
+            const [a, b] = ranges[r];
+            out = out.slice(0, a) + out.slice(b);
+        }
+    }
+    return out;
+}
+
 function parseToolCalls(text, functions = []) {
     const calls = [];
     if (!text)
@@ -1932,28 +3222,124 @@ function parseToolCalls(text, functions = []) {
         }
     }
 
-    // 3. XML-теги — сверка с доступными функциями (динамически)
+    // 3. XML-теги — quote-aware (multiline post / вложенные " в HTML)
     if (calls.length === 0 && functions.length > 0) {
         const knownNames = new Set(functions.map(fn => fn.name));
-        const xmlRegex = /<(\w+)\s+([^>]+)\/?>/g;
-        while ((match = xmlRegex.exec(text)) !== null) {
-            const tagName = match[1];
-            const attrsStr = match[2];
-            if (!knownNames.has(tagName))
-                continue;
-            const args = {};
-            const attrRegex = /(\w+)=["']([^"']*)["']/g;
-            let am;
-            while ((am = attrRegex.exec(attrsStr)) !== null) {
-                args[am[1]] = am[2];
+        for (const name of knownNames) {
+            if (!name || !/^\w+$/.test(name)) continue;
+            const startRe = new RegExp('<' + name + '(?=\\s|/|>)', 'gi');
+            let sm;
+            while ((sm = startRe.exec(text)) !== null) {
+                const parsed = parseXmlToolCallAt(text, sm.index, name);
+                if (parsed && Object.keys(parsed.args).length > 0)
+                    calls.push({ method: parsed.method, args: parsed.args });
             }
-            if (Object.keys(args).length > 0) {
-                calls.push({ method: tagName, args });
+        }
+    }
+
+    // 4. Light prose: <function calling>save_file({…})</function calling>
+    if (calls.length === 0) {
+        const wrapRe = /<function(?:\s+|_)calling>\s*(\w+)\s*\(/gi;
+        let wm;
+        while ((wm = wrapRe.exec(text)) !== null) {
+            const method = wm[1];
+            const rel = wm[0].lastIndexOf(method);
+            if (rel < 0)
+                continue;
+            const parsed = parseJsStyleToolCallAt(text, wm.index + rel, method);
+            if (parsed)
+                calls.push({ method: parsed.method, args: parsed.args });
+        }
+    }
+
+    // 5. Голый save_file({…}) для известных tools (если ещё пусто)
+    if (calls.length === 0 && functions.length > 0) {
+        const knownNames = new Set(functions.map(fn => fn.name));
+        for (const name of knownNames) {
+            if (!name || !/^\w+$/.test(name)) continue;
+            const startRe = new RegExp('\\b' + name + '\\s*\\(', 'g');
+            let sm;
+            while ((sm = startRe.exec(text)) !== null) {
+                // не XML <save_file
+                if (sm.index > 0 && text[sm.index - 1] === '<')
+                    continue;
+                const parsed = parseJsStyleToolCallAt(text, sm.index, name);
+                if (parsed)
+                    calls.push({ method: parsed.method, args: parsed.args });
             }
         }
     }
 
     return calls;
+}
+
+/**
+ * Конец значения attr: next attr / self-close / простой `>` (без HTML внутри value).
+ * @param {string} after — текст после закрывающей кавычки
+ * @param {string} valueSoFar
+ */
+function isXmlAttrValueEnd(after, valueSoFar) {
+    if (/^\s+\w+=/.test(after)) return true;
+    if (/^\s*\/>/.test(after)) return true;
+    if (/^\s*>/.test(after) && !String(valueSoFar).includes('<')) return true;
+    return false;
+}
+
+/**
+ * Разобрать XML tool-call начиная с индекса `<tagName`.
+ * Поддерживает multiline attrs и вложенные кавычки в HTML-значениях (post).
+ * @returns {{ method: string, args: object, end: number }|null}
+ */
+function parseXmlToolCallAt(text, startIdx, tagName) {
+    if (!text || startIdx < 0 || !tagName) return null;
+    const prefix = '<' + tagName;
+    if (text.slice(startIdx, startIdx + prefix.length).toLowerCase() !== prefix.toLowerCase())
+        return null;
+    let i = startIdx + prefix.length;
+    const args = {};
+    while (i < text.length) {
+        while (i < text.length && /\s/.test(text[i])) i++;
+        if (i >= text.length) return null;
+        if (text[i] === '/' && text[i + 1] === '>')
+            return { method: tagName, args, end: i + 2 };
+        if (text[i] === '>')
+            return { method: tagName, args, end: i + 1 };
+        const nameMatch = text.slice(i).match(/^(\w+)=/);
+        if (!nameMatch) return null;
+        const attrName = nameMatch[1];
+        i += nameMatch[0].length;
+        const q = text[i];
+        if (q !== '"' && q !== "'") return null;
+        i++;
+        let value = '';
+        while (i < text.length) {
+            if (text[i] === q) {
+                const after = text.slice(i + 1);
+                if (isXmlAttrValueEnd(after, value)) {
+                    i++;
+                    break;
+                }
+                value += text[i];
+                i++;
+            } else {
+                value += text[i];
+                i++;
+            }
+        }
+        args[attrName] = value;
+    }
+    return null;
+}
+
+/**
+ * Парсинг attrs из строки (unit-тесты / отладка).
+ * @param {string} attrsStr
+ * @returns {object}
+ */
+function parseXmlTagAttrs(attrsStr) {
+    const fake = '<' + '_x' + ' ' + (attrsStr || '') + ' />';
+    const parsed = parseXmlToolCallAt(fake, 0, '_x');
+    return parsed?.args || {};
 }
 
 /** Канонические роли WORK */
@@ -2106,9 +3492,9 @@ async function resolveUserStorage(params = {}) {
     if (!uid || typeof WORK?.get_item !== 'function')
         return null;
     try {
-        let item = await WORK.get_item('/users/' + uid);
+        let item = await WORK.get_item('/USERS/' + uid);
         if (!item)
-            item = await WORK.get_item('/users//' + uid);
+            item = await WORK.get_item('/USERS//' + uid);
         return item || null;
     } catch (e) {
         console.warn('[task.ai] resolveUserStorage:', e.message);

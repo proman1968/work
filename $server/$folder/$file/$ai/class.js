@@ -7,6 +7,16 @@ export default {
                 { id: 'content', type: 'string' },
                 { id: 'time', type: 'number' },
                 { id: 'sender', type: 'string' },
+                {
+                    id: 'usage',
+                    fields: [
+                        { id: 'prompt', type: 'number' },
+                        { id: 'completion', type: 'number' },
+                        { id: 'total', type: 'number' },
+                        { id: 'contextPct', type: 'number' },
+                        { id: 'contextWindow', type: 'number' },
+                    ],
+                },
             ],
         },
         thinking: {
@@ -123,5 +133,15 @@ export default {
         { id: 'model', type: 'string' },
         { id: 'system', type: 'string' },
         { id: 'ribbon', type: 'TYPES.ribbon' },
+        {
+            id: 'usage',
+            fields: [
+                { id: 'prompt', type: 'number' },
+                { id: 'completion', type: 'number' },
+                { id: 'total', type: 'number' },
+                { id: 'contextPct', type: 'number' },
+                { id: 'contextWindow', type: 'number' },
+            ],
+        },
     ],
 }

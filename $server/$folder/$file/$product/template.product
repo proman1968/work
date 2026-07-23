@@ -1,0 +1,21 @@
+{
+  "label": "Новый продукт",
+  "icon": "carbon:product",
+  "price": "",
+  "priceHint": "",
+  "includes": [],
+  "orderForm": {
+    "id": "order",
+    "type": "form",
+    "fields": [
+      {
+        "id": "name",
+        "label": "Имя",
+        "type": "text",
+        "required": true,
+        "placeholder": "my-company"
+      }
+    ]
+  },
+  "status": "published"
+}

@@ -177,7 +177,7 @@ describe('task pipeline', () => {
             },
         };
         const author = {
-            path: '/users/u/$user',
+            path: '/USERS/u/$user',
             id: 'u',
             async save_file() {
                 authorWrites++;
@@ -202,7 +202,7 @@ describe('task pipeline', () => {
     it('save_to_log writes once when author cabinet equals group storage', async () => {
         let writes = 0;
         const cabinet = {
-            path: '/users/test/$user',
+            path: '/USERS/test/$user',
             id: 'test',
             async save_file() {
                 writes++;
@@ -210,7 +210,7 @@ describe('task pipeline', () => {
         };
         globalThis.WORK = { file_handlers: {}, id: 'WORK' };
         await CORE.$file.save_to_log.call(
-            { json_model: { path: '/users/test/$user/text/.message.txt/history/2026-06-27/1.test.txt' }, $owner: cabinet },
+            { json_model: { path: '/USERS/test/$user/text/.message.txt/history/2026-06-27/1.test.txt' }, $owner: cabinet },
             {
                 filename: 'message.txt',
                 post: 'hello',
@@ -224,7 +224,7 @@ describe('task pipeline', () => {
     it('save_to_log skips mirror for task.ai when logAuthor cabinet equals owner', async () => {
         let writes = 0;
         const cabinet = {
-            path: '/users/test/$user',
+            path: '/USERS/test/$user',
             id: 'test',
             async save_file() {
                 writes++;
@@ -232,7 +232,7 @@ describe('task pipeline', () => {
         };
         globalThis.WORK = { file_handlers: {}, id: 'WORK' };
         await CORE.$file.save_to_log.call(
-            { json_model: { path: '/users/test/$user/ai/.task.ai/history/2026-06-27/1.WORK.ai' }, $owner: cabinet },
+            { json_model: { path: '/USERS/test/$user/ai/.task.ai/history/2026-06-27/1.WORK.ai' }, $owner: cabinet },
             {
                 filename: 'task.ai',
                 post: 'task',
@@ -586,7 +586,7 @@ describe('task pipeline', () => {
         const skillBody = {
             label: 'Поиск файлов',
             skill: 'Поиск файлов',
-            path: '/skills/system/Поиск файлов',
+            path: '/SKILLS/system/Поиск файлов',
             data: { prompt: 'readme' },
             fields: [],
             status: 'pending',
@@ -618,7 +618,7 @@ describe('task pipeline', () => {
         await WORK.children;
 
         const group = await WORK.get_item('/root/direction');
-        const template = await WORK.get_item('/skills/AI/Генерация изображений');
+        const template = await WORK.get_item('/SKILLS/AI/Генерация изображений');
         const script = await template.import();
 
         let called = null;
@@ -651,7 +651,7 @@ describe('task pipeline', () => {
         await script.execute.call(group, {
             data: {
                 prompt: 'красный закат',
-                service: '/services/AI/GenApi/images/Grok Imagine Image',
+                service: '/SERVICES/AI/GenApi/images/Grok Imagine Image',
             },
         });
 

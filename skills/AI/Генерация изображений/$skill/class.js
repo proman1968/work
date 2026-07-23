@@ -23,8 +23,8 @@ export default {
     label: 'Генерация изображений',
     icon: 'carbon:image',
     services: [
-        '/services/AI/GenApi/images/Grok%20Imagine%20Image',
-        '/services/AI/GenApi/images/Qwen%20Image%202',
+        '/SERVICES/AI/GenApi/images/Grok%20Imagine%20Image',
+        '/SERVICES/AI/GenApi/images/Qwen%20Image%202',
     ],
     keywords: `
 генерация изображений

@@ -216,9 +216,9 @@ ODA({is: 'skill-preview',
         const parts = String(filePath || '').split('/').filter(Boolean);
         if (!parts.length)
             return null;
-        // /users/UID/... → storage = /users/UID
-        if (parts[0] === 'users' && parts[1])
-            return WORK.get_item('/users/' + parts[1], 'info');
+        // /USERS/UID/... → storage = /USERS/UID
+        if (parts[0] === 'USERS' && parts[1])
+            return WORK.get_item('/USERS/' + parts[1], 'info');
         // /root/group/... → storage = первый сегмент (root или другой корневой контейнер)
         return WORK.get_item('/' + parts[0], 'info');
     },

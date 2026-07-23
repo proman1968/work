@@ -91,6 +91,12 @@ export class $folder extends $item{
     scripts = [];
     parent = null;
     #manifestCache = Object.create(null);
+    /**
+     * Получить манифест PWA для текущего элемента.
+     * @param {object} [params]
+     * @param {string} [params.handler_path] Путь handler страницы (по умолчанию explorer)
+     * @returns {Promise<object>} Объект манифеста
+     */
     manifest({ handler_path }) {
         handler_path ??= '/~/handlers/pages/explorer/';
         return this.#manifestCache[handler_path] ??= WORK.get_item('/sources/manifest.json').then(async manifest => {
@@ -107,6 +113,11 @@ export class $folder extends $item{
             return manifest;
         });
     }
+    /**
+     * Загрузить содержимое папки (заготовка; для $class — class.js).
+     * @param {object} [params]
+     * @returns {Promise<*>} Данные загрузки
+     */
     load(params){
         // todo сделать загрузку папки, возможно в виде архива
     }
@@ -165,8 +176,9 @@ export class $folder extends $item{
     }
 
     /**
-     * @ai Удалить папку рекурсивно (требует права администратора)
-     * @ai.returns Строка с подтверждением удаления
+     * Удалить папку рекурсивно (требует права администратора).
+     * @param {object} [params]
+     * @returns {Promise<string|boolean>} Строка с подтверждением удаления или false
      */
     async delete(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
@@ -176,6 +188,13 @@ export class $folder extends $item{
         this.parent?.reset();
         return `removed: ${this.path}`;
     }
+    /**
+     * Получить дерево handlers текущего элемента.
+     * @param {object} [p]
+     * @param {string} [p.path] Относительный путь внутри ~/handlers
+     * @param {number} [p.deep] Глубина обхода
+     * @returns {Promise<Array>} Дерево handlers
+     */
     async handlers(p = {}){
         p.path ||= '';
         p.deep ||= 8;
@@ -312,6 +331,10 @@ export class $folder extends $item{
             return fs.statSync(this.real_dir);
         return {}
     }
+    /**
+     * Список элементов без метапапок ($ и .).
+     * @returns {Promise<Array>} Массив элементов
+     */
     get items(){
         return new AsyncPromise(async ()=>{
             let files = await this.files;
@@ -491,9 +514,11 @@ export class $folder extends $item{
         })()
     }
     /**
-     * @ai Семантический поиск по эмбеддингам (RAG) внутри класса
-     * @ai.params {"prompt": "текст запроса", "sensitivity": "чувствительность 0-1"}
-     * @ai.returns Отсортированный массив релевантных результатов
+     * Семантический поиск по эмбеддингам (RAG) внутри класса.
+     * @param {object} [params]
+     * @param {string} [params.prompt] Текст запроса
+     * @param {number} [params.sensitivity] Чувствительность 0–1
+     * @returns {Promise<Array>} Отсортированный массив релевантных результатов
      */
     async search(params = {prompt: '', embedding: null, using: []}){
         let sensitivity = params.sensitivity || .5;
@@ -579,9 +604,10 @@ export class $folder extends $item{
         return rags;
     }
     /**
-     * @ai Найти дочерний элемент по имени с рекурсивным обходом
-     * @ai.params {"name": "имя элемента", "filter_function": "функция фильтра"}
-     * @ai.returns Найденный элемент или null
+     * Найти дочерний элемент по имени с рекурсивным обходом.
+     * @param {string} name Имя элемента
+     * @param {Function} [filter_function] Функция фильтра
+     * @returns {Promise<object|null>} Найденный элемент или null
      */
     async find_item(name, filter_function){
         let children = await this.children;
@@ -597,10 +623,13 @@ export class $folder extends $item{
         return result;
     }
     /**
-     * Поиск текста по содержимому файлов
-     * @ai Поиск текста или регулярного выражения по файлам внутри папки
-     * @ai.params {"text": "строка поиска", "regex": "регулярное выражение", "ext": "массив расширений", "limit": "макс результатов"}
-     * @ai.returns Массив найденных совпадений [{path, line, text}]
+     * Поиск текста или регулярного выражения по файлам внутри папки.
+     * @param {object} [params]
+     * @param {string} [params.text] Строка поиска
+     * @param {string} [params.regex] Регулярное выражение
+     * @param {Array|string} [params.ext] Массив расширений
+     * @param {number} [params.limit] Макс. число результатов
+     * @returns {Promise<Array<{path: string, line: number, text: string}>>} Найденные совпадения
      */
     async find_text(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
@@ -666,36 +695,11 @@ export class $folder extends $item{
         await walk(this);
         return results;
     }
-    // Статический словарь описаний серверных методов для ИИ-агента
-    static TOOL_DESCRIPTIONS = {
-        info: 'Получить информацию о структуре элемента. Параметры: deep (число, глубина вложенности), mask (строка, фильтр по имени с * и ?). Возвращает объект с данными элемента.',
-        load: 'Загрузить и объединить class.js элемента. Возвращает объект с данными class.js.',
-        import: 'Импортировать class.js как модуль. Возвращает экспорт class.js.',
-        save: 'Сохранить class.js элемента. Параметры: post (объект или строка с содержимым).',
-        save_file: 'Сохранить файл. Параметры: filename (имя файла), post (содержимое). Возвращает объект файла.',
-        save_files: 'Сохранить несколько файлов. Параметры: post {files, urls, message}. Возвращает массив результатов.',
-        find_text: 'Поиск текста по файлам. Параметры: text (текст для поиска), ext (массив расширений), limit (макс результатов). Возвращает массив {path, line, text}.',
-        find_item: 'Найти элемент по имени в дочерних. Параметры: name (имя элемента), filter_function (функция фильтра). Возвращает найденный элемент.',
-        get_item: 'Получить элемент по пути. Параметры: path (путь или массив шагов), deep (глубина). Возвращает элемент или массив элементов.',
-        get_schema: 'Получить список методов и свойств текущего элемента с json_model. Параметры: with_body (true для включения кода методов). Возвращает {className, properties, methods, json_model}.',
-        children: 'Получить список всех дочерних элементов (папки и файлы). Возвращает массив элементов.',
-        files: 'Получить список файлов элемента (без скрытых). Возвращает массив файлов.',
-        folders: 'Получить список дочерних папок. Возвращает массив папок.',
-        items: 'Получить список элементов (без метапапок). Возвращает массив элементов.',
-        create: 'Создать файл/папку/классе. Параметры: type ($file, $folder, $class), id (имя), post (содержимое). Возвращает созданный элемент.',
-        delete: 'Удалить элемент. Требует ADMIN доступ. Возвращает строку с результатом.',
-        search: 'RAG-поиск по эмбеддингам. Параметры: prompt (текст запроса), sensitivity (0-1). Возвращает отсортированный массив результатов.',
-        logs: 'Получить логи класса. Параметры: mode, day, from, to, ext. Возвращает массив логов.',
-        read_log_bodies: 'Получить тела записей логов. Параметры: day, from, to, ext.',
-        log_index: 'Получить индекс логов (без content). Параметры: day, from, to.',
-        manifest: 'Получить манифест PWA. Параметры: handler_path. Возвращает объект манифеста.',
-        handlers: 'Получить дерево handlers. Параметры: path (путь), deep (глубина). Возвращает дерево handlers.',
-    };
-
     /**
-     * @ai Получить схему методов и свойств текущего элемента для ИИ-агента
-     * @ai.params {"with_body": "включить исходный код методов"}
-     * @ai.returns {className, properties, methods, json_model}
+     * Получить схему методов и свойств текущего элемента для ИИ-агента.
+     * @param {object} [params]
+     * @param {boolean} [params.with_body] Включить исходный код методов
+     * @returns {Promise<object>} {className, properties, methods, json_model}
      */
     async get_schema(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
@@ -788,9 +792,12 @@ export class $folder extends $item{
         return items;
     }
     /**
-     * @ai Получить информацию о структуре элемента с возможностью раскрывать дочерние
-     * @ai.params {"deep": "глубина вложенности", "mask": "фильтр по имени с * и ?", "items": "тип элементов: items/files/folders"}
-     * @ai.returns Объект с данными элемента и (опц.) дочерними элементами
+     * Получить информацию о структуре элемента с возможностью раскрывать дочерние.
+     * @param {object} [p]
+     * @param {number} [p.deep] Глубина вложенности
+     * @param {string} [p.mask] Фильтр по имени с * и ?
+     * @param {string} [p.items] Тип элементов: items/files/folders
+     * @returns {Promise<object>} Данные элемента и (опц.) дочерние
      */
     async info(p = {deep: 0}){
         p.deep = +p.deep;
@@ -871,12 +878,20 @@ export class $folder extends $item{
             return result;
         })();
     }
+    /**
+     * Список файлов элемента (без скрытых).
+     * @returns {Promise<Array>} Массив файлов
+     */
     get files(){
         return new AsyncPromise(async ()=>{
             let children = await this.children;
             return children.filter(f => !f.isHidden);
         })
     }
+    /**
+     * Список всех дочерних элементов (папки и файлы).
+     * @returns {Promise<Array>} Массив элементов
+     */
     get children(){
         return new AsyncPromise(async ()=>{
             let files = [];
@@ -936,6 +951,10 @@ export class $folder extends $item{
             return files;
         })
     }
+    /**
+     * Список дочерних папок.
+     * @returns {Promise<Array>} Массив папок
+     */
     get folders(){
         return new AsyncPromise(async ()=>{
             let files = await this.files;
@@ -959,9 +978,12 @@ export class $folder extends $item{
     }
 
     /**
-     * @ai Получить элемент по пути или массиву шагов (поддержка ~, @, *, .)
-     * @ai.params {"path": "путь или массив шагов", "deep": "глубина поиска"}
-     * @ai.returns Элемент, массив элементов или null
+     * Получить элемент по пути или массиву шагов (поддержка ~, @, *, .).
+     * @param {string|Array} [path] Путь или массив шагов
+     * @param {number} [deep] Глубина поиска
+     * @param {*} [$tilde] Контекст tilde
+     * @param {object} [params] Доп. параметры (доступ)
+     * @returns {Promise<object|Array|null>} Элемент, массив элементов или null
      */
     async get_item(path = [], deep = 0, $tilde, params) {
         const item = this;
@@ -1100,9 +1122,10 @@ export class $folder extends $item{
         return 'todo for $folder'
     }
     /**
-     * @ai Сохранить несколько файлов (FormData, URL-загрузка или массив файлов)
-     * @ai.params {"post": "{files, urls, message}"}
-     * @ai.returns Объект с путём сохранённого пакета файлов
+     * Сохранить несколько файлов (FormData, URL-загрузка или массив файлов).
+     * @param {object} [params]
+     * @param {object} [params.post] {files, urls, message}
+     * @returns {Promise<object>} Объект с путём сохранённого пакета файлов
      */
     async save_files(params = {}){
         let {post} = params;
@@ -1195,9 +1218,11 @@ export class $folder extends $item{
     }
 
     /**
-     * @ai Сохранить файл в текущую папку с записью в историю
-     * @ai.params {"filename": "имя файла", "post": "содержимое (строка, Buffer или объект с path)"}
-     * @ai.returns Объект с путём сохранённого файла и лога истории
+     * Сохранить файл в текущую папку с записью в историю.
+     * @param {object} [params]
+     * @param {string} params.filename Имя файла
+     * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
+     * @returns {Promise<object>} Объект с путём сохранённого файла и лога истории
      */
     async save_file(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
@@ -1338,6 +1363,10 @@ export class $folder extends $item{
         }
 
     }
+    /**
+     * Создать папку на диске (mkdir), если ещё нет.
+     * @returns {Promise<void>}
+     */
     async save(){
         if(!fs.existsSync(this.real_dir)){
             fs.mkdirSync(this.real_dir, { recursive: true });
@@ -1354,59 +1383,32 @@ export class $folder extends $item{
         }
         return this;
     }
+
     /**
-     * @ai Создать новый файл, папку или типизированное классе
-     * @ai.params {"type": "$file | $folder | $class", "id": "имя элемента", "post": "содержимое"}
-     * @ai.returns Созданный элемент
+     * @deprecated create только на $class. Файл — save_file; папки — ensure_folder / save_file.
      */
     async create(p = {}) {
-        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
-        if (p.type === '$file') {
-            // загрузка файла(ов)
-            if (p.post?.files?.length) {
-                return this.save_files(p);
-            }
-
-            if (p.id) {
-                if (!p.post) { // поск шаблона файла по расширению
-                    const ext = p.id.split('.').last;
-                    const ext_folder = await WORK.$folder.find_item('$' + ext, (item) => item.id[0] === '$');
-                    const ext_tmp = await ext_folder._get_item('template.' + ext);
-                    if (ext_tmp) {
-                        p.post = WORK.fs.readFileSync('.' + ext_tmp.path);
-                    }
-                    else {
-                        p.post = '';
-                    }
-                }
-                p.filename = p.id
-                return this.save_file(p);
-            }
-        }
-        else if (p.type === '$folder') {
-            let folder = await this._get_item(p.id, FS.$folder);
-            await folder.save();
-            return folder;
-        }
-        else { // $class
-            let folder = await this._get_item(p.id, FS.$folder);
-            await folder.save();
-            folder = await folder._get_item(p.type, FS.$folder);
-            await folder.save();
-            if (!p.post) {
-                p.post = `export default {
-    label: '${p.id}'
-}`;
-            }
-            p.filename = 'class.js';
-            p.ignore_save_logs = true;
-            const file = await folder.save_file(p);
-            // folder.reset();
-            // folder.$parent.reset();
-            // this.reset();
-            return file;
-        }
+        throw new Error(
+            'create есть только у $class (новый класс). Файл — save_file({ filename, post }); папки — ensure_folder или при save_file',
+        );
     }
+
+    /**
+     * Создать пустую папку (mkdir), если ещё нет.
+     * @param {object} [p]
+     * @param {string} p.id Имя папки
+     * @returns {Promise<object>} Папка
+     */
+    async ensure_folder(p = {}) {
+        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
+        const id = String(p.id ?? p.name ?? '').trim();
+        if (!id)
+            throw new Error('ensure_folder: нужен id');
+        const folder = await this._get_item(id, FS.$folder);
+        await folder.save();
+        return folder;
+    }
+
     sortItems(files, reverse = false, isType = this.isType) {
         files = files.sort((a, b) => {
             if (a?.parent === a?.$owner) {

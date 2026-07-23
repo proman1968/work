@@ -10,18 +10,6 @@ import { MERGE } from "../host/babel-merge.js";
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
 
-    // Описания методов, специфичных для $file (наследуются от $folder)
-    static TOOL_DESCRIPTIONS = {
-        ...$folder.TOOL_DESCRIPTIONS,
-        load: 'Загрузить содержимое файла. Параметры: encoding (кодировка). Возвращает строку или Buffer.',
-        save: 'Сохранить содержимое файла. Параметры: post (новое содержимое).',
-        edit_file: 'Точечное редактирование файла через SEARCH/REPLACE блоки. Параметры: post/diff (блоки).',
-        download: 'Скачать файл как поток. Возвращает ReadStream.',
-        get_imports: 'Получить список import-операторов из файла. Возвращает массив строк.',
-        save_includes: 'Добавить вложенные файлы к записи лога. Параметры: post (files).',
-        restore_from_history: 'Восстановить файл из истории. Только для history-файлов.',
-    };
-
     metadata = null;
     meta_file = null;
     GET = 'load';
@@ -32,26 +20,33 @@ export class $file extends $folder{
         const parts = path.split('/');
         const id = parts.pop();
         if (!id) return null;
-        parts.pop();
+        const date = parts.pop() || '';
         if (parts.pop() !== 'history') return null;
         const sourceId = parts.pop() || '';
         const extDot = id.lastIndexOf('.');
         const name = extDot > 0 ? id.slice(0, extDot) : id;
         const nameParts = name.split('.');
         const timestamp = nameParts[0];
-        const userId = nameParts.length > 1 ? nameParts[1] : '';
+        const userId = nameParts.length > 1 ? nameParts.slice(1).join('.') : '';
         const fileName = sourceId.startsWith('.') ? sourceId.slice(1) : sourceId;
         const ms = +timestamp;
         const time = Number.isFinite(ms)
             ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
-        return { timestamp, userId, fileName, time };
+        // UI: «22.07 18:12» или только время
+        let dateShort = '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            const [, m, d] = date.split('-');
+            dateShort = `${d}.${m}`;
+        }
+        const dateTime = [dateShort, time].filter(Boolean).join(' ');
+        return { timestamp, userId, fileName, time, date, dateShort, dateTime };
     }
 
     static historyEntryLabel(path) {
         const p = this.parseHistoryEntryPath(path);
         if (!p) return '';
-        return p.fileName ? `${p.time} | ${p.fileName}` : p.time;
+        return p.fileName || p.time || '';
     }
 
     static historyUserLabel(path) {
@@ -67,6 +62,11 @@ export class $file extends $folder{
             return Array.from(items.map(r=>r.id));
         })
     }
+    /**
+     * Восстановить файл из истории. Только для history-файлов.
+     * @param {object} [params]
+     * @returns {Promise<object>} Результат save_file целевого файла
+     */
     restore_from_history(params = {}){
         if(!this.inHistory)
             throw new Error('Восстановить можно только файл из истории');
@@ -75,6 +75,12 @@ export class $file extends $folder{
         params.post = {path: this.dir};
         return target_folder.parent.save_file(params);
     }
+    /**
+     * Добавить вложенные файлы к записи лога.
+     * @param {object} [params]
+     * @param {object} [params.post] Файлы для сохранения
+     * @returns {Promise<object>} Обновлённая запись лога
+     */
     async save_includes(params = {}){
         let chat = await this.$parent.chat();
         let row = chat.find(el=>el.path === this.path);
@@ -137,7 +143,7 @@ export class $file extends $folder{
         this.id = parts.pop();
         parts.pop();
         if (parts.pop() === 'history')
-            return this.constructor.historyUserLabel(this.path);
+            return this.constructor.historyEntryLabel(this.path);
         return this.id;
     }
     get storage_folder(){ // папка - классе
@@ -165,9 +171,10 @@ export class $file extends $folder{
         }
     }
     /**
-     * @ai Загрузить содержимое файла как строку или Buffer
-     * @ai.params {"encoding": "кодировка (utf-8, binary)"}
-     * @ai.returns Строка (при encoding) или Buffer
+     * Загрузить содержимое файла как строку или Buffer.
+     * @param {object} [params]
+     * @param {string} [params.encoding] Кодировка (utf-8, binary)
+     * @returns {Promise<string|Buffer>} Строка (при encoding) или Buffer
      */
     async load(params = {encoding: 'utf8'}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
@@ -193,14 +200,20 @@ export class $file extends $folder{
             }
         });
     }
+    /**
+     * Скачать файл как поток.
+     * @param {object} [params]
+     * @returns {Promise<import('node:fs').ReadStream>} ReadStream
+     */
     async download(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
         return fs.createReadStream(this.dir, params);
     }
     /**
-     * @ai Сохранить новое содержимое файла (перезапись целиком)
-     * @ai.params {"post": "новое содержимое (строка или Buffer)"}
-     * @ai.returns this (сохранённый файл)
+     * Сохранить новое содержимое файла (перезапись целиком).
+     * @param {object} [params]
+     * @param {string|Buffer} params.post Новое содержимое
+     * @returns {Promise<$file>} this (сохранённый файл)
      */
     async save(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
@@ -216,9 +229,11 @@ export class $file extends $folder{
         return this.parent.save_file(params)
     }
     /**
-     * @ai Точечное редактирование файла через SEARCH/REPLACE блоки
-     * @ai.params {"post": "блоки SEARCH/REPLACE", "diff": "альтернативное имя параметра"}
-     * @ai.returns Полный текст файла после применения правок
+     * Точечное редактирование файла через SEARCH/REPLACE блоки.
+     * @param {object} [params]
+     * @param {string} [params.post] Блоки SEARCH/REPLACE
+     * @param {string} [params.diff] Альтернативное имя параметра
+     * @returns {Promise<string>} Полный текст файла после применения правок
      */
     async edit_file(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
@@ -288,8 +303,9 @@ export class $file extends $folder{
         return result;
     }
     /**
-     * @ai Получить список import-операторов из JS/TS файла
-     * @ai.returns Массив строк с import-операторами
+     * Получить список import-операторов из JS/TS файла.
+     * @param {object} [params]
+     * @returns {Promise<string[]>} Массив строк с import-операторами
      */
     async get_imports(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
@@ -300,12 +316,9 @@ export class $file extends $folder{
         return matches ? matches.map(m => m.trim()) : [];
     }
     async create(p = {}) {
-        switch (p.type) {
-            case '$file':
-            case '$folder':
-                return this.storage_folder.create(p);
-        }
-        throw new Error(`Невозможно создание элемента типа "${p.type}" внутри файла`);
+        throw new Error(
+            'create есть только у $class (новый класс). Файл — save_file({ filename, post })',
+        );
     }
     static _logClassKey(storage) {
         if (!storage || storage === globalThis.WORK)

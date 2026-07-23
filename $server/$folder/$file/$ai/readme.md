@@ -14,6 +14,7 @@
 2. [`methods/prompt`](/$server/$folder/$file/$ai/methods/prompt/$method/class.js/~/handlers/pages/form/) собирает system: роль, бандлы class+user, PDCA; стримит модель с functions из `get_schema` + services + `ask_user`.
 3. Tools выполняются с `params.role`. USER/BOSS не меняют типизаторы/`class.js`. ADMIN system-modify всегда через `pendingAction` confirm.
 4. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/): ribbon, questions/form/action, nested task.
+5. Артефакты Do: один конечный `filename` (перезапись); history пишет платформа. Не `*.struct.*` / draft рядом с финалом.
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
 
@@ -29,9 +30,15 @@
 - ✅ PDCA harness, ask_user, idle propose inject (Cursor AskQuestion: select+options)
 - ✅ Harness FC tools: `write_file` / `read_file` / `ask_user` / `navigate` (не только get_schema)
 - ✅ GigaChat Light/Pro: `functionCalling: true` (tools уходят в API)
+- ✅ z.ai/GLM: OpenAI `tools` + `role:tool` (не legacy `functions`/`role:function`)
 - ✅ Контекст пары class+user (readme, .mem, логи)
-- ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN modify
-- ✅ Preview: action / form / questions (nested `embedded`, form questions get/set)
+- ✅ ACL ролей USER/BOSS/ADMIN + confirm для ADMIN/system-modify (обычный write_file без confirm)
+- ✅ Preview: declarative `~is`/`~props` по TYPES; task = nested ribbon; Ask = view-questions
+- ✅ MVP e2e path: план → Начать → options → Уточнить → write_file → блок `file`
+- ✅ Task card: цель (`label`) — заголовок; в прогрессе — текст текущего шага
+- ✅ Do: протокол шага; fill → subplan по N; stub не advance; done только harness; idle → «Выполнить»
+- ✅ Карточка `file` = **history path** из `save_file` (не прокси filename)
+- ✅ XML tool fallback: multiline / nested quotes в attrs (`post`)
 - 🔧 spawn_agent / skills как tools harness
 - ❌ host file-handlers / skill-router (запрещены как костыль)
 

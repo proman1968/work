@@ -36,8 +36,9 @@ describe('formatRoleAclForSystem', () => {
 describe('isSystemModifyCall / roleBlocksTool', () => {
     it('detects save and class.js / handlers paths', () => {
         assert.equal(isSystemModifyCall({ method: 'save', args: {} }), true);
-        assert.equal(isSystemModifyCall({ method: 'write_file', args: { name: 'class.js' } }), true);
+        assert.equal(isSystemModifyCall({ method: 'save_file', args: { filename: 'class.js' } }), true);
         assert.equal(isSystemModifyCall({ method: 'create', args: { name: 'handlers/foo' } }), true);
+        assert.equal(isSystemModifyCall({ method: 'save_file', args: { filename: 'notes.md' } }), false);
         assert.equal(isSystemModifyCall({ method: 'write_file', args: { name: 'notes.md' } }), false);
         assert.equal(isSystemModifyCall({ method: 'get_schema', args: {} }), false);
     });
@@ -47,6 +48,6 @@ describe('isSystemModifyCall / roleBlocksTool', () => {
         assert.ok(roleBlocksTool('USER', save));
         assert.ok(roleBlocksTool('BOSS', save));
         assert.equal(roleBlocksTool('ADMIN', save), null);
-        assert.equal(roleBlocksTool('USER', { method: 'write_file', args: { name: 'a.md' } }), null);
+        assert.equal(roleBlocksTool('USER', { method: 'save_file', args: { filename: 'a.md' } }), null);
     });
 });

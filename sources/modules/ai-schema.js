@@ -1,13 +1,14 @@
 /**
  * Утилита построения схемы методов элемента для ИИ-агента.
  *
- * Парсит JSDoc-теги @ai из исходного файла класса (по constructor.sourceUrl).
- * Для методов без @ai использует static TOOL_DESCRIPTIONS как fallback.
+ * Парсит стандартный JSDoc из исходного файла класса (constructor.sourceUrl):
+ *   summary — текст до первого @-тега
+ *   @param {type} name — описание
+ *   @param {type} params.key — ключ объекта params (плоско в схеме)
+ *   @returns / @return — возвращаемое значение
  *
- * Теги @ai:
- *   @ai описание метода
- *   @ai.params {"param": "описание"} — JSON объект параметров
- *   @ai.returns описание возвращаемого значения
+ * Метод/геттер попадает в схему, если есть summary и хотя бы один
+ * тег @param или @returns/@return (чтобы IDE-комментарии без тегов не утекали в LLM).
  */
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -62,18 +63,15 @@ export function buildAiSchema(proto) {
     const methods = [];
     const seenNames = new Set();
 
-    // Обход цепочки прототипов: $class → $folder → $item → Reactor → ...
     let currentProto = proto;
     while (currentProto && currentProto !== Object.prototype && currentProto !== EventTarget.prototype) {
         const currentCtor = currentProto.constructor;
         if (!currentCtor) break;
 
         const ownNames = Object.getOwnPropertyNames(currentProto);
-        const toolDesc = currentCtor.TOOL_DESCRIPTIONS || {};
-        const aiDocs = parseSourceFile(currentProto);
+        const docs = parseSourceFile(currentProto);
 
         for (const name of ownNames) {
-            // Пропускаем приватные, системные и уже обработанные
             if (name[0] === '_' || name[0] === '#' || name === 'constructor')
                 continue;
             if (seenNames.has(name))
@@ -88,26 +86,23 @@ export function buildAiSchema(proto) {
             if (!isMethod && !isGetter)
                 continue;
 
-            const aiDoc = aiDocs[name];
-            const fallback = toolDesc[name];
-
-            // Метод включается при наличии @ai разметки ИЛИ описания в TOOL_DESCRIPTIONS
-            if (!aiDoc && !fallback)
+            const doc = docs[name];
+            // summary + (@param | @returns) — AI-разметка; голый summary оставляем IDE
+            if (!doc?.description || !doc.schemaReady)
                 continue;
 
             const fn = isMethod ? desc.value : desc.get;
             methods.push({
                 name,
-                description: aiDoc?.description || fallback || '',
-                params: aiDoc?.params || {},
-                returns: aiDoc?.returns || '',
+                description: doc.description,
+                params: doc.params || {},
+                returns: doc.returns || '',
                 isAsync: fn.constructor.name === 'AsyncFunction',
                 isGetter,
             });
             seenNames.add(name);
         }
 
-        // Переход к родительскому прототипу
         currentProto = Object.getPrototypeOf(currentProto);
     }
 
@@ -116,7 +111,7 @@ export function buildAiSchema(proto) {
 }
 
 /**
- * Разобрать исходный файл класса и извлечь @ai разметку методов.
+ * Разобрать исходный файл класса и извлечь JSDoc методов/геттеров.
  * @param {object} proto — прототип класса
  * @returns {object} — {methodName: {description, params, returns}}
  */
@@ -136,17 +131,12 @@ function parseSourceFile(proto) {
         return result;
     }
 
-    // JSDoc блок, затем сигнатура метода/геттера/сеттера
     const regex = /(\/\*\*[\s\S]*?\*\/)\s*((?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(\w+)\s*\()/g;
     let match;
     while ((match = regex.exec(source)) !== null) {
         const docBlock = match[1];
         const name = match[3];
-
-        if (!docBlock.includes('@ai'))
-            continue;
-
-        const parsed = extractAiTags(docBlock);
+        const parsed = parseJSDocBlock(docBlock);
         if (parsed)
             result[name] = parsed;
     }
@@ -155,39 +145,160 @@ function parseSourceFile(proto) {
 }
 
 /**
- * Извлечь @ai теги из текста JSDoc-комментария.
- * @param {string} docBlock — полный текст JSDoc-комментария
- * @returns {{description?: string, params?: object, returns?: string}|null}
+ * Разобрать стандартный JSDoc-блок.
+ * @param {string} docBlock — полный текст `/** ... *\/`
+ * @returns {{description: string, params: object, returns: string}|null}
  */
-function extractAiTags(docBlock) {
-    // Отрезаем маркеры начала и конца JSDoc
+export function parseJSDocBlock(docBlock) {
+    if (!docBlock || typeof docBlock !== 'string')
+        return null;
+
     const inner = docBlock.slice(3, -2);
+    const lines = inner.split('\n').map(line => line.replace(/^\s*\*\s?/, ''));
 
-    const result = {};
+    const summaryLines = [];
+    for (const line of lines) {
+        if (/^\s*@\w/.test(line))
+            break;
+        summaryLines.push(line);
+    }
+    const description = summaryLines.join('\n').replace(/\s+/g, ' ').trim();
+    if (!description)
+        return null;
 
-    // @ai описание (до следующего тега или конца)
-    const descMatch = inner.match(/@ai\s+([\s\S]+?)(?=\n\s*\*\s*@|\s*$)/);
-    if (descMatch)
-        result.description = cleanJSDocText(descMatch[1]);
+    const rawParams = [];
+    const tagRe = /@(\w+)\s*([\s\S]*?)(?=\n\s*@\w|\s*$)/g;
+    const cleaned = lines.join('\n');
+    let tagMatch;
+    let returns = '';
 
-    // @ai.params — JSON объект
-    const paramsMatch = inner.match(/@ai\.params\s+([\s\S]+?)(?=\n\s*\*\s*@|\s*$)/);
-    if (paramsMatch) {
-        const raw = cleanJSDocText(paramsMatch[1]);
-        try {
-            result.params = JSON.parse(raw);
+    while ((tagMatch = tagRe.exec(cleaned)) !== null) {
+        const tag = tagMatch[1];
+        const body = tagMatch[2].trim();
+        if (tag === 'param') {
+            const parsed = parseParamTag(body);
+            if (parsed)
+                rawParams.push(parsed);
         }
-        catch {
-            result.params = raw;
+        else if (tag === 'returns' || tag === 'return') {
+            returns = parseReturnsTag(body);
         }
     }
 
-    // @ai.returns — описание возвращаемого значения
-    const returnsMatch = inner.match(/@ai\.returns\s+([\s\S]+?)(?=\n\s*\*\s*@|\s*$)/);
-    if (returnsMatch)
-        result.returns = cleanJSDocText(returnsMatch[1]);
+    const params = flattenParams(rawParams);
+    const hasParamTags = rawParams.length > 0;
+    const hasReturns = Boolean(returns);
+    return {
+        description,
+        params,
+        returns,
+        schemaReady: hasParamTags || hasReturns,
+    };
+}
 
-    return result.description ? result : null;
+/**
+ * @param {string} body — тело после @param
+ * @returns {{name: string, type: string, description: string, required: boolean}|null}
+ */
+function parseParamTag(body) {
+    const m = body.match(/^(?:\{([^}]*)\}\s+)?(\[[^\]]+\]|[^\s=]+)(?:\s*=\s*\S+)?\s*([\s\S]*)$/);
+    if (!m)
+        return null;
+    let type = (m[1] || 'string').trim() || 'string';
+    let rawName = m[2].trim();
+    let required = true;
+    if (rawName.startsWith('[') && rawName.endsWith(']')) {
+        required = false;
+        rawName = rawName.slice(1, -1);
+        const eq = rawName.indexOf('=');
+        if (eq !== -1)
+            rawName = rawName.slice(0, eq);
+    }
+    const description = cleanJSDocText(m[3] || '').replace(/^[-–—:]\s*/, '');
+    return { name: rawName, type, description, required };
+}
+
+/**
+ * @param {string} body
+ * @returns {string}
+ */
+function parseReturnsTag(body) {
+    const m = body.match(/^(?:\{([^}]*)\}\s*)?([\s\S]*)$/);
+    if (!m)
+        return cleanJSDocText(body);
+    return cleanJSDocText(m[2] || m[1] || '');
+}
+
+const BAG_PARAM_NAMES = new Set(['params', 'p', 'options']);
+
+/**
+ * Плоские ключи для LLM: params.filename → filename; сам bag params пропускаем.
+ * Голый bag (`params`/`p`/`options` object) без nested keys не отдаём — иначе GigaChat 422
+ * (object без properties).
+ * @param {Array<{name: string, type: string, description: string, required: boolean}>} raw
+ * @returns {object}
+ */
+function flattenParams(raw) {
+    const hasNested = raw.some(p => p.name.includes('.'));
+    const out = {};
+    for (const p of raw) {
+        let key = p.name;
+        if (hasNested) {
+            if (!key.includes('.'))
+                continue;
+            key = key.split('.').slice(1).join('.');
+        }
+        else if (BAG_PARAM_NAMES.has(key) && mapJsDocType(p.type) === 'object') {
+            // Только bag без params.x — не включать в FC
+            continue;
+        }
+        if (!key)
+            continue;
+        out[key] = {
+            description: p.description || '',
+            type: mapJsDocType(p.type),
+            required: p.required,
+        };
+    }
+    return out;
+}
+
+/**
+ * JSON Schema property, совместимый с GigaChat FC (object → properties, array → items).
+ * @param {{ type?: string, description?: string, properties?: object, items?: object }} prop
+ * @returns {object}
+ */
+function normalizeFcProperty(prop) {
+    const out = { ...prop };
+    if (out.type === 'object' && (!out.properties || typeof out.properties !== 'object'))
+        out.properties = {};
+    if (out.type === 'array' && !out.items)
+        out.items = { type: 'string' };
+    return out;
+}
+
+/**
+ * Упростить JSDoc-тип до JSON Schema type.
+ * @param {string} type
+ * @returns {string}
+ */
+export function mapJsDocType(type) {
+    const t = String(type || 'string').toLowerCase().replace(/\s+/g, '');
+    if (t === 'number' || t === 'int' || t === 'integer' || t === 'float')
+        return 'number';
+    if (t === 'boolean' || t === 'bool')
+        return 'boolean';
+    if (t.startsWith('array') || t.endsWith('[]'))
+        return 'array';
+    if (t === 'object' || t.startsWith('promise') || t.includes('{'))
+        return 'object';
+    if (t.includes('number') && !t.includes('string'))
+        return 'number';
+    if (t.includes('boolean'))
+        return 'boolean';
+    if (t.includes('array'))
+        return 'array';
+    return 'string';
 }
 
 /**
@@ -196,7 +307,7 @@ function extractAiTags(docBlock) {
  * @returns {string}
  */
 function cleanJSDocText(text) {
-    return text
+    return String(text || '')
         .replace(/^\s*\*\s?/gm, '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -204,9 +315,6 @@ function cleanJSDocText(text) {
 
 /**
  * Построить массив functions (OpenAI-compatible) из схемы методов.
- *
- * Преобразует результат buildAiSchema() в формат, передаваемый в LLM:
- *   [{name, description, parameters: {type, properties, required}}]
  *
  * @param {Array} methods — результат buildAiSchema(proto)
  * @param {object} [options] — настройки
@@ -224,11 +332,19 @@ export function buildFunctionsFromSchema(methods, options = {}) {
         const properties = {};
         const required = [];
         if (m.params && typeof m.params === 'object') {
-            for (const [key, desc] of Object.entries(m.params)) {
-                properties[key] = {
-                    type: typeof desc === 'string' && desc.includes('(число)') ? 'number' : 'string',
-                    description: typeof desc === 'string' ? desc : String(desc || ''),
-                };
+            for (const [key, meta] of Object.entries(m.params)) {
+                if (typeof meta === 'string') {
+                    properties[key] = normalizeFcProperty({
+                        type: meta.includes('(число)') ? 'number' : 'string',
+                        description: meta,
+                    });
+                    continue;
+                }
+                const description = meta?.description ?? String(meta || '');
+                const type = meta?.type || 'string';
+                properties[key] = normalizeFcProperty({ type, description });
+                if (meta?.required)
+                    required.push(key);
             }
         }
         const fn = {

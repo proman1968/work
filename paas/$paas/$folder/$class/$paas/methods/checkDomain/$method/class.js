@@ -19,7 +19,7 @@ export default {
         if (reserved.has(subdomain))
             return { valid: false, message: 'Имя занято системой' };
 
-        const existing = await WORK.get_item('/paas/' + subdomain, 0, undefined, { user: globalThis.WORK });
+        const existing = await WORK.get_item('/PAAS/' + subdomain, 0, undefined, { user: globalThis.WORK });
         if (existing?.type === '$paas')
             return { valid: false, message: 'Имя уже занято' };
 

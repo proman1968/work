@@ -11,15 +11,19 @@ import {
     formatRoleAclForSystem,
     roleBlocksTool,
     isSystemModifyCall,
+    callNeedsTrustConfirm,
     normalizeRole,
     questionsFromAskUser,
     prepareStepsForStart,
     getDoStepPhase,
     stepNeedsClarify,
+    pushToolResult,
+    executeToolCall,
+    parseResponseToRibbon,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
-/** Симуляция gate harness: что уйдёт в pendingAction / что заблокируется */
-function gateToolCalls(role, calls) {
+/** Симуляция gate harness: ACL + trust confirm (обычный write без confirm) */
+function gateToolCalls(role, calls, trustLevel = 0) {
     const r = normalizeRole(role);
     const blocked = [];
     const allowed = [];
@@ -30,7 +34,10 @@ function gateToolCalls(role, calls) {
         else
             allowed.push(call);
     }
-    const needsConfirm = r === 'ADMIN' && allowed.some(isSystemModifyCall);
+    const hasDangerous = allowed.some(callNeedsTrustConfirm);
+    const hasSystemModify = allowed.some(isSystemModifyCall);
+    const needsConfirm = (hasDangerous && trustLevel < 3)
+        || (r === 'ADMIN' && hasSystemModify);
     return { blocked, allowed, needsConfirm };
 }
 
@@ -38,23 +45,108 @@ describe('MVP e2e: USER working task', () => {
     it('system shows pair context and USER ACL; work write allowed, typifier blocked', () => {
         const system = formatRoleAclForSystem('USER') + formatPairContextForSystem(
             { path: '/org/dept', readme: 'Отдел', mem: '', logs: '- 2026-07-21 | u1 | ai | /org/dept/task.ai' },
-            { path: '/users/u1', readme: '', mem: 'prefs', logs: '- 2026-07-21 | u1 | md | /users/u1/note.md' },
+            { path: '/USERS/u1', readme: '', mem: 'prefs', logs: '- 2026-07-21 | u1 | md | /USERS/u1/note.md' },
         );
         assert.ok(system.includes('## Права роли (USER)'));
         assert.ok(system.includes('## Класс'));
         assert.ok(system.includes('## Пользователь'));
         assert.ok(system.includes('/org/dept/task.ai'));
-        assert.ok(system.includes('/users/u1/note.md'));
+        assert.ok(system.includes('/USERS/u1/note.md'));
 
         const gate = gateToolCalls('USER', [
-            { method: 'write_file', args: { name: 'presentation.html' } },
+            { method: 'save_file', args: { filename: 'presentation.html' } },
             { method: 'save', args: {} },
             { method: 'create', args: { name: 'handlers/x' } },
         ]);
         assert.equal(gate.allowed.length, 1);
-        assert.equal(gate.allowed[0].args.name, 'presentation.html');
+        assert.equal(gate.allowed[0].args.filename, 'presentation.html');
         assert.equal(gate.blocked.length, 2);
         assert.equal(gate.needsConfirm, false);
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'presentation.html' } }), false);
+    });
+
+    it('pushToolResult adds file block with history resultPath', () => {
+        const historyPath = '/USERS/u1/$user/text/.presentation.html/history/2026-07-22/1784729198845.GigaChat.html';
+        const ribbon = [];
+        pushToolResult(
+            ribbon,
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
+            {
+                success: true,
+                name: 'presentation.html',
+                path: historyPath,
+                resultPath: historyPath,
+            },
+            { path: 'models/GigaChat' },
+        );
+        assert.equal(ribbon.length, 2);
+        assert.equal(ribbon[0].type, 'tool_result');
+        assert.equal(ribbon[0].resultPath, historyPath);
+        assert.equal(ribbon[1].type, 'file');
+        assert.equal(ribbon[1].path, historyPath);
+        assert.equal(ribbon[1].name, 'presentation.html');
+    });
+
+    it('executeToolCall uses save_file history path, not context/filename', async () => {
+        const historyPath = '/USERS/u1/$user/text/.presentation.html/history/2026-07-22/1.GigaChat.html';
+        const ctx = {
+            path: '/USERS/u1',
+            async save_file() {
+                return { path: historyPath, type: '$file' };
+            },
+        };
+        const { result } = await executeToolCall(
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
+            ctx,
+            ctx,
+            [],
+            { user: { uid: 'u1' }, role: 'USER' },
+            { uid: 'GigaChat', isAI: true },
+        );
+        assert.equal(result.success, true);
+        assert.equal(result.resultPath, historyPath);
+        assert.equal(result.path, historyPath);
+        assert.equal(result.workPath, undefined);
+        assert.notEqual(result.resultPath, '/USERS/u1/presentation.html');
+    });
+
+    it('executeToolCall errors when save_file has no history path', async () => {
+        const ctx = {
+            path: '/USERS/u1',
+            async save_file() {
+                return true;
+            },
+        };
+        const { result } = await executeToolCall(
+            { method: 'save_file', args: { filename: 'presentation.html', post: '<html/>' } },
+            ctx,
+            ctx,
+            [],
+            { user: { uid: 'u1' }, role: 'USER' },
+        );
+        assert.ok(result.error);
+        assert.ok(String(result.error).includes('history path'));
+        assert.equal(result.resultPath, undefined);
+        assert.notEqual(result.path, '/USERS/u1/presentation.html');
+    });
+
+    it('XML questions without options are dropped (idle inject path)', () => {
+        const { blocks } = parseResponseToRibbon(
+            '<questions>[{"id":"topic","label":"Тема","type":"text"}]</questions><action>{"label":"Уточнить"}</action>',
+            'WORK',
+        );
+        assert.equal(blocks.some(b => b.type === 'questions'), false);
+    });
+
+    it('XML questions with options stay as select', () => {
+        const { blocks } = parseResponseToRibbon(
+            '<questions>[{"id":"topic","label":"Тема","options":["A","B"]}]</questions><action>{"label":"Уточнить"}</action>',
+            'WORK',
+        );
+        const q = blocks.find(b => b.type === 'questions');
+        assert.ok(q);
+        assert.equal(q.fields[0].type, 'select');
+        assert.deepEqual(q.fields[0].options, ['A', 'B']);
     });
 
     it('clarify step → propose; ask_user options for USER path', () => {
@@ -79,20 +171,23 @@ describe('MVP e2e: ADMIN modify class', () => {
 
         const gate = gateToolCalls('ADMIN', [
             { method: 'save', args: {} },
-            { method: 'write_file', args: { name: 'handlers/methods/foo/$method/class.js' } },
-            { method: 'write_file', args: { name: 'readme.md' } },
+            { method: 'save_file', args: { filename: 'handlers/methods/foo/$method/class.js' } },
+            { method: 'save_file', args: { filename: 'readme.md' } },
         ]);
         assert.equal(gate.blocked.length, 0);
         assert.equal(gate.allowed.length, 3);
         assert.equal(gate.needsConfirm, true);
         assert.ok(isSystemModifyCall(gate.allowed[0]));
         assert.ok(isSystemModifyCall(gate.allowed[1]));
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'class.js' } }), true);
+        assert.equal(callNeedsTrustConfirm({ method: 'save_file', args: { filename: 'readme.md' } }), false);
+        assert.equal(callNeedsTrustConfirm({ method: 'write_file', args: { name: 'readme.md' } }), false);
     });
 
     it('BOSS cannot save class.js even if ask_user succeeded', () => {
         const gate = gateToolCalls('BOSS', [
             { method: 'save', args: {} },
-            { method: 'write_file', args: { name: 'plan.md' } },
+            { method: 'save_file', args: { filename: 'plan.md' } },
         ]);
         assert.equal(gate.blocked.length, 1);
         assert.equal(gate.allowed.length, 1);

@@ -75,7 +75,7 @@ WORK построен вокруг `$item`.
 
 В `modules/` не должны попадать базовые helpers ядра.
 
-## JSDoc @ai-разметка методов для ИИ
+## JSDoc методов для ИИ (`get_schema`)
 
 ### Назначение
 
@@ -87,24 +87,28 @@ WORK построен вокруг `$item`.
 
 1. Обходит всю цепочку прототипов (от `$class` до `$folder` и выше)
 2. Для каждого слоя парсит исходный файл класса через `constructor.sourceUrl`
-3. Извлекает JSDoc-теги `@ai`, `@ai.params`, `@ai.returns` из текста исходника
-4. Fallback на `static TOOL_DESCRIPTIONS` для методов без `@ai`
+3. Извлекает стандартный JSDoc: summary, `@param`, `@returns` / `@return`
+4. В схему попадают методы/геттеры с summary и хотя бы одним `@param` или `@returns` (IDE-комментарии без тегов не утекают в LLM)
 5. Кэширует результат в `WeakMap` по конструктору
 
 **Критическая особенность:** `Function.prototype.toString()` в V8 НЕ сохраняет JSDoc-комментарии, поэтому парсинг идёт по исходному файлу, а не по функции в рантайме.
 
-### Теги @ai
+### Канон разметки
 
 ```js
 /**
- * @ai Описание метода для ИИ-агента
- * @ai.params {"param1": "описание параметра", "param2": "описание"}
- * @ai.returns Описание возвращаемого значения
+ * Сохранить файл в текущую папку с записью в историю.
+ * @param {object} [params]
+ * @param {string} params.filename Имя файла
+ * @param {string|Buffer|object} params.post Содержимое
+ * @returns {Promise<object>} Объект с путём сохранённого файла и лога истории
  */
-async myMethod(params = {}) {
+async save_file(params = {}) {
     // ...
 }
 ```
+
+Ключи вида `params.filename` в схеме для LLM становятся плоским `filename`. Сам bag `params` не дублируется.
 
 ### `static sourceUrl = import.meta.url`
 
@@ -112,16 +116,6 @@ async myMethod(params = {}) {
 - `sources/server/folder.js` — `$folder`
 - `sources/server/class.js` — `$class`
 - `sources/server/file.js` — `$file`
-
-### `static TOOL_DESCRIPTIONS`
-
-Статический словарь описаний методов для методов без JSDoc `@ai`. Наследуется через spread:
-```js
-static TOOL_DESCRIPTIONS = {
-    ...$folder.TOOL_DESCRIPTIONS,  // наследование
-    newMethod: 'Описание нового метода',
-};
-```
 
 ### `get_schema()` в `$folder`
 

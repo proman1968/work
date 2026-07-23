@@ -58,6 +58,46 @@ describe('parseResponseToRibbon types', () => {
         assert.equal(blocks.some(isInteractiveBlock), false);
         assert.ok(blocks.some(b => b.type === 'text'));
     });
+
+    it('ask_user tag → questions; raw XML stripped from text', () => {
+        const { blocks } = parseResponseToRibbon(
+            `Сначала уточню параметры.
+<ask_user>{"questions":[{"id":"topic","prompt":"Тема","options":["A","B"]}]}</ask_user>
+<function_caller></function_caller>`,
+            'AI',
+        );
+        const q = blocks.find(b => b.type === 'questions');
+        assert.ok(q);
+        assert.ok(q.fields?.length >= 1);
+        assert.equal(q.fields[0].id, 'topic');
+        const text = blocks.filter(b => b.type === 'text').map(b => b.content).join('\n');
+        assert.ok(!text.includes('<ask_user>'));
+        assert.ok(!text.includes('</ask_user>'));
+        assert.ok(!text.includes('function_caller'));
+        assert.ok(!text.includes('"questions"'));
+    });
+
+    it('unclosed reasoning → thinking (stream cut mid-tag)', () => {
+        const { blocks } = parseResponseToRibbon(
+            `<reasoning>\nТема известна, пишу структуру слайдов.`,
+            'AI',
+        );
+        const th = blocks.filter(b => b.type === 'thinking');
+        assert.equal(th.length, 1);
+        assert.ok(th[0].content.includes('пишу структуру'));
+        assert.ok(!th[0].content.includes('<reasoning>'));
+    });
+
+    it('closed + trailing unclosed reasoning both kept', () => {
+        const { blocks } = parseResponseToRibbon(
+            `<reasoning>Первый блок</reasoning>\n<reasoning>\nВторой без закрытия`,
+            'AI',
+        );
+        const th = blocks.filter(b => b.type === 'thinking');
+        assert.equal(th.length, 2);
+        assert.equal(th[0].content, 'Первый блок');
+        assert.ok(th[1].content.includes('Второй'));
+    });
 });
 
 describe('normalizeInteractiveBlocks', () => {

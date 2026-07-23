@@ -47,7 +47,7 @@ export default {
     },
     async selectUser(e) {
         const currentTarget = e.currentTarget;
-        const $users = await WORK.get_item('/users');
+        const $users = await WORK.get_item('/USERS');
         const menu = ODA.createElement('item-tree',
             {
                 $item: $users,

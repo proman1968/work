@@ -1,3 +1,13 @@
+/** «?» / probe readme.md только для папок и классов под /oda и /sources. */
+function mayShowReadme($item) {
+    if (!$item) return false;
+    // $file extends $folder на клиенте — файлы исключаем явно
+    if ($item.constructor === CORE.$file || $item.type === '$file') return false;
+    const p = String($item.path || '');
+    return p === '/oda' || p === '/sources'
+        || p.startsWith('/oda/') || p.startsWith('/sources/');
+}
+
 export default {
     imports: '~/lib//icon, ~/lib//user, ~/lib//users',
     extends: 'item-icon',
@@ -54,6 +64,14 @@ export default {
                 white-space: nowrap;
                 align-self: center;
             }
+            .history-time{
+                @apply --no-flex;
+                font-size: xx-small;
+                opacity: .55;
+                margin-left: 6px;
+                white-space: nowrap;
+                align-self: center;
+            }
             .readme-help{
                 @apply --no-flex;
                 opacity: .55;
@@ -68,6 +86,7 @@ export default {
             <div vertical flex>
                 <div horizontal flex> 
                     <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
+                    <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-user ~if="showBoss" :$item="boss" icon-size="16"></item-user>
                 </div>
@@ -79,8 +98,17 @@ export default {
     showSize: false,
     showUsers: false,
     hideLabel: false,
+    get historyTime() {
+        const path = this.$item?.path;
+        if (!path || !String(path).includes('/history/'))
+            return '';
+        const parse = CORE.$file?.parseHistoryEntryPath || this.$item?.constructor?.parseHistoryEntryPath;
+        if (typeof parse !== 'function')
+            return '';
+        return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
+    },
     get readmeItem() {
-        if (!this.$item) return null;
+        if (!mayShowReadme(this.$item)) return null;
         return Promise.resolve(this.$item.items).then(async items => {
             if (Array.isArray(items)) {
                 const found = items.find(f => /^readme\.md$/i.test(f.id));
@@ -88,7 +116,7 @@ export default {
             }
             if (typeof this.$item.get_item === 'function') {
                 try {
-                    const readme = await this.$item.get_item('readme.md');
+                    const readme = await this.$item.get_item('/readme.md');
                     if (readme && !Array.isArray(readme)) return readme;
                 } catch {}
             }

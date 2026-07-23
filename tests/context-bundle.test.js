@@ -56,14 +56,14 @@ describe('formatPairContextForSystem', () => {
     it('renders class and user sections', () => {
         const text = formatPairContextForSystem(
             { path: '/org/dept', readme: 'Dept readme', mem: 'goal', logs: '- log1' },
-            { path: '/users/u1', readme: '', mem: 'pref', logs: '- ulog' },
+            { path: '/USERS/u1', readme: '', mem: 'pref', logs: '- ulog' },
         );
         assert.ok(text.includes('## Класс'));
         assert.ok(text.includes('/org/dept'));
         assert.ok(text.includes('Dept readme'));
         assert.ok(text.includes('### Логи класса'));
         assert.ok(text.includes('## Пользователь'));
-        assert.ok(text.includes('/users/u1'));
+        assert.ok(text.includes('/USERS/u1'));
         assert.ok(text.includes('### Логи пользователя'));
     });
 

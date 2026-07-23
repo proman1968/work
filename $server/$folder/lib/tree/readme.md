@@ -13,7 +13,7 @@
 - Дети берутся через `itemsSelector` (по умолчанию `items`).
 - `hideSystem` убирает `$…` типы.
 - `hideReadme` (по умолчанию выкл.) скрывает `readme.md` из списка — включает только `item-menu` handlers; в explorer файлы `readme.md` видны.
-- Узлы с собственным `readme.md` показывают «?» на `item-node`.
+- Узлы с собственным `readme.md` показывают «?» на `item-node` — только папки/$class под `/oda` и `/sources` (файлы и прочие пути без probe).
 
 ## Из чего это состоит
 

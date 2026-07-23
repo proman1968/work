@@ -17,6 +17,6 @@ export default {
     },
     fileControl: 'object',
     get url(){
-        return this.$context?.url + '/~/handlers/pages/open/index.html';
+        return this.$context?.url;
     }
 }

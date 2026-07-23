@@ -200,7 +200,7 @@ export function createRequestHandler() {
 
                         // Location: encodeURI(user?.uid
                         //     ? `/~/handlers//${'explorer'}/index.html`
-                        //     : `/paas/~/handlers//landing/`),
+                        //     : `/PAAS/~/handlers//landing/`),
                     });
                     response.end();
                     return;
