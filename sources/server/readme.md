@@ -15,7 +15,6 @@
 ## Ключевые механизмы
 
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям
-- **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = JSDoc `@ai`)
-- **`TOOL_DESCRIPTIONS`** — fallback-описания только для методов **без** `@ai` (не дублировать размеченные)
-- **`static sourceUrl = import.meta.url`** — для парсинга JSDoc `@ai` тегов
+- **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
+- **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
 - **`save_file` → `save_to_history`** — return = history path снимка (карточка file в task.ai показывает его)

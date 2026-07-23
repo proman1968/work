@@ -626,10 +626,10 @@ describe('expandStepWithSubplan', () => {
 
 describe('workPathFromHistoryPath', () => {
     it('maps history snapshot to work file path (helper only; UI uses history)', () => {
-        const hp = '/users/u1/$user/text/.presentation.html/history/2026-07-23/1.GigaChat.html';
+        const hp = '/USERS/u1/$user/text/.presentation.html/history/2026-07-23/1.GigaChat.html';
         assert.equal(
             workPathFromHistoryPath(hp, 'presentation.html'),
-            '/users/u1/$user/text/presentation.html',
+            '/USERS/u1/$user/text/presentation.html',
         );
     });
 });

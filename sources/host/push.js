@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import webPush from 'web-push';
 
 function getPushSubscriptionsPath(uid) {
-    return `./users/${uid}/$user/#system/push_subscriptions.json`;
+    return `./USERS/${uid}/$user/#system/push_subscriptions.json`;
 }
 
 export async function loadPushSubscriptions(uid) {

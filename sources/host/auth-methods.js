@@ -96,7 +96,7 @@ export const authMethods = {
 
         let base64Image = icon?.split(';base64,')?.pop();
         if (base64Image)
-            credentials.icon = '/users//' + uid + '/$user/icon.png';
+            credentials.icon = '/USERS//' + uid + '/$user/icon.png';
 
         let post = CORE.$class.toScript(credentials);
 
@@ -108,7 +108,7 @@ export const authMethods = {
 
         if (base64Image) {
             base64Image = Buffer.from(base64Image, 'base64');
-            fs.writeFileSync('./users/' + uid + '/$user/icon.png', base64Image);
+            fs.writeFileSync('./USERS/' + uid + '/$user/icon.png', base64Image);
         }
 
         user.credentials = { ...user.credentials, ...credentials };

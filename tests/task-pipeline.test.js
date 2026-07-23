@@ -177,7 +177,7 @@ describe('task pipeline', () => {
             },
         };
         const author = {
-            path: '/users/u/$user',
+            path: '/USERS/u/$user',
             id: 'u',
             async save_file() {
                 authorWrites++;
@@ -202,7 +202,7 @@ describe('task pipeline', () => {
     it('save_to_log writes once when author cabinet equals group storage', async () => {
         let writes = 0;
         const cabinet = {
-            path: '/users/test/$user',
+            path: '/USERS/test/$user',
             id: 'test',
             async save_file() {
                 writes++;
@@ -210,7 +210,7 @@ describe('task pipeline', () => {
         };
         globalThis.WORK = { file_handlers: {}, id: 'WORK' };
         await CORE.$file.save_to_log.call(
-            { json_model: { path: '/users/test/$user/text/.message.txt/history/2026-06-27/1.test.txt' }, $owner: cabinet },
+            { json_model: { path: '/USERS/test/$user/text/.message.txt/history/2026-06-27/1.test.txt' }, $owner: cabinet },
             {
                 filename: 'message.txt',
                 post: 'hello',
@@ -224,7 +224,7 @@ describe('task pipeline', () => {
     it('save_to_log skips mirror for task.ai when logAuthor cabinet equals owner', async () => {
         let writes = 0;
         const cabinet = {
-            path: '/users/test/$user',
+            path: '/USERS/test/$user',
             id: 'test',
             async save_file() {
                 writes++;
@@ -232,7 +232,7 @@ describe('task pipeline', () => {
         };
         globalThis.WORK = { file_handlers: {}, id: 'WORK' };
         await CORE.$file.save_to_log.call(
-            { json_model: { path: '/users/test/$user/ai/.task.ai/history/2026-06-27/1.WORK.ai' }, $owner: cabinet },
+            { json_model: { path: '/USERS/test/$user/ai/.task.ai/history/2026-06-27/1.WORK.ai' }, $owner: cabinet },
             {
                 filename: 'task.ai',
                 post: 'task',

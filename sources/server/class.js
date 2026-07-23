@@ -33,16 +33,6 @@ export class $class extends $folder{
         return childPath.startsWith(parentPath + '/');
     }
 
-    // Описания методов, специфичных для $class (наследуются от $folder)
-    static TOOL_DESCRIPTIONS = {
-        ...$folder.TOOL_DESCRIPTIONS,
-        read_secret: 'Прочитать секрет из #system. Параметры: name (имя модуля). Требует ADMIN доступ.',
-        save_secret: 'Сохранить секрет в #system. Параметры: name (имя модуля), post (данные). Требует ADMIN доступ.',
-        read_log_entry: 'Получить актуальную запись лога по path. Параметры: taskPath/path/entryPath.',
-        appendLogIncludes: 'Добавить пути в includes записи лога. Параметры: entryPath, includePaths.',
-        task_reply: 'Продолжить диалог в существующей task.ai. Параметры: taskPath, post.',
-    };
-
     get $public(){
         return {
             get icon(){
@@ -302,9 +292,10 @@ export class $class extends $folder{
     }
 
     /**
-     * @ai Загрузить и объединить class.js класса из цепочки наследования
-     * @ai.params {"reset": "сбросить кэш перед загрузкой"}
-     * @ai.returns Объединённый объект class.js
+     * Загрузить и объединить class.js класса из цепочки наследования.
+     * @param {object} [params]
+     * @param {boolean} [params.reset] Сбросить кэш перед загрузкой
+     * @returns {Promise<object>} Объединённый объект class.js
      */
     async load(params = {}){
         await this.allowAccess(params, $class.ACCESS_LEVEL.READ);
@@ -313,8 +304,9 @@ export class $class extends $folder{
         return $server.mergeFiles(files, params.reset);
     }
     /**
-     * @ai Импортировать class.js класса как ES-модуль
-     * @ai.returns Экспорт class.js (default)
+     * Импортировать class.js класса как ES-модуль.
+     * @param {object} [params]
+     * @returns {Promise<*>} Экспорт class.js (default)
      */
     async import(params = {}){
         let data = await this.load(params)
@@ -393,11 +385,11 @@ export class $class extends $folder{
     }
 
     /**
-     * Все роли пользователя в данном классе.
+     * Получить список ролей текущего пользователя в классе.
      * Проверяет геттеры admins/bosses/users (наследуемые/локальные).
-     * @ai Получить список ролей текущего пользователя в классе
-     * @ai.params {"user": "объект пользователя из сессии"}
-     * @ai.returns Массив строк: 'ADMIN', 'BOSS', 'USER'
+     * @param {object} [params]
+     * @param {object} [params.user] Объект пользователя из сессии
+     * @returns {Promise<string[]>} Массив строк: 'ADMIN', 'BOSS', 'USER'
      */
     async roles(params = {}) {
         const uid = $class.resolveUid(params);
@@ -445,14 +437,14 @@ export class $class extends $folder{
         const uid = $class.resolveUid(params);
         // Явно выбранная роль в UI имеет приоритет
         if (params.role === $class.ROLES.USER)
-            return uid ? '/users//' + uid : this.path;
+            return uid ? '/USERS//' + uid : this.path;
         if (params.role === $class.ROLES.ADMIN || params.role === $class.ROLES.BOSS)
             return this.path;
         // Fallback: без role — по фактическим ролям
         const roles = await this.roles(params);
         if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS))
             return this.path;
-        return uid ? '/users//' + uid : this.path;
+        return uid ? '/USERS//' + uid : this.path;
     }
     /**
      * Элемент-источник логов для текущей роли (this или $user).
@@ -473,9 +465,10 @@ export class $class extends $folder{
         return this.constructor.importScript(script);
     }
     /**
-     * @ai Сохранить class.js класса с разделением на собственные и наследуемые данные
-     * @ai.params {"post": "строка class.js (export default {...})"}
-     * @ai.returns true при успешном сохранении
+     * Сохранить class.js класса с разделением на собственные и наследуемые данные.
+     * @param {object} [params]
+     * @param {string} params.post Строка class.js (export default {...})
+     * @returns {Promise<boolean>} true при успешном сохранении
      */
     async save(params = {}){
         await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
@@ -685,13 +678,13 @@ export class $class extends $folder{
     }
 
     /**
-     * JSON-тела записей за день или диапазон.
-     * params: { day } | { from, to } | { days[] }, опционально ext / exts: 'ics' | ['ics','eml']
-     */
-    /**
-     * @ai Получить тела записей логов за день или диапазон дат
-     * @ai.params {"day": "дата YYYY-MM-DD", "from": "начало диапазона", "to": "конец диапазона", "ext": "фильтр по расширению"}
-     * @ai.returns Массив записей логов с содержимым
+     * Получить тела записей логов за день или диапазон дат.
+     * @param {object} [dayOrParams]
+     * @param {string} [dayOrParams.day] Дата YYYY-MM-DD
+     * @param {string} [dayOrParams.from] Начало диапазона
+     * @param {string} [dayOrParams.to] Конец диапазона
+     * @param {string|Array} [dayOrParams.ext] Фильтр по расширению
+     * @returns {Promise<Array>} Массив записей логов с содержимым
      */
     async read_log_bodies(dayOrParams = {}){
         const params = $class._normalizeLogQuery(dayOrParams);
@@ -727,12 +720,25 @@ export class $class extends $folder{
         return null;
     }
 
-    /** Актуальная JSON-запись лога по path history-файла (для микрочата task.ai). */
+    /**
+     * Актуальная JSON-запись лога по path history-файла (для микрочата task.ai).
+     * @param {object} [params]
+     * @param {string} [params.taskPath] Путь к task.ai / history
+     * @param {string} [params.path] Альтернативное имя параметра пути
+     * @param {string} [params.entryPath] Альтернативное имя параметра пути
+     * @returns {Promise<object|null>} Запись лога или null
+     */
     async read_log_entry(params = {}) {
         return this._findLogEntry(params.taskPath || params.path || params.entryPath);
     }
 
-    /** Добавить пути в includes записи лога (например, шаги task.ai). */
+    /**
+     * Добавить пути в includes записи лога (например, шаги task.ai).
+     * @param {string|object} entryPath Путь записи или объект {entryPath, includePaths}
+     * @param {Array|string} [includePaths] Пути для includes
+     * @param {object} [params]
+     * @returns {Promise<object|null>} Обновлённая запись или null
+     */
     async appendLogIncludes(entryPath, includePaths = [], params = {}) {
         if (entryPath && typeof entryPath === 'object' && entryPath.entryPath) {
             params = includePaths?.user ? includePaths : (params?.user ? params : {});
@@ -843,11 +849,13 @@ export class $class extends $folder{
         }
     }
 
-    /** Продолжение диалога в существующей task.ai (микрочат). */
     /**
-     * @ai Продолжить диалог в существующей task.ai (отправка повторного промпта)
-     * @ai.params {"taskPath": "путь к task.ai", "post": "текст или FormData с файлами"}
-     * @ai.returns Обновлённая запись лога task.ai
+     * Продолжить диалог в существующей task.ai (отправка повторного промпта).
+     * @param {object} [params]
+     * @param {string} params.taskPath Путь к task.ai
+     * @param {string|object} [params.post] Текст или FormData с файлами
+     * @param {string|object} [post] То же, что params.post (позиционный)
+     * @returns {Promise<object>} Обновлённая запись лога task.ai
      */
     async task_reply(params = {}, post) {
         post ??= params.post;
@@ -940,8 +948,13 @@ export class $class extends $folder{
     }
 
     /**
-     * Лёгкий срез для calendar / списков — без content и без load history-файлов.
-     * params: как read_log_bodies + flat, perDay (default true для диапазона)
+     * Лёгкий индекс логов без content (для calendar / списков).
+     * @param {object} [params]
+     * @param {string} [params.day] Дата YYYY-MM-DD
+     * @param {string} [params.from] Начало диапазона
+     * @param {string} [params.to] Конец диапазона
+     * @param {boolean} [params.flat] Плоский список
+     * @returns {Promise<Array>} Индекс записей или агрегаты по дням
      */
     async log_index(params = {}){
         params = $class._normalizeLogQuery(params);
@@ -982,18 +995,14 @@ export class $class extends $folder{
     }
 
     /**
-     * Универсальный доступ к логам.
-     * mode:
-     *   folder — $folder дня (чат, WS-подписка), только params.day
-     *   bodies — read_log_bodies(params)
-     *   index  — log_index(params)
-     *   files  — список $file (*.logs) за день или диапазон без load JSON
-     * Фильтры: day | from+to | days[], ext | exts
-     */
-    /**
-     * @ai Универсальный доступ к логам класса
-     * @ai.params {"mode": "folder|bodies|index|files", "day": "дата", "from": "начало", "to": "конец", "ext": "расширение"}
-     * @ai.returns Зависит от mode: папку дня, тела записей, индекс или список файлов
+     * Универсальный доступ к логам класса.
+     * @param {object} [params]
+     * @param {string} [params.mode] folder|bodies|index|files
+     * @param {string} [params.day] Дата
+     * @param {string} [params.from] Начало диапазона
+     * @param {string} [params.to] Конец диапазона
+     * @param {string} [params.ext] Расширение
+     * @returns {Promise<*>} Зависит от mode: папка дня, тела, индекс или список файлов
      */
     async logs(params = {}){
         const source = await this._logSource(params);
@@ -1241,6 +1250,12 @@ export class $class extends $folder{
         return itemClass === this;
     }
 
+    /**
+     * Прочитать секрет из #system. Требует ADMIN.
+     * @param {object} [params]
+     * @param {string} params.name Имя модуля
+     * @returns {Promise<object>} Данные секрета или {}
+     */
     async read_secret(params = {}){
         await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;
@@ -1258,6 +1273,13 @@ export class $class extends $folder{
         return {};
     }
 
+    /**
+     * Сохранить секрет в #system. Требует ADMIN.
+     * @param {object} [params]
+     * @param {string} params.name Имя модуля
+     * @param {object|string} params.post Данные секрета
+     * @returns {Promise<object>} Сохранённые данные
+     */
     async save_secret(params = {}){
         await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;

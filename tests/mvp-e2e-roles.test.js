@@ -45,13 +45,13 @@ describe('MVP e2e: USER working task', () => {
     it('system shows pair context and USER ACL; work write allowed, typifier blocked', () => {
         const system = formatRoleAclForSystem('USER') + formatPairContextForSystem(
             { path: '/org/dept', readme: 'Отдел', mem: '', logs: '- 2026-07-21 | u1 | ai | /org/dept/task.ai' },
-            { path: '/users/u1', readme: '', mem: 'prefs', logs: '- 2026-07-21 | u1 | md | /users/u1/note.md' },
+            { path: '/USERS/u1', readme: '', mem: 'prefs', logs: '- 2026-07-21 | u1 | md | /USERS/u1/note.md' },
         );
         assert.ok(system.includes('## Права роли (USER)'));
         assert.ok(system.includes('## Класс'));
         assert.ok(system.includes('## Пользователь'));
         assert.ok(system.includes('/org/dept/task.ai'));
-        assert.ok(system.includes('/users/u1/note.md'));
+        assert.ok(system.includes('/USERS/u1/note.md'));
 
         const gate = gateToolCalls('USER', [
             { method: 'save_file', args: { filename: 'presentation.html' } },
@@ -66,7 +66,7 @@ describe('MVP e2e: USER working task', () => {
     });
 
     it('pushToolResult adds file block with history resultPath', () => {
-        const historyPath = '/users/u1/$user/text/.presentation.html/history/2026-07-22/1784729198845.GigaChat.html';
+        const historyPath = '/USERS/u1/$user/text/.presentation.html/history/2026-07-22/1784729198845.GigaChat.html';
         const ribbon = [];
         pushToolResult(
             ribbon,
@@ -88,9 +88,9 @@ describe('MVP e2e: USER working task', () => {
     });
 
     it('executeToolCall uses save_file history path, not context/filename', async () => {
-        const historyPath = '/users/u1/$user/text/.presentation.html/history/2026-07-22/1.GigaChat.html';
+        const historyPath = '/USERS/u1/$user/text/.presentation.html/history/2026-07-22/1.GigaChat.html';
         const ctx = {
-            path: '/users/u1',
+            path: '/USERS/u1',
             async save_file() {
                 return { path: historyPath, type: '$file' };
             },
@@ -107,12 +107,12 @@ describe('MVP e2e: USER working task', () => {
         assert.equal(result.resultPath, historyPath);
         assert.equal(result.path, historyPath);
         assert.equal(result.workPath, undefined);
-        assert.notEqual(result.resultPath, '/users/u1/presentation.html');
+        assert.notEqual(result.resultPath, '/USERS/u1/presentation.html');
     });
 
     it('executeToolCall errors when save_file has no history path', async () => {
         const ctx = {
-            path: '/users/u1',
+            path: '/USERS/u1',
             async save_file() {
                 return true;
             },
@@ -127,7 +127,7 @@ describe('MVP e2e: USER working task', () => {
         assert.ok(result.error);
         assert.ok(String(result.error).includes('history path'));
         assert.equal(result.resultPath, undefined);
-        assert.notEqual(result.path, '/users/u1/presentation.html');
+        assert.notEqual(result.path, '/USERS/u1/presentation.html');
     });
 
     it('XML questions without options are dropped (idle inject path)', () => {

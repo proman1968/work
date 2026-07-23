@@ -2,6 +2,8 @@
 
 ## Последние изменения
 
+- [16:30] Корневой класс кабинетов: `users/` → `USERS/`; пути `/USERS/…`; §1.9 — корневые классы ЗАГЛАВНЫМИ.
+- [15:40] `get_schema`: канон = стандартный JSDoc (`@param`/`@returns`); убраны `@ai.*` и `TOOL_DESCRIPTIONS`.
 - [15:20] task.ai: карточка file = history path; fill-шаг → subplan по N; TOOL_DESCRIPTIONS без дублей `@ai`.
 - [13:53] Убран лишний `handlers-help` из `item-menu` — возврат к архитектуре tools + `item-tree` без отдельной кнопки «?».
 

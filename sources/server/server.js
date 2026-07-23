@@ -78,7 +78,7 @@ export class $server extends $class {
         return $folder.build('$folder', this.meta_folder);
     }
     get $users(){
-        return this._get_item('users', $user);
+        return this._get_item('USERS', $user);
     }
     get id(){
         return 'WORK';

@@ -3125,9 +3125,9 @@ async function resolveUserStorage(params = {}) {
     if (!uid || typeof WORK?.get_item !== 'function')
         return null;
     try {
-        let item = await WORK.get_item('/users/' + uid);
+        let item = await WORK.get_item('/USERS/' + uid);
         if (!item)
-            item = await WORK.get_item('/users//' + uid);
+            item = await WORK.get_item('/USERS//' + uid);
         return item || null;
     } catch (e) {
         console.warn('[task.ai] resolveUserStorage:', e.message);

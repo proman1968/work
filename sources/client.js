@@ -562,11 +562,11 @@ class WebSocketEvents {
 }
 
 WORK.get_$user = function (uid = WORK.uid){
-    return WORK.get_item('/users//' + uid);
+    return WORK.get_item('/USERS//' + uid);
 }
 
 WORK.$users = function (){
-    return WORK.get_item('/users/*');
+    return WORK.get_item('/USERS/*');
 }
 
 
@@ -775,7 +775,7 @@ WORK.renderSVG = async (svg) => {
 Object.defineProperty(WORK, 'users', {
     get(){ //todo надо сбрасывать при появлении новых пользователей на сервере
         return WORK._users ??= new AsyncPromise(async _=>{
-            let res = await WORK.get_item('/users');
+            let res = await WORK.get_item('/USERS');
             return res.children;
         });
     }

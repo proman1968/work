@@ -2,7 +2,8 @@
 
 ## Последние изменения
 
-- [15:15] Карточка file = history path из `save_file` (откат workPath). Fill-шаг → обязательный subplan по N; stub не advance. TOOL_DESCRIPTIONS без дублей @ai; harness не перетирает schema save_file.
+- [15:40] `get_schema`: стандартный JSDoc (`@param`/`@returns`); без `@ai.*` / `TOOL_DESCRIPTIONS`.
+- [15:15] Карточка file = history path из `save_file` (откат workPath). Fill-шаг → обязательный subplan по N; stub не advance.
 
 ## В работе
 
@@ -13,7 +14,7 @@
 
 - **History в UI.** `save_file` уже возвращает снимок; harness не подменяет на `~/text/name`.
 - **Fill = подплан.** N из answers → expand; иначе блок save. Stub не закрывает слайд.
-- **@ai канон.** TOOL_DESCRIPTIONS только fallback; ensureHarnessFunctions не overwrite schema.
+- **JSDoc канон.** Обычный `@param`/`@returns` для IDE и `get_schema`; без второго словаря.
 
 ## Блокеры / Открытые вопросы
 
