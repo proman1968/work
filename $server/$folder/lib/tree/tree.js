@@ -42,7 +42,7 @@ export default {
     showUsers: false,
     showSize: false,
     get expanderIconSize(){
-        return ODA.states?.mobileMode ? this.iconSize * 2 : this.iconSize;
+        return ODA.states?.mobileMode ? this.iconSize * 1.5 : this.iconSize;
     },
     nodeTemplate: 'oda-tree-node',
     itemsSelector: 'items',

@@ -1,5 +1,5 @@
 export default {
-    label: 'APPS',
+    label: 'VIEWS',
     icon: 'icons:dashboard',
     template: /* html */`
         <style>

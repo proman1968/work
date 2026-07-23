@@ -1,0 +1,8 @@
+---
+description: WORK platform rules — read rules/ (canonical); do not duplicate here
+alwaysApply: true
+---
+
+Читай и следуй [`rules/rules.md`](rules/rules.md). При работе от роли — [`rules/user.md`](rules/user.md) | [`rules/boss.md`](rules/boss.md) | [`rules/admin.md`](rules/admin.md).
+
+Канон правил — только каталог `rules/`. Этот файл — перенаправление для Cursor, не вторая копия стандартов.

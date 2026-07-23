@@ -2,41 +2,15 @@
 
 ## Последние изменения
 
-- [23.07.2026] Правило: id папки класса — целиком ЗАГЛАВНЫМИ (любой алфавит); label любой. Корень: base→BASE, paas→PAAS, … Системные oda/sources без смены.
-- [23.07.2026] item-node: probe/иконка readme.md только для папок/$class под /oda и /sources (не на файлах). Причина: GET …/readme.md?info 400 по всему корню.
-- [23.07.2026] z.ai/GLM FC: OpenAI `tools` + `role:tool` / `tool_calls` (не legacy `functions`/`role:function`). GigaChat без изменений. Причина: 400/1214 Incorrect role information.
-- [23.07.2026] Task UI: цель над планом; в progress — текущий шаг. Do: auto-advance после ok save_file; idle не завершает незакрытый план из‑за prior save.
-- [22.07.2026] Правило артефактов: один конечный filename + перезапись (file→history); запрет presentation.struct.md и т.п. в SYSTEM_PROMPT/harness/rules.
-- [22.07.2026] History-файл: label = прото-имя; справа в item-node мелко dateTime. Причина: «18:12 | GigaChat Light» неинформативно.
-- [22.07.2026] Граница хода: `clear_stream` после durable + после tools; unclosed `<reasoning>` → thinking. Причина: стрим копился через turns, 6-е «Мысли» только в UI.
-- [22.07.2026] Harness: единый `commitDurableBlocks` сразу после parse (до idle/inject) — reasoning не зависит от веток.
-- [22.07.2026] Idle PROPOSE inject: `commitIdleContent` перед `makeClarifyQuestions` — reasoning до формы не пропадает.
-- [22.07.2026] Клиентский `WORK.get_item`: default `info` → всегда `$item`; контент только через `load`. Карточка файла + idle после ok save_file + strip FC-хвоста в post.
-- [22.07.2026] Idle EXECUTE: reasoning (`thinking`/`text`) коммитится в ленту на retry/stop; deferred plan без tools не двигает шаги. Причина: стрим пропадал при `chat.done` с одним error.
-- [22.07.2026] harness `save_file`: в ленту только history `log.path` из return, без invented `context/filename`. Причина: фейковый path ломал карточку файла.
-- [22.07.2026] MVP e2e до файла: write без confirm, file-блок, FC tool_calls/flush, plan≥4 для презентации, nested $file.
-- [22.07.2026] task.ai: harness `write_file` в FC + clarify→execute после ответов (Do до файла).
-- [22.07.2026] task.ai: GigaChat `functionCalling` + Cursor AskQuestion idle (select+options, не text).
-- [22.07.2026] MVP `$ai`/task.ai: контекст пары user/class, ACL ролей, ADMIN modify+confirm; вход через `triggers/on_save`. Документация уровня `$ai` по `rules.md`.
-- [21.07.2026] Исправлен misuse `AsyncPromise`: оставлен только для прерывания реактивности (one-shot `??=` и циклы FS `ancestor`/`items`/`children`/`files`/`folders`/`tilde`). UI и производные геттеры переведены на обычный `Promise`, чтобы deps снова подписывались. Правило зафиксировано в `README.md` §3.1.
-- [20.07.2026] Исправлено открытие форм с конкретным представлением (`~/handlers/pages/form/file/`). Причина: метод `getIndexForPage()` в `sources/server/server.js` ненадёжно определял корневой handler через проверку `parent.type === '$handler'` — промежуточная папка `form` при наследовании (из-за новой `$devs/handlers/pages/form`) получила тип `$folder` вместо `$handler`. Решение: замена проверки на структурную `parent.id !== 'pages'`, так как структура путей всегда `handlers/pages/<page>[/<view>]`. Теперь `page_handler`, `component_name` и `view_name` генерируются корректно для всех вариантов.
-- [20.07.2026] Исправлены `label` и `icon` для handler'а `file` (форма файла). Причина: геттеры `label`/`icon` находились в теле прототипа, но `$public` из `$class` перехватывал их (через `DATA.icon`), поэтому возвращался fallback или иконка WORK (`/sources/odant.png`). Диагностика через `console.log` подтвердила что `$context`/`$item` корректно указывают на `$file`, но геттеры прототипа игнорировались. Решение: перенос `label`/`icon` внутрь `$public` прототипа handler `file` — теперь они имеют приоритет и возвращают расширение/иконку конкретного файла через `$context` (с fallback на `$item`). Дополнительно: в `work-form` добавлен enrich views через `$context: this.$item` для корректной передачи контекста в селектор представлений.
-- [19.07.2026] Обновлён корневой `readme.md` — добавлены глобальные механизмы (реактивность, `$public`, наследование, `~`, операция→файл→лог, двойная запись, ИИ). Структура по стандарту: 6 разделов. Ссылки на `rules.md` и `progress.md`.
-- [19.07.2026] Создан корневой `progress.md` + первый снимок `.progress.md/history/2026-07-19T2153.cline.md`. Запущен паттерн file→history для VSCode-разработки.
-- [19.07.2026] Создан `rules.md` — стандарт системы документации (8 принципов, структура readme.md и progress.md, механика history-снимков). Решение: единый стандарт вместо разнородных readme.
+- [13:53] Убран лишний `handlers-help` из `item-menu` — возврат к архитектуре tools + `item-tree` без отдельной кнопки «?».
 
 ## В работе
 
-- Создание недостающих `readme.md` в директориях без документации.
+- Покрытие директорий `readme.md` по стандарту `rules/`.
 
 ## Ключевые решения
 
-- **`AsyncPromise` прерывает реактивность, а не «делает async»**: через `queueMicrotask` тело handler’а не участвует в сборе deps. Живые геттеры — обычный `Promise`; one-shot/`??=` и циклы FS — `AsyncPromise`.
-- **Структурная проверка вместо проверки типа в `getIndexForPage()`**: при определении корневого handler'а для генерации `page.html` используется `parent.id !== 'pages'` вместо `parent.type === '$handler'`. Причина: тип промежуточных папок (например `form`) при наследовании зависит от наличия метапапки `$handler` на каждом уровне иерархии, что делает проверку типа ненадёжной. Структурная проверка по `pages` устойчива, так как эта часть пути инвариантна.
-- **Двухуровневость документации**: каждый readme отвечает для разработчика (техническое устройство) и для ИИ-управляющего (прикладное назначение). Причина: основная цель WORK — управление процессами с помощью ИИ, ему нужно понимать инструменты.
-- **`progress.md` вместо глобального лога**: локальные журналы на каждом уровне. Причина: проект большой, нужна точная память на каждом уровне иерархии, а не один общий файл.
-- **Изоморфность с WORK**: progress.md mirror'ит `file → history` паттерн — перезапись + неизменный снимок. Причина: процесс разработки должен быть приближен к технологии самой платформы.
-- **`rules.md` отдельно от `readme.md`**: стандарт документации вынесен в отдельный файл. Причина: правила — это мета-уровень, не смешивать с описанием системы.
+- **Архитектура UI** — не добавлять обходные кнопки поверх существующих механизмов (`item-tree` / explorer); лишний слой ломает наследование handlers.
 
 ## Блокеры / Открытые вопросы
 

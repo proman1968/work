@@ -11,20 +11,19 @@
 ## Как это работает
 
 - `handlersRoot` = `$item.fetch('handlers', { path })`.
-- Дерево с `hide-readme`: `readme.md` не пункты меню; у узлов со своим readme — «?» на `item-node`.
-- Корень `handlers` скрыт, поэтому для `handlers/readme.md` отдельная кнопка «?» над деревом (`hasHandlersReadme` / `openHandlersReadme`).
-- В explorer фильтр не действует — там `readme.md` остаётся в списке файлов.
+- Режимы: `tools` | `handlers` | `both`.
+- Корень `handlers` скрыт (`hideTops` / `hideRoots`); дерево показывает categories и пункты.
+- Справка по handlers — через `readme.md` в дереве / explorer, не отдельной кнопкой в меню.
 
 ## Из чего это состоит
 
-- [`menu.js`](/$server/$folder/lib/menu/menu.js/~/handlers/pages/form/) — компонент `item-menu`: tools, handlers-tree, справка корневого readme (контекстное меню элемента)
+- [`menu.js`](/$server/$folder/lib/menu/menu.js/~/handlers/pages/form/) — компонент `item-menu`: список tools и дерево handlers
 
 ## В каком это состоянии
 
 - ✅ режимы tools / handlers / both
-- ✅ кнопка «?» для корневого `handlers/readme.md` при hideTops
-- ✅ скрытие readme только в этом меню (`hide-readme`)
+- ✅ без отдельного UI «handlers-help» (архитектура: меню = tools + tree)
 
 ## Дальнейшие планы
 
-- При необходимости перенести кнопку корневой справки в title popover
+- —
