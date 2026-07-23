@@ -41,6 +41,12 @@ data (JSON) → get items → microchat-ribbon :items
 `open` = последний unanswered `action`|`form`|`questions` (в т.ч. в `task.ribbon`).  
 `confirm(true)` → `{ text: button.label, confirm: true, answers? }` из `fields` на том же блоке `data`.
 
+## Модель
+
+- В **form chat** (нет получателей) выбор нейросети в AI-режиме промпт-бара → поле `model` в создаваемом `task.ai`.
+- `on_save` не затирает клиентский `model` (`body.model || findFirstModel()`).
+- В preview смена модели через `item-node` / `/MODELS` пишет в `data.model` (источник правды для задачи).
+
 ## Legacy
 
 `migrateRibbon` один раз на load (`role→prompt`, `block→task`, `answered` по следующему prompt). Не в render path.
@@ -51,3 +57,4 @@ data (JSON) → get items → microchat-ribbon :items
 - ✅ `microchat-view-file`: `path` и `$item` из `data`
 - ✅ task = nested ribbon
 - ✅ Ask = questions + field
+- ✅ модель из form chat → `task.ai.model`

@@ -356,7 +356,7 @@ export default {
             const { pathToFileURL } = await import('node:url');
             const { join } = await import('node:path');
             const { findFirstModel } = await import(pathToFileURL(join(process.cwd(), 'sources/modules/ai-schema.js')).href);
-            body.model = await findFirstModel();
+            body.model = body.model || await findFirstModel();
             try {
                 const fsp = await import('node:fs/promises');
                 await fsp.writeFile('.' + taskFile.path, JSON.stringify(body, null, 4), 'utf-8');

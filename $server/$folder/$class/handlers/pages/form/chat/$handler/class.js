@@ -35,7 +35,7 @@ ODA({is: 'form-chat',
             <item-users ~if="!isPrivate" flex :$item @selected_users-changed="_onSelectionChanged"></item-users>
             <oda-button shadow :icon="callIcon" @tap="call" title="Call..." :icon-size="iconSize * 1.5" style="border-radius: 50%;"></oda-button>
         </div>
-        <oda-chat id="chat" :$item></oda-chat>
+        <oda-chat id="chat" :$item ::model></oda-chat>
     `,
     get callIcon(){
         return this.receivers.length?'communication:call':'av:videocam'
@@ -48,6 +48,7 @@ ODA({is: 'form-chat',
         const itemUsers = this.$('item-users');
         if (itemUsers)
             this.receivers = (await itemUsers.selectedUsers) || [];
+        await this._hydrateModel();
     },
     get showCallButton(){
         return this.receivers?.length
@@ -62,8 +63,32 @@ ODA({is: 'form-chat',
         $def: 0,
         $save: true
     },
+    model: { $def: '', $save: true },
     get $saveKey(){
-        return this.$item.short;
+        return this.$item?.short;
+    },
+    async _hydrateModel(){
+        if (!this.$item?.short) return;
+        if (!this.model) {
+            try {
+                const saved = ODA.LocalStorage.create(this._savePath).getItem('model');
+                if (saved) this.model = saved;
+            } catch {}
+        }
+        if (!this.model) {
+            try {
+                const children = await WORK.children;
+                const aiRoot = children?.find(el => el.type === '$ai');
+                if (!aiRoot) return;
+                const tree = await aiRoot.info({ deep: -1 });
+                const walk = (n) => (!n ? null : (!n.items?.length ? n : walk(n.items[0])));
+                const path = walk(tree)?.path;
+                if (path) {
+                    this.model = path;
+                    try { ODA.LocalStorage.create(this._savePath).setItem('model', path); } catch {}
+                }
+            } catch {}
+        }
     },
     get formChat(){
         return this;
@@ -85,11 +110,12 @@ ODA({is: 'form-chat',
         $def: null,
         set($item) {
             if($item && this.isPrivate && this.$item.id !== WORK.uid) this.receivers = [$item];
+            if ($item) this._hydrateModel();
         }
     }
 })
 ODA({is: 'oda-chat',
-    imports: 'oda//button, ~/lib//pack',
+    imports: 'oda//button, oda//icon, ~/lib//pack, ~/lib//tree',
     template:/* html */`
         <style>
             :host{
@@ -111,9 +137,21 @@ ODA({is: 'oda-chat',
                 opacity: .1;
             }
             .prompt-bar{
+                @apply --vertical;
                 margin: 8px;
-                align-items: center;
                 border-radius: 16px;
+                padding: 4px 8px;
+                gap: 2px;
+            }
+            .prompt-row{
+                align-items: flex-end;
+            }
+            .prompt-tools{
+                align-items: center;
+                font-size: small;
+            }
+            .prompt-tools > oda-button{
+                border-radius: 50%;
             }
             #text{
                 min-height: 1.5em;
@@ -124,6 +162,8 @@ ODA({is: 'oda-chat',
                 font-family: system-ui;
                 outline-color: var(--header-background);
                 overflow: hidden;
+                resize: none;
+                background: transparent;
             }
             label{
                 text-overflow: ellipsis;
@@ -204,11 +244,22 @@ ODA({is: 'oda-chat',
                 </div>
             </div>
             <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
-            <div class="prompt-bar" horizontal raised content  @tap="focusedItem = null">
-                <oda-button icon="icons:add" @tap="getFile"></oda-button>
-                <textarea id="text" ~if="!recording" @keydown style="resize: none;" type="text" autofocus :rows ::value :placeholder></textarea>
-                <div flex style="text-align: right; align-items: center" ~if="recording">{{timer}}</div>
-                <oda-button :icon="sendIcon" @tap="send"></oda-button>
+            <div class="prompt-bar" raised content @tap="focusedItem = null">
+                <div class="prompt-row" horizontal>
+                    <oda-button ~if="!isAIMode" icon="icons:add" @tap="getFile"></oda-button>
+                    <textarea id="text" ~if="!recording" @keydown type="text" autofocus :rows ::value :placeholder></textarea>
+                    <div flex style="text-align: right; align-items: center" ~if="recording">{{timer}}</div>
+                    <oda-button ~if="!isAIMode" :icon="sendIcon" @tap="send"></oda-button>
+                </div>
+                <div ~if="isAIMode" class="prompt-tools" horizontal>
+                    <item-node ~if="modelItem" no-flex :icon-size="20" :$item="modelItem"
+                        @pointerdown.stop="selectModel($event)"></item-node>
+                    <oda-button ~if="!modelItem" icon="carbon:ai" :icon-size="20"
+                        @tap="selectModel($event)" title="Выбрать модель"></oda-button>
+                    <div flex></div>
+                    <oda-button icon="icons:attachment" :icon-size="24" @tap="getFile" title="Прикрепить файл"></oda-button>
+                    <oda-button :icon="sendIcon" :icon-size="24" @tap="send"></oda-button>
+                </div>
             </div>
         </div>
     `,
@@ -261,6 +312,36 @@ ODA({is: 'oda-chat',
         if(this.$pdp.receivers.length)
             return 'Сообщение для ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';
         return 'Новая задача для ИИ ...'
+    },
+    get isAIMode(){
+        const isForeign = this.$pdp?.isPrivate && this.$pdp?.$item?.id !== WORK.uid;
+        const hasReceivers = !!(this.$pdp?.receivers?.length);
+        return !isForeign && !hasReceivers;
+    },
+    model: '',
+    get $saveKey(){
+        return this.$item?.short;
+    },
+    get modelItem(){
+        return this.model ? WORK.get_item(this.model) : null;
+    },
+    async selectModel(e){
+        e.stopPropagation();
+        e.preventDefault();
+        const tree = ODA.createElement('item-tree', {
+            $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
+        });
+        tree.execute = async (item) => {
+            this.model = item.path;
+            try {
+                const host = this.host || this.$pdp;
+                if (host?._savePath)
+                    ODA.LocalStorage.create(host._savePath).setItem('model', item.path);
+            } catch {}
+            for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
+            this.focusInput();
+        };
+        await WORK.showDropdown(tree, { TITLE: { label: 'Select model' } }, e);
     },
     clear(e){
         this.value = '';
@@ -347,7 +428,8 @@ ODA({is: 'oda-chat',
     attached(){
         this.async(()=>{
             this.focusInput();
-        }, 100)
+        }, 100);
+        this.$pdp?._hydrateModel?.();
     },
     focusInput(){
         this.async(()=>{
@@ -377,7 +459,7 @@ ODA({is: 'oda-chat',
             if (isAI) {
                 this.awaitTask = true;
                 params.message = this.value || '';
-                const body = JSON.stringify({
+                const body = {
                     title: this.value || '',
                     created: Date.now(),
                     ribbon: [{
@@ -386,8 +468,9 @@ ODA({is: 'oda-chat',
                         time: Date.now(),
                         sender: WORK.uid,
                     }],
-                }, null, 2);
-                file = new File([body], 'task.ai', { type: "application/json" });
+                };
+                if (this.model) body.model = this.model;
+                file = new File([JSON.stringify(body, null, 2)], 'task.ai', { type: "application/json" });
             } else {
                 file = new File([this.value || ''], 'message.msg', { type: "text/plain" });
             }
@@ -423,7 +506,7 @@ ODA({is: 'oda-chat',
     recognizing: false,
     timer: '',
     get chatAudioController() {
-        return new chatAudioController(this);
+        return this._audioController ??= new chatAudioController(this);
     }
 });
 ODA({is: 'chat-record-loader',
@@ -934,79 +1017,127 @@ class chatAudioController {
     editFinal(s) {
         return s.replace(/\s([\.+,?!:-])/g, '$1');
     }
-    record(e) {
-        if(!this.chatComponent.recording) {
-            navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-                this.final_transcript = '';
-                const speechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                this.recognition = new speechRecognition();
-                this.recognition.continuous = true;
-                this.recognition.interimResults = true;
-                this.recognition.maxAlternatives = 3;
-                this.recognition.lang = 'ru-RU';
-                // this.recognition.onstart = () => { console.log('Распознавание голоса запущено'); };
-                this.recognition.onerror = ({ error }) => { console.error(error); };
-                this.recognition.onend = () => {
-                    // console.log('Распознавание голоса закончено');
-                    this.chatComponent.value = this.final_transcript;
-                    if (!this.chatComponent.recognizing) return;
-                    this.recognition.start();
-                };
-                this.recognition.onresult = (e) => {
-                    let interim_transcript = '';
-                    for (let i = e.resultIndex; i < e.results.length; i++) {
-                        if (e.results[i].isFinal) {
-                            const result = this.editInterim(e.results[i][0].transcript);
-                            this.final_transcript += result;
-                        } else {
-                            interim_transcript += e.results[i][0].transcript;
-                        }
-                    }
-                    this.final_transcript = this.editFinal(this.final_transcript);
-                    this.interim_text = interim_transcript;
-                };
-
-                // e.target.fill = 'red';
-                this.chatComponent.timer = '00:00';
-
-                this.final_transcript = '';
-                this.recognition.start();
-                this.chatComponent.recognizing = true;
-                // this.value = '';
-                this.interim_text = '';
-
-                this.mediaStream = stream;
-                this.mediaRecorder = new MediaRecorder(stream);
-                this.mediaRecorder.start();
-                this.chatComponent.recording = true;
-                this.playSound('.//beep-start.mp3');
-                let chunks = [];
-                let totalSeconds = 0;
-                this.timerInterval = setInterval(() => {
-                    ++totalSeconds;
-                    this.chatComponent.timer = this.pad(parseInt(totalSeconds / 60)) + ':' + this.pad(totalSeconds % 60);
-                    if(totalSeconds > 60) this.stopSpeach();
-                }, 1000);
-                this.mediaRecorder.ondataavailable = e => {
-                    chunks.push(e.data);
-                    if(this.mediaRecorder.state == 'inactive') this.chatComponent.files.add(this.makeFile(chunks));
-                    this.playSound('.//beep-end.mp3');
-                };
-            }).catch((err) => {
-                console.error(`The following getUserMedia error occurred: ${err}`);
-            });
-        } else {
-            this.stopSpeach();
+    get isAIMode() {
+        return !!this.chatComponent.isAIMode;
+    }
+    _setupRecognition() {
+        const speechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!speechRecognition) {
+            this.chatComponent.value = 'Распознавание речи не поддерживается браузером';
+            return null;
         }
+        this.final_transcript = '';
+        this.interim_text = '';
+        this.recognition = new speechRecognition();
+        this.recognition.continuous = true;
+        this.recognition.interimResults = true;
+        this.recognition.maxAlternatives = 3;
+        this.recognition.lang = 'ru-RU';
+        this.recognition.onerror = ({ error }) => { console.error(error); };
+        this.recognition.onend = () => {
+            if (!this.chatComponent.recognizing) return;
+            try { this.recognition.start(); } catch {}
+        };
+        this.recognition.onresult = (e) => {
+            let interim_transcript = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+                if (e.results[i].isFinal) {
+                    const result = this.editInterim(e.results[i][0].transcript);
+                    this.final_transcript += result;
+                } else {
+                    interim_transcript += e.results[i][0].transcript;
+                }
+            }
+            this.final_transcript = this.editFinal(this.final_transcript);
+            this.interim_text = interim_transcript;
+            this.chatComponent.value = (this.final_transcript + ' ' + interim_transcript).trim();
+        };
+        return this.recognition;
+    }
+    _startTimer() {
+        this.chatComponent.timer = '00:00';
+        let totalSeconds = 0;
+        this.timerInterval = setInterval(() => {
+            ++totalSeconds;
+            this.chatComponent.timer = this.pad(parseInt(totalSeconds / 60)) + ':' + this.pad(totalSeconds % 60);
+            if (totalSeconds > 60) this.stopSpeach();
+        }, 1000);
+    }
+    record(e) {
+        if (this.chatComponent.recording) {
+            this.stopSpeach();
+            return;
+        }
+        if (this.isAIMode)
+            this._startAI();
+        else
+            this._startHuman();
+    }
+    _startAI() {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+            if (!this._setupRecognition()) {
+                stream.getTracks().forEach(t => t.stop());
+                return;
+            }
+            this.recognition.start();
+            this.chatComponent.recognizing = true;
+            this.chatComponent.recording = true;
+            this.chatComponent.value = '';
+            this.playSound('.//beep-start.mp3');
+            this._startTimer();
+            stream.getTracks().forEach(t => t.stop());
+        }).catch((err) => {
+            console.error(`The following getUserMedia error occurred: ${err}`);
+        });
+    }
+    _startHuman() {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+            if (!this._setupRecognition()) {
+                stream.getTracks().forEach(t => t.stop());
+                return;
+            }
+            this.recognition.start();
+            this.chatComponent.recognizing = true;
+            this.chatComponent.value = '';
+
+            this.mediaStream = stream;
+            this.mediaRecorder = new MediaRecorder(stream);
+            this.mediaRecorder.start();
+            this.chatComponent.recording = true;
+            this.playSound('.//beep-start.mp3');
+            this._startTimer();
+
+            const chunks = [];
+            this.mediaRecorder.ondataavailable = e => {
+                chunks.push(e.data);
+                if (this.mediaRecorder.state !== 'inactive') return;
+                this.chatComponent.files.add(this.makeFile(chunks));
+                this.playSound('.//beep-end.mp3');
+                this.chatComponent.value = (this.final_transcript || '').trim();
+                if (this.chatComponent.value || this.chatComponent.files.length)
+                    this.chatComponent.send();
+            };
+        }).catch((err) => {
+            console.error(`The following getUserMedia error occurred: ${err}`);
+        });
     }
     stopSpeach() {
-        this.recognition.stop();
         this.chatComponent.recognizing = false;
-
-        this.mediaRecorder.stop();
-        this.mediaStream.getTracks().forEach( track => track.stop() );
+        try { this.recognition?.stop(); } catch {}
         clearInterval(this.timerInterval);
         this.chatComponent.recording = false;
+
+        if (this.isAIMode) {
+            this.chatComponent.value = (this.final_transcript || '').trim();
+            this.playSound('.//beep-end.mp3');
+            this.chatComponent.focusInput();
+            if (this.chatComponent.value)
+                this.chatComponent.send();
+            return;
+        }
+
+        try { this.mediaRecorder?.stop(); } catch {}
+        this.mediaStream?.getTracks().forEach(track => track.stop());
         this.chatComponent.focusInput();
     }
 }

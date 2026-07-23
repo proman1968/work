@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [20:45] Form chat (AI-режим): выбор модели как в микрочате; `model` в создаваемом `task.ai`; `on_save` сохраняет клиентский `model`.
 - [15:40] `get_schema`: стандартный JSDoc (`@param`/`@returns`); без `@ai.*` / `TOOL_DESCRIPTIONS`.
 - [15:15] Карточка file = history path из `save_file` (откат workPath). Fill-шаг → обязательный subplan по N; stub не advance.
 
@@ -12,6 +13,7 @@
 
 ## Ключевые решения
 
+- **Модель при создании задачи.** Form chat (нет receivers) пишет `model` в `task.ai`; `on_save` не перетирает (`body.model || findFirstModel()`). Смена внутри задачи — в preview.
 - **History в UI.** `save_file` уже возвращает снимок; harness не подменяет на `~/text/name`.
 - **Fill = подплан.** N из answers → expand; иначе блок save. Stub не закрывает слайд.
 - **JSDoc канон.** Обычный `@param`/`@returns` для IDE и `get_schema`; без второго словаря.
