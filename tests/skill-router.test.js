@@ -44,13 +44,13 @@ describe('skill-router', () => {
         const route = classifyRoute([
             { id: 'Поиск файлов', sim: 0.9 },
             { id: 'Генерация изображений', sim: 0.2 },
-        ], { dialogueSkill: { id: 'Диалог', path: '/skills/system/Диалог' } });
+        ], { dialogueSkill: { id: 'Диалог', path: '/SKILLS/system/Диалог' } });
         assert.equal(route.mode, ROUTE_MODES.EXECUTE);
         assert.equal(route.skills[0].id, 'Поиск файлов');
     });
 
     it('classifyRoute falls back to dialogue when scores are low', () => {
-        const dialogueSkill = { id: 'Диалог', path: '/skills/system/Диалог' };
+        const dialogueSkill = { id: 'Диалог', path: '/SKILLS/system/Диалог' };
         const route = classifyRoute([{ id: 'X', sim: 0.1 }], { dialogueSkill });
         assert.equal(route.mode, ROUTE_MODES.DIALOGUE);
         assert.equal(route.skills[0].id, 'Диалог');
@@ -87,7 +87,7 @@ describe('skill-router', () => {
     it('buildTaskSkillBody keeps execute preview interactive', () => {
         const body = buildTaskSkillBody('найди файл', {
             mode: ROUTE_MODES.EXECUTE,
-            skills: [{ id: 'Поиск файлов', path: '/skills/system/Поиск файлов', sim: 0.9 }],
+            skills: [{ id: 'Поиск файлов', path: '/SKILLS/system/Поиск файлов', sim: 0.9 }],
             scores: [],
         });
         assert.equal(body.route, 'execute');

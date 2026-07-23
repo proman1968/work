@@ -493,7 +493,7 @@ export default {
         e.stopPropagation();
         e.preventDefault();
         const tree = ODA.createElement('item-tree', {
-            $item: await WORK.get_item('/models'), hideTops: 1, hideRoots: 2, allowCategories: false,
+            $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
         });
         tree.execute = async (item) => {
             this.selectedModel = item.path;
@@ -574,7 +574,10 @@ ODA({ is: 'microchat-streaming',
 ODA({ is: 'microchat-panel',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; gap: 4px; padding: 6px 8px 8px; }
+            :host { 
+                @apply --vertical; 
+                padding: 8px;
+            }
             .composer {
                 @apply --vertical; @apply --raised; @apply --content;
                 border-radius: 16px; padding: 6px 8px; gap: 4px;
@@ -686,8 +689,8 @@ ODA({ is: 'microchat-view-prompt',
         <style>
             :host {
                 @apply --horizontal; @apply --info-invert; @apply --raised;
-                padding: 6px 10px; position: sticky; top: 0; gap: 8px; align-items: flex-start;
-                border-radius: 12px; margin: 2px 4px;
+                padding: 8px; position: sticky; top: 0; gap: 8px; align-items: flex-start;
+                margin: 8px 0px;
             }
             .msg { white-space: pre-wrap; word-break: break-word; }
             .time { font-size: xx-small; opacity: .5; flex-shrink: 0; }
@@ -948,6 +951,15 @@ ODA({ is: 'microchat-view-task',
     template: /*html*/`
         <style>
             :host { @apply --vertical; @apply --content; @apply --raised; overflow: visible; }
+            .goal {
+                @apply --bold; 
+                font-size: medium; 
+                padding: 8px 8px 2px;
+                overflow: hidden; 
+                text-overflow: ellipsis; 
+                white-space: nowrap;
+                @apply --header;
+            }
             .header {
                 @apply --horizontal; @apply --bold; font-size: small; padding: 4px 8px;
                 cursor: pointer; align-items: center; gap: 6px; user-select: none;
@@ -963,13 +975,14 @@ ODA({ is: 'microchat-view-task',
             .step.done { opacity: .5; text-decoration: line-through; }
             .step.in_progress { @apply --accent; @apply --bold; }
             .nested {
-                @apply --vertical; padding: 4px 0 4px 8px;
+                @apply --vertical;
                 border-left: 2px solid var(--border-color, #ccc); margin-left: 2px; overflow: visible;
             }
         </style>
+        <div class="goal" ~if="label">{{label}}</div>
         <div class="header" @tap="collapsed = !collapsed" horizontal>
             <span info style="border-radius: 16px; padding: 2px 4px;">{{current}}/{{steps.length}}</span>
-            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{label}}</span>
+            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{currentStepText}}</span>
             <oda-icon icon="icons:chevron-right" :icon-size
                 ~style="collapsed ? '' : 'transform: rotate(90deg);'"></oda-icon>
         </div>
@@ -996,6 +1009,13 @@ ODA({ is: 'microchat-view-task',
         if (i >= 0) return i + 1;
         const p = s.findIndex(x => x.status !== 'done');
         return p >= 0 ? p + 1 : s.length;
+    },
+    get currentStepText() {
+        const s = this.steps;
+        if (!s.length) return '';
+        const i = s.findIndex(x => x.status === 'in_progress');
+        const step = i >= 0 ? s[i] : (s.find(x => x.status !== 'done') || s[s.length - 1]);
+        return step?.description || '';
     },
     get progress() {
         const s = this.steps;

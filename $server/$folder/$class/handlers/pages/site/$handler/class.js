@@ -45,7 +45,7 @@ export default {
                 }
 
                 .self-tab {
-                    border-radius: 0 3cqmin 0 0;
+                    border-radius: 0 24px 0 0;
                     padding: 6px;
                 }
             }
@@ -131,7 +131,7 @@ export default {
                             --oda-button-padding: 0 14px;
                             height: 32px;
                             min-height: 32px;
-                            border-radius: 100cqmin;
+                            border-radius: 32px;
                             font-size: 14px;
                             font-weight: 500;
                             letter-spacing: 0.01em;

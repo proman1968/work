@@ -251,7 +251,7 @@ export default {
 
     tariff: '',
     subdomain: '',
-    servicePath: '/services/ArgoCD/PaaS/prod',
+    servicePath: '/SERVICES/ArgoCD/PaaS/prod',
     error: '',
     orderResult: null,
     domainStatus: '',
@@ -442,7 +442,7 @@ export default {
     },
     goManage() {
         // как window.execute в explorer: корень explorer + hash item.short + handler
-        location.href = '/~/handlers//' + 'explorer' + '/#/paas/~/handlers/pages/form';
+        location.href = '/~/handlers//' + 'explorer' + '/#/PAAS/~/handlers/pages/form';
     },
     openOrderUrl() {
         if (this.orderUrl)

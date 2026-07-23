@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 export default {
     async execute(params = {}, post) {
-        const streamChatPath = path.join(process.cwd(), 'models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js');
+        const streamChatPath = path.join(process.cwd(), 'MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js');
         const mod = await import(pathToFileURL(streamChatPath).href);
         const streamChatHandler = mod.default;
         const gen = streamChatHandler.execute.call(this, params, post);

@@ -131,6 +131,7 @@ ODA({is: 'work-form',
             </div>
         </div>
     `,
+    allowZoom: true,
     iconSize: 24,
     openView(e){
         if(e.button === 0 && this.view)

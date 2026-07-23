@@ -1,3 +1,13 @@
+/** «?» / probe readme.md только для папок и классов под /oda и /sources. */
+function mayShowReadme($item) {
+    if (!$item) return false;
+    // $file extends $folder на клиенте — файлы исключаем явно
+    if ($item.constructor === CORE.$file || $item.type === '$file') return false;
+    const p = String($item.path || '');
+    return p === '/oda' || p === '/sources'
+        || p.startsWith('/oda/') || p.startsWith('/sources/');
+}
+
 export default {
     imports: '~/lib//icon, ~/lib//user, ~/lib//users',
     extends: 'item-icon',
@@ -98,7 +108,7 @@ export default {
         return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
     },
     get readmeItem() {
-        if (!this.$item) return null;
+        if (!mayShowReadme(this.$item)) return null;
         return Promise.resolve(this.$item.items).then(async items => {
             if (Array.isArray(items)) {
                 const found = items.find(f => /^readme\.md$/i.test(f.id));

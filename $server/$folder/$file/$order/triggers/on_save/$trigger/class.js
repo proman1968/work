@@ -15,7 +15,7 @@ export default {
             return;
 
         const service = orderFile.$class || orderFile.$owner || orderFile.$class
-            || await WORK.get_item('/services/ArgoCD/PaaS/prod');
+            || await WORK.get_item('/SERVICES/ArgoCD/PaaS/prod');
         if (!service) return;
 
         const methods = await service._methods;

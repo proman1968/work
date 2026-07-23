@@ -17,8 +17,8 @@
 ## Маршрутизация запросов
 
 URL = путь к объекту, первый query-параметр без значения — имя метода:
-- `/base?info` → `item.info()`
-- `/base?get_schema` → `item.get_schema()`
-- `/base?save_file&filename=test.txt` → `item.save_file({filename: 'test.txt'})`
+- `/BASE?info` → `item.info()`
+- `/BASE?get_schema` → `item.get_schema()`
+- `/BASE?save_file&filename=test.txt` → `item.save_file({filename: 'test.txt'})`
 
 Разрешение метода: сначала метод класса FS, затем (legacy) `~/handlers/methods/`.

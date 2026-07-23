@@ -2,13 +2,13 @@ import * as fs from 'node:fs';
 import { MERGE } from '../sources/host/babel-merge.js';
 
 const files = [
-    'models/$ai/$folder/$class/$ai/class.js',
-    'models/GigaChat/$ai/$folder/$class/$ai/class.js',
-    'models/GigaChat/GigaChat Pro/$ai/class.js',
-    'models/GigaChat/GigaChat Light/$ai/class.js',
-    'models/z.ai/$ai/$folder/$class/$ai/class.js',
-    'models/z.ai/GLM-5.2/$ai/class.js',
-    'models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js',
+    'MODELS/$ai/$folder/$class/$ai/class.js',
+    'MODELS/GigaChat/$ai/$folder/$class/$ai/class.js',
+    'MODELS/GigaChat/GigaChat Pro/$ai/class.js',
+    'MODELS/GigaChat/GigaChat Light/$ai/class.js',
+    'MODELS/z.ai/$ai/$folder/$class/$ai/class.js',
+    'MODELS/z.ai/GLM-5.2/$ai/class.js',
+    'MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js',
 ];
 
 console.log('=== Чтение файлов ===');
@@ -43,9 +43,9 @@ for (let i = 0; i < files.length; i++) {
 console.log('\n=== Цепочечное слияние (имитация наследования) ===');
 // Имитация: merge(merge(ancestor, parent), child)
 const chains = [
-    ['models/$ai/$folder/$class/$ai/class.js', 'models/GigaChat/$ai/$folder/$class/$ai/class.js', 'models/GigaChat/GigaChat Pro/$ai/class.js'],
-    ['models/$ai/$folder/$class/$ai/class.js', 'models/GigaChat/$ai/$folder/$class/$ai/class.js', 'models/GigaChat/GigaChat Light/$ai/class.js'],
-    ['models/$ai/$folder/$class/$ai/class.js', 'models/z.ai/$ai/$folder/$class/$ai/class.js', 'models/z.ai/GLM-5.2/$ai/class.js'],
+    ['MODELS/$ai/$folder/$class/$ai/class.js', 'MODELS/GigaChat/$ai/$folder/$class/$ai/class.js', 'MODELS/GigaChat/GigaChat Pro/$ai/class.js'],
+    ['MODELS/$ai/$folder/$class/$ai/class.js', 'MODELS/GigaChat/$ai/$folder/$class/$ai/class.js', 'MODELS/GigaChat/GigaChat Light/$ai/class.js'],
+    ['MODELS/$ai/$folder/$class/$ai/class.js', 'MODELS/z.ai/$ai/$folder/$class/$ai/class.js', 'MODELS/z.ai/GLM-5.2/$ai/class.js'],
 ];
 
 for (const chain of chains) {

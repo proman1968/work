@@ -5,8 +5,8 @@
  * Крайние элементы дерева — конечные модели, доступные для вызова.
  *
  * Структура наследования:
- *   models/$ai/                          — этот тип
- *   models/$ai/$folder/$class/$ai/     — прототип (METADATA, handlers)
+ *   MODELS/$ai/                          — этот тип
+ *   MODELS/$ai/$folder/$class/$ai/     — прототип (METADATA, handlers)
  *   models/GigaChat/                     — провайдер
  *   models/GigaChat/GigaChat Pro/        — конкретная модель
  *   models/GigaChat/GigaChat Light/      — конкретная модель

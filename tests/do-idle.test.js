@@ -11,6 +11,8 @@ import {
     questionsFromAskUser,
     ensureHarnessFunctions,
     advanceAfterClarifyAnswers,
+    advanceAfterSuccessfulSave,
+    currentStepDescription,
     formatPlanMarkdown,
     keepDoAction,
     buildToolMethodParams,
@@ -18,6 +20,7 @@ import {
     commitDurableBlocks,
     commitIdleContent,
     mayCommitDeferredOnIdleExecuteStop,
+    taskHasSuccessfulSave,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -38,6 +41,32 @@ describe('shouldContinueDo', () => {
 
     it('stops when waiting for user confirmation', () => {
         assert.equal(shouldContinueDo(activeIncomplete, true, []), false);
+    });
+
+    it('idle silent-ok only when plan done even if prior save', () => {
+        const withSave = {
+            state: 'active',
+            steps: [
+                { step: 1, status: 'done' },
+                { step: 2, status: 'in_progress' },
+            ],
+            ribbon: [{ type: 'tool_result', tool: 'save_file', ok: true }],
+        };
+        assert.equal(taskHasSuccessfulSave(withSave), true);
+        assert.equal(shouldContinueDo(withSave, false, []), true);
+        // Silent ok gate: save && !shouldContinueDo
+        assert.equal(taskHasSuccessfulSave(withSave) && !shouldContinueDo(withSave, false, []), false);
+
+        const allDone = {
+            state: 'active',
+            steps: [
+                { step: 1, status: 'done' },
+                { step: 2, status: 'done' },
+            ],
+            ribbon: [{ type: 'tool_result', tool: 'save_file', ok: true }],
+        };
+        assert.equal(shouldContinueDo(allDone, false, []), false);
+        assert.equal(taskHasSuccessfulSave(allDone) && !shouldContinueDo(allDone, false, []), true);
     });
 });
 
@@ -338,6 +367,60 @@ describe('advanceAfterClarifyAnswers', () => {
         advanceAfterClarifyAnswers(task);
         assert.equal(task.steps[0].status, 'in_progress');
         assert.equal(task.steps[1].status, 'proposed');
+    });
+});
+
+describe('advanceAfterSuccessfulSave', () => {
+    it('marks execute step done and advances next', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Наполнить presentation.md структурой', status: 'in_progress' },
+                { step: 2, description: 'Дополнить контент', status: 'proposed' },
+            ],
+        };
+        assert.equal(advanceAfterSuccessfulSave(task), true);
+        assert.equal(task.steps[0].status, 'done');
+        assert.equal(task.steps[1].status, 'in_progress');
+    });
+
+    it('no-op if plan already marked step done (no double-advance)', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Наполнить', status: 'done' },
+                { step: 2, description: 'Дополнить', status: 'in_progress' },
+            ],
+        };
+        assert.equal(advanceAfterSuccessfulSave(task, { step: 1 }), false);
+        assert.equal(task.steps[0].status, 'done');
+        assert.equal(task.steps[1].status, 'in_progress');
+    });
+
+    it('ignores clarify steps', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Уточнить тему презентации', status: 'in_progress' },
+                { step: 2, description: 'Создать', status: 'proposed' },
+            ],
+        };
+        assert.equal(advanceAfterSuccessfulSave(task), false);
+        assert.equal(task.steps[0].status, 'in_progress');
+    });
+});
+
+describe('currentStepDescription', () => {
+    it('returns in_progress description', () => {
+        assert.equal(currentStepDescription([
+            { status: 'done', description: 'A' },
+            { status: 'in_progress', description: 'Наполнить presentation.md структурой' },
+            { status: 'proposed', description: 'C' },
+        ]), 'Наполнить presentation.md структурой');
+    });
+
+    it('falls back to first non-done', () => {
+        assert.equal(currentStepDescription([
+            { status: 'done', description: 'A' },
+            { status: 'proposed', description: 'B' },
+        ]), 'B');
     });
 });
 

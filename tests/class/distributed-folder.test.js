@@ -27,7 +27,7 @@ async function distributedDataJsDir(storage) {
 describe('$class.resolveDistributedFolder', () => {
     it('matches collect_tilde axis (starts from $folder, not meta_folder)', async () => {
         globalThis.WORK = new $server();
-        const item = await WORK.get_item('/services');
+        const item = await WORK.get_item('/SERVICES');
         assert.ok(item instanceof $class);
         assert.equal(item.type, '$service');
 
@@ -39,7 +39,7 @@ describe('$class.resolveDistributedFolder', () => {
 
     it('distributed folder is parent of class.js layer in ~/class.js chain', async () => {
         globalThis.WORK = new $server();
-        const item = await WORK.get_item('/services');
+        const item = await WORK.get_item('/SERVICES');
 
         const resolved = await item.resolveDistributedFolder();
         const distDataDir = await distributedDataJsDir(item);
@@ -52,7 +52,7 @@ describe('$class.resolveDistributedFolder', () => {
 
     it('does not resolve to meta/$class/$type shortcut path', async () => {
         globalThis.WORK = new $server();
-        const item = await WORK.get_item('/services');
+        const item = await WORK.get_item('/SERVICES');
 
         const resolved = await item.resolveDistributedFolder();
         const wrongShortcut = item.meta_folder.path + '/$class/$service';

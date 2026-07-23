@@ -586,7 +586,7 @@ describe('task pipeline', () => {
         const skillBody = {
             label: 'Поиск файлов',
             skill: 'Поиск файлов',
-            path: '/skills/system/Поиск файлов',
+            path: '/SKILLS/system/Поиск файлов',
             data: { prompt: 'readme' },
             fields: [],
             status: 'pending',
@@ -618,7 +618,7 @@ describe('task pipeline', () => {
         await WORK.children;
 
         const group = await WORK.get_item('/root/direction');
-        const template = await WORK.get_item('/skills/AI/Генерация изображений');
+        const template = await WORK.get_item('/SKILLS/AI/Генерация изображений');
         const script = await template.import();
 
         let called = null;
@@ -651,7 +651,7 @@ describe('task pipeline', () => {
         await script.execute.call(group, {
             data: {
                 prompt: 'красный закат',
-                service: '/services/AI/GenApi/images/Grok Imagine Image',
+                service: '/SERVICES/AI/GenApi/images/Grok Imagine Image',
             },
         });
 

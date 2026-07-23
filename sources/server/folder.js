@@ -6,6 +6,7 @@ import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
+import { assertClassId } from './assert-class-id.js';
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
     static PATH_STEP = {
@@ -682,7 +683,7 @@ export class $folder extends $item{
         files: 'Получить список файлов элемента (без скрытых). Возвращает массив файлов.',
         folders: 'Получить список дочерних папок. Возвращает массив папок.',
         items: 'Получить список элементов (без метапапок). Возвращает массив элементов.',
-        create: 'Создать файл/папку/классе. Параметры: type ($file, $folder, $class), id (имя), post (содержимое). Возвращает созданный элемент.',
+        create: 'Создать файл/папку/класс. Параметры: type ($file, $folder, $class), id (имя — для класса целиком ЗАГЛАВНЫМИ буквами), post (содержимое). Возвращает созданный элемент.',
         delete: 'Удалить элемент. Требует ADMIN доступ. Возвращает строку с результатом.',
         search: 'RAG-поиск по эмбеддингам. Параметры: prompt (текст запроса), sensitivity (0-1). Возвращает отсортированный массив результатов.',
         logs: 'Получить логи класса. Параметры: mode, day, from, to, ext. Возвращает массив логов.',
@@ -1355,8 +1356,8 @@ export class $folder extends $item{
         return this;
     }
     /**
-     * @ai Создать новый файл, папку или типизированное классе
-     * @ai.params {"type": "$file | $folder | $class", "id": "имя элемента", "post": "содержимое"}
+     * @ai Создать новый файл, папку или типизированный класс
+     * @ai.params {"type": "$file | $folder | $class", "id": "имя (для $class — целиком ЗАГЛАВНЫМИ)", "post": "содержимое"}
      * @ai.returns Созданный элемент
      */
     async create(p = {}) {
@@ -1388,7 +1389,10 @@ export class $folder extends $item{
             await folder.save();
             return folder;
         }
-        else { // $class
+        else { // $class и прочие типизаторы
+            // Правило ЗАГЛАВНЫХ — только для $class (не для $paas/$node с DNS-id)
+            if (p.type === '$class')
+                assertClassId(p.id);
             let folder = await this._get_item(p.id, FS.$folder);
             await folder.save();
             folder = await folder._get_item(p.type, FS.$folder);

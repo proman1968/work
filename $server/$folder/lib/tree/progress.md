@@ -1,6 +1,7 @@
 # Прогресс: item-tree
 
 ## Последние изменения
+- [2026-07-23] «?» / get_item(readme.md) только под /oda и /sources, не на $file. Причина: лавина GET …/readme.md?info 400 в корне explorer.
 - [2026-07-20] Фильтр `readme.md` только при `hideReadme` — в explorer файлы снова видны; меню handlers передаёт флаг само
 - [2026-07-20] В `getItems` и `oda-tree-node.items` добавлен фильтр `readme.md` — документация уровня не попадает в навигационный список; данные `$item.items` не очищаются
 

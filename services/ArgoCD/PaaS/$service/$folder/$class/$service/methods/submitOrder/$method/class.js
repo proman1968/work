@@ -34,7 +34,7 @@ export default {
         const fqdn = subdomain + '.' + baseDomain;
         const url = 'https://' + fqdn;
 
-        const existing = await WORK.get_item('/paas/' + subdomain, 0, undefined, { user: globalThis.WORK });
+        const existing = await WORK.get_item('/PAAS/' + subdomain, 0, undefined, { user: globalThis.WORK });
         if (existing?.type === '$paas')
             throw new Error('Имя хоста "' + subdomain + '" уже занято');
 
@@ -46,7 +46,7 @@ export default {
             status: 'pending',
             buyer: uid,
             created: Date.now(),
-            paasPath: '/paas/' + subdomain,
+            paasPath: '/PAAS/' + subdomain,
         };
 
         await service.save_file({
@@ -77,7 +77,7 @@ export default {
 async function resolveService(params) {
     if (params.$service?.save_file)
         return params.$service;
-    return WORK.get_item(params.servicePath || '/services/ArgoCD/PaaS/prod');
+    return WORK.get_item(params.servicePath || '/SERVICES/ArgoCD/PaaS/prod');
 }
 
 function normalizeSubdomain(raw) {

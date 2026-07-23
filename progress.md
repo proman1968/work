@@ -2,6 +2,10 @@
 
 ## Последние изменения
 
+- [23.07.2026] Правило: id папки класса — целиком ЗАГЛАВНЫМИ (любой алфавит); label любой. Корень: base→BASE, paas→PAAS, … Системные oda/sources без смены.
+- [23.07.2026] item-node: probe/иконка readme.md только для папок/$class под /oda и /sources (не на файлах). Причина: GET …/readme.md?info 400 по всему корню.
+- [23.07.2026] z.ai/GLM FC: OpenAI `tools` + `role:tool` / `tool_calls` (не legacy `functions`/`role:function`). GigaChat без изменений. Причина: 400/1214 Incorrect role information.
+- [23.07.2026] Task UI: цель над планом; в progress — текущий шаг. Do: auto-advance после ok save_file; idle не завершает незакрытый план из‑за prior save.
 - [22.07.2026] Правило артефактов: один конечный filename + перезапись (file→history); запрет presentation.struct.md и т.п. в SYSTEM_PROMPT/harness/rules.
 - [22.07.2026] History-файл: label = прото-имя; справа в item-node мелко dateTime. Причина: «18:12 | GigaChat Light» неинформативно.
 - [22.07.2026] Граница хода: `clear_stream` после durable + после tools; unclosed `<reasoning>` → thinking. Причина: стрим копился через turns, 6-е «Мысли» только в UI.

@@ -106,7 +106,7 @@ class TextExtractor{
         try{
             if(TEXT_EXTS.includes(file.ext) || !file.ext){
                 let text = await file.load({hasTilde: true, encoding: 'utf-8'});
-                // if(file.ext === 'js' && file.path.includes('/skills/')){
+                // if(file.ext === 'js' && file.path.includes('/SKILLS/')){
                 //     let script = Buffer.from(text, 'utf-8').toString('base64');
                 //     let module = await import('data:text/javascript;base64,'+script);
                 //     script = (module?.default || null);

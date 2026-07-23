@@ -68,12 +68,70 @@ function sanitizeParsedArgs(parsed) {
     return parsed;
 }
 
+/**
+ * OpenAI/z.ai tools[] из внутреннего списка functions (GigaChat-style schema).
+ * @param {Array} functions
+ * @returns {Array<{type:string,function:object}>}
+ */
+export function toOpenAiTools(functions) {
+    if (!Array.isArray(functions)) return [];
+    return functions.map(f => ({ type: 'function', function: f }));
+}
+
+/**
+ * Нормализация messages для OpenAI/GLM: нет role:function, есть непустой user.
+ * Legacy function → tool; orphan function_call на assistant снимается в tool_calls-пару при возможности.
+ * @param {Array} messages
+ * @returns {Array}
+ */
+export function normalizeOpenAiMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    const out = [];
+    let toolSeq = 0;
+    for (const m of messages) {
+        if (!m || typeof m !== 'object') continue;
+        if (m.role === 'function') {
+            const id = m.tool_call_id || ('call_' + (m.name || 'fn') + '_' + (toolSeq++));
+            // Предыдущий assistant с function_call → tool_calls
+            const prev = out[out.length - 1];
+            if (prev?.role === 'assistant' && prev.function_call && !prev.tool_calls) {
+                const fc = prev.function_call;
+                const args = typeof fc.arguments === 'string'
+                    ? fc.arguments
+                    : JSON.stringify(fc.arguments || {});
+                prev.tool_calls = [{
+                    id,
+                    type: 'function',
+                    function: { name: fc.name || m.name || 'unknown', arguments: args },
+                }];
+                delete prev.function_call;
+                if (prev.content === '')
+                    prev.content = null;
+            }
+            out.push({
+                role: 'tool',
+                tool_call_id: id,
+                content: m.content == null ? '' : String(m.content),
+            });
+            continue;
+        }
+        out.push({ ...m });
+    }
+    const hasUser = out.some(m => m.role === 'user' && String(m.content || '').trim());
+    if (!hasUser)
+        out.push({ role: 'user', content: 'Продолжай.' });
+    return out;
+}
+
 export default {
     async *execute(params = {}, post) {
         const ai = params.$ai || this;
         const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
-        const messages = options.messages || [];
         const useFunctions = Array.isArray(options.functions) && options.functions.length > 0;
+        const isGigachat = ai.protocol === 'gigachat';
+        let messages = options.messages || [];
+        if (!isGigachat)
+            messages = normalizeOpenAiMessages(messages);
 
         const body = {
             model: options.model || ai.model || '',
@@ -85,16 +143,21 @@ export default {
         if (options.stop)
             body.stop = options.stop;
 
-        // Function calling
+        // Function calling: gigachat = legacy functions; openai/z.ai = tools
         if (useFunctions && ai.functionCalling === true) {
-            body.functions = options.functions;
-            if (options.function_call)
-                body.function_call = options.function_call;
+            if (isGigachat) {
+                body.functions = options.functions;
+                if (options.function_call)
+                    body.function_call = options.function_call;
+            } else {
+                body.tools = toOpenAiTools(options.functions);
+                body.tool_choice = options.tool_choice
+                    || (options.function_call === 'none' ? 'none' : 'auto');
+            }
         }
 
         const headers = await getAuthHeaders(ai);
         const url = new URL(ai.baseUrl);
-        const isGigachat = ai.protocol === 'gigachat';
 
         const res = await new Promise((resolve, reject) => {
             const req = https.request({

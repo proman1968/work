@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import {
     appendFunctionArgs,
     parseFunctionArgs,
-} from '../models/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js';
+    toOpenAiTools,
+    normalizeOpenAiMessages,
+} from '../MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js';
 import {
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,
     stripFcTrailer,
     taskHasSuccessfulSave,
+    formatToolResultMessages,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
 describe('appendFunctionArgs', () => {
@@ -121,5 +124,80 @@ describe('taskHasSuccessfulSave', () => {
             ribbon: [{ type: 'tool_result', tool: 'ask_user', ok: true }],
         }), false);
         assert.equal(taskHasSuccessfulSave(null), false);
+    });
+});
+
+describe('toOpenAiTools', () => {
+    it('wraps functions as type function tools', () => {
+        const tools = toOpenAiTools([
+            { name: 'save_file', description: 'x', parameters: { type: 'object' } },
+        ]);
+        assert.equal(tools.length, 1);
+        assert.equal(tools[0].type, 'function');
+        assert.equal(tools[0].function.name, 'save_file');
+    });
+
+    it('empty / non-array → []', () => {
+        assert.deepEqual(toOpenAiTools([]), []);
+        assert.deepEqual(toOpenAiTools(null), []);
+    });
+});
+
+describe('normalizeOpenAiMessages', () => {
+    it('converts role function to tool and upgrades function_call', () => {
+        const out = normalizeOpenAiMessages([
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: 'hi' },
+            {
+                role: 'assistant',
+                content: '',
+                function_call: { name: 'save_file', arguments: { filename: 'a.html' } },
+            },
+            { role: 'function', name: 'save_file', content: '{"ok":true}' },
+        ]);
+        assert.equal(out.some(m => m.role === 'function'), false);
+        const asst = out.find(m => m.role === 'assistant' && m.tool_calls);
+        assert.ok(asst);
+        assert.equal(asst.tool_calls[0].function.name, 'save_file');
+        const tool = out.find(m => m.role === 'tool');
+        assert.ok(tool);
+        assert.equal(tool.tool_call_id, asst.tool_calls[0].id);
+    });
+
+    it('injects user if missing', () => {
+        const out = normalizeOpenAiMessages([
+            { role: 'system', content: 'sys' },
+            { role: 'assistant', content: 'ok' },
+        ]);
+        assert.ok(out.some(m => m.role === 'user' && m.content === 'Продолжай.'));
+    });
+});
+
+describe('formatToolResultMessages', () => {
+    const entry = {
+        tool: 'save_file',
+        args: { filename: 'presentation.html', post: '<html/>' },
+        content: '{"ok":true}',
+    };
+
+    it('openai → tool_calls + role tool', () => {
+        const msgs = formatToolResultMessages(entry, 'openai', 'call_save_file_0');
+        assert.equal(msgs.length, 2);
+        assert.equal(msgs[0].role, 'assistant');
+        assert.equal(msgs[0].content, null);
+        assert.equal(msgs[0].tool_calls[0].id, 'call_save_file_0');
+        assert.equal(msgs[0].tool_calls[0].function.name, 'save_file');
+        assert.equal(typeof msgs[0].tool_calls[0].function.arguments, 'string');
+        assert.equal(msgs[1].role, 'tool');
+        assert.equal(msgs[1].tool_call_id, 'call_save_file_0');
+    });
+
+    it('gigachat → function_call + role function', () => {
+        const msgs = formatToolResultMessages(entry, 'gigachat', 'x');
+        assert.equal(msgs[0].role, 'assistant');
+        assert.ok(msgs[0].function_call);
+        assert.equal(msgs[0].function_call.name, 'save_file');
+        assert.equal(msgs[1].role, 'function');
+        assert.equal(msgs[1].name, 'save_file');
     });
 });

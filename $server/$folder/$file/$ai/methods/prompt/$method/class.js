@@ -220,12 +220,21 @@ export default {
 
             if (confirm === true) {
                 // Выполнить отложенные вызовы
+                const doTask = lastTask || activeTaskFind(body);
+                const stepBefore = doTask?.steps?.find(s => s.status === 'in_progress')
+                    || doTask?.steps?.find(s => s.status === 'proposed')
+                    || null;
+                let hadOkSave = false;
                 for (const call of body.pendingAction.calls || []) {
                     const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
                     currentContext = newContext;
                     pushToolResult(ribbonTarget, call, result, model);
                     sendToolResultWs(wsPath, call, result);
+                    if (isFileWriteMethod(call.method) && !(result && typeof result === 'object' && result.error))
+                        hadOkSave = true;
                 }
+                if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore))
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
             } else {
                 // Отмена — добавить tool_result "отменено" для каждого вызова
                 for (const call of body.pendingAction.calls || []) {
@@ -408,7 +417,10 @@ export default {
 
         while (iteration < maxIter) {
             iteration++;
-            const messages = buildHistoryFromRibbon(body, model.functionCalling === true, { forceDoReminder });
+            const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
+                forceDoReminder,
+                protocol: model.protocol,
+            });
             forceDoReminder = false;
 
             // Построение functions из схемы методов контекста
@@ -613,17 +625,23 @@ export default {
                     if (phase === 'execute' && nextIdleDoAction(idleDoStreak) === 'stop') {
                         if (mayCommitDeferredOnIdleExecuteStop() && deferredDoSteps)
                             activeTask.steps = deferredDoSteps;
-                        // Уже был ok save_file в этом Do — не врём «не вызвала tool»
-                        if (taskHasSuccessfulSave(activeTask)) {
+                        // Silent ok только если план уже весь done (не «был хоть один save»)
+                        const planStillOpen = shouldContinueDo(activeTask, false, []);
+                        if (taskHasSuccessfulSave(activeTask) && !planStillOpen) {
                             applyTurnUsage(body, ribbonTarget, turnUsage, model);
                             await writeTaskBody(fullPath, body);
                             notifyChanged(fullPath);
                             WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                             return { ok: true };
                         }
+                        const stepHint = cur?.description
+                            ? ' («' + cur.description + '»)'
+                            : '';
                         ribbonTarget.push({
                             type: 'error',
-                            content: 'Модель не вызвала tool (save_file) за ' + MAX_IDLE_DO + ' попыток.',
+                            content: planStillOpen && taskHasSuccessfulSave(activeTask)
+                                ? 'План не завершён: выполни текущий шаг' + stepHint + ' через tool (save_file).'
+                                : 'Модель не вызвала tool (save_file) за ' + MAX_IDLE_DO + ' попыток.',
                             time: Date.now(),
                             sender: model.path || 'WORK',
                         });
@@ -747,11 +765,22 @@ export default {
             }
 
             // === Выполнение вызовов ===
-            for (const call of toolCalls) {
-                const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
-                currentContext = newContext;
-                pushToolResult(ribbonTarget, call, result, model);
-                sendToolResultWs(wsPath, call, result);
+            {
+                const doTask = activeTaskFind(body);
+                const stepBefore = doTask?.steps?.find(s => s.status === 'in_progress')
+                    || doTask?.steps?.find(s => s.status === 'proposed')
+                    || null;
+                let hadOkSave = false;
+                for (const call of toolCalls) {
+                    const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
+                    currentContext = newContext;
+                    pushToolResult(ribbonTarget, call, result, model);
+                    sendToolResultWs(wsPath, call, result);
+                    if (isFileWriteMethod(call.method) && !(result && typeof result === 'object' && result.error))
+                        hadOkSave = true;
+                }
+                if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore))
+                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
             }
 
             await writeTaskBody(fullPath, body);
@@ -782,7 +811,7 @@ export default {
 
 /**
  * Построить список functions (OpenAI-compatible) из схемы методов контекста
- * и схем сервисов /services/*.
+ * и схем сервисов /SERVICES/*.
  * @param {object} currentContext — текущий элемент-контекст
  * @returns {Promise<Array>} — массив описаний функций
  */
@@ -802,9 +831,9 @@ async function buildFunctionsList(currentContext) {
         console.warn('[task.ai] get_schema for functions:', e.message);
     }
 
-    // Методы сервисов — автозагрузка из /services/*
+    // Методы сервисов — автозагрузка из /SERVICES/*
     try {
-        const services = await WORK.get_item('/services/*');
+        const services = await WORK.get_item('/SERVICES/*');
         const svcList = Array.isArray(services) ? services : (services ? [services] : []);
         for (const svcItem of svcList) {
             if (svcItem.type !== '$service')
@@ -923,6 +952,47 @@ function advanceAfterClarifyAnswers(activeTask) {
     const next = activeTask.steps.find(s => s.status === 'proposed');
     if (next)
         next.status = 'in_progress';
+}
+
+/**
+ * После ok save_file в EXECUTE: закрыть шаг, на котором был save (не clarify).
+ * Если <plan> уже пометил этот шаг done — no-op (без double-advance).
+ * @param {{ steps?: Array }} activeTask
+ * @param {{ step?: number }|null} [stepRef] — шаг, который был in_progress до tools
+ * @returns {boolean} — шаги изменились
+ */
+function advanceAfterSuccessfulSave(activeTask, stepRef = null) {
+    if (!activeTask?.steps?.length) return false;
+    let target = null;
+    if (stepRef != null && stepRef.step != null)
+        target = activeTask.steps.find(s => s.step === stepRef.step) || null;
+    if (!target) {
+        target = activeTask.steps.find(s => s.status === 'in_progress')
+            || activeTask.steps.find(s => s.status === 'proposed');
+    }
+    if (!target || stepNeedsClarify(target)) return false;
+    if (target.status === 'done') return false;
+    target.status = 'done';
+    for (const s of activeTask.steps) {
+        if (s !== target && s.status === 'in_progress')
+            s.status = 'proposed';
+    }
+    const next = activeTask.steps.find(s => s.status === 'proposed');
+    if (next)
+        next.status = 'in_progress';
+    return true;
+}
+
+/**
+ * Описание текущего шага плана (in_progress → первый не-done → последний).
+ * @param {Array<{status?: string, description?: string}>} steps
+ * @returns {string}
+ */
+function currentStepDescription(steps) {
+    if (!Array.isArray(steps) || !steps.length) return '';
+    const i = steps.findIndex(x => x.status === 'in_progress');
+    const step = i >= 0 ? steps[i] : (steps.find(x => x.status !== 'done') || steps[steps.length - 1]);
+    return step?.description || '';
 }
 
 /**
@@ -1289,6 +1359,10 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
     const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
     const historyOnly = !!opts.historyOnly;
+    const protocol = opts.protocol || '';
+    const fcStyle = protocol === 'gigachat' ? 'gigachat' : 'openai';
+    let toolCallSeq = opts._toolCallSeq || { n: 0 };
+    const childOpts = { ...opts, historyOnly: true, protocol, _toolCallSeq: toolCallSeq };
 
     // 1. System prompt (не для вложенной ленты task — иначе дубли ACL mid-history)
     if (!historyOnly) {
@@ -1323,8 +1397,11 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             if (forceDoReminder) {
                 if (phase === 'propose')
                     systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
-                else
-                    systemContent += 'СТОП: прошлый ответ без tool calls. Сейчас вызови native function save_file({filename, post}) с КОНЕЧНЫМ именем артефакта (то же имя, что уже в задаче / presentation.html). Не промежуточные файлы. Не <ask_user>, не prose без tool. Не «Начать».\n';
+                else {
+                    const stepLabel = cur?.description ? '«' + cur.description + '»' : 'текущий';
+                    systemContent += 'СТОП: прошлый ответ без tool calls. Текущий шаг: ' + stepLabel
+                        + '. Сейчас вызови native function save_file({filename, post}) с КОНЕЧНЫМ именем артефакта (то же имя, что уже в задаче / presentation.html). Не промежуточные файлы. Не <ask_user>, не prose без tool. Не «Начать».\n';
+                }
             }
         }
         if (systemContent)
@@ -1386,7 +1463,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 messages.push(...buildHistoryFromRibbon(
                     { ribbon: entry.ribbon },
                     useFunctionCalling,
-                    { historyOnly: true },
+                    childOpts,
                 ));
             }
             continue;
@@ -1422,15 +1499,8 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 pendingAssistant = '';
             }
             if (useFunctionCalling) {
-                const fnName = entry.tool || 'unknown';
-                const fnArgs = sanitizeToolArgsForHistory(entry.args);
-                // GigaChat: каждый role:function обязан иметь предшествующий assistant.function_call
-                messages.push({
-                    role: 'assistant',
-                    content: '',
-                    function_call: { name: fnName, arguments: fnArgs },
-                });
-                messages.push({ role: 'function', name: fnName, content: entry.content });
+                const id = 'call_' + (entry.tool || 'fn') + '_' + (toolCallSeq.n++);
+                messages.push(...formatToolResultMessages(entry, fcStyle, id));
             } else {
                 messages.push({
                     role: 'user',
@@ -1449,7 +1519,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             messages.push(...buildHistoryFromRibbon(
                 { ribbon: entry.ribbon || [] },
                 useFunctionCalling,
-                { historyOnly: true },
+                childOpts,
             ));
         }
     }
@@ -1458,6 +1528,42 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
         messages.push({ role: 'assistant', content: pendingAssistant });
 
     return messages;
+}
+
+/**
+ * Сообщения LLM для одного tool_result: gigachat legacy vs OpenAI tools.
+ * @param {{ tool?: string, args?: object, content?: string, label?: string }} entry
+ * @param {'gigachat'|'openai'} style
+ * @param {string} callId
+ * @returns {Array<object>}
+ */
+function formatToolResultMessages(entry, style, callId) {
+    const fnName = entry.tool || 'unknown';
+    const fnArgs = sanitizeToolArgsForHistory(entry.args);
+    const argsStr = typeof fnArgs === 'string' ? fnArgs : JSON.stringify(fnArgs || {});
+    if (style === 'gigachat') {
+        return [
+            {
+                role: 'assistant',
+                content: '',
+                function_call: { name: fnName, arguments: fnArgs },
+            },
+            { role: 'function', name: fnName, content: entry.content },
+        ];
+    }
+    const id = callId || ('call_' + fnName + '_0');
+    return [
+        {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+                id,
+                type: 'function',
+                function: { name: fnName, arguments: argsStr },
+            }],
+        },
+        { role: 'tool', tool_call_id: id, content: entry.content },
+    ];
 }
 
 function findOpenActionFlat(ribbon) {
@@ -2016,6 +2122,9 @@ export {
     mapAskQuestionToField,
     ensureHarnessFunctions,
     advanceAfterClarifyAnswers,
+    advanceAfterSuccessfulSave,
+    currentStepDescription,
+    formatToolResultMessages,
     stripBoilerplateContent,
     formatPlanMarkdown,
     keepDoAction,

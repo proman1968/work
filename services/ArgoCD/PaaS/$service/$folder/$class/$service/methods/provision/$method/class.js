@@ -58,11 +58,11 @@ export default {
             argoResult = { ok: false, error: e.message, stub: true };
         }
 
-        const paasRoot = await WORK.get_item('/paas');
+        const paasRoot = await WORK.get_item('/PAAS');
         if (!paasRoot?.create)
-            throw new Error('provision: /paas недоступен');
+            throw new Error('provision: /PAAS недоступен');
 
-        const paasPath = '/paas/' + subdomain;
+        const paasPath = '/PAAS/' + subdomain;
         let paasItem = await WORK.get_item(paasPath, 0, undefined, { user: globalThis.WORK });
         if (!paasItem || paasItem.type !== '$paas') {
             if (paasItem && paasRoot.__items__)
@@ -126,9 +126,9 @@ export default {
         let nodePath = null;
         const deployed = argoResult?.ok && argoResult?.stub !== true;
         if (deployed) {
-            const nodesRoot = await WORK.get_item('/nodes');
+            const nodesRoot = await WORK.get_item('/NODES');
             if (nodesRoot?.create) {
-                nodePath = '/nodes/' + fqdn;
+                nodePath = '/NODES/' + fqdn;
                 const nodeItem = await WORK.get_item(nodePath, 0, undefined, { user: globalThis.WORK });
                 if (!nodeItem || nodeItem.type !== '$node') {
                     await nodesRoot.create({
@@ -196,17 +196,17 @@ async function resolveService(params, orderFile) {
     const fromOrder = orderFile?.$class || orderFile?.$owner || orderFile?.$class;
     if (fromOrder?.type === '$service')
         return fromOrder;
-    return WORK.get_item('/services/ArgoCD/PaaS/prod');
+    return WORK.get_item('/SERVICES/ArgoCD/PaaS/prod');
 }
 
 async function resolveArgo(paasService) {
     let p = paasService?.$parent || paasService?.parent;
     while (p) {
-        if (p.type === '$service' && (p.path === '/services/ArgoCD' || p.id === 'ArgoCD'))
+        if (p.type === '$service' && (p.path === '/SERVICES/ArgoCD' || p.id === 'ArgoCD'))
             return p;
         p = p.$parent || p.parent;
     }
-    return WORK.get_item('/services/ArgoCD');
+    return WORK.get_item('/SERVICES/ArgoCD');
 }
 
 function toDataJs(obj) {
