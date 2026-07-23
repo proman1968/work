@@ -498,7 +498,9 @@ ODA({
         );
     },
     attached() {
-        this.init();
+        this.async(() => {
+            this.init();
+        });
     },
     async init() {
         await this.loadSettings();
@@ -647,11 +649,6 @@ ODA({
             return;
         const settings = this._settings || await this.$item.fetch('read_secret', { name: 'email' });
         const box = settings?.mailboxes?.[address];
-        const folder = await this.$item.get_item('~/email/' + address);
-        if (!folder) {
-            alert('Папка ящика не найдена. Сохраните настройки — будет создана email/' + address);
-            return;
-        }
         const eml = defaultEml({
             from: box?.auth?.user || address,
             to: this.compose.to,
@@ -661,7 +658,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await folder.save_file(new File([eml], 'outbox.eml', { type: 'message/rfc822' }), { encoding: 'utf-8' });
+            await this.$item.save_file(new File([eml], 'send.eml', { type: 'message/rfc822' }), { encoding: 'utf-8' });
             this.composing = false;
             this.folder = 'outbox';
             await this.refreshMessages();

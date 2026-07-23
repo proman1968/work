@@ -36,7 +36,9 @@
 - ✅ Preview: declarative `~is`/`~props` по TYPES; task = nested ribbon; Ask = view-questions
 - ✅ MVP e2e path: план → Начать → options → Уточнить → write_file → блок `file`
 - ✅ Task card: цель (`label`) — заголовок; в прогрессе — текст текущего шага
-- ✅ Do: после ok `save_file` auto-advance шага; idle не silent-ok при незавершённом плане
+- ✅ Do: протокол шага; fill → subplan по N; stub не advance; done только harness; idle → «Выполнить»
+- ✅ Карточка `file` = **history path** из `save_file` (не прокси filename)
+- ✅ XML tool fallback: multiline / nested quotes в attrs (`post`)
 - 🔧 spawn_agent / skills как tools harness
 - ❌ host file-handlers / skill-router (запрещены как костыль)
 

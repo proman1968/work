@@ -21,6 +21,21 @@ import {
     commitIdleContent,
     mayCommitDeferredOnIdleExecuteStop,
     taskHasSuccessfulSave,
+    makeIdleExecuteResumeAction,
+    appendDoForceNudge,
+    parseToolCalls,
+    parseXmlTagAttrs,
+    buildHistoryFromRibbon,
+    applyHarnessDoneCap,
+    countDoneSteps,
+    pushStepAnnounce,
+    expandStepWithSubplan,
+    workPathFromHistoryPath,
+    stepIsAcceptOnly,
+    finalizeAcceptOnlySteps,
+    parseResponseToRibbon,
+    ensureFillSubplan,
+    allContentWorkDone,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -326,7 +341,7 @@ describe('buildToolMethodParams', () => {
 });
 
 describe('ensureHarnessFunctions', () => {
-    it('adds save_file read_file ask_user for FC', () => {
+    it('adds ask_user and missing helpers; does not overwrite schema save_file', () => {
         const fns = ensureHarnessFunctions([]);
         const names = fns.map(f => f.name);
         assert.ok(names.includes('save_file'));
@@ -336,11 +351,10 @@ describe('ensureHarnessFunctions', () => {
         const sf = fns.find(f => f.name === 'save_file');
         assert.ok(sf.parameters.required.includes('filename'));
         assert.ok(sf.parameters.required.includes('post'));
-        // idempotent + overwrite schema duplicate
         assert.equal(ensureHarnessFunctions(fns).filter(f => f.name === 'save_file').length, 1);
         const withSchema = ensureHarnessFunctions([{ name: 'save_file', parameters: { required: ['x'] } }]);
         assert.equal(withSchema.filter(f => f.name === 'save_file').length, 1);
-        assert.ok(withSchema.find(f => f.name === 'save_file').parameters.required.includes('filename'));
+        assert.deepEqual(withSchema.find(f => f.name === 'save_file').parameters.required, ['x']);
     });
 });
 
@@ -374,11 +388,13 @@ describe('advanceAfterSuccessfulSave', () => {
     it('marks execute step done and advances next', () => {
         const task = {
             steps: [
-                { step: 1, description: 'Наполнить presentation.md структурой', status: 'in_progress' },
-                { step: 2, description: 'Дополнить контент', status: 'proposed' },
+                { step: 1, description: 'Создать структуру presentation.md', status: 'in_progress' },
+                { step: 2, description: 'Заполнить слайды', status: 'proposed' },
             ],
         };
-        assert.equal(advanceAfterSuccessfulSave(task), true);
+        assert.equal(advanceAfterSuccessfulSave(task, null, {
+            post: '<html><body>' + 'section '.repeat(80) + '</body></html>',
+        }), true);
         assert.equal(task.steps[0].status, 'done');
         assert.equal(task.steps[1].status, 'in_progress');
     });
@@ -457,5 +473,253 @@ describe('normalizeActionBlocks', () => {
         assert.ok(q);
         assert.equal(q.button.label, 'Уточнить');
         assert.ok(q.fields?.length);
+    });
+});
+
+describe('makeIdleExecuteResumeAction', () => {
+    it('returns Выполнить action for open plan step', () => {
+        const a = makeIdleExecuteResumeAction(
+            { step: 3, description: 'Наполнить артефакт', status: 'in_progress' },
+            'WORK',
+        );
+        assert.equal(a.type, 'action');
+        assert.equal(a.title, 'Действие');
+        assert.equal(a.button.label, 'Выполнить');
+        assert.equal(a.button.color, 'success');
+        assert.match(a.content || '', /Наполнить артефакт/);
+        assert.equal(a.sender, 'WORK');
+    });
+});
+
+describe('appendDoForceNudge', () => {
+    it('appends user STOP message with step label', () => {
+        const messages = [{ role: 'system', content: 'sys' }];
+        appendDoForceNudge(messages, { description: 'Создать отчёт' });
+        assert.equal(messages.length, 2);
+        assert.equal(messages[1].role, 'user');
+        assert.match(messages[1].content, /Создать отчёт/);
+        assert.match(messages[1].content, /tool call/);
+        assert.match(messages[1].content, /save_file/);
+    });
+});
+
+describe('buildHistoryFromRibbon forceDoReminder nudge', () => {
+    it('appends user nudge on execute forceDoReminder', () => {
+        const body = {
+            system: 'base',
+            ribbon: [{
+                type: 'task',
+                state: 'active',
+                label: 'Задача',
+                steps: [
+                    { step: 1, description: 'Уточнить', status: 'done' },
+                    { step: 2, description: 'Записать результат', status: 'in_progress' },
+                ],
+                ribbon: [
+                    { type: 'tool_result', tool: 'save_file', ok: true, content: '{}' },
+                    { type: 'text', content: 'Продолжаем?' },
+                ],
+            }],
+        };
+        const messages = buildHistoryFromRibbon(body, false, { forceDoReminder: true });
+        const last = messages[messages.length - 1];
+        assert.equal(last.role, 'user');
+        assert.match(last.content, /Записать результат/);
+        assert.match(last.content, /СТОП/);
+    });
+});
+
+describe('parseToolCalls XML multiline post', () => {
+    it('keeps HTML post with nested quotes and tags', () => {
+        const html = '<!DOCTYPE html>\n<html lang="ru">\n<head><meta charset="UTF-8"></head>\n<body><p>Hi</p></body>\n</html>';
+        const text = '<save_file filename="report.html" post="' + html + '" />';
+        const calls = parseToolCalls(text, [{ name: 'save_file' }]);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].method, 'save_file');
+        assert.equal(calls[0].args.filename, 'report.html');
+        assert.equal(calls[0].args.post, html);
+        assert.match(calls[0].args.post, /lang="ru"/);
+        assert.match(calls[0].args.post, /<meta charset="UTF-8">/);
+    });
+
+    it('parseXmlTagAttrs keeps nested quotes inside post', () => {
+        const attrs = parseXmlTagAttrs('filename="a.html" post="<div class="x">ok</div>"');
+        assert.equal(attrs.filename, 'a.html');
+        assert.equal(attrs.post, '<div class="x">ok</div>');
+    });
+});
+
+describe('mayCommitDeferredOnIdleExecuteStop regression', () => {
+    it('still never commits deferred plan without tools', () => {
+        assert.equal(mayCommitDeferredOnIdleExecuteStop(), false);
+    });
+});
+
+describe('applyHarnessDoneCap', () => {
+    it('blocks model from painting all steps done', () => {
+        const prev = [
+            { step: 1, description: 'A', status: 'done' },
+            { step: 2, description: 'B', status: 'in_progress' },
+            { step: 3, description: 'C', status: 'proposed' },
+            { step: 4, description: 'D', status: 'proposed' },
+        ];
+        const fakeAllDone = prev.map(s => ({ ...s, status: 'done' }));
+        const capped = applyHarnessDoneCap(prev, fakeAllDone, false);
+        assert.equal(countDoneSteps(capped), 1);
+        assert.equal(capped[1].status, 'in_progress');
+        assert.equal(capped.every(s => s.status === 'done'), false);
+    });
+
+    it('allowOneMoreDone advances at most one step', () => {
+        const prev = [
+            { step: 1, description: 'A', status: 'done' },
+            { step: 2, description: 'B', status: 'in_progress' },
+            { step: 3, description: 'C', status: 'proposed' },
+        ];
+        const next = [
+            { step: 1, status: 'done' },
+            { step: 2, status: 'done' },
+            { step: 3, status: 'done' },
+        ];
+        const capped = applyHarnessDoneCap(prev, next, true);
+        assert.equal(countDoneSteps(capped), 2);
+        assert.equal(capped[2].status, 'in_progress');
+    });
+});
+
+describe('pushStepAnnounce', () => {
+    it('pushes Выполняю шаг N text once', () => {
+        const ribbon = [];
+        const a = pushStepAnnounce(ribbon, { step: 2, description: 'Создать файл' }, 'WORK');
+        assert.equal(a.type, 'text');
+        assert.match(a.content, /Выполняю шаг 2/);
+        assert.match(a.content, /Создать файл/);
+        assert.equal(a.stepAnnounce, true);
+        pushStepAnnounce(ribbon, { step: 2, description: 'Создать файл' }, 'WORK');
+        assert.equal(ribbon.length, 1);
+    });
+});
+
+describe('expandStepWithSubplan', () => {
+    it('replaces current step with substeps', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Уточнить', status: 'done' },
+                { step: 2, description: 'Большой шаг', status: 'in_progress' },
+                { step: 3, description: 'Принять', status: 'proposed' },
+            ],
+        };
+        const ok = expandStepWithSubplan(task, task.steps[1], [
+            { description: 'Часть A' },
+            { description: 'Часть B' },
+        ]);
+        assert.equal(ok, true);
+        assert.equal(task.steps.length, 4);
+        assert.equal(task.steps[0].description, 'Уточнить');
+        assert.equal(task.steps[0].status, 'done');
+        assert.equal(task.steps[1].description, 'Часть A');
+        assert.equal(task.steps[1].status, 'in_progress');
+        assert.equal(task.steps[2].description, 'Часть B');
+        assert.equal(task.steps[3].description, 'Принять');
+    });
+});
+
+describe('workPathFromHistoryPath', () => {
+    it('maps history snapshot to work file path (helper only; UI uses history)', () => {
+        const hp = '/users/u1/$user/text/.presentation.html/history/2026-07-23/1.GigaChat.html';
+        assert.equal(
+            workPathFromHistoryPath(hp, 'presentation.html'),
+            '/users/u1/$user/text/presentation.html',
+        );
+    });
+});
+
+describe('ensureFillSubplan', () => {
+    it('expands fill step into N slide substeps from answers', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Уточнить', status: 'done' },
+                { step: 2, description: 'Заполнить слайды информацией', status: 'in_progress' },
+                { step: 3, description: 'Проверить и принять', status: 'proposed' },
+            ],
+            ribbon: [{ type: 'prompt', answers: { topic: 'WORK', slides: '5' } }],
+        };
+        const r = ensureFillSubplan(task, task.steps[1]);
+        assert.equal(r.expanded, true);
+        assert.equal(task.steps.filter(s => /^Слайд /.test(s.description)).length, 5);
+        assert.equal(task.steps.find(s => s.status === 'in_progress').description, 'Слайд 1');
+    });
+
+    it('blocks fill save when no count and no subplan', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Заполнить контент деталями', status: 'in_progress' },
+            ],
+            ribbon: [],
+        };
+        const r = ensureFillSubplan(task, task.steps[0]);
+        assert.equal(r.blocked, true);
+    });
+});
+
+describe('advanceAfterSuccessfulSave stub/fill', () => {
+    it('does not advance fill parent without slide substeps', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Заполнить слайды информацией', status: 'in_progress' },
+                { step: 2, description: 'Принять', status: 'proposed' },
+            ],
+        };
+        assert.equal(advanceAfterSuccessfulSave(task, task.steps[0], { post: '<html>' + 'x'.repeat(500) + '</html>' }), false);
+    });
+
+    it('does not advance slide substep on stub post', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Слайд 1', status: 'in_progress' },
+                { step: 2, description: 'Слайд 2', status: 'proposed' },
+            ],
+        };
+        assert.equal(advanceAfterSuccessfulSave(task, task.steps[0], {
+            post: '<html><body><div>Слайд 1 из 5</div></body></html>',
+        }), false);
+    });
+});
+
+describe('allContentWorkDone', () => {
+    it('true when only accept-only steps remain open', () => {
+        assert.equal(allContentWorkDone({
+            steps: [
+                { status: 'done', description: 'Слайд 1' },
+                { status: 'done', description: 'Слайд 2' },
+                { status: 'in_progress', description: 'Проверить и принять' },
+            ],
+        }), true);
+    });
+});
+
+describe('finalizeAcceptOnlySteps', () => {
+    it('closes remaining check/accept steps', () => {
+        const task = {
+            steps: [
+                { step: 1, description: 'Сделать', status: 'done' },
+                { step: 2, description: 'Проверить и принять файл', status: 'in_progress' },
+            ],
+        };
+        assert.equal(stepIsAcceptOnly(task.steps[1]), true);
+        assert.equal(finalizeAcceptOnlySteps(task), true);
+        assert.equal(task.steps.every(s => s.status === 'done'), true);
+    });
+});
+
+describe('parseResponseToRibbon subplan', () => {
+    it('extracts pendingSubplan', () => {
+        const out = parseResponseToRibbon(
+            '<reasoning>нужна декомпозиция</reasoning>\n<subplan>[{"description":"A"},{"description":"B"}]</subplan>',
+            'WORK',
+        );
+        assert.ok(out.pendingSubplan);
+        assert.equal(out.pendingSubplan.length, 2);
+        assert.equal(out.blocks.some(b => b.type === 'thinking'), true);
     });
 });

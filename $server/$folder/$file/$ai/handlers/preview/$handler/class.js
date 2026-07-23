@@ -183,7 +183,7 @@ export default {
         return openInteractive(this.data?.ribbon);
     },
     get rows() {
-        return Math.min(Math.max(2, String(this.value ?? '').split('\n').length), 6);
+        return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },
     get sendIcon() {
         if (this.pending || this.recording) return 'av:stop';

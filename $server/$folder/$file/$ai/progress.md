@@ -2,24 +2,18 @@
 
 ## Последние изменения
 
-- [12:10] Preview переписан декларативно: `body` + `~is`/`~props` по TYPES; task = nested ribbon; Ask = `microchat-view-questions` + `microchat-field`; убраны normalize/sync/openAsk.
-- [11:00] Fix AskQuestion UI (native options) — промежуточный костыль; заменён declarative rewrite.
-- [10:55] MVP e2e harness: write без confirm, file-блок, FC tool_calls, plan≥4, MAX_IDLE_DO=3.
-- [00:25] MVP harness ACL + on_save; документация `$ai`.
+- [15:15] Карточка file = history path из `save_file` (откат workPath). Fill-шаг → обязательный subplan по N; stub не advance. TOOL_DESCRIPTIONS без дублей @ai; harness не перетирает schema save_file.
 
 ## В работе
 
-- Живой UI-прогон: план → Начать → options в task → Уточнить → write → file.
+- Живой прогон: 5 слайдов → подшаги «Слайд 1…N» → history-карточки → Принять.
 - Следующий шаг: `spawn_agent` / skills-as-tools.
 
 ## Ключевые решения
 
-- **Preview = bind task.ai, не FSM.** `~props` блока = props view; один `body`; Reactor рисует.
-- **task не особый случай.** Nested `microchat-ribbon :items="ribbon"` — тот же диспетч; Ask внутри как `microchat-view-questions`.
-- **Ask пишет в `field.value` на объекте из body** (`:field="$for.item"`), не копия через get/set form.
-- **migrateRibbon только на load.** Не normalize на каждый render.
-- **Обычный write_file без trust-confirm** (harness). Confirm — system-modify.
-- **Не воскрешать file-handlers / skill-router.**
+- **History в UI.** `save_file` уже возвращает снимок; harness не подменяет на `~/text/name`.
+- **Fill = подплан.** N из answers → expand; иначе блок save. Stub не закрывает слайд.
+- **@ai канон.** TOOL_DESCRIPTIONS только fallback; ensureHarnessFunctions не overwrite schema.
 
 ## Блокеры / Открытые вопросы
 

@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [15:20] task.ai: карточка file = history path; fill-шаг → subplan по N; TOOL_DESCRIPTIONS без дублей `@ai`.
 - [13:53] Убран лишний `handlers-help` из `item-menu` — возврат к архитектуре tools + `item-tree` без отдельной кнопки «?».
 
 ## В работе

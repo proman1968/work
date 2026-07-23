@@ -106,6 +106,7 @@ describe('MVP e2e: USER working task', () => {
         assert.equal(result.success, true);
         assert.equal(result.resultPath, historyPath);
         assert.equal(result.path, historyPath);
+        assert.equal(result.workPath, undefined);
         assert.notEqual(result.resultPath, '/users/u1/presentation.html');
     });
 

@@ -14,4 +14,7 @@
 
 Утилита `buildAiSchema(proto)` — парсит JSDoc-теги `@ai` из исходных файлов классов. Обходит всю цепочку прототипов. Результат кэшируется в `WeakMap`.
 
+**Канон описаний methods для ИИ — JSDoc `@ai` / `@ai.params` / `@ai.returns` на методе.**  
+`static TOOL_DESCRIPTIONS` — только fallback для методов **без** `@ai`; не дублировать уже размеченные методы.
+
 Критическая особенность: `Function.prototype.toString()` в V8 не сохраняет JSDoc-комментарии, поэтому парсинг идёт по исходному файлу через `constructor.sourceUrl`.
