@@ -79,6 +79,139 @@ export function toOpenAiTools(functions) {
 }
 
 /**
+ * GigaChat FC: только name/description/parameters (без _servicePath и прочего).
+ * Битые property без type → string; пустой name пропускаем.
+ * @param {Array} functions
+ * @returns {Array<{name:string,description:string,parameters:object}>}
+ */
+export function sanitizeGigaChatFunctions(functions) {
+    if (!Array.isArray(functions))
+        return [];
+    const out = [];
+    for (const fn of functions) {
+        if (!fn || typeof fn !== 'object' || !fn.name)
+            continue;
+        const name = String(fn.name).trim();
+        if (!name || !/^[\w.-]+$/.test(name))
+            continue;
+        let parameters = fn.parameters;
+        if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters))
+            parameters = { type: 'object', properties: {} };
+        else {
+            const propsIn = parameters.properties && typeof parameters.properties === 'object'
+                ? parameters.properties
+                : {};
+            const propsOut = {};
+            for (const [key, prop] of Object.entries(propsIn)) {
+                if (!key || typeof prop !== 'object' || prop == null)
+                    continue;
+                const type = ['string', 'number', 'integer', 'boolean', 'object', 'array'].includes(prop.type)
+                    ? prop.type
+                    : 'string';
+                const clean = { type, description: String(prop.description || '') };
+                if (type === 'object')
+                    clean.properties = (prop.properties && typeof prop.properties === 'object')
+                        ? prop.properties
+                        : {};
+                if (type === 'array')
+                    clean.items = prop.items && typeof prop.items === 'object'
+                        ? prop.items
+                        : { type: 'string' };
+                propsOut[key] = clean;
+            }
+            const required = Array.isArray(parameters.required)
+                ? parameters.required.filter(k => k in propsOut)
+                : [];
+            parameters = { type: 'object', properties: propsOut };
+            if (required.length)
+                parameters.required = required;
+        }
+        out.push({
+            name,
+            description: String(fn.description || name).slice(0, 500),
+            parameters,
+        });
+    }
+    return out;
+}
+
+/**
+ * Убрать из messages FC-пары, чьих имён нет в functions (иначе GigaChat 422).
+ * Оставить только валидные пары assistant.function_call + role:function.
+ * @param {Array} messages
+ * @param {Array<{name?: string}>} functions
+ * @returns {Array}
+ */
+export function sanitizeGigaChatMessages(messages, functions = []) {
+    if (!Array.isArray(messages))
+        return [];
+    const allowed = new Set(
+        (functions || []).map(f => f?.name).filter(Boolean),
+    );
+    const out = [];
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.role === 'assistant' && m.function_call?.name) {
+            const fname = String(m.function_call.name);
+            const next = messages[i + 1];
+            const paired = next?.role === 'function' && String(next.name || '') === fname;
+            if (!allowed.has(fname) || !paired) {
+                // Сирота / неизвестная функция — в prose, не в FC
+                const args = m.function_call.arguments;
+                const argsStr = typeof args === 'string' ? args : JSON.stringify(args || {});
+                out.push({
+                    role: 'assistant',
+                    content: (m.content ? String(m.content) + '\n' : '')
+                        + '[function_call ' + fname + ' ' + argsStr + ']',
+                });
+                if (paired) {
+                    out.push({
+                        role: 'user',
+                        content: 'Результат ' + fname + ':\n' + String(next.content ?? ''),
+                    });
+                    i++;
+                }
+                continue;
+            }
+            const args = m.function_call.arguments;
+            out.push({
+                role: 'assistant',
+                content: m.content == null ? '' : String(m.content),
+                function_call: {
+                    name: fname,
+                    arguments: (args && typeof args === 'object' && !Array.isArray(args))
+                        ? args
+                        : (typeof args === 'string'
+                            ? (() => { try { return JSON.parse(args); } catch { return {}; } })()
+                            : {}),
+                },
+            });
+            continue;
+        }
+        if (m.role === 'function') {
+            const fname = String(m.name || '');
+            if (!allowed.has(fname)) {
+                out.push({
+                    role: 'user',
+                    content: 'Результат ' + (fname || 'метода') + ':\n' + String(m.content ?? ''),
+                });
+                continue;
+            }
+            out.push({
+                role: 'function',
+                name: fname,
+                content: m.content == null ? '' : String(m.content),
+            });
+            continue;
+        }
+        out.push(m);
+    }
+    return out;
+}
+
+/**
  * Нормализация messages для OpenAI/GLM: нет role:function, есть непустой user.
  * Legacy function → tool; orphan function_call на assistant снимается в tool_calls-пару при возможности.
  * @param {Array} messages
@@ -146,7 +279,28 @@ export default {
         // Function calling: gigachat = legacy functions; openai/z.ai = tools
         if (useFunctions && ai.functionCalling === true) {
             if (isGigachat) {
-                body.functions = options.functions;
+                let gigaFns = sanitizeGigaChatFunctions(options.functions);
+                // Force save_file: только чистая схема — иначе 422 «undefined … [save_file]»
+                const forcedName = options.function_call && typeof options.function_call === 'object'
+                    ? options.function_call.name
+                    : null;
+                if (forcedName === 'save_file') {
+                    const saveFn = gigaFns.find(f => f.name === 'save_file') || {
+                        name: 'save_file',
+                        description: 'Создать или перезаписать файл. filename + post.',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                filename: { type: 'string', description: 'Имя файла' },
+                                post: { type: 'string', description: 'Содержимое' },
+                            },
+                            required: ['filename', 'post'],
+                        },
+                    };
+                    gigaFns = [saveFn];
+                }
+                body.functions = gigaFns;
+                body.messages = sanitizeGigaChatMessages(messages, gigaFns);
                 if (options.function_call)
                     body.function_call = options.function_call;
             } else {

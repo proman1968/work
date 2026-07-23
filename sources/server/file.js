@@ -316,12 +316,9 @@ export class $file extends $folder{
         return matches ? matches.map(m => m.trim()) : [];
     }
     async create(p = {}) {
-        switch (p.type) {
-            case '$file':
-            case '$folder':
-                return this.storage_folder.create(p);
-        }
-        throw new Error(`Невозможно создание элемента типа "${p.type}" внутри файла`);
+        throw new Error(
+            'create есть только у $class (новый класс). Файл — save_file({ filename, post })',
+        );
     }
     static _logClassKey(storage) {
         if (!storage || storage === globalThis.WORK)

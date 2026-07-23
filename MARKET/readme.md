@@ -6,28 +6,33 @@
 
 ## 2. Зачем это нужно
 
-Единая точка покупки внутри платформы. Категории и товары — `$class`; заявка — файл `$bid`.
+Единая точка покупки внутри платформы. Категории — `$class`; товары — файлы `.product` в `work/product/` категории; заявка — файл `$bid`.
 
 ## 3. Как это работает
 
 1. Сайт `MARKET` (shell `site` из `~`) — меню категорий.
 2. Категория `PAAS`: handlers под `$class/` (чтобы `~/handlers` видел override) — `site/main` с карточками товаров.
-3. Клик по карточке → `WORK.showModal` с панелью заказа (описание + `FIELDS` form + «Заказать»).
-4. «Заказать» → auth при необходимости → `new File(…, '*.bid')` + `product.save_file` (как чат / `task.ai`).
+3. Товары — файлы `*.product` в `work/product/` зоны роли (USER → `meta_folder/work/product/`). Main получает список через `~//product` и грузит актуальные версии файлов.
+4. Клик по карточке → `WORK.showModal` с панелью заказа (описание + форма из `orderForm` + «Заказать»).
+5. «Заказать» → auth при необходимости → `{uid}.bid` сохраняется на ближайший `$class` категории (`/MARKET/PAAS`) по роли покупателя. Повторный заказ перезаписывает файл; предыдущие версии — в `history` и `data.logs`.
 
 ## 4. Из чего это состоит
 
 - `$class/class.js` — витрина «Магазин»
 - `PAAS/$class/` — категория + `handlers/pages/site` (shell `{}` + main: карточки/модалка)
-- `PAAS/СТАРТ|БИЗНЕС|ПРЕДПРИЯТИЕ/$class/class.js` — товар: `$public` (price, includes, FIELDS form+`name`)
+- `PAAS/$class/work/product/*.product` — товары (тарифные планы): `старт.product`, `бизнес.product`, `предприятие.product`
+- Тип `$product` — [`$server/$folder/$file/$product/`]($server/$folder/$file/$product/) (схема `FIELDS`, шаблон)
+- Тип `$bid` — [`$server/$folder/$file/$bid/`]($server/$folder/$file/$bid/) (схема заявки, preview)
 
 ## 5. В каком это состоянии
 
-- ✅ PAAS карточки → модалка → `.bid` через client `save_file`
+- ✅ Тип `$product` (схема + шаблон)
+- ✅ PAAS карточки → модалка → `.bid` через client `save_file` на класс категории
 - ❌ Provision / биллинг / связь с `$order`
 
 ## 6. Дальнейшие планы
 
 - Другие категории витрины
-- Наследование `FIELDS` с категории
+- Наследование `orderForm` с категории
 - Подключение исполнения заявки (вне MARKET)
+- Синхронизация тарифов с корневым `/PAAS` landing

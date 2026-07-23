@@ -4,8 +4,17 @@ import { $item } from '../core.js';
 import * as mime from "mime-types";
 import { FS } from './index.js';
 import { $folder } from './folder.js';
+import { assertClassId } from './assert-class-id.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
+
+/** id похож на имя файла (presentation.html), а не на класс (MARKET). */
+export function looksLikeFileId(id) {
+    const s = String(id ?? '').trim();
+    if (!s || s[0] === '$')
+        return false;
+    return /\.[A-Za-z0-9]{1,16}$/.test(s);
+}
 
 export class $class extends $folder{
     static sourceUrl = import.meta.url;
@@ -1357,6 +1366,44 @@ export class $class extends $folder{
             return bosses;
         })
     }
+    /**
+     * Создать дочерний класс (только класс). Файлы — save_file; папки появляются при save_file.
+     * @param {object} [p]
+     * @param {string} [p.type] $class или другой типизатор ($paas, …); по умолчанию $class
+     * @param {string} p.id Имя класса (для $class — целиком ЗАГЛАВНЫМИ)
+     * @param {string} [p.post] Содержимое class.js
+     * @returns {Promise<object>} Снимок class.js (history path)
+     */
+    async create(p = {}) {
+        await this.allowAccess(p, $class.ACCESS_LEVEL.WRITE);
+        const id = String(p.id ?? '').trim();
+        if (!id)
+            throw new Error('create: нужен id класса');
+        if (looksLikeFileId(id))
+            throw new Error('create создаёт только класс. Файл — save_file({ filename, post })');
+        let type = p.type || '$class';
+        if (type === '$file' || type === '$folder')
+            throw new Error('create создаёт только класс. Файл — save_file; папки появляются при save_file');
+        if (typeof type !== 'string' || type[0] !== '$')
+            throw new Error('create: type должен быть $class или типизатором ($…)');
+        if (type === '$class')
+            assertClassId(id);
+
+        let folder = await this._get_item(id, FS.$folder);
+        await folder.save();
+        folder = await folder._get_item(type, FS.$folder);
+        await folder.save();
+        const post = p.post ?? `export default {
+    label: '${id}'
+}`;
+        return folder.save_file({
+            ...p,
+            filename: 'class.js',
+            post,
+            ignore_save_logs: true,
+        });
+    }
+
     /** Все назначенные пользователи класса (объединение admins + bosses + users). */
     get assignedUsers(){
         return Promise.all([

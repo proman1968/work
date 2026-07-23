@@ -2,9 +2,10 @@ export default {
     icon: 'icons:add',
     access: 'c',
     async execute(filter) {
-        const props = { $item: this.$item.$context, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
+        const ctx = this.$item.$context;
+        const props = { $item: ctx, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
         if (filter) {
-            props.type = this.$item.$context.type;
+            props.type = ctx.type;
         }
         const el = ODA.createElement('input-name-type', props);
         const upload = {
@@ -13,17 +14,37 @@ export default {
                 el.parentElement.close('upload');
             }
         };
-        // const result = await WORK.showDialog(el, { TITLE: { label: `Input item name and type` }, BUTTONS: [upload] });
         const result = await WORK.showDialog(el, { $item: this, TITLE: { deep: 1 }, BUTTONS: [upload] });
         if (result === 'ok') {
-            if (el.type.startsWith('$')) {
-                // create $item
-                return this.$item.$context.create({ type: el.type, id: el.name });
-            } else {
-                // create $file
-                const fullName = `${el.name}${el.type ? `.${el.type}` : ''}`;
-                return this.$item.$context.create({ type: '$file', id: fullName });
+            const type = el.type || '';
+            const name = el.name;
+            if (type.startsWith('$') && type !== '$file' && type !== '$folder') {
+                const owner = [ctx.$class, ctx.$owner, ctx].find(o =>
+                    o && typeof o.create === 'function'
+                    && o.constructor?.name !== '$folder'
+                    && o.constructor?.name !== '$file'
+                );
+                if (!owner)
+                    throw new Error('create класса: нужен контекст $class');
+                return owner.create({ type, id: name });
             }
+            if (type === '$folder') {
+                return ctx.ensure_folder({ id: name });
+            }
+            const fullName = type === '$file'
+                ? name
+                : `${name}${type ? `.${type}` : ''}`;
+            let post = '';
+            const ext = fullName.includes('.') ? fullName.split('.').pop() : '';
+            if (ext) {
+                try {
+                    const ext_folder = await WORK.$folder.find_item('$' + ext, (item) => item.id?.[0] === '$');
+                    const ext_tmp = await ext_folder?._get_item('template.' + ext);
+                    if (ext_tmp)
+                        post = WORK.fs.readFileSync('.' + ext_tmp.path);
+                } catch { /* empty */ }
+            }
+            return ctx.save_file({ filename: fullName, post, encoding: 'utf-8' });
         } else if (result === 'upload') {
             const fileDialog = await ODA.showFileDialog({ multiple: true });
             let files = Array.from(fileDialog).map(f => {
@@ -40,10 +61,10 @@ export default {
                 return f;
             });
             const formData = new FormData();
-            files.forEach((file, index) => {
+            files.forEach((file) => {
                 formData.append('file', file, file.name);
             });
-            return this.$item.$context.create({ type: '$file' }, formData);
+            return ctx.save_files({ post: { files }, user: WORK });
         }
     }
 }

@@ -6,7 +6,6 @@ import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
-import { assertClassId } from './assert-class-id.js';
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
     static PATH_STEP = {
@@ -1384,65 +1383,32 @@ export class $folder extends $item{
         }
         return this;
     }
+
     /**
-     * Создать новый файл, папку или типизированный класс.
-     * @param {object} [p]
-     * @param {string} [p.type] $file | $folder | $class
-     * @param {string} [p.id] Имя (для $class — целиком ЗАГЛАВНЫМИ)
-     * @param {*} [p.post] Содержимое
-     * @returns {Promise<object>} Созданный элемент
+     * @deprecated create только на $class. Файл — save_file; папки — ensure_folder / save_file.
      */
     async create(p = {}) {
-        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
-        if (p.type === '$file') {
-            // загрузка файла(ов)
-            if (p.post?.files?.length) {
-                return this.save_files(p);
-            }
-
-            if (p.id) {
-                if (!p.post) { // поск шаблона файла по расширению
-                    const ext = p.id.split('.').last;
-                    const ext_folder = await WORK.$folder.find_item('$' + ext, (item) => item.id[0] === '$');
-                    const ext_tmp = await ext_folder._get_item('template.' + ext);
-                    if (ext_tmp) {
-                        p.post = WORK.fs.readFileSync('.' + ext_tmp.path);
-                    }
-                    else {
-                        p.post = '';
-                    }
-                }
-                p.filename = p.id
-                return this.save_file(p);
-            }
-        }
-        else if (p.type === '$folder') {
-            let folder = await this._get_item(p.id, FS.$folder);
-            await folder.save();
-            return folder;
-        }
-        else { // $class и прочие типизаторы
-            // Правило ЗАГЛАВНЫХ — только для $class (не для $paas/$node с DNS-id)
-            if (p.type === '$class')
-                assertClassId(p.id);
-            let folder = await this._get_item(p.id, FS.$folder);
-            await folder.save();
-            folder = await folder._get_item(p.type, FS.$folder);
-            await folder.save();
-            if (!p.post) {
-                p.post = `export default {
-    label: '${p.id}'
-}`;
-            }
-            p.filename = 'class.js';
-            p.ignore_save_logs = true;
-            const file = await folder.save_file(p);
-            // folder.reset();
-            // folder.$parent.reset();
-            // this.reset();
-            return file;
-        }
+        throw new Error(
+            'create есть только у $class (новый класс). Файл — save_file({ filename, post }); папки — ensure_folder или при save_file',
+        );
     }
+
+    /**
+     * Создать пустую папку (mkdir), если ещё нет.
+     * @param {object} [p]
+     * @param {string} p.id Имя папки
+     * @returns {Promise<object>} Папка
+     */
+    async ensure_folder(p = {}) {
+        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
+        const id = String(p.id ?? p.name ?? '').trim();
+        if (!id)
+            throw new Error('ensure_folder: нужен id');
+        const folder = await this._get_item(id, FS.$folder);
+        await folder.save();
+        return folder;
+    }
+
     sortItems(files, reverse = false, isType = this.isType) {
         files = files.sort((a, b) => {
             if (a?.parent === a?.$owner) {

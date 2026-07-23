@@ -42,6 +42,14 @@ function isBrokenFcArgs(args) {
     return args.raw === '[object Object]';
 }
 
+/** id похож на имя файла (presentation.html), а не на класс (MARKET). */
+function looksLikeFileId(id) {
+    const s = String(id ?? '').trim();
+    if (!s || s[0] === '$')
+        return false;
+    return /\.[A-Za-z0-9]{1,16}$/.test(s);
+}
+
 /** Args для history/API: без мусора raw:"[object Object]" */
 function sanitizeToolArgsForHistory(args) {
     if (!args || typeof args !== 'object' || Array.isArray(args))
@@ -458,8 +466,16 @@ export default {
                 try {
                     const streamParams = { messages, $ai: model };
                     if (functions.length > 0) {
-                        streamParams.functions = functions;
-                        streamParams.function_call = 'auto';
+                        const doTask = activeTaskFind(body);
+                        const doCur = doTask?.steps?.find(s => s.status === 'in_progress')
+                            || doTask?.steps?.find(s => s.status === 'proposed');
+                        const doPhase = doTask ? getDoStepPhase(doTask) : null;
+                        ensureNamedFunction(functions, 'save_file', HARNESS_SAVE_FILE);
+                        const mode = resolveFunctionCallMode(doPhase, doCur, functions);
+                        const prepared = prepareFunctionsForStream(functions, messages, mode);
+                        streamParams.functions = prepared.functions;
+                        streamParams.function_call = prepared.function_call;
+                        functions = prepared.functions;
                     }
                     const stream = await execItemMethod(model, 'streamChat', streamParams);
                     for await (const chunk of stream) {
@@ -685,7 +701,7 @@ export default {
                         ribbonTarget.push({
                             type: 'error',
                             content: planStillOpen
-                                ? 'План не завершён: выполни текущий шаг' + stepHint + ' через tool (save_file / create / …).'
+                                ? 'План не завершён: выполни текущий шаг' + stepHint + ' через tool (файл — save_file; класс — create).'
                                 : 'Модель не вызвала tool за ' + MAX_IDLE_DO + ' попыток.',
                             time: Date.now(),
                             sender: model.path || 'WORK',
@@ -998,7 +1014,98 @@ async function buildFunctionsList(currentContext) {
 }
 
 /**
- * Гарантировать ask_user + недостающие helpers. save_file — только если нет в schema (@ai канон).
+ * Upsert функции по точному имени (write_file ≠ save_file).
+ * @param {Array} functions
+ * @param {string} name
+ * @param {object} template
+ * @param {{ prepend?: boolean }} [opts]
+ * @returns {Array}
+ */
+function ensureNamedFunction(functions = [], name, template, opts = {}) {
+    if (!Array.isArray(functions) || !name || !template)
+        return functions;
+    const idx = functions.findIndex(f => f?.name === name);
+    if (idx >= 0) {
+        if (opts.prepend && idx > 0) {
+            const [existing] = functions.splice(idx, 1);
+            functions.unshift(existing);
+        }
+        return functions;
+    }
+    const copy = { ...template, name };
+    if (opts.prepend)
+        functions.unshift(copy);
+    else
+        functions.push(copy);
+    return functions;
+}
+
+/**
+ * Имена FC из messages (assistant.function_call / role:function).
+ * @param {Array} messages
+ * @returns {string[]}
+ */
+function collectFunctionNamesFromMessages(messages = []) {
+    const names = new Set();
+    for (const m of messages || []) {
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.role === 'function' && m.name)
+            names.add(String(m.name));
+        const fc = m.function_call;
+        if (fc?.name)
+            names.add(String(fc.name));
+        if (Array.isArray(m.tool_calls)) {
+            for (const tc of m.tool_calls) {
+                const n = tc?.function?.name || tc?.name;
+                if (n)
+                    names.add(String(n));
+            }
+        }
+    }
+    return [...names];
+}
+
+/**
+ * Stub для имени из history, которого нет в schema.
+ * @param {string} name
+ */
+function stubFunctionForHistory(name) {
+    if (name === 'save_file')
+        return { ...HARNESS_SAVE_FILE };
+    return {
+        name,
+        description: name,
+        parameters: { type: 'object', properties: {} },
+    };
+}
+
+/**
+ * Подготовить functions к stream: history names + force save_file первым.
+ * @param {Array} functions
+ * @param {Array} messages
+ * @param {'auto'|{name:string}} functionCall
+ * @returns {{ functions: Array, function_call: 'auto'|{name:string} }}
+ */
+function prepareFunctionsForStream(functions = [], messages = [], functionCall = 'auto') {
+    const list = Array.isArray(functions) ? [...functions] : [];
+    for (const name of collectFunctionNamesFromMessages(messages)) {
+        if (!list.some(f => f?.name === name))
+            list.push(stubFunctionForHistory(name));
+    }
+    let mode = functionCall;
+    if (mode && typeof mode === 'object' && mode.name === 'save_file') {
+        // Канон harness-схемы (schema save_file иногда даёт 422 у GigaChat)
+        const rest = list.filter(f => f?.name !== 'save_file');
+        rest.unshift({ ...HARNESS_SAVE_FILE });
+        return { functions: rest, function_call: { name: 'save_file' } };
+    }
+    return { functions: list, function_call: mode };
+}
+
+/**
+ * Гарантировать ask_user + недостающие helpers.
+ * save_file — по имени (write_file не замена для force FC).
  * @param {Array} functions
  * @returns {Array}
  */
@@ -1007,8 +1114,7 @@ function ensureHarnessFunctions(functions = []) {
         if (!functions.find(f => f.name === fn.name))
             functions.push({ ...fn });
     }
-    if (!functions.find(fn => fn.name === 'save_file' || fn.name === 'write_file'))
-        functions.push({ ...HARNESS_SAVE_FILE });
+    ensureNamedFunction(functions, 'save_file', HARNESS_SAVE_FILE);
     if (!functions.find(fn => fn.name === ASK_USER_METHOD)) {
         functions.push({
             name: ASK_USER_METHOD,
@@ -1363,6 +1469,20 @@ function buildToolMethodParams(call, params, opts = {}) {
  */
 async function executeToolCall(call, currentContext, initialContext, functions, params, aiUser) {
     let result;
+
+    // create с id-файлом — до dispatch (иначе $folder.create / ошибочный класс)
+    if (call.method === 'create') {
+        const id = String(call.args?.id ?? call.args?.name ?? '').trim();
+        const type = call.args?.type;
+        if (looksLikeFileId(id) || type === '$file' || type === '$folder') {
+            return {
+                result: {
+                    error: 'create создаёт только класс. Файл — save_file({ filename, post }); папки появляются при save_file',
+                },
+                newContext: currentContext,
+            };
+        }
+    }
 
     // save_file / write_file (алиас) — до generic dispatch (у $user нет write_file)
     if (isFileWriteMethod(call.method)) {
@@ -1732,7 +1852,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             systemContent += 'Статусы done ставит система по факту (tool/форма), не рисуй все done в <plan>. «Принять» — когда harness закрыл все шаги.\n';
             systemContent += 'Сложный шаг — <subplan>[{"description":"..."},…] вместо одного прыжка. Не закрывай N и N+1 одним save.\n';
             if (phase === 'execute')
-                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО <reasoning> и tool (save_file / create / …) по текущему шагу ИЛИ <subplan>. Не prose «готово» без факта. Артефакт: один конечный filename, перезапись.\n';
+                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО <reasoning> и native tool по текущему шагу ИЛИ <subplan>. Файл — tool save_file; класс — create. Запрещены JS-вызов save_file(…) и <function calling>. Fallback: <tool_call>{"method":"save_file","args":{…}}</tool_call>. Не prose «готово» без факта.\n';
             else if (phase === 'propose')
                 systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не save_file до ответов.\n';
             if (forceDoReminder) {
@@ -1740,8 +1860,12 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                     systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
                 else {
                     const stepLabel = cur?.description ? '«' + cur.description + '»' : 'текущий';
+                    const fn = artifactFilenameFromStep(cur);
                     systemContent += 'СТОП: прошлый ответ без tool calls. Текущий шаг: ' + stepLabel
-                        + '. Сейчас <reasoning> + native function (save_file / create / …) ИЛИ <subplan>. Не prose без tool. Не «Начать».\n';
+                        + '. Сейчас <reasoning> + native tool save_file (или <subplan>). Не печатай save_file(…) / <function calling>.';
+                    if (fn)
+                        systemContent += ' Fallback: <tool_call>{"method":"save_file","args":{"filename":"' + fn + '","post":"…полный HTML…"}}</tool_call>';
+                    systemContent += '. Не «Начать».\n';
                 }
             }
         }
@@ -1882,18 +2006,17 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
 }
 
 /**
- * Короткий user-nudge для EXECUTE forceDoReminder (generic, без имён артефактов).
+ * Короткий user-nudge для EXECUTE forceDoReminder.
  * @param {Array} messages
  * @param {{ description?: string, step?: number }|null} step
  */
 function appendDoForceNudge(messages, step) {
     if (!Array.isArray(messages)) return messages;
     const label = step?.description ? '«' + step.description + '»' : 'текущему шагу';
-    messages.push({
-        role: 'user',
-        content: 'СТОП: нужен tool call по ' + label
-            + '. Вызови доступный method (save_file / create / …). Не отвечай prose без tool.',
-    });
+    const content = 'СТОП: нужен tool call по ' + label
+        + '. Файл — native tool save_file (function calling API); класс — create.'
+        + ' Не печатай save_file(…) / <function calling> / <tool_call> текстом.';
+    messages.push({ role: 'user', content });
     return messages;
 }
 
@@ -2153,6 +2276,44 @@ function activeTaskFind(body) {
 function stepNeedsClarify(step) {
     const d = String(step?.description || '');
     return /уточн|спроси|тема|выбор|параметр|данн/i.test(d);
+}
+
+/**
+ * Имя артефакта из описания шага (presentation.html).
+ * @param {{ description?: string }|null} step
+ * @returns {string}
+ */
+function artifactFilenameFromStep(step) {
+    const d = String(step?.description || '');
+    const m = d.match(/\b([\w.-]+\.[A-Za-z0-9]{1,16})\b/);
+    return m ? m[1] : '';
+}
+
+/**
+ * EXECUTE-шаг создания/записи файла → форс GigaChat function_call save_file.
+ * @param {{ description?: string }|null} step
+ * @param {Array<{name?: string}>} [functions]
+ */
+function stepNeedsForcedSaveFile(step, functions = []) {
+    if (!step || stepNeedsClarify(step))
+        return false;
+    if (!artifactFilenameFromStep(step))
+        return false;
+    return (functions || []).some(fn => fn?.name === 'save_file');
+}
+
+/**
+ * Режим function_call для streamChat.
+ * Force только если в functions уже есть save_file (после ensureNamedFunction).
+ * @param {string|null|undefined} phase
+ * @param {{ description?: string }|null} step
+ * @param {Array} [functions]
+ * @returns {'auto'|{name: string}}
+ */
+function resolveFunctionCallMode(phase, step, functions = []) {
+    if (phase === 'execute' && stepNeedsForcedSaveFile(step, functions))
+        return { name: 'save_file' };
+    return 'auto';
 }
 
 /** Boilerplate prose/title опросника — не показывать */
@@ -2503,11 +2664,17 @@ export {
     nextIdleDoAction,
     getDoStepPhase,
     stepNeedsClarify,
+    artifactFilenameFromStep,
+    stepNeedsForcedSaveFile,
+    resolveFunctionCallMode,
     taskHasClarifyAnswers,
     makeClarifyQuestions,
     questionsFromAskUser,
     mapAskQuestionToField,
     ensureHarnessFunctions,
+    ensureNamedFunction,
+    collectFunctionNamesFromMessages,
+    prepareFunctionsForStream,
     advanceAfterClarifyAnswers,
     advanceAfterSuccessfulSave,
     countDoneSteps,
@@ -2554,6 +2721,8 @@ export {
     makeIdleExecuteResumeAction,
     appendDoForceNudge,
     parseToolCalls,
+    parseJsObjectLiteral,
+    parseJsStyleToolCallAt,
     parseXmlToolCallAt,
     parseXmlTagAttrs,
     isXmlAttrValueEnd,
@@ -2730,9 +2899,11 @@ function parseResponseToRibbon(text, sender = 'WORK') {
     remaining = remaining.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
     remaining = remaining.replace(/```tool_call[\s\S]*?```/g, '');
     remaining = remaining.replace(/```ask_user[\s\S]*?```/gi, '');
+    remaining = remaining.replace(/<function(?:\s+|_)calling>[\s\S]*?<\/function(?:\s+|_)calling>/gi, '');
     remaining = remaining.replace(/<function(?:\s[^>]*)?>[\s\S]*?<\/function>/gi, '');
     remaining = remaining.replace(/<\/?function_caller>/gi, '');
     remaining = remaining.replace(/<\/?function\s+caller[^>]*>/gi, '');
+    remaining = stripJsStyleToolProse(remaining);
 
     const cleanText = remaining.trim();
     if (cleanText)
@@ -2852,6 +3023,169 @@ async function buildContextInfo(context, user) {
     return info;
 }
 
+/**
+ * Разобрать JS-object literal args: {filename:"a.html", post:"…"} (ключи без кавычек).
+ * @param {string} src
+ * @returns {object|null}
+ */
+function parseJsObjectLiteral(src) {
+    const s = String(src ?? '').trim();
+    if (!s.startsWith('{') || !s.endsWith('}'))
+        return null;
+    try {
+        const asJson = JSON.parse(s);
+        if (asJson && typeof asJson === 'object' && !Array.isArray(asJson))
+            return asJson;
+    } catch { /* JS-style keys */ }
+    const out = {};
+    let i = 1;
+    while (i < s.length - 1) {
+        while (i < s.length && /[\s,]/.test(s[i])) i++;
+        if (i >= s.length - 1 || s[i] === '}')
+            break;
+        let key = '';
+        if (s[i] === '"' || s[i] === "'") {
+            const q = s[i++];
+            let esc = false;
+            while (i < s.length) {
+                const c = s[i++];
+                if (esc) { key += c; esc = false; continue; }
+                if (c === '\\') { esc = true; continue; }
+                if (c === q) break;
+                key += c;
+            }
+            while (i < s.length && /\s/.test(s[i])) i++;
+            if (s[i] !== ':')
+                return null;
+            i++;
+        } else {
+            const m = s.slice(i).match(/^([A-Za-z_]\w*)\s*:/);
+            if (!m)
+                return null;
+            key = m[1];
+            i += m[0].length;
+        }
+        while (i < s.length && /\s/.test(s[i])) i++;
+        if (i >= s.length)
+            return null;
+        if (s[i] === '"' || s[i] === "'") {
+            const q = s[i++];
+            let val = '';
+            let esc = false;
+            while (i < s.length) {
+                const c = s[i++];
+                if (esc) { val += c; esc = false; continue; }
+                if (c === '\\') { esc = true; continue; }
+                if (c === q) break;
+                val += c;
+            }
+            out[key] = val;
+        } else if (s[i] === '{') {
+            const nested = extractBalancedObject(s, i);
+            if (!nested)
+                return null;
+            const nestedObj = parseJsObjectLiteral(nested.literal);
+            if (!nestedObj)
+                return null;
+            out[key] = nestedObj;
+            i = nested.end;
+        } else {
+            const m = s.slice(i).match(/^(true|false|null|-?\d+(?:\.\d+)?)/);
+            if (!m)
+                return null;
+            const raw = m[1];
+            out[key] = raw === 'true' ? true : raw === 'false' ? false : raw === 'null' ? null : Number(raw);
+            i += raw.length;
+        }
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Вырезать `{…}` с учётом строк и вложенности, начиная с индекса `{`.
+ * @returns {{ literal: string, end: number }|null} end — индекс после `}`
+ */
+function extractBalancedObject(text, startIdx) {
+    if (!text || text[startIdx] !== '{')
+        return null;
+    let depth = 0;
+    let inStr = false;
+    let quote = '';
+    let escape = false;
+    for (let i = startIdx; i < text.length; i++) {
+        const c = text[i];
+        if (inStr) {
+            if (escape) { escape = false; continue; }
+            if (c === '\\') { escape = true; continue; }
+            if (c === quote) inStr = false;
+            continue;
+        }
+        if (c === '"' || c === "'") {
+            inStr = true;
+            quote = c;
+            continue;
+        }
+        if (c === '{')
+            depth++;
+        else if (c === '}') {
+            depth--;
+            if (depth === 0)
+                return { literal: text.slice(startIdx, i + 1), end: i + 1 };
+        }
+    }
+    return null;
+}
+
+/**
+ * Найти call `name({…})` начиная с индекса имени; вернуть { method, args, end }.
+ */
+function parseJsStyleToolCallAt(text, nameStart, method) {
+    if (!text || nameStart < 0 || !method)
+        return null;
+    let i = nameStart + method.length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== '(')
+        return null;
+    i++;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const bal = extractBalancedObject(text, i);
+    if (!bal)
+        return null;
+    i = bal.end;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== ')')
+        return null;
+    const args = parseJsObjectLiteral(bal.literal);
+    if (!args || !Object.keys(args).length)
+        return null;
+    return { method, args, end: i + 1 };
+}
+
+/** Убрать голые tool-вызовы name({…}) из prose ленты. */
+function stripJsStyleToolProse(text) {
+    if (!text)
+        return text;
+    const names = ['save_file', 'write_file', 'create', 'ask_user', 'navigate', 'read_file', 'reset_context'];
+    let out = String(text);
+    for (const name of names) {
+        const re = new RegExp('\\b' + name + '\\s*\\(', 'g');
+        const ranges = [];
+        let sm;
+        while ((sm = re.exec(out)) !== null) {
+            if (sm.index > 0 && out[sm.index - 1] === '<')
+                continue;
+            const parsed = parseJsStyleToolCallAt(out, sm.index, name);
+            if (parsed)
+                ranges.push([sm.index, parsed.end]);
+        }
+        for (let r = ranges.length - 1; r >= 0; r--) {
+            const [a, b] = ranges[r];
+            out = out.slice(0, a) + out.slice(b);
+        }
+    }
+    return out;
+}
+
 function parseToolCalls(text, functions = []) {
     const calls = [];
     if (!text)
@@ -2898,6 +3232,39 @@ function parseToolCalls(text, functions = []) {
             while ((sm = startRe.exec(text)) !== null) {
                 const parsed = parseXmlToolCallAt(text, sm.index, name);
                 if (parsed && Object.keys(parsed.args).length > 0)
+                    calls.push({ method: parsed.method, args: parsed.args });
+            }
+        }
+    }
+
+    // 4. Light prose: <function calling>save_file({…})</function calling>
+    if (calls.length === 0) {
+        const wrapRe = /<function(?:\s+|_)calling>\s*(\w+)\s*\(/gi;
+        let wm;
+        while ((wm = wrapRe.exec(text)) !== null) {
+            const method = wm[1];
+            const rel = wm[0].lastIndexOf(method);
+            if (rel < 0)
+                continue;
+            const parsed = parseJsStyleToolCallAt(text, wm.index + rel, method);
+            if (parsed)
+                calls.push({ method: parsed.method, args: parsed.args });
+        }
+    }
+
+    // 5. Голый save_file({…}) для известных tools (если ещё пусто)
+    if (calls.length === 0 && functions.length > 0) {
+        const knownNames = new Set(functions.map(fn => fn.name));
+        for (const name of knownNames) {
+            if (!name || !/^\w+$/.test(name)) continue;
+            const startRe = new RegExp('\\b' + name + '\\s*\\(', 'g');
+            let sm;
+            while ((sm = startRe.exec(text)) !== null) {
+                // не XML <save_file
+                if (sm.index > 0 && text[sm.index - 1] === '<')
+                    continue;
+                const parsed = parseJsStyleToolCallAt(text, sm.index, name);
+                if (parsed)
                     calls.push({ method: parsed.method, args: parsed.args });
             }
         }

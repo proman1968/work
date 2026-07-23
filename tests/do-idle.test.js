@@ -7,6 +7,9 @@ import {
     nextIdleDoAction,
     getDoStepPhase,
     stepNeedsClarify,
+    artifactFilenameFromStep,
+    stepNeedsForcedSaveFile,
+    resolveFunctionCallMode,
     makeClarifyQuestions,
     questionsFromAskUser,
     ensureHarnessFunctions,
@@ -501,6 +504,48 @@ describe('appendDoForceNudge', () => {
         assert.match(messages[1].content, /tool call/);
         assert.match(messages[1].content, /save_file/);
     });
+
+    it('forbids text tool_call / function calling in nudge', () => {
+        const messages = [];
+        appendDoForceNudge(messages, { description: 'Создать файл presentation.html (первая версия)' });
+        assert.equal(messages[0].content.includes('<tool_call>{'), false);
+        assert.match(messages[0].content, /native tool save_file/);
+        assert.match(messages[0].content, /presentation\.html/);
+    });
+});
+
+describe('resolveFunctionCallMode force save_file', () => {
+    const fns = [{ name: 'save_file' }];
+
+    it('artifactFilenameFromStep extracts filename', () => {
+        assert.equal(
+            artifactFilenameFromStep({ description: 'Создать файл presentation.html (первая версия)' }),
+            'presentation.html',
+        );
+        assert.equal(artifactFilenameFromStep({ description: 'Уточнить тему' }), '');
+    });
+
+    it('stepNeedsForcedSaveFile true for file execute step', () => {
+        assert.equal(
+            stepNeedsForcedSaveFile({ description: 'Создать файл presentation.html' }, fns),
+            true,
+        );
+        assert.equal(
+            stepNeedsForcedSaveFile({ description: 'Уточнить тему презентации' }, fns),
+            false,
+        );
+        assert.equal(
+            stepNeedsForcedSaveFile({ description: 'Создать файл presentation.html' }, []),
+            false,
+        );
+    });
+
+    it('resolveFunctionCallMode forces save_file on execute file step', () => {
+        const step = { description: 'Создать файл presentation.html (первая версия)' };
+        assert.deepEqual(resolveFunctionCallMode('execute', step, fns), { name: 'save_file' });
+        assert.equal(resolveFunctionCallMode('propose', step, fns), 'auto');
+        assert.equal(resolveFunctionCallMode('execute', { description: 'Уточнить тему' }, fns), 'auto');
+    });
 });
 
 describe('buildHistoryFromRibbon forceDoReminder nudge', () => {
@@ -546,6 +591,37 @@ describe('parseToolCalls XML multiline post', () => {
         const attrs = parseXmlTagAttrs('filename="a.html" post="<div class="x">ok</div>"');
         assert.equal(attrs.filename, 'a.html');
         assert.equal(attrs.post, '<div class="x">ok</div>');
+    });
+});
+
+describe('parseToolCalls Light <function calling>', () => {
+    const fns = [{ name: 'save_file' }];
+
+    it('parses <function calling>save_file({…})</function calling>', () => {
+        const text = '<function calling>save_file({filename:"presentation.html", post:"Тема: ИИ"})</function calling>';
+        const calls = parseToolCalls(text, fns);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].method, 'save_file');
+        assert.equal(calls[0].args.filename, 'presentation.html');
+        assert.equal(calls[0].args.post, 'Тема: ИИ');
+    });
+
+    it('parses bare save_file({…}) when known', () => {
+        const text = 'save_file({filename:"a.html", post:"x"})';
+        const calls = parseToolCalls(text, fns);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].method, 'save_file');
+        assert.equal(calls[0].args.filename, 'a.html');
+        assert.equal(calls[0].args.post, 'x');
+    });
+
+    it('strips function calling from ribbon prose', () => {
+        const text = '<function calling>save_file({filename:"presentation.html", post:"Тема: ИИ"})</function calling> Презентация создана.';
+        const { blocks } = parseResponseToRibbon(text, '/MODELS/GigaChat/GigaChat Light');
+        const prose = blocks.filter(b => b.type === 'text').map(b => b.content).join('\n');
+        assert.equal(prose.includes('function calling'), false);
+        assert.equal(prose.includes('save_file('), false);
+        assert.match(prose, /Презентация создана/);
     });
 });
 

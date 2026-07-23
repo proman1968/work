@@ -2,10 +2,7 @@
 
 ## Последние изменения
 
-- [16:30] Корневой класс кабинетов: `users/` → `USERS/`; пути `/USERS/…`; §1.9 — корневые классы ЗАГЛАВНЫМИ.
-- [15:40] `get_schema`: канон = стандартный JSDoc (`@param`/`@returns`); убраны `@ai.*` и `TOOL_DESCRIPTIONS`.
-- [15:20] task.ai: карточка file = history path; fill-шаг → subplan по N; TOOL_DESCRIPTIONS без дублей `@ai`.
-- [13:53] Убран лишний `handlers-help` из `item-menu` — возврат к архитектуре tools + `item-tree` без отдельной кнопки «?».
+- [18:25] GigaChat 422: при force — только `save_file` в functions; sanitize messages (сироты FC→prose); harness-схема вместо schema.
 
 ## В работе
 
@@ -13,7 +10,8 @@
 
 ## Ключевые решения
 
-- **Архитектура UI** — не добавлять обходные кнопки поверх существующих механизмов (`item-tree` / explorer); лишний слой ломает наследование handlers.
+- **GigaChat force** — `body.functions = [save_file]` only; иначе 422 `undefined functions in dialog history`.
+- **create ≠ файл** — артефакт только через `save_file`.
 
 ## Блокеры / Открытые вопросы
 

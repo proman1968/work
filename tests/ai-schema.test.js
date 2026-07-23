@@ -48,6 +48,22 @@ describe('parseJSDocBlock', () => {
         assert.equal(doc.schemaReady, false);
     });
 
+    it('bare @param {object} [params] does not become FC params object', () => {
+        const doc = parseJSDocBlock(`/**
+ * Удалить папку рекурсивно.
+ * @param {object} [params]
+ * @returns {Promise<string>} Подтверждение
+ */`);
+        assert.ok(!('params' in doc.params));
+        const fns = buildFunctionsFromSchema([{
+            name: 'delete',
+            description: doc.description,
+            params: doc.params,
+            returns: doc.returns,
+        }]);
+        assert.deepEqual(fns[0].parameters.properties, {});
+    });
+
     it('returns null without summary', () => {
         assert.equal(parseJSDocBlock(`/**
  * @param {string} x
@@ -97,5 +113,33 @@ describe('buildAiSchema server classes', () => {
         assert.ok(save.parameters.properties.filename);
         assert.ok(save.parameters.required.includes('filename'));
         assert.equal(save.parameters.properties.filename.type, 'string');
+    });
+
+    it('no FC object property without nested properties (GigaChat 422)', () => {
+        const fns = buildFunctionsFromSchema(buildAiSchema($folder.prototype));
+        for (const fn of fns) {
+            for (const [key, prop] of Object.entries(fn.parameters.properties || {})) {
+                if (prop.type === 'object') {
+                    assert.ok(
+                        prop.properties && typeof prop.properties === 'object',
+                        `${fn.name}.${key} object must have properties`,
+                    );
+                }
+                if (prop.type === 'array') {
+                    assert.ok(prop.items, `${fn.name}.${key} array must have items`);
+                }
+            }
+            assert.ok(!('params' in (fn.parameters.properties || {}) &&
+                fn.parameters.properties.params?.type === 'object' &&
+                !fn.parameters.properties.params.properties),
+            `${fn.name}: bare params object without properties`);
+        }
+        // object without properties in raw meta still gets normalized
+        const normalized = buildFunctionsFromSchema([{
+            name: 'x',
+            description: 't',
+            params: { blob: { type: 'object', description: 'raw', required: false } },
+        }]);
+        assert.deepEqual(normalized[0].parameters.properties.blob.properties, {});
     });
 });

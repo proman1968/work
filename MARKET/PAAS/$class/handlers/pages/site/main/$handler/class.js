@@ -59,6 +59,7 @@ ODA({
         <style>
             :host {
                 @apply --vertical;
+                margin: 32px;
                 gap: 16px;
                 min-width: min(420px, 90vw);
                 max-width: 520px;
@@ -154,20 +155,20 @@ ODA({
     _pendingOrder: false,
 
     get price() {
-        return this.$item?.price || this.$item?.DATA?.price || '';
+        return this.$item?.price || '';
     },
     get priceHint() {
-        return this.$item?.priceHint || this.$item?.DATA?.priceHint || '';
+        return this.$item?.priceHint || '';
     },
     get includes() {
-        const list = this.$item?.includes || this.$item?.DATA?.includes;
+        const list = this.$item?.includes;
         return Array.isArray(list) ? list : [];
     },
     get formFields() {
-        const fields = this.$item?.FIELDS || this.$item?.DATA?.FIELDS || [];
-        const list = Array.isArray(fields) ? fields : [];
-        const form = list.find(f => f?.type === 'form');
-        return Array.isArray(form?.fields) ? form.fields : [];
+        const form = this.$item?.orderForm;
+        const list = Array.isArray(form) ? form : (form ? [form] : []);
+        const formBlock = list.find(f => f?.type === 'form') || list[0];
+        return Array.isArray(formBlock?.fields) ? formBlock.fields : [];
     },
     isText(field) {
         const t = String(field?.type || 'text').toLowerCase();
@@ -273,30 +274,31 @@ ODA({
                 if (v != null && String(v).trim() !== '')
                     input[f.id] = typeof v === 'string' ? v.trim() : v;
             }
-            const data = this.$item.DATA || {};
             const created = Date.now();
             const bid = {
                 status: 'submitted',
                 role: 'USER',
                 buyer: WORK.uid,
                 created,
-                target: this.$item.path || this.$item.short,
+                target: this.$item.path || '',
                 product: {
-                    id: this.$item.id,
-                    label: this.$item.label || data.label || this.$item.id,
-                    price: this.$item.price ?? data.price,
-                    priceHint: this.$item.priceHint ?? data.priceHint,
-                    includes: this.$item.includes || data.includes || [],
+                    id: this.$item.$file?.id || '',
+                    label: this.$item.label || '',
+                    price: this.$item.price || '',
+                    priceHint: this.$item.priceHint || '',
+                    includes: this.$item.includes || [],
                 },
                 input,
             };
-            const filename = created + '.' + WORK.uid + '.bid';
+            const filename = WORK.uid + '.bid';
             const file = new File(
                 [JSON.stringify(bid, null, 2)],
                 filename,
                 { type: 'application/json' }
             );
-            await this.$item.save_file(file, {
+            const target = this.$item.$owner || this.$item.$file?.$owner;
+            if (!target) throw new Error('Не найден класс категории для заявки');
+            await target.save_file(file, {
                 message: (bid.product.label || '') + (input.name ? ': ' + input.name : ''),
             });
             this._closeAuth();
@@ -368,9 +370,9 @@ export default {
                 <market-product-card
                     ~for="products"
                     :label="$for.item.label"
-                    :price="cardPrice($for.item)"
-                    :price-hint="cardHint($for.item)"
-                    :includes="cardIncludes($for.item)"
+                    :price="$for.item.price"
+                    :price-hint="$for.item.priceHint"
+                    :includes="$for.item.includes"
                     @tap="openProduct($for.item)">
                 </market-product-card>
             </div>
@@ -379,19 +381,31 @@ export default {
     `,
     get products() {
         if (!this.$item) return [];
-        return Promise.resolve(this.$item.items).then(items =>
-            (items || []).filter(i => i instanceof CORE.$class && !i.isType)
-        );
-    },
-    cardPrice(item) {
-        return item?.price || item?.DATA?.price || '';
-    },
-    cardHint(item) {
-        return item?.priceHint || item?.DATA?.priceHint || '';
-    },
-    cardIncludes(item) {
-        const list = item?.includes || item?.DATA?.includes;
-        return Array.isArray(list) ? list : [];
+        return Promise.resolve(this.$item.get_item('/~//product')).then(async (folders) => {
+            const arr = Array.isArray(folders) ? folders : (folders ? [folders] : []);
+            const files = await Promise.all(arr.map(f => f?.get_item?.('*.product')));
+            const flat = files.flat().filter(Boolean).filter(f => !f.isHidden && f.ext === 'product');
+            const loaded = await Promise.all(flat.map(async f => {
+                let data = {};
+                try {
+                    const raw = await f.load({ encoding: 'utf-8' });
+                    data = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+                } catch {}
+                return {
+                    $file: f,
+                    $owner: f.$owner,
+                    path: f.path || f.short || '',
+                    label: data.label || f.id,
+                    icon: data.icon || '',
+                    price: data.price || '',
+                    priceHint: data.priceHint || '',
+                    includes: Array.isArray(data.includes) ? data.includes : [],
+                    orderForm: data.orderForm || data.FIELDS || [],
+                    status: data.status || 'published',
+                };
+            }));
+            return loaded.filter(p => p.status === 'published');
+        });
     },
     async openProduct(item) {
         if (!item) return;

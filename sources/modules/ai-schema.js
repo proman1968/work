@@ -229,8 +229,12 @@ function parseReturnsTag(body) {
     return cleanJSDocText(m[2] || m[1] || '');
 }
 
+const BAG_PARAM_NAMES = new Set(['params', 'p', 'options']);
+
 /**
  * Плоские ключи для LLM: params.filename → filename; сам bag params пропускаем.
+ * Голый bag (`params`/`p`/`options` object) без nested keys не отдаём — иначе GigaChat 422
+ * (object без properties).
  * @param {Array<{name: string, type: string, description: string, required: boolean}>} raw
  * @returns {object}
  */
@@ -244,6 +248,10 @@ function flattenParams(raw) {
                 continue;
             key = key.split('.').slice(1).join('.');
         }
+        else if (BAG_PARAM_NAMES.has(key) && mapJsDocType(p.type) === 'object') {
+            // Только bag без params.x — не включать в FC
+            continue;
+        }
         if (!key)
             continue;
         out[key] = {
@@ -252,6 +260,20 @@ function flattenParams(raw) {
             required: p.required,
         };
     }
+    return out;
+}
+
+/**
+ * JSON Schema property, совместимый с GigaChat FC (object → properties, array → items).
+ * @param {{ type?: string, description?: string, properties?: object, items?: object }} prop
+ * @returns {object}
+ */
+function normalizeFcProperty(prop) {
+    const out = { ...prop };
+    if (out.type === 'object' && (!out.properties || typeof out.properties !== 'object'))
+        out.properties = {};
+    if (out.type === 'array' && !out.items)
+        out.items = { type: 'string' };
     return out;
 }
 
@@ -312,15 +334,15 @@ export function buildFunctionsFromSchema(methods, options = {}) {
         if (m.params && typeof m.params === 'object') {
             for (const [key, meta] of Object.entries(m.params)) {
                 if (typeof meta === 'string') {
-                    properties[key] = {
+                    properties[key] = normalizeFcProperty({
                         type: meta.includes('(число)') ? 'number' : 'string',
                         description: meta,
-                    };
+                    });
                     continue;
                 }
                 const description = meta?.description ?? String(meta || '');
                 const type = meta?.type || 'string';
-                properties[key] = { type, description };
+                properties[key] = normalizeFcProperty({ type, description });
                 if (meta?.required)
                     required.push(key);
             }

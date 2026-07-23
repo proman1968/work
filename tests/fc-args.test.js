@@ -5,6 +5,8 @@ import {
     parseFunctionArgs,
     toOpenAiTools,
     normalizeOpenAiMessages,
+    sanitizeGigaChatFunctions,
+    sanitizeGigaChatMessages,
 } from '../MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js';
 import {
     isBrokenFcArgs,
@@ -12,6 +14,11 @@ import {
     stripFcTrailer,
     taskHasSuccessfulSave,
     formatToolResultMessages,
+    ensureNamedFunction,
+    collectFunctionNamesFromMessages,
+    prepareFunctionsForStream,
+    resolveFunctionCallMode,
+    stepNeedsForcedSaveFile,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
 describe('appendFunctionArgs', () => {
@@ -199,5 +206,106 @@ describe('formatToolResultMessages', () => {
         assert.equal(msgs[0].function_call.name, 'save_file');
         assert.equal(msgs[1].role, 'function');
         assert.equal(msgs[1].name, 'save_file');
+    });
+});
+
+describe('sanitizeGigaChatFunctions', () => {
+    it('strips _servicePath and keeps save_file', () => {
+        const cleaned = sanitizeGigaChatFunctions([
+            {
+                name: 'save_file',
+                description: 'save',
+                parameters: {
+                    type: 'object',
+                    properties: { filename: { type: 'string' } },
+                    required: ['filename'],
+                },
+                _servicePath: '/SERVICES/x',
+            },
+            { name: 'bad' },
+        ]);
+        assert.equal(cleaned.length, 2);
+        assert.equal(cleaned[0].name, 'save_file');
+        assert.equal(cleaned[0]._servicePath, undefined);
+        assert.deepEqual(Object.keys(cleaned[0]).sort(), ['description', 'name', 'parameters']);
+        assert.equal(cleaned[1].parameters.type, 'object');
+        assert.ok(cleaned[1].parameters.properties);
+    });
+});
+
+describe('ensureNamedFunction / prepareFunctionsForStream', () => {
+    const template = {
+        name: 'save_file',
+        description: 'harness',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+    };
+
+    it('adds save_file even when write_file exists', () => {
+        const fns = [{ name: 'write_file', description: 'w', parameters: { type: 'object', properties: {} } }];
+        ensureNamedFunction(fns, 'save_file', template);
+        assert.ok(fns.some(f => f.name === 'save_file'));
+        assert.ok(fns.some(f => f.name === 'write_file'));
+    });
+
+    it('prepares force: harness save_file first (replaces schema)', () => {
+        const fns = [
+            { name: 'navigate', description: 'n', parameters: { type: 'object', properties: {} } },
+            {
+                name: 'save_file',
+                description: 'schema dirty',
+                parameters: { type: 'object', properties: {} },
+            },
+        ];
+        const messages = [
+            { role: 'assistant', content: '', function_call: { name: 'save_file', arguments: {} } },
+            { role: 'function', name: 'save_file', content: '{}' },
+        ];
+        const prepared = prepareFunctionsForStream(fns, messages, { name: 'save_file' });
+        assert.equal(prepared.function_call.name, 'save_file');
+        assert.equal(prepared.functions[0].name, 'save_file');
+        assert.match(prepared.functions[0].description, /history|файл|артефакт/i);
+        assert.ok(prepared.functions.some(f => f.name === 'navigate'));
+    });
+
+    it('collectFunctionNamesFromMessages', () => {
+        const names = collectFunctionNamesFromMessages([
+            { role: 'assistant', function_call: { name: 'save_file' } },
+            { role: 'function', name: 'ask_user', content: '{}' },
+        ]);
+        assert.ok(names.includes('save_file'));
+        assert.ok(names.includes('ask_user'));
+    });
+
+    it('resolveFunctionCallMode requires save_file by name', () => {
+        const step = { description: 'Создать файл presentation.html' };
+        assert.equal(resolveFunctionCallMode('execute', step, [{ name: 'write_file' }]), 'auto');
+        assert.deepEqual(
+            resolveFunctionCallMode('execute', step, [{ name: 'save_file' }]),
+            { name: 'save_file' },
+        );
+        assert.equal(stepNeedsForcedSaveFile(step, [{ name: 'write_file' }]), false);
+    });
+});
+
+describe('sanitizeGigaChatMessages', () => {
+    it('keeps paired save_file when allowed', () => {
+        const fns = [{ name: 'save_file' }];
+        const msgs = sanitizeGigaChatMessages([
+            { role: 'user', content: 'go' },
+            { role: 'assistant', content: '', function_call: { name: 'save_file', arguments: { filename: 'a.html' } } },
+            { role: 'function', name: 'save_file', content: '{"ok":true}' },
+        ], fns);
+        assert.equal(msgs[1].function_call.name, 'save_file');
+        assert.equal(msgs[2].role, 'function');
+    });
+
+    it('strips orphan save_file when not in functions', () => {
+        const msgs = sanitizeGigaChatMessages([
+            { role: 'assistant', content: '', function_call: { name: 'save_file', arguments: {} } },
+            { role: 'function', name: 'save_file', content: '{}' },
+        ], []);
+        assert.equal(msgs.some(m => m.function_call), false);
+        assert.equal(msgs.some(m => m.role === 'function'), false);
+        assert.ok(msgs.some(m => m.role === 'assistant' && /save_file/.test(m.content)));
     });
 });
