@@ -123,18 +123,28 @@ export class $folder extends $item{
     }
     /** Подпапка для сохранения файла по MIME-типу или расширению. */
     async getFolderToSaveFile(params = {}) {
-        if(!params.filename)
+        if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
+        
         let folder_name = mime.contentType(params.filename);
-        if(folder_name)
+        if (folder_name) {
             folder_name = folder_name.split('/')[0];
-        if(!folder_name || folder_name === 'application'){
-            let split = params.filename.split('.');
-            if(split.length > 1)
-                folder_name = split.pop().toLowerCase();
-            else
-                folder_name = 'etc'
         }
+
+        if (!folder_name || folder_name === 'application') {
+            let split = params.filename.split('.');
+            if (split.length > 1) {
+                folder_name = split.pop().toLowerCase();
+            }
+            else {
+                folder_name = 'etc'
+            }
+        }
+
+        if (params.folder) {
+            folder_name = params.folder + '/' + folder_name;
+        }
+
         return this._get_item(folder_name, FS.$folder);
     }
     get admins(){

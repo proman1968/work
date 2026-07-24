@@ -28,6 +28,9 @@ describe('formatRoleAclForSystem', () => {
         const u = formatRoleAclForSystem('USER');
         const b = formatRoleAclForSystem('BOSS');
         assert.ok(u.includes('Запрещено') || u.includes('типизатор'));
+        assert.match(u, /\$user/);
+        assert.match(u, /\bwork\b/);
+        assert.ok(!u.includes('$work'));
         assert.ok(b.includes('Запрещено') || b.includes('class.js'));
         assert.ok(!u.includes('MODIFY-PATH'));
     });
@@ -41,6 +44,32 @@ describe('isSystemModifyCall / roleBlocksTool', () => {
         assert.equal(isSystemModifyCall({ method: 'save_file', args: { filename: 'notes.md' } }), false);
         assert.equal(isSystemModifyCall({ method: 'write_file', args: { name: 'notes.md' } }), false);
         assert.equal(isSystemModifyCall({ method: 'get_schema', args: {} }), false);
+    });
+
+    it('does not treat navigate to $user/text as system-modify', () => {
+        const nav = {
+            method: 'navigate',
+            args: { path: '/USERS/CA4E097FF6C1D387/$user/text' },
+        };
+        assert.equal(isSystemModifyCall(nav), false);
+        assert.equal(roleBlocksTool('USER', nav), null);
+        assert.equal(
+            isSystemModifyCall({ method: 'save_file', args: { filename: '/x/$folder/handlers/a.js' } }),
+            true,
+        );
+        assert.equal(
+            isSystemModifyCall({ method: 'save_file', args: { path: '/USERS/u/$user/text/a.html' } }),
+            false,
+        );
+        assert.equal(
+            isSystemModifyCall({ method: 'save_file', args: { path: '/USERS/u/$user/work/ai/x.ai' } }),
+            false,
+        );
+        // вымышленный $work — всё ещё $-мета (не личный $user)
+        assert.equal(
+            isSystemModifyCall({ method: 'save_file', args: { path: '/x/$work/a.md' } }),
+            true,
+        );
     });
 
     it('blocks system-modify for USER/BOSS, allows ADMIN', () => {

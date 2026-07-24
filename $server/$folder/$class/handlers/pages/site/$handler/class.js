@@ -1,3 +1,66 @@
+// site-nav — парсинг/сборка якоря глубокой локации для page-handler `site`.
+// Формат: #ctx=<short>#ctx=<short>&view=main  — фрагмент делится по '#',
+// каждый сегмент — мини-querystring; первый параметр ctx=<short> задаёт слой,
+// хвостовые параметры последнего сегмента = leaf-состояние (view, ...).
+// Кодируются только разделители (% &#=), '/' остаётся как есть для читаемости.
+// Логика используется только внутри site, поэтому живёт здесь, а не в отдельном модуле.
+
+function _siteNavEncodeVal(v) {
+    return String(v == null ? '' : v)
+        .replace(/[%&#=]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+function _siteNavDecodeVal(v) {
+    try { return decodeURIComponent(v); } catch { return v; }
+}
+
+function parseSiteHash(hash) {
+    const frag = (hash == null ? '' : String(hash)).replace(/^#/, '');
+    if (!frag) return [];
+    return frag.split('#').map(seg => {
+        const params = new Map();
+        let ctx = '';
+        for (const pair of seg.split('&')) {
+            if (!pair) continue;
+            const eq = pair.indexOf('=');
+            const k = eq < 0 ? pair : pair.slice(0, eq);
+            const v = eq < 0 ? '' : _siteNavDecodeVal(pair.slice(eq + 1));
+            if (k === 'ctx') ctx = v;
+            else params.set(k, v);
+        }
+        return { ctx, params, raw: seg };
+    });
+}
+
+function buildFragment(segments) {
+    return segments.map(s => {
+        const parts = ['ctx=' + _siteNavEncodeVal(s.ctx)];
+        if (s.params) for (const [k, v] of s.params) parts.push(k + '=' + _siteNavEncodeVal(v));
+        return parts.join('&');
+    }).join('#');
+}
+
+function buildSiteLoc(ctx, childLoc, leaf) {
+    const parts = ['ctx=' + _siteNavEncodeVal(ctx)];
+    if (leaf) for (const [k, v] of Object.entries(leaf)) {
+        if (v == null || v === '') continue;
+        parts.push(k + '=' + _siteNavEncodeVal(v));
+    }
+    let seg = parts.join('&');
+    if (childLoc) seg += '#' + childLoc;
+    return seg;
+}
+
+function matchSelf(segments, myShort) {
+    const idx = segments.findIndex(s => s.ctx === myShort);
+    if (idx < 0) return { idx: -1, childCtx: '', childSubFragment: '', leaf: null };
+    const next = segments[idx + 1];
+    const leaf = next ? null : segments[idx].params;
+    const childCtx = next ? next.ctx : '';
+    const childSubFragment = next ? buildFragment(segments.slice(idx + 1)) : '';
+    return { idx, childCtx, childSubFragment, leaf };
+}
+
 export default {
     icon: 'iconoir:internet',
     label: 'Сайт',
@@ -238,7 +301,7 @@ export default {
             </div>
         </div>
         <div class="sheet" flex>
-            <iframe ~for="frames" ~show="current_href === $for.item.href" :src="$for.item.href"></iframe>
+            <iframe ~for="frames" ~show="current_href === $for.item.href" :src="$for.item.href" @load="on_frame_load($for.item, $event)"></iframe>
         </div>
     </div>
     <div ~if="view_name" class="view-host" flex id="view-host"></div>
@@ -260,6 +323,12 @@ export default {
     tabsCanScrollRight: false,
     tabsStacked: false,
     _selfNaturalWidth: 0,
+    last_tab: { $def: '', $save: true },
+    _childLoc: '',
+    _activeFrame: null,
+    get $saveKey() {
+        return this.$item?.short || '';
+    },
     get isLoggedIn() {
         return !!WORK.uid;
     },
@@ -300,14 +369,70 @@ export default {
             return new URL(item.url + `/~/handlers//site/${this.default_view}/index.html`).href;
         return new URL(item.url + '/~/handlers//site/index.html').href;
     },
-    open_subpage(item) {
+    open_subpage(item, subFragment = '') {
         if (!item) return;
-        const href = this.frame_url(item);
-        if (!this.frames.find(f => f.href === href)) {
-            this.frames = [...this.frames, { id: ++this._frameSeq, href }];
+        const base = this.frame_url(item);
+        let frame = this.frames.find(f => f.base === base);
+        if (!frame) {
+            const href = subFragment ? (base + '#' + subFragment) : base;
+            frame = { id: ++this._frameSeq, base, href };
+            this.frames = [...this.frames, frame];
         }
         this.current_item = item;
-        this.current_href = href;
+        this.current_href = frame.href;
+        this._activeFrame = frame;
+        this.last_tab = this.isSelf(item) ? '' : (item.short || item.path || '');
+        this.async(() => this._setupTabsScroll());
+        this.emit_location();
+    },
+    async apply_location() {
+        const segs = parseSiteHash(location.hash);
+        const myShort = this.$item?.short || '';
+        const m = matchSelf(segs, myShort);
+        const items = await this.sub_items;
+        let childItem = null;
+        if (m.idx >= 0 && m.childCtx) {
+            childItem = items.find(it => it.short === m.childCtx) || null;
+        }
+        if (childItem) {
+            this.open_subpage(childItem, m.childSubFragment);
+            return;
+        }
+        const selfSub = m.idx >= 0 ? segs[m.idx].raw : '';
+        const saved = this.last_tab;
+        const savedItem = saved ? (items.find(it => it.short === saved || it.path === saved) || null) : null;
+        if (m.idx >= 0 || !savedItem) {
+            this.open_subpage(this.$item, selfSub);
+        } else {
+            this.open_subpage(savedItem, '');
+        }
+    },
+    emit_location() {
+        const myShort = this.$item?.short || '';
+        let loc;
+        if (this.current_item && this.isSelf(this.current_item)) {
+            loc = buildSiteLoc(myShort, '', { view: this.view_name || this.default_view });
+        } else {
+            loc = buildSiteLoc(myShort, this._childLoc || '', {});
+        }
+        this._myLoc = loc;
+        if (window.parent && window.parent !== window) {
+            try { parent.postMessage({ kind: 'work-site-loc', loc }, location.origin); } catch {}
+        } else {
+            const cur = location.hash.replace(/^#/, '');
+            if (cur !== loc) history.replaceState(null, '', '#' + loc);
+        }
+    },
+    on_frame_load(frame, e) {
+        frame.el = e?.target || null;
+    },
+    _onMessage(e) {
+        if (e?.data?.kind !== 'work-site-loc') return;
+        const active = this._activeFrame;
+        if (!active || !active.el) return;
+        if (e.source !== active.el.contentWindow) return;
+        this._childLoc = e.data.loc || '';
+        this.emit_location();
     },
     updateTabsScrollHints() {
         const el = this._tabsScrollEl || this.$('#tabs-scroll');
@@ -423,11 +548,13 @@ export default {
         this._boundAuth = () => this._onAuth();
         WORK.authEvents?.addEventListener('auth', this._boundAuth);
         WORK.AUTH_CHANNEL?.addEventListener('message', this._boundAuth);
+        this._boundMessage = (e) => this._onMessage(e);
+        window.addEventListener('message', this._boundMessage);
         this.async(() => this._setupTabsScroll());
         await this.sub_items;
         this.async(() => this._setupTabsScroll());
         if (this.$item)
-            this.open_subpage(this.$item);
+            await this.apply_location();
     },
     detached() {
         this._teardownTabsScroll();
@@ -435,5 +562,7 @@ export default {
             WORK.authEvents?.removeEventListener('auth', this._boundAuth);
             WORK.AUTH_CHANNEL?.removeEventListener('message', this._boundAuth);
         }
+        if (this._boundMessage)
+            window.removeEventListener('message', this._boundMessage);
     }
 }

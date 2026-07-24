@@ -1,12 +1,14 @@
-# sources/modules/ — прикладные модули
+# sources/modules/ — технические модули платформы
 
-Тяжёлые и внешние модули, не являющиеся ядром объектной модели.
+Тяжёлые и внешние модули, не являющиеся ядром объектной модели и не являющиеся прикладной семантикой типов (`$ai`, PDCA и т.п.).
+
+Прикладная модель файла `.ai` живёт во фрагментах типизатора `$ai` (в т.ч. `methods/prompt/$method/class.js`), не здесь. См. [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) §1.11.
 
 ## Модули
 
 - `ai-schema.js` — построение схемы методов элемента для ИИ-агента (`buildAiSchema`)
 - `embeddings/` — embeddings/RAG (Xenova, kreuzberg)
-- `tts/` — Text-to-Speech (браузерный, GigaChat, Silero)
+- `tts/` — Piper (:8003, default local) и Qwen3-TTS (:8002); модели [`/MODELS/Local/Piper`](/MODELS/Local/Piper/~/handlers/pages/form/), [`/MODELS/Local/Qwen3-TTS`](/MODELS/Local/Qwen3-TTS/~/handlers/pages/form/)
 - `call/` — WebRTC-звонки
 - `user-profile/` — клиентский UI профиля пользователя
 

@@ -145,21 +145,21 @@ describe('extractBalancedJsonArray', () => {
 });
 
 describe('ensureMinimumPlanSteps', () => {
-    it('expands 1-step presentation plan to 4 canonical steps', () => {
+    it('1-step deliverable → abstract fallback (no domain filename)', () => {
         const out = ensureMinimumPlanSteps(
             [{ step: 1, description: 'Уточнить детали презентации', status: 'proposed' }],
             'сделай презентацию',
         );
         assert.equal(out.length, 4);
-        assert.equal(out[0].description, 'Уточнить тему и структуру');
-        assert.equal(out[3].description, 'Сохранить файл');
+        assert.equal(out[0].description, 'Уточнить детали');
+        assert.match(out[1].description, /артефакт/i);
+        assert.doesNotMatch(out.map(s => s.description).join('\n'), /presentation\.html/i);
         const md = formatPlanMarkdown(out, '');
         assert.match(md, /2\./);
-        assert.match(md, /3\./);
         assert.match(md, /4\./);
     });
 
-    it('expands 2–3 step presentation plan to 4 canonical steps', () => {
+    it('process-only multi-step deliverable → abstract fallback', () => {
         const out = ensureMinimumPlanSteps(
             [
                 { step: 1, description: 'Уточнить', status: 'proposed' },
@@ -168,27 +168,83 @@ describe('ensureMinimumPlanSteps', () => {
             'сделай презентацию',
         );
         assert.equal(out.length, 4);
-        assert.equal(out[3].description, 'Сохранить файл');
+        assert.match(out[1].description, /артефакт/i);
+        assert.doesNotMatch(out.map(s => s.description).join('\n'), /presentation\.html/i);
     });
 
-    it('does not rewrite a 4-step plan from the model', () => {
+    it('does not rewrite a 4-step artifact plan from the model', () => {
         const input = [
-            { step: 1, description: 'A', status: 'proposed' },
-            { step: 2, description: 'B', status: 'proposed' },
-            { step: 3, description: 'C', status: 'proposed' },
-            { step: 4, description: 'D', status: 'proposed' },
+            { step: 1, description: 'Уточнить тему', status: 'proposed' },
+            { step: 2, description: 'Создать presentation.html — каркас', status: 'proposed' },
+            { step: 3, description: 'Наполнить presentation.html', status: 'proposed' },
+            { step: 4, description: 'Проверить и принять', status: 'proposed' },
         ];
         const out = ensureMinimumPlanSteps(input, 'сделай презентацию');
-        assert.deepEqual(out.map(s => s.description), ['A', 'B', 'C', 'D']);
+        assert.deepEqual(out.map(s => s.description), input.map(s => s.description));
     });
 
-    it('expands generic 1-step plan to 3 steps preserving first description', () => {
+    it('replaces process-only plan with abstract fallback on deliverable', () => {
+        const out = ensureMinimumPlanSteps(
+            [
+                { step: 1, description: 'A', status: 'proposed' },
+                { step: 2, description: 'B', status: 'proposed' },
+                { step: 3, description: 'C', status: 'proposed' },
+                { step: 4, description: 'D', status: 'proposed' },
+            ],
+            'сделай презентацию',
+        );
+        assert.equal(out.length, 4);
+        assert.match(out[1].description, /артефакт/i);
+        assert.doesNotMatch(out.map(s => s.description).join('\n'), /presentation\.html/i);
+    });
+
+    it('replaces thin deliverable plan with abstract fallback', () => {
         const out = ensureMinimumPlanSteps(
             [{ step: 1, description: 'Уточнить формат отчёта', status: 'proposed' }],
             'сделай отчёт',
         );
-        assert.equal(out.length, 3);
-        assert.equal(out[0].description, 'Уточнить формат отчёта');
+        assert.equal(out.length, 4);
+        assert.match(out[1].description, /артефакт/i);
+        assert.match(out[3].description, /принять/i);
+    });
+
+    it('empty model plan + deliverable → abstract fallback', () => {
+        const out = ensureMinimumPlanSteps([], 'сделай презентацию');
+        assert.equal(out.length, 4);
+        assert.equal(out[0].description, 'Уточнить детали');
+        assert.match(out[1].description, /артефакт/i);
+        assert.doesNotMatch(out.map(s => s.description).join('\n'), /presentation\.html/i);
+    });
+
+    it('fills empty descriptions without rewriting non-empty artifact plan', () => {
+        const out = ensureMinimumPlanSteps(
+            [
+                { step: 1, description: 'Уточнить тему', status: 'proposed' },
+                { step: 2, description: 'Создать notes.md каркас', status: 'proposed' },
+                { step: 3, description: '', status: 'proposed' },
+                { step: 4, description: 'Проверить и принять notes.md', status: 'proposed' },
+            ],
+            'сделай файл',
+        );
+        assert.equal(out.length, 4);
+        assert.equal(out[0].description, 'Уточнить тему');
+        assert.equal(out[1].description, 'Создать notes.md каркас');
+        assert.equal(out[2].description, 'Сохранить или оформить результат');
+        assert.equal(out[3].description, 'Проверить и принять notes.md');
+        assert.ok(!out.some(s => !String(s.description || '').trim()));
+    });
+
+    it('fills empty middle step for artifact report plan', () => {
+        const out = ensureMinimumPlanSteps(
+            [
+                { step: 1, description: 'Уточнить аудиторию отчёта', status: 'proposed' },
+                { step: 2, description: '  ', status: 'proposed' },
+                { step: 3, description: 'Сохранить report.md и принять файл', status: 'proposed' },
+            ],
+            'сделай отчёт',
+        );
+        assert.equal(out[0].description, 'Уточнить аудиторию отчёта');
         assert.equal(out[1].description, 'Выполнить основную работу');
+        assert.equal(out[2].description, 'Сохранить report.md и принять файл');
     });
 });

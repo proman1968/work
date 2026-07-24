@@ -14,8 +14,8 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
- * Найти первую доступную модель $ai из дерева WORK.
- * Единая функция для всех потребителей: prompt, on_save, preview handler.
+ * Найти первую доступную chat-модель $ai из дерева WORK.
+ * Листья только с capabilities без `chat` (например TTS) пропускаются.
  * @returns {Promise<string|null>} — путь к модели или null
  */
 export async function findFirstModel() {
@@ -24,18 +24,42 @@ export async function findFirstModel() {
         const aiRoot = children?.find(el => el.type === '$ai');
         if (!aiRoot) return null;
         const tree = await aiRoot.info({ deep: -1 });
-        return _findFirstLeaf(tree)?.path || null;
+        const leaf = await _findFirstChatLeaf(tree);
+        return leaf?.path || null;
     } catch (e) {
         console.warn('[ai-schema] findFirstModel:', e.message);
     }
     return null;
 }
 
-function _findFirstLeaf(node) {
+function _capList(caps) {
+    if (Array.isArray(caps)) return caps.map(String);
+    if (caps == null || caps === '') return [];
+    return String(caps).split(/[,\s]+/).filter(Boolean);
+}
+
+/** true, если модель подходит для chat (нет caps или есть chat) */
+function _isChatModel(caps) {
+    const list = _capList(caps);
+    if (!list.length) return true;
+    return list.includes('chat');
+}
+
+async function _findFirstChatLeaf(node) {
     if (!node) return null;
-    const items = node.items;
-    if (!items?.length) return node;
-    return _findFirstLeaf(items[0]);
+    if (!node.items?.length) {
+        try {
+            const item = node.path ? await WORK.get_item(node.path) : null;
+            if (item && !_isChatModel(item.capabilities))
+                return null;
+        } catch {}
+        return node;
+    }
+    for (const child of node.items) {
+        const found = await _findFirstChatLeaf(child);
+        if (found) return found;
+    }
+    return null;
 }
 
 /**

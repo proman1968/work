@@ -18,16 +18,10 @@ export default {
     label: 'on_save (.eml)',
     icon: 'carbon:email',
     async execute(params = {}) {
-        const storage = this;
+        const storage = this.$owner;
         const filename = params.filename || '';
-
-        // inbox — ничего не делаем, RAG индексирует history
-        if (filename === 'inbox.eml')
+        if (filename !== 'send.eml')
             return true;
-
-        // outbox — отправляем почту
-        if (filename !== 'outbox.eml')
-            return;
 
         // Динамический импорт локальных модулей
         const emailUtils = await import(pathToFileURL(path.join(ROOT, 'sources/host/email-utils.js')).href);
@@ -42,15 +36,8 @@ export default {
             return true;
 
         // Разбор ящика и настроек
-        let hit = params.logPath ? mailboxFromHistoryPath(params.logPath) : null;
-        if (!hit && params.logPath)
-            hit = mailboxFromHistoryPath('/' + params.logPath);
-        let address = getEmlHeader(params.post, 'X-WORK-Mailbox');
-        let structureId = hit?.structureId || null;
-        if (!address && hit)
-            address = hit.address;
-        let structFolder = await resolveStructFolder(storage, structureId) || storage;
-        const settings = readEmailSettings(structFolder);
+        const address = getEmlHeader(params.post, 'X-WORK-Mailbox');
+        const settings = readEmailSettings(storage);
         const box = address ? settings.mailboxes?.[address] : null;
 
         if (!address || !box)
@@ -60,8 +47,9 @@ export default {
 
         // SMTP не настроен — failed
         if (!box?.smtp?.host) {
-            await saveOutboxOnMailbox(structFolder || storage, address,
-                markEmlStatus(raw, 'failed', { error: 'SMTP не настроен' }), params, getMailboxFolder);
+            console.warn('[sent.eml]', 'SMTP не настроен');
+            // raw = markEmlStatus(raw, 'failed', { error: 'SMTP не настроен' });
+            // await saveOutboxOnMailbox(storage, address, raw, params);
             return true;
         }
 
@@ -69,25 +57,23 @@ export default {
         try {
             await sendOutboxEml(box, raw);
             raw = markEmlStatus(raw, 'sent');
-            await saveOutboxOnMailbox(structFolder || storage, address, raw, params, getMailboxFolder);
+            await saveOutboxOnMailbox(storage, address, raw, params);
         }
         catch (err) {
-            console.warn('[outbox.eml]', err.message);
-            raw = markEmlStatus(raw, 'failed', { error: err.message });
-            await saveOutboxOnMailbox(structFolder || storage, address, raw, params, getMailboxFolder);
+            console.warn('[sent.eml]', err.message);
+            // raw = markEmlStatus(raw, 'failed', { error: err.message });
+            // await saveOutboxOnMailbox(storage, address, raw, params);
         }
         return true;
     },
 };
 
-async function saveOutboxOnMailbox(structFolder, address, post, params, getMailboxFolder) {
-    const folder = await getMailboxFolder(structFolder, address);
-    if (!folder)
-        throw new Error(`Папка ящика ${address} не найдена`);
-    return folder.save_file({
-        filename: 'outbox.eml',
-        post,
+async function saveOutboxOnMailbox(storage, folder, post, params) {
+    return storage.save_file({
+        filename: params.filename,
+        folder,
         encoding: 'utf-8',
         user: params.user,
+        post,
     });
 }
