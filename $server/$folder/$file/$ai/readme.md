@@ -18,7 +18,7 @@
 4. Предложение плана = `TYPE.action` (`title: План`, tip «Начать», content = шаги). `TYPE.task` создаётся **только после** confirm. Каждый шаг Do = `prompt` в `task.ribbon` («Выполни шаг N…») + тот же канон U→M→S. `completed` — только после «Принять».
 5. Tools с `params.role`. ADMIN system-modify через `pendingAction` confirm.
 6. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
-7. Артефакты Do: один `filename`; history пишет платформа. Точечные правки — `edit_file`.
+7. Артефакты Do: один `filename`; history пишет платформа. Точечные правки — `edit` (алиас `edit_file`).
 8. Лимит итераций (default **30**): «Продолжить» + `pendingContinue`.
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
@@ -38,7 +38,7 @@
 - ✅ `TYPES.servicePrompt` по каждому каналу (U→M→S→один канал)
 - ✅ План = action «План» → «Начать» → `TYPE.task`; шаг Do = prompt в `task.ribbon`; `completed` после «Принять»
 - ✅ `body.usage` — сумма токенов всех LLM-ходов (API + estimate fallback)
-- ✅ Harness tools: `read_file` / `save_file` / `edit_file` / `ask_user` / `navigate` / `reset_context`
+- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `navigate` / `reset_context`
 - ✅ Skills-as-tools: `list_skills` / `run_skill`
 - ✅ `spawn_agent` (sequential nested task)
 - ✅ `inspect_schema` (подготовка к trust/self-mod)
@@ -62,7 +62,7 @@
 |------|------------|--------|
 | 0 | MVP PDCA + microchat + save_file | ✅ |
 | 1 | maxIterations 30 + Continue + orphan tool | ✅ |
-| 2 | edit_file в harness + карточка file | ✅ |
+| 2 | edit в harness + карточка file | ✅ |
 | 3 | skills-as-tools + @path | ✅ |
 | 4 | sequential spawn_agent | ✅ |
 | 5 | trust + self-mod WORK (whitepaper §10) | 🔧 foundation (`inspect_schema`) |

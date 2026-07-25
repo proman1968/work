@@ -471,7 +471,8 @@ export class $class extends $folder{
         return this.constructor.importScript(script);
     }
     /**
-     * Сохранить class.js класса с разделением на собственные и наследуемые данные.
+     * Сохранить class.js этого класса (слои self/inherit).
+     * Не путать с save_file (файл в зоне роли) и save_message (лог без файла).
      * @param {object} [params]
      * @param {string} params.post Строка class.js (export default {...})
      * @returns {Promise<boolean>} true при успешном сохранении

@@ -225,7 +225,8 @@ export class $file extends $folder{
         return fs.createReadStream(this.dir, params);
     }
     /**
-     * Сохранить новое содержимое файла (перезапись целиком).
+     * Сохранить содержимое этого файла целиком (перезапись).
+     * Для нового файла в папке — save_file({ filename, post }) у родителя.
      * @param {object} [params]
      * @param {string|Buffer} params.post Новое содержимое
      * @returns {Promise<$file>} this (сохранённый файл)
@@ -244,17 +245,18 @@ export class $file extends $folder{
         return this.parent.save_file(params)
     }
     /**
-     * Точечное редактирование файла через SEARCH/REPLACE блоки.
+     * Точечная правка содержимого файла через SEARCH/REPLACE (не полная перезапись).
+     * Полная перезапись — save({ post }).
      * @param {object} [params]
      * @param {string} [params.post] Блоки SEARCH/REPLACE
      * @param {string} [params.diff] Альтернативное имя параметра
      * @returns {Promise<string>} Полный текст файла после применения правок
      */
-    async edit_file(params = {}){
+    async edit(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         const diff = typeof params.post === 'string' ? params.post : params.diff;
         if (!diff)
-            throw new Error('edit_file: не указан diff (params.post или params.diff)');
+            throw new Error('edit: не указан diff (params.post или params.diff)');
         const current = await this.load({ encoding: 'utf-8' });
         const result = this.constructor.apply_diff(current, diff);
         const saveParams = Object.assign({}, params, { post: result });
@@ -268,6 +270,10 @@ export class $file extends $folder{
         saveParams.filename = this.id;
         await this.parent.save_file(saveParams);
         return result;
+    }
+    /** @deprecated используй edit */
+    edit_file(params) {
+        return this.edit(params);
     }
     static _parse_diff(diff){
         const SEARCH_MARKER = '------- SEARCH';
@@ -285,7 +291,7 @@ export class $file extends $folder{
                     i++;
                 }
                 if (i >= lines.length)
-                    throw new Error('edit_file: не найден разделитель =======');
+                    throw new Error('edit: не найден разделитель =======');
                 i++;
                 const replaceLines = [];
                 while (i < lines.length && lines[i].trim() !== END_MARKER) {
@@ -293,7 +299,7 @@ export class $file extends $folder{
                     i++;
                 }
                 if (i >= lines.length)
-                    throw new Error('edit_file: не найден завершающий +++++++ REPLACE');
+                    throw new Error('edit: не найден завершающий +++++++ REPLACE');
                 i++;
                 blocks.push({
                     search: searchLines.join('\n'),
@@ -304,7 +310,7 @@ export class $file extends $folder{
                 i++;
         }
         if (!blocks.length)
-            throw new Error('edit_file: не найдено блоков SEARCH/REPLACE');
+            throw new Error('edit: не найдено блоков SEARCH/REPLACE');
         return blocks;
     }
     static apply_diff(content, diff){
@@ -312,7 +318,7 @@ export class $file extends $folder{
         let result = String(content);
         for (const block of blocks) {
             if (!result.includes(block.search))
-                throw new Error('edit_file: фрагмент не найден в файле:\n' + block.search.slice(0, 200));
+                throw new Error('edit: фрагмент не найден в файле:\n' + block.search.slice(0, 200));
             result = result.replace(block.search, block.replace);
         }
         return result;

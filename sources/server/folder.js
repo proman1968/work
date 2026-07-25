@@ -1294,11 +1294,13 @@ export class $folder extends $item{
     }
 
     /**
-     * Сохранить файл в текущую папку с записью в историю.
+     * Создать или перезаписать файл в этой папке с записью в историю (→ history → log).
+     * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
      * @param {string} params.filename Имя файла
      * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
-     * @returns {Promise<object>} Объект с путём сохранённого файла и лога истории
+     * @param {string} [params.message] Текст для log.content
+     * @returns {Promise<object>} Запись лога (path = history-снимок)
      */
     async save_file(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
@@ -1442,8 +1444,9 @@ export class $folder extends $item{
 
     }
     /**
-     * Создать папку на диске (mkdir), если ещё нет.
-     * @returns {Promise<void>}
+     * Создать эту папку на диске (mkdir), если ещё нет.
+     * Не путать с save_file (новый файл) и $file.save (контент файла).
+     * @returns {Promise<$folder>} this
      */
     async save(){
         if(!fs.existsSync(this.real_dir)){

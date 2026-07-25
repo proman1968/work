@@ -32,7 +32,7 @@
 - <subplan>[{"description":"…"},…]</subplan> — декомпозиция текущего шага
 - Tools: native function calling; fallback <tool_call>{"method":"…","args":{…}}</tool_call>
 - Файл — только save_file (filename + post); новый класс — create (не для файлов)
-- Точечные правки — edit_file; скиллы — list_skills / run_skill; подагент — spawn_agent
+- Точечные правки — edit; скиллы — list_skills / run_skill; подагент — spawn_agent
 
 ## Инструменты
 Методы контекста передаются как functions. get_schema — свойства/методы элемента. Метод без path (текущий контекст). navigate / reset_context — смена контекста.

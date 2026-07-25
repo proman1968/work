@@ -17,7 +17,7 @@
 
 - `load()` — чтение содержимого
 - `save()` — сохранение (перезапись)
-- `edit_file()` — точечное редактирование через SEARCH/REPLACE
+- `edit()` — точечное редактирование через SEARCH/REPLACE (deprecated-алиас: `edit_file`)
 - `download()` — скачивание как потока
 - `get_imports()` — список import-операторов
 

@@ -72,7 +72,8 @@ async function finishStopped(fullPath, wsPath, body) {
 }
 
 function isFileWriteMethod(method) {
-    return method === 'save_file' || method === 'write_file';
+    return method === 'save_file' || method === 'write_file'
+        || method === 'edit' || method === 'edit_file';
 }
 
 /** Битые args после ""+object → "[object Object]" в streamChat */
@@ -138,8 +139,8 @@ const HARNESS_FUNCTIONS = [
         },
     },
     {
-        name: 'edit_file',
-        description: 'Точечная правка файла SEARCH/REPLACE (не полный rewrite). filename + post с блоками ------- SEARCH / ======= / +++++++ REPLACE.',
+        name: 'edit',
+        description: 'Точечная правка файла SEARCH/REPLACE (не полный rewrite). filename + post с блоками ------- SEARCH / ======= / +++++++ REPLACE. Полная перезапись — save_file.',
         parameters: {
             type: 'object',
             properties: {
@@ -1772,20 +1773,20 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
         }
     }
 
-    // edit_file — точечный SEARCH/REPLACE в контексте
-    if (call.method === 'edit_file') {
+    // edit (алиас edit_file) — точечный SEARCH/REPLACE в контексте
+    if (call.method === 'edit' || call.method === 'edit_file') {
         const fileName = call.args?.filename || call.args?.name;
         const diff = call.args?.post ?? call.args?.diff ?? '';
         if (!fileName)
-            return { result: { error: 'edit_file: нужен filename' }, newContext: currentContext };
+            return { result: { error: 'edit: нужен filename' }, newContext: currentContext };
         if (!String(diff).trim())
-            return { result: { error: 'edit_file: нужен post (SEARCH/REPLACE)' }, newContext: currentContext };
+            return { result: { error: 'edit: нужен post (SEARCH/REPLACE)' }, newContext: currentContext };
         try {
             const file = await currentContext._get_item?.(String(fileName));
-            if (!file?.edit_file)
-                return { result: { error: 'Файл не найден / нет edit_file: ' + fileName }, newContext: currentContext };
-            const text = await file.edit_file(buildToolMethodParams(
-                { method: 'edit_file', args: { post: String(diff) } },
+            if (!file?.edit && !file?.edit_file)
+                return { result: { error: 'Файл не найден / нет edit: ' + fileName }, newContext: currentContext };
+            const text = await file.edit(buildToolMethodParams(
+                { method: 'edit', args: { post: String(diff) } },
                 params,
                 { aiUser },
             ));
@@ -1800,7 +1801,7 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
                 newContext: currentContext,
             };
         } catch (e) {
-            return { result: { error: 'edit_file: ' + e.message }, newContext: currentContext };
+            return { result: { error: 'edit: ' + e.message }, newContext: currentContext };
         }
     }
 
@@ -2139,8 +2140,8 @@ function pushToolResult(ribbonTarget, call, result, model) {
         chatEntry.resultPath = result.resultPath;
     ribbonTarget.push(chatEntry);
     // Карточка файла = history path из save_file (канон §1.6), не прокси filename
-    const filePath = result?.resultPath || (call.method === 'edit_file' ? result?.path : '');
-    if ((isFileWriteMethod(call.method) || call.method === 'edit_file') && !isError && filePath) {
+    const filePath = result?.resultPath || (isFileWriteMethod(call.method) ? result?.path : '');
+    if (isFileWriteMethod(call.method) && !isError && filePath) {
         ribbonTarget.push({
             type: 'file',
             path: filePath,
