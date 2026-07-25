@@ -13,20 +13,22 @@
 ## 3. Как это работает
 
 1. Сохранение / обновление `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) поднимает harness.
-2. [`methods/prompt`](/$server/$folder/$file/$ai/methods/prompt/$method/class.js/~/handlers/pages/form/) собирает system (идентичность WORK + канон; протокол хода — в `TYPES.servicePrompt`); через `buildHistoryFromRibbon` упаковывает ленту в `messages`; стримит с functions. Usage (`body.usage`) — сумма всех LLM-ходов (API `include_usage` или estimate по messages, включая system/servicePrompt).
-3. **Канон хода:** U (`prompt` + `servicePrompt`) → M (`thinking`) → S → **ровно один канал**.
-4. Предложение плана = `TYPE.action` (`title: План`, tip «Начать», content = шаги). `TYPE.task` создаётся **только после** confirm. Каждый шаг Do = `prompt` в `task.ribbon` («Выполни шаг N…») + тот же канон U→M→S. `completed` — только после «Принять».
-5. Tools с `params.role`. ADMIN system-modify через `pendingAction` confirm.
+2. [`methods/prompt`](/$server/$folder/$file/$ai/methods/prompt/$method/class.js/~/handlers/pages/form/) — **TYPE-driven пайплайн**:
+   вход → `servicePrompt` текущего TYPE → контекст → LLM → новый блок TYPE →
+   если тип ждёт пользователя (`text`/`action`/`form`/`questions`) — стоп;
+   иначе авто-ход с `servicePrompt` нового блока.
+3. **Канон хода:** U (`prompt` + `servicePrompt`) → M (`thinking`) → S → **ровно один канал** (задан в `TYPES.*.servicePrompt`).
+4. План = `TYPE.action` («План» / «Начать») → после confirm — `TYPE.task` + step-prompt в `task.ribbon`.
+5. Tools + ACL; опасные — `pendingAction` confirm.
 6. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
-7. Артефакты Do: один `filename`; history пишет платформа. Точечные правки — `edit` (алиас `edit_file`).
-8. Лимит итераций (default **30**): «Продолжить» + `pendingContinue`.
+7. Хелперы парсера/tools — [`sources/modules/ai-prompt`](/sources/modules/ai-prompt/readme.md/~/handlers/pages/form/) (не рядом с `$method`).
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
 
 ## 4. Из чего это состоит
 
 - `class.js` — схема `TYPES` + `servicePrompt`
-- `methods/prompt/$method/` — harness PDCA (`pendingPlan` → action «План» → task; Do = step-prompt в `task.ribbon`; протокол — `TYPES.servicePrompt`)
+- `methods/prompt/$method/class.js` — тонкий TYPE-driven `execute` (протокол — `TYPES.servicePrompt`)
 - `triggers/on_save/$trigger/` — вход в цикл
 - `handlers/preview/$handler/` — микрочат
 

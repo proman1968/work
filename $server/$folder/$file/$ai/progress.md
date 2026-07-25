@@ -2,6 +2,7 @@
 
 ## Последние изменения
 
+- [21:05] `prompt.execute` — тонкий TYPE-driven пайплайн (`servicePrompt` → LLM → TYPE → auto/stop); хелперы в `sources/modules/ai-prompt/legacy.js` (§1.11).
 - [12:38] Убран `sources/modules/task-control` / `body.control`; протокол хода — `TYPES.servicePrompt`; harness — в `methods/prompt`.
 
 ## В работе
