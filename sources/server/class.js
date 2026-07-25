@@ -323,18 +323,7 @@ export class $class extends $folder{
     }
     async info(p = {deep: 0, reset: false}){
         p.deep = +p.deep;
-        let data =  this[R].cache['info-data'] ??= new  AsyncPromise(async _=>{
-            if(this.isType || this.isHidden)
-                return null;
-            let key = 'info:' + (this.ext || this.type);
-            let data = this[R].cache[key] ??= new AsyncPromise( _ => this.import(p))
-            data = await data;
-            if(data)
-                this.DATA = data;
-            return data;
-
-        })
-        data = await data;
+        await this.init;
         const arg = Object.assign({}, p)
         return super.info(arg);
     }

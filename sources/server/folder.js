@@ -121,6 +121,19 @@ export class $folder extends $item{
     load(params){
         // todo сделать загрузку папки, возможно в виде архива
     }
+    get init(){
+        if(this.constructor === FS.$folder)
+            return Promise.resolve(null);
+        return new AsyncPromise(async ()=>{
+            console.log("[folder.init] this:", this);
+            let files = await this.tilde;
+            files = files.filter(f=>f.id === 'class.js');
+            let script = await $server.mergeFiles(files);
+            script = await this.constructor.importScript(script);
+            this.DATA = script;
+            return this;
+        })
+    }
     /** Подпапка для сохранения файла по MIME-типу или расширению. */
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
@@ -1118,7 +1131,7 @@ export class $folder extends $item{
             else if ($tilde && !result.length)
                 result = null;
         }
-        else if (result?.info)
+        else //if (result?.info)
             await result?.info?.();
 
         // TODO: фильтрация результата через canSee
