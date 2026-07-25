@@ -93,6 +93,29 @@ export class $file extends $folder{
         this.reset();
         return row;
     }
+    /**
+     * Кэш собранных скриптов типизаторов по расширению.
+     * У файлов нет SELF-слоя и локальной цепочки — набор class.js
+     * одинаков для всех файлов одного расширения, где бы они ни лежали.
+     * Сбрасывается при reset() любого class.js (см. $folder.reset).
+     */
+    static __ext_scripts__ = Object.create(null);
+    get init(){
+        return this[R].cache.init ??= new AsyncPromise(async ()=>{
+            const key = this.ext || this.type;
+            const script = await ($file.__ext_scripts__[key] ??= new AsyncPromise(async ()=>{
+                let files = await this.tilde;
+                files = files.filter(f => f.id === 'class.js');
+                if(!files.length)
+                    return null;
+                let script = await $server.mergeFiles(files);
+                return this.constructor.importScript(script);
+            }));
+            if (script)
+                this.DATA = script;
+            return this;
+        })
+    }
     get steps(){
         let type = this.ext ? '$' + this.ext : this.type;
         return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{

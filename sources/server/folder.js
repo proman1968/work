@@ -1386,6 +1386,8 @@ export class $folder extends $item{
                 let keys = Object.keys($server.merges).filter(key=>key.split(';').includes(this.real_dir));
                 for(let key of keys)
                    $server.merges[key] = undefined;
+                // Типизаторы файлов могли измениться — пересобрать по требованию
+                FS.$file.__ext_scripts__ = Object.create(null);
                 this.$owner?.debounce('reset_owner', ()=>{
                     this.$owner.reset(initiator || this);
                 }, 100)

@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as mime from "mime-types";
 import * as fsp from "node:fs/promises";
 import { $class, $folder, $user } from './index.js';
@@ -237,8 +238,21 @@ return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
         })
 
     }
+    /**
+     * Кэш попарных merge по хэшам содержимого.
+     * Цепочки разных классов делят общий префикс глобальных слоёв —
+     * с кэшем пар babel-парсинг префикса выполняется один раз,
+     * для конкретного класса парсится только финальная пара (префикс + SELF).
+     */
+    static __merge_pairs__ = new Map();
     static mergeScripts(code1, code2) {
-        return MERGE.mergeScripts(code1, code2);
+        const key = createHash('sha1').update(code1).update('\u0000').update(code2).digest('base64');
+        let result = this.__merge_pairs__.get(key);
+        if (result === undefined) {
+            result = MERGE.mergeScripts(code1, code2);
+            this.__merge_pairs__.set(key, result);
+        }
+        return result;
     }
     static getSettings(item){
         let mata_folder = item.meta_folder;
