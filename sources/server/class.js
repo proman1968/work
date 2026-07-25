@@ -1267,10 +1267,9 @@ export class $class extends $folder{
         await this._ensureSystemDir();
         fs.writeFileSync(this._secretPath(name), JSON.stringify(data, null, 2), { encoding: 'utf-8' });
         this.meta_folder?.reset();
-        if (name === 'email') {
-            const { ensureMailboxFolders } = await import('../../../$server/$folder/lib/email/settings.js');
-            await ensureMailboxFolders(this, data.mailboxes || {});
-        }
+        // Прикладная реакция на секрет — необязательный член слоя 2 (class.js типизатора).
+        // Ядро не знает имён модулей ('email' и т.п.).
+        await this.on_secret_save?.({ name, data, params });
         return data;
     }
 
