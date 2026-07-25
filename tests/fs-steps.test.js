@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import '../oda/reactor.js';
+import '../sources/reactor.js';
 import { $folder, $class, $user, $file } from '../sources/server/index.js';
 
 describe('fs class static steps', () => {

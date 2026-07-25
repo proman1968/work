@@ -1,4 +1,4 @@
-import '../../oda/reactor.js';
+import '../../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { $class } from '../../sources/server/index.js';
