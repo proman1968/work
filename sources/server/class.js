@@ -329,9 +329,9 @@ export class $class extends $folder{
         const arg = Object.assign({}, p)
         return super.info(arg);
     }
-    get steps(){
+    get type_chain(){
         let type = this.type;
-        return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{
+        return this.constructor.type_chain[type] ??= new AsyncPromise(async ()=>{
             let folder = await WORK.$folder.find_item(type, item => item.id?.[0] === '$' && item.id !== '$file');
             if(!folder)
                 return [this.constructor.name, type];
@@ -340,7 +340,7 @@ export class $class extends $folder{
     }
     async resolveDistributedFolder() {
         let folder = this.$folder;
-        for (const step of await this.steps) {
+        for (const step of await this.type_chain) {
             folder = await folder._get_item(step, $folder);
             if (!folder)
                 break;
@@ -1019,7 +1019,12 @@ export class $class extends $folder{
             }
         }
     }
+    /** @deprecated используй outline */
     get structure(){
+        return this.outline;
+    }
+    /** Описательное дерево элемента (id/label/type/path + вложенные items). */
+    get outline(){
         return (async ()=>{
             let item = await this.info();
             let result = {
@@ -1032,7 +1037,7 @@ export class $class extends $folder{
             result.items = await this.items;
             result.items = result.items.filter(item=>item.constructor === FS.$file).map(file=>{
                 if(this !== WORK || file instanceof FS.$class)
-                    return file.structure;
+                    return file.outline;
                 return {
                     id: file.id,
                     label: file.label,
@@ -1380,4 +1385,4 @@ export class $class extends $folder{
         })
     }
 }
-$class.steps = Object.create(null);
+$class.type_chain = Object.create(null);

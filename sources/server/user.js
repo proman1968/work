@@ -29,4 +29,4 @@ export class $user extends $class{
         }
     }
 }
-$user.steps = Object.create(null);
+$user.type_chain = Object.create(null);

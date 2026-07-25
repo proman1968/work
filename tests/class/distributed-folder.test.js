@@ -7,7 +7,7 @@ import { $server } from '../../sources/server/server.js';
 /** Ожидаемая distributed-папка: та же прогулка, что collect_tilde до meta_folder. */
 async function expectedDistributedFolder(storage) {
     let folder = storage.$folder;
-    for (const step of await storage.steps) {
+    for (const step of await storage.type_chain) {
         folder = await folder._get_item(step, $folder);
         if (!folder)
             break;

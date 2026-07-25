@@ -5,7 +5,7 @@ export default{
     hideTops: 0,
     hideRoots: 1,
     showSize: true,
-    itemsSelector: 'files',
+    itemsSelector: 'entries',
     async ready(){
         if(this.$item){
             this.$context =  this.$item;

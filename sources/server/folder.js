@@ -11,7 +11,7 @@ export class $folder extends $item{
     static PATH_STEP = {
         EMPTY: 'empty',
         TILDE: 'tilde',
-        ANCESTOR: 'ancestor',
+        PROP: 'prop',
         WILDCARD: 'wildcard',
         CURRENT: 'current',
         NAME: 'name',
@@ -272,7 +272,11 @@ export class $folder extends $item{
             return sizes.sum();
         })
     }
-    get ancestor(){
+    /**
+     * Донор наследования: элемент, от которого текущий получает inherit-прокси.
+     * Это ось наследования (типизаторы/классы), а не родитель по файловому пути.
+     */
+    get inherit_ancestor(){
         return new AsyncPromise(async ()=>{
              //наследование всех папкок и фалов
             if(this.id === '$folder'){
@@ -284,7 +288,7 @@ export class $folder extends $item{
 
 
             //тотальное наследование всех папкок и фалов
-            let parentAncestor = await this.parent?.ancestor;
+            let parentAncestor = await this.parent?.inherit_ancestor;
             let children = await parentAncestor?.children;
             let ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
             if(ancestor)
@@ -319,6 +323,10 @@ export class $folder extends $item{
         })
 
 
+    }
+    /** @deprecated используй inherit_ancestor */
+    get ancestor(){
+        return this.inherit_ancestor;
     }
     get dir(){
         return '.' + this.path;
@@ -362,13 +370,13 @@ export class $folder extends $item{
         return {}
     }
     /**
-     * Список элементов без метапапок ($ и .).
+     * Бизнес-видимые элементы: без метапапок ($) и скрытых (.).
      * @returns {Promise<Array>} Массив элементов
      */
     get items(){
         return new AsyncPromise(async ()=>{
-            let files = await this.files;
-            return files.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || [];
+            let entries = await this.entries;
+            return entries.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || [];
         })
     }
     static build(id = '', parent){
@@ -543,6 +551,10 @@ export class $folder extends $item{
             return body;
         })()
     }
+    /** @deprecated используй semantic_search */
+    search(params){
+        return this.semantic_search(params);
+    }
     /**
      * Семантический поиск по эмбеддингам (RAG) внутри класса.
      * @param {object} [params]
@@ -550,7 +562,7 @@ export class $folder extends $item{
      * @param {number} [params.sensitivity] Чувствительность 0–1
      * @returns {Promise<Array>} Отсортированный массив релевантных результатов
      */
-    async search(params = {prompt: '', embedding: null, using: []}){
+    async semantic_search(params = {prompt: '', embedding: null, using: []}){
         let sensitivity = params.sensitivity || .5;
         params.embedding ??= await xenova.embedding(params.prompt);
         params.using ??= [];
@@ -566,7 +578,7 @@ export class $folder extends $item{
         if(!Reactor.equal(this.$owner, WORK)){
             let folder = this.$folder;
             folders.push(folder)
-            let steps = await this.steps;
+            let steps = await this.type_chain;
             for(let step of steps){
                 folder = await folder._get_item(step, FS.$folder);
                 if(folder){
@@ -620,7 +632,7 @@ export class $folder extends $item{
             }
             let folder = await WORK.get_item(file.path);
             if(folder){
-                return folder.search(params);
+                return folder.semantic_search(params);
             }
         })
 
@@ -769,8 +781,13 @@ export class $folder extends $item{
         };
     }
 
-    get steps(){
+    /** Цепочка типизаторов элемента (например ['$file', '$smoke']). */
+    get type_chain(){
         return [];
+    }
+    /** @deprecated используй type_chain */
+    get steps(){
+        return this.type_chain;
     }
     get step(){
         return this.id;
@@ -787,7 +804,7 @@ export class $folder extends $item{
         let {inherit} = p;
         let folder = this.$folder;
         let folders = [folder];
-        let steps = await this.steps;
+        let steps = await this.type_chain;
         if(inherit != '$folder'){
             for(let step of steps){
                 folder = await folder._get_item(step, FS.$folder);
@@ -907,13 +924,23 @@ export class $folder extends $item{
         })();
     }
     /**
-     * Список файлов элемента (без скрытых).
+     * Записи каталога: все дочерние элементы без скрытых (папки и файлы).
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get entries(){
+        return new AsyncPromise(async ()=>{
+            let children = await this.children;
+            return children.filter(f => !f.isHidden);
+        })
+    }
+    /**
+     * Только файлы (без скрытых). Папки — в folders, всё вместе — в entries.
      * @returns {Promise<Array>} Массив файлов
      */
     get files(){
         return new AsyncPromise(async ()=>{
-            let children = await this.children;
-            return children.filter(f => !f.isHidden);
+            let entries = await this.entries;
+            return entries.filter(f => f instanceof FS.$file);
         })
     }
     /**
@@ -961,7 +988,7 @@ export class $folder extends $item{
                 if(!files.find(f => f.id === '$folder'))
                     files.push(this.parent.$folder)
             }
-            let ancestor = await this.ancestor;
+            let ancestor = await this.inherit_ancestor;
             if(ancestor){
                 let a_files = await ancestor.children;
                 if(Reactor.equal(this.parent, ancestor)){
@@ -980,13 +1007,13 @@ export class $folder extends $item{
         })
     }
     /**
-     * Список дочерних папок.
+     * Только папки (без скрытых).
      * @returns {Promise<Array>} Массив папок
      */
     get folders(){
         return new AsyncPromise(async ()=>{
-            let files = await this.files;
-            return files.filter(f => f.constructor === FS.$folder);
+            let entries = await this.entries;
+            return entries.filter(f => f.constructor === FS.$folder);
         })
     }
     async _get_item(id, force_type){
@@ -1071,7 +1098,7 @@ export class $folder extends $item{
                 $tilde = item;
             } break;
             case '@': {
-                result = await item[step.slice(1) || 'ancestor'];
+                result = await item[step.slice(1) || 'inherit_ancestor'];
                 if (result === undefined) {
                     result = await item.children;
                     result = result.find(f => f.id === step);
@@ -1478,11 +1505,11 @@ export class $folder extends $item{
         if (!step) return this.PATH_STEP.EMPTY;
         switch (step[0]) {
             case '~': return this.PATH_STEP.TILDE;
-            case '@': return this.PATH_STEP.ANCESTOR;
+            case '@': return this.PATH_STEP.PROP;
             case '*': return this.PATH_STEP.WILDCARD;
             case '.': return this.PATH_STEP.CURRENT;
             default: return this.PATH_STEP.NAME;
         }
     }
 }
-$folder.steps = Object.create(null);
+$folder.type_chain = Object.create(null);

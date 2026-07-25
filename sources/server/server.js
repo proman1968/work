@@ -267,6 +267,6 @@ return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
         return mime;
     }
 }
-$server.steps = Object.create(null);
+$server.type_chain = Object.create(null);
 Object.assign($server.prototype, authMethods);
 globalThis.$server = $server;

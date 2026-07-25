@@ -550,7 +550,7 @@ export default {
         const storage = this.$item?.$class || this.$item?.$parent;
         const target = storage?.storage_folder || storage || await WORK.get_item('/');
         const tree = ODA.createElement('item-tree', {
-            $item: target, hideTops: 1, hideRoots: 1, showSize: true, hideSystem: true, itemsSelector: 'files',
+            $item: target, hideTops: 1, hideRoots: 1, showSize: true, hideSystem: true, itemsSelector: 'entries',
         });
         tree.execute = async (item) => {
             const name = item.id || item.path.split('/').pop();

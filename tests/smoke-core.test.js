@@ -116,7 +116,7 @@ describe('steps файла по расширению', () => {
     it('файл .smoke получает цепочку [$file, $smoke]', async () => {
         const box = await WORK.get_item('/BOX');
         const file = await box._get_item('probe.smoke', FS.$file);
-        assert.deepEqual(await file.steps, ['$file', '$smoke']);
+        assert.deepEqual(await file.type_chain, ['$file', '$smoke']);
     });
 });
 

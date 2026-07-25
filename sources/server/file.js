@@ -116,9 +116,9 @@ export class $file extends $folder{
             return this;
         })
     }
-    get steps(){
+    get type_chain(){
         let type = this.ext ? '$' + this.ext : this.type;
-        return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{
+        return this.constructor.type_chain[type] ??= new AsyncPromise(async ()=>{
             let folder = await WORK.$folder.children;
             folder = folder.find(f=>f.id === '$file');
             folder = await folder.find_item(type, item => item.id?.[0] === '$');
@@ -142,11 +142,15 @@ export class $file extends $folder{
     get size(){
         return this.stat.size;
     }
+    /** Записи скрытой папки файла (вложения, history и т.п.). */
+    get entries(){
+        return this.storage_folder.entries;
+    }
     get files(){
         return this.storage_folder.files;
     }
     get items(){
-        return this.files;
+        return this.entries;
     }
 
     get history(){
@@ -199,14 +203,14 @@ export class $file extends $folder{
             return fsp.readFile(this.dir, params);
         }
 
-        let ancestor = await this.ancestor;
+        let ancestor = await this.inherit_ancestor;
         if(ancestor)
             return ancestor.load(params)
         throw new Error(`file ${this.path} not found`);
     }
     async inherit() {
         return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
-            const ancestor = await this.ancestor;
+            const ancestor = await this.inherit_ancestor;
             if (ancestor) {
                 const selfData = await this.load();
                 const ancestorData = await ancestor.inherit();
@@ -473,4 +477,4 @@ export class $file extends $folder{
         return log;
     }
 }
-$file.steps = Object.create(null);
+$file.type_chain = Object.create(null);

@@ -40,7 +40,7 @@ export default {
         if (content) prompt += (prompt ? ' ' : '') + content;
 
         // Встроенный поиск WORK
-        const rating = await this.search({ prompt });
+        const rating = await this.semantic_search({ prompt });
         if (!rating.length)
             throw new Error('Ничего не найдено');
 

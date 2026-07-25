@@ -20,7 +20,7 @@ describe('path-syntax', () => {
     it('classifyPathStep detects special prefixes', () => {
         assert.equal($folder.classifyPathStep(''), $folder.PATH_STEP.EMPTY);
         assert.equal($folder.classifyPathStep('~'), $folder.PATH_STEP.TILDE);
-        assert.equal($folder.classifyPathStep('@ancestor'), $folder.PATH_STEP.ANCESTOR);
+        assert.equal($folder.classifyPathStep('@users'), $folder.PATH_STEP.PROP);
         assert.equal($folder.classifyPathStep('*'), $folder.PATH_STEP.WILDCARD);
         assert.equal($folder.classifyPathStep('.'), $folder.PATH_STEP.CURRENT);
         assert.equal($folder.classifyPathStep('file.txt'), $folder.PATH_STEP.NAME);

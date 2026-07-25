@@ -192,13 +192,13 @@ services/LLM/<Провайдер>/<Модель>/$llm/class.js — конкре�
 - **Вторая `~`** — поиск `class.js` внутри мета-папок `on_save` (через `$trigger`).
 - **Результат** — массив `class.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
 
-Структура триггера на диске (через `steps`):
+Структура триггера на диске (через `type_chain`):
 
 ```
 $server/$folder/$file/$prompt/triggers/on_save/$trigger/class.js
 ```
 
-- `$folder` — корневой типизатор (начало цепочки `steps`)
+- `$folder` — корневой типизатор (начало цепочки `type_chain`)
 - `$file/$prompt` — цепочка типов от расширения файла (`.prompt`)
 - `triggers/on_save` — папка триггера
 - `$trigger` — мета-тип (как `$handler`), содержит `class.js` с методом `execute(params)`
