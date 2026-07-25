@@ -121,12 +121,20 @@ export class $folder extends $item{
     load(params){
         // todo сделать загрузку папки, возможно в виде архива
     }
+    /**
+     * Единственная точка сборки DATA элемента из цепочки class.js (слой 2).
+     * Кэшируется на экземпляре ([R].cache), сбрасывается через reset().
+     * get_item гарантирует await init для каждого найденного элемента —
+     * элемент "рождается пропатченным".
+     */
     get init(){
         if(this.constructor === FS.$folder)
             return Promise.resolve(null);
-        return new AsyncPromise(async ()=>{
+        return this[R].cache.init ??= new AsyncPromise(async ()=>{
             let files = await this.tilde;
             files = files.filter(f=>f.id === 'class.js');
+            if(!files.length)
+                return this;
             let script = await $server.mergeFiles(files);
             script = await this.constructor.importScript(script);
             this.DATA = script;
@@ -879,10 +887,8 @@ export class $folder extends $item{
             try {
                 const triggers = await this.get_item('~/triggers/*');
                 const items = Array.isArray(triggers) ? triggers : (triggers ? [triggers] : []);
-                for (const trigger of items) {
-                    await trigger.info();
+                for (const trigger of items)
                     result[trigger.id] = trigger;
-                }
             } catch {}
             return result;
         })();
@@ -894,10 +900,8 @@ export class $folder extends $item{
             try {
                 const methods = await this.get_item('~/methods/*');
                 const items = Array.isArray(methods) ? methods : (methods ? [methods] : []);
-                for (const method of items) {
-                    await method.info();
+                for (const method of items)
                     result[method.id] = method;
-                }
             } catch {}
             return result;
         })();
@@ -991,7 +995,8 @@ export class $folder extends $item{
         if(!item && force_type){
             let real = await this.real_source._get_item(id);
             if(real){
-                await real.info();
+                // inherit копирует [R].__data__ исходника — DATA должна быть собрана
+                await real.init;
                 item = this.constructor.inherit(real, this);
             }
             else
@@ -1128,19 +1133,19 @@ export class $folder extends $item{
             if (steps.last === 'index.html')
                 result = result.last;
             else if (result.length && result.last?.info)
-                await Promise.all(result.map(child => child.info()));
+                await Promise.all(result.map(child => child.init));
             else if ($tilde && !result.length)
                 result = null;
         }
-        else //if (result?.info)
-            await result?.info?.();
+        else
+            await result?.init;
 
         // TODO: фильтрация результата через canSee
         return result;
     }
     async execute(p = {}){
-        await this.info();
-        // После info() исполняемый execute должен появиться из class.js (DATA)
+        await this.init;
+        // После init исполняемый execute должен появиться из class.js (DATA)
         // собственным свойством экземпляра. Иначе — бесконечная рекурсия.
         if (!Object.getOwnPropertyDescriptor(this, 'execute'))
             throw new Error(`execute не определён в class.js: ${this.path}`);

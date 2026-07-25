@@ -323,7 +323,9 @@ export class $class extends $folder{
     }
     async info(p = {deep: 0, reset: false}){
         p.deep = +p.deep;
-        await this.init;
+        if (p.reset)
+            this.reset();
+        await this.init; // после get_item уже собран (кэш) — чтение чистое
         const arg = Object.assign({}, p)
         return super.info(arg);
     }
@@ -372,7 +374,8 @@ export class $class extends $folder{
     async ensureBootstrapAdmin(uid, params = {}) {
         if (!uid)
             return false;
-        await this.info({ reset: true });
+        this.reset();
+        await this.init;
         if (this.DATA?.['#security']?.ADMIN)
             return false;
         const security = Object.assign({}, this.DATA?.['#security'], { ADMIN: uid });
@@ -1273,39 +1276,33 @@ export class $class extends $folder{
 
     /** Один администратор класса (из #security.ADMIN, без наследования). */
     get admin(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const uid = this.DATA['#security']?.ADMIN;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
-            const user = await usersRoot.get_item('//' + uid);
-            if (user) await user.info();
-            return user;
+            return usersRoot.get_item('//' + uid);
         })
     }
     /** Один управляющий класса (из #security.BOSS, без наследования). */
     get boss(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const uid = this.DATA['#security']?.BOSS;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
-            const user = await usersRoot.get_item('//' + uid);
-            if (user) await user.info();
-            return user;
+            return usersRoot.get_item('//' + uid);
         })
     }
     /** Исполнители класса (из #security.USERS, без наследования). */
     get users(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const ids = this.DATA['#security']?.USERS;
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
             const result = [];
             for (const id of ids) {
                 const user = await usersRoot.get_item('//' + id);
-                if (user) {
-                    await user.info();
+                if (user)
                     result.push(user);
-                }
             }
             return result;
         })
