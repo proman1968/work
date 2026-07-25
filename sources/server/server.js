@@ -7,7 +7,6 @@ import { $class, $folder, $user } from './index.js';
 import { MERGE } from '../host/babel-merge.js';
 import { installPackageSpawn } from '../host/package-install.js';
 import { authMethods } from '../host/auth-methods.js';
-import { GEN_API_TOKEN } from '../host/config.js';
 import { vapidKeys } from '../host/vapid.js';
 import {
     getPublicVapid,
@@ -23,16 +22,8 @@ export class $server extends $class {
     get fs(){
         return fs
     }
-    get genApi(){
-        if (GEN_API_TOKEN)
-            genApi.setAuthToken(GEN_API_TOKEN);
-        return genApi;
-    }
     get exclude_for_rag(){
         return [];
-    }
-    get embedding_llm(){
-        return getLLMModel({ name: DEFAULT_EMBEDDINGS_LLM});
     }
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'

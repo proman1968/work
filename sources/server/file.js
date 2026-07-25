@@ -82,15 +82,14 @@ export class $file extends $folder{
      * @returns {Promise<object>} Обновлённая запись лога
      */
     async save_includes(params = {}){
-        let chat = await this.$parent.chat();
-        let row = chat.find(el=>el.path === this.path);
-        if(!row)
-            throw new Error(`Не найдена запись о файле ${this.path}`);
         params.ignore_save_logs = true;
         let logs = await this.$owner.save_files(params);
-        row.includes ??= [];
-        row.includes.add(...logs.map(l=>l.path));
-        this.$parent.save_chat(chat);
+        if (!Array.isArray(logs))
+            logs = logs ? [logs] : [];
+        const paths = logs.map(l => l?.logFullPath || l?.path).filter(Boolean);
+        const row = await this.$parent.appendLogIncludes(this.path, paths, params);
+        if (!row)
+            throw new Error(`Не найдена запись о файле ${this.path}`);
         this.reset();
         return row;
     }
@@ -113,11 +112,6 @@ export class $file extends $folder{
     async delete(params = {}){
         await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
-        let chat = await this.$parent.chat();
-        let row = chat.find(r=>r.path === this.path);
-        if(row){
-            chat.remove(row)
-        }
         this.parent.reset();
         this.reset();
         return 'removed: '+ this.path;

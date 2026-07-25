@@ -125,7 +125,6 @@ export class $folder extends $item{
         if(this.constructor === FS.$folder)
             return Promise.resolve(null);
         return new AsyncPromise(async ()=>{
-            console.log("[folder.init] this:", this);
             let files = await this.tilde;
             files = files.filter(f=>f.id === 'class.js');
             let script = await $server.mergeFiles(files);
@@ -737,6 +736,8 @@ export class $folder extends $item{
                 name,
                 type: prop.$type?.name || '',
             };
+            if (prop.$public)
+                info.isPublic = true;
             if ('$def' in prop) {
                 try { info.hasDefault = true; }
                 catch {}
@@ -1139,6 +1140,10 @@ export class $folder extends $item{
     }
     async execute(p = {}){
         await this.info();
+        // После info() исполняемый execute должен появиться из class.js (DATA)
+        // собственным свойством экземпляра. Иначе — бесконечная рекурсия.
+        if (!Object.getOwnPropertyDescriptor(this, 'execute'))
+            throw new Error(`execute не определён в class.js: ${this.path}`);
         return this.execute(p);
     }
     download(){
@@ -1326,9 +1331,9 @@ export class $folder extends $item{
             }
         }
         clearTimeout(obj.check);
-      obj.check = setTimeout(() => obj.close(), 10_000);
-      await obj.write;
-      return obj;
+        obj.check = setTimeout(() => obj.close(), 10_000);
+        await obj.writing;
+        return obj;
     }
   async close_write_stream(params) {
       const obj = await this.get_write_stream(params);

@@ -509,9 +509,6 @@ export class $class extends $folder{
         }
         await Promise.all(writes);
 
-        // todo: при повторном использовании вынести в отдельный метод
-        delete this[R].cache['info-data'];
-        delete this[R].cache['info:' + (this.ext || this.type)];
         this.reset();
         this.DATA = await this.import();
 
@@ -918,31 +915,7 @@ export class $class extends $folder{
         if (stepPath)
             row = await this.appendLogIncludes(taskPath, [stepPath], { user: globalThis.WORK });
 
-        const includes = row?.includes || (stepPath ? [stepPath] : []);
-        
-        let entry = await this._findLogEntry(taskPath) ?? row;
-        const normPath = p => (p?.startsWith('/') ? p : '/' + p);
-        const hasInclude = (list, p) => {
-            const target = normPath(p);
-            return Array.isArray(list) && list.some(x => normPath(x) === target);
-        };
-        if (entry && aiResult?.responsePath) {
-            const p = normPath(aiResult.responsePath);
-            if (!hasInclude(entry.includes, p)) {
-                const updated = await this.appendLogIncludes(taskPath, [p], { user: globalThis.WORK });
-                if (updated)
-                    entry = updated;
-                else {
-                    entry.includes = Array.isArray(entry.includes) ? [...entry.includes] : [];
-                    entry.includes.push(p);
-                }
-            }
-            if (aiResult.responseText != null)
-                entry.replyText = aiResult.responseText;
-            if (aiResult.errorText != null)
-                entry.errorText = aiResult.errorText;
-        }
-        return entry;
+        return await this._findLogEntry(taskPath) ?? row;
     }
 
     /**
