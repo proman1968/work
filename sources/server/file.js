@@ -87,7 +87,7 @@ export class $file extends $folder{
         if (!Array.isArray(logs))
             logs = logs ? [logs] : [];
         const paths = logs.map(l => l?.logFullPath || l?.path).filter(Boolean);
-        const row = await this.$parent.appendLogIncludes(this.path, paths, params);
+        const row = await this.$parent.append_log_includes({ entryPath: this.path, includePaths: paths, user: params.user });
         if (!row)
             throw new Error(`Не найдена запись о файле ${this.path}`);
         this.reset();

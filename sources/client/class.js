@@ -27,10 +27,10 @@ export class $class extends $folder{
     read_log_bodies(params = {}){
         if (typeof params === 'string')
             params = { day: params };
-        return this.fetch('read_log_bodies', params);
+        return this.logs({ ...params, mode: 'bodies' });
     }
     log_index(params = {}){
-        return this.fetch('log_index', params);
+        return this.logs({ ...params, mode: 'index' });
     }
     log_files(day){
         day ??= new Date().toISOString().slice(0, 10);

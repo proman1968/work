@@ -52,4 +52,11 @@ API элементов — это «система команд» для ИИ-а
 - `info()` — текущее состояние (json-модель)
 - `outline` — описательное дерево (deprecated-алиас: `structure`)
 
+### Логи ($class, внутренности — `logs.js`)
+
+- `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`
+- `read_log_entry({path})` — одна запись по пути history-файла
+- `append_log_includes({entryPath, includePaths})` — дописать includes записи
+- deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`
+
 Deprecated-алиасы удерживаются до миграции всех вызывающих, новые вызовы — только канон.

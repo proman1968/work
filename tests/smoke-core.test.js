@@ -205,3 +205,43 @@ describe('save_file → history → log → on_save', () => {
         assert.ok(items.some(f => f.id === 'note.smoke'), '* видит файл');
     });
 });
+
+describe('лог-фасад: logs / read_log_entry / append_log_includes', () => {
+    const day = new Date().toISOString().slice(0, 10);
+
+    it('logs({mode: "dates"}) содержит сегодня', async () => {
+        const dates = await WORK.logs({ mode: 'dates' });
+        assert.ok(Array.isArray(dates));
+        assert.ok(dates.includes(day), 'сегодняшний день в списке дат');
+    });
+
+    it('logs({mode: "bodies"}) возвращает записи, mode: "index" — индекс без content', async () => {
+        const rows = await WORK.logs({ mode: 'bodies', day });
+        assert.ok(rows.length >= 1, 'есть записи за сегодня');
+        assert.ok(rows.every(r => r.time != null));
+
+        const flat = await WORK.logs({ mode: 'index', flat: true, day });
+        assert.equal(flat.length, rows.length, 'индекс покрывает те же записи');
+        assert.ok(flat.every(r => !('content' in r)), 'в индексе нет content');
+    });
+
+    it('read_log_entry находит запись, append_log_includes дописывает includes', async () => {
+        const rows = await WORK.logs({ mode: 'bodies', day });
+        const target = rows.find(r => r.path);
+        assert.ok(target, 'есть запись с path');
+
+        const found = await WORK.read_log_entry({ path: target.path });
+        assert.ok(found, 'запись найдена по path');
+        assert.equal(found.path, target.path);
+
+        const updated = await WORK.append_log_includes({
+            entryPath: target.path,
+            includePaths: ['/PLAIN/extra.smoke'],
+        });
+        assert.ok(updated, 'append вернул обновлённую запись');
+        assert.ok(updated.includes.includes('/PLAIN/extra.smoke'));
+
+        const reread = await WORK.read_log_entry({ path: target.path });
+        assert.ok(reread.includes?.includes('/PLAIN/extra.smoke'), 'includes сохранены на диске');
+    });
+});

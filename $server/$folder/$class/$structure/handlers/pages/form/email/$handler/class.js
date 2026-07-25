@@ -564,7 +564,7 @@ ODA({
         const fromDate = new Date();
         fromDate.setDate(fromDate.getDate() - 30);
         const from = fromDate.toISOString().slice(0, 10);
-        let rows = await this.$item.fetch('log_index', { flat: true, from, to, ext: 'eml' });
+        let rows = await this.$item.fetch('logs', { mode: 'index', flat: true, from, to, ext: 'eml' });
         if (!Array.isArray(rows))
             rows = [];
         const items = [];

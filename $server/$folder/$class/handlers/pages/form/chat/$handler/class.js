@@ -649,8 +649,8 @@ ODA({is: 'chat-ribbon',
             return true;
         }
         delete this.$item[R]?.cache?.logs_dates;
-        let dates = await this.$item.fetch('logs_dates');
-        // logs_dates на сервере — по убыванию; в ленте дни — от старых к новым
+        let dates = await this.$item.fetch('logs', { mode: 'dates' });
+        // dates на сервере — по убыванию; в ленте дни — от старых к новым
         dates = dates.slice().reverse();
         if (dates.indexOf(today) === -1)
             dates.push(today);

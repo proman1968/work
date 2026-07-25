@@ -4415,13 +4415,10 @@ async function loadLogSummary(storage, opts = {}) {
     const fromStr = from.toISOString().slice(0, 10);
     const toStr = to.toISOString().slice(0, 10);
     let rows = [];
-    if (typeof storage._loadLogBodiesForDays === 'function') {
-        let query = { from: fromStr, to: toStr };
-        if (typeof storage.constructor?._normalizeLogQuery === 'function')
-            query = storage.constructor._normalizeLogQuery(query);
-        rows = await storage._loadLogBodiesForDays(query);
+    if (typeof storage.read_log_bodies === 'function') {
+        // напрямую, без _logSource-диспатча
+        rows = await storage.read_log_bodies({ from: fromStr, to: toStr });
     } else if (typeof storage.logs === 'function') {
-        // fallback: mode bodies (может уйти в chatSource — только если нет _loadLogBodiesForDays)
         rows = await storage.logs({ mode: 'bodies', from: fromStr, to: toStr });
     }
     if (!Array.isArray(rows))
