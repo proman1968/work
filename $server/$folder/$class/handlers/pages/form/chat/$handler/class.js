@@ -508,10 +508,12 @@ ODA({is: 'oda-chat',
         this.files.forEach((file) => {
             formData.append('file', file, file.name);
         });
-        const file = new File([this.value || ''], 'message.msg', { type: 'text/plain' });
+        const msgText = String(this.value ?? '');
+        const file = new File([msgText], 'message.msg', { type: 'text/plain' });
 
         if(!this.files.length && !this.$pdp.replyTarget) {
             this.clear();
+            params.message = msgText;
             this.$pdp.$item.save_file(file, params).catch(onFail);
         } else {
             formData.append('message', file, file.name);

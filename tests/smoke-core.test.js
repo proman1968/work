@@ -155,10 +155,28 @@ describe('save_file → history → log → on_save', () => {
         assert.ok(fs.existsSync(logsFile), 'data.logs записан в мету класса');
         const row = JSON.parse(fs.readFileSync(logsFile, 'utf-8'));
         assert.equal(row.ext, 'smoke');
+        // Без params.message контент файла НЕ инлайнится в лог (ядро не знает имён)
+        assert.equal(row.content, undefined, 'без message контент не инлайнится');
 
         // 5. Триггер on_save типизатора $smoke сработал
         await new Promise(r => setTimeout(r, 800));
         assert.ok(globalThis.__SMOKE_ON_SAVE__ >= 1, 'on_save триггер вызван');
+    });
+
+    it('params.message инлайнится в log.content для любого файла', async () => {
+        const folder = await WORK.get_item('/PLAIN');
+        await folder.save_file({
+            filename: 'anything.smoke',
+            post: 'тело файла',
+            message: 'видимое сообщение',
+            encoding: 'utf-8',
+        });
+        const logsFile = path.join(tmp, '$server', 'logs', 'data.logs');
+        const rows = fs.readFileSync(logsFile, 'utf-8')
+            .trim().split(/\n(?=\{)/).map(s => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
+        const row = rows.reverse().find(r => r.path?.includes('anything.smoke'));
+        assert.ok(row, 'запись лога для anything.smoke найдена');
+        assert.equal(row.content, 'видимое сообщение', 'content = params.message, а не тело файла');
     });
 
     it('повторное сохранение добавляет второй снимок, текущий файл перезаписан', async () => {

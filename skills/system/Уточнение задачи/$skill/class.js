@@ -37,9 +37,11 @@ disambiguation`,
             'Нужно уточнение: выберите подходящий skill в списке выше и нажмите OK.',
             prompt ? `\nКомментарий: ${prompt}` : '',
         ].filter(Boolean);
+        const post = lines.join('\n');
         await this.save_file({
             filename: 'response.md',
-            post: lines.join('\n'),
+            post,
+            message: post,
             encoding: 'utf-8',
         });
     },

@@ -398,7 +398,14 @@ export class $file extends $folder{
             log.sender = params.user.uid;
         else if (params.user === globalThis.WORK)
             log.sender = WORK.id;
-        if (params.filename === 'files.pack') {
+        // Инлайн текста сообщения в запись лога управляется вызывающим
+        // через params.message — ядро не знает прикладных имён файлов.
+        if (params.message != null) {
+            log.content = params.message;
+        }
+        // files.pack и message.txt — путь мультифайла (save_files):
+        // содержимое ещё берётся из post. Уедет в шаг «мультифайл на чистых логах».
+        else if (params.filename === 'files.pack') {
             try {
                 const pack = typeof params.post === 'string' ? JSON.parse(params.post) : params.post;
                 log.content = pack?.content ?? '';
@@ -409,10 +416,8 @@ export class $file extends $folder{
                 log.content = String(params.post ?? '');
             }
         }
-        else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
-            || params.filename === 'response.md' || params.filename === 'error.txt'
-            || params.filename === 'task.ai' || params.filename === 'pass.order')
-            log.content = params.message ?? params.post;
+        else if (params.filename === 'message.txt')
+            log.content = params.post;
         log.path = this.json_model.path;
         log.type = '$file';
         if (params.filename)

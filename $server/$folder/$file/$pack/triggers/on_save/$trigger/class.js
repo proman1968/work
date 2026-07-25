@@ -54,9 +54,11 @@ export default {
         }
         catch (err) {
             console.warn('[files.pack]', err.message);
+            const errPost = '<label error>' + err.message + '</label>';
             await storage.save_file({
                 filename: 'error.txt',
-                post: '<label error>' + err.message + '</label>',
+                post: errPost,
+                message: errPost,
                 receivers: params.user?.uid,
                 user: params.user,
             });

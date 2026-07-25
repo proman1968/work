@@ -53,6 +53,7 @@ export default {
         await this.save_file({
             filename: 'response.md',
             post,
+            message: post,
             encoding: 'utf-8'
         });
 
