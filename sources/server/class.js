@@ -308,7 +308,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Объединённый объект class.js
      */
     async load(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
         let files = await this.tilde;
         files = files.filter(f=>f.id === 'class.js');
         return $server.mergeFiles(files, params.reset);
@@ -410,12 +410,12 @@ export class $class extends $folder{
     }
 
     /**
-     * Папка зоны действия по роли.
+     * Рабочая зона роли — папка, куда пишутся файлы пользователя этой роли.
      * ADMIN → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
-     * boss → управленческая зона (distributed_folder/$work)
+     * BOSS → управленческая зона (distributed_folder/$work)
      * USER → рабочая зона (meta_folder/$work)
      */
-    async get_storage(params = {}){
+    async work_zone(params = {}){
         const {role} = params;
         switch(role){
             case $class.ROLES.ADMIN:
@@ -427,6 +427,10 @@ export class $class extends $folder{
                 return this.meta_folder._get_item('work', FS.$folder);
         }
         return this.meta_folder
+    }
+    /** @deprecated используй work_zone */
+    get_storage(params){
+        return this.work_zone(params);
     }
 
     /**
@@ -473,7 +477,7 @@ export class $class extends $folder{
      * @returns {Promise<boolean>} true при успешном сохранении
      */
     async save(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         let { post } = params;
 
         const self_folder = this.meta_folder;
@@ -520,17 +524,17 @@ export class $class extends $folder{
     }
     async save_file(params = {}){
         // Логи (data.logs) — системная операция: всегда пишутся в meta_folder,
-        // минуя get_storage, чтобы не попадать в зону $work по role.
+        // минуя work_zone, чтобы не попадать в зону $work по role.
         if (params.filename === 'data.logs') {
             const folder = await this.meta_folder.getFolderToSaveFile(params);
             return folder.save_file(params);
         }
-        const storage = await this.get_storage(params);
+        const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.save_file(params);
     }
     async get_write_stream(params) {
-        const storage = await this.get_storage(params);
+        const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.get_write_stream(params);
     }
@@ -940,9 +944,9 @@ export class $class extends $folder{
     }
 
     /**
-     * Единая проверка доступа: read → canSee, write → canWrite, ADMIN → ADMIN точки.
+     * Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, ADMIN → ADMIN точки.
      */
-    async allowAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
+    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
         if ($class.isDevMode) return;
         if (!params?.user) return;
         if (params.user === globalThis.WORK) return;
@@ -967,6 +971,11 @@ export class $class extends $folder{
             default:
                 throw new Error(ACCESS_DENIED);
         }
+    }
+
+    /** @deprecated используй assertAccess */
+    allowAccess(params, level) {
+        return this.assertAccess(params, level);
     }
 
     /** Проверка ADMIN на корневом WORK. */
@@ -1003,7 +1012,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Данные секрета или {}
      */
     async read_secret(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;
         if (!name)
             throw new Error('Не указано имя модуля');
@@ -1027,7 +1036,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Сохранённые данные
      */
     async save_secret(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         const name = params.name;
         if (!name)
             throw new Error('Не указано имя модуля');
@@ -1045,7 +1054,35 @@ export class $class extends $folder{
         return data;
     }
 
-    /** Один администратор класса (из #security.ADMIN, без наследования). */
+    /**
+     * Назначенные пользователи класса по роли.
+     * @param {object} [params]
+     * @param {string} [params.role] ADMIN | BOSS | USER; без роли — все назначенные
+     * @param {boolean} [params.inherited] Включить вышестоящие классы (для ADMIN и BOSS)
+     * @returns {Promise<Array>} Массив пользователей ($user)
+     */
+    async members(params = {}) {
+        const { role, inherited } = params;
+        switch (role) {
+            case $class.ROLES.ADMIN: {
+                if (inherited)
+                    return this.admins;
+                const admin = await this.admin;
+                return admin ? [admin] : [];
+            }
+            case $class.ROLES.BOSS: {
+                if (inherited)
+                    return this.bosses;
+                const boss = await this.boss;
+                return boss ? [boss] : [];
+            }
+            case $class.ROLES.USER:
+                return this.users;
+        }
+        return this.assignedUsers;
+    }
+
+    /** Один администратор класса (из #security.ADMIN, без наследования). Реактивная обёртка members({role:'ADMIN'}). */
     get admin(){
         return Promise.resolve(this.init).then(async () => {
             const uid = this.DATA['#security']?.ADMIN;
@@ -1105,7 +1142,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Снимок class.js (history path)
      */
     async create(p = {}) {
-        await this.allowAccess(p, $class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(p, $class.ACCESS_LEVEL.WRITE);
         const id = String(p.id ?? '').trim();
         if (!id)
             throw new Error('create: нужен id класса');

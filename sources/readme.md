@@ -50,7 +50,6 @@ WORK построен вокруг `$item`.
 Серверный runtime и инфраструктура. Эти файлы не являются частью объектной модели, они обеспечивают запуск и протоколы.
 
 - `config.js` — env-конфигурация: host, ports, TLS, dev mode, challenge TTL.
-- `security.js` — функции контроля доступа: `allowAccess`, `canSee`, `canWrite`, `filterHttpTreeResult`, `METHOD_ACCESS`.
 - `http-server.js` — запуск HTTP/HTTPS, разбор запроса, cookies, routing методов.
 - `websocket.js` — WebSocket-события.
 - `stun.js` — локальный STUN для WebRTC.

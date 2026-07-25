@@ -199,10 +199,14 @@ export class $folder extends $item{
         this.parent = parent;
     }
     /** Делегирование проверки доступа к классу-владельцу. */
-    async allowAccess(params = {}, level) {
+    async assertAccess(params = {}, level) {
         const owner = this.$owner || this.$class;
         if (owner && owner !== this)
-            await owner.allowAccess(params, level);
+            await owner.assertAccess(params, level);
+    }
+    /** @deprecated используй assertAccess */
+    allowAccess(params, level) {
+        return this.assertAccess(params, level);
     }
 
     /**
@@ -211,7 +215,7 @@ export class $folder extends $item{
      * @returns {Promise<string|boolean>} Строка с подтверждением удаления или false
      */
     async delete(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         if(!fs.existsSync(this.dir))
             return false;
         await fsp.rm(this.dir, {recursive: true});
@@ -646,12 +650,19 @@ export class $folder extends $item{
         return rags;
     }
     /**
-     * Найти дочерний элемент по имени с рекурсивным обходом.
-     * @param {string} name Имя элемента
-     * @param {Function} [filter_function] Функция фильтра
+     * Найти элемент по имени рекурсивным обходом вглубь.
+     * @param {object} params
+     * @param {string} params.name Имя искомого элемента
+     * @param {boolean} [params.types_only] Искать только среди типизаторов ($-папок)
      * @returns {Promise<object|null>} Найденный элемент или null
      */
     async find_item(name, filter_function){
+        // Внутренний позиционный вызов: find_item(name, filterFn).
+        if (name && typeof name === 'object') {
+            filter_function ??= name.types_only ? (item => item.id?.[0] === '$') : undefined;
+            name = name.name;
+        }
+        filter_function ??= (() => true);
         let children = await this.children;
         let items = children.filter(filter_function);
         let result = items.find(f=>f.id === name);
@@ -674,7 +685,7 @@ export class $folder extends $item{
      * @returns {Promise<Array<{path: string, line: number, text: string}>>} Найденные совпадения
      */
     async find_text(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const text = String(params.text ?? params.post ?? '');
         if (!text)
             throw new Error('find_text: не указан текст поиска (params.text или params.post)');
@@ -744,7 +755,7 @@ export class $folder extends $item{
      * @returns {Promise<object>} {className, properties, methods, json_model}
      */
     async get_schema(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
         const props = this[R]?.props || {};
         const properties = [];
@@ -1285,7 +1296,7 @@ export class $folder extends $item{
      * @returns {Promise<object>} Объект с путём сохранённого файла и лога истории
      */
     async save_file(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
 
@@ -1329,7 +1340,7 @@ export class $folder extends $item{
 
     write_streams = Object.create(null);
     async get_write_stream(params) {
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла')
 
@@ -1462,7 +1473,7 @@ export class $folder extends $item{
      * @returns {Promise<object>} Папка
      */
     async ensure_folder(p = {}) {
-        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
         const id = String(p.id ?? p.name ?? '').trim();
         if (!id)
             throw new Error('ensure_folder: нужен id');

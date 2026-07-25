@@ -5,7 +5,6 @@
 ## Файлы
 
 - `config.js` — env-конфигурация: host, ports, TLS, dev mode
-- `security.js` — контроль доступа: `allowAccess`, `canSee`, `canWrite`, `METHOD_ACCESS`
 - `http-server.js` — запуск HTTP/HTTPS, разбор запроса, routing методов (`execItemMethod`)
 - `websocket.js` — WebSocket-события (`changed`, `chat.delta`, `chat.done`)
 - `stun.js` — локальный STUN для WebRTC

@@ -245,3 +245,67 @@ describe('лог-фасад: logs / read_log_entry / append_log_includes', () =>
         assert.ok(reread.includes?.includes('/PLAIN/extra.smoke'), 'includes сохранены на диске');
     });
 });
+
+describe('словарь API: members / assertAccess / work_zone / find_item', () => {
+    it('members({role}) читает #security, без role — дедуплицированные все', async () => {
+        write('USERS/u1/$user/class.js', `export default { label: 'U1' }`);
+        write('MBOX/$class/class.js',
+            `export default { label: 'MBOX', '#security': { ADMIN: 'u1', USERS: ['u1'] } }`);
+        WORK.reset();
+
+        const mbox = await WORK.get_item('/MBOX');
+        const admins = await mbox.members({ role: 'ADMIN' });
+        assert.equal(admins.length, 1, 'один ADMIN из #security');
+        assert.equal(admins[0].id, 'u1');
+
+        const users = await mbox.members({ role: 'USER' });
+        assert.equal(users[0]?.id, 'u1');
+
+        const bosses = await mbox.members({ role: 'BOSS' });
+        assert.deepEqual(bosses, [], 'BOSS не назначен');
+
+        const inherited = await mbox.members({ role: 'ADMIN', inherited: true });
+        assert.ok(inherited.some(u => u.id === 'u1'), 'inherited включает собственного админа');
+
+        const all = await mbox.members();
+        assert.equal(all.length, 1, 'один пользователь во всех ролях — дедупликация по id');
+    });
+
+    it('work_zone({role}) даёт зону роли, get_storage — deprecated алиас', async () => {
+        const mbox = await WORK.get_item('/MBOX');
+        const zone = await mbox.work_zone({ role: 'USER' });
+        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/work'), 'USER-зона — папка work');
+        const legacy = await mbox.get_storage({ role: 'USER' });
+        assert.equal(legacy.path, zone.path, 'алиас возвращает ту же папку');
+        const def = await mbox.work_zone({});
+        assert.equal(def, mbox.meta_folder, 'без роли — метапапка');
+    });
+
+    it('assertAccess бросает при отказе, allowAccess — deprecated алиас', async () => {
+        const prevWorkDev = process.env.WORK_DEV;
+        const prevDev = process.env.dev;
+        process.env.WORK_DEV = 'false';
+        delete process.env.dev;
+        try {
+            const mbox = await WORK.get_item('/MBOX');
+            // Без user — no-op (внутренний вызов)
+            await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
+            // user без uid на WRITE — отказ, через оба имени
+            await assert.rejects(mbox.assertAccess({ user: {} }, FS.$class.ACCESS_LEVEL.WRITE));
+            await assert.rejects(mbox.allowAccess({ user: {} }, FS.$class.ACCESS_LEVEL.WRITE));
+        }
+        finally {
+            if (prevWorkDev === undefined) delete process.env.WORK_DEV;
+            else process.env.WORK_DEV = prevWorkDev;
+            if (prevDev !== undefined) process.env.dev = prevDev;
+        }
+    });
+
+    it('find_item: объектная форма эквивалентна позиционной', async () => {
+        const viaObj = await WORK.$folder.find_item({ name: '$smoke', types_only: true });
+        assert.ok(viaObj, '$smoke найден объектной формой');
+        assert.equal(viaObj.id, '$smoke');
+        const viaPos = await WORK.$folder.find_item('$smoke', item => item.id?.[0] === '$');
+        assert.equal(viaPos.path, viaObj.path, 'обе формы находят один элемент');
+    });
+});

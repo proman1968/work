@@ -133,7 +133,7 @@ export class $file extends $folder{
         return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
     }
     async delete(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
         this.parent.reset();
         this.reset();
@@ -198,7 +198,7 @@ export class $file extends $folder{
      * @returns {Promise<string|Buffer>} Строка (при encoding) или Buffer
      */
     async load(params = {encoding: 'utf8'}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         if(fs.existsSync(this.dir)){
             return fsp.readFile(this.dir, params);
         }
@@ -227,7 +227,7 @@ export class $file extends $folder{
      * @returns {Promise<import('node:fs').ReadStream>} ReadStream
      */
     async download(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         return fs.createReadStream(this.dir, params);
     }
     /**
@@ -237,7 +237,7 @@ export class $file extends $folder{
      * @returns {Promise<$file>} this (сохранённый файл)
      */
     async save(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(this.inHistory || this.inRAG){
             if(!fs.existsSync(this.parent.real_dir)){
                 fs.mkdirSync(this.parent.real_dir, {recursive: true});
@@ -257,7 +257,7 @@ export class $file extends $folder{
      * @returns {Promise<string>} Полный текст файла после применения правок
      */
     async edit_file(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         const diff = typeof params.post === 'string' ? params.post : params.diff;
         if (!diff)
             throw new Error('edit_file: не указан diff (params.post или params.diff)');
@@ -329,7 +329,7 @@ export class $file extends $folder{
      * @returns {Promise<string[]>} Массив строк с import-операторами
      */
     async get_imports(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const content = await this.load({ encoding: 'utf-8' });
         if (typeof content !== 'string')
             return [];

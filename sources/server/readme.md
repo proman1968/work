@@ -45,6 +45,13 @@ API элементов — это «система команд» для ИИ-а
 ### Поиск
 
 - `get_item` — по пути; `find_text` — по содержимому (grep); `semantic_search` — RAG-поиск (deprecated-алиас: `search`)
+- `find_item({name, types_only})` — рекурсивный поиск элемента по имени (внутренняя позиционная форма: `find_item(name, filterFn)`)
+
+### Роли и доступ
+
+- `members({role, inherited})` — назначенные пользователи класса; ролевые геттеры `admin`/`boss`/`users`/`admins`/`bosses`/`assignedUsers` — реактивные обёртки для UI
+- `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
+- `work_zone({role})` — папка рабочей зоны роли; deprecated-алиас: `get_storage`
 
 ### Описание элемента
 
