@@ -26,9 +26,11 @@ Thumbs.db
 *.log
 .svn/
 
-# Python venv (Qwen3-TTS)
+# Python venv / models (local TTS)
 sources/modules/tts/.venv/
+sources/modules/tts/.venv-piper/
 sources/modules/tts/qwen3_tts_model/
+sources/modules/tts/piper_voices/
 
 # Large ML model weights (download separately)
 torus/binnet/models/

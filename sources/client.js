@@ -527,7 +527,8 @@ class WebSocketEvents {
             } break;
             case 'chat.delta':
             case 'chat.done':
-            case 'chat.error': {
+            case 'chat.error':
+            case 'chat.clear_stream': {
                 if(!data.path)
                     return;
                 let item = CORE.$item.ITEMS[data.path];

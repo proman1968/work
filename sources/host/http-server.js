@@ -407,6 +407,10 @@ export function createRequestHandler() {
                 }
 
             }
+            else if (Buffer.isBuffer(result)) {
+                // method вроде ?tts — сырой WAV, не JSON.stringify(Buffer)
+                header["Content-Type"] = "audio/wav";
+            }
             else {
                 result = JSON.stringify(result, null, +params.space || 2);
             }

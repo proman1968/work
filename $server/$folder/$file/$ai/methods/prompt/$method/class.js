@@ -19,7 +19,17 @@ import { pathToFileURL } from 'node:url';
 import * as https from 'node:https';
 
 const ROOT = process.cwd();
-const MAX_ITERATIONS = 10;
+// Абсолютный import: WORK грузит этот файл как data: URL — относительные пути не резолвятся
+let RIBBON_TYPES = {};
+try {
+    const aiClassDef = (await import(
+        pathToFileURL(path.join(ROOT, '$server/$folder/$file/$ai/class.js')).href
+    )).default;
+    RIBBON_TYPES = aiClassDef?.TYPES || {};
+} catch (e) {
+    console.warn('[task.ai] TYPES load failed:', e.message);
+}
+const MAX_ITERATIONS = 30;
 const MAX_IDLE_DO = 3; // пустые EXECUTE-ходы → ошибка, не выжигать maxIter
 const MAX_IDLE_PROPOSE = 1; // 1 idle на clarify → Cursor AskQuestion inject (не ждать Light)
 const CONTEXT_LOG_DAYS = 7;
@@ -30,6 +40,36 @@ const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 
 const ASK_USER_METHOD = 'ask_user';
 // Уровень доверия для автоподтверждения опасных действий
 const TRUST_AUTOCONFIRM = 3;
+
+/** Stop из микрочата: путь .ai → abort (отдельный HTTP prompt {stop:true}). */
+const abortByPath = new Map();
+
+function requestAbort(path) {
+    const p = String(path || '').trim();
+    if (p)
+        abortByPath.set(p, true);
+}
+
+function clearAbort(path) {
+    const p = String(path || '').trim();
+    if (p)
+        abortByPath.delete(p);
+}
+
+function isAborted(path) {
+    const p = String(path || '').trim();
+    return !!(p && abortByPath.get(p));
+}
+
+async function finishStopped(fullPath, wsPath, body) {
+    clearAbort(fullPath);
+    if (body) {
+        await writeTaskBody(fullPath, body);
+        notifyChanged(fullPath);
+    }
+    WORK.wsSend?.({ type: 'chat.done', path: wsPath, stopped: true });
+    return { ok: true, stopped: true };
+}
 
 function isFileWriteMethod(method) {
     return method === 'save_file' || method === 'write_file';
@@ -98,6 +138,18 @@ const HARNESS_FUNCTIONS = [
         },
     },
     {
+        name: 'edit_file',
+        description: 'Точечная правка файла SEARCH/REPLACE (не полный rewrite). filename + post с блоками ------- SEARCH / ======= / +++++++ REPLACE.',
+        parameters: {
+            type: 'object',
+            properties: {
+                filename: { type: 'string', description: 'Имя файла в текущем контексте' },
+                post: { type: 'string', description: 'Diff SEARCH/REPLACE' },
+            },
+            required: ['filename', 'post'],
+        },
+    },
+    {
         name: 'navigate',
         description: 'Перейти в элемент по абсолютному path.',
         parameters: {
@@ -112,6 +164,50 @@ const HARNESS_FUNCTIONS = [
         name: 'reset_context',
         description: 'Вернуться в домашний класс текущей задачи.',
         parameters: { type: 'object', properties: {} },
+    },
+    {
+        name: 'list_skills',
+        description: 'Список доступных $skill в /skills (path + label).',
+        parameters: { type: 'object', properties: {} },
+    },
+    {
+        name: 'run_skill',
+        description: 'Выполнить скилл по path (skills-as-tools).',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Путь к $skill' },
+                data: { type: 'object', description: 'Параметры скилла' },
+            },
+            required: ['path'],
+        },
+    },
+    {
+        name: 'spawn_agent',
+        description: 'Создать последовательного подагента (вложенный task в ribbon). Не параллелит — следующие ходы выполняй в его шагах.',
+        parameters: {
+            type: 'object',
+            properties: {
+                goal: { type: 'string', description: 'Цель подагента' },
+                brief: { type: 'string', description: 'Краткое ТЗ' },
+                steps: {
+                    type: 'array',
+                    items: { type: 'object', properties: { description: { type: 'string' } } },
+                    description: 'Шаги подагента',
+                },
+            },
+            required: ['goal'],
+        },
+    },
+    {
+        name: 'inspect_schema',
+        description: 'Инспекция get_schema текущего контекста или path (методы/свойства класса).',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Опционально: путь элемента; иначе текущий контекст' },
+            },
+        },
     },
 ];
 
@@ -140,6 +236,7 @@ export default {
         let requestModel = '';
         let confirm = undefined;
         let answers = undefined;
+        let wantStop = false;
         const raw = post ?? params.text ?? params.post ?? '';
         if (typeof raw === 'string' && raw.trim().startsWith('{')) {
             try {
@@ -147,6 +244,7 @@ export default {
                 text = String(parsed.text ?? '').trim();
                 requestModel = String(parsed.model ?? '').trim();
                 confirm = parsed.confirm;
+                wantStop = parsed.stop === true;
                 if (parsed.answers && typeof parsed.answers === 'object')
                     answers = parsed.answers;
             } catch {
@@ -155,20 +253,29 @@ export default {
         } else {
             text = String(raw).trim();
         }
+        if (params.stop === true || post?.stop === true)
+            wantStop = true;
 
-        // === 2. Загрузка тела task.ai ===
+        // === 2. Пути (до body — для stop без цикла) ===
+        const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
+        const wsPath = taskAi.short || fullPath;
+        if (wantStop) {
+            requestAbort(fullPath);
+            return { ok: true, stopped: true };
+        }
+        clearAbort(fullPath);
+
+        // === 3. Загрузка тела task.ai ===
         const body = await loadTaskBody(taskAi);
         if (!body)
             throw new Error('Не удалось загрузить тело task.ai');
 
-        // === 3. Базовые пути и контекст ===
-        const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
-        const wsPath = taskAi.short || fullPath;
         const initialContext = taskAi.$class || taskAi.$parent;
         if (!initialContext)
             throw new Error('Не определено классе-контекст для task.ai');
 
         body.ribbon ??= [];
+        delete body.control;
         // После «Выполнить» / confirm pendingAction — сразу forceDoReminder на первом turn
         let resumeDoForce = false;
 
@@ -202,7 +309,9 @@ export default {
         if (!model) throw new Error('Модель не найдена: ' + modelPath);
 
         const { execItemMethod } = await import(pathToFileURL(path.join(ROOT, 'sources/host/http-server.js')).href);
-        const maxIter = body.maxIterations || MAX_ITERATIONS;
+        if (!body.maxIterations || body.maxIterations < 1)
+            body.maxIterations = MAX_ITERATIONS;
+        const maxIter = Number(body.maxIterations) || MAX_ITERATIONS;
 
         // Пользователь от лица модели — для логов действий ИИ
         const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
@@ -238,8 +347,10 @@ export default {
                     || null;
                 let hadOkSave = false;
                 for (const call of body.pendingAction.calls || []) {
-                    const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
+                    const { result, newContext, spawnTask } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
                     currentContext = newContext;
+                    if (spawnTask)
+                        body.ribbon.push(spawnTask);
                     pushToolResult(ribbonTarget, call, result, model);
                     sendToolResultWs(wsPath, call, result);
                     if (isFileWriteMethod(call.method) && !(result && typeof result === 'object' && result.error))
@@ -272,7 +383,67 @@ export default {
             body.pendingAction = null;
         }
 
-        // === 5b. Подтверждение / отказ плана (pendingPlan) — факт = prompt, не status у action ===
+        // === 5a. Continue после лимита итераций (доиграть orphan tool_call) ===
+        if (body.pendingContinue) {
+            if (body.pendingContinue.contextPath) {
+                try {
+                    const target = await WORK.get_item(body.pendingContinue.contextPath);
+                    if (target)
+                        currentContext = target;
+                } catch {}
+            }
+            const textNormC = String(text || '').trim().toLowerCase();
+            const wantContinue = confirm === true
+                || textNormC === 'продолжить'
+                || textNormC.includes('продолжить');
+            const wantReject = confirm === false
+                || textNormC === 'нет'
+                || textNormC.startsWith('отмен');
+            const openC = findOpenAction(body.ribbon);
+            if (wantContinue) {
+                const functions = await buildFunctionsList(currentContext);
+                let calls = Array.isArray(body.pendingContinue.calls) ? body.pendingContinue.calls : [];
+                if (!calls.length && body.pendingContinue.lastResponse)
+                    calls = parseToolCalls(body.pendingContinue.lastResponse, functions);
+                if (openC?.action)
+                    openC.action.answered = true;
+                pushClosingPrompt(body.ribbon, text?.trim() || 'Продолжить', sender);
+                text = '';
+                for (const call of calls) {
+                    ribbonTarget.push({
+                        type: 'tool',
+                        label: '🔧 ' + call.method,
+                        content: JSON.stringify(call.args || {}, null, 2).slice(0, 4000),
+                        tool: call.method,
+                        args: call.args || {},
+                        time: Date.now(),
+                        sender: model.path || 'WORK',
+                    });
+                    const { result, newContext, spawnTask } = await executeToolCall(
+                        call, currentContext, initialContext, functions, params, aiUser,
+                    );
+                    currentContext = newContext;
+                    if (spawnTask)
+                        body.ribbon.push(spawnTask);
+                    pushToolResult(ribbonTarget, call, result, model);
+                    sendToolResultWs(wsPath, call, result);
+                }
+                body.pendingContinue = null;
+                resumeDoForce = true;
+                await writeTaskBody(fullPath, body);
+                notifyChanged(fullPath);
+            } else if (wantReject) {
+                if (openC?.action)
+                    openC.action.answered = true;
+                body.pendingContinue = null;
+                await writeTaskBody(fullPath, body);
+            } else {
+                // другой текст — сброс флага, обычный ход
+                body.pendingContinue = null;
+            }
+        }
+
+        // === 5b. Подтверждение / отказ плана (pendingPlan + action «План») — факт = prompt ===
         {
             const open = findOpenAction(body.ribbon);
             const openAction = open?.action;
@@ -293,7 +464,6 @@ export default {
             const isAcceptFinal = !body.pendingPlan && !isFormSubmit && openAction?.type === 'action'
                 && (/принять|готово/i.test(finalLabel) || openAction.title === 'Отчёт')
                 && (confirm === true || textIsAccept);
-            // «Выполнить» / confirm шага — только action без fields
             const isStepConfirm = !body.pendingPlan && !isFormSubmit && !isAcceptFinal
                 && openAction?.type === 'action'
                 && !/^начать\??$/i.test(finalLabel)
@@ -302,9 +472,8 @@ export default {
 
             if (isAcceptPlan) {
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
-                // Факт согласия — в корневой ленте (перед task)
                 pushClosingPrompt(body.ribbon, promptContent, sender, answers);
-                text = ''; // не дублировать prompt в §7
+                text = '';
                 if (openAction)
                     openAction.answered = true;
                 const plan = body.pendingPlan;
@@ -322,8 +491,8 @@ export default {
                 body.ribbon.push(task);
                 ribbonTarget = task.ribbon;
                 body.pendingPlan = null;
-                const firstStep = steps.find(s => s.status === 'in_progress') || steps[0];
-                pushStepAnnounce(ribbonTarget, firstStep, model.path || 'WORK');
+                pushStepPrompt(task, 'WORK');
+                resumeDoForce = true;
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isFormSubmit) {
@@ -333,7 +502,6 @@ export default {
                 if (needFields && (!answers || !Object.keys(answers).length)) {
                     return { ok: true, pendingActionConfirm: true, error: 'need_answers' };
                 }
-                // Ответы на поля — prompt только Q:A; блок формы закрываем
                 const promptContent = formatPromptWithAnswers('', answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
                 if (answers && openAction.fields) {
@@ -343,13 +511,10 @@ export default {
                     }
                 }
                 openAction.answered = true;
-                // Clarify-шаг закрыт ответами → следующий in_progress (EXECUTE)
                 const doTask = activeTaskFind(body);
                 if (doTask) {
                     advanceAfterClarifyAnswers(doTask);
-                    const nextCur = doTask.steps?.find(s => s.status === 'in_progress')
-                        || doTask.steps?.find(s => s.status === 'proposed');
-                    pushStepAnnounce(actionRibbon, nextCur, model.path || 'WORK');
+                    pushStepPrompt(doTask, 'WORK');
                 }
                 text = '';
                 resumeDoForce = true;
@@ -361,18 +526,21 @@ export default {
                 if (openAction)
                     openAction.answered = true;
                 text = '';
+                const doTask = activeTaskFind(body);
+                if (doTask)
+                    pushStepPrompt(doTask, 'WORK');
                 resumeDoForce = true;
                 await writeTaskBody(fullPath, body);
                 notifyChanged(fullPath);
             } else if (isAcceptFinal) {
-                // «Принять» — задача выполнена
                 const promptContent = formatPromptWithAnswers(text?.trim() || acceptLabel, answers, openAction?.fields);
                 pushClosingPrompt(actionRibbon, promptContent, sender, answers);
                 if (openAction)
                     openAction.answered = true;
                 text = '';
                 const doneTask = activeTaskFind(body)
-                    || [...(body.ribbon || [])].reverse().find(b => b.type === 'task' && b.state === 'completed');
+                    || [...(body.ribbon || [])].reverse().find(b =>
+                        b.type === 'task' && (b.state === 'active' || b.state === 'completed'));
                 if (doneTask)
                     doneTask.state = 'completed';
                 body.pendingPlan = null;
@@ -390,10 +558,8 @@ export default {
                 WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                 return { ok: true, rejected: true };
             } else if ((openAction || body.pendingPlan) && text && !isAcceptPlan && !isFormSubmit && !isStepConfirm) {
-                // Любой другой prompt закрывает открытый action; план снимаем
                 body.pendingPlan = null;
             } else if ((openAction || body.pendingPlan) && !text && confirm === undefined) {
-                // Открытый action / план без решения — не крутим LLM
                 return { ok: true, pendingPlan: !!body.pendingPlan, pendingActionConfirm: true };
             }
         }
@@ -412,7 +578,7 @@ export default {
             }
         }
 
-        // === 8. Контекст пары class + user (readme, mem, логи) ===
+        // === 8. Контекст пары class + user (readme, mem, логи) + @path ===
         const logWindow = normalizeLogWindow(body.logWindow);
         const classBundle = await loadContextBundle(initialContext, logWindow);
         const userStorage = await resolveUserStorage(params);
@@ -424,7 +590,9 @@ export default {
         body.role = role;
         const roleLine = 'Роль: ' + role + '\n';
         const geoInfo = await getGeoByIp();
-        body.context = roleLine + contextInfo + (geoInfo || '');
+        const atPathBlock = await loadAtPathMentions(text);
+        body.context = roleLine + contextInfo + (geoInfo || '')
+            + (atPathBlock ? '\n\n## Упомянутые @path\n' + atPathBlock : '');
         body.classBundle = classBundle;
         body.userBundle = userBundle;
         // legacy поля — класс (совместимость)
@@ -435,16 +603,23 @@ export default {
         let iteration = 0;
         let lastResponse = '';
         let idleDoStreak = 0;
+        let planIdleStreak = 0;
         // «Выполнить» / confirm опасных tools → сразу EXECUTE pressure на первом turn
         let forceDoReminder = !!resumeDoForce;
+        let forcePlanReminder = false;
 
         while (iteration < maxIter) {
+            if (isAborted(fullPath))
+                return await finishStopped(fullPath, wsPath, body);
+
             iteration++;
             const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
                 forceDoReminder,
+                forcePlanReminder,
                 protocol: model.protocol,
             });
             forceDoReminder = false;
+            forcePlanReminder = false;
 
             // Построение functions из схемы методов контекста
             let functions = await buildFunctionsList(currentContext);
@@ -462,6 +637,7 @@ export default {
                 // Обычный режим — стриминг от модели
                 let nativeToolCalls = [];
                 let hasNativeFunctionCall = false;
+                let abortedMidStream = false;
 
                 try {
                     const streamParams = { messages, $ai: model };
@@ -479,6 +655,10 @@ export default {
                     }
                     const stream = await execItemMethod(model, 'streamChat', streamParams);
                     for await (const chunk of stream) {
+                        if (isAborted(fullPath)) {
+                            abortedMidStream = true;
+                            break;
+                        }
                         if (typeof chunk === 'string') {
                             fullResponse += chunk;
                             WORK.wsSend?.({ type: 'chat.delta', path: wsPath, token: chunk });
@@ -497,6 +677,7 @@ export default {
                                     prompt: Number(chunk.prompt_tokens) || 0,
                                     completion: Number(chunk.completion_tokens) || 0,
                                     total: Number(chunk.total_tokens) || 0,
+                                    source: 'api',
                                 };
                             }
                         }
@@ -515,6 +696,10 @@ export default {
                     return { ok: false, error: e.message };
                 }
 
+                if (abortedMidStream || isAborted(fullPath))
+                    return await finishStopped(fullPath, wsPath, body);
+
+                turnUsage = resolveTurnUsage(turnUsage, messages, fullResponse);
                 lastResponse = fullResponse;
 
                 // Разбор ответа: thinking / form / единый action(MD) / pendingPlan / subplan
@@ -522,8 +707,6 @@ export default {
                 let blocks = parsed.blocks || [];
                 const activeTask = [...body.ribbon].reverse().find(b => b.type === 'task' && b.state === 'active');
                 let waitingForUser = false;
-                // Do: не коммитим steps до выхода из idle — усечённый <plan> не должен схлопывать UI
-                let deferredDoSteps = null;
                 const turnHasThinking = blocks.some(b => b.type === 'thinking');
 
                 // Tools раньше plan-allDone — иначе модель «рисует» 4/4 до факта
@@ -537,8 +720,6 @@ export default {
                         || activeTask.steps?.find(s => s.status === 'proposed');
                     if (expandStepWithSubplan(activeTask, curStep, parsed.pendingSubplan)) {
                         parsed.pendingPlan = null;
-                        const nextCur = activeTask.steps.find(s => s.status === 'in_progress');
-                        pushStepAnnounce(ribbonTarget, nextCur, model.path || 'WORK');
                         WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: activeTask.steps });
                         blocks = commitDurableBlocks(ribbonTarget, blocks);
                         WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
@@ -553,15 +734,14 @@ export default {
 
                 if (parsed.pendingPlan) {
                     if (activeTask) {
-                        // Статусы done — только по факту harness (модель не рисует 4/4)
+                        // Модель не фиксирует done — только cap
                         const capped = applyHarnessDoneCap(activeTask.steps, parsed.pendingPlan.steps, false);
                         parsed.pendingPlan.steps = capped;
                         const harnessAllDone = (activeTask.steps || []).length
                             && activeTask.steps.every(s => s.status === 'done');
                         if (harnessAllDone) {
                             activeTask.steps = capped;
-                            activeTask.state = 'completed';
-                            deferredDoSteps = null;
+                            // completed — только после «Принять»; здесь только Отчёт
                             blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: true });
                             for (const a of blocks.filter(b => b.type === 'action')) {
                                 a.content = formatPlanMarkdown(activeTask.steps, 'Принять результат?') || a.content;
@@ -573,16 +753,16 @@ export default {
                             WORK.wsSend?.({ type: 'chat.plan_completed', path: wsPath });
                             WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: capped });
                         } else {
-                            deferredDoSteps = capped;
+                            // Preview only — prose/<plan> без tools не двигает шаги
                             blocks = normalizeInteractiveBlocks(blocks, { phase: 'do', allDone: false });
                             for (const a of blocks.filter(b => b.type === 'action')) {
-                                a.content = formatPlanMarkdown(capped, '') || a.content;
+                                a.content = formatPlanMarkdown(activeTask.steps, '') || a.content;
                             }
                             if (blocks.some(isInteractiveBlock))
                                 waitingForUser = true;
                         }
                     } else {
-                        // Plan-фаза: action title План / Начать; не принимать 1-шаговый усечённый план
+                        // Plan-фаза: ensureMinimum + action «План» + tip «Начать»
                         const lastUser = [...body.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
                         const userText = lastUser?.content || '';
                         parsed.pendingPlan.steps = ensureMinimumPlanSteps(
@@ -640,6 +820,53 @@ export default {
                     // пустой prose без мыслей — idle с nudge
                 }
 
+                // Plan-фаза: deliverable без <plan> — один retry (не prose «укажи параметры»)
+                if (!activeTask && !parsed.pendingPlan && toolCalls.length === 0 && planIdleStreak < 1) {
+                    const lastUser = [...body.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
+                    const userText = lastUser?.content || body.title || '';
+                    if (looksLikeDeliverableRequest(userText)) {
+                        const keep = (blocks || []).filter(b => b.type === 'thinking');
+                        commitDurableBlocks(ribbonTarget, keep);
+                        WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+                        applyTurnUsage(body, ribbonTarget, turnUsage, model);
+                        await writeTaskBody(fullPath, body);
+                        notifyChanged(fullPath);
+                        forcePlanReminder = true;
+                        planIdleStreak++;
+                        continue;
+                    }
+                }
+
+                // После reminder: всё ещё нет <plan> → синтез канон-плана + «Начать» (без 2-го LLM)
+                if (!activeTask && !parsed.pendingPlan && toolCalls.length === 0 && planIdleStreak >= 1) {
+                    const lastUser = [...body.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
+                    const userText = lastUser?.content || body.title || '';
+                    if (looksLikeDeliverableRequest(userText)) {
+                        const synth = synthesizePlanAfterIdle(userText, model.path || 'WORK');
+                        body.pendingPlan = synth.pendingPlan;
+                        const keep = (blocks || []).filter(b => b.type === 'thinking');
+                        blocks = normalizeInteractiveBlocks([...keep, synth.actionBlock], { phase: 'plan' });
+                        for (const a of blocks.filter(b => b.type === 'action')) {
+                            a.title = 'План';
+                            a.time = a.time || Date.now();
+                            a.sender = a.sender || model.path || 'WORK';
+                            a.content = formatPlanMarkdown(body.pendingPlan.steps, '') || a.content;
+                        }
+                        waitingForUser = true;
+                        WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: body.pendingPlan.steps });
+                    }
+                }
+
+                // Plan-фаза: одна карточка «План»/«Начать» — без prose-парафраза в text
+                blocks = dropTextBlocksBesidePlanAction(blocks, body.pendingPlan);
+                // Do: без text рядом с questions/form/action/tools/subplan
+                if (activeTask) {
+                    blocks = dropTextBlocksBesideDoInteractive(blocks, {
+                        pendingSubplan: parsed.pendingSubplan,
+                        hasTools: toolCalls.length > 0,
+                    });
+                }
+
                 // Инвариант: thinking/text в ленту СРАЗУ — до idle/inject/error/continue.
                 // Иначе стрим виден в UI, а при chat.done пропадает (дыры по веткам).
                 blocks = commitDurableBlocks(ribbonTarget, blocks);
@@ -667,8 +894,6 @@ export default {
                         || activeTask.steps?.find(s => s.status === 'proposed');
                     // Inject только в propose — не после уже данных ответов (execute + clarify-step)
                     if (phase === 'propose' && idleDoStreak >= MAX_IDLE_PROPOSE) {
-                        if (deferredDoSteps)
-                            activeTask.steps = deferredDoSteps;
                         ribbonTarget.push(makeClarifyQuestions(
                             activeTask.steps?.find(s => s.status === 'in_progress')
                                 || activeTask.steps?.find(s => s.status === 'proposed')
@@ -681,12 +906,8 @@ export default {
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                         return { ok: true, pendingActionConfirm: true };
                     }
-                    // EXECUTE idle: после MAX_IDLE_DO — диагностика + human gate «Выполнить» (не тупик)
-                    // Не коммитим deferredDoSteps — prose/<plan> без tools не двигает шаги
+                    // EXECUTE idle: мягкий nudge / step-prompt, без error + «Выполнить»
                     if (phase === 'execute' && nextIdleDoAction(idleDoStreak) === 'stop') {
-                        if (mayCommitDeferredOnIdleExecuteStop() && deferredDoSteps)
-                            activeTask.steps = deferredDoSteps;
-                        // Silent ok только если план уже весь done (не «был хоть один save»)
                         const planStillOpen = shouldContinueDo(activeTask, false, []);
                         if (taskHasSuccessfulSave(activeTask) && !planStillOpen) {
                             applyTurnUsage(body, ribbonTarget, turnUsage, model);
@@ -695,30 +916,13 @@ export default {
                             WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                             return { ok: true };
                         }
-                        const stepHint = cur?.description
-                            ? ' («' + cur.description + '»)'
-                            : '';
-                        ribbonTarget.push({
-                            type: 'error',
-                            content: planStillOpen
-                                ? 'План не завершён: выполни текущий шаг' + stepHint + ' через tool (файл — save_file; класс — create).'
-                                : 'Модель не вызвала tool за ' + MAX_IDLE_DO + ' попыток.',
-                            time: Date.now(),
-                            sender: model.path || 'WORK',
-                        });
-                        if (planStillOpen) {
-                            ribbonTarget.push(makeIdleExecuteResumeAction(cur, model.path || 'WORK'));
-                            applyTurnUsage(body, ribbonTarget, turnUsage, model);
-                            await writeTaskBody(fullPath, body);
-                            notifyChanged(fullPath);
-                            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-                            return { ok: true, pendingActionConfirm: true };
-                        }
+                        if (planStillOpen)
+                            pushStepPrompt(activeTask, 'WORK');
                         applyTurnUsage(body, ribbonTarget, turnUsage, model);
                         await writeTaskBody(fullPath, body);
                         notifyChanged(fullPath);
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-                        return { ok: false, error: 'idle_execute' };
+                        return { ok: true };
                     }
                     // Idle retry: steps не коммитим; durable уже в ленте; стрим уже сброшен
                     applyTurnUsage(body, ribbonTarget, turnUsage, model);
@@ -729,11 +933,6 @@ export default {
                 }
 
                 idleDoStreak = 0;
-                if (deferredDoSteps && activeTask && activeTask.state === 'active') {
-                    // Не даём deferred <plan> нарисовать лишние done поверх факта
-                    activeTask.steps = applyHarnessDoneCap(activeTask.steps, deferredDoSteps, false);
-                    WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: activeTask.steps });
-                }
 
                 for (const block of blocks) {
                     if (block.function_call === true && hasNativeFunctionCall) {
@@ -757,6 +956,9 @@ export default {
                 if (toolCalls.length === 0)
                     break;
             }
+
+            if (isAborted(fullPath))
+                return await finishStopped(fullPath, wsPath, body);
 
             // === ACL роли: не-ADMIN не меняет типизаторы / class.js ===
             const role = normalizeRole(body.role || params.role);
@@ -804,6 +1006,59 @@ export default {
                 continue;
             }
 
+            // Plan-фаза: spawn_agent / write на deliverable — только после «Начать» (active task)
+            {
+                const activeDo = activeTaskFind(body);
+                if (!activeDo) {
+                    const lastUser = [...body.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
+                    const userText = lastUser?.content || body.title || '';
+                    const deliverable = looksLikeDeliverableRequest(userText);
+                    const kept = [];
+                    for (const call of toolCalls) {
+                        const isSpawn = call.method === 'spawn_agent';
+                        const isWrite = isFileWriteMethod(call.method) || call.method === 'create';
+                        if (isSpawn || (deliverable && isWrite)) {
+                            const msg = isSpawn
+                                ? 'Сначала предложи <plan> и дождись «Начать». spawn_agent только внутри active task.'
+                                : 'Сначала предложи <plan> и дождись «Начать». Запись файла — после подтверждения плана.';
+                            pushToolResult(ribbonTarget, call, { error: msg }, model);
+                            sendToolResultWs(wsPath, call, { error: msg });
+                        } else {
+                            kept.push(call);
+                        }
+                    }
+                    toolCalls = kept;
+                    if (!toolCalls.length) {
+                        if (deliverable && planIdleStreak < 1) {
+                            forcePlanReminder = true;
+                            planIdleStreak++;
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            continue;
+                        }
+                        if (deliverable && planIdleStreak >= 1) {
+                            const synth = synthesizePlanAfterIdle(userText, model.path || 'WORK');
+                            body.pendingPlan = synth.pendingPlan;
+                            const planBlocks = normalizeInteractiveBlocks([synth.actionBlock], { phase: 'plan' });
+                            for (const a of planBlocks.filter(b => b.type === 'action')) {
+                                a.title = 'План';
+                                a.content = formatPlanMarkdown(body.pendingPlan.steps, '') || a.content;
+                                a.time = Date.now();
+                                a.sender = model.path || 'WORK';
+                            }
+                            commitDurableBlocks(ribbonTarget, planBlocks);
+                            await writeTaskBody(fullPath, body);
+                            notifyChanged(fullPath);
+                            WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: body.pendingPlan.steps });
+                            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                            return { ok: true, pendingPlan: true, pendingActionConfirm: true };
+                        }
+                        await writeTaskBody(fullPath, body);
+                        continue;
+                    }
+                }
+            }
+
             // === Подтверждение: dangerous (trust) или ADMIN system-modify ===
             // Обычный save_file (presentation.html и т.п.) — без confirm (MVP e2e).
             const trustLevel = Number(model.trustLevel || 0);
@@ -835,6 +1090,9 @@ export default {
             }
 
             // === Выполнение вызовов ===
+            if (isAborted(fullPath))
+                return await finishStopped(fullPath, wsPath, body);
+
             {
                 const doTask = activeTaskFind(body);
                 let stepBefore = doTask?.steps?.find(s => s.status === 'in_progress')
@@ -848,7 +1106,6 @@ export default {
                         WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
                         stepBefore = doTask.steps.find(s => s.status === 'in_progress')
                             || doTask.steps.find(s => s.status === 'proposed');
-                        pushStepAnnounce(ribbonTarget, stepBefore, model.path || 'WORK');
                     } else if (fill.blocked && toolCalls.some(c => isFileWriteMethod(c.method))) {
                         for (const call of toolCalls.filter(c => isFileWriteMethod(c.method))) {
                             pushToolResult(ribbonTarget, call, { error: fill.message }, model);
@@ -864,14 +1121,15 @@ export default {
                     }
                 }
 
-                if (doTask && stepBefore)
-                    pushStepAnnounce(ribbonTarget, stepBefore, model.path || 'WORK');
                 let hadOkSave = false;
                 let hadOkTool = false;
                 let lastWriteArgs = null;
+                let lastSaveWasStub = false;
                 for (const call of toolCalls) {
-                    const { result, newContext } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
+                    const { result, newContext, spawnTask } = await executeToolCall(call, currentContext, initialContext, functions, params, aiUser);
                     currentContext = newContext;
+                    if (spawnTask)
+                        body.ribbon.push(spawnTask);
                     pushToolResult(ribbonTarget, call, result, model);
                     sendToolResultWs(wsPath, call, result);
                     const ok = !(result && typeof result === 'object' && result.error);
@@ -880,18 +1138,21 @@ export default {
                     if (isFileWriteMethod(call.method) && ok) {
                         hadOkSave = true;
                         lastWriteArgs = call.args || null;
-                        if (isStubWriteContent(call.args?.post ?? call.args?.content)) {
-                            ribbonTarget.push({
-                                type: 'error',
-                                content: 'Содержимое похоже на заглушку — шаг не закрыт. Наполни артефакт (по подшагам), перезапиши тот же filename.',
-                                time: Date.now(),
-                                sender: model.path || 'WORK',
-                            });
-                        }
+                        lastSaveWasStub = isStubWriteContent(
+                            call.args?.post ?? call.args?.content,
+                            call.args?.filename || call.args?.name,
+                        );
                     }
                 }
                 let stepped = false;
-                if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore, lastWriteArgs)) {
+                if (hadOkSave && doTask && lastSaveWasStub) {
+                    ribbonTarget.push({
+                        type: 'error',
+                        content: 'Содержимое похоже на заглушку — шаг не закрыт. Наполни артефакт, перезапиши тот же filename.',
+                        time: Date.now(),
+                        sender: model.path || 'WORK',
+                    });
+                } else if (hadOkSave && doTask && advanceAfterSuccessfulSave(doTask, stepBefore, lastWriteArgs)) {
                     stepped = true;
                     WORK.wsSend?.({ type: 'chat.plan', path: wsPath, plan: doTask.steps });
                 }
@@ -907,8 +1168,10 @@ export default {
                                 || doTask.steps.find(s => s.status === 'proposed');
                         }
                     }
-                    if (allContentWorkDone(doTask) && finalizeAcceptOnlySteps(doTask)) {
-                        doTask.state = 'completed';
+                    if (allContentWorkDone(doTask)
+                        && !lastSuccessfulWriteWasStub(doTask.ribbon)
+                        && finalizeAcceptOnlySteps(doTask)) {
+                        // state=completed — только после «Принять»; tip «Принять» пока task active
                         ribbonTarget.push({
                             type: 'action',
                             title: 'Отчёт',
@@ -925,7 +1188,7 @@ export default {
                         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                         return { ok: true, pendingActionConfirm: true };
                     }
-                    pushStepAnnounce(ribbonTarget, nextCur, model.path || 'WORK');
+                    pushStepPrompt(doTask, 'WORK');
                     await writeTaskBody(fullPath, body);
                     notifyChanged(fullPath);
                     WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
@@ -943,9 +1206,32 @@ export default {
         }
 
         if (iteration >= maxIter && lastResponse) {
+            const functions = await buildFunctionsList(currentContext);
+            const orphanCalls = parseToolCalls(lastResponse, functions);
+            body.pendingContinue = {
+                lastResponse: String(lastResponse).slice(0, 50000),
+                calls: orphanCalls,
+                contextPath: currentContext?.path || '',
+                atIter: iteration,
+                maxIter,
+            };
             body.ribbon.push({
                 type: 'error',
-                content: 'Превышен лимит итераций. Последний ответ:\n' + lastResponse.slice(0, 2000),
+                content: 'Превышен лимит итераций (' + maxIter + ').'
+                    + (orphanCalls.length
+                        ? ' Есть невыполненный tool_call — нажмите «Продолжить», чтобы выполнить и идти дальше.'
+                        : ' Нажмите «Продолжить», чтобы возобновить задачу.')
+                    + '\n\nПоследний ответ:\n' + String(lastResponse).slice(0, 1500),
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+            body.ribbon.push({
+                type: 'action',
+                title: 'Лимит итераций',
+                content: orphanCalls.length
+                    ? 'Выполнить отложенный tool и продолжить PDCA?'
+                    : 'Продолжить задачу с текущего шага?',
+                button: { label: 'Продолжить', color: 'success' },
                 time: Date.now(),
                 sender: model.path || 'WORK',
             });
@@ -1188,7 +1474,10 @@ function advanceAfterClarifyAnswers(activeTask) {
     if (!activeTask?.steps?.length) return;
     const cur = activeTask.steps.find(s => s.status === 'in_progress')
         || activeTask.steps.find(s => s.status === 'proposed');
-    if (!cur || !stepNeedsClarify(cur)) return;
+    if (!cur) return;
+    // Пустое описание (битый plan) + ответы формы — тоже закрываем clarify
+    const desc = String(cur.description || '').trim();
+    if (desc && !stepNeedsClarify(cur)) return;
     cur.status = 'done';
     const next = activeTask.steps.find(s => s.status === 'proposed');
     if (next)
@@ -1197,7 +1486,7 @@ function advanceAfterClarifyAnswers(activeTask) {
 
 /**
  * После ok save_file в EXECUTE: закрыть шаг, на котором был save (не clarify).
- * Не двигает done для stub-контента и для fill-шага без подплана (слайды).
+ * Stub-skeleton не закрывает fill / «Слайд N»; create/структура — можно коротким save.
  * @param {{ steps?: Array }} activeTask
  * @param {{ step?: number }|null} [stepRef]
  * @param {{ post?: string }|null} [writeArgs] — args save (для stub-проверки)
@@ -1214,11 +1503,10 @@ function advanceAfterSuccessfulSave(activeTask, stepRef = null, writeArgs = null
     }
     if (!target || stepNeedsClarify(target)) return false;
     if (target.status === 'done') return false;
-    // Fill-шаг целиком (ещё не разбит на «Слайд N») — не закрывать одним save
-    if (stepNeedsContentFill(target) && !stepLooksLikeSlideSubstep(target))
-        return false;
-    // Подшаг слайда / наполнения: stub-контент не закрывает шаг (структуру можно короткой)
-    if (stepLooksLikeSlideSubstep(target) && isStubWriteContent(writeArgs?.post ?? writeArgs?.content))
+    const post = writeArgs?.post ?? writeArgs?.content;
+    const filename = writeArgs?.filename || writeArgs?.name || '';
+    // Stub/placeholder не закрывает шаг (в т.ч. «структура» / create)
+    if (isStubWriteContent(post, filename))
         return false;
     target.status = 'done';
     for (const s of activeTask.steps) {
@@ -1231,7 +1519,7 @@ function advanceAfterSuccessfulSave(activeTask, stepRef = null, writeArgs = null
     return true;
 }
 
-/** Шаг наполнения контента (нужен подплан / по-элементная работа). */
+/** Шаг наполнения контента (stub-skeleton не закрывает; без авто-N слайдов). */
 function stepNeedsContentFill(step) {
     if (stepLooksLikeSlideSubstep(step)) return false;
     return /заполнить|наполнить|слайд|содержан|деталями|контент|дополнить/i
@@ -1256,40 +1544,54 @@ function getFillCountFromTask(activeTask) {
     return 0;
 }
 
-/** Пустышка / список «Слайд k из N» без реального текста. */
-function isStubWriteContent(post) {
+/**
+ * Stub / placeholder post: пусто, token-макрос, slide-skeleton, короткий «файл» без структуры.
+ * Без доменных имён (не завязано на презентацию).
+ * @param {string} post
+ * @param {string} [filename]
+ */
+function isStubWriteContent(post, filename = '') {
     const s = String(post || '').trim();
     if (!s) return true;
-    if (s.length < 280) return true;
+    const unquoted = s.replace(/^`+|`+$/g, '').trim();
+    // `` `_FOO_` `` / `_NAME_` / `<PLACEHOLDER>` / одна SCREAMING константа
+    if (/^_[A-Z][A-Z0-9_]*_$/.test(unquoted)) return true;
+    if (/^<[A-Z][A-Z0-9_]*>$/.test(unquoted)) return true;
+    if (/^[A-Z][A-Z0-9_]{2,}$/.test(unquoted) && unquoted.length < 80) return true;
+    if (/^`[^`\n]{1,80}`$/.test(s)) return true;
+
     const slideDivs = (s.match(/<div[^>]*>\s*Слайд\s+\d+/gi) || []).length;
     if (slideDivs >= 2 && s.length < 1200) return true;
     if (/Слайд\s+\d+\s+из\s+\d+/i.test(s) && s.length < 900) return true;
+
+    const ext = String(filename || '').split('.').pop()?.toLowerCase() || '';
+    if (/^(html?|md|markdown|xml|svg)$/i.test(ext)) {
+        const hasMarkup = /<\w[\s\S]*>/.test(s) || /^#{1,3}\s/m.test(s);
+        const hasProse = s.length >= 80 && /\s/.test(s);
+        if (!hasMarkup && !hasProse) return true;
+    }
+    return false;
+}
+
+/** Последний ok write в ленте — stub (не закрывать «Принять»). */
+function lastSuccessfulWriteWasStub(ribbon) {
+    if (!Array.isArray(ribbon)) return false;
+    for (let i = ribbon.length - 1; i >= 0; i--) {
+        const b = ribbon[i];
+        if (b?.type !== 'tool_result' || !b.ok) continue;
+        if (!isFileWriteMethod(b.tool)) continue;
+        return isStubWriteContent(b.args?.post ?? b.args?.content, b.args?.filename || b.args?.name);
+    }
     return false;
 }
 
 /**
- * На fill-шаге: развернуть в N подшагов из answers, либо заблокировать save без subplan.
+ * Ранее: авто-N «Слайд k» из answers.slides + block save.
+ * Сейчас noop — fill одним шагом; `<subplan>` только от модели (`expandStepWithSubplan`).
  * @returns {{ expanded: boolean, blocked: boolean, message?: string }}
  */
-function ensureFillSubplan(activeTask, cur) {
-    if (!activeTask?.steps?.length || !cur) return { expanded: false, blocked: false };
-    if (!stepNeedsContentFill(cur) || stepLooksLikeSlideSubstep(cur))
-        return { expanded: false, blocked: false };
-    if (activeTask.steps.some(stepLooksLikeSlideSubstep))
-        return { expanded: false, blocked: false };
-    const n = getFillCountFromTask(activeTask);
-    if (n >= 2) {
-        const parts = Array.from({ length: n }, (_, i) => ({
-            description: 'Слайд ' + (i + 1),
-        }));
-        if (expandStepWithSubplan(activeTask, cur, parts))
-            return { expanded: true, blocked: false };
-    }
-    return {
-        expanded: false,
-        blocked: true,
-        message: 'Шаг наполнения требует <subplan> (по элементам / слайдам). Не сохраняй всё одним stub save.',
-    };
+function ensureFillSubplan(_activeTask, _cur) {
+    return { expanded: false, blocked: false };
 }
 
 /** Все не-accept шаги done — можно закрыть «Проверить и принять». */
@@ -1351,26 +1653,12 @@ function finalizeAcceptOnlySteps(activeTask) {
 }
 
 /**
- * Объявление текущего шага в ленту задачи.
- * @returns {object|null} блок text
+ * Раньше писал «Выполняю шаг N» в ribbon — убрано: шаг уже в system Do / <plan>.
+ * Оставлено как no-op для совместимости тестов/импортов.
+ * @returns {null}
  */
-function pushStepAnnounce(ribbon, step, sender = 'WORK') {
-    if (!Array.isArray(ribbon) || !step) return null;
-    const n = step.step != null ? step.step : '?';
-    const desc = String(step.description || '').trim();
-    const content = 'Выполняю шаг ' + n + (desc ? ': «' + desc + '»' : '');
-    const last = ribbon[ribbon.length - 1];
-    if (last?.type === 'text' && last.stepAnnounce && last.content === content)
-        return last;
-    const block = {
-        type: 'text',
-        content,
-        time: Date.now(),
-        sender,
-        stepAnnounce: true,
-    };
-    ribbon.push(block);
-    return block;
+function pushStepAnnounce(/* ribbon, step, sender */) {
+    return null;
 }
 
 /**
@@ -1481,6 +1769,149 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
                 },
                 newContext: currentContext,
             };
+        }
+    }
+
+    // edit_file — точечный SEARCH/REPLACE в контексте
+    if (call.method === 'edit_file') {
+        const fileName = call.args?.filename || call.args?.name;
+        const diff = call.args?.post ?? call.args?.diff ?? '';
+        if (!fileName)
+            return { result: { error: 'edit_file: нужен filename' }, newContext: currentContext };
+        if (!String(diff).trim())
+            return { result: { error: 'edit_file: нужен post (SEARCH/REPLACE)' }, newContext: currentContext };
+        try {
+            const file = await currentContext._get_item?.(String(fileName));
+            if (!file?.edit_file)
+                return { result: { error: 'Файл не найден / нет edit_file: ' + fileName }, newContext: currentContext };
+            const text = await file.edit_file(buildToolMethodParams(
+                { method: 'edit_file', args: { post: String(diff) } },
+                params,
+                { aiUser },
+            ));
+            return {
+                result: {
+                    success: true,
+                    message: 'Файл изменён: ' + fileName,
+                    name: fileName,
+                    path: file.path || '',
+                    content: String(text ?? '').slice(0, 4000),
+                },
+                newContext: currentContext,
+            };
+        } catch (e) {
+            return { result: { error: 'edit_file: ' + e.message }, newContext: currentContext };
+        }
+    }
+
+    // list_skills / run_skill — skills-as-tools
+    if (call.method === 'list_skills') {
+        try {
+            const root = await WORK.get_item('/skills');
+            const tree = await root?.info?.({ deep: -1 });
+            const leaves = [];
+            const walk = (n) => {
+                if (!n) return;
+                if (!n.items?.length) {
+                    if (n.path && /\$skill|skill/i.test(n.type || n.path))
+                        leaves.push({ path: n.path, label: n.label || n.id || n.path });
+                    else if (n.path && String(n.path).includes('/skills/'))
+                        leaves.push({ path: n.path, label: n.label || n.id || n.path });
+                    return;
+                }
+                for (const c of n.items || [])
+                    walk(c);
+            };
+            walk(tree);
+            const uniq = [];
+            const seen = new Set();
+            for (const L of leaves) {
+                if (seen.has(L.path)) continue;
+                seen.add(L.path);
+                uniq.push(L);
+            }
+            return { result: { skills: uniq.slice(0, 80) }, newContext: currentContext };
+        } catch (e) {
+            return { result: { error: 'list_skills: ' + e.message }, newContext: currentContext };
+        }
+    }
+    if (call.method === 'run_skill') {
+        const skillPath = String(call.args?.path || '').trim();
+        if (!skillPath)
+            return { result: { error: 'run_skill: нужен path' }, newContext: currentContext };
+        try {
+            const skill = await WORK.get_item(skillPath);
+            if (!skill)
+                return { result: { error: 'Скилл не найден: ' + skillPath }, newContext: currentContext };
+            const data = call.args?.data && typeof call.args.data === 'object' ? call.args.data : {};
+            let out;
+            if (typeof skill.execute === 'function')
+                out = await skill.execute({ data, ...data }, { context: currentContext, user: params?.user });
+            else
+                out = { ok: false, error: 'У скилла нет execute()' };
+            return { result: out, newContext: currentContext };
+        } catch (e) {
+            return { result: { error: 'run_skill: ' + e.message }, newContext: currentContext };
+        }
+    }
+
+    // spawn_agent — только внутри уже принятого active task (harness тоже блокирует Plan-фазу)
+    if (call.method === 'spawn_agent') {
+        const goal = String(call.args?.goal || '').trim();
+        if (!goal)
+            return { result: { error: 'spawn_agent: нужен goal' }, newContext: currentContext };
+        const rawSteps = Array.isArray(call.args?.steps) ? call.args.steps : [];
+        const steps = (rawSteps.length ? rawSteps : [{ description: goal }]).map((s, i) => ({
+            description: String(s?.description || s?.label || goal),
+            status: i === 0 ? 'in_progress' : 'proposed',
+        }));
+        const spawnTask = {
+            type: 'task',
+            label: goal,
+            content: String(call.args?.brief || ''),
+            state: 'active',
+            steps,
+            ribbon: [],
+            spawned: true,
+            time: Date.now(),
+            sender: 'WORK',
+        };
+        return {
+            result: {
+                success: true,
+                message: 'Подагент создан: ' + goal,
+                note: 'Sequential: выполняй шаги этого task в следующих ходах harness.',
+            },
+            newContext: currentContext,
+            spawnTask,
+        };
+    }
+
+    // inspect_schema — trust/self-mod подготовка
+    if (call.method === 'inspect_schema') {
+        try {
+            let target = currentContext;
+            const p = String(call.args?.path || '').trim();
+            if (p)
+                target = await WORK.get_item(p);
+            if (!target)
+                return { result: { error: 'Элемент не найден' }, newContext: currentContext };
+            const schema = await target.get_schema?.();
+            return {
+                result: {
+                    path: target.path,
+                    type: target.type,
+                    trustLevel: target.trustLevel ?? null,
+                    schema: schema ? {
+                        className: schema.className,
+                        properties: schema.properties,
+                        methods: schema.methods,
+                    } : null,
+                },
+                newContext: currentContext,
+            };
+        } catch (e) {
+            return { result: { error: 'inspect_schema: ' + e.message }, newContext: currentContext };
         }
     }
 
@@ -1646,15 +2077,58 @@ async function executeToolCall(call, currentContext, initialContext, functions, 
  * @param {any} result — результат выполнения
  * @param {object} model — объект модели
  */
-function pushToolResult(ribbonTarget, call, result, model) {
+const TOOL_RESULT_MAX = 32000;
+const SCHEMA_RESULT_MAX = 4000;
+
+/**
+ * Компактный content для ленты / LLM history (get_schema без params tree).
+ * @param {string} method
+ * @param {any} result
+ */
+function summarizeToolResultForRibbon(method, result) {
+    if (method === 'get_schema' && result && typeof result === 'object' && !result.error) {
+        const props = (result.properties || []).map(p => (typeof p === 'string' ? p : p?.name)).filter(Boolean);
+        const methods = (result.methods || []).map(m => (typeof m === 'string' ? m : m?.name)).filter(Boolean);
+        const jm = result.json_model;
+        const compact = {
+            className: result.className,
+            properties: props.slice(0, 80),
+            methods: methods.slice(0, 80),
+            json_model: jm ? {
+                id: jm.id,
+                name: jm.name,
+                type: jm.type,
+                path: jm.path,
+            } : undefined,
+            _truncated: true,
+        };
+        return JSON.stringify(compact, null, 2).slice(0, SCHEMA_RESULT_MAX);
+    }
     const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    return String(resultStr || '').slice(0, TOOL_RESULT_MAX);
+}
+
+/** Сжать уже записанный tool_result (старые жирные get_schema). */
+function compactToolResultContentForHistory(entry) {
+    let content = String(entry?.content || '');
+    if (entry?.tool !== 'get_schema' || content.length <= SCHEMA_RESULT_MAX)
+        return content;
+    try {
+        return summarizeToolResultForRibbon('get_schema', JSON.parse(content));
+    } catch {
+        return content.slice(0, SCHEMA_RESULT_MAX) + '\n…';
+    }
+}
+
+function pushToolResult(ribbonTarget, call, result, model) {
+    const resultStr = summarizeToolResultForRibbon(call.method, result);
     const isError = result && typeof result === 'object' && result.error;
     const sender = model.path || 'WORK';
     const time = Date.now();
     const chatEntry = {
         type: 'tool_result',
         label: '🔧 ' + call.method,
-        content: resultStr.slice(0, 32000),
+        content: resultStr,
         tool: call.method,
         args: call.args || {},
         ok: !isError,
@@ -1665,10 +2139,11 @@ function pushToolResult(ribbonTarget, call, result, model) {
         chatEntry.resultPath = result.resultPath;
     ribbonTarget.push(chatEntry);
     // Карточка файла = history path из save_file (канон §1.6), не прокси filename
-    if (isFileWriteMethod(call.method) && !isError && result?.resultPath) {
+    const filePath = result?.resultPath || (call.method === 'edit_file' ? result?.path : '');
+    if ((isFileWriteMethod(call.method) || call.method === 'edit_file') && !isError && filePath) {
         ribbonTarget.push({
             type: 'file',
-            path: result.resultPath,
+            path: filePath,
             name: result.name || call.args?.filename || call.args?.name || '',
             time,
             sender,
@@ -1705,16 +2180,84 @@ function commitIdleContent(ribbonTarget, blocks) {
     return Array.isArray(ribbonTarget) ? ribbonTarget.length - before : 0;
 }
 
-/** Idle EXECUTE stop: не принимать deferred plan без tools (регрессия: «3/4» без save_file). */
-function mayCommitDeferredOnIdleExecuteStop() {
-    return false;
+/**
+ * Эвристика числа токенов по тексту (без tiktoken).
+ * Кириллица ≈ 1 токен / 2.5 символа; иначе ≈ 1 / 4.
+ * @param {string|*} text
+ * @returns {number}
+ */
+function estimateTokens(text) {
+    const s = text == null ? '' : String(text);
+    if (!s)
+        return 0;
+    const cyr = /[\u0400-\u04FF]/.test(s);
+    return Math.max(1, Math.ceil(s.length / (cyr ? 2.5 : 4)));
+}
+
+/**
+ * Оценка prompt-токенов по полному messages[] (system + servicePrompt + лента).
+ * @param {Array} messages
+ * @returns {number}
+ */
+function estimateMessagesTokens(messages) {
+    if (!Array.isArray(messages) || !messages.length)
+        return 0;
+    let n = 0;
+    for (const m of messages) {
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.content != null)
+            n += estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        if (m.name)
+            n += estimateTokens(m.name);
+        if (m.tool_calls)
+            n += estimateTokens(JSON.stringify(m.tool_calls));
+        if (m.function_call)
+            n += estimateTokens(JSON.stringify(m.function_call));
+        n += 4;
+    }
+    return n;
+}
+
+/**
+ * Usage хода: API если есть, иначе оценка по messages + completion.
+ * @param {{ prompt?: number, completion?: number, total?: number, source?: string }|null} turnUsage
+ * @param {Array} messages
+ * @param {string} completionText
+ * @returns {{ prompt: number, completion: number, total: number, source: string }|null}
+ */
+function resolveTurnUsage(turnUsage, messages, completionText) {
+    const hasApi = turnUsage
+        && turnUsage.source === 'api'
+        && (turnUsage.total || turnUsage.prompt || turnUsage.completion);
+    if (hasApi) {
+        const prompt = Number(turnUsage.prompt) || 0;
+        const completion = Number(turnUsage.completion) || 0;
+        const total = Number(turnUsage.total) || (prompt + completion);
+        return { prompt, completion, total, source: 'api' };
+    }
+    if (turnUsage && (turnUsage.total || turnUsage.prompt || turnUsage.completion)
+        && turnUsage.source !== 'estimate') {
+        const prompt = Number(turnUsage.prompt) || 0;
+        const completion = Number(turnUsage.completion) || 0;
+        const total = Number(turnUsage.total) || (prompt + completion);
+        if (prompt || completion || total)
+            return { prompt, completion, total, source: 'api' };
+    }
+    const prompt = estimateMessagesTokens(messages);
+    const completion = estimateTokens(completionText || '');
+    const total = prompt + completion;
+    if (!total)
+        return null;
+    return { prompt, completion, total, source: 'estimate' };
 }
 
 /**
  * Записать usage хода на последний AI-блок и накопить в body.usage.
+ * Итоговая правда по задаче — body.usage (все LLM-ходы, включая system/servicePrompt).
  * @param {object} body
  * @param {Array} ribbonTarget
- * @param {{ prompt?: number, completion?: number, total?: number }|null} turnUsage
+ * @param {{ prompt?: number, completion?: number, total?: number, source?: string }|null} turnUsage
  * @param {object} model
  */
 function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
@@ -1725,10 +2268,10 @@ function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
     const completion = Number(turnUsage.completion) || 0;
     const total = Number(turnUsage.total) || (prompt + completion);
     const contextPct = ctxWin > 0 ? Math.min(100, Math.round((prompt / ctxWin) * 100)) : 0;
-    const usage = { prompt, completion, total, contextPct, contextWindow: ctxWin };
+    const source = turnUsage.source === 'estimate' ? 'estimate' : 'api';
+    const usage = { prompt, completion, total, contextPct, contextWindow: ctxWin, source };
 
     if (Array.isArray(ribbonTarget)) {
-        // Prefer thinking (summary «Мысли») — action/text без usage в UI теряли статистику
         const prefer = ['thinking', 'text', 'tool_result', 'error', 'action'];
         let placed = false;
         for (const t of prefer) {
@@ -1744,12 +2287,14 @@ function applyTurnUsage(body, ribbonTarget, turnUsage, model) {
         }
     }
 
-    body.usage = body.usage || { prompt: 0, completion: 0, total: 0 };
+    body.usage = body.usage || { prompt: 0, completion: 0, total: 0, turns: 0 };
     body.usage.prompt = (Number(body.usage.prompt) || 0) + prompt;
     body.usage.completion = (Number(body.usage.completion) || 0) + completion;
     body.usage.total = (Number(body.usage.total) || 0) + total;
     body.usage.contextPct = contextPct;
     body.usage.contextWindow = ctxWin;
+    body.usage.turns = (Number(body.usage.turns) || 0) + 1;
+    body.usage.lastSource = source;
 }
 
 /**
@@ -1797,18 +2342,54 @@ function notifyChanged(fullPath) {
 }
 
 /**
+ * Шаблон TYPES[type].servicePrompt → строка с подстановкой полей блока.
+ * @param {object} entry
+ * @returns {string}
+ */
+function resolveServicePrompt(entry) {
+    const type = entry?.type;
+    if (!type || type === 'step' || type === 'ribbon' || type === 'details')
+        return '';
+    const tpl = RIBBON_TYPES[type]?.servicePrompt;
+    if (!tpl || typeof tpl !== 'string')
+        return '';
+    const vars = {
+        title: entry.title != null ? String(entry.title) : '',
+        button: entry.button?.label != null ? String(entry.button.label) : '',
+        path: entry.path != null ? String(entry.path) : '',
+        name: entry.name != null ? String(entry.name) : '',
+        tool: entry.tool != null ? String(entry.tool) : (entry.name != null ? String(entry.name) : ''),
+        ok: entry.ok != null ? String(entry.ok) : '',
+        label: entry.label != null ? String(entry.label) : '',
+        step: entry.step != null ? String(entry.step) : '',
+    };
+    return tpl.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? vars[k] : ''));
+}
+
+/** Служебная инструкция в messages (не в ribbon). */
+function appendServicePrompt(messages, entry) {
+    const text = resolveServicePrompt(entry);
+    if (!text)
+        return;
+    messages.push({ role: 'user', content: '[инструкция] ' + text });
+}
+
+function formatInteractiveFieldsFact(entry) {
+    const title = entry.title ? ' «' + entry.title + '»' : '';
+    const fields = Array.isArray(entry.fields) ? entry.fields : [];
+    const lines = fields.map(f => {
+        const opts = Array.isArray(f.options) ? ' (' + f.options.length + ' options)' : '';
+        return '- ' + (f.id || '') + ': ' + (f.label || '') + ' [' + (f.type || 'text') + ']' + opts;
+    });
+    return 'UI ' + (entry.type || 'form') + title + ':\n'
+        + (lines.length ? lines.join('\n') : '(нет полей)');
+}
+
+/**
  * Построить массив messages для LLM из ленты (ribbon) блоков.
  *
- * Преобразует типизированные блоки в формат OpenAI:
- * - {type:'prompt'} / {role:'user'} → user message
- * - {type:'text'} → накапливается как assistant content
- * - {type:'thinking'|'details'} → пропускается
- * - {type:'task'|'block', steps} → <plan>[...]</plan> + рекурсия ribbon
- * - {type:'action'} → пропускается (кнопки UI)
- * - {type:'form'} → пропускается
- * - {type:'error'} → assistant error text
- * - {type:'tool_result'} → FC: assistant.function_call + role:function; иначе user с текстом
- * - {type:'tool'} → FC: пропуск (пара из tool_result); иначе краткая пометка assistant
+ * servicePrompt (TYPES.*.servicePrompt) — только в messages, не в ribbon.
+ * Scope инъекции: блоки от последнего user-prompt до конца ленты.
  *
  * @param {object} body — тело task.ai (с ribbon, system, context и т.д.)
  * @param {boolean} useFunctionCalling — использовать нативный формат function calling
@@ -1817,6 +2398,7 @@ function notifyChanged(fullPath) {
 function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
     const forceDoReminder = !!opts.forceDoReminder || !!opts.forceToolReminder;
+    const forcePlanReminder = !!opts.forcePlanReminder;
     const historyOnly = !!opts.historyOnly;
     const protocol = opts.protocol || '';
     const fcStyle = protocol === 'gigachat' ? 'gigachat' : 'openai';
@@ -1837,6 +2419,9 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             systemContent += '\n\n## Предложенный план (ожидает подтверждения пользователем)\n' + JSON.stringify(body.pendingPlan.steps);
 
         const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
+        if (!activeTask && forcePlanReminder) {
+            systemContent += '\n\n## Plan-фаза\nНужен <plan> (≥3–4 шагов proposed). Платформа оформит action «План» + tip «Начать».\n';
+        }
         if (activeTask) {
             const cur = activeTask.steps?.find(s => s.status === 'in_progress')
                 || activeTask.steps?.find(s => s.status === 'proposed');
@@ -1846,27 +2431,15 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             systemContent += 'Шаги: ' + JSON.stringify(activeTask.steps || []) + '\n';
             if (cur)
                 systemContent += 'Сейчас шаг ' + cur.step + ': «' + cur.description + '».\n';
-            systemContent += 'PDCA: после confirm («Начать»/форма/«Выполнить») сразу tool calls по текущему шагу; questions — только если без данных нельзя.\n';
-            systemContent += 'НЕ предлагай новый общий план и НЕ добавляй <action> «Начать».\n';
-            systemContent += 'Протокол шага: объявление «Выполняю шаг N» (система пишет сама) → <reasoning> → tool ИЛИ <subplan> (декомпозиция). За один ход закрывается максимум один шаг.\n';
-            systemContent += 'Статусы done ставит система по факту (tool/форма), не рисуй все done в <plan>. «Принять» — когда harness закрыл все шаги.\n';
-            systemContent += 'Сложный шаг — <subplan>[{"description":"..."},…] вместо одного прыжка. Не закрывай N и N+1 одним save.\n';
             if (phase === 'execute')
-                systemContent += 'Фаза: EXECUTE — сейчас ОБЯЗАТЕЛЬНО <reasoning> и native tool по текущему шагу ИЛИ <subplan>. Файл — tool save_file; класс — create. Запрещены JS-вызов save_file(…) и <function calling>. Fallback: <tool_call>{"method":"save_file","args":{…}}</tool_call>. Не prose «готово» без факта.\n';
+                systemContent += 'Фаза: EXECUTE.\n';
             else if (phase === 'propose')
-                systemContent += 'Фаза: PROPOSE — ЗАПРЕЩЕНО «Начать». Вызови ask_user({questions:[{id,prompt,options:[...]}]}) с 2–5 options на вопрос. Не textarea без options, не prose «Уточните параметры». Не save_file до ответов.\n';
+                systemContent += 'Фаза: PROPOSE.\n';
             if (forceDoReminder) {
                 if (phase === 'propose')
-                    systemContent += 'СТОП: прошлый ответ без формы. Сейчас ask_user({questions:[{id,prompt,options}]}). Обязательны options. Не «Начать», не save_file.\n';
-                else {
-                    const stepLabel = cur?.description ? '«' + cur.description + '»' : 'текущий';
-                    const fn = artifactFilenameFromStep(cur);
-                    systemContent += 'СТОП: прошлый ответ без tool calls. Текущий шаг: ' + stepLabel
-                        + '. Сейчас <reasoning> + native tool save_file (или <subplan>). Не печатай save_file(…) / <function calling>.';
-                    if (fn)
-                        systemContent += ' Fallback: <tool_call>{"method":"save_file","args":{"filename":"' + fn + '","post":"…полный HTML…"}}</tool_call>';
-                    systemContent += '. Не «Начать».\n';
-                }
+                    systemContent += 'Нужен ask_user с options, не save_file.\n';
+                else
+                    systemContent += 'Нужен tool call по текущему шагу (save_file / create).\n';
             }
         }
         if (systemContent)
@@ -1875,54 +2448,105 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
 
     // 2. Обход блоков ленты
     const ribbon = body.ribbon || [];
+    let lastPromptIdx = -1;
+    for (let i = ribbon.length - 1; i >= 0; i--) {
+        if (ribbon[i].type === 'prompt' || ribbon[i].role === 'user') {
+            lastPromptIdx = i;
+            break;
+        }
+    }
     let pendingAssistant = '';
 
-    for (const entry of ribbon) {
-        // Сообщение пользователя (новая схема + legacy)
+    const flushPending = () => {
+        if (!pendingAssistant)
+            return;
+        messages.push({ role: 'assistant', content: pendingAssistant });
+        pendingAssistant = '';
+    };
+
+    for (let i = 0; i < ribbon.length; i++) {
+        const entry = ribbon[i];
+        const inServiceScope = lastPromptIdx >= 0 && i >= lastPromptIdx;
+
         if ((entry.type === 'prompt' || entry.role === 'user') && (entry.content || entry.answers)) {
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
+            flushPending();
             let content = entry.content || '';
             if (entry.answers && typeof entry.answers === 'object') {
                 const lines = Object.entries(entry.answers).map(([k, v]) => k + ': ' + v);
                 content = (content ? content + '\n' : '') + 'Ответы:\n' + lines.join('\n');
             }
+            if (inServiceScope) {
+                const svc = resolveServicePrompt({ ...entry, type: 'prompt' });
+                if (svc)
+                    content = (content ? content + '\n\n' : '') + '[инструкция] ' + svc;
+            }
             messages.push({ role: 'user', content });
             continue;
         }
 
-        // Текстовый блок ассистента — накапливаем
         if (entry.type === 'text' && entry.content) {
-            pendingAssistant += (pendingAssistant ? '\n' : '') + entry.content;
+            if (inServiceScope) {
+                flushPending();
+                messages.push({ role: 'assistant', content: entry.content });
+                appendServicePrompt(messages, entry);
+            }
+            else {
+                pendingAssistant += (pendingAssistant ? '\n' : '') + entry.content;
+            }
             continue;
         }
 
-        // Мысли — не отправляем модели
+        if ((entry.type === 'thinking' || entry.type === 'details') && entry.content) {
+            flushPending();
+            messages.push({ role: 'assistant', content: entry.content });
+            if (inServiceScope && entry.type === 'thinking')
+                appendServicePrompt(messages, entry);
+            continue;
+        }
         if (entry.type === 'thinking' || entry.type === 'details')
             continue;
 
-        // Action — UI-кнопка, в LLM не шлём
-        if (entry.type === 'action' || entry.type === 'form' || entry.type === 'questions')
+        if (entry.type === 'action') {
+            flushPending();
+            const title = entry.title || '';
+            const button = entry.button?.label || '';
+            messages.push({
+                role: 'user',
+                content: 'UI action «' + title + '» / кнопка «' + button + '» — ожидает ответа пользователя.',
+            });
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
             continue;
-
-        // Ошибка
-        if (entry.type === 'error' && entry.content) {
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
-            messages.push({ role: 'assistant', content: entry.content });
+        }
+        if (entry.type === 'form' || entry.type === 'questions') {
+            flushPending();
+            messages.push({ role: 'user', content: formatInteractiveFieldsFact(entry) });
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
             continue;
         }
 
-        // План (task или legacy block) — <plan> + вложенная лента
+        if (entry.type === 'file') {
+            flushPending();
+            messages.push({
+                role: 'user',
+                content: 'Вложение: ' + (entry.path || '') + ' (' + (entry.name || '') + ')',
+            });
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
+            continue;
+        }
+
+        if (entry.type === 'error' && entry.content) {
+            flushPending();
+            messages.push({ role: 'assistant', content: entry.content });
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
+            continue;
+        }
+
         if ((entry.type === 'task' || entry.type === 'block') && entry.steps) {
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
+            flushPending();
             messages.push({ role: 'assistant', content: '<plan>' + JSON.stringify(entry.steps) + '</plan>' });
             if (entry.type === 'task' && Array.isArray(entry.ribbon) && entry.ribbon.length) {
                 messages.push(...buildHistoryFromRibbon(
@@ -1931,68 +2555,61 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                     childOpts,
                 ));
             }
+            if (inServiceScope && entry.type === 'task')
+                appendServicePrompt(messages, entry);
             continue;
         }
 
-        // Legacy block с content без steps
         if (entry.type === 'block' && entry.content) {
             pendingAssistant += (pendingAssistant ? '\n' : '') + entry.content;
             continue;
         }
 
-        // Форма legacy — пропускаем (поля теперь в action)
-        if (entry.type === 'form')
-            continue;
-
-        // Вызов инструмента (если сохранён в ленте)
         if (entry.type === 'tool') {
-            // FC: пару function_call + function строим из tool_result (не prose «Вызов …»)
             if (useFunctionCalling)
                 continue;
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
+            flushPending();
             pendingAssistant = 'Вызов ' + (entry.name || 'tool') + (entry.args ? ': ' + JSON.stringify(entry.args) : '');
+            if (inServiceScope) {
+                flushPending();
+                appendServicePrompt(messages, entry);
+            }
             continue;
         }
 
-        // Результат tool_call
         if (entry.type === 'tool_result' && entry.content) {
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
+            flushPending();
             if (useFunctionCalling) {
                 const id = 'call_' + (entry.tool || 'fn') + '_' + (toolCallSeq.n++);
                 messages.push(...formatToolResultMessages(entry, fcStyle, id));
-            } else {
+            }
+            else {
                 messages.push({
                     role: 'user',
-                    content: 'Результат ' + (entry.label || entry.tool || 'метода') + ':\n' + entry.content,
+                    content: 'Результат ' + (entry.label || entry.tool || 'метода') + ':\n'
+                        + compactToolResultContentForHistory(entry),
                 });
             }
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
             continue;
         }
 
-        // Legacy task без steps выше — только ribbon
         if (entry.type === 'task') {
-            if (pendingAssistant) {
-                messages.push({ role: 'assistant', content: pendingAssistant });
-                pendingAssistant = '';
-            }
+            flushPending();
             messages.push(...buildHistoryFromRibbon(
                 { ribbon: entry.ribbon || [] },
                 useFunctionCalling,
                 childOpts,
             ));
+            if (inServiceScope)
+                appendServicePrompt(messages, entry);
         }
     }
 
     if (pendingAssistant)
         messages.push({ role: 'assistant', content: pendingAssistant });
 
-    // User-nudge: слабые модели чаще слушают role:user, чем system STOP
     if (!historyOnly && forceDoReminder) {
         const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
         if (activeTask && getDoStepPhase(activeTask) === 'execute') {
@@ -2001,21 +2618,68 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             appendDoForceNudge(messages, cur);
         }
     }
+    if (!historyOnly && forcePlanReminder)
+        appendPlanForceNudge(messages);
 
     return messages;
 }
 
+/** User-запрос на артефакт / «сделай X» — Plan-фаза обязательна. */
+function looksLikeDeliverableRequest(text) {
+    const t = String(text || '').trim();
+    if (!t) return false;
+    return /сделай|создай|подготов|напиши|сгенер|презентац|отчёт|отчет|файл|слайд|landing|лендинг/i.test(t);
+}
+
 /**
- * Короткий user-nudge для EXECUTE forceDoReminder.
+ * Краткое напоминание Plan-фазы (протокол — в servicePrompt).
+ * @param {Array} messages
+ */
+function appendPlanForceNudge(messages) {
+    if (!Array.isArray(messages)) return messages;
+    messages.push({
+        role: 'user',
+        content: 'Нужен <plan> (≥3–4 шагов proposed). Платформа оформит action «План» + tip «Начать».',
+    });
+    return messages;
+}
+
+/**
+ * После исчерпания forcePlanReminder: канон-план + action «Начать» без второго LLM-retry.
+ * @param {string} userText
+ * @param {string} [sender]
+ * @returns {{ pendingPlan: object, actionBlock: object }}
+ */
+function synthesizePlanAfterIdle(userText, sender = 'WORK') {
+    const steps = ensureMinimumPlanSteps([], userText);
+    const pendingPlan = {
+        steps,
+        label: 'План',
+        content: steps.map(s => s.description).filter(Boolean).join('; '),
+    };
+    const actionBlock = {
+        type: 'action',
+        title: 'План',
+        content: formatPlanMarkdown(steps, '') || '',
+        button: { label: 'Начать', color: 'success' },
+        time: Date.now(),
+        sender: sender || 'WORK',
+    };
+    return { pendingPlan, actionBlock };
+}
+
+/**
+ * Краткое напоминание EXECUTE (протокол — в servicePrompt).
  * @param {Array} messages
  * @param {{ description?: string, step?: number }|null} step
  */
 function appendDoForceNudge(messages, step) {
     if (!Array.isArray(messages)) return messages;
     const label = step?.description ? '«' + step.description + '»' : 'текущему шагу';
-    const content = 'СТОП: нужен tool call по ' + label
-        + '. Файл — native tool save_file (function calling API); класс — create.'
-        + ' Не печатай save_file(…) / <function calling> / <tool_call> текстом.';
+    const fn = artifactFilenameFromStep(step);
+    let content = 'Нужен tool call по ' + label + ' (save_file / create).';
+    if (fn)
+        content += ' Файл: «' + fn + '».';
     messages.push({ role: 'user', content });
     return messages;
 }
@@ -2051,6 +2715,7 @@ function formatToolResultMessages(entry, style, callId) {
     const fnName = entry.tool || 'unknown';
     const fnArgs = sanitizeToolArgsForHistory(entry.args);
     const argsStr = typeof fnArgs === 'string' ? fnArgs : JSON.stringify(fnArgs || {});
+    const resultContent = compactToolResultContentForHistory(entry);
     if (style === 'gigachat') {
         return [
             {
@@ -2058,7 +2723,7 @@ function formatToolResultMessages(entry, style, callId) {
                 content: '',
                 function_call: { name: fnName, arguments: fnArgs },
             },
-            { role: 'function', name: fnName, content: entry.content },
+            { role: 'function', name: fnName, content: resultContent },
         ];
     }
     const id = callId || ('call_' + fnName + '_0');
@@ -2072,7 +2737,7 @@ function formatToolResultMessages(entry, style, callId) {
                 function: { name: fnName, arguments: argsStr },
             }],
         },
-        { role: 'tool', tool_call_id: id, content: entry.content },
+        { role: 'tool', tool_call_id: id, content: resultContent },
     ];
 }
 
@@ -2095,13 +2760,51 @@ function findOpenActionFlat(ribbon) {
  */
 function findOpenAction(ribbon) {
     if (!Array.isArray(ribbon)) return null;
-    const lastTask = [...ribbon].reverse().find(b => b.type === 'task');
+    const lastTask = [...ribbon].reverse().find(b => b.type === 'task' && b.state === 'active');
     if (lastTask?.ribbon?.length) {
         const nested = findOpenActionFlat(lastTask.ribbon);
         if (nested) return { action: nested, ribbon: lastTask.ribbon };
     }
     const root = findOpenActionFlat(ribbon);
     return root ? { action: root, ribbon } : null;
+}
+
+/**
+ * Текст step-prompt для текущего in_progress/proposed шага.
+ * @param {{ step?: number, description?: string }|null} step
+ */
+function formatStepPromptContent(step) {
+    const n = step?.step != null ? String(step.step) : '?';
+    const d = String(step?.description || 'текущий шаг').trim();
+    return 'Выполни шаг ' + n + ': «' + d + '»';
+}
+
+/**
+ * Пуш обычного prompt в task.ribbon перед LLM-ходом шага (канон Do).
+ * @param {object} task
+ * @param {string} [sender]
+ * @returns {boolean}
+ */
+function pushStepPrompt(task, sender = 'WORK') {
+    if (!task || !Array.isArray(task.steps)) return false;
+    if (!Array.isArray(task.ribbon))
+        task.ribbon = [];
+    const cur = task.steps.find(s => s.status === 'in_progress')
+        || task.steps.find(s => s.status === 'proposed');
+    if (!cur) return false;
+    const content = formatStepPromptContent(cur);
+    const last = [...task.ribbon].reverse().find(b => b.type === 'prompt' || b.role === 'user');
+    if (last && last.content === content)
+        return false;
+    task.ribbon.push({
+        type: 'prompt',
+        content,
+        time: Date.now(),
+        sender: sender || 'WORK',
+        stepPrompt: true,
+        step: cur.step,
+    });
+    return true;
 }
 
 function pushClosingPrompt(ribbon, content, sender, answers) {
@@ -2153,6 +2856,42 @@ function keepDoInteractive(b) {
 }
 
 /**
+ * Plan-фаза: рядом с action «План»/«Начать» не оставлять text (парафраз шагов / сырой JSON).
+ * @param {Array} blocks
+ * @param {object|null|undefined} pendingPlan
+ * @returns {Array}
+ */
+function dropTextBlocksBesidePlanAction(blocks, pendingPlan = null) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    const hasPlanAction = list.some(b =>
+        b?.type === 'action'
+        && (/^план$/i.test(String(b.title || ''))
+            || /^начать$/i.test(String(b.button?.label || ''))));
+    if (!pendingPlan && !hasPlanAction)
+        return list;
+    return list.filter(b => b?.type !== 'text');
+}
+
+/**
+ * Do-ход: рядом с questions/form/action/tools/subplan не оставлять prose text (thinking сохраняем).
+ * @param {Array} blocks
+ * @param {{ pendingSubplan?: Array|null, hasTools?: boolean }} [opts]
+ * @returns {Array}
+ */
+function dropTextBlocksBesideDoInteractive(blocks, opts = {}) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    const hasInteractive = list.some(b =>
+        b?.type === 'questions'
+        || b?.type === 'form'
+        || (b?.type === 'action' && !/^план$/i.test(String(b.title || ''))));
+    const hasSubplan = Array.isArray(opts.pendingSubplan) && opts.pendingSubplan.length > 0;
+    const hasTools = !!opts.hasTools;
+    if (!hasInteractive && !hasSubplan && !hasTools)
+        return list;
+    return list.filter(b => b?.type !== 'text');
+}
+
+/**
  * Нормализация интерактивных блоков: action | form | questions.
  * @param {Array} blocks
  * @param {{ phase: 'plan'|'do', allDone?: boolean }} opts
@@ -2171,7 +2910,7 @@ function normalizeInteractiveBlocks(blocks, opts = {}) {
 
         if (b.type === 'form' || b.type === 'questions') {
             if (phase === 'plan' || allDone)
-                continue; // уточнение/форма — не на Plan и не на Отчёте
+                continue;
             if (!b.fields?.length)
                 continue;
             const block = {
@@ -2187,7 +2926,6 @@ function normalizeInteractiveBlocks(blocks, opts = {}) {
             continue;
         }
 
-        // legacy: action с fields → questions
         if (b.type === 'action' && b.fields?.length && phase === 'do' && !allDone) {
             out.push({
                 ...b,
@@ -2201,7 +2939,6 @@ function normalizeInteractiveBlocks(blocks, opts = {}) {
             continue;
         }
 
-        // action — только подтверждение, без fields
         const action = {
             ...b,
             type: 'action',
@@ -2376,7 +3113,24 @@ function makeClarifyQuestions(step, sender = 'WORK') {
 }
 
 /**
- * Cursor AskQuestion item → field meta (только с options → select).
+ * Options по умолчанию, если модель дала пустой массив / без options.
+ * @param {string} id
+ * @param {string} label
+ * @returns {string[]}
+ */
+function defaultOptionsForAskField(id, label) {
+    const key = (String(id || '') + ' ' + String(label || '')).toLowerCase();
+    if (/topic|тем/.test(key))
+        return ['Система WORK', 'Инновации в бизнесе', 'ИИ в образовании', 'Экология'];
+    if (/slide|слайд|slides_count|slides/.test(key))
+        return ['5', '8', '12', '15'];
+    if (/style|стил|оформл/.test(key))
+        return ['Минималистичный', 'Современный', 'Классический'];
+    return ['Вариант A', 'Вариант B', 'Другое'];
+}
+
+/**
+ * Cursor AskQuestion item → field meta (select + options; пустые options — defaults).
  * @param {object} q
  */
 function mapAskQuestionToField(q) {
@@ -2392,7 +3146,7 @@ function mapAskQuestionToField(q) {
         }).filter(Boolean);
     }
     if (!options || options.length < 2)
-        return null;
+        options = defaultOptionsForAskField(id, label);
     return { id, label, type: 'select', options };
 }
 
@@ -2483,39 +3237,69 @@ function normalizeProposedSteps(steps) {
     }));
 }
 
-/** Канон из system prompt (on_save) для «сделай презентацию» */
-const PRESENTATION_PLAN_STEPS = [
-    { step: 1, description: 'Уточнить тему и структуру', status: 'proposed' },
-    { step: 2, description: 'Создать структуру слайдов', status: 'proposed' },
-    { step: 3, description: 'Написать содержимое', status: 'proposed' },
-    { step: 4, description: 'Сохранить файл', status: 'proposed' },
+/** Нейтральные слоты для пустых description (без домена / filename). */
+const PLAN_SLOT_DESCRIPTIONS = [
+    'Уточнить детали',
+    'Выполнить основную работу',
+    'Сохранить или оформить результат',
 ];
 
+/** Абстрактный fallback Plan-фазы (нет домена: презентация, отчёт, …). */
+const FALLBACK_PLAN_STEPS = [
+    { step: 1, description: 'Уточнить детали', status: 'proposed' },
+    { step: 2, description: 'Создать артефакт (файл)', status: 'proposed' },
+    { step: 3, description: 'Наполнить или оформить результат', status: 'proposed' },
+    { step: 4, description: 'Проверить и принять', status: 'proposed' },
+];
+
+/** План уже про артефакт (файл / save_file), не чистый process. */
+function planLooksLikeArtifactWork(steps) {
+    const text = (Array.isArray(steps) ? steps : []).map(s => String(s?.description || '')).join('\n');
+    if (!text.trim()) return false;
+    if (/\b[\w.-]+\.(html?|md|txt|json|js|css|py|xml|svg)\b/i.test(text)) return true;
+    if (/save_file|создать\s+артефакт|артефакт\s*\(файл\)/i.test(text)) return true;
+    return false;
+}
+
 /**
- * Plan-фаза: не принимать усечённый <plan> от модели.
- * Презентация + <4 шагов → канон 4; иначе >=2 как есть; 1 шаг → generic 3.
+ * Plan-фаза: принять план модели; пустые description — нейтральные слоты;
+ * deliverable без артефакт-шагов / пусто / 1 шаг → абстрактный fallback.
  */
 function ensureMinimumPlanSteps(steps, userText = '') {
     const normalized = normalizeProposedSteps(steps);
-    const hint = [userText, ...normalized.map(s => s.description || '')].join(' ');
-    if (/презентац|слайд/i.test(hint) && normalized.length < 4)
-        return PRESENTATION_PLAN_STEPS.map(s => ({ ...s }));
-    if (normalized.length >= 2)
-        return normalized;
-    const firstDesc = (normalized[0] && normalized[0].description) || 'Уточнить детали';
-    return normalizeProposedSteps([
-        { step: 1, description: firstDesc, status: 'proposed' },
-        { step: 2, description: 'Выполнить основную работу', status: 'proposed' },
-        { step: 3, description: 'Сохранить или оформить результат', status: 'proposed' },
-    ]);
+    const deliverable = looksLikeDeliverableRequest(userText)
+        || looksLikeDeliverableRequest(normalized.map(s => s.description || '').join(' '));
+    if (!normalized.length || (deliverable && !planLooksLikeArtifactWork(normalized) && normalized.length < 2))
+        return FALLBACK_PLAN_STEPS.map(s => ({ ...s }));
+    if (normalized.length === 1) {
+        const first = String(normalized[0].description || '').trim() || PLAN_SLOT_DESCRIPTIONS[0];
+        if (deliverable && !planLooksLikeArtifactWork(normalized))
+            return FALLBACK_PLAN_STEPS.map(s => ({ ...s }));
+        return normalizeProposedSteps([
+            { step: 1, description: first, status: 'proposed' },
+            { step: 2, description: PLAN_SLOT_DESCRIPTIONS[1], status: 'proposed' },
+            { step: 3, description: PLAN_SLOT_DESCRIPTIONS[2], status: 'proposed' },
+        ]);
+    }
+    if (deliverable && !planLooksLikeArtifactWork(normalized))
+        return FALLBACK_PLAN_STEPS.map(s => ({ ...s }));
+    return normalized.map((s, i) => {
+        const desc = String(s.description || '').trim();
+        return { ...s, description: desc || PLAN_SLOT_DESCRIPTIONS[i] || ('Шаг ' + (i + 1)) };
+    });
 }
 
 /**
  * JSON-массив между тегами: скобки с учётом строк (не non-greedy до первого ]).
+ * @param {string} text
+ * @param {string} [openTag]
+ * @param {string} [closeTag]
+ * @param {{ allowMissingClose?: boolean }} [opts] — без closeTag закончить на балансе ]
  * @returns {{ raw: string, index: number, end: number } | null}
  */
-function extractBalancedJsonArray(text, openTag = '<plan>', closeTag = '</plan>') {
+function extractBalancedJsonArray(text, openTag = '<plan>', closeTag = '</plan>', opts = {}) {
     if (!text) return null;
+    const allowMissingClose = !!opts.allowMissingClose;
     const openIdx = text.indexOf(openTag);
     if (openIdx < 0) return null;
     let i = openIdx + openTag.length;
@@ -2550,7 +3334,15 @@ function extractBalancedJsonArray(text, openTag = '<plan>', closeTag = '</plan>'
             depth--;
             if (depth === 0) {
                 const closeIdx = text.indexOf(closeTag, i + 1);
-                if (closeIdx < 0) return null;
+                if (closeIdx < 0) {
+                    if (!allowMissingClose)
+                        return null;
+                    return {
+                        raw: text.slice(start, i + 1),
+                        index: openIdx,
+                        end: i + 1,
+                    };
+                }
                 return {
                     raw: text.slice(start, i + 1),
                     index: openIdx,
@@ -2652,10 +3444,14 @@ function shouldContinueDo(activeTask, waitingForUser, toolCalls) {
 }
 
 export {
+    requestAbort,
+    clearAbort,
+    isAborted,
     normalizeStepStatus,
     normalizeProposedSteps,
     ensureMinimumPlanSteps,
     extractBalancedJsonArray,
+    planLooksLikeArtifactWork,
     normalizePlanSteps,
     prepareStepsForStart,
     shouldContinueDo,
@@ -2670,6 +3466,7 @@ export {
     taskHasClarifyAnswers,
     makeClarifyQuestions,
     questionsFromAskUser,
+    defaultOptionsForAskField,
     mapAskQuestionToField,
     ensureHarnessFunctions,
     ensureNamedFunction,
@@ -2688,6 +3485,7 @@ export {
     stepLooksLikeSlideSubstep,
     getFillCountFromTask,
     isStubWriteContent,
+    lastSuccessfulWriteWasStub,
     ensureFillSubplan,
     allContentWorkDone,
     currentStepDescription,
@@ -2698,7 +3496,12 @@ export {
     keepDoInteractive,
     normalizeActionBlocks,
     normalizeInteractiveBlocks,
+    dropTextBlocksBesidePlanAction,
+    dropTextBlocksBesideDoInteractive,
     isInteractiveBlock,
+    findOpenAction,
+    pushStepPrompt,
+    formatStepPromptContent,
     parseResponseToRibbon,
     buildToolMethodParams,
     formatLogSummary,
@@ -2710,16 +3513,21 @@ export {
     roleBlocksTool,
     callNeedsTrustConfirm,
     pushToolResult,
+    summarizeToolResultForRibbon,
+    compactToolResultContentForHistory,
     executeToolCall,
     commitDurableBlocks,
     commitIdleContent,
-    mayCommitDeferredOnIdleExecuteStop,
     taskHasSuccessfulSave,
     stripFcTrailer,
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,
+    stripRawActionJsonFromProse,
     makeIdleExecuteResumeAction,
     appendDoForceNudge,
+    appendPlanForceNudge,
+    synthesizePlanAfterIdle,
+    looksLikeDeliverableRequest,
     parseToolCalls,
     parseJsObjectLiteral,
     parseJsStyleToolCallAt,
@@ -2727,6 +3535,11 @@ export {
     parseXmlTagAttrs,
     isXmlAttrValueEnd,
     buildHistoryFromRibbon,
+    resolveServicePrompt,
+    estimateTokens,
+    estimateMessagesTokens,
+    resolveTurnUsage,
+    applyTurnUsage,
     MAX_IDLE_DO,
     MAX_IDLE_PROPOSE,
     ASK_USER_METHOD,
@@ -2815,7 +3628,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         } catch {}
     }
 
-    // 2. <plan> → pendingPlan (balanced brackets — не резать на ] внутри description)
+    // 2. <plan> → pendingPlan (массив; объект → один шаг; битое — вырезать, не text)
     const planExtract = extractBalancedJsonArray(remaining, '<plan>', '</plan>');
     if (planExtract) {
         try {
@@ -2829,9 +3642,37 @@ function parseResponseToRibbon(text, sender = 'WORK') {
                     label: 'План',
                     content: steps.map(s => s.description).filter(Boolean).join('; '),
                 };
-                remaining = remaining.slice(planExtract.end);
+                remaining = remaining.slice(0, planExtract.index) + remaining.slice(planExtract.end);
             }
         } catch {}
+    }
+    if (!pendingPlan) {
+        const planObjMatch = remaining.match(/<plan>\s*(\{[\s\S]*?\})\s*<\/plan>/i);
+        if (planObjMatch) {
+            try {
+                const obj = JSON.parse(planObjMatch[1]);
+                const desc = String(obj.description || obj.step || obj.label || obj.title || 'Шаг').trim();
+                const step = {
+                    step: Number(obj.step) > 0 ? Number(obj.step) : 1,
+                    description: desc,
+                    status: 'proposed',
+                };
+                const beforePlan = remaining.slice(0, planObjMatch.index).trim();
+                if (beforePlan)
+                    proseParts.push(beforePlan);
+                pendingPlan = {
+                    steps: [step],
+                    label: 'План',
+                    content: desc,
+                };
+                remaining = remaining.slice(0, planObjMatch.index)
+                    + remaining.slice(planObjMatch.index + planObjMatch[0].length);
+            } catch {
+                remaining = remaining.replace(/<plan\b[\s\S]*?(?:<\/plan>|$)/i, '');
+            }
+        } else if (/<plan\b/i.test(remaining)) {
+            remaining = remaining.replace(/<plan\b[\s\S]*?(?:<\/plan>|$)/i, '');
+        }
     }
 
     // 3. <action> → метаданные кнопки подтверждения
@@ -2848,12 +3689,14 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         remaining = remaining.replace(/<action>[\s\S]*?<\/action>/g, '');
     }
 
-    // 4. <questions> → опросник (только AskQuestion: select+options; иначе null → idle inject)
+    // 4. <questions> → опросник (balanced array; без </questions> тоже)
     let questionFields = null;
-    const questionsMatch = remaining.match(/<questions>\s*(\[[\s\S]*?\])\s*<\/questions>/);
-    if (questionsMatch) {
+    const questionsExtract = extractBalancedJsonArray(remaining, '<questions>', '</questions>', {
+        allowMissingClose: true,
+    });
+    if (questionsExtract) {
         try {
-            const questions = JSON.parse(questionsMatch[1]);
+            const questions = JSON.parse(questionsExtract.raw);
             if (Array.isArray(questions) && questions.length) {
                 questionFields = questions
                     .map(q => mapAskQuestionToField(q))
@@ -2863,7 +3706,10 @@ function parseResponseToRibbon(text, sender = 'WORK') {
                     questionFields = null;
             }
         } catch {}
-        remaining = remaining.replace(/<questions>[\s\S]*?<\/questions>/g, '');
+        remaining = remaining.slice(0, questionsExtract.index) + remaining.slice(questionsExtract.end);
+    } else if (/<questions\b/i.test(remaining)) {
+        // Битая разметка — вырезать, не класть в text
+        remaining = remaining.replace(/<questions\b[\s\S]*?(?:<\/questions>|$)/i, '');
     }
 
     // 5. <form> → форма ввода данных
@@ -2904,11 +3750,12 @@ function parseResponseToRibbon(text, sender = 'WORK') {
     remaining = remaining.replace(/<\/?function_caller>/gi, '');
     remaining = remaining.replace(/<\/?function\s+caller[^>]*>/gi, '');
     remaining = stripJsStyleToolProse(remaining);
+    remaining = stripRawActionJsonFromProse(remaining);
 
     const cleanText = remaining.trim();
     if (cleanText)
         proseParts.push(cleanText);
-    const prose = proseParts.join('\n\n').trim();
+    const prose = stripRawActionJsonFromProse(proseParts.join('\n\n').trim());
 
     // Prefer <questions>; иначе поля из <ask_user>
     if (!questionFields?.length && askUserFields?.length)
@@ -3186,6 +4033,28 @@ function stripJsStyleToolProse(text) {
     return out;
 }
 
+/**
+ * Вырезать нераспарсенные action-JSON ({"title","label","color"}) из prose.
+ * @param {string} text
+ */
+function stripRawActionJsonFromProse(text) {
+    if (!text)
+        return text;
+    let out = String(text);
+    const re = /\{[^{}]*"(?:title|label|color)"[^{}]*\}/g;
+    out = out.replace(re, (m) => {
+        try {
+            const o = JSON.parse(m);
+            if (o && typeof o === 'object'
+                && ('title' in o || 'label' in o)
+                && ('label' in o || 'color' in o || 'title' in o))
+                return '';
+        } catch {}
+        return m;
+    });
+    return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function parseToolCalls(text, functions = []) {
     const calls = [];
     if (!text)
@@ -3366,17 +4235,22 @@ function formatRoleAclForSystem(role) {
         out += 'BOSS: цели и процессы узла, рабочие артефакты управленческой зоны. Запрещено: class.js, handlers/triggers типизаторов, #system/secrets.\n';
         out += 'Изменение системы класса — только через ADMIN.\n';
     } else {
-        out += 'USER: личная рабочая зона ($work кабинета), свои файлы и логи. Запрещено: типизаторы класса, class.js, handlers, системные $-элементы.\n';
+        out += 'USER: зона `$user` (папки `work`, `text`, …), свои файлы и логи. Запрещено: типизаторы класса, class.js, handlers, системные $-элементы.\n';
     }
     return out;
 }
 
 /**
  * Вызов меняет типизатор / class.js / handlers (нужен ADMIN + confirm).
+ * Не путать с navigate/read в `$user/…` (ложный match на любой `/$`).
+ * Папки `$work` нет — под `$user` обычные `work` / `text`.
  * @param {{ method?: string, args?: object }} call
  */
 function isSystemModifyCall(call) {
     if (!call?.method)
+        return false;
+    // Чтение / смена контекста — не system-modify
+    if (/^(navigate|read_file|reset_context|info|get_schema|ask_user)$/i.test(call.method))
         return false;
     if (call.method === 'save')
         return true;
@@ -3387,7 +4261,10 @@ function isSystemModifyCall(call) {
         return false;
     if (/class\.js$/i.test(p))
         return true;
-    if (/(^|\/)(\$|handlers\/|triggers\/|methods\/)/i.test(p))
+    if (/(^|\/)(handlers|triggers|methods)(\/|$)/i.test(p))
+        return true;
+    // $-мета кроме личной `$user` (не `$work` — такого сегмента нет)
+    if (/(^|\/)\$(?!user\b)[\w.-]+/i.test(p))
         return true;
     return false;
 }
@@ -3631,4 +4508,45 @@ async function loadMemFiles(storage) {
         console.warn('[task.ai] loadMemFiles:', e.message);
         return '';
     }
+}
+
+/**
+ * Cursor-like @/path mentions в тексте пользователя → сниппеты в system context.
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
+async function loadAtPathMentions(text) {
+    if (!text || typeof text !== 'string')
+        return '';
+    const re = /@(\/[^\s"'<>]+)/g;
+    const paths = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        const p = m[1].replace(/[.,;:!?)]+$/, '');
+        if (p && !paths.includes(p))
+            paths.push(p);
+        if (paths.length >= 8)
+            break;
+    }
+    if (!paths.length)
+        return '';
+    const parts = [];
+    for (const p of paths) {
+        try {
+            const item = await WORK.get_item(p);
+            if (!item)
+                continue;
+            if (typeof item.load === 'function') {
+                const content = await item.load({ encoding: 'utf-8' });
+                parts.push('### ' + p + '\n```\n' + String(content ?? '').slice(0, 12000) + '\n```');
+            } else {
+                const schema = await item.get_schema?.();
+                parts.push('### ' + p + '\n(type: ' + (item.type || '?') + '; methods: '
+                    + Object.keys(schema?.methods || {}).slice(0, 40).join(', ') + ')');
+            }
+        } catch (e) {
+            parts.push('### ' + p + '\n(ошибка: ' + e.message + ')');
+        }
+    }
+    return parts.join('\n\n');
 }

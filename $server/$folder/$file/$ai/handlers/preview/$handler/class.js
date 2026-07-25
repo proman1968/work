@@ -8,25 +8,39 @@ const VIEW_TYPES = new Set([
     'file', 'tool', 'tool_result', 'form', 'questions', 'error',
 ]);
 
-/** Last unanswered action|form|questions (root or last task.ribbon) */
-function openInteractive(ribbon) {
-    if (!Array.isArray(ribbon)) return null;
-    const task = [...ribbon].reverse().find(b => b.type === 'task');
-    if (task?.ribbon?.length) {
-        const nested = openInteractiveFlat(task.ribbon);
-        if (nested) return nested;
-    }
-    return openInteractiveFlat(ribbon);
+/**
+ * Исполняемая ветка tip:
+ * 1) active task → его ribbon (Отчёт / questions / step prompts);
+ * 2) иначе task, у хвоста ribbon есть button (Отчёт до accept) → его ribbon;
+ * 3) иначе корневой ribbon (action «План» / «Начать»).
+ */
+function tipBranch(ribbon) {
+    if (!Array.isArray(ribbon) || !ribbon.length) return [];
+    const tasks = [...ribbon].filter(b => b?.type === 'task').reverse();
+    const active = tasks.find(b => b.state === 'active');
+    if (active && Array.isArray(active.ribbon))
+        return active.ribbon;
+    const waiting = tasks.find(b => {
+        const nested = Array.isArray(b.ribbon) ? b.ribbon : [];
+        if (!nested.length) return false;
+        return !!String(nested[nested.length - 1]?.button?.label || '').trim();
+    });
+    if (waiting && Array.isArray(waiting.ribbon))
+        return waiting.ribbon;
+    return ribbon;
 }
 
-function openInteractiveFlat(ribbon) {
-    for (let i = ribbon.length - 1; i >= 0; i--) {
-        const b = ribbon[i];
-        if (b.type === 'prompt' || b.role === 'user') return null;
-        if ((b.type === 'action' || b.type === 'form' || b.type === 'questions') && !b.answered)
-            return b;
-    }
-    return null;
+/**
+ * Tip для панели над промптом: последний блок ветки, если у него есть button.label.
+ * Не зависит от answered.
+ */
+function tipBlock(ribbon) {
+    const branch = tipBranch(ribbon);
+    if (!branch.length) return null;
+    const last = branch[branch.length - 1];
+    const label = String(last?.button?.label || '').trim();
+    if (!label) return null;
+    return last;
 }
 
 function answersFrom(fields) {
@@ -76,6 +90,19 @@ function viewTag(item) {
     return t && VIEW_TYPES.has(t) ? 'microchat-view-' + t : '';
 }
 
+/** Первый ход после on_save: есть user prompt, ещё нет ответа AI → UI busy. */
+function ribbonLooksAwaitingFirstReply(ribbon, data) {
+    if (data?.pendingPlan || data?.pendingAction) return false;
+    if (!Array.isArray(ribbon) || !ribbon.length) return false;
+    const hasUser = ribbon.some(b => b.type === 'prompt' || b.role === 'user');
+    if (!hasUser) return false;
+    const done = new Set([
+        'thinking', 'text', 'action', 'task', 'tool', 'tool_result',
+        'error', 'questions', 'form',
+    ]);
+    return !ribbon.some(b => done.has(b.type));
+}
+
 /** ↑1.2k ↓340 · 12% */
 function formatUsageLine(u) {
     if (!u || typeof u !== 'object') return '';
@@ -107,6 +134,7 @@ export default {
         <microchat-ribbon flex
             :items
             :streaming-text="streamingText"
+            :pending="pending"
             @scroll="_onScroll"
             @confirm="confirm(true)"
             @cancel="confirm(false)"
@@ -123,12 +151,16 @@ export default {
             :selected-model-item="selectedModelItem"
             :tts-icon="ttsIcon"
             :tts-mode="ttsMode"
+            :tts-title="ttsTitle"
             :sending="sending"
             :usage-text="usageText"
             :context-pct="contextPct"
             :pending-action="!!data?.pendingAction"
+            :tip-button="open?.button || null"
             @action="confirm(true)"
             @cancel-action="confirm(false)"
+            @tip-confirm="confirm(true)"
+            @tip-cancel="confirm(false)"
             @send="pending ? stopGeneration() : send()"
             @get-file="getFile"
             @select-model="selectModel($event.detail?.value || $event)"
@@ -148,10 +180,12 @@ export default {
     files: [],
     selectedModel: { $def: '', $save: true },
     iconSize: 24,
-    ttsMode: 'off',
+    ttsMode: { $def: 'off' },
     _autoFollow: true,
     _audioEl: null,
     _lastSpoken: '',
+    _ttsBuffer: '',
+    _userStopped: false,
 
     $item: {
         $def: null,
@@ -180,7 +214,7 @@ export default {
     get items() { return this.data?.ribbon || []; },
 
     get open() {
-        return openInteractive(this.data?.ribbon);
+        return tipBlock(this.data?.ribbon);
     },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
@@ -193,7 +227,11 @@ export default {
         return this.selectedModel ? WORK.get_item(this.selectedModel) : null;
     },
     get ttsIcon() {
-        return ({ gigachat: 'carbon:ai', qwen3: 'carbon:machine-learning-model', browser: 'av:volume-up' })[this.ttsMode] || 'av:volume-off';
+        return ({ local: 'carbon:machine-learning-model', browser: 'av:volume-up' })[this.ttsMode] || 'av:volume-off';
+    },
+    get ttsTitle() {
+        const label = this.ttsMode === 'local' ? 'piper' : (this.ttsMode || 'off');
+        return 'TTS: ' + label;
     },
     get usageText() {
         const u = this.data?.usage;
@@ -211,7 +249,11 @@ export default {
         return Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : 0;
     },
 
-    attached() { this._focus(); },
+    attached() {
+        this._autoFollow = true;
+        this._focus();
+        this._scrollBottom(true);
+    },
 
     async _load() {
         if (!this.$item?.load) return;
@@ -222,9 +264,11 @@ export default {
             data.ribbon ??= [];
             migrateRibbon(data.ribbon);
             this.data = data;
+            if (ribbonLooksAwaitingFirstReply(data.ribbon, data))
+                this.pending = true;
             await this._ensureModel();
             this._autoFollow = true;
-            this._scrollBottom();
+            this._scrollBottom(true);
         } catch (e) {
             console.warn('[ai-preview] load:', e.message);
         }
@@ -246,8 +290,10 @@ export default {
         }
     },
     _reload() {
-        this.pending = false;
-        this.streamingText = '';
+        // Mid-loop notifyChanged не должен гасить busy — иначе снова mic
+        if (!this.pending && !this.sending)
+            this.streamingText = '';
+        // _ttsBuffer не трогаем — chat.done может прийти после changed/reload
         if (this.$item) {
             this.$item.increaseVersion?.();
             this.$item.body = undefined;
@@ -257,8 +303,10 @@ export default {
 
     confirm(ok = true) {
         const open = this.open;
-        const label = open?.button?.label
-            || (this.data?.pendingPlan ? (ok ? 'Начать' : 'Нет') : (ok ? 'Подтвердить' : 'Нет'));
+        const label = ok
+            ? (String(open?.button?.label || '').trim()
+                || (this.data?.pendingPlan ? 'Начать' : 'Подтвердить'))
+            : 'нет';
         if (ok && open && (open.type === 'questions' || open.type === 'form') && open.fields?.length) {
             if (!answersFrom(open.fields)) {
                 open.needAnswers = true;
@@ -271,12 +319,13 @@ export default {
             open.needAnswers = false;
         }
         if (!this.data?.pendingAction && !this.data?.pendingPlan && !open) {
-            this.value = ok ? 'Да' : 'Нет';
+            this.value = ok ? 'Да' : 'нет';
             this.send();
             return;
         }
         this.sending = true;
         this.pending = true;
+        this._userStopped = false;
         const payload = { text: label, confirm: !!ok };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
@@ -301,7 +350,9 @@ export default {
 
         this.sending = true;
         this.pending = true;
+        this._userStopped = false;
         this.streamingText = '';
+        this._ttsBuffer = '';
         window.speechSynthesis?.cancel();
         if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
 
@@ -346,8 +397,16 @@ export default {
     },
 
     stopGeneration() {
+        this._userStopped = true;
         this.pending = false;
         this.streamingText = '';
+        this._ttsBuffer = '';
+        window.speechSynthesis?.cancel();
+        if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
+        if (this.$item?.path) {
+            this.$item.fetch('prompt', {}, JSON.stringify({ stop: true }))
+                .catch(e => console.warn('[ai-preview] stop:', e.message));
+        }
     },
     _onKeydown(e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
@@ -364,46 +423,59 @@ export default {
         else { t.scrollTop = t.scrollHeight; this._autoFollow = true; }
         this._focus();
     },
-    _scrollBottom() {
+    /** @param {boolean} [forceLayout] — повтор после paint (открытие старого чата / load) */
+    _scrollBottom(forceLayout = false) {
         if (!this._autoFollow) return;
-        this.async(() => {
+        const go = () => {
             const t = this.$('microchat-ribbon');
             if (t) t.scrollTop = t.scrollHeight;
-        }, 50);
+        };
+        this.async(go, 50);
+        if (forceLayout) {
+            this.async(go, 150);
+            this.async(go, 400);
+        }
     },
     _focus() {
         this.async(() => this.$('.prompt')?.focus(), 50);
     },
     _onDelta(e) {
+        if (this._userStopped) return;
         const token = e.detail?.value?.token;
         if (!token) return;
+        this.pending = true;
         this.streamingText += token;
+        this._ttsBuffer += token;
         this._autoFollow = true;
         this._scrollBottom();
     },
-    /** Idle retry: сбросить стрим, pending оставить — ход ещё идёт */
+    /** Idle retry: сбросить UI-стрим; _ttsBuffer держим до chat.done */
     _onClearStream() {
+        if (this._userStopped) return;
         this.streamingText = '';
-        this._reload();
     },
     _onDone() {
-        const full = this.streamingText;
+        this._userStopped = false;
+        const full = this._ttsBuffer || this.streamingText;
+        this._ttsBuffer = '';
+        this.streamingText = '';
         if (this.ttsMode !== 'off' && full) {
             const clean = full.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').replace(/```tool_call[\s\S]*?```/gi, '').trim();
             if (clean) { this._lastSpoken = clean; this._speak(clean); }
         }
-        this.streamingText = '';
         this.pending = false;
         this._reload();
     },
     _onError(e) {
         console.warn('[ai-preview]', e.detail?.value?.error || 'error');
+        this._userStopped = false;
         this.streamingText = '';
+        this._ttsBuffer = '';
         this.pending = false;
         this.async(() => this._reload(), 100);
     },
     _speak(text) {
-        if (this.ttsMode === 'gigachat' || this.ttsMode === 'qwen3') this._speakServer(text);
+        if (this.ttsMode === 'local') this._speakLocal(text);
         else this._speakBrowser(text);
     },
     _speakBrowser(text) {
@@ -418,13 +490,13 @@ export default {
         u.onend = () => this._onSpeakEnd();
         window.speechSynthesis.speak(u);
     },
-    async _speakServer(text) {
+    async _speakLocal(text) {
         try {
-            if (!this.selectedModel) return this._speakBrowser(text);
-            const res = await fetch(location.origin + this.selectedModel + '?tts', {
+            if (!this.$item?.path) return this._speakBrowser(text);
+            const res = await fetch(location.origin + this.$item.path + '?tts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-WORK-WSID': WORK.wsid },
-                body: JSON.stringify({ text: text.slice(0, 2000), engine: this.ttsMode, voice: 'profi', modelPath: this.selectedModel }),
+                body: JSON.stringify({ text: text.slice(0, 2000) }),
             });
             if (!res.ok) return this._speakBrowser(text);
             const url = URL.createObjectURL(await res.blob());
@@ -444,8 +516,9 @@ export default {
         }
     },
     cycleTts() {
-        const modes = ['off', 'browser', 'gigachat', 'qwen3'];
-        this.ttsMode = modes[(modes.indexOf(this.ttsMode) + 1) % modes.length];
+        const modes = ['off', 'local', 'browser'];
+        const idx = modes.indexOf(this.ttsMode);
+        this.ttsMode = modes[(idx < 0 ? 0 : idx + 1) % modes.length];
         if (this.ttsMode === 'off') {
             window.speechSynthesis?.cancel();
             if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
@@ -517,8 +590,24 @@ async function findFirstModel() {
         const aiRoot = children?.find(el => el.type === '$ai');
         if (!aiRoot) return null;
         const tree = await aiRoot.info({ deep: -1 });
-        const walk = (n) => (!n ? null : (!n.items?.length ? n : walk(n.items[0])));
-        return walk(tree)?.path || null;
+        const walk = async (n) => {
+            if (!n) return null;
+            if (!n.items?.length) {
+                try {
+                    const item = n.path ? await WORK.get_item(n.path) : null;
+                    const caps = item?.capabilities;
+                    const list = Array.isArray(caps) ? caps : String(caps || '').split(/[,\s]+/).filter(Boolean);
+                    if (list.length && !list.includes('chat')) return null;
+                } catch {}
+                return n;
+            }
+            for (const c of n.items) {
+                const f = await walk(c);
+                if (f) return f;
+            }
+            return null;
+        };
+        return (await walk(tree))?.path || null;
     } catch {
         return null;
     }
@@ -547,10 +636,11 @@ ODA({ is: 'microchat-ribbon',
             <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
                 @confirm="fire('confirm')" @cancel="fire('cancel')"></div>
         </div>
-        <microchat-streaming ~if="streamingText" :text="streamingText"></microchat-streaming>
+        <microchat-streaming ~if="pending && streamingText" :text="streamingText"></microchat-streaming>
     `,
     items: [],
     streamingText: '',
+    pending: false,
     embedded: { $def: false, $type: Boolean, $attr: true },
     tag(item) { return viewTag(item); },
     visible(item) {
@@ -563,8 +653,7 @@ ODA({ is: 'microchat-ribbon',
 
 ODA({ is: 'microchat-streaming',
     template: /*html*/`
-        <div vertical light style="padding: 4px; font-size: small;">
-            <div rainbow style="padding: 4px;">Думаю...</div>
+        <div vertical light style="padding: 4px 12px; font-size: small;">
             <div style="padding: 4px; white-space: pre-wrap;">{{text}}</div>
         </div>
     `,
@@ -590,6 +679,9 @@ ODA({ is: 'microchat-panel',
             }
             .btn-warning { @apply --warning-invert; }
             .btn-error { @apply --error-invert; }
+            .btn-success { @apply --success-invert; }
+            .btn-info { @apply --info-invert; }
+            .tip-actions { @apply --horizontal; gap: 6px; align-items: stretch; padding: 0 2px 6px; }
             .attach-chip {
                 @apply --horizontal; @apply --accent-invert; max-width: 150px;
                 padding: 4px 8px; align-items: center; gap: 4px; border-radius: 8px;
@@ -619,13 +711,22 @@ ODA({ is: 'microchat-panel',
                 @apply --dark-invert; @apply --raised; z-index: 2; pointer-events: none;
             }
         </style>
-        <div ~if="pendingAction" horizontal style="gap: 4px; padding: 0 2px;">
+        <div ~if="pendingAction" horizontal style="gap: 4px; padding: 0 2px 6px;">
             <oda-button flex class="btn-warning" icon="icons:check" :icon-size="iconSize * .8"
                 label="Подтвердить" @tap="fire('action')"></oda-button>
             <oda-button class="btn-error" icon="icons:close" :icon-size="iconSize * .8"
                 @tap="fire('cancel-action')"></oda-button>
         </div>
-        <div class="composer" :rainbow="pending">
+        <div class="tip-actions" ~if="!pendingAction && tipButton?.label">
+            <oda-button flex
+                :class="'btn-' + (tipButton.color || 'success')"
+                icon="icons:check" :icon-size="iconSize * .8"
+                :label="tipButton.label"
+                @tap="fire('tip-confirm')"></oda-button>
+            <oda-button class="btn-error" icon="icons:close" :icon-size="iconSize * .8"
+                @tap="fire('tip-cancel')"></oda-button>
+        </div>
+        <div class="composer">
             <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0;">
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -652,15 +753,18 @@ ODA({ is: 'microchat-panel',
                 <oda-button icon="icons:attachment" :icon-size @tap="fire('get-file')"
                     style="border-radius: 50%;" title="Прикрепить файл"></oda-button>
                 <oda-button :icon="ttsIcon" :icon-size @tap="fire('cycle-tts')" :success="ttsMode !== 'off'"
-                    style="border-radius: 50%;" title="Режим разговора"></oda-button>
-                <oda-button :icon="sendIcon" :icon-size :rainbow="recording || pending" :disabled="sending"
-                    @tap="fire('send')" style="border-radius: 50%;"></oda-button>
+                    style="border-radius: 50%;" :title="ttsTitle"></oda-button>
+                <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size
+                    :rainbow="pending || recording" :disabled="sending && !pending"
+                    :title="pending ? 'Стоп' : ''" @tap="fire('send')"
+                    style="border-radius: 50%;"></oda-button>
             </div>
         </div>
     `,
     imports: 'oda//button, oda//icon, ~/lib//tree',
     pending: false,
     pendingAction: false,
+    tipButton: null,
     recording: false,
     timer: '',
     files: [],
@@ -671,6 +775,7 @@ ODA({ is: 'microchat-panel',
     selectedModelItem: null,
     ttsIcon: 'av:volume-off',
     ttsMode: 'off',
+    ttsTitle: 'TTS: off',
     sending: false,
     usageText: '',
     contextPct: 0,
@@ -769,31 +874,16 @@ ODA({ is: 'microchat-view-action',
             .head { @apply --horizontal; align-items: center; gap: 8px; }
             .title { @apply --bold; font-size: small; }
             .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
-            .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
-            .btn-success { @apply --success-invert; }
-            .btn-error { @apply --error-invert; }
-            .btn-info { @apply --info-invert; }
-            .btn-warning { @apply --warning-invert; }
         </style>
         <div class="head" ~if="title || usageLine">
             <div class="title" flex ~if="title">{{title}}</div>
             <div class="usage" ~if="usageLine">{{usageLine}}</div>
         </div>
         <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-        <div class="actions" ~if="!answered">
-            <oda-button flex
-                :class="'btn-' + (button?.color || 'success')"
-                icon="icons:check" icon-size="18"
-                :label="button?.label || 'Начать'"
-                @tap="fire('confirm')"></oda-button>
-            <oda-button class="btn-error" icon="icons:close" icon-size="18" @tap="fire('cancel')"></oda-button>
-        </div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
-    get button() { return this.data?.button || null; },
-    get answered() { return !!this.data?.answered; },
     get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
@@ -806,31 +896,17 @@ ODA({ is: 'microchat-view-form',
                 border-radius: 12px; margin: 2px 4px;
             }
             .title { @apply --bold; font-size: small; }
-            .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
-            .btn-success { @apply --success-invert; }
-            .btn-error { @apply --error-invert; }
-            .btn-info { @apply --info-invert; }
-            .btn-warning { @apply --warning-invert; }
         </style>
         <div class="title" ~if="title">{{title}}</div>
         <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
         <div ~for="fields">
             <microchat-field :field="$for.item"></microchat-field>
         </div>
-        <div class="actions">
-            <oda-button flex
-                :class="'btn-' + (button?.color || 'success')"
-                icon="icons:check" icon-size="18"
-                :label="button?.label || 'Отправить'"
-                @tap="fire('confirm')"></oda-button>
-            <oda-button class="btn-error" icon="icons:close" icon-size="18" @tap="fire('cancel')"></oda-button>
-        </div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get fields() { return this.data?.fields || []; },
-    get button() { return this.data?.button || null; },
 });
 
 ODA({ is: 'microchat-view-questions',
@@ -842,12 +918,7 @@ ODA({ is: 'microchat-view-questions',
                 border-radius: 12px; margin: 2px 4px;
             }
             .title { @apply --bold; font-size: small; }
-            .actions { @apply --horizontal; gap: 6px; align-items: stretch; }
             .hint { font-size: x-small; color: var(--error-color, #c62828); padding: 0 2px; }
-            .btn-success { @apply --success-invert; }
-            .btn-error { @apply --error-invert; }
-            .btn-info { @apply --info-invert; }
-            .btn-warning { @apply --warning-invert; }
             :host([need-answers]) {
                 outline: 2px solid var(--error-color, #c62828);
                 outline-offset: 1px;
@@ -859,21 +930,11 @@ ODA({ is: 'microchat-view-questions',
             <microchat-field :field="$for.item"></microchat-field>
         </div>
         <div class="hint" ~if="needAnswers">Выберите варианты или введите «другое…»</div>
-        <div class="actions">
-            <oda-button flex
-                :class="'btn-' + (button?.color || 'success')"
-                icon="icons:check" icon-size="18"
-                :label="button?.label || 'Уточнить'"
-                @tap="fire('confirm')"></oda-button>
-            <oda-button class="btn-error" icon="icons:close" icon-size="18" @tap="fire('cancel')"></oda-button>
-        </div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer, oda//button',
+    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get fields() { return this.data?.fields || []; },
-    get button() { return this.data?.button || null; },
-    get answered() { return !!this.data?.answered; },
     needAnswers: {
         $attr: true,
         get() { return !!this.data?.needAnswers; },

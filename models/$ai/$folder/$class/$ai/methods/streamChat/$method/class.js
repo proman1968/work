@@ -41,6 +41,22 @@ export function appendFunctionArgs(acc, value) {
 }
 
 /**
+ * OpenAI/z.ai: harness `function_call: { name }` → `tool_choice` (не оставлять auto).
+ * @param {{ tool_choice?: unknown, function_call?: 'auto'|'none'|{ name?: string } }} options
+ * @returns {'auto'|'none'|{ type: 'function', function: { name: string } }}
+ */
+export function resolveOpenAiToolChoice(options = {}) {
+    if (options.tool_choice != null)
+        return options.tool_choice;
+    const fc = options.function_call;
+    if (fc === 'none')
+        return 'none';
+    if (fc && typeof fc === 'object' && fc.name)
+        return { type: 'function', function: { name: String(fc.name) } };
+    return 'auto';
+}
+
+/**
  * Разобрать накопленные arguments; мусор "[object Object]" → {}.
  * @param {string|object} acc
  * @returns {object}
@@ -275,6 +291,9 @@ export default {
         };
         if (options.stop)
             body.stop = options.stop;
+        // OpenAI/z.ai: usage в финальном chunk стрима
+        if (!isGigachat)
+            body.stream_options = { include_usage: true };
 
         // Function calling: gigachat = legacy functions; openai/z.ai = tools
         if (useFunctions && ai.functionCalling === true) {
@@ -305,8 +324,7 @@ export default {
                     body.function_call = options.function_call;
             } else {
                 body.tools = toOpenAiTools(options.functions);
-                body.tool_choice = options.tool_choice
-                    || (options.function_call === 'none' ? 'none' : 'auto');
+                body.tool_choice = resolveOpenAiToolChoice(options);
             }
         }
 

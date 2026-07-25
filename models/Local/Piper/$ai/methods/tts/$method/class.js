@@ -1,16 +1,16 @@
 /**
- * Серверный метод tts для task.ai — делегирует в /MODELS/Local/Piper.
+ * tts — синтез речи через Piper (ensureReady + POST /tts).
  * POST body: { text: string }
- * Возвращает: Buffer (WAV audio)
+ * @returns {Buffer} WAV
  */
 import { pathToFileURL } from 'node:url';
 import * as path from 'node:path';
 
 const ROOT = process.cwd();
-const PIPER_PATH = '/MODELS/Local/Piper';
 
 export default {
     async execute(params = {}) {
+        const ai = params.$context || this;
         let text = '';
         const raw = params.post ?? params.body ?? params;
         if (typeof raw === 'string') {
@@ -23,14 +23,11 @@ export default {
             throw new Error('Текст для озвучки пуст');
 
         const tts = await import(pathToFileURL(path.join(ROOT, 'sources/modules/tts/tts.js')).href);
-        let baseUrl = tts.DEFAULT_TTS_URL;
-        let batPath = tts.DEFAULT_BAT;
-        try {
-            const model = await WORK.get_item(PIPER_PATH);
-            if (model?.baseUrl) baseUrl = model.baseUrl;
-            if (model?.batPath) batPath = model.batPath;
-        } catch {}
-
-        return tts.synthesize(text, { baseUrl, batPath, ensure: true, timeoutMs: 60_000 });
+        return tts.synthesize(text, {
+            baseUrl: ai?.baseUrl,
+            batPath: ai?.batPath,
+            ensure: true,
+            timeoutMs: 60_000,
+        });
     },
 };

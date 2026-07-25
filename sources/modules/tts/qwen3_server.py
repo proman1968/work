@@ -1,50 +1,48 @@
 """
 Qwen3-TTS — локальный сервер синтеза речи.
-Модель: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+Пакет: qwen-tts (PyPI). Модель: Qwen3-TTS-12Hz-0.6B-CustomVoice.
 Порт: 8002
 """
 from contextlib import asynccontextmanager
+import io
+import os
+
+import numpy as np
+import scipy.io.wavfile as wavfile
+import torch
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
-from transformers import AutoConfig, AutoModel, AutoProcessor
-import torch
-import numpy as np
-import io
-import scipy.io.wavfile as wavfile
-import os
+from qwen_tts import Qwen3TTSModel
+from typing import Optional
 
-MODEL_NAME = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+MODEL_NAME = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
 LOCAL_MODEL_DIR = os.path.join(os.path.dirname(__file__), "qwen3_tts_model")
 
-state = {"model": None, "processor": None}
+state = {"model": None}
 
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "default"
-    speed: float = 1.0
+    language: str = "Russian"
+    speaker: str = "Ryan"
+    instruct: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Загрузка модели при старте
     print("[qwen3] Загрузка модели...")
     model_path = LOCAL_MODEL_DIR if os.path.exists(LOCAL_MODEL_DIR) else MODEL_NAME
-    state["processor"] = AutoProcessor.from_pretrained(
-        model_path, trust_remote_code=True
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+    state["model"] = Qwen3TTSModel.from_pretrained(
+        model_path,
+        device_map=device,
+        dtype=dtype,
     )
-    config = AutoConfig.from_pretrained(
-        model_path, trust_remote_code=True
-    )
-    state["model"] = AutoModel.from_pretrained(
-        model_path, config=config, trust_remote_code=True
-    )
-    state["model"].eval()
-    print("[qwen3] Модель загружена")
+    print("[qwen3] Модель загружена:", model_path, "device=", device)
     yield
     state["model"] = None
-    state["processor"] = None
 
 
 app = FastAPI(lifespan=lifespan)
@@ -53,31 +51,31 @@ app = FastAPI(lifespan=lifespan)
 @app.post("/tts")
 async def tts(req: TTSRequest):
     model = state["model"]
-    processor = state["processor"]
-    if model is None or processor is None:
+    if model is None:
         return Response(content=b"", media_type="audio/wav", status_code=503)
 
-    inputs = processor(
-        text=req.text,
-        return_tensors="pt",
-        sampling_rate=24000,
-    )
+    text = (req.text or "").strip()
+    if not text:
+        return Response(content=b"", media_type="audio/wav", status_code=400)
 
-    with torch.no_grad():
-        generated = model.generate(**inputs, max_new_tokens=1024)
+    kwargs = {
+        "text": text[:2000],
+        "language": req.language or "Russian",
+        "speaker": req.speaker or "Ryan",
+    }
+    if req.instruct:
+        kwargs["instruct"] = req.instruct
 
-    audio_np = generated.cpu().numpy()
+    wavs, sr = model.generate_custom_voice(**kwargs)
+    audio_np = np.asarray(wavs[0] if isinstance(wavs, (list, tuple)) else wavs, dtype=np.float32)
     if audio_np.ndim > 1:
-        audio_np = audio_np[0]
-
-    if audio_np.dtype != np.float32:
-        audio_np = audio_np.astype(np.float32)
-    peak = np.max(np.abs(audio_np))
-    if peak > 0:
+        audio_np = audio_np.reshape(-1)
+    peak = float(np.max(np.abs(audio_np))) if audio_np.size else 0.0
+    if peak > 1.0:
         audio_np = audio_np / peak
 
     buffer = io.BytesIO()
-    wavfile.write(buffer, 24000, audio_np)
+    wavfile.write(buffer, int(sr), audio_np)
     return Response(content=buffer.getvalue(), media_type="audio/wav")
 
 

@@ -658,7 +658,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await this.$item.save_file(new File([eml], 'send.eml', { type: 'message/rfc822' }), { encoding: 'utf-8' });
+            await this.$item.save_file(new File([eml], 'send.eml', { type: 'message/rfc822' }), { encoding: 'utf-8', folder: address });
             this.composing = false;
             this.folder = 'outbox';
             await this.refreshMessages();

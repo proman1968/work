@@ -8,7 +8,7 @@ import {
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
 
 describe('parseResponseToRibbon types', () => {
-    it('plan → action title План without fields', () => {
+    it('plan → action title План + tip Начать', () => {
         const { blocks, pendingPlan } = parseResponseToRibbon(
             `<plan>[{"step":1,"description":"A","status":"proposed"}]</plan>
 <action>{"label":"Начать","color":"success"}</action>`,
@@ -19,8 +19,20 @@ describe('parseResponseToRibbon types', () => {
         assert.ok(act);
         assert.equal(act.title, 'План');
         assert.equal(act.button.label, 'Начать');
-        assert.equal(act.fields, undefined);
+        assert.equal(blocks.some(b => b.type === 'task'), false);
         assert.equal(blocks.some(b => b.type === 'questions' || b.type === 'form'), false);
+    });
+
+    it('plan object (not array) → pendingPlan one step, not text', () => {
+        const { blocks, pendingPlan } = parseResponseToRibbon(
+            `<plan>\n{"step":"создание task","description":"инициирую подагента","status":"proposed"}\n</plan>`,
+            'AI',
+        );
+        assert.ok(pendingPlan);
+        assert.equal(pendingPlan.steps.length, 1);
+        assert.match(pendingPlan.steps[0].description, /подагента|инициирую/);
+        assert.equal(blocks.some(b => b.type === 'text'), false);
+        assert.equal(blocks.find(b => b.type === 'action')?.button?.label, 'Начать');
     });
 
     it('questions → type questions with fields', () => {

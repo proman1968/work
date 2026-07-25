@@ -1,8 +1,6 @@
 fastapi
 uvicorn
-torch
-transformers @ git+https://github.com/huggingface/transformers.git
-accelerate
+qwen-tts
 numpy
 scipy
 soundfile

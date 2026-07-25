@@ -7,6 +7,7 @@ import {
     normalizeOpenAiMessages,
     sanitizeGigaChatFunctions,
     sanitizeGigaChatMessages,
+    resolveOpenAiToolChoice,
 } from '../MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js';
 import {
     isBrokenFcArgs,
@@ -20,6 +21,22 @@ import {
     resolveFunctionCallMode,
     stepNeedsForcedSaveFile,
 } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+
+describe('resolveOpenAiToolChoice', () => {
+    it('maps function_call { name } to tool_choice function', () => {
+        assert.deepEqual(
+            resolveOpenAiToolChoice({ function_call: { name: 'save_file' } }),
+            { type: 'function', function: { name: 'save_file' } },
+        );
+    });
+
+    it('keeps explicit tool_choice and none/auto', () => {
+        assert.equal(resolveOpenAiToolChoice({ tool_choice: 'required' }), 'required');
+        assert.equal(resolveOpenAiToolChoice({ function_call: 'none' }), 'none');
+        assert.equal(resolveOpenAiToolChoice({ function_call: 'auto' }), 'auto');
+        assert.equal(resolveOpenAiToolChoice({}), 'auto');
+    });
+});
 
 describe('appendFunctionArgs', () => {
     it('object args (GigaChat) → JSON string with filename/post', () => {

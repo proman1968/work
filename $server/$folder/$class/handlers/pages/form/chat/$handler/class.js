@@ -207,7 +207,6 @@ ODA({is: 'oda-chat',
         </style>
         <div class="back"></div>
         <chat-ribbon id="ribbon" :$item></chat-ribbon>
-        <chat-record-loader ~if="recording"></chat-record-loader>
         <div class="mover" vertical hidden>
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
@@ -248,8 +247,8 @@ ODA({is: 'oda-chat',
                 <div class="prompt-row" horizontal>
                     <oda-button ~if="!isAIMode" icon="icons:add" @tap="getFile"></oda-button>
                     <textarea id="text" ~if="!recording" @keydown type="text" autofocus :rows ::value :placeholder></textarea>
-                    <div flex style="text-align: right; align-items: center" ~if="recording">{{timer}}</div>
-                    <oda-button ~if="!isAIMode" :icon="sendIcon" @tap="send"></oda-button>
+                    <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
+                    <oda-button ~if="!isAIMode" :icon="sendIcon" :rainbow="recording" @tap="send"></oda-button>
                 </div>
                 <div ~if="isAIMode" class="prompt-tools" horizontal>
                     <item-node ~if="modelItem" no-flex :icon-size="20" :$item="modelItem"
@@ -258,7 +257,7 @@ ODA({is: 'oda-chat',
                         @tap="selectModel($event)" title="Выбрать модель"></oda-button>
                     <div flex></div>
                     <oda-button icon="icons:attachment" :icon-size="24" @tap="getFile" title="Прикрепить файл"></oda-button>
-                    <oda-button :icon="sendIcon" :icon-size="24" @tap="send"></oda-button>
+                    <oda-button :icon="sendIcon" :icon-size="24" :rainbow="recording" @tap="send"></oda-button>
                 </div>
             </div>
         </div>
@@ -403,7 +402,8 @@ ODA({is: 'oda-chat',
         }
     },
     get sendIcon(){
-        return (this.value?.length || this.files.length)?'icons:send':(this.recording)?'av:stop':'av:mic';
+        if (this.recording) return 'av:stop';
+        return (this.value?.length || this.files.length) ? 'icons:send' : 'av:mic';
     },
     get meta_urls(){
         if(this.value){
@@ -439,66 +439,96 @@ ODA({is: 'oda-chat',
     focusedItem: null,
     $item: null,
     awaitTask: false,
-    send(e){
-        this.$('#ribbon').scrollDown = true;
-        const formData = new FormData();
-        this.files.forEach((file, index) => {
-            formData.append('file', file, file.name);
-        });
-        if(this.value || this.files.length || this.$pdp.replyTarget) {
-            let params = {encoding: 'utf-8'}
-            if(this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
-                params.receivers = [this.$pdp.$item.id];
-            else if(this.$pdp.receivers.length)
-                params.receivers = this.$pdp.receivers.map(u => u.id);
-
-            const isForeign = this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid;
-            const hasReceivers = !!(params.receivers?.length);
-            const isAI = !isForeign && !hasReceivers;
-            let file;
-            if (isAI) {
-                this.awaitTask = true;
-                params.message = this.value || '';
-                const body = {
-                    title: this.value || '',
-                    created: Date.now(),
-                    ribbon: [{
-                        role: 'user',
-                        content: this.value || '',
-                        time: Date.now(),
-                        sender: WORK.uid,
-                    }],
-                };
-                if (this.model) body.model = this.model;
-                file = new File([JSON.stringify(body, null, 2)], 'task.ai', { type: "application/json" });
-            } else {
-                file = new File([this.value || ''], 'message.msg', { type: "text/plain" });
-            }
-            const onFail = err => console.warn('[chat] send', err);
-
-            if(!this.files.length && !this.$pdp.replyTarget) {
-                this.clear();
-                this.$pdp.$item.save_file(file, params).catch(onFail);
-            } else {
-                formData.append('message', file, file.name);
-                const upload = () => {
-                    this.clear();
-                    this.$pdp.$item.save_files(formData, params).catch(onFail);
-                };
-                if(this.$pdp.replyTarget){
-                    Promise.resolve(this.$pdp.replyTarget).then(replyTarget => {
-                        let metadata = replyTarget.toJSON();
-                        metadata.reply = true;
-                        formData.append('metadata', JSON.stringify(metadata));
-                        upload();
-                    }).catch(onFail);
-                } else {
-                    upload();
-                }
-            }
-        } else {
+    async send(e){
+        if (this.recording) {
             this.chatAudioController.record(e);
             return;
+        }
+        this.$('#ribbon').scrollDown = true;
+        if(!(this.value || this.files.length || this.$pdp.replyTarget)) {
+            this.chatAudioController.record(e);
+            return;
+        }
+
+        let params = {encoding: 'utf-8'}
+        if(this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
+            params.receivers = [this.$pdp.$item.id];
+        else if(this.$pdp.receivers.length)
+            params.receivers = this.$pdp.receivers.map(u => u.id);
+
+        const isForeign = this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid;
+        const hasReceivers = !!(params.receivers?.length);
+        const isAI = !isForeign && !hasReceivers;
+        const onFail = err => console.warn('[chat] send', err);
+
+        if (isAI) {
+            this.awaitTask = true;
+            const text = String(this.value ?? '').trim();
+            const promptText = text || (this.files.length ? 'есть вложения' : '');
+            const time = Date.now();
+            const ribbon = [{
+                type: 'prompt',
+                role: 'user',
+                content: promptText,
+                time,
+                sender: WORK.uid,
+            }];
+            try {
+                for (const f of [...this.files]) {
+                    const res = await this.$pdp.$item.save_file(f, { encoding: 'utf-8', ignore_save_logs: true });
+                    const path = res?.logFullPath || res?.path || res?.logPath;
+                    if (path) {
+                        ribbon.push({
+                            type: 'file',
+                            path: path.startsWith('/') ? path : '/' + path,
+                            name: f.name || path.split('/').pop(),
+                            time: Date.now(),
+                            sender: WORK.uid,
+                        });
+                    }
+                }
+                const body = {
+                    title: text || (ribbon.find(b => b.type === 'file')?.name) || 'task',
+                    created: time,
+                    ribbon,
+                };
+                if (this.model) body.model = this.model;
+                const taskFile = new File([JSON.stringify(body, null, 2)], 'task.ai', { type: 'application/json' });
+                params.message = promptText;
+                this.clear();
+                await this.$pdp.$item.save_file(taskFile, params);
+            } catch (err) {
+                onFail(err);
+            }
+            this.$('#ribbon').scrollDown = true;
+            return;
+        }
+
+        const formData = new FormData();
+        this.files.forEach((file) => {
+            formData.append('file', file, file.name);
+        });
+        const file = new File([this.value || ''], 'message.msg', { type: 'text/plain' });
+
+        if(!this.files.length && !this.$pdp.replyTarget) {
+            this.clear();
+            this.$pdp.$item.save_file(file, params).catch(onFail);
+        } else {
+            formData.append('message', file, file.name);
+            const upload = () => {
+                this.clear();
+                this.$pdp.$item.save_files(formData, params).catch(onFail);
+            };
+            if(this.$pdp.replyTarget){
+                Promise.resolve(this.$pdp.replyTarget).then(replyTarget => {
+                    let metadata = replyTarget.toJSON();
+                    metadata.reply = true;
+                    formData.append('metadata', JSON.stringify(metadata));
+                    upload();
+                }).catch(onFail);
+            } else {
+                upload();
+            }
         }
         this.$('#ribbon').scrollDown = true;
     },
@@ -509,49 +539,6 @@ ODA({is: 'oda-chat',
         return this._audioController ??= new chatAudioController(this);
     }
 });
-ODA({is: 'chat-record-loader',
-    template: /* html */`
-    <style>
-        :host{
-            @apply --content;
-            width: 128px;
-            height: 128px;
-            border-radius: 50%;
-            display: inline-block;
-            position: fixed;
-            top: 45%;
-            left: 47%;
-            border: 10px solid;
-            box-sizing: border-box;
-            animation: animloader 60s linear infinite alternate;
-            z-index: 1;
-        }
-        @keyframes rotation {
-            0% {
-                transform: rotate(0deg);
-            }
-            100% {
-                transform: rotate(360deg);
-            }
-        }
-        @keyframes animloader {
-            0% {
-                border-color: #337AB7 rgba(51, 122, 183, 0) rgba(51, 122, 183, 0) rgba(51, 122, 183, 0);
-            }
-            33% {
-                border-color: #337AB7 #337AB7 rgba(51, 122, 183, 0) rgba(51, 122, 183, 0);
-            }
-            66% {
-                border-color: #337AB7 #337AB7 #337AB7 rgba(51, 122, 183, 0);
-            }
-            100% {
-                border-color: #337AB7 #337AB7 #337AB7 #337AB7;
-            }
-        }
-    </style>
-    <oda-button icon="av:stop" icon-size="100" @tap.stop="$pdp.chatAudioController.record()"></oda-button>
-    `
-})
 ODA({is: 'chat-ribbon',
     template:/* html */`
         <style>
