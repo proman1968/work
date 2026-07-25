@@ -48,9 +48,16 @@ describe('execItemMethod', () => {
     });
 
     it('blocks save_file for guest session', async () => {
+        // Доступ проверяет класс-владелец: у реальных папок он есть всегда (корень — WORK).
+        class TestClass extends CORE.$class {}
+        const owner = new TestClass({ id: 'group' });
+        owner.path = '/root/test/$group';
+        Object.defineProperty(owner, '$class', { get: () => owner });
+
         class TestFolder extends CORE.$folder {}
         const folder = new TestFolder({ id: 'sources' });
         folder.path = '/sources';
+        Object.defineProperty(folder, '$class', { get: () => owner });
         await assert.rejects(
             () => execItemMethod(folder, 'save_file', { user: { ssid: 'guest' } }, { method: 'POST' }),
             /Доступ запрещён/

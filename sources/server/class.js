@@ -790,38 +790,6 @@ export class $class extends $folder{
                 return LOGS.dayFolder(this, params.day || LOGS.resolveDays(params)[0]);
         }
     }
-    /** @deprecated используй outline */
-    get structure(){
-        return this.outline;
-    }
-    /** Описательное дерево элемента (id/label/type/path + вложенные items). */
-    get outline(){
-        return (async ()=>{
-            let item = await this.info();
-            let result = {
-                id: item.id,
-                label: item.label,
-                type: item.type,
-                path: item.path,
-                description: item.description
-            }
-            result.items = await this.items;
-            result.items = result.items.filter(item=>item.constructor === FS.$file).map(file=>{
-                if(this !== WORK || file instanceof FS.$class)
-                    return file.outline;
-                return {
-                    id: file.id,
-                    label: file.label,
-                    type: file.type,
-                    description: file.description
-                }
-            })
-            result.items = await Promise.all(result.items);
-            if(!result.items.length)
-                delete result.items;
-            return result;
-        })()
-    }
     get settings(){
         if(this.meta_folder){
             let dir = this.meta_folder.dir + '/#system/settings.json';

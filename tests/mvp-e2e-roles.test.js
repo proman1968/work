@@ -130,12 +130,15 @@ describe('MVP e2e: USER working task', () => {
         assert.notEqual(result.path, '/USERS/u1/presentation.html');
     });
 
-    it('XML questions without options are dropped (idle inject path)', () => {
+    it('XML questions without options get default options (upgrade to select)', () => {
         const { blocks } = parseResponseToRibbon(
             '<questions>[{"id":"topic","label":"Тема","type":"text"}]</questions><action>{"label":"Уточнить"}</action>',
             'WORK',
         );
-        assert.equal(blocks.some(b => b.type === 'questions'), false);
+        const q = blocks.find(b => b.type === 'questions');
+        assert.ok(q, 'вопрос без options не выпадает, а апгрейдится');
+        assert.equal(q.fields[0].type, 'select');
+        assert.ok(q.fields[0].options.length >= 2, 'подставлены дефолтные варианты');
     });
 
     it('XML questions with options stay as select', () => {

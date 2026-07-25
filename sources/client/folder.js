@@ -70,9 +70,6 @@ export class $folder extends $item {
     get checked() {
         return false
     }
-    get count() {
-        return 0;
-    }
     get localStorage() {
         return new ODA.LocalStorage(this.path)
     }

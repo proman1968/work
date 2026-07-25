@@ -267,9 +267,6 @@ export class $folder extends $item{
     get isMetaFolder(){ // признак мета папки
         return this.isType && this.parent instanceof FS.$class;
     }
-    get count(){
-        return 0;
-    }
     get size(){
         return Promise.resolve(this.items).then(async items => {
             let sizes = await Promise.all(items.map(f=>f.size));

@@ -55,13 +55,6 @@ export class $file extends $folder{
         return p.userId ? `${p.time} | ${p.userId}` : p.time;
     }
 
-    get svg_icons_list(){
-        return Promise.resolve(this.load()).then(svgString => {
-            const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
-            let items = doc.querySelectorAll('symbol[id]');
-            return Array.from(items.map(r=>r.id));
-        })
-    }
     /**
      * Восстановить файл из истории. Только для history-файлов.
      * @param {object} [params]
