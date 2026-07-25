@@ -362,11 +362,13 @@ export default {
         if (external.length) {
             try {
                 const fd = new FormData();
-                fd.append('message', new File([text || 'Файлы без текста'], 'message.txt', { type: 'text/plain' }));
+                fd.append('message', text || 'Файлы без текста');
                 for (const f of external) fd.append('file', f, f.name);
                 const storage = this.$item?.$class || this.$item?.$parent;
-                const result = await storage?.fetch?.('save_files', {}, fd);
-                if (result?.path) text += (text ? '\n' : '') + 'Загружен файл: ' + result.path;
+                const result = await storage?.fetch?.('save_files', { message: text || 'Файлы без текста' }, fd);
+                const paths = result?.includes || (result?.path ? [result.path] : []);
+                if (paths.length)
+                    text += (text ? '\n' : '') + 'Загружены файлы:\n' + paths.join('\n');
             } catch (e) {
                 console.warn('[ai-preview] save_files:', e.message);
             }

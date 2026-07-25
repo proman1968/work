@@ -6,7 +6,7 @@
 
 - `index.js` — сборка `CORE` и registry `FS`: `$folder`, `$class`, `$handler`, `$user`, `$file`
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file`, `find_text`, `get_schema`
-- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `task_reply`
+- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`
 - `file.js` — `$file`: load/save, history, RAG, `edit_file`, триггеры `on_save`
 - `handler.js` — `$handler extends $class`: исполняемый элемент (execute в class.js)
 - `user.js` — `$user`: пользовательская storage-сущность, online-статус
@@ -62,6 +62,8 @@ API элементов — это «система команд» для ИИ-а
 ### Логи ($class, внутренности — `logs.js`)
 
 - `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`
+- `save_message({ message, includes })` — чистая лог-запись без файла (`content` + `includes`)
+- `save_files` — батч: файлы в history + одна `save_message` (физический `files.pack` удалён)
 - `read_log_entry({path})` — одна запись по пути history-файла
 - `append_log_includes({entryPath, includePaths})` — дописать includes записи
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`

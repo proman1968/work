@@ -18,7 +18,7 @@
 - `logs()` — единая точка чтения логов (mode: folder/bodies/index/files/dates)
 - `read_log_entry()` — одна запись лога по пути history-файла
 - `append_log_includes()` — добавить пути в includes записи лога
-- `task_reply()` — продолжение диалога в task.ai
+- `save_message({ message, includes })` — чистая лог-запись (сообщение без файла)
 - `read_secret()` / `save_secret()` — секреты модулей в `#system/`
 
 ## Метапапка

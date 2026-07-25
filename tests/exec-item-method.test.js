@@ -66,7 +66,7 @@ describe('execItemMethod', () => {
 
     it('passes params.post to prototype methods when request.post is empty', async () => {
         class TestClass extends CORE.$class {
-            async task_reply(params, post) {
+            async save_message(params, post) {
                 return { post, paramsPost: params.post };
             }
         }
@@ -75,10 +75,10 @@ describe('execItemMethod', () => {
         Object.defineProperty(storage, '$class', { get: () => storage });
         const body = {
             files: [{ originalFilename: 'sample.txt' }],
-            message: { originalFilename: 'message.txt' },
+            message: 'hello',
         };
-        const params = { taskPath: '/task.ai', post: body, user: { uid: 'TEST' } };
-        const result = await execItemMethod(storage, 'task_reply', params, { method: 'POST' });
+        const params = { message: 'hello', post: body, user: { uid: 'TEST' } };
+        const result = await execItemMethod(storage, 'save_message', params, { method: 'POST' });
         assert.equal(result.post, body);
         assert.equal(result.paramsPost, body);
     });

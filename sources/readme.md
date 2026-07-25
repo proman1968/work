@@ -54,9 +54,6 @@ WORK построен вокруг `$item`.
 - `websocket.js` — WebSocket-события.
 - `stun.js` — локальный STUN для WebRTC.
 - `auth-methods.js` — login/register/session methods (примешиваются в прототип `$server`).
-- `file-handlers.js` — реакции на сохранение файлов (`task.ai`, `message.txt`, `files.pack`, `outbox.eml`…).
-- `skill-manager.js` — запуск и контроль выполнения скиллов.
-- `skill-router.js` — роутинг запросов к скиллам (эмбеддинги + keyword fallback).
 - `mail.js`, `email-utils.js` — почта и EML.
 - `push.js`, `vapid.js` — push subscriptions.
 - `babel-merge.js` — merge `class.js` по слоям наследования (через Babel AST).

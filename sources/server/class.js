@@ -601,6 +601,38 @@ export class $class extends $folder{
     }
 
     /**
+     * Чистая лог-запись (сообщение) без физического файла.
+     * @param {object} [params]
+     * @param {string} [params.message] Текст сообщения → content
+     * @param {Array<string>} [params.includes] Пути вложенных файлов (history)
+     * @param {string|Array} [params.receivers] Получатели
+     * @returns {Promise<object>} Запись лога
+     */
+    async save_message(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.WRITE);
+        const time = Date.now();
+        const row = { time };
+        if (params.sender)
+            row.sender = params.sender;
+        else if (params.user?.uid)
+            row.sender = params.user.uid;
+        else if (params.user === globalThis.WORK)
+            row.sender = WORK.id;
+        if (params.message != null)
+            row.content = params.message;
+        if (params.includes?.length)
+            row.includes = params.includes.map(p => (p?.startsWith('/') ? p : '/' + p));
+        if (typeof params.receivers === 'string')
+            row.receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+        else if (Array.isArray(params.receivers))
+            row.receivers = params.receivers.slice();
+        if (params.mainContext)
+            row.mainContext = params.mainContext;
+        await LOGS.appendRow(this, row, params);
+        return row;
+    }
+
+    /**
      * Добавить пути в includes записи лога (например, шаги task.ai).
      * @param {object} params
      * @param {string} params.entryPath Путь записи лога (history-файла)
@@ -619,139 +651,6 @@ export class $class extends $folder{
             entryPath = entryPath.entryPath;
         }
         return this.append_log_includes({ entryPath, includePaths, user: params.user });
-    }
-
-    /** Развернуть includes: pack / message.txt → вложенные файлы. */
-    async _expandLogIncludes(includePaths = []) {
-        const seen = new Set();
-        const out = [];
-        const add = (p) => {
-            if (!p)
-                return;
-            const key = p.startsWith('/') ? p : '/' + p;
-            if (seen.has(key))
-                return;
-            seen.add(key);
-            out.push(key);
-        };
-        for (const p of includePaths) {
-            add(p);
-            const path = String(p);
-            if (path.includes('.pack')) {
-                const row = await LOGS.findEntry(this, p);
-                if (row?.includes?.length) {
-                    for (const inc of row.includes)
-                        add(inc);
-                }
-                else {
-                    try {
-                        const file = await WORK.get_item(p.startsWith('/') ? p : '/' + p);
-                        const pack = JSON.parse(await file.load());
-                        for (const inc of pack.includes || [])
-                            add(inc);
-                    }
-                    catch { /* no nested includes */ }
-                }
-            }
-            else if (path.includes('.message.txt')) {
-                const row = await LOGS.findEntry(this, p);
-                if (row?.includes?.length)
-                    for (const inc of row.includes)
-                        add(inc);
-            }
-        }
-        return out;
-    }
-
-    async _runTaskAiQueue(taskPath, job) {
-        const key = taskPath?.startsWith('/') ? taskPath : taskPath ? '/' + taskPath : '';
-        if (!key || !globalThis.WORK)
-            return job();
-        globalThis.WORK._taskAiQueue ??= new Map();
-        const previous = globalThis.WORK._taskAiQueue.get(key) || Promise.resolve();
-        const next = previous.catch(() => {}).then(job);
-        globalThis.WORK._taskAiQueue.set(key, next);
-        try {
-            return await next;
-        }
-        finally {
-            if (globalThis.WORK._taskAiQueue.get(key) === next)
-                globalThis.WORK._taskAiQueue.delete(key);
-        }
-    }
-
-    /**
-     * Продолжить диалог в существующей task.ai (отправка повторного промпта).
-     * @param {object} [params]
-     * @param {string} params.taskPath Путь к task.ai
-     * @param {string|object} [params.post] Текст или FormData с файлами
-     * @param {string|object} [post] То же, что params.post (позиционный)
-     * @returns {Promise<object>} Обновлённая запись лога task.ai
-     */
-    async task_reply(params = {}, post) {
-        post ??= params.post;
-        const taskPath = params.taskPath;
-        if (!taskPath)
-            throw new Error('taskPath обязателен');
-        return this._runTaskAiQueue(taskPath, () => this._task_reply_queued(params, post));
-    }
-
-    async _task_reply_queued(params = {}, post) {
-        const taskPath = params.taskPath;
-        const logAuthor = params.user;
-        let text = '';
-        let stepPath = null;
-
-        const isMultipart = post && typeof post === 'object' && !Buffer.isBuffer(post)
-            && (post.files || post.message);
-
-        if (isMultipart) {
-            const packLog = await this.save_files({
-                post,
-                encoding: params.encoding || 'utf-8',
-                user: globalThis.WORK,
-                logAuthor,
-                ignore_save_logs: true,
-                taskPath,
-            });
-            stepPath = packLog?.logFullPath || packLog?.path;
-            if (!stepPath)
-                throw new Error('Нужен текст или файлы');
-            try {
-                const file = await WORK.get_item(stepPath);
-                const pack = JSON.parse(await file.load());
-                text = String(pack.content ?? '').trim();
-            }
-            catch {
-                const row = await LOGS.findEntry(this, stepPath);
-                text = String(row?.content ?? '').trim();
-            }
-        }
-        else if (typeof post === 'string') {
-            text = post.trim();
-            if (text) {
-                const msgLog = await this.save_file({
-                    filename: 'message.txt',
-                    post: text,
-                    encoding: 'utf-8',
-                    user: logAuthor || globalThis.WORK,
-                    logAuthor,
-                    ignore_save_logs: true,
-                });
-                stepPath = msgLog?.logFullPath || msgLog?.path;
-            }
-        }
-        else
-            throw new Error('Нужен текст или файлы');
-
-        if (!text && !stepPath)
-            throw new Error('Нужен текст или файлы');
-
-        let row = null;
-        if (stepPath)
-            row = await this.append_log_includes({ entryPath: taskPath, includePaths: [stepPath], user: globalThis.WORK });
-
-        return await LOGS.findEntry(this, taskPath) ?? row;
     }
 
     /** @deprecated используй logs({ mode: 'index' }) */

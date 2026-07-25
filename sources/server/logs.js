@@ -221,6 +221,62 @@ export async function findEntry(storage, entryPath) {
     return null;
 }
 
+function logClassKey(storage) {
+    if (!storage || storage === globalThis.WORK)
+        return 'WORK';
+    return storage.id || storage.path || storage.dir || '';
+}
+
+async function writeLogTo(storage, log_param, written) {
+    if (!storage?.save_file)
+        return;
+    const key = logClassKey(storage);
+    if (key && written.has(key))
+        return;
+    if (key)
+        written.add(key);
+    await storage.save_file(log_param);
+}
+
+/**
+ * Записать строку лога в data.logs с fan-out (owner + кабинет автора + receivers).
+ * @param {object} storage $class-владелец ленты
+ * @param {object} row { time, sender?, content?, includes?, path?, ext?, receivers? }
+ * @param {object} [params] user, logAuthor, …
+ */
+export async function appendRow(storage, row, params = {}) {
+    if (!storage)
+        throw new Error('appendRow: нужен storage');
+    const log_param = Object.assign({}, params, {
+        ignore_save_logs: true,
+        filename: 'data.logs',
+        post: JSON.stringify(row, null, 2),
+        encoding: 'utf-8',
+    });
+    const written = new Set();
+    await writeLogTo(storage, log_param, written);
+
+    const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
+    if (authorCabinet && authorCabinet !== globalThis.WORK
+        && logClassKey(authorCabinet) !== logClassKey(storage))
+        await writeLogTo(authorCabinet, log_param, written);
+
+    let receivers = row.receivers;
+    if (typeof receivers === 'string')
+        receivers = receivers.split(',').map(s => s.trim()).filter(Boolean);
+    if (receivers?.length) {
+        receivers = receivers.filter(r => r !== storage.id);
+        if (receivers.length) {
+            const usersList = await globalThis.WORK.$users;
+            const resolved = await Promise.all(receivers.map(uid => usersList.get_item('//' + uid)));
+            for (const receiver of resolved)
+                await writeLogTo(receiver, log_param, written);
+        }
+        row.receivers = receivers;
+    }
+    return row;
+}
+
 /** Добавить пути в includes записи лога (например, шаги task.ai). */
 export async function appendIncludes(storage, entryPath, includePaths = [], params = {}) {
     if (typeof includePaths === 'string')

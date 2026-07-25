@@ -7,6 +7,7 @@ import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
+import * as LOGS from './logs.js';
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
 
@@ -334,23 +335,6 @@ export class $file extends $folder{
             'create есть только у $class (новый класс). Файл — save_file({ filename, post })',
         );
     }
-    static _logClassKey(storage) {
-        if (!storage || storage === globalThis.WORK)
-            return 'WORK';
-        return storage.id || storage.path || storage.dir || '';
-    }
-
-    static async _writeLogTo(storage, log_param, written) {
-        if (!storage?.save_file)
-            return;
-        const key = $file._logClassKey(storage);
-        if (key && written.has(key))
-            return;
-        if (key)
-            written.add(key);
-        await storage.save_file(log_param);
-    }
-
     static async save_to_history(params){
         const actor = params.user;
         let uid = actor?.uid;
@@ -367,7 +351,7 @@ export class $file extends $folder{
         let date = params.dateTime.toISOString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
-        // Логи (data.logs) пишутся через _writeLogTo без role,
+        // Логи (data.logs) пишутся через LOGS.appendRow без role,
         // поэтому они физически в meta_folder/logs/.
         // this.storage_folder для них = meta_folder/logs/.data.logs — корректно.
         // Для пользовательских файлов в $work — личная история рядом с файлом.
@@ -383,6 +367,9 @@ export class $file extends $folder{
 
         let res =  await FS.$file.save_to_log.call(file, params);
         file.reset();
+        // Папка дня могла уже закешировать children (logs/bodies) — сбросить,
+        // иначе новая .logs-запись не видна до следующего reset дерева.
+        data_history.reset();
         return res;
     }
 
@@ -395,62 +382,30 @@ export class $file extends $folder{
             log.sender = params.user.uid;
         else if (params.user === globalThis.WORK)
             log.sender = WORK.id;
-        // Инлайн текста сообщения в запись лога управляется вызывающим
-        // через params.message — ядро не знает прикладных имён файлов.
-        if (params.message != null) {
+        // Инлайн текста — только через params.message (ядро не знает имён файлов).
+        if (params.message != null)
             log.content = params.message;
-        }
-        // files.pack и message.txt — путь мультифайла (save_files):
-        // содержимое ещё берётся из post. Уедет в шаг «мультифайл на чистых логах».
-        else if (params.filename === 'files.pack') {
-            try {
-                const pack = typeof params.post === 'string' ? JSON.parse(params.post) : params.post;
-                log.content = pack?.content ?? '';
-                if (pack?.includes?.length)
-                    log.includes = pack.includes;
-            }
-            catch {
-                log.content = String(params.post ?? '');
-            }
-        }
-        else if (params.filename === 'message.txt')
-            log.content = params.post;
         log.path = this.json_model.path;
         log.type = '$file';
         if (params.filename)
             log.ext = params.filename.includes('.') ? params.filename.split('.').pop() : params.filename;
         else if (this.ext)
             log.ext = this.ext;
-        log.receivers = params.receivers?.split?.(',');
+        if (typeof params.receivers === 'string')
+            log.receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+        else if (Array.isArray(params.receivers))
+            log.receivers = params.receivers.slice();
 
-        if (params.includes?.length && !log.includes?.length)
+        if (params.includes?.length)
             log.includes = params.includes;
         if (params.mainContext)
             log.mainContext = params.mainContext;
-        if(params.ignore_save_logs) {
+        if (params.ignore_save_logs) {
             log.logFullPath = this.json_model.path;
             return log;
         }
-        const log_param = Object.assign({}, params, {ignore_save_logs: true, filename: 'data.logs', post: JSON.stringify(log, null, 2), encoding: 'utf-8'})
-
-        let $class = this.$owner || this.$parent;
-        const written = new Set();
-
-        await $file._writeLogTo($class, log_param, written);
-
-        const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
-        if (authorCabinet && authorCabinet !== globalThis.WORK
-            && $file._logClassKey(authorCabinet) !== $file._logClassKey($class))
-            await $file._writeLogTo(authorCabinet, log_param, written);
-        if (log.receivers?.length) {
-            log.receivers = log.receivers.filter(r => r !== $class.id);
-            if (log.receivers?.length) {
-                let usersList = await WORK.$users;
-                params.receivers = await Promise.all(log.receivers.map(uid => usersList.get_item('//' + uid)));
-                for (const receiver of params.receivers)
-                    await $file._writeLogTo(receiver, log_param, written);
-            }
-        }
+        const owner = this.$owner || this.$parent;
+        await LOGS.appendRow(owner, log, params);
         params.logFullPath = this.json_model.path;
         params.logPath = this.short;
         if (!params.skip_file_handler) {

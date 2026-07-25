@@ -103,7 +103,7 @@ describe('buildAiSchema server classes', () => {
         const classMethods = buildAiSchema($class.prototype);
         assert.ok(classMethods.find(m => m.name === 'logs'));
         assert.ok(classMethods.find(m => m.name === 'read_secret')?.params.name);
-        assert.ok(classMethods.find(m => m.name === 'task_reply')?.params.taskPath);
+        assert.ok(classMethods.find(m => m.name === 'save_message')?.params.message);
     });
 
     it('buildFunctionsFromSchema marks required and types', () => {

@@ -1191,9 +1191,12 @@ export class $folder extends $item{
     }
     /**
      * Сохранить несколько файлов (FormData, URL-загрузка или массив файлов).
+     * При наличии сообщения/нескольких файлов — одна лог-запись через save_message
+     * (content + includes), без физического files.pack.
      * @param {object} [params]
      * @param {object} [params.post] {files, urls, message}
-     * @returns {Promise<object>} Объект с путём сохранённого пакета файлов
+     * @param {string} [params.message] Текст сообщения (предпочтительно)
+     * @returns {Promise<object|Array>} Лог-запись сообщения, либо массив файловых логов при ignore_save_logs
      */
     async save_files(params = {}){
         let {post} = params;
@@ -1234,6 +1237,7 @@ export class $folder extends $item{
         if(post?.files)
             files.push(...post?.files)
 
+        const hasMessage = params.message != null || post?.message;
         let logs = files?.map(file=>{
             let p = Object.assign({}, params);
             if(file.originalFilename){
@@ -1245,44 +1249,48 @@ export class $folder extends $item{
                 p.post = file.buffer;
             }
 
-            p.ignore_save_logs = params.ignore_save_logs || post?.message;
+            p.ignore_save_logs = params.ignore_save_logs || hasMessage;
+            delete p.message;
             return this.save_file(p);
         }) || []
 
         logs = await Promise.all(logs);
-        if (params.metadata)
-            logs.unshift(params.metadata);
+        if (params.ignore_save_logs)
+            return logs;
 
-        if (logs.length) {
-            let content = '';
-            if (post?.message?.path)
-                content = (await fsp.readFile(post.message.path, 'utf-8')).trim();
-            else if (post?.message && Buffer.isBuffer(post.message))
-                content = post.message.toString('utf-8').trim();
-            else if (typeof post?.message === 'string')
-                content = post.message.trim();
-            if (!content)
-                content = logs.map(l => l.path?.split('/').pop()).filter(Boolean).join(', ');
-            const packBody = JSON.stringify({
-                content,
-                includes: logs.map(l => l.path).filter(Boolean),
-            }, null, 2);
-            let p = Object.assign({}, params);
-            p.filename = p.id = 'files.pack';
-            p.post = packBody;
-            p.encoding = 'utf-8';
-            if (params.ignore_save_logs)
-                p.ignore_save_logs = true;
-            const packLog = await this.save_file(p);
-            return packLog;
+        let content = '';
+        if (typeof params.message === 'string')
+            content = params.message.trim();
+        else if (post?.message?.path)
+            content = (await fsp.readFile(post.message.path, 'utf-8')).trim();
+        else if (post?.message && Buffer.isBuffer(post.message))
+            content = post.message.toString('utf-8').trim();
+        else if (typeof post?.message === 'string')
+            content = post.message.trim();
+
+        const includes = [];
+        if (params.metadata?.path)
+            includes.push(params.metadata.path.startsWith('/') ? params.metadata.path : '/' + params.metadata.path);
+        for (const l of logs) {
+            const p = l?.path;
+            if (p)
+                includes.push(p.startsWith('/') ? p : '/' + p);
         }
-        if (post?.message) {
-            let p = Object.assign({}, params);
-            p.filename = p.id = post.message.originalFilename || 'message.txt';
-            p.post = post.message;
-            return this.save_file(p);
-        }
-        return logs;
+
+        if (!content && includes.length)
+            content = includes.map(p => p.split('/').pop()).filter(Boolean).join(', ');
+
+        if (!content && !includes.length)
+            return logs;
+
+        const storage = this.$owner || this.$class || this;
+        if (typeof storage.save_message !== 'function')
+            throw new Error('save_files: нет save_message у владельца');
+        return storage.save_message({
+            ...params,
+            message: content,
+            includes,
+        });
     }
 
     /**

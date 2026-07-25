@@ -309,3 +309,53 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.equal(viaPos.path, viaObj.path, 'обе формы находят один элемент');
     });
 });
+
+describe('мультифайл на чистых логах: save_message / save_files', () => {
+    it('save_message пишет content без физического файла', async () => {
+        const marker = 'pure-msg-' + Date.now();
+        const row = await WORK.save_message({ message: marker });
+        assert.equal(row.content, marker);
+        assert.ok(!row.path, 'без path — нет файла');
+        const bodies = await WORK.logs({ mode: 'bodies', day: new Date().toISOString().slice(0, 10) });
+        assert.ok(bodies.some(r => r.content === marker), 'запись видна в logs(bodies)');
+    });
+
+    it('save_files: файлы в history, одна запись content+includes, без files.pack', async () => {
+        let folder = await WORK.get_item('/PLAIN');
+        if (!folder)
+            folder = await WORK.ensure_folder({ id: 'PLAIN' });
+        const marker = 'batch-msg-' + Date.now();
+        const row = await folder.save_files({
+            message: marker,
+            encoding: 'utf-8',
+            post: {
+                files: [
+                    { name: 'a.smoke', buffer: Buffer.from('aaa') },
+                    { name: 'b.smoke', buffer: Buffer.from('bbb') },
+                ],
+            },
+        });
+        assert.equal(row.content, marker);
+        assert.ok(Array.isArray(row.includes) && row.includes.length === 2);
+        assert.ok(row.includes.every(p => p.includes('.smoke')));
+        assert.ok(!fs.existsSync(path.join(tmp, 'PLAIN', 'files.pack')), 'files.pack не создаётся');
+        assert.ok(fs.existsSync(path.join(tmp, 'PLAIN', 'a.smoke')));
+        assert.ok(fs.existsSync(path.join(tmp, 'PLAIN', 'b.smoke')));
+    });
+
+    it('save_files(ignore_save_logs) возвращает массив файловых логов', async () => {
+        let folder = await WORK.get_item('/PLAIN');
+        if (!folder)
+            folder = await WORK.ensure_folder({ id: 'PLAIN' });
+        const logs = await folder.save_files({
+            ignore_save_logs: true,
+            encoding: 'utf-8',
+            post: {
+                files: [{ name: 'c.smoke', buffer: Buffer.from('ccc') }],
+            },
+        });
+        assert.ok(Array.isArray(logs));
+        assert.equal(logs.length, 1);
+        assert.ok(logs[0].path?.includes('c.smoke'));
+    });
+});

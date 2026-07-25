@@ -504,19 +504,18 @@ ODA({is: 'oda-chat',
             return;
         }
 
-        const formData = new FormData();
-        this.files.forEach((file) => {
-            formData.append('file', file, file.name);
-        });
         const msgText = String(this.value ?? '');
-        const file = new File([msgText], 'message.msg', { type: 'text/plain' });
+        params.message = msgText;
 
         if(!this.files.length && !this.$pdp.replyTarget) {
             this.clear();
-            params.message = msgText;
-            this.$pdp.$item.save_file(file, params).catch(onFail);
+            this.$pdp.$item.fetch('save_message', params).catch(onFail);
         } else {
-            formData.append('message', file, file.name);
+            const formData = new FormData();
+            this.files.forEach((file) => {
+                formData.append('file', file, file.name);
+            });
+            formData.append('message', msgText);
             const upload = () => {
                 this.clear();
                 this.$pdp.$item.save_files(formData, params).catch(onFail);

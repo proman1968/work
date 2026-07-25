@@ -274,6 +274,9 @@ export function createRequestHandler() {
                                     if (fields?.metadata?.[0]) {
                                         params.metadata = JSON.parse(fields.metadata[0]);
                                     }
+                                    // Текст сообщения: поле формы или (legacy) файл message
+                                    if (fields?.message?.[0] != null && params.message == null)
+                                        params.message = String(fields.message[0]);
 
                                     params.post = {};
 

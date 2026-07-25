@@ -75,14 +75,28 @@ ODA({is: 'chat-item',
                 <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
                 <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
-            <div class="content" ~if="!expanded && content" ~html="content" style="padding: 8px; font-size: small;"></div>     
+            <div class="content" ~if="!expanded && content" ~html="content" style="padding: 8px; font-size: small;"></div>
+            <div ~if="!expanded && includeFiles?.length" vertical style="padding: 4px 8px;">
+                <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
+            </div>
             <div class="body" flex vertical ~if="expanded">
-                <div ~if="hasPreview" ~is="previewTag" flex vertical :$item="$file" :log="log" :log-content="logContent"></div>
+                <div ~if="content" ~html="content" style="padding: 8px; font-size: small;"></div>
+                <div ~if="hasPreview && $file" ~is="previewTag" flex vertical :$item="$file" :log="log" :log-content="logContent"></div>
+                <div ~for="includeFiles" class="item">
+                    <chat-item visible history compact :$file="$for.item"></chat-item>
+                </div>
             </div>
         </div>
     `,
     get content() {
         return this.log?.content ?? '';
+    },
+    get includeFiles() {
+        const paths = this.log?.includes;
+        if (!paths?.length)
+            return [];
+        return Promise.all(paths.map(p => WORK.get_item(p.startsWith('/') ? p : '/' + p, 'info')))
+            .then(items => items.filter(Boolean));
     },
     get expanderIcon(){
         return this.expanded?'icons:close':'box:i-expand';
