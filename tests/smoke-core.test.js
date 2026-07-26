@@ -34,12 +34,16 @@ before(async () => {
     write('$server/class.js', `export default { label: 'WORK-SMOKE' }`);
     write('$server/$folder/class.js', `export default { fromFolderLayer: true }`);
     write('$server/$folder/$class/class.js', `export default { fromClassLayer: true }`);
-    write('$server/$folder/$file/$smoke/class.js', `export default { smokeType: true }`);
+    write('$server/$folder/$file/$smoke/class.js',
+        `export default { smokeType: true, ping() { return 'pong'; } }`);
     write('$server/$folder/$file/$smoke/triggers/on_save/$trigger/class.js',
         `export default {
     async execute(p) {
         globalThis.__SMOKE_ON_SAVE__ = (globalThis.__SMOKE_ON_SAVE__ || 0) + 1;
         globalThis.__SMOKE_LAST_LOG__ = p.logFullPath || null;
+        // Регрессия task.ai: методы merged class.js попадают на инстанс только после init
+        await p.$context.init;
+        globalThis.__SMOKE_CTX_PING__ = typeof p.$context.ping;
     }
 }`);
     write('BOX/$class/class.js', `export default { label: 'BOX', selfMarker: 'self' }`);
@@ -120,6 +124,26 @@ describe('steps файла по расширению', () => {
     });
 });
 
+describe('Reactor#async на сервере', () => {
+    // Регрессия task.ai: async(fn) без delay падал с ReferenceError,
+    // т.к. в Node нет requestAnimationFrame (голый идентификатор)
+    it('async(fn) без delay выполняет колбэк', async () => {
+        const box = await WORK.get_item('/BOX');
+        let called = false;
+        assert.doesNotThrow(() => box.async(() => { called = true; }));
+        await new Promise(r => setTimeout(r, 10));
+        assert.equal(called, true);
+    });
+
+    it('async(fn, delay) выполняет колбэк через setTimeout', async () => {
+        const box = await WORK.get_item('/BOX');
+        let called = false;
+        box.async(() => { called = true; }, 5);
+        await new Promise(r => setTimeout(r, 50));
+        assert.equal(called, true);
+    });
+});
+
 describe('save_file → history → log → on_save', () => {
     it('полный цикл сохранения файла', async () => {
         globalThis.__SMOKE_ON_SAVE__ = 0;
@@ -161,6 +185,11 @@ describe('save_file → history → log → on_save', () => {
         // 5. Триггер on_save типизатора $smoke сработал
         await new Promise(r => setTimeout(r, 800));
         assert.ok(globalThis.__SMOKE_ON_SAVE__ >= 1, 'on_save триггер вызван');
+
+        // 6. После await $context.init методы типизатора доступны на инстансе
+        // (паттерн $ai-триггера: taskFile.prompt после init)
+        assert.equal(globalThis.__SMOKE_CTX_PING__, 'function',
+            'метод class.js типизатора виден на $context после init');
     });
 
     it('params.message инлайнится в log.content для любого файла', async () => {

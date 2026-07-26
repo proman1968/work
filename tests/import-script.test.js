@@ -21,4 +21,20 @@ ODA({ is: 'x' });`;
         const data = await CORE.$folder.importScript(script);
         assert.equal(data.icon, 'enterprise:calendar');
     });
+
+    // Регрессия: merged export default должен идти после const-объявлений слоёв,
+    // иначе шортхенды (TYPES, FIELDS) падают с TDZ ReferenceError при импорте data-URL
+    it('merged chain $folder → $file → $ai imports without TDZ error', async () => {
+        const { MERGE } = await import('../sources/host/babel-merge.js');
+        const layers = [
+            './$server/$folder/class.js',
+            './$server/$folder/$file/class.js',
+            './$server/$folder/$file/$ai/class.js',
+        ].map(p => fs.readFileSync(p, 'utf8'));
+        const merged = layers.reduce((acc, code) => MERGE.mergeScripts(acc, code));
+        const data = await CORE.$folder.importScript(merged);
+        assert.equal(typeof data.prompt, 'function');
+        assert.ok(data.TYPES?.prompt, 'TYPES.prompt доступен из merged export default');
+        assert.ok(Array.isArray(data.FIELDS), 'FIELDS доступен из merged export default');
+    });
 });

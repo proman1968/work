@@ -6,7 +6,7 @@ import {
     normalizeLogWindow,
     CONTEXT_LOG_DAYS,
     CONTEXT_LOG_MAX_ROWS,
-} from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+} from '../$server/$folder/$file/$ai/class.js';
 
 describe('normalizeLogWindow', () => {
     it('defaults to CONTEXT_LOG_DAYS / MAX_ROWS', () => {

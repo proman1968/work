@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { $folder, $class, $file } from '../sources/server/index.js';
 import { looksLikeFileId } from '../sources/server/class.js';
-import { executeToolCall } from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+import { executeToolCall } from '../$server/$folder/$file/$ai/class.js';
 
 describe('looksLikeFileId', () => {
     it('detects file-like ids', () => {

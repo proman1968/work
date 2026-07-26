@@ -1,11 +1,36 @@
 /**
  * SearXNG — сервис метапоиска.
  *
- * Поиск через DuckDuckGo Instant Answer API.
+ * search — поиск через DuckDuckGo Instant Answer API.
+ * fetch_url — чтение веб-страницы (HTML → плоский текст).
  * Погода вынесена в отдельный сервис Weather.
  *
  * SCHEMA — описание методов для ИИ (function calling).
  */
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const MAX_PAGE_TEXT = 20000;
+
+/** HTML → плоский текст: без script/style/навигации, entities, сжатые пробелы. */
+function htmlToText(html = '') {
+    return String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<(?:head|nav|footer|noscript|svg|iframe)[\s\S]*?<\/(?:head|nav|footer|noscript|svg|iframe)>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\s*\n\s*/g, '\n')
+        .trim();
+}
+
 export default {
     icon: 'carbon:search',
     description: 'Поиск информации в интернете',
@@ -14,13 +39,23 @@ export default {
 
     SCHEMA: {
         search: {
-            description: 'Поиск информации в интернете',
+            description: 'Поиск информации в интернете. Результат — абстракт или список ссылок; страницы читай fetch_url.',
             params: {
                 type: 'object',
                 properties: {
                     query: { type: 'string', description: 'Поисковый запрос' },
                 },
                 required: ['query'],
+            },
+        },
+        fetch_url: {
+            description: 'Прочитать веб-страницу по URL: плоский текст без разметки (до 20000 символов). Используй после search для выбранных ссылок.',
+            params: {
+                type: 'object',
+                properties: {
+                    url: { type: 'string', description: 'Полный http(s) URL страницы' },
+                },
+                required: ['url'],
             },
         },
     },
@@ -31,12 +66,10 @@ export default {
         if (!query)
             return { error: 'Пустой поисковый запрос' };
 
-        const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-
         try {
             const ddgUrl = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json&no_html=1&skip_disambig=1&t=work-ai';
             const response = await fetch(ddgUrl, {
-                headers: { 'User-Agent': ua },
+                headers: { 'User-Agent': UA },
                 signal: AbortSignal.timeout(8000),
             });
             if (response.ok) {
@@ -69,5 +102,42 @@ export default {
         }
 
         return { error: 'Ничего не найдено', query };
+    },
+
+    /** Чтение веб-страницы: HTML → текст (для ИИ после search) */
+    async fetch_url(params = {}) {
+        const url = String(params.url || '').trim();
+        if (!/^https?:\/\//i.test(url))
+            return { error: 'Нужен полный http(s) URL' };
+
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': UA,
+                    'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+                },
+                signal: AbortSignal.timeout(12000),
+                redirect: 'follow',
+            });
+            if (!response.ok)
+                return { error: 'HTTP ' + response.status, url };
+
+            const type = String(response.headers.get('content-type') || '');
+            const raw = await response.text();
+            if (/json/i.test(type))
+                return { url, content: raw.slice(0, MAX_PAGE_TEXT), truncated: raw.length > MAX_PAGE_TEXT };
+
+            const title = (raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
+            const text = htmlToText(raw);
+            return {
+                url,
+                title,
+                content: text.slice(0, MAX_PAGE_TEXT),
+                truncated: text.length > MAX_PAGE_TEXT,
+            };
+        }
+        catch (e) {
+            return { error: 'fetch_url: ' + e.message, url };
+        }
     },
 };

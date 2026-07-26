@@ -14,13 +14,12 @@ import {
     callNeedsTrustConfirm,
     normalizeRole,
     questionsFromAskUser,
-    prepareStepsForStart,
     getDoStepPhase,
     stepNeedsClarify,
     pushToolResult,
     executeToolCall,
     parseResponseToRibbon,
-} from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+} from '../$server/$folder/$file/$ai/class.js';
 
 /** Симуляция gate harness: ACL + trust confirm (обычный write без confirm) */
 function gateToolCalls(role, calls, trustLevel = 0) {
@@ -130,15 +129,17 @@ describe('MVP e2e: USER working task', () => {
         assert.notEqual(result.path, '/USERS/u1/presentation.html');
     });
 
-    it('XML questions without options get default options (upgrade to select)', () => {
+    it('XML questions без options — открытые поля, варианты не фабрикуются', () => {
         const { blocks } = parseResponseToRibbon(
-            '<questions>[{"id":"topic","label":"Тема","type":"text"}]</questions><action>{"label":"Уточнить"}</action>',
+            '<questions>[{"id":"topic","label":"Тема","type":"text"},{"id":"style","label":"Стиль"}]</questions><action>{"label":"Уточнить"}</action>',
             'WORK',
         );
         const q = blocks.find(b => b.type === 'questions');
-        assert.ok(q, 'вопрос без options не выпадает, а апгрейдится');
-        assert.equal(q.fields[0].type, 'select');
-        assert.ok(q.fields[0].options.length >= 2, 'подставлены дефолтные варианты');
+        assert.ok(q, 'опросник разобран');
+        for (const f of q.fields) {
+            assert.equal(f.type, 'text', f.id + ': поле без options остаётся открытым');
+            assert.ok(!f.options?.length, f.id + ': опции не сфабрикованы');
+        }
     });
 
     it('XML questions with options stay as select', () => {
@@ -153,10 +154,10 @@ describe('MVP e2e: USER working task', () => {
     });
 
     it('clarify step → propose; ask_user options for USER path', () => {
-        const steps = prepareStepsForStart([
-            { step: 1, description: 'Уточнить тему презентации', status: 'proposed' },
+        const steps = [
+            { step: 1, description: 'Уточнить тему презентации', status: 'in_progress' },
             { step: 2, description: 'Сохранить файл', status: 'proposed' },
-        ]);
+        ];
         assert.equal(stepNeedsClarify(steps[0]), true);
         assert.equal(getDoStepPhase({ steps, ribbon: [] }), 'propose');
         const q = questionsFromAskUser({

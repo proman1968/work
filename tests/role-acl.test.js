@@ -5,7 +5,7 @@ import {
     formatRoleAclForSystem,
     isSystemModifyCall,
     roleBlocksTool,
-} from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+} from '../$server/$folder/$file/$ai/class.js';
 
 describe('normalizeRole', () => {
     it('canonicalizes and defaults to USER', () => {

@@ -76,13 +76,10 @@ export const MERGE =
                 mergedExportDefault = exportDefault1 || exportDefault2;
             }
 
-            // Р’СЃС‚Р°РІР»СЏРµРј export default РІ РїСЂР°РІРёР»СЊРЅСѓСЋ РїРѕР·РёС†РёСЋ
-            if (mergedExportDefault) {
-                const insertIndex = exportDefaultIndex1 !== -1 ?
-                    Math.min(exportDefaultIndex1, mergedNodes.length) :
-                    mergedNodes.length;
-                mergedNodes.splice(insertIndex, 0, mergedExportDefault);
-            }
+            // export default — всегда в конец: объектный литерал вычисляется на месте,
+            // и ссылки-шортхенды на const слоёв (TDZ) должны идти после их объявлений
+            if (mergedExportDefault)
+                mergedNodes.push(mergedExportDefault);
 
             const newAST = t.program(mergedNodes);
             let code = generate.default(newAST);
