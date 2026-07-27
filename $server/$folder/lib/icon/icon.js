@@ -33,25 +33,17 @@ export default {
     subIcon:{
         $def: '',
         get (){
-            if (this.isUser){
-                return this.online?.then?.(res=>{
-                    return (res?'unicon:check-circle':null);
-                })
-            }
-
-            return this.$item?.subIcon;
+            if (!this.isUser)
+                return this.$item?.subIcon;
+            return Promise.resolve(this.online).then(res => res ? 'unicon:check-circle' : '');
         }
-
     },
     subIconColor:{
         $def: '',
         get (){
-            if (this.isUser){
-                return this.online?.then?.(res=>{
-                    return (res?'lime':'');
-                })
-            }
-            return '';
+            if (!this.isUser)
+                return '';
+            return Promise.resolve(this.online).then(res => res ? 'lime' : '');
         }
     },
     get default(){

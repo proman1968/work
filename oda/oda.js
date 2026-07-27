@@ -696,7 +696,7 @@ class VNode{
             old.parentNode.replaceChild(element, old);
             if(comment)
                 comment.__replacer__ = element;
-            old.$for = undefined;
+            // Не сбрасывать $for: cache общий у old/new, иначе ~is+~for ломает ~props
         }
         return element;
     }

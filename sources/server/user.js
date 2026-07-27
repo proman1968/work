@@ -15,6 +15,9 @@ export class $user extends $class{
             icon:{
                 get(){
                     let icon = this.DATA?.icon;
+                    const pngPath = `./USERS/${this.id}/$user/icon.png`;
+                    if (!icon && fs.existsSync(pngPath))
+                        icon = `/USERS//${this.id}/$user/icon.png`;
                     if(!icon){
                         icon = this.label.split(' ');
                         while(icon.length>2)
