@@ -702,16 +702,17 @@ export class $class extends $folder{
         return null;
     }
 
-    _secretPath(name){
-        if (!this.meta_folder)
+    _secretPath(filename){
+        if (!this.meta_folder || !filename)
             return null;
-        return this.meta_folder.dir + '/#system/' + name + '.json';
+        return this.meta_folder.dir + '/#secret/' + filename;
     }
 
-    async _ensureSystemDir(){
-        const dir = this.meta_folder?.dir + '/#system';
-        if (dir)
-            fs.mkdirSync(dir, { recursive: true });
+    /** Legacy: секреты раньше лежали в #system/. */
+    _legacySecretPath(filename){
+        if (!this.meta_folder || !filename)
+            return null;
+        return this.meta_folder.dir + '/#system/' + filename;
     }
 
     /**
@@ -813,6 +814,8 @@ export class $class extends $folder{
 
     /**
      * Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, ADMIN → ADMIN точки.
+     * Текущая params.role (UI) ограничивает эффективные права: при role≠ADMIN Work ADMIN
+     * не получает bypass на ADMIN-операции.
      */
     async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
         if ($class.isDevMode) return;
@@ -821,7 +824,8 @@ export class $class extends $folder{
         const uid = $class.resolveUid(params);
         if (!uid && level !== $class.ACCESS_LEVEL.READ)
             throw new Error(ACCESS_DENIED);
-        if (globalThis.WORK && await this._isWorkAdmin(params))
+        const roleIsAdmin = !params.role || params.role === $class.ROLES.ADMIN;
+        if (roleIsAdmin && globalThis.WORK && await this._isWorkAdmin(params))
             return;
         switch (level) {
             case $class.ACCESS_LEVEL.READ:
@@ -833,6 +837,8 @@ export class $class extends $folder{
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.ADMIN:
+                if (params.role && params.role !== $class.ROLES.ADMIN)
+                    throw new Error(ACCESS_DENIED);
                 if (globalThis.WORK && await this._isWorkAdmin(params))
                     return;
                 throw new Error(ACCESS_DENIED);
@@ -874,18 +880,19 @@ export class $class extends $folder{
     }
 
     /**
-     * Прочитать секрет из #system. Требует ADMIN.
+     * Прочитать секрет из #secret (fallback: #system). Требует ADMIN.
      * @param {object} [params]
-     * @param {string} params.name Имя модуля
+     * @param {string} params.filename Имя файла секрета (например email.json)
      * @returns {Promise<object>} Данные секрета или {}
      */
     async read_secret(params = {}){
         await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
-        const name = params.name;
-        if (!name)
-            throw new Error('Не указано имя модуля');
-        const path = this._secretPath(name);
-        if (path && fs.existsSync(path)) {
+        const filename = params.filename;
+        if (!filename)
+            throw new Error('Не указано имя файла');
+        for (const path of [this._secretPath(filename), this._legacySecretPath(filename)]) {
+            if (!path || !fs.existsSync(path))
+                continue;
             try {
                 return JSON.parse(fs.readFileSync(path, { encoding: 'utf-8' }));
             }
@@ -897,29 +904,23 @@ export class $class extends $folder{
     }
 
     /**
-     * Сохранить секрет в #system. Требует ADMIN.
+     * Сохранить секрет в #secret через save_file (файл + history; лог как обычно).
+     * Требует ADMIN. Caller передаёт готовые filename и post.
      * @param {object} [params]
-     * @param {string} params.name Имя модуля
-     * @param {object|string} params.post Данные секрета
-     * @returns {Promise<object>} Сохранённые данные
+     * @param {string} params.filename Имя файла секрета (например email.json)
+     * @param {string|Buffer} params.post Тело файла
+     * @returns {Promise<object>} Запись лога (path = history-снимок)
      */
     async save_secret(params = {}){
         await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
-        const name = params.name;
-        if (!name)
-            throw new Error('Не указано имя модуля');
-        let data = params.post;
-        if (typeof data === 'string')
-            data = JSON.parse(data);
-        if (!data || typeof data !== 'object')
-            throw new Error('Некорректные данные секрета');
-        await this._ensureSystemDir();
-        fs.writeFileSync(this._secretPath(name), JSON.stringify(data, null, 2), { encoding: 'utf-8' });
-        this.meta_folder?.reset();
-        // Прикладная реакция на секрет — необязательный член слоя 2 (class.js типизатора).
-        // Ядро не знает имён модулей ('email' и т.п.).
-        await this.on_secret_save?.({ name, data, params });
-        return data;
+        if (!params.filename)
+            throw new Error('Не указано имя файла');
+        if (params.post == null)
+            throw new Error('Не указано тело файла');
+        if (!this.meta_folder)
+            throw new Error('Нет метапапки класса');
+        const secretFolder = await this.meta_folder._get_item('#secret', FS.$folder);
+        return secretFolder.save_file({ ...params });
     }
 
     /**

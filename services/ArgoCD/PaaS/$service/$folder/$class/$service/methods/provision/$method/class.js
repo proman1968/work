@@ -196,7 +196,7 @@ async function resolveService(params, orderFile) {
     const fromOrder = orderFile?.$class || orderFile?.$owner || orderFile?.$class;
     if (fromOrder?.type === '$service')
         return fromOrder;
-    return WORK.get_item('/SERVICES/ArgoCD/PaaS/prod');
+    return WORK.get_item('/SERVICES/ArgoCD/PaaS');
 }
 
 async function resolveArgo(paasService) {

@@ -53,7 +53,17 @@ export default {
     get hexagon() {
         return this.$('#hexagon');
     },
+    user_icon: {
+        $def: 'icons:account-circle',
+        get() {
+            return Promise.resolve(WORK.USER?.icon).then(i => i || 'icons:account-circle');
+        }
+    },
     get left_buttons() {
+        let user_icon = this.user_icon;
+        if (user_icon && typeof user_icon.then === 'function')
+            user_icon = 'icons:account-circle'; // пока грузится
+        const user_color = WORK.USER?.iconColor || 'transparent';
         let buttons = [
             {
                 round: true,
@@ -71,13 +81,12 @@ export default {
             },
             {
                 round: true,
-                get icon(){
-                    return WORK.USER?.icon || 'icons:account-circle'
-                },
+                icon: user_icon,
+                default: 'icons:account-circle',
+                style: `color: white; fill: white; background:${user_color}`,
                 click: (e) => {
                     this.showUser = true;
                 },
-                style: 'color: white; fill: white; background:'  + WORK.USER?.iconColor || 'transparent',
                 get errorInvert(){
                     return !WORK.uid;
                 }
@@ -132,6 +141,11 @@ export default {
             }
         })
         window.explorer = this;
+        WORK.authEvents?.addEventListener('auth', () => {
+            this.user_icon = undefined;
+            this.left_buttons = undefined;
+            this.render?.();
+        });
         window.execute = async ($item) => {
             let url = window.location.origin + window.location.pathname + '#' + $item.short;
             if ($item.type !== '$handler')

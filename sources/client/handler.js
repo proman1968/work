@@ -14,20 +14,44 @@ export class $handler extends $class{
         await WORK(prototype);
         return await prototype;
     }
-    async execute(...params){
-        let $item = Reactor.activate(this);
-        $item.$context = await $item.$context;
-        let module = await import($item.short + '/~/class.js');
-        if (module.default.execute) {
-            module.default.execute.call($item, ...params);
+    async execute(...params) {
+        const module = this.module;
+        if (module.execute) {
+            module.execute.call(this, ...params);
             return;
         }
-        if ($item.short.includes('form')) {
+
+        if (this.short.includes('form')) {
             if (window.execute) {
-                window.execute($item);
+                window.execute(this);
                 return;
             }
         }
-        window.open($item.short + '/');
+        window.open(this.short + '/');
+    }
+    async showSettings(...params) {
+        const module = await this.module;
+        if (module.showSettings) {
+            // todo: заменить на 'call(this', когда заработает bind.
+            module.showSettings(this, ...params);
+        }
+    }
+    get hasSettings() {
+        return new AsyncPromise(async () => {
+            try {
+                const module = await this.module;
+                return typeof module?.showSettings === 'function';
+            } catch {
+                return false;
+            }
+        });
+    }
+    get module() {
+        return new AsyncPromise(async () => {
+            const $item = Reactor.activate(this);
+            $item.$context = await $item.$context;
+            const module = await import($item.short + '/~/class.js');
+            return module.default;
+        });
     }
 }

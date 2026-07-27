@@ -251,7 +251,7 @@ export default {
 
     tariff: '',
     subdomain: '',
-    servicePath: '/SERVICES/ArgoCD/PaaS/prod',
+    servicePath: '/SERVICES/ArgoCD/PaaS',
     error: '',
     orderResult: null,
     domainStatus: '',

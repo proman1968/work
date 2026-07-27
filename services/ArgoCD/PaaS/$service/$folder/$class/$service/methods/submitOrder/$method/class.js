@@ -4,13 +4,16 @@ export default {
         if (!uid)
             throw new Error('Требуется авторизация');
 
-        const service = params.$service
+        const service = params.$context
+            || params.$service
             || (this && typeof this.save_file === 'function' ? this : null)
             || await resolveService(params);
         if (!service?.save_file)
             throw new Error('PaaS-сервис не найден');
 
-        let body = typeof post === 'string' ? safeParse(post) : (post || params.order || {});
+        let body = typeof post === 'string' ? safeParse(post) : (post || params.post || params.order || {});
+        if (typeof body === 'string')
+            body = safeParse(body);
         if (!body || typeof body !== 'object')
             throw new Error('Пустая заявка');
 
@@ -28,11 +31,9 @@ export default {
         if (baseDomain && typeof baseDomain.then === 'function')
             baseDomain = await baseDomain;
         baseDomain = String(baseDomain || '').replace(/^\.+/, '');
-        if (!baseDomain)
-            throw new Error('Не задан baseDomain в настройках сервиса');
 
-        const fqdn = subdomain + '.' + baseDomain;
-        const url = 'https://' + fqdn;
+        const fqdn = baseDomain ? (subdomain + '.' + baseDomain) : '';
+        const url = fqdn ? ('https://' + fqdn) : '';
 
         const existing = await WORK.get_item('/PAAS/' + subdomain, 0, undefined, { user: globalThis.WORK });
         if (existing?.type === '$paas')
@@ -43,7 +44,6 @@ export default {
             subdomain,
             fqdn,
             url,
-            status: 'pending',
             buyer: uid,
             created: Date.now(),
             paasPath: '/PAAS/' + subdomain,
@@ -59,25 +59,16 @@ export default {
             skip_file_handler: true,
         });
 
-        const methods = await service._methods;
-        const provision = methods?.provision;
-        let provisionResult = null;
-        if (typeof provision?.execute === 'function') {
-            provisionResult = await provision.execute({
-                $service: service,
-                order,
-                user: params.user,
-            });
-        }
-
-        return { ok: true, order, ...provisionResult };
+        return { ok: true, order };
     },
 };
 
 async function resolveService(params) {
     if (params.$service?.save_file)
         return params.$service;
-    return WORK.get_item(params.servicePath || '/SERVICES/ArgoCD/PaaS/prod');
+    if (params.$context?.save_file)
+        return params.$context;
+    return WORK.get_item(params.servicePath || '/SERVICES/ArgoCD/PaaS');
 }
 
 function normalizeSubdomain(raw) {

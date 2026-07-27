@@ -19,7 +19,7 @@
 - `read_log_entry()` — одна запись лога по пути history-файла
 - `append_log_includes()` — добавить пути в includes записи лога
 - `save_message({ message, includes })` — чистая лог-запись (сообщение без файла)
-- `read_secret()` / `save_secret()` — секреты модулей в `#system/`
+- `read_secret()` / `save_secret()` — секреты модулей в `#secret/`
 
 ## Метапапка
 

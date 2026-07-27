@@ -1,11 +1,18 @@
 import * as fs from 'node:fs';
 import { FS } from '../../../../sources/server/index.js';
 
-export function secretPath(item, name) {
+export function secretPath(item, filename = 'email.json') {
     const dir = item.meta_folder?.dir;
     if (!dir)
         return null;
-    return dir + '/#system/' + name + '.json';
+    return dir + '/#secret/' + filename;
+}
+
+function legacySecretPath(item, filename = 'email.json') {
+    const dir = item.meta_folder?.dir;
+    if (!dir)
+        return null;
+    return dir + '/#system/' + filename;
 }
 
 export function normalizeEmailSettings(raw = {}) {
@@ -21,8 +28,9 @@ function itemId(item) {
 }
 
 export function readEmailSettings(item) {
-    const path = secretPath(item, 'email');
-    if (path && fs.existsSync(path)) {
+    for (const path of [secretPath(item, 'email.json'), legacySecretPath(item, 'email.json')]) {
+        if (!path || !fs.existsSync(path))
+            continue;
         try {
             return normalizeEmailSettings(
                 JSON.parse(fs.readFileSync(path, { encoding: 'utf-8' }))

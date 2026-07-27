@@ -549,11 +549,10 @@ class WebSocketEvents {
                 if(item){
                     const LISTS = item.constructor.LISTS || CORE.$item.LISTS;
                     for(let key of LISTS){
-                        if (key in item)
-                            item[key] = undefined;
-                            delete item[key];
+                        delete item[key];
+                        if (item[R]?.cache)
+                            item[R].cache[key] = undefined;
                     }
-                    // item[R].cache = {};
                     item.fire('changed', data);
                     item.increaseVersion();
                 }

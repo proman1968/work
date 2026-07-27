@@ -262,7 +262,7 @@ ODA({is: 'app-tabs',
                 font-size: x-small;
                 order: {{mobile?1:0}};
             }
-            oda-button {
+            for-contents > * {
                  padding: 2px;
                  aspect-ratio: 1/1;
                  width: {{mobile?'auto':'-webkit-fill-available'}};
@@ -273,7 +273,7 @@ ODA({is: 'app-tabs',
             <oda-button :label="$for.item.label" :light="focusedIndex === $for.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px;" @tap="setIndex($for.index)"></oda-button>
         </div>
         <div flex></div>
-        <oda-button ~for="buttons" ~props="$for.item" style="margin: 8px;" @tap="$pdp.closed = true"></oda-button>
+        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 8px;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
     `,
     get mobile() {
         return this.host.mobile

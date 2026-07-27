@@ -1,10 +1,14 @@
-export default{
+export default {
     icon: 'enterprise:email',
     imports: 'oda//app-layout',
     extends: 'oda-app-layout',
     template: /* html */`
         <oda-form-email slot="main" flex :$item></oda-form-email>
-    `
+    `,
+    async showSettings($item, ...params) {
+        // todo: заменить $item на this, когда заработает bind
+        return runEmailSettingsDialog($item);
+    }
 }
 
 function parseEmlClient(raw) {
@@ -87,22 +91,66 @@ function mailboxesToAccounts(mailboxes = {}) {
     }));
 }
 
-function accountsToMailboxes(accounts = []) {
+function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
     const mailboxes = Object.create(null);
     for (const acc of accounts) {
-        const address = String(acc.address || '').trim();
+        const address = String(acc.auth?.user || '').trim();
         if (!address)
             continue;
+        const prevPass = previousMailboxes[address]?.auth?.pass || '';
+        const nextPass = acc.auth?.pass || '';
         mailboxes[address] = {
             smtp: { ...acc.smtp },
             imap: { ...acc.imap },
             auth: {
-                user: String(acc.auth?.user || address).trim(),
-                pass: acc.auth?.pass || '',
+                user: address,
+                pass: nextPass || prevPass || '',
             },
         };
     }
     return mailboxes;
+}
+
+async function runEmailSettingsDialog($item) {
+    const settings = await $item.fetch('read_secret', { filename: 'email.json' });
+    const el = ODA.createElement('oda-email-settings', {
+        accounts: mailboxesToAccounts(settings?.mailboxes),
+    });
+    if (!el.accounts.length) {
+        el.addAccount();
+    }
+    else {
+        el.index = 0;
+    }
+    try {
+        await WORK.showDialog(el, {
+            TITLE: { label: 'Почтовые ящики', icon: 'enterprise:email' },
+            OK: { label: 'Сохранить', icon: 'icons:save' },
+            CANCEL: { label: 'Отмена', icon: 'icons:close' },
+        });
+    }
+    catch {
+        return null;
+    }
+    try {
+        el.validate();
+        const mailboxes = accountsToMailboxes(el.accounts, settings?.mailboxes);
+        await $item.fetch(
+            'save_secret',
+            { filename: 'email.json' },
+            JSON.stringify({ mailboxes }),
+        );
+        // await $item.fetch(
+        //     'ensure_mailbox_folders',
+        //     {},
+        //     JSON.stringify({ mailboxes }),
+        // );
+        return mailboxes;
+    }
+    catch (e) {
+        alert(e.message || e);
+        return null;
+    }
 }
 
 ODA({
@@ -114,7 +162,7 @@ ODA({
                 @apply --horizontal;
                 @apply --flex;
                 min-width: 640px;
-                min-height: 420px;
+                min-height: 320px;
                 overflow: hidden;
             }
             .accounts {
@@ -132,12 +180,10 @@ ODA({
                 align-items: center;
             }
             .account-item {
-                padding: 10px 12px;
+                @apply --horizontal;
+                padding: 10px 8px 10px 12px;
                 cursor: pointer;
                 border-bottom: 1px solid rgba(0,0,0,.06);
-            }
-            .account-item[active] {
-                @apply --selection;
             }
             .account-title {
                 font-weight: 500;
@@ -205,37 +251,32 @@ ODA({
             </div>
             <div flex style="overflow-y:auto;">
                 <div ~for="accounts" class="account-item"
-                    :active="index === $for.index"
+                    :info-invert="index === $for.index"
                     @tap="index = $for.index">
-                    <div class="account-title">{{$for.item.address || '(новый)'}}</div>
-                    <div class="account-sub">{{$for.item.smtp?.host || 'SMTP не задан'}}</div>
+                    <div vertical flex>
+                        <div class="account-title">{{$for.item.auth?.user || '(новый)'}}</div>
+                        <div class="account-sub">{{$for.item.smtp?.host || 'SMTP не задан'}}</div>
+                    </div>
+                    <oda-button ~if="index === $for.index" icon="icons:delete" title="Удалить ящик" @tap="removeAccount($for.index)"></oda-button>
                 </div>
                 <div ~if="!accounts.length" class="empty">Нет ящиков</div>
             </div>
         </div>
         <div class="editor" vertical flex>
             <div ~if="accounts[index]" vertical flex>
-                <fieldset>
-                    <legend>Адрес e-mail</legend>
-                    <input type="email" placeholder="name@example.com" ::value="accounts[index].address">
-                </fieldset>
-                <div class="presets" horizontal>
-                    <oda-button ~for="presetList" @tap="applyPreset($for.item.id)">{{$for.item.label}}</oda-button>
+                <div class="row" horizontal>
+                    <fieldset flex>
+                        <legend>Логин</legend>
+                        <input placeholder="user@example.com" ::value="accounts[index].auth.user">
+                    </fieldset>
+                    <fieldset flex>
+                        <legend>Пароль</legend>
+                        <input type="password" placeholder="••••••••" ::value="accounts[index].auth.pass">
+                    </fieldset>
                 </div>
-                <fieldset>
-                    <legend>Исходящая (SMTP)</legend>
-                    <input placeholder="smtp.example.com" ::value="accounts[index].smtp.host">
-                    <div class="row" horizontal>
-                        <fieldset class="port">
-                            <legend>Порт</legend>
-                            <input type="number" ::value="accounts[index].smtp.port">
-                        </fieldset>
-                        <label horizontal style="gap:4px; align-items:center;">
-                            <oda-checkbox ::value="accounts[index].smtp.secure"></oda-checkbox>
-                            <span>SSL/TLS</span>
-                        </label>
-                    </div>
-                </fieldset>
+                <!--<div class="presets" horizontal>
+                    <oda-button ~for="presetList" @tap="applyPreset($for.item.id)">{{$for.item.label}}</oda-button>
+                </div>-->
                 <fieldset>
                     <legend>Входящая (IMAP)</legend>
                     <input placeholder="imap.example.com" ::value="accounts[index].imap.host">
@@ -250,17 +291,20 @@ ODA({
                         </label>
                     </div>
                 </fieldset>
-                <div class="row" horizontal>
-                    <fieldset flex>
-                        <legend>Логин</legend>
-                        <input placeholder="user@example.com" ::value="accounts[index].auth.user">
-                    </fieldset>
-                    <fieldset flex>
-                        <legend>Пароль</legend>
-                        <input type="password" placeholder="••••••••" ::value="accounts[index].auth.pass">
-                    </fieldset>
-                </div>
-                <oda-button error icon="icons:delete" @tap="removeAccount" style="align-self:flex-start; margin-top:8px;">Удалить ящик</oda-button>
+                <fieldset>
+                    <legend>Исходящая (SMTP)</legend>
+                    <input placeholder="smtp.example.com" ::value="accounts[index].smtp.host">
+                    <div class="row" horizontal>
+                        <fieldset class="port">
+                            <legend>Порт</legend>
+                            <input type="number" ::value="accounts[index].smtp.port">
+                        </fieldset>
+                        <label horizontal style="gap:4px; align-items:center;">
+                            <oda-checkbox ::value="accounts[index].smtp.secure"></oda-checkbox>
+                            <span>SSL/TLS</span>
+                        </label>
+                    </div>
+                </fieldset>
             </div>
             <div ~if="!accounts[index]" class="empty" flex>Выберите ящик или нажмите «+»</div>
         </div>
@@ -279,28 +323,32 @@ ODA({
         this.index = this.accounts.length - 1;
         this.render();
     },
-    removeAccount() {
-        if (this.index < 0)
+    removeAccount(index) {
+        if (index < 0)
             return;
-        this.accounts.splice(this.index, 1);
-        this.index = Math.min(this.index, this.accounts.length - 1);
-        this.render();
+        this.accounts.splice(index, 1);
+        this.async(() => {
+            if (this.index >= index) {
+                this.index = Math.min(this.index, this.accounts.length - 1);
+            }
+            this.render();
+        })
     },
-    applyPreset(presetId) {
-        const acc = this.current;
-        const preset = MAIL_PRESETS[presetId];
-        if (!acc || !preset)
-            return;
-        acc.smtp = { ...acc.smtp, ...preset.smtp };
-        acc.imap = { ...acc.imap, ...preset.imap };
-        this.render();
-    },
+    // applyPreset(presetId) {
+    //     const acc = this.accounts[this.index];
+    //     const preset = MAIL_PRESETS[presetId];
+    //     if (!acc || !preset)
+    //         return;
+    //     acc.smtp = { ...acc.smtp, ...preset.smtp };
+    //     acc.imap = { ...acc.imap, ...preset.imap };
+    //     this.render();
+    // },
     validate() {
-        const addresses = this.accounts.map(a => String(a.address || '').trim()).filter(Boolean);
-        if (this.accounts.some(a => !String(a.address || '').trim()))
-            throw new Error('Укажите адрес e-mail для каждого ящика');
-        if (addresses.length !== new Set(addresses).size)
-            throw new Error('Адреса ящиков должны быть уникальными');
+        const logins = this.accounts.map(a => String(a.auth?.user || '').trim()).filter(Boolean);
+        if (this.accounts.some(a => !String(a.auth?.user || '').trim()))
+            throw new Error('Укажите логин e-mail для каждого ящика');
+        if (logins.length !== new Set(logins).size)
+            throw new Error('Логины ящиков должны быть уникальными');
     },
 });
 
@@ -411,9 +459,8 @@ ODA({
         </style>
         <div class="sidebar" vertical>
             <div class="toolbar" horizontal>
-                <oda-button icon="icons:settings" @tap="openSettings" title="Настройки ящиков"></oda-button>
+                <oda-button icon="icons:add" @tap="startCompose" title="Написать"></oda-button>
                 <oda-button icon="icons:refresh" @tap="refreshMessages" title="Обновить"></oda-button>
-                <oda-button icon="icons:create" @tap="startCompose" title="Написать"></oda-button>
             </div>
             <div flex vertical>
                 <div class="sidebar-section">Ящики</div>
@@ -514,44 +561,9 @@ ODA({
         this._watch = true;
     },
     async loadSettings() {
-        this._settings = await this.$item.fetch('read_secret', { name: 'email' });
+        this._settings = await this.$item.fetch('read_secret', { filename: 'email.json' });
     },
-    async openSettings() {
-        if (!this.structureId) {
-            alert('Откройте почту из группы ($structure), не из корня storage');
-            return;
-        }
-        await this.loadSettings();
-        const el = ODA.createElement('oda-email-settings', {
-            accounts: mailboxesToAccounts(this._settings?.mailboxes),
-        });
-        if (!el.accounts.length) {
-            el.addAccount();
-        }
-        else {
-            el.index = 0;
-        }
-        try {
-            await WORK.showDialog(el, {
-                TITLE: { label: 'Почтовые ящики', icon: 'enterprise:email' },
-                OK: { label: 'Сохранить', icon: 'icons:save' },
-                CANCEL: { label: 'Отмена', icon: 'icons:close' },
-            });
-            el.validate();
-            const mailboxes = accountsToMailboxes(el.accounts);
-            await this.$item.fetch(
-                'save_secret',
-                { name: 'email' },
-                JSON.stringify({ mailboxes }),
-            );
-            await this.loadSettings();
-            const list = Object.keys(mailboxes);
-            if (!list.includes(this.selectedAddress))
-                this.selectedAddress = list[0] || '';
-            await this.refreshMessages();
-        }
-        catch { /* cancel */ }
-    },
+
     selectMailbox(address) {
         this.selectedAddress = address;
         this.selectedRow = null;
@@ -647,7 +659,7 @@ ODA({
         const address = this.selectedAddress;
         if (!address)
             return;
-        const settings = this._settings || await this.$item.fetch('read_secret', { name: 'email' });
+        const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
         const box = settings?.mailboxes?.[address];
         const eml = defaultEml({
             from: box?.auth?.user || address,

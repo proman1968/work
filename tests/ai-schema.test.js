@@ -105,7 +105,7 @@ describe('buildAiSchema server classes', () => {
         assert.ok(!fileMethods.find(m => m.name === 'edit_file'), 'edit_file не в schema (deprecated)');
         const classMethods = buildAiSchema($class.prototype);
         assert.ok(classMethods.find(m => m.name === 'logs'));
-        assert.ok(classMethods.find(m => m.name === 'read_secret')?.params.name);
+        assert.ok(classMethods.find(m => m.name === 'read_secret')?.params.filename);
         assert.ok(classMethods.find(m => m.name === 'save_message')?.params.message);
     });
 
