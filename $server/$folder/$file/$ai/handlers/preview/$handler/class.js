@@ -122,7 +122,7 @@ function formatUsageLine(u) {
 // ─── shell ───────────────────────────────────────────────────────────
 
 export default {
-    imports: 'oda//button, oda//icon, ~/lib//tree, oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//button, oda//icon, ~/lib//tree, oda//markdown//markdown-viewer',
     template: /* html */`
         <style>
             :host {
@@ -157,10 +157,8 @@ export default {
             :context-pct="contextPct"
             :pending-action="!!data?.pendingAction"
             :tip-button="open?.button || null"
-            @action="confirm(true)"
-            @cancel-action="confirm(false)"
-            @tip-confirm="confirm(true)"
-            @tip-cancel="confirm(false)"
+            @confirm="confirm(true)"
+            @cancel="confirm(false)"
             @send="pending ? stopGeneration() : send()"
             @get-file="getFile"
             @select-model="selectModel($event.detail?.value || $event)"
@@ -634,10 +632,10 @@ ODA({ is: 'microchat-ribbon',
             }
             .ribbon { @apply --vertical; }
         </style>
-        <div class="ribbon" ~for="items">
-            <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
+  
+        <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item" ~for="items"
                 @confirm="fire('confirm')" @cancel="fire('cancel')"></div>
-        </div>
+
         <microchat-streaming ~if="pending && streamingText" :text="streamingText"></microchat-streaming>
     `,
     items: [],
@@ -679,10 +677,13 @@ ODA({ is: 'microchat-panel',
                 border: none; outline: none; resize: none; min-width: 0; padding: 6px 4px;
                 max-height: 10em; overflow-y: auto; font-family: inherit; background: transparent;
             }
-            .btn-warning { @apply --warning-invert; }
-            .btn-error { @apply --error-invert; }
-            .btn-success { @apply --success-invert; }
-            .btn-info { @apply --info-invert; }
+            .btn-warning { @apply --warning; }
+            .btn-error {
+                border-radius: 50%;
+                @apply --error; 
+            }
+            .btn-success { @apply --success; }
+            .btn-info { @apply --info; }
             .tip-actions { @apply --horizontal; gap: 6px; align-items: stretch; padding: 0 2px 6px; }
             .attach-chip {
                 @apply --horizontal; @apply --accent-invert; max-width: 150px;
@@ -713,22 +714,16 @@ ODA({ is: 'microchat-panel',
                 @apply --dark-invert; @apply --raised; z-index: 2; pointer-events: none;
             }
         </style>
-        <div ~if="pendingAction" horizontal style="gap: 4px; padding: 0 2px 6px;">
-            <oda-button flex class="btn-warning" icon="icons:check" :icon-size="iconSize * .8"
-                label="Подтвердить" @tap="fire('action')"></oda-button>
-            <oda-button class="btn-error" icon="icons:close" :icon-size="iconSize * .8"
-                @tap="fire('cancel-action')"></oda-button>
-        </div>
-        <div class="tip-actions" ~if="!pendingAction && tipButton?.label">
-            <oda-button flex
-                :class="'btn-' + (tipButton.color || 'success')"
+        <div class="tip-actions" ~if="confirmUi">
+            <oda-button border hide-icon flex style="border-radius: 8px;"
+                :class="'btn-' + (confirmUi.color || 'success')"
                 icon="icons:check" :icon-size="iconSize * .8"
-                :label="tipButton.label"
-                @tap="fire('tip-confirm')"></oda-button>
-            <oda-button class="btn-error" icon="icons:close" :icon-size="iconSize * .8"
-                @tap="fire('tip-cancel')"></oda-button>
+                :label="confirmUi.label"
+                @tap="fire('confirm')"></oda-button>
+            <oda-button border class="btn-error" icon="icons:close" :icon-size="iconSize * .8"
+                @tap="fire('cancel')"></oda-button>
         </div>
-        <div class="composer">
+        <div class="composer" border>
             <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0;">
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -767,6 +762,13 @@ ODA({ is: 'microchat-panel',
     pending: false,
     pendingAction: false,
     tipButton: null,
+    get confirmUi() {
+        if (this.pendingAction)
+            return { label: 'Подтвердить', color: 'warning' };
+        if (this.tipButton?.label)
+            return { label: this.tipButton.label, color: this.tipButton.color || 'success' };
+        return null;
+    },
     recording: false,
     timer: '',
     files: [],
@@ -797,7 +799,6 @@ ODA({ is: 'microchat-view-prompt',
             :host {
                 @apply --horizontal; @apply --info-invert; @apply --raised;
                 padding: 8px; position: sticky; top: 0; gap: 8px; align-items: flex-start;
-                margin: 8px 0px;
             }
             .msg { white-space: pre-wrap; word-break: break-word; }
             .time { font-size: xx-small; opacity: .5; flex-shrink: 0; }
@@ -860,7 +861,7 @@ ODA({ is: 'microchat-view-text',
         </div>
         <div class="usage" ~if="usageLine">{{usageLine}}</div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//markdown//markdown-viewer',
     get content() { return this.data?.content || ''; },
     get usageLine() { return formatUsageLine(this.data?.usage); },
 });
@@ -883,7 +884,7 @@ ODA({ is: 'microchat-view-action',
         </div>
         <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//markdown//markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get usageLine() { return formatUsageLine(this.data?.usage); },
@@ -905,7 +906,7 @@ ODA({ is: 'microchat-view-form',
             <microchat-field :field="$for.item"></microchat-field>
         </div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//markdown//markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get fields() { return this.data?.fields || []; },
@@ -933,7 +934,7 @@ ODA({ is: 'microchat-view-questions',
         </div>
         <div class="hint" ~if="needAnswers">Выберите варианты или введите «другое…»</div>
     `,
-    imports: 'oda/components/editors/markdown/markdown-viewer/markdown-viewer',
+    imports: 'oda//markdown//markdown-viewer',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get fields() { return this.data?.fields || []; },

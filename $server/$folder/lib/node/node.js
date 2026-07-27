@@ -82,7 +82,7 @@ export default {
                     <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
-                    <item-user ~if="showBoss" :$item="boss" icon-size="16"></item-user>
+                    <item-user border ~if="showBoss" :$item="boss" icon-size="16"></item-user>
                 </div>
                 <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>
