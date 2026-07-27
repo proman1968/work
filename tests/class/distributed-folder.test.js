@@ -1,4 +1,4 @@
-import '../../oda/reactor.js';
+import '../../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { $folder, $class } from '../../sources/server/index.js';
@@ -7,7 +7,7 @@ import { $server } from '../../sources/server/server.js';
 /** Ожидаемая distributed-папка: та же прогулка, что collect_tilde до meta_folder. */
 async function expectedDistributedFolder(storage) {
     let folder = storage.$folder;
-    for (const step of await storage.steps) {
+    for (const step of await storage.type_chain) {
         folder = await folder._get_item(step, $folder);
         if (!folder)
             break;
@@ -25,7 +25,7 @@ async function distributedDataJsDir(storage) {
 }
 
 describe('$class.resolveDistributedFolder', () => {
-    it('matches collect_tilde axis (starts from $folder, not meta_folder)', async () => {
+    it('matches collect_tilde axis ($folder of class + type_chain)', async () => {
         globalThis.WORK = new $server();
         const item = await WORK.get_item('/SERVICES');
         assert.ok(item instanceof $class);
@@ -34,7 +34,8 @@ describe('$class.resolveDistributedFolder', () => {
         const resolved = await item.resolveDistributedFolder();
         const expected = await expectedDistributedFolder(item);
         assert.equal(resolved.path, expected.path);
-        assert.match(resolved.path, /\/\$folder\/\$class\/\$service$/);
+        // Ось — inherit-прокси: $folder класса (якорь — метапапка) + шаги type_chain.
+        assert.match(resolved.path, /\/\$folder\/\$service$/);
     });
 
     it('distributed folder is parent of class.js layer in ~/class.js chain', async () => {

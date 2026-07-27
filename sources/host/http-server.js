@@ -87,7 +87,6 @@ async function tryHandlerMethod(item, method, params, request) {
     try {
         const handlers = await item._methods;
         const handler = handlers?.[method];
-        if (method === "tts") console.log("[tryHandlerMethod] handlers:", Object.keys(handlers||{}), "handler:", !!handler, "hasExecute:", !!(handler?.execute));
         if (handler && typeof handler.execute === 'function') {
             params.$context = item;
             return handler.execute(params);
@@ -140,9 +139,7 @@ export function execItemMethod(item, method, params, request) {
         return item;
 
     const runMethod = async () => {
-        if (method === "tts") console.log("[execItemMethod] tts called, item:", item?.path, "params.post:", JSON.stringify(params.post)?.slice(0,200));
         const classResult = resolveClassMethod(item, method, params, request);
-        if (method === "tts") console.log("[execItemMethod] classResult:", classResult, "type:", typeof classResult);
         if (classResult !== undefined)
             return classResult;
 
@@ -277,6 +274,9 @@ export function createRequestHandler() {
                                     if (fields?.metadata?.[0]) {
                                         params.metadata = JSON.parse(fields.metadata[0]);
                                     }
+                                    // Текст сообщения: поле формы или (legacy) файл message
+                                    if (fields?.message?.[0] != null && params.message == null)
+                                        params.message = String(fields.message[0]);
 
                                     params.post = {};
 
@@ -384,28 +384,28 @@ export function createRequestHandler() {
 
                 // header["Cache-Control"] = "must-revalidate, public, max-age=3600";
 
-                let acceptEncoding = request.headers['accept-encoding'];
-                if(acceptEncoding){
-
-                    if (acceptEncoding.match(/\bdeflate\b/)) {
-                        header["Content-Encoding"] = 'deflate'
-                        pipeline(Readable.from(result), zlib.createDeflate(), response, onError);
-
-                    }
-                    else if (acceptEncoding?.match(/\bgzip\b/)) {
-                        header["Content-Encoding"] = 'gzip'
-                        pipeline(Readable.from(result), zlib.createGzip(), response, onError);
-                    }
-                    else if (acceptEncoding?.match(/\br\b/)) {
-                        header["Content-Encoding"] = 'br'
-                        pipeline(Readable.from(result), zlib.createBrotliCompress(), response, onError);
-
-                    }
-
+                const acceptEncoding = request.headers['accept-encoding'] || '';
+                let encoder = null;
+                if (/\bbr\b/.test(acceptEncoding)) {
+                    header["Content-Encoding"] = 'br';
+                    encoder = zlib.createBrotliCompress();
+                }
+                else if (/\bgzip\b/.test(acceptEncoding)) {
+                    header["Content-Encoding"] = 'gzip';
+                    encoder = zlib.createGzip();
+                }
+                else if (/\bdeflate\b/.test(acceptEncoding)) {
+                    header["Content-Encoding"] = 'deflate';
+                    encoder = zlib.createDeflate();
+                }
+                if (encoder) {
+                    if (!cookies.ssid)
+                        header['Set-Cookie'] = `ssid=${user.ssid}; HttpOnly; Path=/`;
                     response.writeHead(200, header);
+                    pipeline(Readable.from(result), encoder, response, onError);
                     return;
                 }
-
+                // нет поддерживаемой кодировки — отдаём без сжатия ниже
             }
             else if (Buffer.isBuffer(result)) {
                 // method вроде ?tts — сырой WAV, не JSON.stringify(Buffer)
@@ -419,8 +419,6 @@ export function createRequestHandler() {
             header["Content-Type"] = "audio/wav";
         }
         else if (typeof result === 'object') {
-            if (result?.constructor.name === 'bound R')
-                result = result[ACTIVE].chache.data;
             result = JSON.stringify(result, null, +params.space || 2);
         }
         else if(typeof result === 'string'){

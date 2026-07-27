@@ -12,25 +12,28 @@
 
 ## 3. Как это работает
 
-1. Сохранение / обновление `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) поднимает harness.
-2. [`methods/prompt`](/$server/$folder/$file/$ai/methods/prompt/$method/class.js/~/handlers/pages/form/) собирает system (идентичность WORK + канон; протокол хода — в `TYPES.servicePrompt`); через `buildHistoryFromRibbon` упаковывает ленту в `messages`; стримит с functions. Usage (`body.usage`) — сумма всех LLM-ходов (API `include_usage` или estimate по messages, включая system/servicePrompt).
-3. **Канон хода:** U (`prompt` + `servicePrompt`) → M (`thinking`) → S → **ровно один канал**.
-4. Предложение плана = `TYPE.action` (`title: План`, tip «Начать», content = шаги). `TYPE.task` создаётся **только после** confirm. Каждый шаг Do = `prompt` в `task.ribbon` («Выполни шаг N…») + тот же канон U→M→S. `completed` — только после «Принять».
-5. Tools с `params.role`. ADMIN system-modify через `pendingAction` confirm.
-6. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
-7. Артефакты Do: один `filename`; history пишет платформа. Точечные правки — `edit_file`.
-8. Лимит итераций (default **30**): «Продолжить» + `pendingContinue`.
+1. Сохранение / обновление `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) вызывает `taskFile.prompt(...)`.
+2. `prompt` — **инстанс-метод файла** (наследуется из `class.js` типизатора через merge-цепочку, `this` = файл `task.ai`). **Однопроходный TYPE-driven пайплайн**:
+   вход → `servicePrompt` текущего TYPE → контекст → **один ход LLM** → новый блок TYPE + tools →
+   если тип ждёт пользователя (`text`/`action`/`form`/`questions`) — стоп;
+   иначе следующий проход планируется через `this.async(() => prompt(...))` — без блокирующего цикла.
+3. **Канон хода:** U (`prompt` + `servicePrompt`) → M (`thinking`, закрытый до канала) → S → **ровно один канал** (задан в `TYPES.*.servicePrompt`). Структурные каналы — **native FC-tools**: план `propose_plan({steps, intro})`, декомпозиция `subplan({steps})`, опрос `ask_user`, закрытие шага `complete_step`; XML-теги (`<plan>` строго JSON-массив, `<questions>`, `<subplan>`) — толерантный fallback для моделей без FC (невалидный JSON плана → шаги из нумерованного списка; каналы внутри `<reasoning>` не глотаются — thinking обрезается на первом теге). К servicePrompt драйвера добавляется ролевой оверлей `ROLE_OVERLAYS[role]` (USER — артефакт-first, BOSS — делегирование, ADMIN — inspect→diff→verify).
+4. План = `TYPE.action` («План» / «Начать») → после confirm — `TYPE.task` + step-prompt в `task.ribbon`.
+5. **Движок шагов:** модель закрывает шаг tool'ом `complete_step({step, summary})` → harness ставит `done` и пушит «Выполни шаг N+1»; после последнего шага — prompt «сформируй Отчёт» (с реальным списком артефактов из `collectArtifacts`) → action «Отчёт» → «Принять» закрывает задачу (`state: completed`) без хода модели. `<subplan>` создаёт вложенную подзадачу (стек задач в `body.ribbon`); закрытие всех подшагов закрывает шаг родителя и продвигает его.
+   **Ворота (`stepEvidence`):** clarify-шаг (`stepNeedsClarify`) закрывается только после answered `questions`/`form`; do-шаг — только при успешном tool_result в span'е шага. Отказ — обучающая ошибка (ask_user / save_file). Step-prompt clarify-шага сам напоминает «начни с ask_user, не выдумывай значения».
+6. Tools + ACL; опасные — `pendingAction` confirm. Лимит авто-проходов `MAX_AUTO_TURNS` → action «Продолжить».
+7. Интернет: сервисные tools `search` / `fetch_url` (`services/SearXNG`, `/SERVICES/*` → FC автоматически).
+8. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
 
 ## 4. Из чего это состоит
 
-- `class.js` — схема `TYPES` + `servicePrompt`
-- `methods/prompt/$method/` — harness PDCA (`pendingPlan` → action «План» → task; Do = step-prompt в `task.ribbon`; протокол — `TYPES.servicePrompt`)
-- `triggers/on_save/$trigger/` — вход в цикл
+- `class.js` — **весь ИИ-харнесс**: схема `TYPES` + `servicePrompt`, метод `prompt` (один проход + `this.async`), парсер ответа, tools + ACL, контекст пары, usage
+- `triggers/on_save/$trigger/` — вход в цикл (`taskFile.prompt(...)`)
 - `handlers/preview/$handler/` — микрочат
 
-Вспомогательные модули **не** класть рядом с `$method/class.js` (см. rules §1.11).
+Хелперы — внутри того же `class.js`, не соседним файлом (rules §1.11). Отдельного `methods/prompt` и `sources/modules/ai-prompt` больше нет.
 
 ## 5. В каком это состоянии
 
@@ -38,12 +41,18 @@
 - ✅ `TYPES.servicePrompt` по каждому каналу (U→M→S→один канал)
 - ✅ План = action «План» → «Начать» → `TYPE.task`; шаг Do = prompt в `task.ribbon`; `completed` после «Принять»
 - ✅ `body.usage` — сумма токенов всех LLM-ходов (API + estimate fallback)
-- ✅ Harness tools: `read_file` / `save_file` / `edit_file` / `ask_user` / `navigate` / `reset_context`
+- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `navigate` / `reset_context` / `complete_step` / `propose_plan` / `subplan`
+- ✅ Каналы как FC-tools + толерантный fallback: reasoning не глотает теги, `<plan>` из нумерованного списка, textarea/text без фабрикации опций, впрыск состояния (evidence, артефакты, бюджет ходов) в Do-блок system
+- ✅ Движок шагов: `complete_step` → done + следующий step-prompt; `<subplan>` → стек подзадач; «Принять» Отчёта → `completed`
+- ✅ Ворота `stepEvidence`: clarify-шаг = answered опрос, do-шаг = успешный tool_result; Отчёт — только реальные артефакты (`collectArtifacts`); позиционный `save_file("имя")` → обучающая ошибка
+- ✅ Ролевые оверлеи servicePrompt (`ROLE_OVERLAYS`: USER / BOSS / ADMIN)
+- ✅ Интернет: `search` + `fetch_url` (сервис SearXNG)
+- ✅ Толерантный парсер `<action>`: JSON-канон + атрибутная форма слабых моделей; сырые теги каналов не попадают в text
 - ✅ Skills-as-tools: `list_skills` / `run_skill`
 - ✅ `spawn_agent` (sequential nested task)
 - ✅ `inspect_schema` (подготовка к trust/self-mod)
 - ✅ `@/path` mentions в промпте → сниппеты в context
-- ✅ Continue после лимита итераций (`pendingContinue`)
+- ✅ Однопроходный `prompt` на файле + авто-ходы через `this.async` (лимит `MAX_AUTO_TURNS` → action «Продолжить»)
 - ✅ GigaChat / z.ai function calling
 - ✅ Контекст пары class+user; ACL + pendingAction
 - ✅ Preview microchat + TTS Piper
@@ -62,7 +71,7 @@
 |------|------------|--------|
 | 0 | MVP PDCA + microchat + save_file | ✅ |
 | 1 | maxIterations 30 + Continue + orphan tool | ✅ |
-| 2 | edit_file в harness + карточка file | ✅ |
+| 2 | edit в harness + карточка file | ✅ |
 | 3 | skills-as-tools + @path | ✅ |
 | 4 | sequential spawn_agent | ✅ |
 | 5 | trust + self-mod WORK (whitepaper §10) | 🔧 foundation (`inspect_schema`) |

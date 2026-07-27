@@ -84,5 +84,5 @@ export class $item extends Reactor {
         return id?.[0] === '.';
     }
 }
-$item.LISTS = ['items', 'files', 'folders', 'children', 'users'];
+$item.LISTS = ['items', 'entries', 'files', 'folders', 'children', 'users'];
 $item.ITEMS = Object.create(null);

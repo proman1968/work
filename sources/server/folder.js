@@ -11,7 +11,7 @@ export class $folder extends $item{
     static PATH_STEP = {
         EMPTY: 'empty',
         TILDE: 'tilde',
-        ANCESTOR: 'ancestor',
+        PROP: 'prop',
         WILDCARD: 'wildcard',
         CURRENT: 'current',
         NAME: 'name',
@@ -121,6 +121,26 @@ export class $folder extends $item{
     load(params){
         // todo сделать загрузку папки, возможно в виде архива
     }
+    /**
+     * Единственная точка сборки DATA элемента из цепочки class.js (слой 2).
+     * Кэшируется на экземпляре ([R].cache), сбрасывается через reset().
+     * get_item гарантирует await init для каждого найденного элемента —
+     * элемент "рождается пропатченным".
+     */
+    get init(){
+        if(this.constructor === FS.$folder)
+            return Promise.resolve(null);
+        return this[R].cache.init ??= new AsyncPromise(async ()=>{
+            let files = await this.tilde;
+            files = files.filter(f=>f.id === 'class.js');
+            if(!files.length)
+                return this;
+            let script = await $server.mergeFiles(files);
+            script = await this.constructor.importScript(script);
+            this.DATA = script;
+            return this;
+        })
+    }
     /** Подпапка для сохранения файла по MIME-типу или расширению. */
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
@@ -179,10 +199,14 @@ export class $folder extends $item{
         this.parent = parent;
     }
     /** Делегирование проверки доступа к классу-владельцу. */
-    async allowAccess(params = {}, level) {
+    async assertAccess(params = {}, level) {
         const owner = this.$owner || this.$class;
         if (owner && owner !== this)
-            await owner.allowAccess(params, level);
+            await owner.assertAccess(params, level);
+    }
+    /** @deprecated используй assertAccess */
+    allowAccess(params, level) {
+        return this.assertAccess(params, level);
     }
 
     /**
@@ -191,7 +215,7 @@ export class $folder extends $item{
      * @returns {Promise<string|boolean>} Строка с подтверждением удаления или false
      */
     async delete(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         if(!fs.existsSync(this.dir))
             return false;
         await fsp.rm(this.dir, {recursive: true});
@@ -243,16 +267,17 @@ export class $folder extends $item{
     get isMetaFolder(){ // признак мета папки
         return this.isType && this.parent instanceof FS.$class;
     }
-    get count(){
-        return 0;
-    }
     get size(){
         return Promise.resolve(this.items).then(async items => {
             let sizes = await Promise.all(items.map(f=>f.size));
             return sizes.sum();
         })
     }
-    get ancestor(){
+    /**
+     * Донор наследования: элемент, от которого текущий получает inherit-прокси.
+     * Это ось наследования (типизаторы/классы), а не родитель по файловому пути.
+     */
+    get inherit_ancestor(){
         return new AsyncPromise(async ()=>{
              //наследование всех папкок и фалов
             if(this.id === '$folder'){
@@ -264,7 +289,7 @@ export class $folder extends $item{
 
 
             //тотальное наследование всех папкок и фалов
-            let parentAncestor = await this.parent?.ancestor;
+            let parentAncestor = await this.parent?.inherit_ancestor;
             let children = await parentAncestor?.children;
             let ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
             if(ancestor)
@@ -299,6 +324,10 @@ export class $folder extends $item{
         })
 
 
+    }
+    /** @deprecated используй inherit_ancestor */
+    get ancestor(){
+        return this.inherit_ancestor;
     }
     get dir(){
         return '.' + this.path;
@@ -342,13 +371,13 @@ export class $folder extends $item{
         return {}
     }
     /**
-     * Список элементов без метапапок ($ и .).
+     * Бизнес-видимые элементы: без метапапок ($) и скрытых (.).
      * @returns {Promise<Array>} Массив элементов
      */
     get items(){
         return new AsyncPromise(async ()=>{
-            let files = await this.files;
-            return files.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || [];
+            let entries = await this.entries;
+            return entries.filter(f=>f.id[0] !== '$' && f.id[0] !== '.') || [];
         })
     }
     static build(id = '', parent){
@@ -523,6 +552,10 @@ export class $folder extends $item{
             return body;
         })()
     }
+    /** @deprecated используй semantic_search */
+    search(params){
+        return this.semantic_search(params);
+    }
     /**
      * Семантический поиск по эмбеддингам (RAG) внутри класса.
      * @param {object} [params]
@@ -530,7 +563,7 @@ export class $folder extends $item{
      * @param {number} [params.sensitivity] Чувствительность 0–1
      * @returns {Promise<Array>} Отсортированный массив релевантных результатов
      */
-    async search(params = {prompt: '', embedding: null, using: []}){
+    async semantic_search(params = {prompt: '', embedding: null, using: []}){
         let sensitivity = params.sensitivity || .5;
         params.embedding ??= await xenova.embedding(params.prompt);
         params.using ??= [];
@@ -546,7 +579,7 @@ export class $folder extends $item{
         if(!Reactor.equal(this.$owner, WORK)){
             let folder = this.$folder;
             folders.push(folder)
-            let steps = await this.steps;
+            let steps = await this.type_chain;
             for(let step of steps){
                 folder = await folder._get_item(step, FS.$folder);
                 if(folder){
@@ -600,7 +633,7 @@ export class $folder extends $item{
             }
             let folder = await WORK.get_item(file.path);
             if(folder){
-                return folder.search(params);
+                return folder.semantic_search(params);
             }
         })
 
@@ -614,12 +647,19 @@ export class $folder extends $item{
         return rags;
     }
     /**
-     * Найти дочерний элемент по имени с рекурсивным обходом.
-     * @param {string} name Имя элемента
-     * @param {Function} [filter_function] Функция фильтра
+     * Найти элемент по имени рекурсивным обходом вглубь.
+     * @param {object} params
+     * @param {string} params.name Имя искомого элемента
+     * @param {boolean} [params.types_only] Искать только среди типизаторов ($-папок)
      * @returns {Promise<object|null>} Найденный элемент или null
      */
     async find_item(name, filter_function){
+        // Внутренний позиционный вызов: find_item(name, filterFn).
+        if (name && typeof name === 'object') {
+            filter_function ??= name.types_only ? (item => item.id?.[0] === '$') : undefined;
+            name = name.name;
+        }
+        filter_function ??= (() => true);
         let children = await this.children;
         let items = children.filter(filter_function);
         let result = items.find(f=>f.id === name);
@@ -642,7 +682,7 @@ export class $folder extends $item{
      * @returns {Promise<Array<{path: string, line: number, text: string}>>} Найденные совпадения
      */
     async find_text(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const text = String(params.text ?? params.post ?? '');
         if (!text)
             throw new Error('find_text: не указан текст поиска (params.text или params.post)');
@@ -712,7 +752,7 @@ export class $folder extends $item{
      * @returns {Promise<object>} {className, properties, methods, json_model}
      */
     async get_schema(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const withBody = params.with_body === true || params.with_body === 'true';
         const props = this[R]?.props || {};
         const properties = [];
@@ -724,6 +764,8 @@ export class $folder extends $item{
                 name,
                 type: prop.$type?.name || '',
             };
+            if (prop.$public)
+                info.isPublic = true;
             if ('$def' in prop) {
                 try { info.hasDefault = true; }
                 catch {}
@@ -747,8 +789,13 @@ export class $folder extends $item{
         };
     }
 
-    get steps(){
+    /** Цепочка типизаторов элемента (например ['$file', '$smoke']). */
+    get type_chain(){
         return [];
+    }
+    /** @deprecated используй type_chain */
+    get steps(){
+        return this.type_chain;
     }
     get step(){
         return this.id;
@@ -765,7 +812,7 @@ export class $folder extends $item{
         let {inherit} = p;
         let folder = this.$folder;
         let folders = [folder];
-        let steps = await this.steps;
+        let steps = await this.type_chain;
         if(inherit != '$folder'){
             for(let step of steps){
                 folder = await folder._get_item(step, FS.$folder);
@@ -865,10 +912,8 @@ export class $folder extends $item{
             try {
                 const triggers = await this.get_item('~/triggers/*');
                 const items = Array.isArray(triggers) ? triggers : (triggers ? [triggers] : []);
-                for (const trigger of items) {
-                    await trigger.info();
+                for (const trigger of items)
                     result[trigger.id] = trigger;
-                }
             } catch {}
             return result;
         })();
@@ -880,22 +925,30 @@ export class $folder extends $item{
             try {
                 const methods = await this.get_item('~/methods/*');
                 const items = Array.isArray(methods) ? methods : (methods ? [methods] : []);
-                for (const method of items) {
-                    await method.info();
+                for (const method of items)
                     result[method.id] = method;
-                }
             } catch {}
             return result;
         })();
     }
     /**
-     * Список файлов элемента (без скрытых).
+     * Записи каталога: все дочерние элементы без скрытых (папки и файлы).
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get entries(){
+        return new AsyncPromise(async ()=>{
+            let children = await this.children;
+            return children.filter(f => !f.isHidden);
+        })
+    }
+    /**
+     * Только файлы (без скрытых). Папки — в folders, всё вместе — в entries.
      * @returns {Promise<Array>} Массив файлов
      */
     get files(){
         return new AsyncPromise(async ()=>{
-            let children = await this.children;
-            return children.filter(f => !f.isHidden);
+            let entries = await this.entries;
+            return entries.filter(f => f instanceof FS.$file);
         })
     }
     /**
@@ -943,7 +996,7 @@ export class $folder extends $item{
                 if(!files.find(f => f.id === '$folder'))
                     files.push(this.parent.$folder)
             }
-            let ancestor = await this.ancestor;
+            let ancestor = await this.inherit_ancestor;
             if(ancestor){
                 let a_files = await ancestor.children;
                 if(Reactor.equal(this.parent, ancestor)){
@@ -962,13 +1015,13 @@ export class $folder extends $item{
         })
     }
     /**
-     * Список дочерних папок.
+     * Только папки (без скрытых).
      * @returns {Promise<Array>} Массив папок
      */
     get folders(){
         return new AsyncPromise(async ()=>{
-            let files = await this.files;
-            return files.filter(f => f.constructor === FS.$folder);
+            let entries = await this.entries;
+            return entries.filter(f => f.constructor === FS.$folder);
         })
     }
     async _get_item(id, force_type){
@@ -977,7 +1030,8 @@ export class $folder extends $item{
         if(!item && force_type){
             let real = await this.real_source._get_item(id);
             if(real){
-                await real.info();
+                // inherit копирует [R].__data__ исходника — DATA должна быть собрана
+                await real.init;
                 item = this.constructor.inherit(real, this);
             }
             else
@@ -1052,7 +1106,7 @@ export class $folder extends $item{
                 $tilde = item;
             } break;
             case '@': {
-                result = await item[step.slice(1) || 'ancestor'];
+                result = await item[step.slice(1) || 'inherit_ancestor'];
                 if (result === undefined) {
                     result = await item.children;
                     result = result.find(f => f.id === step);
@@ -1114,18 +1168,22 @@ export class $folder extends $item{
             if (steps.last === 'index.html')
                 result = result.last;
             else if (result.length && result.last?.info)
-                await Promise.all(result.map(child => child.info()));
+                await Promise.all(result.map(child => child.init));
             else if ($tilde && !result.length)
                 result = null;
         }
-        else if (result?.info)
-            await result?.info?.();
+        else
+            await result?.init;
 
         // TODO: фильтрация результата через canSee
         return result;
     }
     async execute(p = {}){
-        await this.info();
+        await this.init;
+        // После init исполняемый execute должен появиться из class.js (DATA)
+        // собственным свойством экземпляра. Иначе — бесконечная рекурсия.
+        if (!Object.getOwnPropertyDescriptor(this, 'execute'))
+            throw new Error(`execute не определён в class.js: ${this.path}`);
         return this.execute(p);
     }
     download(){
@@ -1133,9 +1191,12 @@ export class $folder extends $item{
     }
     /**
      * Сохранить несколько файлов (FormData, URL-загрузка или массив файлов).
+     * При наличии сообщения/нескольких файлов — одна лог-запись через save_message
+     * (content + includes), без физического files.pack.
      * @param {object} [params]
      * @param {object} [params.post] {files, urls, message}
-     * @returns {Promise<object>} Объект с путём сохранённого пакета файлов
+     * @param {string} [params.message] Текст сообщения (предпочтительно)
+     * @returns {Promise<object|Array>} Лог-запись сообщения, либо массив файловых логов при ignore_save_logs
      */
     async save_files(params = {}){
         let {post} = params;
@@ -1176,6 +1237,7 @@ export class $folder extends $item{
         if(post?.files)
             files.push(...post?.files)
 
+        const hasMessage = params.message != null || post?.message;
         let logs = files?.map(file=>{
             let p = Object.assign({}, params);
             if(file.originalFilename){
@@ -1187,55 +1249,61 @@ export class $folder extends $item{
                 p.post = file.buffer;
             }
 
-            p.ignore_save_logs = params.ignore_save_logs || post?.message;
+            p.ignore_save_logs = params.ignore_save_logs || hasMessage;
+            delete p.message;
             return this.save_file(p);
         }) || []
 
         logs = await Promise.all(logs);
-        if (params.metadata)
-            logs.unshift(params.metadata);
+        if (params.ignore_save_logs)
+            return logs;
 
-        if (logs.length) {
-            let content = '';
-            if (post?.message?.path)
-                content = (await fsp.readFile(post.message.path, 'utf-8')).trim();
-            else if (post?.message && Buffer.isBuffer(post.message))
-                content = post.message.toString('utf-8').trim();
-            else if (typeof post?.message === 'string')
-                content = post.message.trim();
-            if (!content)
-                content = logs.map(l => l.path?.split('/').pop()).filter(Boolean).join(', ');
-            const packBody = JSON.stringify({
-                content,
-                includes: logs.map(l => l.path).filter(Boolean),
-            }, null, 2);
-            let p = Object.assign({}, params);
-            p.filename = p.id = 'files.pack';
-            p.post = packBody;
-            p.encoding = 'utf-8';
-            if (params.ignore_save_logs)
-                p.ignore_save_logs = true;
-            const packLog = await this.save_file(p);
-            return packLog;
+        let content = '';
+        if (typeof params.message === 'string')
+            content = params.message.trim();
+        else if (post?.message?.path)
+            content = (await fsp.readFile(post.message.path, 'utf-8')).trim();
+        else if (post?.message && Buffer.isBuffer(post.message))
+            content = post.message.toString('utf-8').trim();
+        else if (typeof post?.message === 'string')
+            content = post.message.trim();
+
+        const includes = [];
+        if (params.metadata?.path)
+            includes.push(params.metadata.path.startsWith('/') ? params.metadata.path : '/' + params.metadata.path);
+        for (const l of logs) {
+            const p = l?.path;
+            if (p)
+                includes.push(p.startsWith('/') ? p : '/' + p);
         }
-        if (post?.message) {
-            let p = Object.assign({}, params);
-            p.filename = p.id = post.message.originalFilename || 'message.txt';
-            p.post = post.message;
-            return this.save_file(p);
-        }
-        return logs;
+
+        if (!content && includes.length)
+            content = includes.map(p => p.split('/').pop()).filter(Boolean).join(', ');
+
+        if (!content && !includes.length)
+            return logs;
+
+        const storage = this.$owner || this.$class || this;
+        if (typeof storage.save_message !== 'function')
+            throw new Error('save_files: нет save_message у владельца');
+        return storage.save_message({
+            ...params,
+            message: content,
+            includes,
+        });
     }
 
     /**
-     * Сохранить файл в текущую папку с записью в историю.
+     * Создать или перезаписать файл в этой папке с записью в историю (→ history → log).
+     * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
      * @param {string} params.filename Имя файла
      * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
-     * @returns {Promise<object>} Объект с путём сохранённого файла и лога истории
+     * @param {string} [params.message] Текст для log.content
+     * @returns {Promise<object>} Запись лога (path = history-снимок)
      */
     async save_file(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
 
@@ -1279,7 +1347,7 @@ export class $folder extends $item{
 
     write_streams = Object.create(null);
     async get_write_stream(params) {
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла')
 
@@ -1313,9 +1381,9 @@ export class $folder extends $item{
             }
         }
         clearTimeout(obj.check);
-      obj.check = setTimeout(() => obj.close(), 10_000);
-      await obj.write;
-      return obj;
+        obj.check = setTimeout(() => obj.close(), 10_000);
+        await obj.writing;
+        return obj;
     }
   async close_write_stream(params) {
       const obj = await this.get_write_stream(params);
@@ -1363,6 +1431,8 @@ export class $folder extends $item{
                 let keys = Object.keys($server.merges).filter(key=>key.split(';').includes(this.real_dir));
                 for(let key of keys)
                    $server.merges[key] = undefined;
+                // Типизаторы файлов могли измениться — пересобрать по требованию
+                FS.$file.__ext_scripts__ = Object.create(null);
                 this.$owner?.debounce('reset_owner', ()=>{
                     this.$owner.reset(initiator || this);
                 }, 100)
@@ -1374,8 +1444,9 @@ export class $folder extends $item{
 
     }
     /**
-     * Создать папку на диске (mkdir), если ещё нет.
-     * @returns {Promise<void>}
+     * Создать эту папку на диске (mkdir), если ещё нет.
+     * Не путать с save_file (новый файл) и $file.save (контент файла).
+     * @returns {Promise<$folder>} this
      */
     async save(){
         if(!fs.existsSync(this.real_dir)){
@@ -1410,7 +1481,7 @@ export class $folder extends $item{
      * @returns {Promise<object>} Папка
      */
     async ensure_folder(p = {}) {
-        await this.allowAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(p, FS.$class.ACCESS_LEVEL.WRITE);
         const id = String(p.id ?? p.name ?? '').trim();
         if (!id)
             throw new Error('ensure_folder: нужен id');
@@ -1453,11 +1524,11 @@ export class $folder extends $item{
         if (!step) return this.PATH_STEP.EMPTY;
         switch (step[0]) {
             case '~': return this.PATH_STEP.TILDE;
-            case '@': return this.PATH_STEP.ANCESTOR;
+            case '@': return this.PATH_STEP.PROP;
             case '*': return this.PATH_STEP.WILDCARD;
             case '.': return this.PATH_STEP.CURRENT;
             default: return this.PATH_STEP.NAME;
         }
     }
 }
-$folder.steps = Object.create(null);
+$folder.type_chain = Object.create(null);

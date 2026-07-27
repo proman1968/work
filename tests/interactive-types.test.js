@@ -2,10 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     parseResponseToRibbon,
-    normalizeInteractiveBlocks,
-    normalizeActionBlocks,
-    isInteractiveBlock,
-} from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+} from '../$server/$folder/$file/$ai/class.js';
+
+const INTERACTIVE = new Set(['action', 'form', 'questions']);
 
 describe('parseResponseToRibbon types', () => {
     it('plan → action title План + tip Начать', () => {
@@ -67,7 +66,7 @@ describe('parseResponseToRibbon types', () => {
 <action>{"label":"Уточнить","color":"success"}</action>`,
             'AI',
         );
-        assert.equal(blocks.some(isInteractiveBlock), false);
+        assert.equal(blocks.some(b => INTERACTIVE.has(b.type)), false);
         assert.ok(blocks.some(b => b.type === 'text'));
     });
 
@@ -109,32 +108,5 @@ describe('parseResponseToRibbon types', () => {
         assert.equal(th.length, 2);
         assert.equal(th[0].content, 'Первый блок');
         assert.ok(th[1].content.includes('Второй'));
-    });
-});
-
-describe('normalizeInteractiveBlocks', () => {
-    it('plan phase forces Начать action', () => {
-        const out = normalizeInteractiveBlocks([
-            { type: 'action', button: { label: 'Уточнить' }, fields: [{ id: 'a' }] },
-        ], { phase: 'plan' });
-        const act = out.filter(b => b.type === 'action');
-        assert.equal(act.length, 1);
-        assert.equal(act[0].button.label, 'Начать');
-        assert.equal(act[0].title, 'План');
-        assert.equal(act[0].fields, undefined);
-        assert.equal(out.some(b => b.type === 'questions' || b.type === 'form'), false);
-    });
-
-    it('drops Уточнить-like action without converting; keeps questions with fields', () => {
-        const out = normalizeInteractiveBlocks([
-            { type: 'questions', button: { label: 'Уточнить' }, fields: [{ id: 't', label: 'Тема', type: 'text', value: '' }] },
-        ], { phase: 'do', allDone: false });
-        assert.equal(out.filter(b => b.type === 'questions').length, 1);
-        assert.ok(out[0].fields.length);
-    });
-
-    it('normalizeActionBlocks alias still works', () => {
-        const out = normalizeActionBlocks([], { phase: 'plan' });
-        assert.equal(out.find(b => b.type === 'action')?.button.label, 'Начать');
     });
 });

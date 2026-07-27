@@ -90,7 +90,7 @@ WORK решает проблему управления организацион
 |---|---|
 | `folder.js` | `$folder`: дерево элементов, `children`, `get_item`, tilde, manifest (управление деревом папок, навигация) |
 | `class.js` | `$class`: class.js merge/diff, logs, secrets, metadata (наследование поведения, журнализация, конфигурация) |
-| `file.js` | `$file`: load/save, history, edit_file, триггеры on_save (чтение/запись файлов, история версий) |
+| `file.js` | `$file`: load/save/edit, history, триггеры on_save (чтение/запись файлов, история версий) |
 | `handler.js` | `$handler extends $class`: исполняемый элемент (запуск handlers) |
 | `user.js` | `$user`: пользовательская сущность, online-статус (управление пользователями) |
 

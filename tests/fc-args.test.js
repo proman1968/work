@@ -13,14 +13,11 @@ import {
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,
     stripFcTrailer,
-    taskHasSuccessfulSave,
     formatToolResultMessages,
     ensureNamedFunction,
     collectFunctionNamesFromMessages,
     prepareFunctionsForStream,
-    resolveFunctionCallMode,
-    stepNeedsForcedSaveFile,
-} from '../$server/$folder/$file/$ai/methods/prompt/$method/class.js';
+} from '../$server/$folder/$file/$ai/class.js';
 
 describe('resolveOpenAiToolChoice', () => {
     it('maps function_call { name } to tool_choice function', () => {
@@ -122,32 +119,6 @@ describe('stripFcTrailer', () => {
     it('handles empty', () => {
         assert.equal(stripFcTrailer(''), '');
         assert.equal(stripFcTrailer(null), '');
-    });
-});
-
-describe('taskHasSuccessfulSave', () => {
-    it('true when ok save_file tool_result in ribbon', () => {
-        assert.equal(taskHasSuccessfulSave({
-            ribbon: [
-                { type: 'tool_result', tool: 'save_file', ok: true },
-            ],
-        }), true);
-        assert.equal(taskHasSuccessfulSave({
-            ribbon: [
-                { type: 'tool_result', tool: 'write_file', ok: true },
-            ],
-        }), true);
-    });
-
-    it('false when missing, not ok, or other tool', () => {
-        assert.equal(taskHasSuccessfulSave({ ribbon: [] }), false);
-        assert.equal(taskHasSuccessfulSave({
-            ribbon: [{ type: 'tool_result', tool: 'save_file', ok: false }],
-        }), false);
-        assert.equal(taskHasSuccessfulSave({
-            ribbon: [{ type: 'tool_result', tool: 'ask_user', ok: true }],
-        }), false);
-        assert.equal(taskHasSuccessfulSave(null), false);
     });
 });
 
@@ -291,16 +262,6 @@ describe('ensureNamedFunction / prepareFunctionsForStream', () => {
         ]);
         assert.ok(names.includes('save_file'));
         assert.ok(names.includes('ask_user'));
-    });
-
-    it('resolveFunctionCallMode requires save_file by name', () => {
-        const step = { description: 'Создать файл presentation.html' };
-        assert.equal(resolveFunctionCallMode('execute', step, [{ name: 'write_file' }]), 'auto');
-        assert.deepEqual(
-            resolveFunctionCallMode('execute', step, [{ name: 'save_file' }]),
-            { name: 'save_file' },
-        );
-        assert.equal(stepNeedsForcedSaveFile(step, [{ name: 'write_file' }]), false);
     });
 });
 

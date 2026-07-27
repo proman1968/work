@@ -115,7 +115,9 @@ ODA({is: 'work-form',
                                 ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.45, borderRadius: '4px' }"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
-                            ></item-node>
+                            >
+                                <oda-button icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()"></oda-button>
+                            </item-node>
                         </div>
                     </div>
                 </div>

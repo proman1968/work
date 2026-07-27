@@ -5,6 +5,7 @@ import * as mime from "mime-types";
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { assertClassId } from './assert-class-id.js';
+import * as LOGS from './logs.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -307,7 +308,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Объединённый объект class.js
      */
     async load(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
         let files = await this.tilde;
         files = files.filter(f=>f.id === 'class.js');
         return $server.mergeFiles(files, params.reset);
@@ -323,24 +324,15 @@ export class $class extends $folder{
     }
     async info(p = {deep: 0, reset: false}){
         p.deep = +p.deep;
-        let data =  this[R].cache['info-data'] ??= new  AsyncPromise(async _=>{
-            if(this.isType || this.isHidden)
-                return null;
-            let key = 'info:' + (this.ext || this.type);
-            let data = this[R].cache[key] ??= new AsyncPromise( _ => this.import(p))
-            data = await data;
-            if(data)
-                this.DATA = data;
-            return data;
-
-        })
-        data = await data;
+        if (p.reset)
+            this.reset();
+        await this.init; // после get_item уже собран (кэш) — чтение чистое
         const arg = Object.assign({}, p)
         return super.info(arg);
     }
-    get steps(){
+    get type_chain(){
         let type = this.type;
-        return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{
+        return this.constructor.type_chain[type] ??= new AsyncPromise(async ()=>{
             let folder = await WORK.$folder.find_item(type, item => item.id?.[0] === '$' && item.id !== '$file');
             if(!folder)
                 return [this.constructor.name, type];
@@ -349,7 +341,7 @@ export class $class extends $folder{
     }
     async resolveDistributedFolder() {
         let folder = this.$folder;
-        for (const step of await this.steps) {
+        for (const step of await this.type_chain) {
             folder = await folder._get_item(step, $folder);
             if (!folder)
                 break;
@@ -383,7 +375,8 @@ export class $class extends $folder{
     async ensureBootstrapAdmin(uid, params = {}) {
         if (!uid)
             return false;
-        await this.info({ reset: true });
+        this.reset();
+        await this.init;
         if (this.DATA?.['#security']?.ADMIN)
             return false;
         const security = Object.assign({}, this.DATA?.['#security'], { ADMIN: uid });
@@ -417,12 +410,12 @@ export class $class extends $folder{
     }
 
     /**
-     * Папка зоны действия по роли.
+     * Рабочая зона роли — папка, куда пишутся файлы пользователя этой роли.
      * ADMIN → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
-     * boss → управленческая зона (distributed_folder/$work)
+     * BOSS → управленческая зона (distributed_folder/$work)
      * USER → рабочая зона (meta_folder/$work)
      */
-    async get_storage(params = {}){
+    async work_zone(params = {}){
         const {role} = params;
         switch(role){
             case $class.ROLES.ADMIN:
@@ -434,6 +427,10 @@ export class $class extends $folder{
                 return this.meta_folder._get_item('work', FS.$folder);
         }
         return this.meta_folder
+    }
+    /** @deprecated используй work_zone */
+    get_storage(params){
+        return this.work_zone(params);
     }
 
     /**
@@ -474,13 +471,14 @@ export class $class extends $folder{
         return this.constructor.importScript(script);
     }
     /**
-     * Сохранить class.js класса с разделением на собственные и наследуемые данные.
+     * Сохранить class.js этого класса (слои self/inherit).
+     * Не путать с save_file (файл в зоне роли) и save_message (лог без файла).
      * @param {object} [params]
      * @param {string} params.post Строка class.js (export default {...})
      * @returns {Promise<boolean>} true при успешном сохранении
      */
     async save(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         let { post } = params;
 
         const self_folder = this.meta_folder;
@@ -520,9 +518,6 @@ export class $class extends $folder{
         }
         await Promise.all(writes);
 
-        // todo: при повторном использовании вынести в отдельный метод
-        delete this[R].cache['info-data'];
-        delete this[R].cache['info:' + (this.ext || this.type)];
         this.reset();
         this.DATA = await this.import();
 
@@ -530,17 +525,17 @@ export class $class extends $folder{
     }
     async save_file(params = {}){
         // Логи (data.logs) — системная операция: всегда пишутся в meta_folder,
-        // минуя get_storage, чтобы не попадать в зону $work по role.
+        // минуя work_zone, чтобы не попадать в зону $work по role.
         if (params.filename === 'data.logs') {
             const folder = await this.meta_folder.getFolderToSaveFile(params);
             return folder.save_file(params);
         }
-        const storage = await this.get_storage(params);
+        const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.save_file(params);
     }
     async get_write_stream(params) {
-        const storage = await this.get_storage(params);
+        const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.get_write_stream(params);
     }
@@ -569,125 +564,20 @@ export class $class extends $folder{
     get storage_folder(){
         return this.meta_folder;
     }
+    /** @deprecated используй logs({ mode: 'dates' }) */
     async logs_dates(params = {}){
-        const source = await this._logSource(params);
-        if (source !== this)
-            return source.logs_dates(params);
-        let history = await this.meta_folder.get_item('/logs/.data.logs/history');
-        let dates = [];
-        try{
-            if(history){
-                dates = await history.folders;
-                dates = dates.map(f=>f.name);
-                dates.sort((a, b) => b.localeCompare(a));
-            }
-        }
-        catch (e) {
-            if (e?.code !== 'ENOENT') {
-                console.warn('[WORK] logs_dates:', e.message);
-            }
-        }
-        let day = new Date().toISOString().slice(0, 10);
-        if(dates.indexOf(day) === -1) dates.unshift(day);
-        return dates;
+        return this.logs({ ...params, mode: 'dates' });
     }
-    /** Список .logs файлов дня (без load) — для инкрементального чата */
+    /** @deprecated используй logs({ mode: 'files', day }) — здесь сырой список без сортировки */
     async log_files(day, params = {}){
         const source = await this._logSource(params);
         if (source !== this)
             return source.log_files(day, params);
-        day ??= new Date().toISOString().slice(0, 10);
-        return this.meta_folder.get_item('/logs/.data.logs/history/' + day + '/*.logs');
-    }
-
-    /** Расширение history-файла из записи лога (поле ext или path) */
-    static log_ext(row){
-        if (row?.ext)
-            return String(row.ext).replace(/^\./, '').toLowerCase();
-        const id = row?.path?.split('/').pop() || '';
-        const dot = id.lastIndexOf('.');
-        return dot > 0 ? id.slice(dot + 1).toLowerCase() : '';
-    }
-
-    static _normalizeLogQuery(params = {}){
-        if (typeof params === 'string')
-            params = { day: params };
-        params = {...params};
-        params.exts ??= params.ext != null
-            ? (Array.isArray(params.ext) ? params.ext : [params.ext])
-            : null;
-        if (params.exts)
-            params.exts = params.exts.map(e => String(e).replace(/^\./, '').toLowerCase());
-        return params;
-    }
-
-    _logMatchesFilter(row, params){
-        if (!params.exts?.length)
-            return true;
-        return params.exts.includes($class.log_ext(row));
-    }
-
-    _resolveLogDays(params = {}){
-        if (params.day)
-            return [params.day];
-        if (params.days?.length)
-            return params.days.slice();
-        if (params.from) {
-            const to = params.to || params.from;
-            const days = [];
-            const cur = new Date(params.from + 'T12:00:00');
-            const end = new Date(to + 'T12:00:00');
-            while (cur <= end) {
-                days.push(cur.toISOString().slice(0, 10));
-                cur.setDate(cur.getDate() + 1);
-            }
-            return days;
-        }
-        return [new Date().toISOString().slice(0, 10)];
-    }
-
-    async _logsHistory(){
-        return this.meta_folder.get_item('/logs/.data.logs/history');
-    }
-
-    async _logsDayFolder(day){
-        day ??= new Date().toISOString().slice(0, 10);
-        let history = await this._logsHistory();
-        if (!history)
-            return null;
-        let folder = await history._get_item(day, FS.$folder);
-        await folder.save();
-        return folder;
-    }
-
-    async _loadLogBodiesForDays(params = {}){
-        const days = this._resolveLogDays(params);
-        let rows = [];
-        for (const day of days) {
-            let files = await this.log_files(day);
-            if (!Array.isArray(files))
-                files = files ? [files] : [];
-            for (const f of files) {
-                try {
-                    const raw = await f.load();
-                    const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                    if (row?.time == null)
-                        continue;
-                    if (!this._logMatchesFilter(row, params))
-                        continue;
-                    rows.push(Object.assign({ day, logsFilePath: f.path }, row));
-                }
-                catch (e) {
-                    console.warn('[WORK] log load', day, e.message);
-                }
-            }
-        }
-        rows.sort((a, b) => (b.time || 0) - (a.time || 0));
-        return rows;
+        return LOGS.dayFiles(this, day);
     }
 
     /**
-     * Получить тела записей логов за день или диапазон дат.
+     * Тела записей логов за день или диапазон дат.
      * @param {object} [dayOrParams]
      * @param {string} [dayOrParams.day] Дата YYYY-MM-DD
      * @param {string} [dayOrParams.from] Начало диапазона
@@ -696,390 +586,109 @@ export class $class extends $folder{
      * @returns {Promise<Array>} Массив записей логов с содержимым
      */
     async read_log_bodies(dayOrParams = {}){
-        const params = $class._normalizeLogQuery(dayOrParams);
-        return this._loadLogBodiesForDays(params);
-    }
-
-    /** Найти JSON-запись лога по path history-файла (task.ai и т.п.). */
-    async _findLogEntry(entryPath) {
-        if (!entryPath)
-            return null;
-        const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
-        const shortTarget = $item.toShortPath(target);
-        const days = await this.logs_dates;
-        for (const day of days) {
-            let files = await this.log_files(day);
-            if (!Array.isArray(files))
-                files = files ? [files] : [];
-            for (const f of files) {
-                try {
-                    const raw = await f.load();
-                    const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                    if (!row?.path)
-                        continue;
-                    const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
-                    const shortRow = $item.toShortPath(rowPath);
-                    if (shortRow !== shortTarget && rowPath !== target && !rowPath.endsWith(target) && !target.endsWith(rowPath))
-                        continue;
-                    return row;
-                }
-                catch { /* skip */ }
-            }
-        }
-        return null;
+        return LOGS.loadBodies(this, LOGS.normalizeQuery(dayOrParams));
     }
 
     /**
      * Актуальная JSON-запись лога по path history-файла (для микрочата task.ai).
      * @param {object} [params]
-     * @param {string} [params.taskPath] Путь к task.ai / history
-     * @param {string} [params.path] Альтернативное имя параметра пути
+     * @param {string} [params.path] Путь записи (history-файла)
+     * @param {string} [params.taskPath] Альтернативное имя параметра пути
      * @param {string} [params.entryPath] Альтернативное имя параметра пути
      * @returns {Promise<object|null>} Запись лога или null
      */
     async read_log_entry(params = {}) {
-        return this._findLogEntry(params.taskPath || params.path || params.entryPath);
+        return LOGS.findEntry(this, params.taskPath || params.path || params.entryPath);
+    }
+
+    /**
+     * Чистая лог-запись (сообщение) без физического файла.
+     * @param {object} [params]
+     * @param {string} [params.message] Текст сообщения → content
+     * @param {Array<string>} [params.includes] Пути вложенных файлов (history)
+     * @param {string|Array} [params.receivers] Получатели
+     * @returns {Promise<object>} Запись лога
+     */
+    async save_message(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.WRITE);
+        const time = Date.now();
+        const row = { time };
+        if (params.sender)
+            row.sender = params.sender;
+        else if (params.user?.uid)
+            row.sender = params.user.uid;
+        else if (params.user === globalThis.WORK)
+            row.sender = WORK.id;
+        if (params.message != null)
+            row.content = params.message;
+        if (params.includes?.length)
+            row.includes = params.includes.map(p => (p?.startsWith('/') ? p : '/' + p));
+        if (typeof params.receivers === 'string')
+            row.receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+        else if (Array.isArray(params.receivers))
+            row.receivers = params.receivers.slice();
+        if (params.mainContext)
+            row.mainContext = params.mainContext;
+        await LOGS.appendRow(this, row, params);
+        return row;
     }
 
     /**
      * Добавить пути в includes записи лога (например, шаги task.ai).
-     * @param {string|object} entryPath Путь записи или объект {entryPath, includePaths}
-     * @param {Array|string} [includePaths] Пути для includes
-     * @param {object} [params]
+     * @param {object} params
+     * @param {string} params.entryPath Путь записи лога (history-файла)
+     * @param {Array|string} params.includePaths Пути для добавления в includes
      * @returns {Promise<object|null>} Обновлённая запись или null
      */
+    async append_log_includes(params = {}) {
+        return LOGS.appendIncludes(this, params.entryPath, params.includePaths, { user: params.user });
+    }
+
+    /** @deprecated используй append_log_includes({ entryPath, includePaths }) */
     async appendLogIncludes(entryPath, includePaths = [], params = {}) {
         if (entryPath && typeof entryPath === 'object' && entryPath.entryPath) {
             params = includePaths?.user ? includePaths : (params?.user ? params : {});
             includePaths = entryPath.includePaths;
             entryPath = entryPath.entryPath;
         }
-        if (typeof includePaths === 'string')
-            includePaths = includePaths.split(',').map(s => s.trim()).filter(Boolean);
-        if (!Array.isArray(includePaths))
-            includePaths = includePaths ? [includePaths] : [];
-        if (!entryPath || !includePaths.length)
-            return null;
-        const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
-        const days = await this.logs_dates;
-        for (const day of days) {
-            let files = await this.log_files(day);
-            if (!Array.isArray(files))
-                files = files ? [files] : [];
-            for (const f of files) {
-                try {
-                    const raw = await f.load();
-                    const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                    if (!row?.path)
-                        continue;
-                    const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
-                    const shortTarget = $item.toShortPath(target);
-                    const shortRow = $item.toShortPath(rowPath);
-                    if (shortRow !== shortTarget && rowPath !== target && !rowPath.endsWith(target) && !target.endsWith(rowPath))
-                        continue;
-                    row.includes ??= [];
-                    for (const p of includePaths) {
-                        const path = p.startsWith('/') ? p : '/' + p;
-                        if (!row.includes.includes(path))
-                            row.includes.push(path);
-                    }
-                    await f.save({
-                        post: JSON.stringify(row, null, 2),
-                        encoding: 'utf-8',
-                        user: params.user || globalThis.WORK,
-                    });
-                    this.reset();
-                    return row;
-                }
-                catch (e) {
-                    console.warn('[WORK] appendLogIncludes', e.message);
-                }
-            }
-        }
-        return null;
+        return this.append_log_includes({ entryPath, includePaths, user: params.user });
     }
 
-    /** Развернуть includes: pack / message.txt → вложенные файлы. */
-    async _expandLogIncludes(includePaths = []) {
-        const seen = new Set();
-        const out = [];
-        const add = (p) => {
-            if (!p)
-                return;
-            const key = p.startsWith('/') ? p : '/' + p;
-            if (seen.has(key))
-                return;
-            seen.add(key);
-            out.push(key);
-        };
-        for (const p of includePaths) {
-            add(p);
-            const path = String(p);
-            if (path.includes('.pack')) {
-                const row = await this._findLogEntry(p);
-                if (row?.includes?.length) {
-                    for (const inc of row.includes)
-                        add(inc);
-                }
-                else {
-                    try {
-                        const file = await WORK.get_item(p.startsWith('/') ? p : '/' + p);
-                        const pack = JSON.parse(await file.load());
-                        for (const inc of pack.includes || [])
-                            add(inc);
-                    }
-                    catch { /* no nested includes */ }
-                }
-            }
-            else if (path.includes('.message.txt')) {
-                const row = await this._findLogEntry(p);
-                if (row?.includes?.length)
-                    for (const inc of row.includes)
-                        add(inc);
-            }
-        }
-        return out;
-    }
-
-    async _runTaskAiQueue(taskPath, job) {
-        const key = taskPath?.startsWith('/') ? taskPath : taskPath ? '/' + taskPath : '';
-        if (!key || !globalThis.WORK)
-            return job();
-        globalThis.WORK._taskAiQueue ??= new Map();
-        const previous = globalThis.WORK._taskAiQueue.get(key) || Promise.resolve();
-        const next = previous.catch(() => {}).then(job);
-        globalThis.WORK._taskAiQueue.set(key, next);
-        try {
-            return await next;
-        }
-        finally {
-            if (globalThis.WORK._taskAiQueue.get(key) === next)
-                globalThis.WORK._taskAiQueue.delete(key);
-        }
+    /** @deprecated используй logs({ mode: 'index' }) */
+    async log_index(params = {}){
+        params = LOGS.normalizeQuery(params);
+        return LOGS.buildIndex(await LOGS.loadBodies(this, params), params);
     }
 
     /**
-     * Продолжить диалог в существующей task.ai (отправка повторного промпта).
+     * Универсальный доступ к логам класса — единая точка чтения.
      * @param {object} [params]
-     * @param {string} params.taskPath Путь к task.ai
-     * @param {string|object} [params.post] Текст или FormData с файлами
-     * @param {string|object} [post] То же, что params.post (позиционный)
-     * @returns {Promise<object>} Обновлённая запись лога task.ai
-     */
-    async task_reply(params = {}, post) {
-        post ??= params.post;
-        const taskPath = params.taskPath;
-        if (!taskPath)
-            throw new Error('taskPath обязателен');
-        return this._runTaskAiQueue(taskPath, () => this._task_reply_queued(params, post));
-    }
-
-    async _task_reply_queued(params = {}, post) {
-        const taskPath = params.taskPath;
-        const logAuthor = params.user;
-        let text = '';
-        let stepPath = null;
-
-        const isMultipart = post && typeof post === 'object' && !Buffer.isBuffer(post)
-            && (post.files || post.message);
-
-        if (isMultipart) {
-            const packLog = await this.save_files({
-                post,
-                encoding: params.encoding || 'utf-8',
-                user: globalThis.WORK,
-                logAuthor,
-                ignore_save_logs: true,
-                taskPath,
-            });
-            stepPath = packLog?.logFullPath || packLog?.path;
-            if (!stepPath)
-                throw new Error('Нужен текст или файлы');
-            try {
-                const file = await WORK.get_item(stepPath);
-                const pack = JSON.parse(await file.load());
-                text = String(pack.content ?? '').trim();
-            }
-            catch {
-                const row = await this._findLogEntry(stepPath);
-                text = String(row?.content ?? '').trim();
-            }
-        }
-        else if (typeof post === 'string') {
-            text = post.trim();
-            if (text) {
-                const msgLog = await this.save_file({
-                    filename: 'message.txt',
-                    post: text,
-                    encoding: 'utf-8',
-                    user: logAuthor || globalThis.WORK,
-                    logAuthor,
-                    ignore_save_logs: true,
-                });
-                stepPath = msgLog?.logFullPath || msgLog?.path;
-            }
-        }
-        else
-            throw new Error('Нужен текст или файлы');
-
-        if (!text && !stepPath)
-            throw new Error('Нужен текст или файлы');
-
-        let row = null;
-        if (stepPath)
-            row = await this.appendLogIncludes(taskPath, [stepPath], { user: globalThis.WORK });
-
-        const includes = row?.includes || (stepPath ? [stepPath] : []);
-        
-        let entry = await this._findLogEntry(taskPath) ?? row;
-        const normPath = p => (p?.startsWith('/') ? p : '/' + p);
-        const hasInclude = (list, p) => {
-            const target = normPath(p);
-            return Array.isArray(list) && list.some(x => normPath(x) === target);
-        };
-        if (entry && aiResult?.responsePath) {
-            const p = normPath(aiResult.responsePath);
-            if (!hasInclude(entry.includes, p)) {
-                const updated = await this.appendLogIncludes(taskPath, [p], { user: globalThis.WORK });
-                if (updated)
-                    entry = updated;
-                else {
-                    entry.includes = Array.isArray(entry.includes) ? [...entry.includes] : [];
-                    entry.includes.push(p);
-                }
-            }
-            if (aiResult.responseText != null)
-                entry.replyText = aiResult.responseText;
-            if (aiResult.errorText != null)
-                entry.errorText = aiResult.errorText;
-        }
-        return entry;
-    }
-
-    /**
-     * Лёгкий индекс логов без content (для calendar / списков).
-     * @param {object} [params]
+     * @param {string} [params.mode] folder — папка дня (default) | bodies — тела записей | index — лёгкий индекс без content | files — .logs файлы | dates — список дат с логами
      * @param {string} [params.day] Дата YYYY-MM-DD
      * @param {string} [params.from] Начало диапазона
      * @param {string} [params.to] Конец диапазона
-     * @param {boolean} [params.flat] Плоский список
-     * @returns {Promise<Array>} Индекс записей или агрегаты по дням
-     */
-    async log_index(params = {}){
-        params = $class._normalizeLogQuery(params);
-        const rows = await this._loadLogBodiesForDays(params);
-        const pick = row => ({
-            day: row.day,
-            time: row.time,
-            sender: row.sender,
-            ext: $class.log_ext(row),
-            path: row.path,
-            logsFilePath: row.logsFilePath,
-        });
-        if (params.flat || params.day)
-            return rows.map(pick);
-        const byDay = Object.create(null);
-        for (const row of rows) {
-            let bucket = byDay[row.day];
-            if (!bucket) {
-                bucket = byDay[row.day] = {
-                    day: row.day,
-                    count: 0,
-                    firstTime: row.time,
-                    lastTime: row.time,
-                    exts: [],
-                    items: [],
-                };
-            }
-            bucket.count++;
-            bucket.firstTime = Math.min(bucket.firstTime, row.time);
-            bucket.lastTime = Math.max(bucket.lastTime, row.time);
-            const ext = $class.log_ext(row);
-            if (ext && !bucket.exts.includes(ext))
-                bucket.exts.push(ext);
-            if (params.items)
-                bucket.items.push(pick(row));
-        }
-        return Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day));
-    }
-
-    /**
-     * Универсальный доступ к логам класса.
-     * @param {object} [params]
-     * @param {string} [params.mode] folder|bodies|index|files
-     * @param {string} [params.day] Дата
-     * @param {string} [params.from] Начало диапазона
-     * @param {string} [params.to] Конец диапазона
-     * @param {string} [params.ext] Расширение
-     * @returns {Promise<*>} Зависит от mode: папка дня, тела, индекс или список файлов
+     * @param {string|Array} [params.ext] Фильтр по расширению записей
+     * @param {boolean} [params.flat] Для index: плоский список вместо агрегатов по дням
+     * @returns {Promise<*>} Зависит от mode
      */
     async logs(params = {}){
         const source = await this._logSource(params);
         if (source !== this)
             return source.logs(params);
-        params = $class._normalizeLogQuery(params);
-        const mode = params.mode || 'folder';
-        switch (mode) {
+        params = LOGS.normalizeQuery(params);
+        switch (params.mode || 'folder') {
+            case 'dates':
+                return LOGS.datesList(this);
             case 'bodies':
-                return this.read_log_bodies(params);
+                return LOGS.loadBodies(this, params);
             case 'index':
-                return this.log_index(params);
-            case 'files': {
-                const days = this._resolveLogDays(params);
-                let files = [];
-                for (const day of days) {
-                    let list = await this.log_files(day);
-                    if (!Array.isArray(list))
-                        list = list ? [list] : [];
-                    if (!params.exts?.length) {
-                        files.push(...list);
-                        continue;
-                    }
-                    for (const f of list) {
-                        try {
-                            const raw = await f.load();
-                            const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                            if (this._logMatchesFilter(row, params))
-                                files.push(f);
-                        }
-                        catch { /* skip */ }
-                    }
-                }
-                return this.sortItems(files, true, false);
-            }
+                return LOGS.buildIndex(await LOGS.loadBodies(this, params), params);
+            case 'files':
+                return this.sortItems(await LOGS.filesForDays(this, params), true, false);
             case 'folder':
-            default: {
-                const day = params.day || this._resolveLogDays(params)[0];
-                return this._logsDayFolder(day);
-            }
+            default:
+                return LOGS.dayFolder(this, params.day || LOGS.resolveDays(params)[0]);
         }
-    }
-    get structure(){
-        return (async ()=>{
-            let item = await this.info();
-            let result = {
-                id: item.id,
-                label: item.label,
-                type: item.type,
-                path: item.path,
-                description: item.description
-            }
-            result.items = await this.items;
-            result.items = result.items.filter(item=>item.constructor === FS.$file).map(file=>{
-                if(this !== WORK || file instanceof FS.$class)
-                    return file.structure;
-                return {
-                    id: file.id,
-                    label: file.label,
-                    type: file.type,
-                    description: file.description
-                }
-            })
-            result.items = await Promise.all(result.items);
-            if(!result.items.length)
-                delete result.items;
-            return result;
-        })()
     }
     get settings(){
         if(this.meta_folder){
@@ -1093,16 +702,17 @@ export class $class extends $folder{
         return null;
     }
 
-    _secretPath(name){
-        if (!this.meta_folder)
+    _secretPath(filename){
+        if (!this.meta_folder || !filename)
             return null;
-        return this.meta_folder.dir + '/#system/' + name + '.json';
+        return this.meta_folder.dir + '/#secret/' + filename;
     }
 
-    async _ensureSystemDir(){
-        const dir = this.meta_folder?.dir + '/#system';
-        if (dir)
-            fs.mkdirSync(dir, { recursive: true });
+    /** Legacy: секреты раньше лежали в #system/. */
+    _legacySecretPath(filename){
+        if (!this.meta_folder || !filename)
+            return null;
+        return this.meta_folder.dir + '/#system/' + filename;
     }
 
     /**
@@ -1203,16 +813,19 @@ export class $class extends $folder{
     }
 
     /**
-     * Единая проверка доступа: read → canSee, write → canWrite, ADMIN → ADMIN точки.
+     * Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, ADMIN → ADMIN точки.
+     * Текущая params.role (UI) ограничивает эффективные права: при role≠ADMIN Work ADMIN
+     * не получает bypass на ADMIN-операции.
      */
-    async allowAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
+    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
         if ($class.isDevMode) return;
         if (!params?.user) return;
         if (params.user === globalThis.WORK) return;
         const uid = $class.resolveUid(params);
         if (!uid && level !== $class.ACCESS_LEVEL.READ)
             throw new Error(ACCESS_DENIED);
-        if (globalThis.WORK && await this._isWorkAdmin(params))
+        const roleIsAdmin = !params.role || params.role === $class.ROLES.ADMIN;
+        if (roleIsAdmin && globalThis.WORK && await this._isWorkAdmin(params))
             return;
         switch (level) {
             case $class.ACCESS_LEVEL.READ:
@@ -1224,12 +837,19 @@ export class $class extends $folder{
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.ADMIN:
+                if (params.role && params.role !== $class.ROLES.ADMIN)
+                    throw new Error(ACCESS_DENIED);
                 if (globalThis.WORK && await this._isWorkAdmin(params))
                     return;
                 throw new Error(ACCESS_DENIED);
             default:
                 throw new Error(ACCESS_DENIED);
         }
+    }
+
+    /** @deprecated используй assertAccess */
+    allowAccess(params, level) {
+        return this.assertAccess(params, level);
     }
 
     /** Проверка ADMIN на корневом WORK. */
@@ -1260,18 +880,19 @@ export class $class extends $folder{
     }
 
     /**
-     * Прочитать секрет из #system. Требует ADMIN.
+     * Прочитать секрет из #secret (fallback: #system). Требует ADMIN.
      * @param {object} [params]
-     * @param {string} params.name Имя модуля
+     * @param {string} params.filename Имя файла секрета (например email.json)
      * @returns {Promise<object>} Данные секрета или {}
      */
     async read_secret(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
-        const name = params.name;
-        if (!name)
-            throw new Error('Не указано имя модуля');
-        const path = this._secretPath(name);
-        if (path && fs.existsSync(path)) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        const filename = params.filename;
+        if (!filename)
+            throw new Error('Не указано имя файла');
+        for (const path of [this._secretPath(filename), this._legacySecretPath(filename)]) {
+            if (!path || !fs.existsSync(path))
+                continue;
             try {
                 return JSON.parse(fs.readFileSync(path, { encoding: 'utf-8' }));
             }
@@ -1283,67 +904,82 @@ export class $class extends $folder{
     }
 
     /**
-     * Сохранить секрет в #system. Требует ADMIN.
+     * Сохранить секрет в #secret через save_file (файл + history; лог как обычно).
+     * Требует ADMIN. Caller передаёт готовые filename и post.
      * @param {object} [params]
-     * @param {string} params.name Имя модуля
-     * @param {object|string} params.post Данные секрета
-     * @returns {Promise<object>} Сохранённые данные
+     * @param {string} params.filename Имя файла секрета (например email.json)
+     * @param {string|Buffer} params.post Тело файла
+     * @returns {Promise<object>} Запись лога (path = history-снимок)
      */
     async save_secret(params = {}){
-        await this.allowAccess(params, $class.ACCESS_LEVEL.ADMIN);
-        const name = params.name;
-        if (!name)
-            throw new Error('Не указано имя модуля');
-        let data = params.post;
-        if (typeof data === 'string')
-            data = JSON.parse(data);
-        if (!data || typeof data !== 'object')
-            throw new Error('Некорректные данные секрета');
-        await this._ensureSystemDir();
-        fs.writeFileSync(this._secretPath(name), JSON.stringify(data, null, 2), { encoding: 'utf-8' });
-        this.meta_folder?.reset();
-        if (name === 'email') {
-            const { ensureMailboxFolders } = await import('../../../$server/$folder/lib/email/settings.js');
-            await ensureMailboxFolders(this, data.mailboxes || {});
-        }
-        return data;
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        if (!params.filename)
+            throw new Error('Не указано имя файла');
+        if (params.post == null)
+            throw new Error('Не указано тело файла');
+        if (!this.meta_folder)
+            throw new Error('Нет метапапки класса');
+        const secretFolder = await this.meta_folder._get_item('#secret', FS.$folder);
+        return secretFolder.save_file({ ...params });
     }
 
-    /** Один администратор класса (из #security.ADMIN, без наследования). */
+    /**
+     * Назначенные пользователи класса по роли.
+     * @param {object} [params]
+     * @param {string} [params.role] ADMIN | BOSS | USER; без роли — все назначенные
+     * @param {boolean} [params.inherited] Включить вышестоящие классы (для ADMIN и BOSS)
+     * @returns {Promise<Array>} Массив пользователей ($user)
+     */
+    async members(params = {}) {
+        const { role, inherited } = params;
+        switch (role) {
+            case $class.ROLES.ADMIN: {
+                if (inherited)
+                    return this.admins;
+                const admin = await this.admin;
+                return admin ? [admin] : [];
+            }
+            case $class.ROLES.BOSS: {
+                if (inherited)
+                    return this.bosses;
+                const boss = await this.boss;
+                return boss ? [boss] : [];
+            }
+            case $class.ROLES.USER:
+                return this.users;
+        }
+        return this.assignedUsers;
+    }
+
+    /** Один администратор класса (из #security.ADMIN, без наследования). Реактивная обёртка members({role:'ADMIN'}). */
     get admin(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const uid = this.DATA['#security']?.ADMIN;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
-            const user = await usersRoot.get_item('//' + uid);
-            if (user) await user.info();
-            return user;
+            return usersRoot.get_item('//' + uid);
         })
     }
     /** Один управляющий класса (из #security.BOSS, без наследования). */
     get boss(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const uid = this.DATA['#security']?.BOSS;
             if (!uid) return null;
             const usersRoot = await WORK.$users;
-            const user = await usersRoot.get_item('//' + uid);
-            if (user) await user.info();
-            return user;
+            return usersRoot.get_item('//' + uid);
         })
     }
     /** Исполнители класса (из #security.USERS, без наследования). */
     get users(){
-        return Promise.resolve(this.info()).then(async () => {
+        return Promise.resolve(this.init).then(async () => {
             const ids = this.DATA['#security']?.USERS;
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
             const result = [];
             for (const id of ids) {
                 const user = await usersRoot.get_item('//' + id);
-                if (user) {
-                    await user.info();
+                if (user)
                     result.push(user);
-                }
             }
             return result;
         })
@@ -1375,7 +1011,7 @@ export class $class extends $folder{
      * @returns {Promise<object>} Снимок class.js (history path)
      */
     async create(p = {}) {
-        await this.allowAccess(p, $class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(p, $class.ACCESS_LEVEL.WRITE);
         const id = String(p.id ?? '').trim();
         if (!id)
             throw new Error('create: нужен id класса');
@@ -1422,4 +1058,4 @@ export class $class extends $folder{
         })
     }
 }
-$class.steps = Object.create(null);
+$class.type_chain = Object.create(null);

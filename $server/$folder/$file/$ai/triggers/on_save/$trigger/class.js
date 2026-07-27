@@ -32,7 +32,7 @@
 - <subplan>[{"description":"…"},…]</subplan> — декомпозиция текущего шага
 - Tools: native function calling; fallback <tool_call>{"method":"…","args":{…}}</tool_call>
 - Файл — только save_file (filename + post); новый класс — create (не для файлов)
-- Точечные правки — edit_file; скиллы — list_skills / run_skill; подагент — spawn_agent
+- Точечные правки — edit; скиллы — list_skills / run_skill; подагент — spawn_agent
 
 ## Инструменты
 Методы контекста передаются как functions. get_schema — свойства/методы элемента. Метод без path (текущий контекст). navigate / reset_context — смена контекста.
@@ -42,7 +42,7 @@
 
 ## Поведение
 - По делу на русском; сдержанно и приветливо
-- Бюджет итераций — maxIterations (по умолчанию 30); «Продолжить» доигрывает orphan tool
+- Бюджет авто-ходов — 30 подряд; после лимита пользователь жмёт «Продолжить»
 - На «где ты» — опиши текущий $class (путь, тип)
 - Действия от первого лица; результаты — списками/таблицами`;
 
@@ -84,7 +84,6 @@ export default {
         // Канон system всегда свежий — иначе старые task.ai живут на устаревшем тексте
         const systemStale = body.system !== SYSTEM_PROMPT;
         body.system = SYSTEM_PROMPT;
-        body.maxIterations = body.maxIterations || 30;
         let modelWasMissing = false;
         if (!body.model) {
             const { pathToFileURL } = await import('node:url');
@@ -100,12 +99,16 @@ export default {
             } catch {}
         }
 
-        const methods = await taskFile._methods;
-        const prompt = methods?.prompt;
-        if (typeof prompt?.execute === 'function') {
-            prompt.execute({ text: firstPrompt, user: params.user, $context: taskFile }).catch(e => {
+        // prompt — инстанс-метод файла (наследуется из $ai/class.js через merge).
+        // Методы DATA навешиваются на инстанс только после init — свежепостроенный
+        // объект снимка (save_to_history → build) его ещё не проходил.
+        await taskFile.init;
+        if (typeof taskFile.prompt === 'function') {
+            taskFile.prompt({ text: firstPrompt, user: params.user }).catch(e => {
                 console.warn('[ai] prompt error:', e.message);
             });
         }
+        else
+            console.warn('[ai] prompt недоступен на', taskFile.path);
     },
 };

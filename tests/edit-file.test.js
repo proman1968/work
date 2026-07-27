@@ -1,9 +1,9 @@
-import '../oda/reactor.js';
+import '../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { $file } from '../sources/server/index.js';
 
-describe('edit_file: _parse_diff', () => {
+describe('edit: _parse_diff', () => {
     it('разбирает один блок SEARCH/REPLACE', () => {
         const diff = [
             '------- SEARCH',
@@ -58,7 +58,7 @@ describe('edit_file: _parse_diff', () => {
     });
 });
 
-describe('edit_file: apply_diff', () => {
+describe('edit: apply_diff', () => {
     it('применяет один блок', () => {
         const content = 'строка 1\nстарый текст\nстрока 3';
         const diff = [
@@ -121,5 +121,13 @@ describe('edit_file: apply_diff', () => {
         const result = $file.apply_diff(content, diff);
         assert.ok(result.includes('console.log("hello")'));
         assert.ok(!result.includes('console.log("hi")'));
+    });
+});
+
+describe('edit: канон и deprecated алиас', () => {
+    it('edit — метод прототипа, edit_file — алиас', () => {
+        assert.equal(typeof $file.prototype.edit, 'function');
+        assert.equal(typeof $file.prototype.edit_file, 'function');
+        assert.notEqual($file.prototype.edit, $file.prototype.edit_file);
     });
 });

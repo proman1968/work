@@ -504,17 +504,18 @@ ODA({is: 'oda-chat',
             return;
         }
 
-        const formData = new FormData();
-        this.files.forEach((file) => {
-            formData.append('file', file, file.name);
-        });
-        const file = new File([this.value || ''], 'message.msg', { type: 'text/plain' });
+        const msgText = String(this.value ?? '');
+        params.message = msgText;
 
         if(!this.files.length && !this.$pdp.replyTarget) {
             this.clear();
-            this.$pdp.$item.save_file(file, params).catch(onFail);
+            this.$pdp.$item.fetch('save_message', params).catch(onFail);
         } else {
-            formData.append('message', file, file.name);
+            const formData = new FormData();
+            this.files.forEach((file) => {
+                formData.append('file', file, file.name);
+            });
+            formData.append('message', msgText);
             const upload = () => {
                 this.clear();
                 this.$pdp.$item.save_files(formData, params).catch(onFail);
@@ -647,8 +648,8 @@ ODA({is: 'chat-ribbon',
             return true;
         }
         delete this.$item[R]?.cache?.logs_dates;
-        let dates = await this.$item.fetch('logs_dates');
-        // logs_dates на сервере — по убыванию; в ленте дни — от старых к новым
+        let dates = await this.$item.fetch('logs', { mode: 'dates' });
+        // dates на сервере — по убыванию; в ленте дни — от старых к новым
         dates = dates.slice().reverse();
         if (dates.indexOf(today) === -1)
             dates.push(today);

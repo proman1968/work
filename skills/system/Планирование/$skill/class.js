@@ -73,9 +73,11 @@ multi-step plan`,
         if (!steps.length)
             throw new Error('План не содержит шагов');
 
+        const post = formatPlanMarkdown(prompt, steps);
         await this.save_file({
             filename: 'response.md',
-            post: formatPlanMarkdown(prompt, steps),
+            post,
+            message: post,
             encoding: 'utf-8',
         });
         return { steps, prompt };

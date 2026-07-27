@@ -4,7 +4,10 @@ export default{
     extends: 'oda-app-layout',
     template: /* html */`
         <oda-form-email slot="main" flex :$item></oda-form-email>
-    `
+    `,
+    showSettings(){
+        alert(this)
+    }
 }
 
 function parseEmlClient(raw) {
@@ -514,7 +517,7 @@ ODA({
         this._watch = true;
     },
     async loadSettings() {
-        this._settings = await this.$item.fetch('read_secret', { name: 'email' });
+        this._settings = await this.$item.fetch('read_secret', { filename: 'email.json' });
     },
     async openSettings() {
         if (!this.structureId) {
@@ -541,7 +544,12 @@ ODA({
             const mailboxes = accountsToMailboxes(el.accounts);
             await this.$item.fetch(
                 'save_secret',
-                { name: 'email' },
+                { filename: 'email.json' },
+                JSON.stringify({ mailboxes }),
+            );
+            await this.$item.fetch(
+                'ensure_mailbox_folders',
+                {},
                 JSON.stringify({ mailboxes }),
             );
             await this.loadSettings();
@@ -564,7 +572,7 @@ ODA({
         const fromDate = new Date();
         fromDate.setDate(fromDate.getDate() - 30);
         const from = fromDate.toISOString().slice(0, 10);
-        let rows = await this.$item.fetch('log_index', { flat: true, from, to, ext: 'eml' });
+        let rows = await this.$item.fetch('logs', { mode: 'index', flat: true, from, to, ext: 'eml' });
         if (!Array.isArray(rows))
             rows = [];
         const items = [];
@@ -647,7 +655,7 @@ ODA({
         const address = this.selectedAddress;
         if (!address)
             return;
-        const settings = this._settings || await this.$item.fetch('read_secret', { name: 'email' });
+        const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
         const box = settings?.mailboxes?.[address];
         const eml = defaultEml({
             from: box?.auth?.user || address,

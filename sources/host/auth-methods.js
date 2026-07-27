@@ -130,7 +130,8 @@ export const authMethods = {
         let $user = await users.get_item('//' + uid);
         if (!$user)
             throw new Error("User not registered");
-        await $user.info({ reset: true });
+        $user.reset();
+        await $user.init;
         user.credentials = $user.DATA;
         user.$user = $user;
         user.challenge ??= {};

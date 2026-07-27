@@ -70,9 +70,6 @@ export class $folder extends $item {
     get checked() {
         return false
     }
-    get count() {
-        return 0;
-    }
     get localStorage() {
         return new ODA.LocalStorage(this.path)
     }
@@ -207,6 +204,7 @@ export class $folder extends $item {
             if (this[R].cache[key] !== undefined) return this[R].cache[key];
             let path;
             switch (key) {
+                case 'entries':
                 case 'files':
                 case 'folders':
                     path = this.path;

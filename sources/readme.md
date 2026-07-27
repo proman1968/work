@@ -50,14 +50,10 @@ WORK построен вокруг `$item`.
 Серверный runtime и инфраструктура. Эти файлы не являются частью объектной модели, они обеспечивают запуск и протоколы.
 
 - `config.js` — env-конфигурация: host, ports, TLS, dev mode, challenge TTL.
-- `security.js` — функции контроля доступа: `allowAccess`, `canSee`, `canWrite`, `filterHttpTreeResult`, `METHOD_ACCESS`.
 - `http-server.js` — запуск HTTP/HTTPS, разбор запроса, cookies, routing методов.
 - `websocket.js` — WebSocket-события.
 - `stun.js` — локальный STUN для WebRTC.
 - `auth-methods.js` — login/register/session methods (примешиваются в прототип `$server`).
-- `file-handlers.js` — реакции на сохранение файлов (`task.ai`, `message.txt`, `files.pack`, `outbox.eml`…).
-- `skill-manager.js` — запуск и контроль выполнения скиллов.
-- `skill-router.js` — роутинг запросов к скиллам (эмбеддинги + keyword fallback).
 - `mail.js`, `email-utils.js` — почта и EML.
 - `push.js`, `vapid.js` — push subscriptions.
 - `babel-merge.js` — merge `class.js` по слоям наследования (через Babel AST).
@@ -192,13 +188,13 @@ services/LLM/<Провайдер>/<Модель>/$llm/class.js — конкре�
 - **Вторая `~`** — поиск `class.js` внутри мета-папок `on_save` (через `$trigger`).
 - **Результат** — массив `class.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
 
-Структура триггера на диске (через `steps`):
+Структура триггера на диске (через `type_chain`):
 
 ```
 $server/$folder/$file/$prompt/triggers/on_save/$trigger/class.js
 ```
 
-- `$folder` — корневой типизатор (начало цепочки `steps`)
+- `$folder` — корневой типизатор (начало цепочки `type_chain`)
 - `$file/$prompt` — цепочка типов от расширения файла (`.prompt`)
 - `triggers/on_save` — папка триггера
 - `$trigger` — мета-тип (как `$handler`), содержит `class.js` с методом `execute(params)`

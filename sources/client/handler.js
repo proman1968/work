@@ -30,4 +30,17 @@ export class $handler extends $class{
         }
         window.open($item.short + '/');
     }
+    async showSettings(e){
+        let module = await this.module;
+        module.showSettings.call(this);
+    }
+    get module(){       
+        return new AsyncPromise(async () => {
+            let $item = Reactor.activate(this);
+            $item.$context = await $item.$context;
+            let module = await import($item.short + '/~/class.js');
+            return  module.default;
+        })
+
+    }
 }

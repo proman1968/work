@@ -1,13 +1,13 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as mime from "mime-types";
 import * as fsp from "node:fs/promises";
 import { $class, $folder, $user } from './index.js';
 import { MERGE } from '../host/babel-merge.js';
 import { installPackageSpawn } from '../host/package-install.js';
 import { authMethods } from '../host/auth-methods.js';
-import { GEN_API_TOKEN } from '../host/config.js';
 import { vapidKeys } from '../host/vapid.js';
 import {
     getPublicVapid,
@@ -23,16 +23,8 @@ export class $server extends $class {
     get fs(){
         return fs
     }
-    get genApi(){
-        if (GEN_API_TOKEN)
-            genApi.setAuthToken(GEN_API_TOKEN);
-        return genApi;
-    }
     get exclude_for_rag(){
         return [];
-    }
-    get embedding_llm(){
-        return getLLMModel({ name: DEFAULT_EMBEDDINGS_LLM});
     }
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'
@@ -246,8 +238,21 @@ return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
         })
 
     }
+    /**
+     * Кэш попарных merge по хэшам содержимого.
+     * Цепочки разных классов делят общий префикс глобальных слоёв —
+     * с кэшем пар babel-парсинг префикса выполняется один раз,
+     * для конкретного класса парсится только финальная пара (префикс + SELF).
+     */
+    static __merge_pairs__ = new Map();
     static mergeScripts(code1, code2) {
-        return MERGE.mergeScripts(code1, code2);
+        const key = createHash('sha1').update(code1).update('\u0000').update(code2).digest('base64');
+        let result = this.__merge_pairs__.get(key);
+        if (result === undefined) {
+            result = MERGE.mergeScripts(code1, code2);
+            this.__merge_pairs__.set(key, result);
+        }
+        return result;
     }
     static getSettings(item){
         let mata_folder = item.meta_folder;
@@ -262,6 +267,6 @@ return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
         return mime;
     }
 }
-$server.steps = Object.create(null);
+$server.type_chain = Object.create(null);
 Object.assign($server.prototype, authMethods);
 globalThis.$server = $server;

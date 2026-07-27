@@ -134,7 +134,8 @@ if (!('fire' in EventTarget.prototype)) {
             value: function (handler, delay = 0) {
                 if (typeof handler === 'string')
                     handler = this[handler].bind(this);
-                const fn = (delay ? setTimeout : requestAnimationFrame || queueMicrotask);
+                // globalThis: на сервере requestAnimationFrame нет — голый идентификатор бросил бы ReferenceError
+                const fn = (delay ? setTimeout : (globalThis.requestAnimationFrame ?? queueMicrotask));
                 fn(handler, delay);
             }
         },

@@ -30,12 +30,6 @@ export default {
                 cursor: pointer;
                 padding: 2px 4px;
             }
-            [bubble]{
-                @apply --info-invert;
-                border-radius: 16px;
-                min-width: 8px;
-                text-align: center;
-            }
             .stat{
                 white-space: nowrap;
                 overflow: hidden;
@@ -93,6 +87,7 @@ export default {
                 <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
+            <slot></slot>
         </div>
     `,
     showSize: false,
@@ -187,14 +182,6 @@ export default {
     },
     get $saveKey(){
         return this.$item?.short;
-    },
-    get bubble(){
-        return this.$item?.count || '';
-    },
-    set $item(n){
-        n?.addEventListener?.('changed', e=>{
-            this.bubble = undefined;
-        })
     },
     set expanded(n){
         if(this.$item){

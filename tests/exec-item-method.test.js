@@ -1,4 +1,4 @@
-import '../oda/reactor.js';
+import '../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as CORE from '../sources/server/index.js';
@@ -48,9 +48,16 @@ describe('execItemMethod', () => {
     });
 
     it('blocks save_file for guest session', async () => {
+        // Доступ проверяет класс-владелец: у реальных папок он есть всегда (корень — WORK).
+        class TestClass extends CORE.$class {}
+        const owner = new TestClass({ id: 'group' });
+        owner.path = '/root/test/$group';
+        Object.defineProperty(owner, '$class', { get: () => owner });
+
         class TestFolder extends CORE.$folder {}
         const folder = new TestFolder({ id: 'sources' });
         folder.path = '/sources';
+        Object.defineProperty(folder, '$class', { get: () => owner });
         await assert.rejects(
             () => execItemMethod(folder, 'save_file', { user: { ssid: 'guest' } }, { method: 'POST' }),
             /Доступ запрещён/
@@ -59,7 +66,7 @@ describe('execItemMethod', () => {
 
     it('passes params.post to prototype methods when request.post is empty', async () => {
         class TestClass extends CORE.$class {
-            async task_reply(params, post) {
+            async save_message(params, post) {
                 return { post, paramsPost: params.post };
             }
         }
@@ -68,10 +75,10 @@ describe('execItemMethod', () => {
         Object.defineProperty(storage, '$class', { get: () => storage });
         const body = {
             files: [{ originalFilename: 'sample.txt' }],
-            message: { originalFilename: 'message.txt' },
+            message: 'hello',
         };
-        const params = { taskPath: '/task.ai', post: body, user: { uid: 'TEST' } };
-        const result = await execItemMethod(storage, 'task_reply', params, { method: 'POST' });
+        const params = { message: 'hello', post: body, user: { uid: 'TEST' } };
+        const result = await execItemMethod(storage, 'save_message', params, { method: 'POST' });
         assert.equal(result.post, body);
         assert.equal(result.paramsPost, body);
     });

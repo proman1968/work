@@ -15,10 +15,11 @@
 - `load()` — загрузка и merge `class.js` из цепочки наследования
 - `import()` — импорт `class.js` как ES-модуля
 - `save()` — сохранение `class.js` (только разница с точкой наследования)
-- `logs()` — универсальный доступ к логам (mode: folder/bodies/index/files)
-- `read_log_bodies()` — тела записей логов за период
-- `task_reply()` — продолжение диалога в task.ai
-- `read_secret()` / `save_secret()` — секреты модулей в `#system/`
+- `logs()` — единая точка чтения логов (mode: folder/bodies/index/files/dates)
+- `read_log_entry()` — одна запись лога по пути history-файла
+- `append_log_includes()` — добавить пути в includes записи лога
+- `save_message({ message, includes })` — чистая лог-запись (сообщение без файла)
+- `read_secret()` / `save_secret()` — секреты модулей в `#secret/`
 
 ## Метапапка
 

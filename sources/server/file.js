@@ -7,6 +7,7 @@ import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
+import * as LOGS from './logs.js';
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
 
@@ -55,13 +56,6 @@ export class $file extends $folder{
         return p.userId ? `${p.time} | ${p.userId}` : p.time;
     }
 
-    get svg_icons_list(){
-        return Promise.resolve(this.load()).then(svgString => {
-            const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
-            let items = doc.querySelectorAll('symbol[id]');
-            return Array.from(items.map(r=>r.id));
-        })
-    }
     /**
      * Восстановить файл из истории. Только для history-файлов.
      * @param {object} [params]
@@ -82,21 +76,43 @@ export class $file extends $folder{
      * @returns {Promise<object>} Обновлённая запись лога
      */
     async save_includes(params = {}){
-        let chat = await this.$parent.chat();
-        let row = chat.find(el=>el.path === this.path);
-        if(!row)
-            throw new Error(`Не найдена запись о файле ${this.path}`);
         params.ignore_save_logs = true;
         let logs = await this.$owner.save_files(params);
-        row.includes ??= [];
-        row.includes.add(...logs.map(l=>l.path));
-        this.$parent.save_chat(chat);
+        if (!Array.isArray(logs))
+            logs = logs ? [logs] : [];
+        const paths = logs.map(l => l?.logFullPath || l?.path).filter(Boolean);
+        const row = await this.$parent.append_log_includes({ entryPath: this.path, includePaths: paths, user: params.user });
+        if (!row)
+            throw new Error(`Не найдена запись о файле ${this.path}`);
         this.reset();
         return row;
     }
-    get steps(){
+    /**
+     * Кэш собранных скриптов типизаторов по расширению.
+     * У файлов нет SELF-слоя и локальной цепочки — набор class.js
+     * одинаков для всех файлов одного расширения, где бы они ни лежали.
+     * Сбрасывается при reset() любого class.js (см. $folder.reset).
+     */
+    static __ext_scripts__ = Object.create(null);
+    get init(){
+        return this[R].cache.init ??= new AsyncPromise(async ()=>{
+            const key = this.ext || this.type;
+            const script = await ($file.__ext_scripts__[key] ??= new AsyncPromise(async ()=>{
+                let files = await this.tilde;
+                files = files.filter(f => f.id === 'class.js');
+                if(!files.length)
+                    return null;
+                let script = await $server.mergeFiles(files);
+                return this.constructor.importScript(script);
+            }));
+            if (script)
+                this.DATA = script;
+            return this;
+        })
+    }
+    get type_chain(){
         let type = this.ext ? '$' + this.ext : this.type;
-        return this.constructor.steps[type] ??= new AsyncPromise(async ()=>{
+        return this.constructor.type_chain[type] ??= new AsyncPromise(async ()=>{
             let folder = await WORK.$folder.children;
             folder = folder.find(f=>f.id === '$file');
             folder = await folder.find_item(type, item => item.id?.[0] === '$');
@@ -111,13 +127,8 @@ export class $file extends $folder{
         return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
     }
     async delete(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
-        let chat = await this.$parent.chat();
-        let row = chat.find(r=>r.path === this.path);
-        if(row){
-            chat.remove(row)
-        }
         this.parent.reset();
         this.reset();
         return 'removed: '+ this.path;
@@ -125,11 +136,15 @@ export class $file extends $folder{
     get size(){
         return this.stat.size;
     }
+    /** Записи скрытой папки файла (вложения, history и т.п.). */
+    get entries(){
+        return this.storage_folder.entries;
+    }
     get files(){
         return this.storage_folder.files;
     }
     get items(){
-        return this.files;
+        return this.entries;
     }
 
     get history(){
@@ -177,19 +192,19 @@ export class $file extends $folder{
      * @returns {Promise<string|Buffer>} Строка (при encoding) или Buffer
      */
     async load(params = {encoding: 'utf8'}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         if(fs.existsSync(this.dir)){
             return fsp.readFile(this.dir, params);
         }
 
-        let ancestor = await this.ancestor;
+        let ancestor = await this.inherit_ancestor;
         if(ancestor)
             return ancestor.load(params)
         throw new Error(`file ${this.path} not found`);
     }
     async inherit() {
         return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
-            const ancestor = await this.ancestor;
+            const ancestor = await this.inherit_ancestor;
             if (ancestor) {
                 const selfData = await this.load();
                 const ancestorData = await ancestor.inherit();
@@ -206,17 +221,18 @@ export class $file extends $folder{
      * @returns {Promise<import('node:fs').ReadStream>} ReadStream
      */
     async download(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         return fs.createReadStream(this.dir, params);
     }
     /**
-     * Сохранить новое содержимое файла (перезапись целиком).
+     * Сохранить содержимое этого файла целиком (перезапись).
+     * Для нового файла в папке — save_file({ filename, post }) у родителя.
      * @param {object} [params]
      * @param {string|Buffer} params.post Новое содержимое
      * @returns {Promise<$file>} this (сохранённый файл)
      */
     async save(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(this.inHistory || this.inRAG){
             if(!fs.existsSync(this.parent.real_dir)){
                 fs.mkdirSync(this.parent.real_dir, {recursive: true});
@@ -229,17 +245,18 @@ export class $file extends $folder{
         return this.parent.save_file(params)
     }
     /**
-     * Точечное редактирование файла через SEARCH/REPLACE блоки.
+     * Точечная правка содержимого файла через SEARCH/REPLACE (не полная перезапись).
+     * Полная перезапись — save({ post }).
      * @param {object} [params]
      * @param {string} [params.post] Блоки SEARCH/REPLACE
      * @param {string} [params.diff] Альтернативное имя параметра
      * @returns {Promise<string>} Полный текст файла после применения правок
      */
-    async edit_file(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+    async edit(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         const diff = typeof params.post === 'string' ? params.post : params.diff;
         if (!diff)
-            throw new Error('edit_file: не указан diff (params.post или params.diff)');
+            throw new Error('edit: не указан diff (params.post или params.diff)');
         const current = await this.load({ encoding: 'utf-8' });
         const result = this.constructor.apply_diff(current, diff);
         const saveParams = Object.assign({}, params, { post: result });
@@ -253,6 +270,10 @@ export class $file extends $folder{
         saveParams.filename = this.id;
         await this.parent.save_file(saveParams);
         return result;
+    }
+    /** @deprecated используй edit */
+    edit_file(params) {
+        return this.edit(params);
     }
     static _parse_diff(diff){
         const SEARCH_MARKER = '------- SEARCH';
@@ -270,7 +291,7 @@ export class $file extends $folder{
                     i++;
                 }
                 if (i >= lines.length)
-                    throw new Error('edit_file: не найден разделитель =======');
+                    throw new Error('edit: не найден разделитель =======');
                 i++;
                 const replaceLines = [];
                 while (i < lines.length && lines[i].trim() !== END_MARKER) {
@@ -278,7 +299,7 @@ export class $file extends $folder{
                     i++;
                 }
                 if (i >= lines.length)
-                    throw new Error('edit_file: не найден завершающий +++++++ REPLACE');
+                    throw new Error('edit: не найден завершающий +++++++ REPLACE');
                 i++;
                 blocks.push({
                     search: searchLines.join('\n'),
@@ -289,7 +310,7 @@ export class $file extends $folder{
                 i++;
         }
         if (!blocks.length)
-            throw new Error('edit_file: не найдено блоков SEARCH/REPLACE');
+            throw new Error('edit: не найдено блоков SEARCH/REPLACE');
         return blocks;
     }
     static apply_diff(content, diff){
@@ -297,7 +318,7 @@ export class $file extends $folder{
         let result = String(content);
         for (const block of blocks) {
             if (!result.includes(block.search))
-                throw new Error('edit_file: фрагмент не найден в файле:\n' + block.search.slice(0, 200));
+                throw new Error('edit: фрагмент не найден в файле:\n' + block.search.slice(0, 200));
             result = result.replace(block.search, block.replace);
         }
         return result;
@@ -308,7 +329,7 @@ export class $file extends $folder{
      * @returns {Promise<string[]>} Массив строк с import-операторами
      */
     async get_imports(params = {}){
-        await this.allowAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         const content = await this.load({ encoding: 'utf-8' });
         if (typeof content !== 'string')
             return [];
@@ -320,23 +341,6 @@ export class $file extends $folder{
             'create есть только у $class (новый класс). Файл — save_file({ filename, post })',
         );
     }
-    static _logClassKey(storage) {
-        if (!storage || storage === globalThis.WORK)
-            return 'WORK';
-        return storage.id || storage.path || storage.dir || '';
-    }
-
-    static async _writeLogTo(storage, log_param, written) {
-        if (!storage?.save_file)
-            return;
-        const key = $file._logClassKey(storage);
-        if (key && written.has(key))
-            return;
-        if (key)
-            written.add(key);
-        await storage.save_file(log_param);
-    }
-
     static async save_to_history(params){
         const actor = params.user;
         let uid = actor?.uid;
@@ -353,7 +357,7 @@ export class $file extends $folder{
         let date = params.dateTime.toISOString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
-        // Логи (data.logs) пишутся через _writeLogTo без role,
+        // Логи (data.logs) пишутся через LOGS.appendRow без role,
         // поэтому они физически в meta_folder/logs/.
         // this.storage_folder для них = meta_folder/logs/.data.logs — корректно.
         // Для пользовательских файлов в $work — личная история рядом с файлом.
@@ -369,6 +373,9 @@ export class $file extends $folder{
 
         let res =  await FS.$file.save_to_log.call(file, params);
         file.reset();
+        // Папка дня могла уже закешировать children (logs/bodies) — сбросить,
+        // иначе новая .logs-запись не видна до следующего reset дерева.
+        data_history.reset();
         return res;
     }
 
@@ -381,57 +388,30 @@ export class $file extends $folder{
             log.sender = params.user.uid;
         else if (params.user === globalThis.WORK)
             log.sender = WORK.id;
-        if (params.filename === 'files.pack') {
-            try {
-                const pack = typeof params.post === 'string' ? JSON.parse(params.post) : params.post;
-                log.content = pack?.content ?? '';
-                if (pack?.includes?.length)
-                    log.includes = pack.includes;
-            }
-            catch {
-                log.content = String(params.post ?? '');
-            }
-        }
-        else if (params.filename === 'message.txt' || params.filename === 'message.prompt' || params.filename === 'message.msg'
-            || params.filename === 'response.md' || params.filename === 'error.txt'
-            || params.filename === 'task.ai' || params.filename === 'pass.order')
-            log.content = params.message ?? params.post;
+        // Инлайн текста — только через params.message (ядро не знает имён файлов).
+        if (params.message != null)
+            log.content = params.message;
         log.path = this.json_model.path;
         log.type = '$file';
         if (params.filename)
             log.ext = params.filename.includes('.') ? params.filename.split('.').pop() : params.filename;
         else if (this.ext)
             log.ext = this.ext;
-        log.receivers = params.receivers?.split?.(',');
+        if (typeof params.receivers === 'string')
+            log.receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+        else if (Array.isArray(params.receivers))
+            log.receivers = params.receivers.slice();
 
-        if (params.includes?.length && !log.includes?.length)
+        if (params.includes?.length)
             log.includes = params.includes;
         if (params.mainContext)
             log.mainContext = params.mainContext;
-        if(params.ignore_save_logs) {
+        if (params.ignore_save_logs) {
             log.logFullPath = this.json_model.path;
             return log;
         }
-        const log_param = Object.assign({}, params, {ignore_save_logs: true, filename: 'data.logs', post: JSON.stringify(log, null, 2), encoding: 'utf-8'})
-
-        let $class = this.$owner || this.$parent;
-        const written = new Set();
-
-        await $file._writeLogTo($class, log_param, written);
-
-        const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
-        if (authorCabinet && authorCabinet !== globalThis.WORK
-            && $file._logClassKey(authorCabinet) !== $file._logClassKey($class))
-            await $file._writeLogTo(authorCabinet, log_param, written);
-        if (log.receivers?.length) {
-            log.receivers = log.receivers.filter(r => r !== $class.id);
-            if (log.receivers?.length) {
-                let usersList = await WORK.$users;
-                params.receivers = await Promise.all(log.receivers.map(uid => usersList.get_item('//' + uid)));
-                for (const receiver of params.receivers)
-                    await $file._writeLogTo(receiver, log_param, written);
-            }
-        }
+        const owner = this.$owner || this.$parent;
+        await LOGS.appendRow(owner, log, params);
         params.logFullPath = this.json_model.path;
         params.logPath = this.short;
         if (!params.skip_file_handler) {
@@ -451,4 +431,4 @@ export class $file extends $folder{
         return log;
     }
 }
-$file.steps = Object.create(null);
+$file.type_chain = Object.create(null);

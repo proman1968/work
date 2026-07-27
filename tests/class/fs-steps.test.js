@@ -1,12 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import '../../oda/reactor.js';
+import '../../sources/reactor.js';
 import { $class } from '../../sources/server/index.js';
 
-describe('$class.steps', () => {
-    it('steps map is initialized', () => {
-        assert.ok($class.steps);
-        assert.equal(typeof $class.steps, 'object');
-        assert.equal($class.steps['$user'], undefined);
+describe('$class.type_chain', () => {
+    it('type_chain map is initialized', () => {
+        assert.ok($class.type_chain);
+        assert.equal(typeof $class.type_chain, 'object');
+        assert.equal($class.type_chain['$user'], undefined);
     });
 });
