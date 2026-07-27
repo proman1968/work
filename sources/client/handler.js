@@ -14,33 +14,33 @@ export class $handler extends $class{
         await WORK(prototype);
         return await prototype;
     }
-    async execute(...params){
-        let $item = Reactor.activate(this);
-        $item.$context = await $item.$context;
-        let module = await import($item.short + '/~/class.js');
-        if (module.default.execute) {
-            module.default.execute.call($item, ...params);
+    async execute(...params) {
+        const module = this.module;
+        if (module.execute) {
+            module.execute.call(this, ...params);
             return;
         }
-        if ($item.short.includes('form')) {
+
+        if (this.short.includes('form')) {
             if (window.execute) {
-                window.execute($item);
+                window.execute(this);
                 return;
             }
         }
-        window.open($item.short + '/');
+        window.open(this.short + '/');
     }
-    async showSettings(e){
-        let module = await this.module;
-        module.showSettings.call(this);
+    async showSettings(e) {
+        const module = await this.module;
+        if (module.showSettings) {
+            module.showSettings.call(this);
+        }
     }
-    get module(){       
+    get module() {
         return new AsyncPromise(async () => {
-            let $item = Reactor.activate(this);
+            const $item = Reactor.activate(this);
             $item.$context = await $item.$context;
-            let module = await import($item.short + '/~/class.js');
-            return  module.default;
-        })
-
+            const module = await import($item.short + '/~/class.js');
+            return module.default;
+        });
     }
 }

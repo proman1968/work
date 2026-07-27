@@ -76,7 +76,7 @@ ODA({is: 'work-form',
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
-    
+
                         <div
                             ~if="view?.allowSave"
                             :disabled="saving"
@@ -116,7 +116,7 @@ ODA({is: 'work-form',
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
-                                <oda-button icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()"></oda-button>
+                                <oda-button ~if="view?.id === $for.item.id" icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()"></oda-button>
                             </item-node>
                         </div>
                     </div>
