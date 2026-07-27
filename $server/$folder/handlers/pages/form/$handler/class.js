@@ -65,11 +65,11 @@ ODA({is: 'work-form',
             }
         </style>
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
-            <div center flex horizontal style="overflow: hidden; flex-wrap: balance;">
+            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
-                <oda-button ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
-                    style="font-size: xx-small;"
+                <oda-button content  ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
+                    style="font-size: xx-small; border-radius: 4px;"
                     center icon-pos="top"
                 ></oda-button>
                 <div flex></div>
@@ -116,7 +116,7 @@ ODA({is: 'work-form',
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
-                                <oda-button ~if="view?.id === $for.item.id" icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()"></oda-button>
+                                <oda-button ~if="view?.id === $for.item.id && view?.hasSettings" icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()" style="padding: 0;"></oda-button>
                             </item-node>
                         </div>
                     </div>

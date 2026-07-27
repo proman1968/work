@@ -35,6 +35,16 @@ export class $handler extends $class{
             module.showSettings.call(this);
         }
     }
+    get hasSettings() {
+        return new AsyncPromise(async () => {
+            try {
+                const module = await this.module;
+                return typeof module?.showSettings === 'function';
+            } catch {
+                return false;
+            }
+        });
+    }
     get module() {
         return new AsyncPromise(async () => {
             const $item = Reactor.activate(this);
