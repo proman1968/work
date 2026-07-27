@@ -1,13 +1,19 @@
 /**
  * Типизатор task.ai: TYPES-модель чата + метод prompt (весь harness — здесь, §1.11).
  *
+ * Два вида промптов, различаются ролью:
+ * - реальный (role USER|BOSS|ADMIN, всегда с клиента, default USER) → блок prompt в ленту;
+ * - служебный (role ASSISTENT — самовызовы шагов плана / авто-ходы) → ТОЛЬКО на острие
+ *   messages текущего вызова; в ленту и историю следующих ходов не попадает.
+ *
  * prompt — ОДИН проход (single-pass), не цикл:
- * 1. вход пользователя (text | answers | confirm | stop) → блок в ленту;
- * 2. servicePrompt текущего TYPE (driver — последний блок ленты);
- * 3. system + контекст пары + ribbon → messages;
- * 4. один ход модели (streamChat);
- * 5. ответ → блоки TYPE + выполнение tools;
- * 6. если не ждём пользователя — следующий проход через this.async(() => this.prompt(...)).
+ * 1. реальный вход (text | answers | confirm | stop) → блок в ленту;
+ * 2. system + контекст пары + ribbon (только факты) → messages;
+ * 3. инъекция на острие: ASSISTENT-текст шага + TYPES[состояние].servicePrompt по роли;
+ *    после реального промпта единственное действие — думать (TYPES.prompt),
+ *    после thinking — развилка TYPES.thinking (ответ | ask_user | propose_plan | шаг);
+ * 4. один ход модели (streamChat) → блоки TYPE + tools;
+ * 5. следующий пункт плана — this.async(() => this.prompt({role:'ASSISTENT', text:'Делай пункт N'})).
  *
  * Метод наследуется файлом .ai через merge class.js (this = task.ai файл),
  * вызывается on_save-триггером, микрочатом ($item.fetch('prompt')) и самим собой.
@@ -38,21 +44,21 @@ const MAX_STREAM_RETRIES = 2;
 
 const TYPES = {
     /**
-     * Канон: U (блок + servicePrompt) → M (thinking) → S → ровно один канал.
-     * План: action «План» → confirm «Начать» → TYPE.task.
-     * Do: каждый шаг = prompt в task.ribbon (+ этот servicePrompt) → снова U→M→S.
+     * Автомат «одно действие за ход». Состояние = тип последнего блока ленты.
+     * servicePrompt — инъекция ТОЛЬКО на острие messages (не в ленту, не в историю).
+     * Строка — один текст для всех ролей; объект — варианты по роли
+     * ({ default, USER, BOSS, ADMIN, ASSISTENT }).
+     * После реального промпта единственное действие — думать (thinking);
+     * после thinking — развилка из TYPES.thinking.servicePrompt.
      */
     prompt: {
+        // Think-ход: functions в запрос не передаются, весь ответ целиком
+        // харнесс фиксирует блоком thinking — никакие теги не нужны.
         servicePrompt: [
-            'Канон хода: 1) <reasoning> — и закрой его </reasoning> ДО вывода канала;',
-            '2) первая строка reasoning: «Действие: <канал>»; 3) ровно ОДИН канал.',
-            'Классификация:',
-            '• вопрос/справка → text;',
-            '• задача «сделай X» и нет active task → tool propose_plan({steps: [{description}…]}) 3–6 шагов (платформа → action «План» + tip «Начать»); fallback без tools — <plan>[…]</plan> строго JSON-массив; других tools и spawn_agent до «Начать» не вызывай;',
-            '• нужны данные пользователя → ask_user (каждый вопрос — options: 3–5 вариантов из контекста + «Другое»; свободный текст — только type textarea);',
-            '• нужны внешние факты из интернета → tool search, затем fetch_url выбранных ссылок; в артефакте укажи источники;',
-            '• шаг Do активной задачи → tool шага (артефакт — save_file), затем complete_step({step, summary}).',
-            'Запрещено: закончить только reasoning; смешивать каналы; каналы внутри <reasoning>; spawn_agent вместо плана.',
+            'Сейчас ровно одно действие — думай.',
+            'Напиши размышления обычным текстом: разбери запрос и контекст,',
+            'первой строкой укажи, какое действие сделаешь следующим ходом.',
+            'Tools в этом ходе недоступны. Ответ пользователю не пиши — только размышления.',
         ].join(' '),
         fields: [
             { id: 'type', type: 'string' },
@@ -73,30 +79,54 @@ const TYPES = {
     },
     thinking: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Мышление уже в ленте. Не повторяй тот же reasoning.',
-            'Выдай ровно ОДИН канал по последней [инструкция]:',
-            'text | tool | tool propose_plan({steps}) | ask_user (options 3–5 + «Другое») | <form>.',
-            'Не заканчивай ход; не «уточните» prose без ask_user/form.',
-        ].join(' '),
+        // Action-ход: ровно одно действие — либо ответ обычным текстом,
+        // либо вызов ОДНОЙ функции по точному имени (function calling).
+        servicePrompt: {
+            default: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                '• это вопрос/справка → ответь обычным текстом;',
+                '• не хватает данных пользователя → вызови функцию ask_user({questions: [{prompt, options}]}) — каждому вопросу options 3–5 вариантов + «Другое»;',
+                '• это задача «сделай X» → вызови функцию propose_plan({steps: [{description}, …]}) с 3–6 шагами;',
+                '• нужны внешние факты → вызови функцию search({query}).',
+                'Либо текст, либо один вызов функции — не оба сразу.',
+            ].join(' '),
+            USER: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом;',
+                'нужны данные → вызови функцию ask_user({questions}) — только options 3–5 + «Другое», пользователь на мобильном;',
+                'задача → вызови функцию propose_plan({steps}) с 3–6 шагами; результат каждого шага — файл через save_file (текстовый html/md).',
+                'Либо текст, либо один вызов функции.',
+            ].join(' '),
+            BOSS: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions});',
+                'задача → вызови функцию propose_plan({steps}): шаги — поручения и контрольные точки, крупные направления — spawn_agent.',
+                'Либо текст, либо один вызов функции.',
+            ].join(' '),
+            ADMIN: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions});',
+                'задача по классу → вызови функцию propose_plan({steps}): сначала inspect_schema/read_file, правки точечным edit (diff), затем проверка и обновление readme.md.',
+                'Либо текст, либо один вызов функции.',
+            ].join(' '),
+            ASSISTENT: [
+                'Размышления зафиксированы — не повторяй их. Выполни текущий пункт плана ровно ОДНИМ вызовом функции:',
+                'артефакт → save_file({filename, post: полное содержимое, текстовый html/md});',
+                'внешние факты → search({query}), затем fetch_url({url}); данные пользователя → ask_user({questions});',
+                'пункт закрыт результатом → complete_step({step, summary}).',
+                'Если все пункты уже закрыты → вызови функцию report({content: итог по реальным артефактам}).',
+                'Не отвечай прозой вместо вызова функции, не предлагай новый план.',
+            ].join(' '),
+        },
     },
+    // text / action / form / questions — wait-состояния (WAIT_USER_TYPES):
+    // автомат остановлен, следующего хода модели нет → servicePrompt не бывает.
     text: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Канал text уже показан.',
-            'Жди новый prompt. Не дублируй текст. Не tools и не новый <plan> без нового prompt.',
-        ].join(' '),
     },
     /** Tip: План/Начать | Отчёт/Принять | Выполнить */
     action: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Кнопка «{button}» (title «{title}») ждёт пользователя — tip над промптом.',
-            'Не вызывай tools и не дублируй кнопку до нового prompt.',
-            'После «Начать» система создаст TYPE.task и пришлёт prompt шага — отвечай на него.',
-            'После «Принять» — задача закрыта; не начинай новый план сам.',
-            'После иного confirm — reasoning → один канал шага.',
-        ].join(' '),
         fields: [
             { id: 'title', type: 'string', options: ['План', 'Отчёт', 'Действие'] },
             { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
@@ -104,11 +134,6 @@ const TYPES = {
     },
     form: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Форма в ленте; tip «{button}» ждёт answers.',
-            'Не дублируй поля. Не tools до prompt с answers.',
-            'После answers система даст следующий step-prompt — отвечай на него.',
-        ].join(' '),
         fields: [
             { id: 'title', type: 'string' },
             { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
@@ -127,11 +152,6 @@ const TYPES = {
     },
     questions: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Опрос в ленте; tip «{button}» ждёт выбор.',
-            'Не дублируй вопросы. Не tools до answers.',
-            'После answers — следующий step-prompt от системы.',
-        ].join(' '),
         fields: [
             { id: 'title', type: 'string' },
             { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
@@ -159,10 +179,9 @@ const TYPES = {
     task: {
         extends: 'TYPES.prompt',
         servicePrompt: [
-            'TYPE.task active: шаги выполняет harness через prompt «Выполни шаг N» в task.ribbon.',
-            'Отвечай на последний step-prompt: one-shot tool или уточнение/subplan.',
-            'Шаг закрыт результатом → вызови complete_step({step, summary}) — система пришлёт следующий шаг.',
-            'Не предлагай новый общий <plan>. completed — только после «Принять».',
+            'Задача активна: пункты плана присылает система («Делай пункт N»).',
+            'Пункт закрыт результатом → complete_step({step, summary}).',
+            'Не предлагай новый общий план. completed — только после «Принять».',
         ].join(' '),
         fields: [
             { id: 'label', type: 'string' },
@@ -183,8 +202,8 @@ const TYPES = {
     file: {
         extends: 'TYPES.prompt',
         servicePrompt: [
-            'Вложение {path} ({name}) в контексте. Учти файл; при необходимости read_file.',
-            'Дальше: reasoning → один канал (правка того же имени или следующий шаг).',
+            'Вложение {path} ({name}) в контексте. Учти файл; при необходимости вызови функцию read_file({path}).',
+            'Дальше ровно одно действие: следующий вызов функции по текущему пункту или ответ текстом.',
         ].join(' '),
         fields: [
             { id: 'path', type: 'string' },
@@ -203,13 +222,15 @@ const TYPES = {
     },
     tool_result: {
         extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Результат tool (ok={ok}, tool={tool}).',
-            'Если ok и текущий шаг задачи закрыт этим результатом → вызови complete_step({step, summary}).',
-            'Если ok, но шаг не закрыт → следующий tool шага.',
-            'Если ошибка: reasoning → исправленный tool или questions/form.',
-            'Не объявляй completed — это делает «Принять».',
-        ].join(' '),
+        servicePrompt: {
+            default: [
+                'Результат tool (ok={ok}, tool={tool}). Ровно ОДНО действие:',
+                'если ok и текущий пункт плана закрыт этим результатом → complete_step({step, summary});',
+                'если ok, но пункт не закрыт → следующий tool пункта;',
+                'если ошибка — в её тексте сказано, что делать: исправленный tool, не тот же вызов без изменений.',
+                'Не объявляй completed — это делает «Принять». Не отвечай прозой.',
+            ].join(' '),
+        },
         fields: [
             { id: 'tool', type: 'string' },
             { id: 'ok', type: 'boolean' },
@@ -218,7 +239,7 @@ const TYPES = {
     error: {
         extends: 'TYPES.prompt',
         servicePrompt: [
-            'Ошибка в истории. reasoning → другой канал: исправленный tool, questions/form или text.',
+            'Ошибка в истории. Ровно одно действие: исправленный вызов функции, ask_user({questions}) или ответ текстом.',
             'Не повторяй тот же failing вызов без изменений.',
         ].join(' '),
         fields: [
@@ -254,29 +275,31 @@ export default {
     FIELDS,
     /**
      * Один проход чата task.ai (this = файл .ai).
-     * @param {object} params — { text?, stop?, user?, role?, _turn? }
-     * @param {string|object} [post] JSON { text, model, confirm, answers, stop } | строка
+     * Два вида промптов, различаются ролью:
+     * - реальный (role USER|BOSS|ADMIN — всегда приходит с клиента, default USER) → блок в ленту;
+     * - служебный (role ASSISTENT — самовызовы шагов плана и авто-ходы) → ТОЛЬКО на острие
+     *   messages текущего вызова модели; в ленту и в историю следующих ходов не попадает.
+     * @param {object} params — { text?, stop?, user?, role?, trustLevel?, _turn? }
+     * @param {string|object} [post] JSON { text, model, role, confirm, answers, stop } | строка
      */
     async prompt(params = {}, post) {
-        return promptTurn(this, params, post);
-    },
-};
-
-/** Один проход: вход пользователя (если есть) + один ход модели + планирование следующего. */
-async function promptTurn(taskAi, params = {}, post) {
+    const taskAi = this;
     if (!taskAi?.load)
         throw new Error('task.ai не найден в контексте');
 
-    const { text, requestModel, confirm, answers, wantStop } = parseInput(params, post);
+    const { text, requestModel, confirm, answers, wantStop, role: postRole } = parseInput(params, post);
     const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
     const wsPath = taskAi.short || fullPath;
     let turn = Number(params._turn) || 0;
+
+    const rawRole = String(params.role || postRole || '').toUpperCase().trim();
+    const isService = rawRole === 'ASSISTENT' || rawRole === 'ASSISTANT';
 
     if (wantStop) {
         requestAbort(fullPath);
         return { ok: true, stopped: true };
     }
-    if (turn === 0)
+    if (turn === 0 && !isService)
         clearAbort(fullPath);
     else if (isAborted(fullPath))
         return finishStopped(fullPath, wsPath, null);
@@ -328,8 +351,26 @@ async function promptTurn(taskAi, params = {}, post) {
     const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
     const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
     const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
-    const role = normalizeRole(params.role || params.user?.role || body.role);
+    // Реальная роль пользователя (ACL, адаптация инъекций). ASSISTENT её не меняет.
+    const role = normalizeRole(isService ? body.role : (rawRole || params.user?.role || body.role));
     body.role = role;
+    // Роль для выбора варианта инъекции: служебный ход — ASSISTENT, иначе реальная роль
+    const injRole = isService ? 'ASSISTENT' : role;
+    // ASSISTENT-промпт — только на острие, не в ленту
+    const tipText = isService ? text : '';
+
+    /** Следующий служебный проход (шаг плана / авто-ход) — всегда role ASSISTENT. */
+    const scheduleServiceTurn = (stepText) => {
+        taskAi.async(() => {
+            taskAi.prompt({
+                user: params.user,
+                role: 'ASSISTENT',
+                trustLevel: params.trustLevel,
+                text: stepText || undefined,
+                _turn: turn + 1,
+            }).catch(e => console.warn('[task.ai] auto turn:', e.message));
+        });
+    };
 
     // Контекст: navigate переживает проходы через body.contextPath
     let currentContext = initialContext;
@@ -341,12 +382,13 @@ async function promptTurn(taskAi, params = {}, post) {
         } catch {}
     }
 
-    // === Вход пользователя (только на проходе от пользователя) ===
-    if (turn === 0) {
+    // === Вход пользователя (только реальный проход, не ASSISTENT) ===
+    let followInstruction = null; // служебный текст следующего шага — уйдёт самовызовом ASSISTENT
+    if (turn === 0 && !isService) {
         if (answers) {
             applyAnswers(body, answers, sender);
             // Ответы clarify-шага закрывают шаг сами — не ждём complete_step от модели
-            autoAdvanceClarifyStep(body);
+            followInstruction = autoAdvanceClarifyStep(body);
             delete body.pendingAction;
         }
         else if (confirm !== undefined && body.pendingRetry) {
@@ -387,7 +429,7 @@ async function promptTurn(taskAi, params = {}, post) {
                         pushToolResult(ribbon, call, result, model);
                         sendToolResultWs(wsPath, call, result);
                         if (followPrompt)
-                            ribbonTargetOf(body).push(followPrompt);
+                            followInstruction = followPrompt;
                         continue;
                     }
                     const { result, newContext, spawnTask } = await executeToolCall(
@@ -425,6 +467,9 @@ async function promptTurn(taskAi, params = {}, post) {
                 WORK.wsSend?.({ type: 'chat.done', path: wsPath });
                 return { ok: true, taskCompleted: true };
             }
+            // «Начать»: задача создана — первый пункт плана уходит самовызовом ASSISTENT
+            if (applied?.instruction)
+                followInstruction = applied.instruction;
         }
         else if (text) {
             // Текст поверх висящего подтверждения — пользователь его проигнорировал
@@ -456,23 +501,45 @@ async function promptTurn(taskAi, params = {}, post) {
     if (isAborted(fullPath))
         return finishStopped(fullPath, wsPath, body);
 
+    // Пункт плана стартовал на этом входе — модельный ход не нужен, шаг уйдёт ASSISTENT-самовызовом
+    if (followInstruction) {
+        if (turn + 1 < MAX_AUTO_TURNS)
+            scheduleServiceTurn(followInstruction);
+        return { ok: true, continued: true, turn };
+    }
+
     // === Один ход модели ===
     const ribbon = ribbonTargetOf(body);
     const driver = driverEntry(ribbon);
-    const svc = resolveServicePrompt(driver, role, body);
+    // Think-фаза: реальный prompt или ASSISTENT-текст шага — единственное действие «думай».
+    // Functions в запрос не передаются, весь ответ фиксируется блоком thinking (теги не нужны).
+    const thinkPhase = !!tipText || driver.type === 'prompt';
+    const svc = resolveServicePrompt(thinkPhase ? { type: 'prompt' } : driver, injRole);
 
     const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
         protocol: model.protocol,
         autoTurnsLeft: Math.max(0, MAX_AUTO_TURNS - turn),
     });
-    if (svc) {
-        const tag = '[инструкция] ' + svc;
-        const lastMsg = messages[messages.length - 1];
-        if (!(lastMsg?.role === 'user' && lastMsg.content === tag))
-            messages.push({ role: 'user', content: tag });
+
+    // Инъекция ТОЛЬКО на острие текущего вызова: ASSISTENT-текст шага + servicePrompt состояния.
+    // В ленту не пишется и в историю следующих ходов не попадает.
+    {
+        const tipParts = [];
+        if (tipText)
+            tipParts.push(tipText);
+        else {
+            const activeTask = findActiveTask(body);
+            const curStep = activeTask?.steps?.find(s => s.status === 'in_progress');
+            if (curStep)
+                tipParts.push('Текущий пункт плана ' + curStep.step + ': «' + (curStep.description || '') + '».');
+        }
+        if (svc)
+            tipParts.push('[инструкция] ' + svc);
+        if (tipParts.length)
+            messages.push({ role: 'user', content: tipParts.join('\n\n') });
     }
 
-    let functions = await buildFunctionsList(currentContext);
+    let functions = thinkPhase ? [] : await buildFunctionsList(currentContext);
 
     WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
 
@@ -523,6 +590,49 @@ async function promptTurn(taskAi, params = {}, post) {
         return finishStopped(fullPath, wsPath, body);
 
     applyTurnUsage(body, ribbon, resolveTurnUsage(turnUsage, messages, fullResponse), model);
+
+    // === Think-фаза: весь ответ — блок thinking, классификации нет по построению ===
+    if (thinkPhase) {
+        const content = stripReasoningWrapper(fullResponse);
+        if (!content) {
+            ribbon.push({
+                type: 'error',
+                content: 'Модель вернула пустой ответ на ход размышлений.',
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'empty think turn' });
+            return { ok: false, error: 'empty think turn' };
+        }
+        ribbon.push({
+            type: 'thinking',
+            content,
+            time: Date.now(),
+            sender: model.path || 'WORK',
+        });
+        body.contextPath = currentContext?.path || '';
+        await writeTaskBody(fullPath, body);
+        notifyChanged(fullPath);
+        if (turn + 1 >= MAX_AUTO_TURNS) {
+            ribbonTargetOf(body).push({
+                type: 'action',
+                title: 'Лимит ходов',
+                content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
+                button: { label: 'Продолжить', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+            return { ok: true, maxAutoTurns: true, turn };
+        }
+        // Action-ход по итогам размышлений — следующим служебным проходом
+        scheduleServiceTurn();
+        return { ok: true, continued: true, think: true, turn };
+    }
 
     let toolCalls = nativeToolCalls.length
         ? nativeToolCalls
@@ -594,6 +704,30 @@ async function promptTurn(taskAi, params = {}, post) {
         parsed.pendingSubplan = subplanFromArgs(subCall.args) || parsed.pendingSubplan;
     }
 
+    // report (FC-канал) → text-отчёт + action «Отчёт / Принять»
+    const reportCall = toolCalls.find(c => c.method === 'report');
+    if (reportCall) {
+        toolCalls = toolCalls.filter(c => c.method !== 'report');
+        const content = String(reportCall.args?.content || '').trim();
+        if (content) {
+            blocks = blocks.filter(b => b.type === 'thinking');
+            blocks.push({
+                type: 'text',
+                content,
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+            blocks.push({
+                type: 'action',
+                title: 'Отчёт',
+                content: 'Принять отчёт и закрыть задачу?',
+                button: { label: 'Принять', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+        }
+    }
+
     // Повтор уже отвеченного опроса — не в ленту: обучающий отказ с готовыми ответами
     let repeatTeach = null;
     const newQ = blocks.find(b => b.type === 'questions');
@@ -648,6 +782,24 @@ async function promptTurn(taskAi, params = {}, post) {
     // Шальные action-кнопки модели посреди Do → text (мёртвая кнопка не блокирует поток)
     blocks = demoteStrayDoActions(body, blocks);
 
+    // Все пункты закрыты, ответ — текст без вызова report: кнопку «Принять» дорисовывает харнесс
+    if (!reportCall) {
+        const doneTask = findActiveTask(body);
+        if (doneTask?.steps?.length
+            && doneTask.steps.every(s => s.status === 'done')
+            && blocks.some(b => b.type === 'text')
+            && !blocks.some(b => b.type === 'action' && b.title === 'Отчёт')) {
+            blocks.push({
+                type: 'action',
+                title: 'Отчёт',
+                content: 'Принять отчёт и закрыть задачу?',
+                button: { label: 'Принять', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+        }
+    }
+
     for (const b of blocks)
         ribbon.push(b);
 
@@ -667,9 +819,13 @@ async function promptTurn(taskAi, params = {}, post) {
     }
 
     // subplan (FC или <subplan>) → вложенная подзадача текущего шага (стек задач)
-    if (!parsed.pendingPlan?.steps?.length && parsed.pendingSubplan?.length
-        && applySubplan(body, parsed.pendingSubplan))
-        toolCalls = [];
+    if (!parsed.pendingPlan?.steps?.length && parsed.pendingSubplan?.length) {
+        const applied = applySubplan(body, parsed.pendingSubplan);
+        if (applied) {
+            toolCalls = [];
+            followInstruction = applied.instruction;
+        }
+    }
 
     // Опасные вызовы / system-modify → pendingAction + подтверждение
     const trustLevel = Number(model.trustLevel ?? params.trustLevel ?? 0);
@@ -710,9 +866,9 @@ async function promptTurn(taskAi, params = {}, post) {
             const { result, followPrompt } = completeTaskStep(body, call.args || {});
             pushToolResult(ribbon, call, result, model);
             sendToolResultWs(wsPath, call, result);
-            // следующий step-prompt — после tool_result: он станет driver'ом хода
+            // следующий пункт — служебной инъекцией (самовызов ASSISTENT), не блоком ленты
             if (followPrompt)
-                ribbonTargetOf(body).push(followPrompt);
+                followInstruction = followPrompt;
             continue;
         }
         const { result, newContext, spawnTask } = await executeToolCall(
@@ -745,7 +901,7 @@ async function promptTurn(taskAi, params = {}, post) {
 
     // === Планирование следующего прохода ===
     const last = driverEntry(ribbonTargetOf(body));
-    if (WAIT_USER_TYPES.has(last.type)) {
+    if (!followInstruction && WAIT_USER_TYPES.has(last.type)) {
         WORK.wsSend?.({ type: 'chat.done', path: wsPath });
         return { ok: true, wait: last.type, turn };
     }
@@ -765,17 +921,12 @@ async function promptTurn(taskAi, params = {}, post) {
         return { ok: true, maxAutoTurns: true, turn };
     }
 
-    // Следующий ход — асинхронно, без блокировки текущего запроса
-    taskAi.async(() => {
-        promptTurn(taskAi, {
-            user: params.user,
-            role: params.role,
-            trustLevel: params.trustLevel,
-            _turn: turn + 1,
-        }).catch(e => console.warn('[task.ai] auto turn:', e.message));
-    });
+    // Следующий ход — служебный (ASSISTENT), асинхронно, без блокировки текущего запроса.
+    // followInstruction («Делай пункт N» / «сформируй Отчёт») уходит только на острие.
+    scheduleServiceTurn(followInstruction);
     return { ok: true, continued: true, turn };
-}
+    },
+};
 
 // ============================================================================
 // Вход пользователя и лента
@@ -787,6 +938,7 @@ function parseInput(params = {}, post) {
     let confirm = undefined;
     let answers = undefined;
     let wantStop = false;
+    let role = '';
     const raw = post ?? params.text ?? params.post ?? '';
     if (typeof raw === 'string' && raw.trim().startsWith('{')) {
         try {
@@ -795,6 +947,7 @@ function parseInput(params = {}, post) {
             requestModel = String(parsed.model ?? '').trim();
             confirm = parsed.confirm;
             wantStop = parsed.stop === true;
+            role = String(parsed.role ?? '').trim();
             if (parsed.answers && typeof parsed.answers === 'object')
                 answers = parsed.answers;
         }
@@ -807,7 +960,7 @@ function parseInput(params = {}, post) {
     }
     if (params.stop === true || post?.stop === true)
         wantStop = true;
-    return { text, requestModel, confirm, answers, wantStop };
+    return { text, requestModel, confirm, answers, wantStop, role };
 }
 
 /** Последний блок ленты, задающий servicePrompt следующего хода. */
@@ -833,35 +986,25 @@ function ribbonTargetOf(body) {
     return lastTask ? (lastTask.ribbon ??= []) : body.ribbon;
 }
 
-/** step-prompt «Выполни шаг N» для ленты задачи (+подсказка для clarify-шага). */
-function makeStepPrompt(step) {
+/**
+ * Служебная инструкция «Делай пункт N» — уходит самовызовом ASSISTENT
+ * только на острие messages, в ленту не пишется.
+ */
+function makeStepInstruction(step) {
     const clarify = stepNeedsClarify(step)
-        ? '\nДанные этого шага есть только у пользователя — начни с ask_user (каждый вопрос — options: 3–5 вариантов + «Другое»), не выдумывай значения.'
+        ? ' Данные этого пункта есть только у пользователя — начни с ask_user (каждый вопрос — options: 3–5 вариантов + «Другое»), не выдумывай значения.'
         : '';
-    return {
-        type: 'prompt',
-        content: 'Выполни шаг ' + step.step + ': «' + step.description + '»' + clarify,
-        time: Date.now(),
-        sender: 'WORK',
-        step: step.step,
-    };
+    return 'Делай пункт ' + step.step + ' плана: «' + step.description + '».' + clarify;
 }
 
 /**
- * Доказательства работы в span'е шага (после его step-prompt):
+ * Доказательства работы в span'е шага (блоки ленты после старта шага, по step.startedAt):
  * answered — закрытый опрос/форма; toolOk — успешный tool (кроме complete_step).
  */
 function stepEvidence(task, step) {
     const ribbon = task.ribbon || [];
-    let start = -1;
-    for (let i = ribbon.length - 1; i >= 0; i--) {
-        const b = ribbon[i];
-        if (b.type === 'prompt' && b.sender === 'WORK' && b.step === step.step) {
-            start = i;
-            break;
-        }
-    }
-    const span = start >= 0 ? ribbon.slice(start + 1) : ribbon;
+    const from = Number(step?.startedAt) || 0;
+    const span = from ? ribbon.filter(b => Number(b.time) >= from) : ribbon;
     return {
         answered: span.some(b => (b.type === 'questions' || b.type === 'form') && b.answered),
         toolOk: span.some(b => b.type === 'tool_result' && b.ok !== false && b.tool !== 'complete_step'),
@@ -871,7 +1014,7 @@ function stepEvidence(task, step) {
 /**
  * Ответы на опрос clarify-шага двигают задачу детерминированно:
  * харнесс сам закрывает шаг (слабая модель не обязана вызвать complete_step).
- * @returns {object|null} step-prompt следующего шага (уже в ленте) или null
+ * @returns {string|null} инструкция следующего пункта (для ASSISTENT-самовызова) или null
  */
 function autoAdvanceClarifyStep(body) {
     const task = findActiveTask(body);
@@ -887,8 +1030,6 @@ function autoAdvanceClarifyStep(body) {
     const { result, followPrompt } = completeTaskStep(body, { step: cur.step, summary });
     if (!result?.success)
         return null;
-    if (followPrompt)
-        ribbonTargetOf(body).push(followPrompt);
     return followPrompt || null;
 }
 
@@ -986,17 +1127,18 @@ function collectArtifacts(body) {
 }
 
 /**
- * Продвижение задачи: следующий шаг → step-prompt;
+ * Продвижение задачи: следующий шаг → инструкция «Делай пункт N»;
  * все шаги done → у subplan-задачи закрытие + рекурсивное продвижение родителя,
- * у обычной — prompt «сформируй Отчёт».
- * Возвращает prompt-блок (пушить в ribbonTargetOf ПОСЛЕ tool_result) или null.
+ * у обычной — инструкция «сформируй Отчёт».
+ * @returns {string|null} служебная инструкция для ASSISTENT-самовызова (не блок ленты)
  */
 function advanceTask(body, task) {
     const next = task.steps.find(s => s.status === 'in_progress')
         || task.steps.find(s => s.status === 'proposed');
     if (next) {
         next.status = 'in_progress';
-        return makeStepPrompt(next);
+        next.startedAt = Date.now();
+        return makeStepInstruction(next);
     }
     if (task.subplan) {
         task.state = 'completed';
@@ -1013,24 +1155,19 @@ function advanceTask(body, task) {
         return null;
     }
     const artifacts = collectArtifacts(body);
-    return {
-        type: 'prompt',
-        content: 'Все шаги выполнены:\n'
-            + task.steps.map(s => '- шаг ' + s.step + ': ' + s.description
-                + (s.summary ? ' — итог: ' + s.summary : '')).join('\n')
-            + (artifacts.length
-                ? '\n\nАртефакты задачи (реальные пути, других нет):\n' + artifacts.map(p => '- ' + p).join('\n')
-                : '\n\nАртефактов не создано — честно укажи это в отчёте, не выдумывай пути.')
-            + '\n\nСформируй финальный Отчёт: что сделано, перечисли только эти артефакты.'
-            + ' В конце — <action>{"title":"Отчёт","label":"Принять","color":"success"}</action>.',
-        time: Date.now(),
-        sender: 'WORK',
-    };
+    return 'Все пункты плана выполнены:\n'
+        + task.steps.map(s => '- пункт ' + s.step + ': ' + s.description
+            + (s.summary ? ' — итог: ' + s.summary : '')).join('\n')
+        + (artifacts.length
+            ? '\n\nАртефакты задачи (реальные пути, других нет):\n' + artifacts.map(p => '- ' + p).join('\n')
+            : '\n\nАртефактов не создано — честно укажи это в отчёте, не выдумывай пути.')
+        + '\n\nСформируй финальный Отчёт: что сделано, перечисли только эти артефакты.'
+        + ' В конце — <action>{"title":"Отчёт","label":"Принять","color":"success"}</action>.';
 }
 
 /**
  * Движок шагов (tool complete_step): закрыть шаг активной задачи и продвинуть её.
- * followPrompt пушится вызывающим кодом после tool_result — он станет driver'ом следующего хода.
+ * followPrompt — строка-инструкция следующего пункта: уходит ASSISTENT-самовызовом на острие.
  */
 function completeTaskStep(body, args = {}) {
     const task = findActiveTask(body);
@@ -1106,6 +1243,7 @@ function applySubplan(body, rawSteps = []) {
     if (!steps.length)
         return null;
     steps[0].status = 'in_progress';
+    steps[0].startedAt = Date.now();
     const sub = {
         type: 'task',
         label: curStep
@@ -1113,14 +1251,14 @@ function applySubplan(body, rawSteps = []) {
             : 'Декомпозиция',
         state: 'active',
         steps,
-        ribbon: [makeStepPrompt(steps[0])],
+        ribbon: [],
         subplan: true,
         parentStep: curStep?.step,
         time: Date.now(),
         sender: 'WORK',
     };
     body.ribbon.push(sub);
-    return sub;
+    return { sub, instruction: makeStepInstruction(steps[0]) };
 }
 
 /** Описание шага из объекта {description|label|title} или голой строки. */
@@ -1143,8 +1281,7 @@ function planQualityError(steps = []) {
     if (meaningful.length >= 2)
         return null;
     return 'План не принят: нужно минимум 2 осмысленных шага. '
-        + 'Вызови tool propose_plan({steps: [{description: "конкретное действие"}, …]}) '
-        + 'с 3–6 шагами; fallback — <plan>[…]</plan> строго JSON-массив.';
+        + 'Вызови функцию propose_plan({steps: [{description: "конкретное действие"}, …]}) с 3–6 шагами.';
 }
 
 /** Args tool propose_plan → pendingPlan (FC-канал плана). */
@@ -1240,12 +1377,13 @@ function applyConfirm(body, confirm, sender) {
             sender: 'WORK',
         };
         const first = task.steps.find(s => s.status === 'proposed') || task.steps[0];
-        if (first)
+        if (first) {
             first.status = 'in_progress';
+            first.startedAt = Date.now();
+        }
         body.ribbon.push(task);
-        const stepPrompt = makeStepPrompt(first);
-        task.ribbon.push(stepPrompt);
-        return stepPrompt;
+        // Пункт плана уходит служебным ASSISTENT-самовызовом, не блоком ленты
+        return { type: 'task', instruction: first ? makeStepInstruction(first) : null };
     }
 
     // «Принять» у Отчёта — задача закрыта, ход модели не нужен
@@ -1615,6 +1753,17 @@ const HARNESS_FUNCTIONS = [
                 intro: { type: 'string', description: 'Краткое вступление к плану (1–2 фразы)' },
             },
             required: ['steps'],
+        },
+    },
+    {
+        name: 'report',
+        description: 'Финальный отчёт по задаче, когда все пункты плана закрыты. Платформа покажет отчёт с кнопкой «Принять». Перечисляй только реальные артефакты.',
+        parameters: {
+            type: 'object',
+            properties: {
+                content: { type: 'string', description: 'Текст отчёта: что сделано, пути артефактов' },
+            },
+            required: ['content'],
         },
     },
     {
@@ -2316,126 +2465,24 @@ function sendToolResultWs(wsPath, call, result) {
 // ============================================================================
 
 /**
- * Ролевые оверлеи протокола хода: короткая добавка к servicePrompt драйвера.
- * USER — артефакт-first; BOSS — делегирование и контроль; ADMIN — inspect → diff → verify.
+ * Инъекция текущего хода: TYPES[type].servicePrompt по паре (состояние, роль).
+ * servicePrompt — строка (для всех ролей) или объект { default, USER, BOSS, ADMIN, ASSISTENT }.
+ * Порядок выбора варианта: роль инъекции → default → строка.
+ * Результат уходит ТОЛЬКО на острие messages текущего вызова (не в ленту, не в историю).
  */
-const ROLE_OVERLAYS = {
-    USER: {
-        prompt: 'Роль USER: пользователь чаще на мобильном — тапы вместо ввода: каждый вопрос ask_user с options (3–5 вариантов + «Другое»), textarea только для свободного текста. Каждый шаг Do завершай сохранением конечного артефакта (save_file, одно имя на артефакт, текстовый формат html/md — не бинарный pptx/docx), затем complete_step; финальный Отчёт — со списком путей файлов.',
-        task: 'Роль USER: результат шага — файл-артефакт через save_file (текстовый html/md), затем complete_step.',
-    },
-    BOSS: {
-        prompt: 'Роль BOSS: шаги плана — поручения и контрольные точки, не ручная работа; крупные направления делегируй spawn_agent; Check — сверка итогов подзадач; финальный Отчёт — сводный статус по направлениям.',
-        task: 'Роль BOSS: шаг = поручение; делегируй spawn_agent, итог фиксируй complete_step({summary}).',
-    },
-    ADMIN: {
-        prompt: 'Роль ADMIN: перед изменением класса — inspect_schema/read_file; правки — точечный edit (diff), не полная перезапись; в плане обязательны шаги проверки результата и обновления readme.md.',
-        task: 'Роль ADMIN: правка — edit (diff) после inspect_schema; после правки — шаг проверки; заверши обновлением readme.md.',
-    },
-};
-
-/**
- * Ситуативная драйвер-инструкция: харнесс сам вычисляет ситуацию
- * (step-prompt clarify/do, Plan-фаза, Отчёт, tool_result шага) и настраивает
- * reasoning модели на выбор одного конкретного действия первой строкой.
- * Возвращает '' если ситуация не распознана — тогда работает fallback TYPES.
- */
-function driverDirective(body, entry, role) {
-    const type = entry?.type;
-    if (!body || !type)
-        return '';
-    const task = findActiveTask(body);
-    const cur = task?.steps?.find(s => s.status === 'in_progress')
-        || task?.steps?.find(s => s.status === 'proposed');
-
-    const clarifyDirective = (step) =>
-        'Шаг ' + step.step + ': «' + (step.description || '') + '» — данные знает только пользователь.'
-        + ' Первая строка reasoning: «Действие: ask_user». Ровно один канал — ask_user({questions}):'
-        + ' каждый вопрос — options 3–5 вариантов из контекста + «Другое»;'
-        + ' свободный текст — только type textarea.'
-        + ' Другие tools не вызывай, значения не выдумывай.';
-
-    const doDirective = (step) => {
-        const base = 'Шаг ' + step.step + ': «' + (step.description || '') + '».'
-            + ' Первая строка reasoning: «Действие: <имя tool>» — выбери tool, дающий результат шага:'
-            + ' артефакт → save_file({filename, post: полное содержимое, текстовый html/md});'
-            + ' внешние факты → search, затем fetch_url.'
-            + ' После успешного tool_result вызови complete_step({step: ' + step.step + ', summary}).'
-            + ' Запрещено: prose-текст или action вместо tool, повторный опрос уже отвеченного, новый план.';
-        const overlay = role && role !== 'USER' ? ROLE_OVERLAYS[role]?.task : '';
-        return overlay ? base + ' ' + overlay : base;
-    };
-
-    // Финальный prompt Отчёта (контент уже несёт список артефактов)
-    if (type === 'prompt' && entry.sender === 'WORK'
-        && /Сформируй финальный Отчёт/i.test(entry.content || '')) {
-        return 'Первая строка reasoning: «Действие: отчёт». Затем text-отчёт строго по артефактам'
-            + ' из prompt (не выдумывай пути) и в конце'
-            + ' <action>{"title":"Отчёт","label":"Принять","color":"success"}</action>.'
-            + ' Tools не вызывай.';
-    }
-
-    // Step-prompt «Выполни шаг N» от харнесса
-    if (type === 'prompt' && entry.sender === 'WORK' && entry.step != null && task && cur) {
-        const step = task.steps.find(s => s.step === Number(entry.step) && s.status !== 'done') || cur;
-        const ev = stepEvidence(task, step);
-        return (stepNeedsClarify(step) && !ev.answered)
-            ? clarifyDirective(step)
-            : doDirective(step);
-    }
-
-    // Ход оборвался на thinking посреди Do — та же ситуация, что у текущего шага
-    if (type === 'thinking' && task && cur) {
-        const ev = stepEvidence(task, cur);
-        return 'Мышление уже в ленте — не повторяй его. '
-            + ((stepNeedsClarify(cur) && !ev.answered) ? clarifyDirective(cur) : doDirective(cur));
-    }
-
-    // Пользовательский prompt без активной задачи — Plan-фаза
-    if (type === 'prompt' && entry.sender !== 'WORK' && !task) {
-        const base = 'Канон хода: <reasoning> закрой до канала; ровно ОДИН канал.'
-            + ' Первая строка reasoning: «Тип: вопрос | задача | нужны данные».'
-            + ' вопрос/справка → text;'
-            + ' задача «сделай X» → tool propose_plan({steps: [{description}…]}) 3–6 шагов'
-            + ' (fallback — <plan>[…]</plan> строго JSON-массив);'
-            + ' нужны данные пользователя → ask_user (options 3–5 + «Другое»; свободный текст — type textarea).'
-            + ' Других tools и spawn_agent до «Начать» не вызывай.';
-        const overlay = role && role !== 'USER' ? ROLE_OVERLAYS[role]?.prompt : '';
-        return overlay ? base + ' ' + overlay : base;
-    }
-
-    // Результат tool при активной задаче — конкретный следующий ход
-    if (type === 'tool_result' && task && cur) {
-        if (entry.ok !== false) {
-            return 'Результат tool получен (ok, tool=' + (entry.tool || '') + ').'
-                + ' Первая строка reasoning: «Действие: complete_step | следующий tool».'
-                + ' Если результат закрывает шаг ' + cur.step
-                + ' — вызови complete_step({step: ' + cur.step + ', summary});'
-                + ' иначе следующий tool шага. Не отвечай прозой, не объявляй completed.';
-        }
-        return 'Tool завершился ошибкой — в тексте ошибки сказано, что делать.'
-            + ' Первая строка reasoning: «Действие: <исправленный tool>».'
-            + ' Выполни указанное (для артефакта — save_file({filename, post}) шага ' + cur.step + '),'
-            + ' затем complete_step({step: ' + cur.step + ', summary}).'
-            + ' Не отвечай прозой и не повторяй тот же вызов без изменений.';
-    }
-
-    return '';
-}
-
-/**
- * Драйвер-инструкция хода: ситуативная директива (driverDirective) при наличии body,
- * иначе шаблон TYPES[type].servicePrompt с подстановкой полей блока (+ ролевой оверлей).
- */
-function resolveServicePrompt(entry, role, body) {
+function resolveServicePrompt(entry, role) {
     const type = entry?.type;
     if (!type || type === 'step' || type === 'ribbon' || type === 'details')
         return '';
-    const directive = driverDirective(body, entry, role);
-    if (directive)
-        return directive;
-    const tpl = TYPES[type]?.servicePrompt;
-    if (!tpl || typeof tpl !== 'string')
+    const raw = TYPES[type]?.servicePrompt;
+    let tpl = '';
+    if (typeof raw === 'string')
+        tpl = raw;
+    else if (raw && typeof raw === 'object') {
+        const r = String(role || '').toUpperCase();
+        tpl = raw[r] || raw.default || '';
+    }
+    if (!tpl)
         return '';
     const vars = {
         title: entry.title != null ? String(entry.title) : '',
@@ -2447,17 +2494,7 @@ function resolveServicePrompt(entry, role, body) {
         label: entry.label != null ? String(entry.label) : '',
         step: entry.step != null ? String(entry.step) : '',
     };
-    const text = tpl.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? vars[k] : ''));
-    const overlay = role ? ROLE_OVERLAYS[role]?.[type] : '';
-    return overlay ? text + ' ' + overlay : text;
-}
-
-/** Служебная инструкция в messages (не в ribbon). */
-function appendServicePrompt(messages, entry) {
-    const text = resolveServicePrompt(entry);
-    if (!text)
-        return;
-    messages.push({ role: 'user', content: '[инструкция] ' + text });
+    return tpl.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? vars[k] : ''));
 }
 
 function formatInteractiveFieldsFact(entry) {
@@ -2477,22 +2514,9 @@ function getDoStepPhase(activeTask) {
     if (activeTask.steps.every(s => s.status === 'done')) return 'done';
     const cur = activeTask.steps.find(s => s.status === 'in_progress')
         || activeTask.steps.find(s => s.status === 'proposed');
-    const ribbon = activeTask.ribbon || [];
-    const last = [...ribbon].reverse().find(b =>
-        b.type === 'prompt' || b.role === 'user'
-        || b.type === 'tool' || b.type === 'tool_result'
-        || b.type === 'action' || b.type === 'form' || b.type === 'questions'
-    );
-    if (!last) {
-        if (cur && stepNeedsClarify(cur)) return 'propose';
-        return 'execute';
-    }
-    // Сразу после step-prompt harness'а clarify-шаг всё ещё требует опроса
-    if (last.type === 'prompt' && last.sender === 'WORK' && last.step != null)
-        return (cur && stepNeedsClarify(cur)) ? 'propose' : 'execute';
-    if (last.type === 'prompt' || last.role === 'user') return 'execute';
-    if (last.type === 'tool' || last.type === 'tool_result') return 'execute';
-    return 'propose';
+    if (cur && stepNeedsClarify(cur) && !stepEvidence(activeTask, cur).answered)
+        return 'propose';
+    return 'execute';
 }
 
 /**
@@ -2510,9 +2534,8 @@ function stepNeedsClarify(step) {
 }
 
 /**
- * ribbon → messages для streamChat.
- * servicePrompt (TYPES.*.servicePrompt) — только в messages, не в ribbon.
- * Scope инъекции: блоки от последнего user-prompt до конца ленты.
+ * ribbon → messages для streamChat: только факты диалога (system + история блоков).
+ * Инъекция servicePrompt в историю НЕ пишется — она добавляется на острие в prompt().
  */
 function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
     const messages = [];
@@ -2564,15 +2587,9 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             messages.push({ role: 'system', content: systemContent });
     }
 
-    // 2. Обход блоков ленты
+    // 2. Обход блоков ленты — ТОЛЬКО факты диалога.
+    // Никаких [инструкция]: инъекция текущего хода добавляется на острие в prompt().
     const ribbon = body.ribbon || [];
-    let lastPromptIdx = -1;
-    for (let i = ribbon.length - 1; i >= 0; i--) {
-        if (ribbon[i].type === 'prompt' || ribbon[i].role === 'user') {
-            lastPromptIdx = i;
-            break;
-        }
-    }
     let pendingAssistant = '';
 
     const flushPending = () => {
@@ -2582,10 +2599,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
         pendingAssistant = '';
     };
 
-    for (let i = 0; i < ribbon.length; i++) {
-        const entry = ribbon[i];
-        const inServiceScope = lastPromptIdx >= 0 && i >= lastPromptIdx;
-
+    for (const entry of ribbon) {
         if ((entry.type === 'prompt' || entry.role === 'user') && (entry.content || entry.answers)) {
             flushPending();
             let content = entry.content || '';
@@ -2593,32 +2607,18 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 const lines = Object.entries(entry.answers).map(([k, v]) => k + ': ' + v);
                 content = (content ? content + '\n' : '') + 'Ответы:\n' + lines.join('\n');
             }
-            if (inServiceScope) {
-                const svc = resolveServicePrompt({ ...entry, type: 'prompt' });
-                if (svc)
-                    content = (content ? content + '\n\n' : '') + '[инструкция] ' + svc;
-            }
             messages.push({ role: 'user', content });
             continue;
         }
 
         if (entry.type === 'text' && entry.content) {
-            if (inServiceScope) {
-                flushPending();
-                messages.push({ role: 'assistant', content: entry.content });
-                appendServicePrompt(messages, entry);
-            }
-            else {
-                pendingAssistant += (pendingAssistant ? '\n' : '') + entry.content;
-            }
+            pendingAssistant += (pendingAssistant ? '\n' : '') + entry.content;
             continue;
         }
 
         if ((entry.type === 'thinking' || entry.type === 'details') && entry.content) {
             flushPending();
             messages.push({ role: 'assistant', content: entry.content });
-            if (inServiceScope && entry.type === 'thinking')
-                appendServicePrompt(messages, entry);
             continue;
         }
         if (entry.type === 'thinking' || entry.type === 'details')
@@ -2632,15 +2632,11 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 role: 'user',
                 content: 'UI action «' + title + '» / кнопка «' + button + '» — ожидает ответа пользователя.',
             });
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
             continue;
         }
         if (entry.type === 'form' || entry.type === 'questions') {
             flushPending();
             messages.push({ role: 'user', content: formatInteractiveFieldsFact(entry) });
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
             continue;
         }
 
@@ -2650,16 +2646,12 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 role: 'user',
                 content: 'Вложение: ' + (entry.path || '') + ' (' + (entry.name || '') + ')',
             });
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
             continue;
         }
 
         if (entry.type === 'error' && entry.content) {
             flushPending();
             messages.push({ role: 'assistant', content: entry.content });
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
             continue;
         }
 
@@ -2673,8 +2665,6 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                     childOpts,
                 ));
             }
-            if (inServiceScope && entry.type === 'task')
-                appendServicePrompt(messages, entry);
             continue;
         }
 
@@ -2688,10 +2678,6 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 continue;
             flushPending();
             pendingAssistant = 'Вызов ' + (entry.name || 'tool') + (entry.args ? ': ' + JSON.stringify(entry.args) : '');
-            if (inServiceScope) {
-                flushPending();
-                appendServicePrompt(messages, entry);
-            }
             continue;
         }
 
@@ -2708,8 +2694,6 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                         + compactToolResultContentForHistory(entry),
                 });
             }
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
             continue;
         }
 
@@ -2720,8 +2704,6 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
                 useFunctionCalling,
                 childOpts,
             ));
-            if (inServiceScope)
-                appendServicePrompt(messages, entry);
         }
     }
 
@@ -3539,6 +3521,16 @@ function parseResponseToRibbon(text, sender = 'WORK') {
 }
 
 /**
+ * Ответ think-хода целиком становится thinking-блоком.
+ * Если модель по привычке обернула его в <reasoning> — снимаем обёртку (лат/кир, парная и висячая).
+ */
+function stripReasoningWrapper(text) {
+    let out = String(text || '').trim();
+    out = out.replace(/<\/?\s*(?:reasoning|мысли|размышления)\s*>/gi, '');
+    return out.trim();
+}
+
+/**
  * Кириллические теги каналов слабых моделей → канонические латинские.
  * Толерантность парсера; канон в servicePrompt остаётся латиницей.
  */
@@ -4061,89 +4053,3 @@ function parseXmlTagAttrs(attrsStr) {
     return parsed?.args || {};
 }
 
-// Экспорт хелперов для unit-тестов (в DATA попадает только default)
-export {
-    parseInput,
-    driverEntry,
-    ribbonTargetOf,
-    findActiveTask,
-    makeStepPrompt,
-    advanceTask,
-    completeTaskStep,
-    applySubplan,
-    autoAdvanceClarifyStep,
-    findAnsweredDuplicate,
-    duplicateAskTeach,
-    demoteStrayDoActions,
-    normalizeChannelTags,
-    driverDirective,
-    questionsFieldsWithoutOptions,
-    hasRecentAskOptionsTeach,
-    stepEvidence,
-    collectArtifacts,
-    ROLE_OVERLAYS,
-    planToAction,
-    planFromProposeArgs,
-    subplanFromArgs,
-    parseNumberedListSteps,
-    planQualityError,
-    isAskQuestionField,
-    applyConfirm,
-    applyAnswers,
-    formatPromptWithAnswers,
-    requestAbort,
-    clearAbort,
-    isAborted,
-    resolveServicePrompt,
-    buildHistoryFromRibbon,
-    formatToolResultMessages,
-    formatInteractiveFieldsFact,
-    getDoStepPhase,
-    stepNeedsClarify,
-    buildFunctionsList,
-    ensureHarnessFunctions,
-    ensureNamedFunction,
-    collectFunctionNamesFromMessages,
-    prepareFunctionsForStream,
-    isFileWriteMethod,
-    isBrokenFcArgs,
-    sanitizeToolArgsForHistory,
-    stripFcTrailer,
-    callNeedsTrustConfirm,
-    buildToolMethodParams,
-    executeToolCall,
-    pushToolResult,
-    summarizeToolResultForRibbon,
-    compactToolResultContentForHistory,
-    normalizeRole,
-    formatRoleAclForSystem,
-    isSystemModifyCall,
-    roleBlocksTool,
-    estimateTokens,
-    estimateMessagesTokens,
-    resolveTurnUsage,
-    applyTurnUsage,
-    normalizeLogWindow,
-    formatLogSummary,
-    formatPairContextForSystem,
-    formatPlanMarkdown,
-    parseResponseToRibbon,
-    extractBalancedJsonArray,
-    normalizeFieldMeta,
-    stripBoilerplateContent,
-    mapAskQuestionToField,
-    questionsFromAskUser,
-    parseToolCalls,
-    parseJsObjectLiteral,
-    parseJsStyleToolCallAt,
-    parseXmlToolCallAt,
-    parseXmlTagAttrs,
-    stripRawActionJsonFromProse,
-    classifyStreamError,
-    ASK_USER_METHOD,
-    TRUST_AUTOCONFIRM,
-    MAX_AUTO_TURNS,
-    MAX_STREAM_RETRIES,
-    CONTEXT_LOG_DAYS,
-    CONTEXT_LOG_MAX_ROWS,
-};

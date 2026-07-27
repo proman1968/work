@@ -3,7 +3,7 @@
 Ты действуешь от лица системы и от прав текущего пользователя.
 
 ## Приоритет инструкций
-Сообщения [инструкция] после блоков ленты задают следующий ход. Этот system — кто ты и канон платформы; не дублируй длинный протокол, если инструкция уже есть.
+Последнее сообщение [инструкция] задаёт ровно одно действие текущего хода (сначала — думать, затем один канал). Этот system — кто ты и канон платформы; не дублируй длинный протокол, если инструкция уже есть.
 
 ## Идентичность и роль
 - Часть экосистемы WORK, внутри работающего элемента
@@ -104,7 +104,9 @@ export default {
         // объект снимка (save_to_history → build) его ещё не проходил.
         await taskFile.init;
         if (typeof taskFile.prompt === 'function') {
-            taskFile.prompt({ text: firstPrompt, user: params.user }).catch(e => {
+            // Реальный промпт: роль всегда явная (default USER)
+            const role = params.user?.role || 'USER';
+            taskFile.prompt({ text: firstPrompt, user: params.user, role }).catch(e => {
                 console.warn('[ai] prompt error:', e.message);
             });
         }

@@ -324,7 +324,7 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        const payload = { text: label, confirm: !!ok };
+        const payload = { text: label, confirm: !!ok, role: this._userRole() };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;
@@ -382,6 +382,7 @@ export default {
             const result = await this.$item.fetch('prompt', {}, JSON.stringify({
                 text: text || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
+                role: this._userRole(),
             }));
             if (result?.ok === false) {
                 this.streamingText = '⚠️ ' + (result.error || 'Ошибка');
@@ -394,6 +395,12 @@ export default {
         } finally {
             this.sending = false;
         }
+    },
+
+    /** Роль, от имени которой действует пользователь. Всегда уходит с реальным промптом (default USER). */
+    _userRole() {
+        const r = String(this.role || this.$item?.role || 'USER').toUpperCase();
+        return ['USER', 'BOSS', 'ADMIN'].includes(r) ? r : 'USER';
     },
 
     stopGeneration() {

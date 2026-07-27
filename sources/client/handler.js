@@ -29,10 +29,11 @@ export class $handler extends $class{
         }
         window.open(this.short + '/');
     }
-    async showSettings(e) {
+    async showSettings(...params) {
         const module = await this.module;
         if (module.showSettings) {
-            module.showSettings.call(this);
+            // todo: заменить на 'call(this', когда заработает bind.
+            module.showSettings(this, ...params);
         }
     }
     get hasSettings() {
