@@ -818,6 +818,24 @@ export class $folder extends $item{
                     break;
             }
             if(!inherit && this.meta_folder){
+                // Корень типа: meta верхнего $parent с тем же type.
+                // Тот же walk, что у meta: typeRoot/$folder + type_chain.
+                let typeRoot = null;
+                for (let p = this.$parent; p; p = p.$parent) {
+                    if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
+                        typeRoot = p.meta_folder;
+                }
+                if (typeRoot && typeRoot !== this.meta_folder) {
+                    let domain = typeRoot.$folder;
+                    if (domain) {
+                        folders.push(domain);
+                        for (let step of steps) {
+                            domain = await domain._get_item(step, FS.$folder);
+                            if (domain)
+                                folders.push(domain);
+                        }
+                    }
+                }
                 // Локальная цепочка наследования внутри метапапки:
                 // meta_folder/$folder/$class/$type/...
                 // ВАЖНО: локальная цепочка ДОЛЖНА быть ПЕРЕД meta_folder (SELF),

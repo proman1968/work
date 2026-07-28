@@ -45,7 +45,7 @@ export default {
                 + TYPES.prompt.servicePrompt,
         });        
         if (params.role !== 'ASSISTENT') {
-            await push_block.call(this, {
+            await push_block.call(this, body, {
                 type: 'prompt',
                 content: params.prompt, // в ленту — только чистый текст
                 time: Date.now(),
@@ -54,19 +54,24 @@ export default {
         }        
         const model = await WORK.get_item(body.model);
         await model.init;
-        let fullResponse = '';
+        let token, fullResponse = '';
         for await (const chunk of model.streamChat({ messages })) {
             if (typeof chunk === 'string')
-                fullResponse += chunk;
+                token = chunk;
             else if (chunk.type === 'content')
-                fullResponse += chunk.content;
+                token = chunk.content;
+            fullResponse += token
+            WORK.wsSend?.({ type: 'chat.delta', path: this.short, token });
         }
-        await push_block.call(this, {
+        await push_block.call(this, body, {
             type: 'thinking',
             content: fullResponse,
             time: Date.now(),
             sender: model.path,
         });
+
+        notifyChanged(this.path);
+        WORK.wsSend?.({ type: 'chat.done', path: this.short });
 
     },  
 
@@ -1147,9 +1152,10 @@ function findActiveTask(body) {
     const chain = activeTaskChain(body);
     return chain.length ? chain[chain.length - 1] : null;
 }
-async function push_block(block) {
-    ribbonTargetOf(this.body).push(block);
-    await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
+async function push_block(body, block) {
+    ribbonTargetOf(body).push(block);
+    await WORK.fsp.writeFile(this.dir, JSON.stringify(body, null, 4), 'utf-8');
+    this.body = body;
 }
 /** Целевая лента: активная task.ribbon или корень. */
 function ribbonTargetOf(body) {
