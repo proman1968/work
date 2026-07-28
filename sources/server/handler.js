@@ -11,3 +11,9 @@ import { $class } from './class.js';
 
 export class $handler extends $class {
 }
+export class $trigger extends $handler {
+}
+export class $timer extends $handler {
+}
+export class $method extends $handler {
+}

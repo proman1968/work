@@ -8,7 +8,7 @@ import {
     sanitizeGigaChatFunctions,
     sanitizeGigaChatMessages,
     resolveOpenAiToolChoice,
-} from '../MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js';
+} from '../models/$ai/$folder/$class/$ai/class.js';
 import {
     isBrokenFcArgs,
     sanitizeToolArgsForHistory,

@@ -6,33 +6,33 @@
 
 ## 2. Зачем это нужно
 
-Единая точка покупки внутри платформы. Категории — `$class`; товары — файлы `.product` в `work/product/` категории; заявка — файл `$bid`.
+Единая точка покупки внутри платформы. Категории — `$class`; товары — файлы `.product` в `work/product/` категории; заявка — файл `$bid`. Карточка товара и форма заказа — разные сущности. Продукт — данные из `.product`, без хардкодных списков тарифов.
 
 ## 3. Как это работает
 
 1. Сайт `MARKET` (shell `site` из `~`) — меню категорий.
-2. Категория `PAAS`: handlers под `$class/` (чтобы `~/handlers` видел override) — `site/main` с карточками товаров.
-3. Товары — файлы `*.product` в `work/product/` зоны роли (USER → `meta_folder/work/product/`). Main получает список через `~//product` и грузит актуальные версии файлов.
-4. Клик по карточке → `WORK.showModal` с панелью заказа (описание + форма из `orderForm` + «Заказать»).
-5. «Заказать» → auth при необходимости → `{uid}.bid` сохраняется на ближайший `$class` категории (`/MARKET/PAAS`) по роли покупателя. Повторный заказ перезаписывает файл; предыдущие версии — в `history` и `data.logs`.
+2. Категория `PAAS`: handlers под `$class/` — `site/main` с карточками товаров.
+3. Товары — файлы `*.product` (`label`, `price`, `description`) в `work/product/` зоны роли. Main: `~//product`, только `status === published`.
+4. Управление — form-view `products`: таблица, add/delete с ролью form → `save_file` / `delete` на класс категории.
+5. Клик по карточке → модалка: описание + поле **«Имя домена»** (`domainName`) + «Заказать».
+6. «Заказать» → auth при необходимости → `{uid}.bid` на `/MARKET/PAAS` (`status`, `product` + `$Link`, `input`) → всегда `submitOrder` на `/SERVICES/ArgoCD/PaaS` (`pass.order`: `status`, `$Link` → `.bid`, `product`, `input`).
 
 ## 4. Из чего это состоит
 
 - `$class/class.js` — витрина «Магазин»
-- `PAAS/$class/` — категория + `handlers/pages/site` (shell `{}` + main: карточки/модалка)
-- `PAAS/$class/work/product/*.product` — товары (тарифные планы): `старт.product`, `бизнес.product`, `предприятие.product`
-- Тип `$product` — [`$server/$folder/$file/$product/`]($server/$folder/$file/$product/) (схема `FIELDS`, шаблон)
-- Тип `$bid` — [`$server/$folder/$file/$bid/`]($server/$folder/$file/$bid/) (схема заявки, preview)
+- `PAAS/$class/` — категория + `handlers/pages/site` (shell + main)
+- `PAAS/$class/handlers/pages/form/products/` — вкладка «Продукты»
+- `PAAS/$class/work/product/*.product` — товары
+- Тип `$product` — [`$server/$folder/$file/$product/`](/$server/$folder/$file/$product/readme.md/~/handlers/pages/form/) (карточка)
+- Тип `$bid` — [`$server/$folder/$file/$bid/`](/$server/$folder/$file/$bid/readme.md/~/handlers/pages/form/) (заявка)
 
 ## 5. В каком это состоянии
 
-- ✅ Тип `$product` (схема + шаблон)
-- ✅ PAAS карточки → модалка → `.bid` через client `save_file` на класс категории
-- ❌ Provision / биллинг / связь с `$order`
+- ✅ `$product` — нейтральная карточка (название, стоимость, описание)
+- ✅ PAAS form/products + витрина; заказ через `.bid` + `pass.order`
+- ❌ Биллинг / DNS fqdn в теле заявки (baseDomain — настройка сервиса)
 
 ## 6. Дальнейшие планы
 
 - Другие категории витрины
-- Наследование `orderForm` с категории
-- Подключение исполнения заявки (вне MARKET)
-- Синхронизация тарифов с корневым `/PAAS` landing
+- Редактирование существующего `.product`

@@ -112,7 +112,7 @@ function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
 }
 
 async function runEmailSettingsDialog($item) {
-    const settings = await $item.fetch('read_secret', { filename: 'email.json' });
+    const settings = await $item.$context.fetch('read_secret', { filename: 'email.json' });
     const el = ODA.createElement('oda-email-settings', {
         accounts: mailboxesToAccounts(settings?.mailboxes),
     });
@@ -135,7 +135,7 @@ async function runEmailSettingsDialog($item) {
     try {
         el.validate();
         const mailboxes = accountsToMailboxes(el.accounts, settings?.mailboxes);
-        await $item.fetch(
+        await $item.$context.fetch(
             'save_secret',
             { filename: 'email.json' },
             JSON.stringify({ mailboxes }),
@@ -670,7 +670,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await this.$item.save_file(new File([eml], 'send.eml', { type: 'message/rfc822' }), { encoding: 'utf-8', folder: address });
+            await this.$item.save_file(new File([eml], 'outbound.eml', { type: 'message/rfc822' }), { encoding: 'utf-8', folder: address });
             this.composing = false;
             this.folder = 'outbox';
             await this.refreshMessages();

@@ -32,7 +32,7 @@ export default {
             <h3>{{title}}</h3>
             <span class="muted">{{status}}</span>
         </div>
-        <div class="muted">{{buyerLine}}</div>
+        <div class="muted">{{summaryLine}}</div>
         <pre>{{jsonText}}</pre>
     `,
     body: null,
@@ -42,10 +42,12 @@ export default {
     get status() {
         return this.body?.status || '';
     },
-    get buyerLine() {
+    get summaryLine() {
         const b = this.body;
         if (!b) return '';
-        return [b.role, b.buyer].filter(Boolean).join(' · ');
+        const domain = b.input?.domainName || '';
+        const link = b.product?.$Link || '';
+        return [domain, link].filter(Boolean).join(' · ');
     },
     get jsonText() {
         return this.body ? JSON.stringify(this.body, null, 2) : '';

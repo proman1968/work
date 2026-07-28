@@ -1,15 +1,9 @@
-import { pathToFileURL } from 'node:url';
-import * as path from 'node:path';
-
 export default {
     async execute(params = {}, post) {
-        const streamChatPath = path.join(process.cwd(), 'MODELS/$ai/$folder/$class/$ai/methods/streamChat/$method/class.js');
-        const mod = await import(pathToFileURL(streamChatPath).href);
-        const streamChatHandler = mod.default;
-        const gen = streamChatHandler.execute.call(this, params, post);
+        const gen = this.$context.streamChat(params, post);
         let result = '';
         for await (const token of gen) {
-            result += token;
+            result += typeof token === 'string' ? token : (token?.content || '');
         }
         return result;
     },

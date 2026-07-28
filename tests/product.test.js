@@ -21,30 +21,22 @@ function readJson(rel) {
 }
 
 describe('$product type', () => {
-    it('class.js exports FIELDS with catalog fields', async () => {
+    it('class.js exports FIELDS with catalog card fields', async () => {
         const def = await loadDefault(PRODUCT_CLASS);
         assert.equal(def.icon, 'carbon:product');
         assert.equal(def.label, 'Продукт');
         assert.ok(Array.isArray(def.FIELDS));
         const ids = def.FIELDS.map(f => f.id);
-        for (const id of ['label', 'icon', 'price', 'priceHint', 'includes', 'orderForm', 'status'])
-            assert.ok(ids.includes(id), 'missing field: ' + id);
+        assert.deepEqual(ids, ['label', 'price', 'description']);
     });
 
-    it('template.product is valid JSON with required fields', () => {
+    it('template.product is valid JSON with card fields', () => {
         const data = readJson(PRODUCT_TEMPLATE);
         assert.equal(typeof data.label, 'string');
-        for (const id of ['label', 'price', 'includes', 'orderForm', 'status'])
+        for (const id of ['label', 'price', 'description'])
             assert.ok(id in data, 'template missing: ' + id);
-        assert.ok(Array.isArray(data.includes));
-        assert.ok(data.orderForm && Array.isArray(data.orderForm.fields));
-    });
-
-    it('template.product orderForm has name field', () => {
-        const data = readJson(PRODUCT_TEMPLATE);
-        const nameField = data.orderForm.fields.find(f => f.id === 'name');
-        assert.ok(nameField, 'orderForm has no name field');
-        assert.equal(nameField.type, 'text');
+        assert.equal(data.orderForm, undefined);
+        assert.equal(data.includes, undefined);
     });
 });
 
@@ -68,7 +60,15 @@ describe('$bid schema', () => {
         const def = await loadDefault(BID_CLASS);
         assert.ok(Array.isArray(def.FIELDS));
         const ids = def.FIELDS.map(f => f.id);
-        for (const id of ['status', 'role', 'buyer', 'target', 'product', 'input'])
-            assert.ok(ids.includes(id), 'bid missing: ' + id);
+        assert.deepEqual(ids, ['status', 'product', 'input']);
+        const status = def.FIELDS.find(f => f.id === 'status');
+        assert.deepEqual(status.options, ['', 'draft', 'submitted']);
+        const product = def.FIELDS.find(f => f.id === 'product');
+        assert.equal(product.type, 'object');
+        const input = def.FIELDS.find(f => f.id === 'input');
+        assert.equal(input.type, 'form');
+        const domain = input.fields?.find(f => f.id === 'domainName');
+        assert.ok(domain, 'input.domainName missing');
+        assert.equal(domain.label, 'Имя домена');
     });
 });

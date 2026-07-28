@@ -465,20 +465,21 @@ ODA({is: 'oda-chat',
             this.awaitTask = true;
             const text = String(this.value ?? '').trim();
             const promptText = text || (this.files.length ? 'есть вложения' : '');
-            const time = Date.now();
-            const ribbon = [{
-                type: 'prompt',
-                role: 'user',
-                content: promptText,
-                time,
-                sender: WORK.uid,
-            }];
+            // const time = Date.now();
+            // const ribbon = [{
+            //     type: 'prompt',
+            //     role: 'user',
+            //     content: promptText,
+            //     time,
+            //     sender: WORK.uid,
+            // }];
             try {
+                let includes = []
                 for (const f of [...this.files]) {
                     const res = await this.$pdp.$item.save_file(f, { encoding: 'utf-8', ignore_save_logs: true });
                     const path = res?.logFullPath || res?.path || res?.logPath;
                     if (path) {
-                        ribbon.push({
+                        includes.push({
                             type: 'file',
                             path: path.startsWith('/') ? path : '/' + path,
                             name: f.name || path.split('/').pop(),
@@ -488,9 +489,9 @@ ODA({is: 'oda-chat',
                     }
                 }
                 const body = {
-                    title: text || (ribbon.find(b => b.type === 'file')?.name) || 'task',
-                    created: time,
-                    ribbon,
+                    title: promptText || 'task',
+                    created: Date.now(),
+                    includes,
                 };
                 if (this.model) body.model = this.model;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'task.ai', { type: 'application/json' });

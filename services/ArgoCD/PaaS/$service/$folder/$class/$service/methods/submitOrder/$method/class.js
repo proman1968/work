@@ -17,43 +17,35 @@ export default {
         if (!body || typeof body !== 'object')
             throw new Error('Пустая заявка');
 
-        const tariff = String(body.tariff || '').trim();
-        const subdomain = normalizeSubdomain(body.subdomain || body.host || body.name);
-        if (!tariff)
-            throw new Error('Не выбран тариф');
-        const known = ['СТАРТ', 'БИЗНЕС', 'ПРЕДПРИЯТИЕ', 'ENTERPRISE'];
-        if (!service.tariffs?.includes?.(tariff) && !known.includes(tariff))
-            throw new Error('Неизвестный тариф: ' + tariff);
-        if (!subdomain)
-            throw new Error('Укажите имя хоста (поддомен)');
+        const product = body.product;
+        if (!product || typeof product !== 'object')
+            throw new Error('Нет снимка продукта');
 
-        let baseDomain = service.baseDomain ?? service.DATA?.baseDomain;
-        if (baseDomain && typeof baseDomain.then === 'function')
-            baseDomain = await baseDomain;
-        baseDomain = String(baseDomain || '').replace(/^\.+/, '');
+        const input = (body.input && typeof body.input === 'object') ? body.input : {};
+        const domainName = normalizeDomainName(input.domainName);
+        if (!domainName)
+            throw new Error('Укажите имя домена');
 
-        const fqdn = baseDomain ? (subdomain + '.' + baseDomain) : '';
-        const url = fqdn ? ('https://' + fqdn) : '';
+        const $Link = String(body.$Link || '').trim();
+        if (!$Link)
+            throw new Error('Нет ссылки на заявку ($Link)');
 
-        const existing = await WORK.get_item('/PAAS/' + subdomain, 0, undefined, { user: globalThis.WORK });
+        const existing = await WORK.get_item('/PAAS/' + domainName, 0, undefined, { user: globalThis.WORK });
         if (existing?.type === '$paas')
-            throw new Error('Имя хоста "' + subdomain + '" уже занято');
+            throw new Error('Имя домена "' + domainName + '" уже занято');
 
         const order = {
-            tariff,
-            subdomain,
-            fqdn,
-            url,
-            buyer: uid,
-            created: Date.now(),
-            paasPath: '/PAAS/' + subdomain,
+            status: '',
+            $Link,
+            product,
+            input: { domainName },
         };
 
         await service.save_file({
             filename: 'pass.order',
             post: JSON.stringify(order, null, 2),
             encoding: 'utf-8',
-            message: order.subdomain + ' / ' + order.tariff,
+            message: domainName + ' / ' + (product.label || product.id || ''),
             user: globalThis.WORK,
             logAuthor: params.user,
             skip_file_handler: true,
@@ -71,7 +63,7 @@ async function resolveService(params) {
     return WORK.get_item(params.servicePath || '/SERVICES/ArgoCD/PaaS');
 }
 
-function normalizeSubdomain(raw) {
+function normalizeDomainName(raw) {
     return String(raw || '')
         .trim()
         .toLowerCase()

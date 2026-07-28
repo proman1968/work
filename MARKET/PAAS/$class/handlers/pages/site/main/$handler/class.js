@@ -1,3 +1,14 @@
+/** Поля заявки PAAS — не из .product. */
+const PAAS_ORDER_FIELDS = [
+    {
+        id: 'domainName',
+        label: 'Имя домена',
+        type: 'text',
+        required: true,
+        placeholder: 'my-company',
+    },
+];
+
 ODA({
     is: 'market-product-card',
     template: /* html */ `
@@ -20,36 +31,22 @@ ODA({
             }
             h3 { margin: 0; font-size: 1.15rem; }
             .price { font-weight: 600; opacity: .9; }
-            .price small {
-                font-weight: 500;
-                opacity: .65;
-                font-size: .8rem;
-            }
-            ul {
+            .desc {
                 margin: 0;
-                padding-left: 1.1rem;
                 @apply --flex;
-                @apply --vertical;
-                gap: 4px;
                 font-size: .9rem;
-                line-height: 1.35;
+                line-height: 1.4;
                 opacity: .85;
-                flex: 1;
+                white-space: pre-wrap;
             }
         </style>
         <h3>{{label}}</h3>
-        <div class="price">
-            {{price}}
-            <small ~if="priceHint">{{priceHint}}</small>
-        </div>
-        <ul>
-            <li ~for="includes">{{$for.item}}</li>
-        </ul>
+        <div class="price">{{price}}</div>
+        <p class="desc">{{description}}</p>
     `,
     label: '',
     price: '',
-    priceHint: '',
-    includes: [],
+    description: '',
 });
 
 ODA({
@@ -67,18 +64,11 @@ ODA({
                 box-sizing: border-box;
             }
             .price { font-size: 1.05rem; font-weight: 600; }
-            .price small {
-                font-weight: 500;
-                opacity: .65;
-                font-size: .8rem;
-            }
-            ul {
+            .desc {
                 margin: 0;
-                padding-left: 1.15rem;
-                @apply --vertical;
-                gap: 6px;
-                line-height: 1.4;
+                line-height: 1.45;
                 opacity: .85;
+                white-space: pre-wrap;
             }
             fieldset {
                 border: 1px solid var(--border-color, rgba(0,0,0,.12));
@@ -109,13 +99,8 @@ ODA({
             .ok { color: var(--success-color, #2e7d32); }
             .muted { opacity: .7; font-size: small; }
         </style>
-        <div class="price">
-            {{price}}
-            <small ~if="priceHint">{{priceHint}}</small>
-        </div>
-        <ul>
-            <li ~for="includes">{{$for.item}}</li>
-        </ul>
+        <div class="price">{{price}}</div>
+        <p ~if="description" class="desc">{{description}}</p>
 
         <div ~if="!orderDone" class="vertical" style="gap:12px;">
             <fieldset ~for="formFields">
@@ -158,18 +143,11 @@ ODA({
     get price() {
         return this.product?.price || '';
     },
-    get priceHint() {
-        return this.product?.priceHint || '';
-    },
-    get includes() {
-        const list = this.product?.includes;
-        return Array.isArray(list) ? list : [];
+    get description() {
+        return this.product?.description || '';
     },
     get formFields() {
-        const form = this.product?.orderForm;
-        const list = Array.isArray(form) ? form : (form ? [form] : []);
-        const formBlock = list.find(f => f?.type === 'form') || list[0];
-        return Array.isArray(formBlock?.fields) ? formBlock.fields : [];
+        return PAAS_ORDER_FIELDS;
     },
     isText(field) {
         const t = String(field?.type || 'text').toLowerCase();
@@ -275,20 +253,17 @@ ODA({
                 if (v != null && String(v).trim() !== '')
                     input[f.id] = typeof v === 'string' ? v.trim() : v;
             }
-            const created = Date.now();
+            const productPath = this.product.path || this.product.$file?.path || '';
+            const product = {
+                $Link: productPath,
+                id: this.product.$file?.id || '',
+                label: this.product.label || '',
+                price: this.product.price || '',
+                description: this.product.description || '',
+            };
             const bid = {
                 status: 'submitted',
-                role: 'USER',
-                buyer: WORK.uid,
-                created,
-                target: this.product.path || '',
-                product: {
-                    id: this.product.$file?.id || '',
-                    label: this.product.label || '',
-                    price: this.product.price || '',
-                    priceHint: this.product.priceHint || '',
-                    includes: this.product.includes || [],
-                },
+                product,
                 input,
             };
             const filename = WORK.uid + '.bid';
@@ -302,11 +277,14 @@ ODA({
                 throw new Error('Не найден класс категории');
             await category.save_file(file, {
                 role: 'USER',
-                message: (bid.product.label || '') + (input.name ? ': ' + input.name : ''),
+                message: (product.label || '') + (input.domainName ? ': ' + input.domainName : ''),
             });
+            const bidPath = (category.path || category.short || '/MARKET/PAAS')
+                + '/$class/work/bid/' + filename;
             await WORK.fetch('/SERVICES/ArgoCD/PaaS', 'submitOrder', {}, {
-                tariff: this.product.label,
-                subdomain: input.name || input.subdomain,
+                $Link: bidPath,
+                product,
+                input,
             });
             this._closeAuth();
             this.orderDone = true;
@@ -378,8 +356,7 @@ export default {
                     ~for="products"
                     :label="$for.item.label"
                     :price="$for.item.price"
-                    :price-hint="$for.item.priceHint"
-                    :includes="$for.item.includes"
+                    :description="$for.item.description"
                     @tap="openProduct($for.item)">
                 </market-product-card>
             </div>
@@ -402,11 +379,8 @@ export default {
                     $file: f,
                     path: f.path || f.short || '',
                     label: data.label || f.id,
-                    icon: data.icon || '',
                     price: data.price || '',
-                    priceHint: data.priceHint || '',
-                    includes: Array.isArray(data.includes) ? data.includes : [],
-                    orderForm: data.orderForm || data.FIELDS || [],
+                    description: data.description || '',
                     status: data.status || 'published',
                 };
             }));
@@ -421,7 +395,7 @@ export default {
         });
         try {
             await WORK.showModal(el, {
-                TITLE: { label: item.label || 'Заказать', icon: item.icon },
+                TITLE: { label: item.label || 'Заказать', icon: 'carbon:product' },
                 allowClose: true,
                 BUTTONS: [],
             });

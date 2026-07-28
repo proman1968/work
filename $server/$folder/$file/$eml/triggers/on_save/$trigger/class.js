@@ -20,7 +20,7 @@ export default {
     async execute(params = {}) {
         const storage = this.$owner;
         const filename = params.filename || '';
-        if (filename !== 'send.eml')
+        if (filename !== 'outbound.eml')
             return true;
 
         // Динамический импорт локальных модулей
@@ -41,13 +41,13 @@ export default {
         const box = address ? settings.mailboxes?.[address] : null;
 
         if (!address || !box)
-            console.warn('[outbox.eml] ящик не настроен', address, structureId);
+            console.warn(`[${filename}]`, 'ящик не настроен', address, structureId);
 
         raw = pendingOutboxEml(raw, address);
 
         // SMTP не настроен — failed
         if (!box?.smtp?.host) {
-            console.warn('[sent.eml]', 'SMTP не настроен');
+            console.warn(`[${filename}]`, 'SMTP не настроен');
             // raw = markEmlStatus(raw, 'failed', { error: 'SMTP не настроен' });
             // await saveOutboxOnMailbox(storage, address, raw, params);
             return true;
@@ -60,7 +60,7 @@ export default {
             await saveOutboxOnMailbox(storage, address, raw, params);
         }
         catch (err) {
-            console.warn('[sent.eml]', err.message);
+            console.warn(`[${filename}]`, err.message);
             // raw = markEmlStatus(raw, 'failed', { error: err.message });
             // await saveOutboxOnMailbox(storage, address, raw, params);
         }

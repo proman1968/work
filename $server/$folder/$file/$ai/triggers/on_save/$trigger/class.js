@@ -1,122 +1,45 @@
-﻿const SYSTEM_PROMPT = `Ты — встроенный ИИ-агент системы WORK — файло-ориентированной веб-платформы.
-Ты НЕ внешний ассистент, а часть системы. Ты работаешь изнутри конкретного элемента (класса, папки, файла).
-Ты действуешь от лица системы и от прав текущего пользователя.
-
-## Приоритет инструкций
-Последнее сообщение [инструкция] задаёт ровно одно действие текущего хода (сначала — думать, затем один канал). Этот system — кто ты и канон платформы; не дублируй длинный протокол, если инструкция уже есть.
-
-## Идентичность и роль
-- Часть экосистемы WORK, внутри работающего элемента
-- Доступ к методам и свойствам текущего контекста; можешь navigate / reset_context
-- Управляешь процессами пользователя, файлами и папками по правам роли
-
-## Архитектура WORK
-- $class = метапапка (имя с $…)
-- Метапапка — рабочая зона назначенных пользователей ($class == $owner)
-- $folder (системная, виртуальная) — только ADMIN; элементы с префиксом $ системные
-- Внешние папки/файлы (без префикса $) — $class == $parent
-
-## Артефакты
-При каждом save_file платформа пишет снимок в history/.
-Канон: один конечный filename на артефакт; каждый шаг Do перезаписывает то же имя.
-Запрещены промежуточные имена (*.struct.*, *.draft.*, «сначала outline, потом html»).
-
-## PDCA (кратко)
-Цикл: Plan → Do → Check → Act. Детальный протокол хода — в [инструкция] после блоков ленты (TYPES.servicePrompt).
-
-## Каналы действий — вызовы функций (function calling)
-Любое действие — вызов функции по точному имени. Предпочтителен native function calling;
-текстовый вызов name({…}) платформа тоже разберёт как fallback.
-Запрещены теги и кривые формы: «<plan>…», «{subplan}[…]», «subplan <…>» —
-они не исполняются.
-Примеры правильных вызовов (аргументы — всегда один JSON-объект):
-- Вопросы пользователю: ask_user({questions: [{prompt: "Какой формат презентации?", options: ["PDF", "HTML", "Другое"]}]})
-- План задачи: propose_plan({steps: [{description: "Уточнить требования"}, {description: "Собрать структуру"}, {description: "Сохранить файл"}]})
-- Декомпозиция текущего шага: subplan({steps: [{description: "Первый подшаг"}, {description: "Второй подшаг"}]})
-- Файл-артефакт: save_file({filename: "presentation.html", post: "<!DOCTYPE html>… полное содержимое"})
-- Закрыть пункт плана: complete_step({step: 1, summary: "что сделано"})
-- Финальный отчёт: report({content: "итог по реальным артефактам"})
-Обычный ответ или справка — просто текст без вызова функции.
-Файл — только save_file (filename + post); новый класс — create (не для файлов).
-Точечные правки — edit; скиллы — list_skills / run_skill; подагент — spawn_agent.
-
-## Инструменты
-Методы контекста передаются как functions. get_schema — свойства/методы элемента. Метод без path (текущий контекст). navigate / reset_context — смена контекста.
-
-## Документация
-При значимых изменениях класса обновляй readme.md через save_file (назначение, структура, настройки, методы, связи).
-
-## Поведение
-- По делу на русском; сдержанно и приветливо
-- Бюджет авто-ходов — 30 подряд; после лимита пользователь жмёт «Продолжить»
-- На «где ты» — опиши текущий $class (путь, тип)
-- Действия от первого лица; результаты — списками/таблицами`;
-
-export default {
+﻿export default {
     label: 'on_save (.ai)',
     icon: 'carbon:ai',
     async execute(params = {}) {
-        const taskFile = params.$context;
-        if (!taskFile) return;
-
-        let body;
-        try {
-            const raw = await taskFile.load({ encoding: 'utf-8' });
-            body = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        } catch { return; }
-
-        if (!body) return;
-
-        body.ribbon ??= [];
-        const hasAssistant = body.ribbon.some(m =>
-            m.role === 'assistant'
-            || ['thinking', 'text', 'action', 'task', 'tool', 'tool_result', 'error', 'details', 'block', 'form'].includes(m.type)
-        );
-        if (hasAssistant) return;
-
-        let firstPrompt = '';
-        const firstUser = body.ribbon.find(m => m.type === 'prompt' || m.role === 'user');
-        if (firstUser) {
-            firstPrompt = String(firstUser.content ?? '').trim();
-        } else {
-            firstPrompt = String(body?.title ?? '').trim();
-        }
-        if (!firstPrompt) {
-            const hasFiles = body.ribbon.some(m => m.type === 'file');
-            if (hasFiles) firstPrompt = 'есть вложения';
-            else return;
-        }
-
-        // Канон system всегда свежий — иначе старые task.ai живут на устаревшем тексте
-        const systemStale = body.system !== SYSTEM_PROMPT;
-        body.system = SYSTEM_PROMPT;
-        let modelWasMissing = false;
-        if (!body.model) {
-            const { pathToFileURL } = await import('node:url');
-            const { join } = await import('node:path');
-            const { findFirstModel } = await import(pathToFileURL(join(process.cwd(), 'sources/modules/ai-schema.js')).href);
-            body.model = await findFirstModel();
-            modelWasMissing = true;
-        }
-        if (systemStale || modelWasMissing) {
-            try {
-                const fsp = await import('node:fs/promises');
-                await fsp.writeFile('.' + taskFile.path, JSON.stringify(body, null, 4), 'utf-8');
-            } catch {}
-        }
-
-        // prompt — инстанс-метод файла (наследуется из $ai/class.js через merge).
-        // Методы DATA навешиваются на инстанс только после init — свежепостроенный
-        // объект снимка (save_to_history → build) его ещё не проходил.
-        await taskFile.init;
-        if (typeof taskFile.prompt === 'function') {
-            // Реальный промпт: роль всегда явная (default USER)
-            const role = params.user?.role || 'USER';
-            taskFile.prompt({ text: firstPrompt, user: params.user, role }).catch(e => {
-                console.warn('[ai] prompt error:', e.message);
-            });
-        }
-        else
-            console.warn('[ai] prompt недоступен на', taskFile.path);
+        const file = this.$context;
+        const raw = await file.load({ encoding: 'utf-8' });
+        const body = JSON.parse(raw);
+        let role = params.role;
+        body.system = [
+            SYSTEM_PROMPT.SYSTEM,
+            `Текущий класс: ${this.$owner.path}`,
+            `Текущий пользователь: ${params.user?.$user?.path}`,
+            (SYSTEM_PROMPT[role] || '')
+        ].join('\n\n');
+        await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
+        await file.init;
+        return file.prompt({
+            user: params.user,
+            role,
+            prompt: body.title,
+        });
     },
+};
+
+const SYSTEM_PROMPT = {
+    SYSTEM: `Ты — встроенный ИИ-агент системы WORK — файло-ориентированной веб-платформы.
+Ты НЕ внешний ассистент, а часть системы. Ты работаешь внутри конкретного элемента (класса).
+Ты действуешь от лица системы и от прав текущего пользователя.
+
+## Поведение
+- По делу на русском; сдержанно и приветливо
+- На «где ты» — опиши текущий $class (путь, тип, назначение)
+`,
+    USER: `Ты USER-агент: работаешь от имени текущего пользователя.
+Можешь просматривать файлы и папки текущего класса.
+Можешь редактировать только файлы и папки в 'work' метапапки данного класса.
+`,
+    BOSS: `Ты BOSS-агент: работаешь от имени владельца текущего класса.
+Можешь просматривать файлы и папки текущего класса и нижестоящих.
+Можешь редактировать только файлы и папки в 'work' папки наследования данного класса.
+`,
+    ADMIN: `Ты ADMIN-агент: работаешь от имени администратора текущего класса.
+Можешь просматривать и редактировать файлы и папки, кроме пользовательских 'work', в текущем классе и дочерних.
+`,
 };

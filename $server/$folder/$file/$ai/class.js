@@ -3,442 +3,247 @@
  *
  * Два вида промптов, различаются ролью:
  * - реальный (role USER|BOSS|ADMIN, всегда с клиента, default USER) → блок prompt в ленту;
- * - служебный (role ASSISTENT — самовызовы шагов плана / авто-ходы) → ТОЛЬКО на острие
+ * - служебный (role ASSISTENT — самовызовы маршрутов / авто-ходы) → ТОЛЬКО на острие
  *   messages текущего вызова; в ленту и историю следующих ходов не попадает.
  *
- * prompt — ОДИН проход (single-pass), не цикл:
- * 1. реальный вход (text | answers | confirm | stop) → блок в ленту;
- * 2. system + контекст пары + ribbon (только факты) → messages;
- * 3. инъекция на острие: ASSISTENT-текст шага + TYPES[состояние].servicePrompt по роли;
- *    после реального промпта единственное действие — думать (TYPES.prompt),
- *    после thinking — развилка TYPES.thinking (ответ | ask_user | propose_plan | шаг);
- * 4. один ход модели (streamChat) → блоки TYPE + tools;
- * 5. следующий пункт плана — this.async(() => this.prompt({role:'ASSISTENT', text:'Делай пункт N'})).
+ * prompt — автомат:
+ * 1. реальный text → двухтактный ход: такт 1 «думай» (functions не передаются,
+ *    весь ответ = thinking) → такт 2 «маршрут» — ответ текстом (стоп) либо одно
+ *    слово research | plan | task | do | report → expect-самовызов;
+ * 2. expect-ходы (ASSISTENT): plan|report → md-блок + кнопка «Принять» (wait);
+ *    task → to-do → task.steps + инъекции пунктов; step|do|research → FC-ход
+ *    (один вызов функции; research — только read-only набор);
+ * 3. любой метод, меняющий файлы, — body.pendingAction + кнопка «Выполнить»
+ *    (без trust-автопропуска); read-only исполняются сразу → tool_result;
+ * 4. реальный confirm: pendingAction | «Принять» плана → task | «Принять» отчёта →
+ *    completed; answers → закрытие опроса + продолжение движка шагов;
+ * 5. продолжения — this.async(() => this.prompt({role:'ASSISTENT', expect, prompt})),
+ *    лимит MAX_AUTO_TURNS через params._turn → кнопка «Продолжить».
  *
  * Метод наследуется файлом .ai через merge class.js (this = task.ai файл),
  * вызывается on_save-триггером, микрочатом ($item.fetch('prompt')) и самим собой.
  * Тело пишется через fsp (не this.save — иначе повторный on_save).
  */
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+
 
 const ROOT = process.cwd();
 
-/** Максимум авто-проходов подряд без участия пользователя. */
-const MAX_AUTO_TURNS = 30;
-/** Опасные методы — подтверждение при trustLevel < TRUST_AUTOCONFIRM. */
-const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 'create'];
-const ASK_USER_METHOD = 'ask_user';
-/** Обучающий отказ: пустой / сырой ask_user без questions. */
-const ASK_USER_TEACH = 'ask_user не показан: вопросов нет или вызов написан текстом. '
-    + 'Вызови функцию ask_user (только function call, не строкой в ответе), пример: '
-    + 'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]}) — '
-    + 'сформулируй вопросы по описанию текущего шага, каждому 2–5 вариантов; '
-    + 'открытый ответ — type: "textarea" без options.';
-/** Уровень доверия модели для автоподтверждения опасных действий. */
-const TRUST_AUTOCONFIRM = 3;
-const CONTEXT_LOG_DAYS = 7;
-const CONTEXT_LOG_MAX_ROWS = 60;
-const CONTEXT_LOG_LINE_MAX = 160;
-const TOOL_RESULT_MAX = 32000;
-const SCHEMA_RESULT_MAX = 4000;
-/** Повторы стрима при транзиентных сетевых сбоях (итого попыток: N+1). */
-const MAX_STREAM_RETRIES = 2;
-
-const TYPES = {
-    /**
-     * Автомат «одно действие за ход». Состояние = тип последнего блока ленты.
-     * servicePrompt — инъекция ТОЛЬКО на острие messages (не в ленту, не в историю).
-     * Строка — один текст для всех ролей; объект — варианты по роли
-     * ({ default, USER, BOSS, ADMIN, ASSISTENT }).
-     * После реального промпта единственное действие — думать (thinking);
-     * после thinking — развилка из TYPES.thinking.servicePrompt.
-     */
-    prompt: {
-        // Think-ход: functions в запрос не передаются, весь ответ целиком
-        // харнесс фиксирует блоком thinking — никакие теги не нужны.
-        servicePrompt: [
-            'Сейчас ровно одно действие — думай.',
-            'Напиши размышления обычным текстом: разбери запрос и контекст,',
-            'первой строкой укажи, какое действие сделаешь следующим ходом.',
-            'Tools в этом ходе недоступны. Ответ пользователю не пиши — только размышления.',
-        ].join(' '),
-        fields: [
-            { id: 'type', type: 'string' },
-            { id: 'content', type: 'string' },
-            { id: 'time', type: 'number' },
-            { id: 'sender', type: 'string' },
-            {
-                id: 'usage',
-                fields: [
-                    { id: 'prompt', type: 'number' },
-                    { id: 'completion', type: 'number' },
-                    { id: 'total', type: 'number' },
-                    { id: 'contextPct', type: 'number' },
-                    { id: 'contextWindow', type: 'number' },
-                ],
-            },
-        ],
-    },
-    thinking: {
-        extends: 'TYPES.prompt',
-        // Action-ход: ровно одно действие — либо ответ обычным текстом,
-        // либо вызов ОДНОЙ функции по точному имени (function calling).
-        servicePrompt: {
-            default: [
-                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                '• это вопрос/справка → ответь обычным текстом;',
-                '• не хватает данных пользователя → вызови функцию ask_user, пример:',
-                'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]});',
-                '• это задача «сделай X» → вызови функцию propose_plan с 3–6 шагами, пример:',
-                'propose_plan({steps: [{description: "Уточнить требования"}, {description: "Собрать структуру"}, {description: "Сохранить файл"}]});',
-                '• нужны внешние факты → вызови функцию search({query: "запрос"}).',
-                'Либо текст, либо один вызов функции — не оба сразу.',
-                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
-            ].join(' '),
-            USER: [
-                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                'вопрос → ответь обычным текстом;',
-                'нужны данные → вызови функцию ask_user (каждому вопросу options 3–5 + «Другое», пользователь на мобильном), пример:',
-                'ask_user({questions: [{prompt: "Какой формат презентации?", options: ["PDF", "HTML", "Другое"]}]});',
-                'задача → вызови функцию propose_plan с 3–6 шагами, пример:',
-                'propose_plan({steps: [{description: "Уточнить тему"}, {description: "Собрать структуру"}, {description: "Сохранить presentation.html"}]});',
-                'результат каждого шага — файл через save_file (текстовый html/md).',
-                'Либо текст, либо один вызов функции.',
-                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
-            ].join(' '),
-            BOSS: [
-                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
-                'задача → вызови функцию propose_plan({steps: [{description}, …]}): шаги — поручения и контрольные точки, крупные направления — spawn_agent.',
-                'Либо текст, либо один вызов функции.',
-                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
-            ].join(' '),
-            ADMIN: [
-                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
-                'задача по классу → вызови функцию propose_plan({steps: [{description}, …]}): сначала inspect_schema/read_file, правки точечным edit (diff), затем проверка и обновление readme.md.',
-                'Либо текст, либо один вызов функции.',
-                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
-            ].join(' '),
-            ASSISTENT: [
-                'Размышления зафиксированы — не повторяй их. Выполни текущий пункт плана ровно ОДНИМ вызовом функции:',
-                'артефакт → save_file({filename: "presentation.html", post: "<!DOCTYPE html>… полное содержимое"});',
-                'внешние факты → search({query: "запрос"}), затем fetch_url({url: "https://…"});',
-                'данные пользователя → ask_user({questions: [{prompt: "вопрос", options: ["вариант 1", "вариант 2", "Другое"]}]});',
-                'пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
-                'Если все пункты уже закрыты → вызови функцию report({content: "итог по реальным артефактам"}).',
-                'Не отвечай прозой вместо вызова функции, не предлагай новый план.',
-                'Псевдовызовы в тексте («subplan <…>», «{subplan}[…]», «ask_user(…)» строкой) не исполняются — только настоящий function call.',
-            ].join(' '),
-        },
-    },
-    // text / action / form / questions — wait-состояния (без servicePrompt):
-    // автомат остановлен, следующего хода модели нет.
-    text: {
-        extends: 'TYPES.prompt',
-    },
-    /** Tip: План/Начать | Отчёт/Принять | Выполнить */
-    action: {
-        extends: 'TYPES.prompt',
-        fields: [
-            { id: 'title', type: 'string', options: ['План', 'Отчёт', 'Действие'] },
-            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
-        ],
-    },
-    form: {
-        extends: 'TYPES.prompt',
-        fields: [
-            { id: 'title', type: 'string' },
-            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
-            {
-                id: 'fields',
-                type: 'array',
-                fields: [
-                    { id: 'id', type: 'string' },
-                    { id: 'label', type: 'string' },
-                    { id: 'type', options: ['text', 'textarea', 'select', 'checkbox', 'number', 'email', 'date'] },
-                    { id: 'options', type: 'array' },
-                    { id: 'value' },
-                ],
-            },
-        ],
-    },
-    questions: {
-        extends: 'TYPES.prompt',
-        fields: [
-            { id: 'title', type: 'string' },
-            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
-            {
-                id: 'fields',
-                type: 'array',
-                fields: [
-                    { id: 'id', type: 'string' },
-                    { id: 'label', type: 'string' },
-                    { id: 'type', options: ['text', 'textarea', 'select', 'checkbox', 'number', 'email', 'date'] },
-                    { id: 'options', type: 'array' },
-                    { id: 'value' },
-                ],
-            },
-            { id: 'step', type: 'number' },
-        ],
-    },
-    step: {
-        fields: [
-            { id: 'step', type: 'number' },
-            { id: 'description', type: 'string' },
-            { id: 'status', options: ['proposed', 'in_progress', 'done'] },
-        ],
-    },
-    task: {
-        extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Задача активна: пункты плана присылает система («Делай пункт N»).',
-            'Пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
-            'Декомпозиция текущего пункта — только вызов функции subplan({steps: [{description: "подшаг 1"}, {description: "подшаг 2"}]}), не текстом.',
-            'Не предлагай новый общий план. completed — только после «Принять».',
-        ].join(' '),
-        fields: [
-            { id: 'label', type: 'string' },
-            { id: 'state', options: ['active', 'completed', 'cancelled'] },
-            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
-            {
-                id: 'steps',
-                type: 'array',
-                fields: [
-                    { id: 'step', type: 'number' },
-                    { id: 'description', type: 'string' },
-                    { id: 'status', options: ['proposed', 'in_progress', 'done'] },
-                ],
-            },
-            { id: 'ribbon', type: 'TYPES.ribbon' },
-        ],
-    },
-    file: {
-        extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Вложение {path} ({name}) в контексте. Учти файл; при необходимости вызови функцию read_file({path}).',
-            'Дальше ровно одно действие: следующий вызов функции по текущему пункту или ответ текстом.',
-        ].join(' '),
-        fields: [
-            { id: 'path', type: 'string' },
-            { id: 'name', type: 'string' },
-        ],
-    },
-    tool: {
-        extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Вызов tool отправлен. Дождись tool_result. Не повторяй тот же вызов без результата.',
-        ].join(' '),
-        fields: [
-            { id: 'name', type: 'string' },
-            { id: 'args' },
-        ],
-    },
-    tool_result: {
-        extends: 'TYPES.prompt',
-        servicePrompt: {
-            default: [
-                'Результат tool (ok={ok}, tool={tool}). Ровно ОДНО действие:',
-                'если ok и текущий пункт плана закрыт этим результатом → complete_step({step: N, summary: "что сделано"});',
-                'если ok, но пункт не закрыт → следующий вызов функции пункта (например save_file({filename: "имя.html", post: "полное содержимое"}));',
-                'если ошибка — в её тексте сказано, что делать: исправленный вызов функции, не тот же и не псевдовызов в тексте.',
-                'Не объявляй completed — это делает «Принять». Не отвечай прозой.',
-            ].join(' '),
-        },
-        fields: [
-            { id: 'tool', type: 'string' },
-            { id: 'ok', type: 'boolean' },
-        ],
-    },
-    error: {
-        extends: 'TYPES.prompt',
-        servicePrompt: [
-            'Ошибка в истории. Ровно одно действие: исправленный вызов функции, ask_user({questions}) или ответ текстом.',
-            'Не повторяй тот же failing вызов без изменений.',
-        ].join(' '),
-        fields: [
-            { id: 'code', type: 'string' },
-        ],
-    },
-    ribbon: {
-        type: 'array',
-    },
-};
-
-const FIELDS = [
-    { id: 'title', type: 'string' },
-    { id: 'created', type: 'number' },
-    { id: 'model', type: 'string' },
-    { id: 'system', type: 'string' },
-    { id: 'ribbon', type: 'TYPES.ribbon' },
-    {
-        id: 'usage',
-        fields: [
-            { id: 'prompt', type: 'number' },
-            { id: 'completion', type: 'number' },
-            { id: 'total', type: 'number' },
-            { id: 'contextPct', type: 'number' },
-            { id: 'contextWindow', type: 'number' },
-        ],
-    },
-];
-
 export default {
     icon: 'bootstrap:robot',
-    TYPES,
-    FIELDS,
+    // Лениво: const TYPES/FIELDS объявлены ниже по файлу (TDZ при прямом обращении)
+    get TYPES() { return TYPES; },
+    get FIELDS() { return FIELDS; },
+    get body(){
+        return this.load({ encoding: 'utf-8' }).then(raw => this.body = JSON.parse(raw));
+    },
     /**
-     * Один проход чата task.ai (this = файл .ai). Линейный пайплайн:
-     *  1. Вход: промпт (params.prompt | text | post).
-     *  2. Собрать messages: контекст + история ribbon + промпт на острие;
-     *     к пользовательскому промпту ВСЕГДА плюсуется служебный «думай».
-     *  3. role != ASSISTENT → блок prompt в активный ribbon.
-     *  4. Запрос модели. 5. Ответ.
-     *  6. role != ASSISTENT → весь ответ = блок thinking (без разбора);
-     *     role == ASSISTENT → модель объявляет тип (FC / разметка).
-     *  7. Парсинг/Func → типизированный блок (+ ворота: ACL, teach, evidence).
-     *  8. Не распознан → text «Требуется уточнение…».
-     *  9. Push блока, save.
-     * 10. У типа блока есть servicePrompt (или динамическая инструкция шага) →
-     *     this.async(() => this.prompt({role:'ASSISTENT', prompt: servicePrompt})).
-     * Служебный промпт передаётся ПАРАМЕТРОМ рекурсии — на острие messages,
-     * в ленту и историю не попадает.
-     * @param {object} params — { prompt?, text?, stop?, user?, role?, trustLevel?, _turn? }
-     * @param {string|object} [post] JSON { text, model, role, confirm, answers, stop } | строка
+     * Автомат task.ai.
+     * Реальный вход (role USER|BOSS|ADMIN): text → двухтактный ход (думай → маршрут словом),
+     * confirm → pendingAction | «Принять» плана (запуск task) | «Принять» отчёта (completed),
+     * answers → закрытие опроса + продолжение.
+     * Служебный вход (role ASSISTENT): params.expect задаёт формат результата —
+     * plan|report → md-блок + кнопка «Принять» (wait); task → to-do → task.steps;
+     * step|do|research → FC-ход (один вызов функции; файл-модифицирующие — через
+     * кнопку «Выполнить» и body.pendingAction, без trust-автопропуска).
+     * @param {object} params — { prompt?, text?, user?, role?, expect?, _turn? }
+     * @param {string|object} [post] JSON { text, model, role, confirm, answers } | строка
      */
     async prompt(params = {}, post) {
-    const taskAi = this;
-    if (!taskAi?.load)
-        throw new Error('task.ai не найден в контексте');
+        const body = await this.body;
+        const { text, requestModel, confirm, answers } = parseInput(params, post);
+        const isService = params.role === 'ASSISTENT';
+        const turn = Number(params._turn) || 0;
+        const sender = params.user?.uid || 'user';
+        if (requestModel)
+            body.model = requestModel;
 
-    const { text, requestModel, confirm, answers, wantStop, role: postRole } = parseInput(params, post);
-    const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
-    const wsPath = taskAi.short || fullPath;
-    let turn = Number(params._turn) || 0;
-
-    const rawRole = String(params.role || postRole || '').toUpperCase().trim();
-    const isService = rawRole === 'ASSISTENT' || rawRole === 'ASSISTANT';
-
-    if (wantStop) {
-        requestAbort(fullPath);
-        return { ok: true, stopped: true };
-    }
-    if (turn === 0 && !isService)
-        clearAbort(fullPath);
-    else if (isAborted(fullPath))
-        return finishStopped(fullPath, wsPath, null);
-
-    const body = await loadTaskBody(taskAi);
-    if (!body)
-        throw new Error('Не удалось загрузить тело task.ai');
-    body.ribbon ??= [];
-
-    // Миграция legacy user → type:prompt
-    for (const m of body.ribbon) {
-        if (m.role === 'user' && !m.type) {
-            m.type = 'prompt';
-            delete m.role;
+        // Контекст класса (navigate переживает ходы через body.contextPath)
+        const initialContext = this.$class || this.$parent;
+        let currentContext = initialContext;
+        if (body.contextPath && initialContext && body.contextPath !== initialContext.path) {
+            try {
+                const target = await WORK.get_item(body.contextPath);
+                if (target)
+                    currentContext = target;
+            } catch {}
         }
-    }
 
-    const initialContext = taskAi.$class || taskAi.$parent;
-    if (!initialContext)
-        throw new Error('Не определён класс-контекст для task.ai');
+        const model = await resolveChatModel.call(this, body, params);
+        if (!model)
+            return;
+        const ctx = { body, model, params, sender, turn, currentContext, initialContext };
 
-    if (requestModel)
-        body.model = requestModel;
+        // --- Реальный вход: кнопки и ответы форм ---
+        if (!isService && confirm !== undefined)
+            return applyConfirmInput.call(this, ctx, confirm);
+        if (!isService && answers)
+            return applyAnswersInput.call(this, ctx, answers);
 
-    const { findFirstModel } = await import(
-        pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href
-    );
-    const modelPath = body.model || await findFirstModel();
-    if (!modelPath) {
-        body.ribbon.push({
-            type: 'error',
-            content: 'Нет доступной модели.',
-            time: Date.now(),
-            sender: 'WORK',
-        });
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'Нет модели' });
-        return { ok: true, model: false };
-    }
-    const model = await WORK.get_item(modelPath);
-    if (!model)
-        throw new Error('Модель не найдена: ' + modelPath);
-
-    const { execItemMethod } = await import(
-        pathToFileURL(path.join(ROOT, 'sources/host/http-server.js')).href
-    );
-
-    const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
-    const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
-    const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
-    // Реальная роль пользователя (ACL, адаптация инъекций). ASSISTENT её не меняет.
-    const role = normalizeRole(isService ? body.role : (rawRole || params.user?.role || body.role));
-    body.role = role;
-    // Роль для выбора варианта servicePrompt: служебный ход — ASSISTENT, иначе реальная роль
-    const injRole = isService ? 'ASSISTENT' : role;
-
-    // Контекст: navigate переживает проходы через body.contextPath
-    let currentContext = initialContext;
-    if (body.contextPath && body.contextPath !== initialContext.path) {
-        try {
-            const target = await WORK.get_item(body.contextPath);
-            if (target)
-                currentContext = target;
-        } catch {}
-    }
-
-    /**
-     * Шаги 9–10: save + рекурсия по служебному промпту.
-     * Тип только что добавленного блока решает следующий ход:
-     * есть servicePrompt (или динамическая инструкция шага) → ASSISTENT-самовызов
-     * с этим текстом как промптом; нет → wait, ждём пользователя.
-     */
-    const finishTurn = async (dynamicFollow) => {
-        body.contextPath = currentContext?.path || '';
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-
-        const target = ribbonTargetOf(body);
-        let last = driverEntry(target);
-        // Свежая задача с пустой лентой (spawn_agent / «Начать») — состояние задаёт сама task
-        if (!target.length)
-            last = findActiveTask(body) || last;
-        const svc = dynamicFollow || resolveServicePrompt(last, injRole);
-        if (!svc) {
-            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-            return { ok: true, wait: last?.type || 'none', turn };
-        }
-        if (turn + 1 >= MAX_AUTO_TURNS) {
-            target.push({
+        // Лимит авто-ходов: стоп с кнопкой «Продолжить»
+        if (isService && turn >= MAX_AUTO_TURNS) {
+            await push_block.call(this, body, {
                 type: 'action',
                 title: 'Лимит ходов',
-                content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
+                content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить?',
                 button: { label: 'Продолжить', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+            params.user?.send?.({ type: 'chat.done', path: this.short });
+            return;
+        }
+
+        // --- Служебный ход с ожидаемым результатом ---
+        if (isService && params.expect) {
+            try {
+                return await expectMove.call(this, ctx);
+            }
+            catch (e) {
+                return failTurn.call(this, body, params, e);
+            }
+        }
+
+        // --- Двухтактный ход: думай → маршрут ---
+        if (!isService)
+            delete body.pendingAction; // текст поверх висящего подтверждения — пользователь его проигнорировал
+        try {
+            return await twoBeatMove.call(this, ctx, text || '', isService);
+        }
+        catch (e) {
+            return failTurn.call(this, body, params, e);
+        }
+    },
+
+    async prompt_old(params = {}, post) {
+
+// дальше - мусор
+
+        const { text, requestModel, confirm, answers, wantStop, role: postRole } = parseInput(params, post);
+        const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
+        const wsPath = taskAi.short || fullPath;
+        let turn = Number(params._turn) || 0;
+
+        const rawRole = String(params.role || postRole || '').toUpperCase().trim();
+        const isService = rawRole === 'ASSISTENT' || rawRole === 'ASSISTANT';
+
+        if (wantStop) {
+            requestAbort(fullPath);
+            return { ok: true, stopped: true };
+        }
+        if (turn === 0 && !isService)
+            clearAbort(fullPath);
+        else if (isAborted(fullPath))
+            return finishStopped(fullPath, wsPath, null);
+
+        const body = await loadTaskBody(taskAi);
+        if (!body)
+            throw new Error('Не удалось загрузить тело task.ai');
+        body.ribbon ??= [];
+
+        // Миграция legacy user → type:prompt
+        for (const m of body.ribbon) {
+            if (m.role === 'user' && !m.type) {
+                m.type = 'prompt';
+                delete m.role;
+            }
+        }
+
+        const initialContext = taskAi.$class || taskAi.$parent;
+        if (!initialContext)
+            throw new Error('Не определён класс-контекст для task.ai');
+
+        if (requestModel)
+            body.model = requestModel;
+
+        const { findFirstModel } = await import(
+            pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href
+        );
+        const modelPath = body.model || await findFirstModel();
+        if (!modelPath) {
+            body.ribbon.push({
+                type: 'error',
+                content: 'Нет доступной модели.',
                 time: Date.now(),
                 sender: 'WORK',
             });
             await writeTaskBody(fullPath, body);
             notifyChanged(fullPath);
-            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-            return { ok: true, maxAutoTurns: true, turn };
+            WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'Нет модели' });
+            return { ok: true, model: false };
         }
-        taskAi.async(() => {
-            taskAi.prompt({
-                user: params.user,
-                role: 'ASSISTENT',
-                trustLevel: params.trustLevel,
-                prompt: svc,
-                _turn: turn + 1,
-            }).catch(e => console.warn('[task.ai] auto turn:', e.message));
-        });
-        return { ok: true, continued: true, turn };
-    };
+        const model = await WORK.get_item(modelPath);
+        if (!model)
+            throw new Error('Модель не найдена: ' + modelPath);
+
+        const { execItemMethod } = await import(
+            pathToFileURL(path.join(ROOT, 'sources/host/http-server.js')).href
+        );
+
+        const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
+        const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
+        const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
+        // Реальная роль пользователя (ACL, адаптация инъекций). ASSISTENT её не меняет.
+        const role = normalizeRole(isService ? body.role : (rawRole || params.user?.role || body.role));
+        body.role = role;
+        // Роль для выбора варианта servicePrompt: служебный ход — ASSISTENT, иначе реальная роль
+        const injRole = isService ? 'ASSISTENT' : role;
+
+        // Контекст: navigate переживает проходы через body.contextPath
+        let currentContext = initialContext;
+        if (body.contextPath && body.contextPath !== initialContext.path) {
+            try {
+                const target = await WORK.get_item(body.contextPath);
+                if (target)
+                    currentContext = target;
+            } catch {}
+        }
+
+        /**
+         * Шаги 9–10: save + рекурсия по служебному промпту.
+         * Тип только что добавленного блока решает следующий ход:
+         * есть servicePrompt (или динамическая инструкция шага) → ASSISTENT-самовызов
+         * с этим текстом как промптом; нет → wait, ждём пользователя.
+         */
+        const finishTurn = async (dynamicFollow) => {
+            body.contextPath = currentContext?.path || '';
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+
+            const target = ribbonTargetOf(body);
+            let last = driverEntry(target);
+            // Свежая задача с пустой лентой (spawn_agent / «Начать») — состояние задаёт сама task
+            if (!target.length)
+                last = findActiveTask(body) || last;
+            const svc = dynamicFollow || resolveServicePrompt(last, injRole);
+            if (!svc) {
+                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                return { ok: true, wait: last?.type || 'none', turn };
+            }
+            if (turn + 1 >= MAX_AUTO_TURNS) {
+                target.push({
+                    type: 'action',
+                    title: 'Лимит ходов',
+                    content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
+                    button: { label: 'Продолжить', color: 'success' },
+                    time: Date.now(),
+                    sender: 'WORK',
+                });
+                await writeTaskBody(fullPath, body);
+                notifyChanged(fullPath);
+                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                return { ok: true, maxAutoTurns: true, turn };
+            }
+            taskAi.async(() => {
+                taskAi.prompt({
+                    user: params.user,
+                    role: 'ASSISTENT',
+                    trustLevel: params.trustLevel,
+                    prompt: svc,
+                    _turn: turn + 1,
+                }).catch(e => console.warn('[task.ai] auto turn:', e.message));
+            });
+            return { ok: true, continued: true, turn };
+        };
 
     // === 2–3. Вход пользователя → блоки ленты (только реальный проход, не ASSISTENT) ===
     let dynamicFollow = null; // динамическая инструкция следующего шага — уйдёт параметром рекурсии
@@ -923,6 +728,320 @@ export default {
     },
 };
 
+/** Максимум авто-проходов подряд без участия пользователя. */
+const MAX_AUTO_TURNS = 30;
+/** Опасные методы — подтверждение при trustLevel < TRUST_AUTOCONFIRM. */
+const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 'create'];
+const ASK_USER_METHOD = 'ask_user';
+/** Обучающий отказ: пустой / сырой ask_user без questions. */
+const ASK_USER_TEACH = 'ask_user не показан: вопросов нет или вызов написан текстом. '
+    + 'Вызови функцию ask_user (только function call, не строкой в ответе), пример: '
+    + 'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]}) — '
+    + 'сформулируй вопросы по описанию текущего шага, каждому 2–5 вариантов; '
+    + 'открытый ответ — type: "textarea" без options.';
+/** Уровень доверия модели для автоподтверждения опасных действий. */
+const TRUST_AUTOCONFIRM = 3;
+const CONTEXT_LOG_DAYS = 7;
+const CONTEXT_LOG_MAX_ROWS = 60;
+const CONTEXT_LOG_LINE_MAX = 160;
+const TOOL_RESULT_MAX = 32000;
+const SCHEMA_RESULT_MAX = 4000;
+/** Повторы стрима при транзиентных сетевых сбоях (итого попыток: N+1). */
+const MAX_STREAM_RETRIES = 2;
+
+const TYPES = {
+    /**
+     * Автомат «одно действие за ход». Состояние = тип последнего блока ленты.
+     * servicePrompt — инъекция ТОЛЬКО на острие messages (не в ленту, не в историю).
+     * Строка — один текст для всех ролей; объект — варианты по роли
+     * ({ default, USER, BOSS, ADMIN, ASSISTENT }).
+     * После реального промпта единственное действие — думать (thinking);
+     * после thinking — развилка из TYPES.thinking.servicePrompt.
+     */
+    prompt: {
+        // Think-ход: functions в запрос не передаются, весь ответ целиком
+        // харнесс фиксирует блоком thinking — никакие теги не нужны.
+        servicePrompt: [
+            'Как следует подумай, над тем, что необходимо сделать на следующем шаге,',
+            'исходя их контекста и последнего промпта, по смыслу,',
+            'и выдай свои размышления (от 5 до 100 строк) о том,',
+            'что необходимо сделать на следующем шаге, не повторяйся и не пытайся ничего делать',
+        ].join(' '),
+        fields: [
+            { id: 'type', type: 'string' },
+            { id: 'content', type: 'string' },
+            { id: 'time', type: 'number' },
+            { id: 'sender', type: 'string' },
+            {
+                id: 'usage',
+                fields: [
+                    { id: 'prompt', type: 'number' },
+                    { id: 'completion', type: 'number' },
+                    { id: 'total', type: 'number' },
+                    { id: 'contextPct', type: 'number' },
+                    { id: 'contextWindow', type: 'number' },
+                ],
+            },
+        ],
+    },
+    thinking: {
+        extends: 'TYPES.prompt',
+        // Action-ход: ровно одно действие — либо ответ обычным текстом,
+        // либо вызов ОДНОЙ функции по точному имени (function calling).
+        servicePrompt: {
+            default: [
+                '- если это вопрос, то ответить на него',
+                '- если это задача, и что-то непонятно, то задать уточняющие вопросы (text, queries, form)',
+                '- если это простая задача, и все абсолютно понятно, то выполнить её',
+                '- если это сложная задача, и все абсолютно понятно, создать план из 3-6 шагов (или столько, сколько надо, возможно с вложениями) и предоставить пользователю на согласование',
+                
+                
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                '• это вопрос/справка → ответь обычным текстом;',
+                '• не хватает данных пользователя → вызови функцию ask_user, пример:',
+                'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]});',
+                '• это задача «сделай X» → вызови функцию propose_plan с 3–6 шагами, пример:',
+                'propose_plan({steps: [{description: "Уточнить требования"}, {description: "Собрать структуру"}, {description: "Сохранить файл"}]});',
+                '• нужны внешние факты → вызови функцию search({query: "запрос"}).',
+                'Либо текст, либо один вызов функции — не оба сразу.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
+            ].join(' '),
+            USER: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом;',
+                'нужны данные → вызови функцию ask_user (каждому вопросу options 3–5 + «Другое», пользователь на мобильном), пример:',
+                'ask_user({questions: [{prompt: "Какой формат презентации?", options: ["PDF", "HTML", "Другое"]}]});',
+                'задача → вызови функцию propose_plan с 3–6 шагами, пример:',
+                'propose_plan({steps: [{description: "Уточнить тему"}, {description: "Собрать структуру"}, {description: "Сохранить presentation.html"}]});',
+                'результат каждого шага — файл через save_file (текстовый html/md).',
+                'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
+            ].join(' '),
+            BOSS: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
+                'задача → вызови функцию propose_plan({steps: [{description}, …]}): шаги — поручения и контрольные точки, крупные направления — spawn_agent.',
+                'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
+            ].join(' '),
+            ADMIN: [
+                'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
+                'задача по классу → вызови функцию propose_plan({steps: [{description}, …]}): сначала inspect_schema/read_file, правки точечным edit (diff), затем проверка и обновление readme.md.',
+                'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
+            ].join(' '),
+            ASSISTENT: [
+                'Размышления зафиксированы — не повторяй их. Выполни текущий пункт плана ровно ОДНИМ вызовом функции:',
+                'артефакт → save_file({filename: "presentation.html", post: "<!DOCTYPE html>… полное содержимое"});',
+                'внешние факты → search({query: "запрос"}), затем fetch_url({url: "https://…"});',
+                'данные пользователя → ask_user({questions: [{prompt: "вопрос", options: ["вариант 1", "вариант 2", "Другое"]}]});',
+                'пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
+                'Если все пункты уже закрыты → вызови функцию report({content: "итог по реальным артефактам"}).',
+                'Не отвечай прозой вместо вызова функции, не предлагай новый план.',
+                'Псевдовызовы в тексте («subplan <…>», «{subplan}[…]», «ask_user(…)» строкой) не исполняются — только настоящий function call.',
+            ].join(' '),
+        },
+    },
+    // text / action / form / questions — wait-состояния (без servicePrompt):
+    // автомат остановлен, следующего хода модели нет.
+    text: {
+        extends: 'TYPES.prompt',
+    },
+    /** Tip: План/Начать | Отчёт/Принять | Выполнить */
+    action: {
+        extends: 'TYPES.prompt',
+        fields: [
+            { id: 'title', type: 'string', options: ['План', 'Отчёт', 'Действие'] },
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+        ],
+    },
+    form: {
+        extends: 'TYPES.prompt',
+        fields: [
+            { id: 'title', type: 'string' },
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+            {
+                id: 'fields',
+                type: 'array',
+                fields: [
+                    { id: 'id', type: 'string' },
+                    { id: 'label', type: 'string' },
+                    { id: 'type', options: ['text', 'textarea', 'select', 'checkbox', 'number', 'email', 'date'] },
+                    { id: 'options', type: 'array' },
+                    { id: 'value' },
+                ],
+            },
+        ],
+    },
+    questions: {
+        extends: 'TYPES.prompt',
+        fields: [
+            { id: 'title', type: 'string' },
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+            {
+                id: 'fields',
+                type: 'array',
+                fields: [
+                    { id: 'id', type: 'string' },
+                    { id: 'label', type: 'string' },
+                    { id: 'type', options: ['text', 'textarea', 'select', 'checkbox', 'number', 'email', 'date'] },
+                    { id: 'options', type: 'array' },
+                    { id: 'value' },
+                ],
+            },
+            { id: 'step', type: 'number' },
+        ],
+    },
+    step: {
+        fields: [
+            { id: 'step', type: 'number' },
+            { id: 'description', type: 'string' },
+            { id: 'status', options: ['proposed', 'in_progress', 'done'] },
+        ],
+    },
+    task: {
+        extends: 'TYPES.prompt',
+        servicePrompt: [
+            'Задача активна: пункты плана присылает система («Делай пункт N»).',
+            'Пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
+            'Декомпозиция текущего пункта — только вызов функции subplan({steps: [{description: "подшаг 1"}, {description: "подшаг 2"}]}), не текстом.',
+            'Не предлагай новый общий план. completed — только после «Принять».',
+        ].join(' '),
+        fields: [
+            { id: 'label', type: 'string' },
+            { id: 'state', options: ['active', 'completed', 'cancelled'] },
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+            {
+                id: 'steps',
+                type: 'array',
+                fields: [
+                    { id: 'step', type: 'number' },
+                    { id: 'description', type: 'string' },
+                    { id: 'status', options: ['proposed', 'in_progress', 'done'] },
+                ],
+            },
+            { id: 'ribbon', type: 'TYPES.ribbon' },
+        ],
+    },
+    file: {
+        extends: 'TYPES.prompt',
+        servicePrompt: [
+            'Вложение {path} ({name}) в контексте. Учти файл; при необходимости вызови функцию read_file({path}).',
+            'Дальше ровно одно действие: следующий вызов функции по текущему пункту или ответ текстом.',
+        ].join(' '),
+        fields: [
+            { id: 'path', type: 'string' },
+            { id: 'name', type: 'string' },
+        ],
+    },
+    tool: {
+        extends: 'TYPES.prompt',
+        servicePrompt: [
+            'Вызов tool отправлен. Дождись tool_result. Не повторяй тот же вызов без результата.',
+        ].join(' '),
+        fields: [
+            { id: 'name', type: 'string' },
+            { id: 'args' },
+        ],
+    },
+    tool_result: {
+        extends: 'TYPES.prompt',
+        servicePrompt: {
+            default: [
+                'Результат tool (ok={ok}, tool={tool}). Ровно ОДНО действие:',
+                'если ok и текущий пункт плана закрыт этим результатом → complete_step({step: N, summary: "что сделано"});',
+                'если ok, но пункт не закрыт → следующий вызов функции пункта (например save_file({filename: "имя.html", post: "полное содержимое"}));',
+                'если ошибка — в её тексте сказано, что делать: исправленный вызов функции, не тот же и не псевдовызов в тексте.',
+                'Не объявляй completed — это делает «Принять». Не отвечай прозой.',
+            ].join(' '),
+        },
+        fields: [
+            { id: 'tool', type: 'string' },
+            { id: 'ok', type: 'boolean' },
+        ],
+    },
+    error: {
+        extends: 'TYPES.prompt',
+        servicePrompt: [
+            'Ошибка в истории. Ровно одно действие: исправленный вызов функции, ask_user({questions}) или ответ текстом.',
+            'Не повторяй тот же failing вызов без изменений.',
+        ].join(' '),
+        fields: [
+            { id: 'code', type: 'string' },
+        ],
+    },
+    // Маршруты двухтактного цикла (второй такт выбирает состояние одним словом).
+    // servicePrompt — инъекция expect-хода: уходит ASSISTENT-самовызовом на острие messages.
+    research: {
+        extends: 'TYPES.prompt',
+        // FC-ход с read-only набором функций (RESEARCH_METHODS), авто-цепочка без кнопок
+        servicePrompt: [
+            'Выбран маршрут research. Проведи исследование ровно ОДНИМ вызовом функции:',
+            'search({query: "запрос"}) — поиск в интернете; fetch_url({url: "https://…"}) — чтение страницы;',
+            'read_file({name}) / get_schema({}) / find_text({text}) — поиск в системе.',
+            'Если фактов уже достаточно — изложи выводы обычным текстом.',
+        ].join(' '),
+    },
+    plan: {
+        extends: 'TYPES.prompt',
+        // Результат — md-блок plan + кнопка «Принять» (wait); confirm запускает task
+        servicePrompt: [
+            'Выбран маршрут plan. Опиши подробно свой план, по пунктам,',
+            'в формате md в красивой рамочке.',
+            'Только план, без вопросов и лишних пояснений.',
+        ].join(' '),
+        fields: [
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+        ],
+    },
+    do: {
+        extends: 'TYPES.prompt',
+        // FC-ход: файл-модифицирующие вызовы уходят на подтверждение (pendingAction)
+        servicePrompt: [
+            'Выбран маршрут do. Выполни задачу ровно ОДНИМ вызовом функции:',
+            'устройство класса — get_schema({}); файлы — save_file({filename, post}) |',
+            'edit({filename, post}) | read_file({name}); данные пользователя — ask_user({questions}).',
+            'Если действие не требуется — дай сам результат обычным текстом.',
+        ].join(' '),
+    },
+    report: {
+        extends: 'TYPES.prompt',
+        // Результат — md-блок report + кнопка «Принять» (wait); confirm закрывает задачу
+        servicePrompt: [
+            'Выбран маршрут report. Сформируй итоговый отчёт по реально сделанному:',
+            'что сделано, какие получены результаты и артефакты (только реальные пути), в формате md.',
+            'Только факты из ленты, ничего не выдумывай.',
+        ].join(' '),
+        fields: [
+            { id: 'button', fields: [{ id: 'label' }, { id: 'color' }] },
+        ],
+    },
+    ribbon: {
+        type: 'array',
+    },
+};
+
+const FIELDS = [
+    { id: 'title', type: 'string' },
+    { id: 'created', type: 'number' },
+    { id: 'model', type: 'string' },
+    { id: 'system', type: 'string' },
+    { id: 'ribbon', type: 'TYPES.ribbon' },
+    {
+        id: 'usage',
+        fields: [
+            { id: 'prompt', type: 'number' },
+            { id: 'completion', type: 'number' },
+            { id: 'total', type: 'number' },
+            { id: 'contextPct', type: 'number' },
+            { id: 'contextWindow', type: 'number' },
+        ],
+    },
+];
+
+
+
 // ============================================================================
 // Вход пользователя и лента
 // ============================================================================
@@ -1121,11 +1240,581 @@ function findActiveTask(body) {
     const chain = activeTaskChain(body);
     return chain.length ? chain[chain.length - 1] : null;
 }
+async function push_block(body, block) {
+    ribbonTargetOf(body).push(block);
+    await saveBody.call(this, body);
+}
 
+/** Слова-маршруты второго такта; они же — типы блоков ленты. */
+const ROUTE_TYPES = ['research', 'plan', 'task', 'do', 'report'];
+
+/** Инъекция запуска task после «Принять» плана (или слова task). */
+const TASK_TODO_PROMPT = [
+    'Сделай to do список из согласованного плана.',
+    'Ответ — ТОЛЬКО нумерованный список: каждый пункт с новой строки,',
+    '«N. описание» — одно проверяемое действие с конечным результатом.',
+    'Без вступления и пояснений.',
+].join(' ');
+
+/** Инъекция отчёта после закрытия всех пунктов плана. */
+const REPORT_AFTER_STEPS = [
+    'Все пункты плана выполнены. Сформируй итоговый отчёт:',
+    'что сделано по каждому пункту, какие артефакты созданы (только реальные пути), в формате md.',
+    'Только факты из ленты, ничего не выдумывай.',
+].join(' ');
+
+/** Read-only функции research-хода: поиск в системе и в интернете, без изменений файлов. */
+const RESEARCH_METHODS = [
+    'search', 'fetch_url', 'read_file', 'get_schema', 'inspect_schema',
+    'find_item', 'find_text', 'semantic_search', 'info', 'logs',
+    'ask_user',
+];
+
+/**
+ * Модель чата двухтактного цикла: body.model | первая доступная.
+ * Нет модели → блок error в ленту + chat.error, вернёт null.
+ * this = файл task.ai.
+ */
+async function resolveChatModel(body, params) {
+    let modelPath = body.model;
+    if (!modelPath) {
+        const [{ pathToFileURL }, path] = await Promise.all([
+            import('node:url'),
+            import('node:path'),
+        ]);
+        const { findFirstModel } = await import(
+            pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href
+        );
+        modelPath = await findFirstModel();
+    }
+    const model = modelPath ? await WORK.get_item(modelPath) : null;
+    if (!model) {
+        await push_block.call(this, body, {
+            type: 'error',
+            code: 'no_model',
+            content: 'Нет доступной модели.',
+            time: Date.now(),
+            sender: 'WORK',
+        });
+        params.user?.send?.({ type: 'chat.error', path: this.short, error: 'Нет модели' });
+        return null;
+    }
+    await model.init;
+    return model;
+}
+
+/**
+ * Один стрим-ход модели: content-чанки → text (+ delta в WS),
+ * function_call-чанки → calls[{method, args}], usage → usage.
+ * options.functions / options.function_call прокидываются в streamChat.
+ * this = файл task.ai.
+ * @returns {Promise<{ text: string, calls: Array<{method:string,args:object}>, usage: object|null }>}
+ */
+async function streamTurn(model, messages, params, options = {}) {
+    let text = '';
+    const calls = [];
+    let usage = null;
+    const req = { messages };
+    if (Array.isArray(options.functions) && options.functions.length) {
+        req.functions = options.functions;
+        if (options.function_call)
+            req.function_call = options.function_call;
+    }
+    for await (const chunk of model.streamChat(req)) {
+        if (typeof chunk === 'string' || chunk?.type === 'content') {
+            const token = typeof chunk === 'string' ? chunk : chunk.content;
+            if (!token)
+                continue;
+            text += token;
+            params.user?.send?.({ type: 'chat.delta', path: this.short, token });
+            continue;
+        }
+        if (chunk?.type === 'function_call' && chunk.name) {
+            calls.push({ method: chunk.name, args: chunk.arguments || {} });
+            continue;
+        }
+        if (chunk?.type === 'usage')
+            usage = chunk;
+    }
+    return { text, calls, usage };
+}
+
+/** Сохранить body на диск (fsp, не this.save — иначе повторный on_save). this = файл task.ai. */
+async function saveBody(body) {
+    await WORK.fsp.writeFile(this.dir, JSON.stringify(body, null, 4), 'utf-8');
+    this.body = body;
+}
+
+/** Отложенный ASSISTENT-самовызов (продолжение автомата). */
+function scheduleSelfCall(taskFile, params, turn, extra = {}) {
+    taskFile.async(() => taskFile.prompt({
+        role: 'ASSISTENT',
+        user: params.user,
+        _turn: turn + 1,
+        ...extra,
+    }));
+}
+
+/** AI-исполнитель tools: действует от прав пользователя, подписывается моделью. */
+function makeAiUser(model, params) {
+    const label = model.label || model.path?.split('/').pop() || 'AI';
+    return { uid: label, $user: params.user?.$user || params.user, isAI: true };
+}
+
+/**
+ * Продолжение движка шагов: followPrompt → следующий пункт (expect step);
+ * открытых пунктов нет → отчёт (expect report); задачи нет → обычный ход.
+ */
+function nextTaskMove(body, followPrompt) {
+    const task = findActiveTask(body);
+    if (!task)
+        return { prompt: followPrompt || 'Продолжай.' };
+    const open = task.steps?.find(s => s.status !== 'done');
+    if (!open)
+        return { expect: 'report', prompt: REPORT_AFTER_STEPS };
+    if (followPrompt)
+        return { expect: 'step', prompt: followPrompt };
+    const cur = task.steps.find(s => s.status === 'in_progress') || open;
+    if (cur.status !== 'in_progress') {
+        cur.status = 'in_progress';
+        cur.startedAt = Date.now();
+    }
+    return { expect: 'step', prompt: makeStepInstruction(cur) };
+}
+
+/**
+ * Продолжение после tool_result: внутри задачи — вернуться к пункту,
+ * research-цепочка — следующий поиск, иначе — двухтактный ход.
+ */
+function nextToolMove(body, params) {
+    const task = findActiveTask(body);
+    const open = task?.steps?.find(s => s.status === 'in_progress');
+    if (open) {
+        return {
+            expect: 'step',
+            prompt: 'Результат получен. Закрой пункт ' + open.step
+                + ' вызовом complete_step({step: ' + open.step + ', summary: "что сделано"})'
+                + ' или сделай следующий вызов функции по пункту.',
+        };
+    }
+    if (params.expect === 'research') {
+        return {
+            expect: 'research',
+            prompt: 'Результат получен. Продолжи исследование следующим вызовом функции'
+                + ' или изложи выводы обычным текстом.',
+        };
+    }
+    return { prompt: 'Результат инструмента получен — продолжай.' };
+}
+
+/** ask_user({questions}) → блок questions (select при options, иначе textarea). */
+function questionsBlockFromArgs(args, model) {
+    const qs = Array.isArray(args?.questions) ? args.questions : [];
+    const fields = qs.map((q, i) => {
+        const opts = Array.isArray(q?.options) ? q.options.filter(Boolean).map(String) : [];
+        return {
+            id: String(q?.id || 'q' + (i + 1)),
+            label: String(q?.prompt || q?.label || ''),
+            type: opts.length ? 'select' : 'textarea',
+            ...(opts.length ? { options: opts } : {}),
+        };
+    }).filter(f => f.label);
+    if (!fields.length)
+        return null;
+    return {
+        type: 'questions',
+        title: String(args?.title || 'Уточнение'),
+        button: { label: 'Ответить', color: 'primary' },
+        fields,
+        time: Date.now(),
+        sender: model.path,
+    };
+}
+
+/**
+ * Аварийное завершение хода: warn + блок error в ленту + chat.error
+ * (клиент гасит спиннер). this = файл task.ai.
+ */
+async function failTurn(body, params, e) {
+    console.warn('[task.ai] prompt turn failed:', e);
+    const message = String(e?.message || e);
+    try {
+        await push_block.call(this, body, {
+            type: 'error',
+            content: 'Сбой хода: ' + message,
+            time: Date.now(),
+            sender: 'WORK',
+        });
+    } catch {}
+    params.user?.send?.({ type: 'chat.error', path: this.short, error: message });
+}
+
+/**
+ * Двухтактный ход: такт 1 «думай» (functions не передаются, весь ответ = thinking)
+ * → такт 2 «маршрут» — ответ текстом (wait, chat.done) либо одно слово-маршрут
+ * → expect-самовызов (спиннер живёт до wait-состояния). this = файл task.ai.
+ */
+async function twoBeatMove(ctx, promptText, isService) {
+    const { body, model, params, sender, turn } = ctx;
+    const messages = buildHistoryFromRibbon(body);
+    messages.push({
+        role: 'user',
+        content: promptText
+            + '\n\n[инструкция]\n'
+            + TYPES.prompt.servicePrompt,
+    });
+    if (!isService) {
+        await push_block.call(this, body, {
+            type: 'prompt',
+            content: promptText, // в ленту — только чистый текст
+            time: Date.now(),
+            sender,
+        });
+    }
+    // Такт 1: думай — functions не передаются, весь ответ = thinking
+    const think = await streamTurn.call(this, model, messages, params);
+    await push_block.call(this, body, {
+        type: 'thinking',
+        content: think.text,
+        time: Date.now(),
+        sender: model.path,
+    });
+    messages.push({
+        role: 'assistant',
+        content: think.text,
+    });
+    params.user?.send?.({ path: this.short });
+    // Такт 2: маршрутизация — ответ пользователю текстом либо ровно одно слово-маршрут
+    messages.push({
+        role: 'user',
+        content: ['Исходя из твоих размышлений выше, сделай ровно одно действие:',
+            '[инструкция]',
+            'Если необходимо ответить на вопрос — ответь обычным текстом.',
+            'Если необходимо что-то уточнить — задай вопросы пользователю обычным текстом.',
+            'Если ты не знаешь или не понимаешь, что делать — так и скажи обычным текстом.',
+            'Иначе ответь ровно ОДНИМ словом, без знаков препинания и пояснений:',
+            'research — если необходимо что-то исследовать;',
+            'plan — если необходимо согласовать план;',
+            'task — если план согласован и можно приступать к выполнению;',
+            'do — если необходимо что-то сделать;',
+            'report — если необходимо предоставить отчёт.',
+        ].join('\n'),
+    });
+    const route = await streamTurn.call(this, model, messages, params);
+    const word = route.text.trim().replace(/[.!]+$/, '').toLowerCase();
+    const type = ROUTE_TYPES.includes(word) ? word : 'text';
+    const block = {
+        type,
+        content: route.text,
+        time: Date.now(),
+        sender: model.path,
+    };
+    await push_block.call(this, body, block);
+    // Маршрут-слово → служебный expect-ход, спиннер не гасим; текст → wait
+    const routePrompt = type === 'text'
+        ? null
+        : type === 'task'
+            ? TASK_TODO_PROMPT
+            : resolveServicePrompt(block, 'ASSISTENT');
+    if (!routePrompt) {
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+    params.user?.send?.({ path: this.short });
+    scheduleSelfCall(this, params, turn, { expect: type, prompt: routePrompt });
+}
+
+/**
+ * Служебный expect-ход: plan|report → md-блок + «Принять» (wait);
+ * task → to-do → task.steps + первый пункт; step|do|research → FC-ход.
+ * this = файл task.ai.
+ */
+async function expectMove(ctx) {
+    const { body, model, params, turn } = ctx;
+    const expect = params.expect;
+    if (expect === 'step' || expect === 'do' || expect === 'research')
+        return fcMove.call(this, ctx);
+
+    const messages = buildHistoryFromRibbon(body);
+    messages.push({ role: 'user', content: String(params.prompt || '') });
+    const { text } = await streamTurn.call(this, model, messages, params);
+
+    if (expect === 'plan' || expect === 'report') {
+        await push_block.call(this, body, {
+            type: expect,
+            content: text,
+            button: { label: 'Принять', color: 'success' },
+            time: Date.now(),
+            sender: model.path,
+        });
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return; // wait: решение пользователя
+    }
+
+    if (expect === 'task') {
+        const parsed = parsePlanBodySteps(text);
+        const steps = parsed?.steps || [];
+        if (!steps.length) {
+            // to-do не распознан — текстом, ждём пользователя
+            await push_block.call(this, body, {
+                type: 'text', content: text, time: Date.now(), sender: model.path,
+            });
+            params.user?.send?.({ type: 'chat.done', path: this.short });
+            return;
+        }
+        const first = steps[0];
+        first.status = 'in_progress';
+        first.startedAt = Date.now();
+        body.ribbon ??= [];
+        body.ribbon.push({
+            type: 'task',
+            label: String(parsed.intro || steps[0].description || 'Задача').split('\n')[0].slice(0, 120),
+            state: 'active',
+            steps,
+            ribbon: [],
+            time: Date.now(),
+            sender: model.path,
+        });
+        await saveBody.call(this, body);
+        params.user?.send?.({ path: this.short });
+        scheduleSelfCall(this, params, turn, { expect: 'step', prompt: makeStepInstruction(first) });
+        return;
+    }
+
+    // Неизвестный expect — текстом, wait
+    await push_block.call(this, body, {
+        type: 'text', content: text, time: Date.now(), sender: model.path,
+    });
+    params.user?.send?.({ type: 'chat.done', path: this.short });
+}
+
+/**
+ * FC-ход (do | research | шаг task): один вызов функции или ответ текстом.
+ * research — только read-only набор. this = файл task.ai.
+ */
+async function fcMove(ctx) {
+    const { body, model, params } = ctx;
+    const useFC = model.functionCalling === true;
+    const messages = buildHistoryFromRibbon(body, useFC, { protocol: model.protocol });
+    messages.push({ role: 'user', content: String(params.prompt || '') });
+
+    let functions = await buildFunctionsList(ctx.currentContext);
+    if (params.expect === 'research')
+        functions = functions.filter(f => RESEARCH_METHODS.includes(f.name));
+    const prep = prepareFunctionsForStream(functions, messages);
+    const { text, calls } = await streamTurn.call(this, model, messages, params, {
+        functions: prep.functions,
+        function_call: prep.function_call,
+    });
+
+    const call = calls[0];
+    if (!call) {
+        // Ответ прозой — фиксируем текстом, автомат ждёт пользователя
+        await push_block.call(this, body, {
+            type: 'text', content: text, time: Date.now(), sender: model.path,
+        });
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+    return executeOneCall.call(this, ctx, call, functions);
+}
+
+/**
+ * Один вызов функции модели: ask_user → опрос (wait); complete_step → движок шагов;
+ * файл-модифицирующий → pendingAction + кнопка «Выполнить» (wait, без trust-автопропуска);
+ * read-only → немедленное исполнение + продолжение. this = файл task.ai.
+ */
+async function executeOneCall(ctx, call, functions) {
+    const { body, model, params, turn } = ctx;
+    const ribbon = ribbonTargetOf(body);
+
+    if (call.method === ASK_USER_METHOD) {
+        const qBlock = questionsBlockFromArgs(call.args, model);
+        await push_block.call(this, body, qBlock || {
+            type: 'text',
+            content: 'Уточнение не сформулировано.',
+            time: Date.now(),
+            sender: model.path,
+        });
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+
+    if (call.method === 'complete_step') {
+        ribbon.push({ type: 'tool', name: call.method, args: call.args, time: Date.now(), sender: model.path });
+        const { result, followPrompt } = completeTaskStep(body, call.args || {});
+        pushToolResult(ribbon, call, result, model);
+        sendToolResultWs(this.short, call, result);
+        // complete_step вне активной задачи — не роняем автомат, продолжаем текущую цепочку
+        const move = result?.success || findActiveTask(body)
+            ? nextTaskMove(body, result?.success ? followPrompt : String(result?.error || ''))
+            : nextToolMove(body, params);
+        await saveBody.call(this, body);
+        params.user?.send?.({ path: this.short });
+        scheduleSelfCall(this, params, turn, move);
+        return;
+    }
+
+    // Любой метод, меняющий файлы, — только через подтверждение пользователя
+    if (isFileWriteMethod(call.method) || DANGEROUS_METHODS.includes(call.method)) {
+        body.pendingAction = { calls: [call], contextPath: ctx.currentContext?.path || '' };
+        const argsPreview = JSON.stringify(sanitizeToolArgsForHistory(call.args)).slice(0, 300);
+        await push_block.call(this, body, {
+            type: 'action',
+            title: 'Действие',
+            content: call.method + ' ' + argsPreview,
+            button: { label: 'Выполнить', color: 'warning' },
+            time: Date.now(),
+            sender: 'WORK',
+        });
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+
+    // Read-only — исполняем сразу
+    ribbon.push({ type: 'tool', name: call.method, args: call.args, time: Date.now(), sender: model.path });
+    const { result, newContext, spawnTask } = await executeToolCall(
+        call, ctx.currentContext, ctx.initialContext, functions, params, makeAiUser(model, params),
+    );
+    if (newContext) {
+        ctx.currentContext = newContext;
+        body.contextPath = newContext.path || '';
+    }
+    if (spawnTask)
+        body.ribbon.push(spawnTask);
+    pushToolResult(ribbonTargetOf(body), call, result, model);
+    sendToolResultWs(this.short, call, result);
+    await saveBody.call(this, body);
+    params.user?.send?.({ path: this.short });
+    scheduleSelfCall(this, params, turn, nextToolMove(body, params));
+}
+
+/**
+ * Реальный confirm: pendingAction (Выполнить/отказ), «Принять» плана → task,
+ * «Принять» отчёта → completed, прочие кнопки → факт + продолжение.
+ * this = файл task.ai.
+ */
+async function applyConfirmInput(ctx, confirm) {
+    const { body, model, params, sender, turn } = ctx;
+
+    if (body.pendingAction) {
+        const hanging = findOpenInteractive(body);
+        if (hanging?.open?.type === 'action')
+            hanging.open.answered = true;
+        const ribbon = ribbonTargetOf(body);
+        if (confirm === true) {
+            const functions = await buildFunctionsList(ctx.currentContext);
+            const aiUser = makeAiUser(model, params);
+            for (const call of body.pendingAction.calls || []) {
+                ribbon.push({ type: 'tool', name: call.method, args: call.args, time: Date.now(), sender: model.path });
+                const { result, newContext, spawnTask } = await executeToolCall(
+                    call, ctx.currentContext, ctx.initialContext, functions, params, aiUser,
+                );
+                if (newContext) {
+                    ctx.currentContext = newContext;
+                    body.contextPath = newContext.path || '';
+                }
+                if (spawnTask)
+                    body.ribbon.push(spawnTask);
+                pushToolResult(ribbonTargetOf(body), call, result, model);
+                sendToolResultWs(this.short, call, result);
+            }
+            delete body.pendingAction;
+            await saveBody.call(this, body);
+            params.user?.send?.({ path: this.short });
+            scheduleSelfCall(this, params, turn, nextToolMove(body, params));
+        }
+        else {
+            for (const call of body.pendingAction.calls || []) {
+                ribbon.push({
+                    type: 'tool_result',
+                    label: '🚫 ' + call.method,
+                    content: 'Действие отменено пользователем',
+                    tool: call.method,
+                    ok: false,
+                    time: Date.now(),
+                    sender,
+                });
+            }
+            delete body.pendingAction;
+            await saveBody.call(this, body);
+            params.user?.send?.({ type: 'chat.done', path: this.short });
+        }
+        return;
+    }
+
+    const found = findOpenInteractive(body);
+    if (!found) {
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+    const { open, ribbon } = found;
+    open.answered = true;
+
+    if (confirm === false) {
+        ribbon.push({ type: 'prompt', content: 'Отменено', time: Date.now(), sender });
+        await saveBody.call(this, body);
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+
+    // «Принять» плана → to-do список → task
+    if (open.type === 'plan') {
+        ribbon.push({ type: 'prompt', content: 'Принять', time: Date.now(), sender });
+        await saveBody.call(this, body);
+        params.user?.send?.({ path: this.short });
+        scheduleSelfCall(this, params, turn, { expect: 'task', prompt: TASK_TODO_PROMPT });
+        return;
+    }
+
+    // «Принять» отчёта → задача закрыта, ход модели не нужен
+    if (open.type === 'report') {
+        const task = findActiveTask(body);
+        if (task) {
+            for (const s of task.steps || [])
+                if (s.status !== 'done')
+                    s.status = 'done';
+            task.state = 'completed';
+        }
+        body.ribbon.push({
+            type: 'text',
+            content: 'Задача завершена' + (task?.label ? ': ' + task.label : '.'),
+            time: Date.now(),
+            sender: 'WORK',
+        });
+        await saveBody.call(this, body);
+        params.user?.send?.({ type: 'chat.done', path: this.short });
+        return;
+    }
+
+    // Прочие кнопки (Продолжить, generic action) — факт + продолжение
+    const label = String(open.button?.label || open.title || 'OK');
+    ribbon.push({ type: 'prompt', content: label, time: Date.now(), sender });
+    await saveBody.call(this, body);
+    params.user?.send?.({ path: this.short });
+    scheduleSelfCall(this, params, turn, { prompt: 'Пользователь подтвердил: «' + label + '». Продолжай.' });
+}
+
+/**
+ * Реальные ответы формы/опроса: закрыть интерактив, clarify-шаг закрывается сам,
+ * продолжение — движок шагов или обычный ход. this = файл task.ai.
+ */
+async function applyAnswersInput(ctx, answers) {
+    const { body, params, sender, turn } = ctx;
+    applyAnswers(body, answers, sender);
+    delete body.pendingAction;
+    const follow = autoAdvanceClarifyStep(body);
+    const move = findActiveTask(body)
+        ? nextTaskMove(body, follow)
+        : { prompt: 'Ответы пользователя получены — продолжай.' };
+    await saveBody.call(this, body);
+    params.user?.send?.({ path: this.short });
+    scheduleSelfCall(this, params, turn, move);
+}
 /** Целевая лента: активная task.ribbon или корень. */
 function ribbonTargetOf(body) {
     const lastTask = findActiveTask(body);
-    return lastTask ? (lastTask.ribbon ??= []) : body.ribbon;
+    return lastTask ? (lastTask.ribbon ??= []) : body.ribbon ??= [] ;
 }
 
 /**
@@ -1680,7 +2369,10 @@ function findOpenInteractive(body) {
     push(body.ribbon);
     for (const r of scopes) {
         const open = [...r].reverse().find(b =>
-            (b.type === 'action' || b.type === 'form' || b.type === 'questions') && !b.answered);
+            ((b.type === 'action' || b.type === 'form' || b.type === 'questions')
+                // md-результаты plan/report с кнопкой «Принять» — тоже интерактив
+                || ((b.type === 'plan' || b.type === 'report') && b.button))
+            && !b.answered);
         if (open)
             return { open, ribbon: r };
     }
@@ -2970,6 +3662,24 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
         }
         if (entry.type === 'thinking' || entry.type === 'details')
             continue;
+
+        // Маршруты двухтактного цикла: слово-решение — фактом, md-результат — целиком.
+        // task-блоки со steps сюда не попадают (обрабатываются веткой task ниже).
+        if (ROUTE_TYPES.includes(entry.type) && !entry.steps) {
+            flushPending();
+            if (entry.button && entry.content) {
+                messages.push({ role: 'assistant', content: entry.content });
+                if (!entry.answered) {
+                    messages.push({
+                        role: 'user',
+                        content: 'UI кнопка «' + (entry.button.label || 'Принять') + '» — ожидает решения пользователя.',
+                    });
+                }
+            }
+            else
+                messages.push({ role: 'assistant', content: '[маршрут: ' + entry.type + ']' });
+            continue;
+        }
 
         if (entry.type === 'action') {
             flushPending();
