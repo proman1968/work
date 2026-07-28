@@ -23,6 +23,12 @@ export class $server extends $class {
     get fs(){
         return fs
     }
+    get fsp(){
+        return fsp
+    }
+    get https(){
+        return https
+    }
     get exclude_for_rag(){
         return [];
     }
@@ -137,7 +143,7 @@ export class $server extends $class {
     }
 
     get testerHTML() {
-return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
+        return fs.readFileSync('./sources/tester.html', {encoding: 'utf-8'});
     }
     getIndexForTest(file){
         let text = this.testerHTML;

@@ -418,10 +418,7 @@ export class $file extends $folder{
             queueMicrotask(async () => {
                 try {
                     const triggers = await this._triggers;
-                    const onSave = triggers?.on_save;
-                    if (typeof onSave?.execute === 'function') {
-                        await onSave.execute({ ...params, $context: this });
-                    }
+                    triggers?.on_save.execute(params);
                 }
                 catch (e) {
                     console.warn('[file] on_save trigger', e.message);

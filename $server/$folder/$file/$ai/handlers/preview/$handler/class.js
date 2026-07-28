@@ -10,16 +10,24 @@ const VIEW_TYPES = new Set([
 
 /**
  * Исполняемая ветка tip:
- * 1) active task → его ribbon (Отчёт / questions / step prompts);
+ * 1) самая глубокая active task → её ribbon (subplan внутри ribbon родителя);
  * 2) иначе task, у хвоста ribbon есть button (Отчёт до accept) → его ribbon;
  * 3) иначе корневой ribbon (action «План» / «Начать»).
  */
 function tipBranch(ribbon) {
     if (!Array.isArray(ribbon) || !ribbon.length) return [];
-    const tasks = [...ribbon].filter(b => b?.type === 'task').reverse();
-    const active = tasks.find(b => b.state === 'active');
+    // Спуск к самой глубокой активной задаче (настоящий стек вложенных subplan)
+    let active = [...ribbon].reverse().find(b => b?.type === 'task' && b.state === 'active');
+    while (active && Array.isArray(active.ribbon)) {
+        const deeper = [...active.ribbon].reverse()
+            .find(b => b?.type === 'task' && b.state === 'active');
+        if (!deeper)
+            return active.ribbon;
+        active = deeper;
+    }
     if (active && Array.isArray(active.ribbon))
         return active.ribbon;
+    const tasks = [...ribbon].filter(b => b?.type === 'task').reverse();
     const waiting = tasks.find(b => {
         const nested = Array.isArray(b.ribbon) ? b.ribbon : [];
         if (!nested.length) return false;
@@ -823,7 +831,7 @@ ODA({ is: 'microchat-view-thinking',
     extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host { overflow: hidden; display: block; }
+            :host { display: block; }
             details { @apply --light; }
             summary {
                 @apply --bold; @apply --horizontal;
@@ -879,7 +887,7 @@ ODA({ is: 'microchat-view-action',
         <style>
             :host {
                 @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 2px 4px;
+                border-radius: 12px; margin: 6px;
             }
             .head { @apply --horizontal; align-items: center; gap: 8px; }
             .title { @apply --bold; font-size: small; }
@@ -925,7 +933,7 @@ ODA({ is: 'microchat-view-questions',
         <style>
             :host {
                 @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 2px 4px;
+                border-radius: 12px; margin: 6px;
             }
             .title { @apply --bold; font-size: small; }
             .hint { font-size: x-small; color: var(--error-color, #c62828); padding: 0 2px; }

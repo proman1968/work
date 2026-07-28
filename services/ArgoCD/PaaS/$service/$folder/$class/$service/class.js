@@ -9,23 +9,10 @@ export default {
                 id: 'baseDomain',
                 type: 'String',
                 placeholder: 'odant.org',
-                required: true,
             }, {
-                id: 'url',
+                id: 'checkDnsUrl',
                 type: 'String',
-                placeholder: 'https://argocd.example.com',
-            }, {
-                id: 'token',
-                type: 'String',
-                placeholder: 'Bearer token',
-            }, {
-                id: 'defaultProject',
-                type: 'String',
-                placeholder: 'default',
-            }, {
-                id: 'destinationServer',
-                type: 'String',
-                placeholder: 'https://kubernetes.default.svc',
+                placeholder: 'https://ns1.odant.org',
             }],
         },
     },

@@ -11,8 +11,8 @@
  *   models/GigaChat/GigaChat Pro/        — конкретная модель
  *   models/GigaChat/GigaChat Light/      — конкретная модель
  *
- * Handler'ы (chat, streamChat) вызываются через execItemMethod.
- * this.$context — экземпляр модели (protocol, apiKey, model, maxTokens, ...).
+ * streamChat — метод прототипа `$folder/$class/$ai/class.js` (вызов: model.streamChat).
+ * chat / tts — `$method`; HTTP также резолвит class-методы через execItemMethod.
  */
 export default {
     icon: 'carbon:machine-learning-model',

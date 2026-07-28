@@ -145,7 +145,7 @@ export class $folder extends $item{
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
-        
+
         let folder_name = mime.contentType(params.filename);
         if (folder_name) {
             folder_name = folder_name.split('/')[0];
@@ -157,12 +157,8 @@ export class $folder extends $item{
                 folder_name = split.pop().toLowerCase();
             }
             else {
-                folder_name = 'etc'
+                folder_name = 'etc';
             }
-        }
-
-        if (params.folder) {
-            folder_name = params.folder + '/' + folder_name;
         }
 
         return this._get_item(folder_name, FS.$folder);
@@ -892,9 +888,6 @@ export class $folder extends $item{
     }
 
     static server_item = true;
-    get triggers(){
-        return Promise.resolve(this.tilde).then(files => files.find(f=>f.id === 'triggers'));
-    }
     get lib(){
         return Promise.resolve(this.tilde).then(files => files.find(f=>f.id === 'lib'));
     }
@@ -907,29 +900,25 @@ export class $folder extends $item{
     }
     /** Контекстные триггеры (~triggers/*), обогащённые class.js и привязанные к владельцу */
     get _triggers(){
-        return (async ()=>{
-            const result = {};
-            try {
-                const triggers = await this.get_item('~/triggers/*');
-                const items = Array.isArray(triggers) ? triggers : (triggers ? [triggers] : []);
-                for (const trigger of items)
-                    result[trigger.id] = trigger;
-            } catch {}
-            return result;
-        })();
+        return new AsyncPromise(async ()=>{
+            const triggers = await this.get_item('~/triggers/*');
+            return triggers.reduce((res, item)=>{
+                res[item.id] = item;
+                item.$context = this;
+                return res;
+            },{});
+        })
     }
     /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
     get _methods(){
-        return (async ()=>{
-            const result = {};
-            try {
-                const methods = await this.get_item('~/methods/*');
-                const items = Array.isArray(methods) ? methods : (methods ? [methods] : []);
-                for (const method of items)
-                    result[method.id] = method;
-            } catch {}
-            return result;
-        })();
+        return new AsyncPromise(async ()=>{
+            const methods = await this.get_item('~/methods/*');
+            return methods.reduce((res, item)=>{
+                res[item.id] = item;
+                item.$context = this;
+                return res;
+            },{});
+        })
     }
     /**
      * Записи каталога: все дочерние элементы без скрытых (папки и файлы).
@@ -1298,48 +1287,60 @@ export class $folder extends $item{
      * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
      * @param {string} params.filename Имя файла
+     * @param {string} params.folder Имя дополнительной директории
      * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
      * @param {string} [params.message] Текст для log.content
      * @returns {Promise<object>} Запись лога (path = history-снимок)
      */
-    async save_file(params = {}){
+    async save_file(params = {}) {
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
-        if(!params.filename)
+        if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
 
-        let dir = this.dir + '/' + params.filename;
-        if(!fs.existsSync(this.dir)){
-            fs.mkdirSync(this.dir, { recursive: true });
+        // полный путь к директории сохранения
+        let dir = this.dir;
+        // путь к файлу относительно this
+        let filename = params.filename
+        if (params.folder) {
+            dir += '/' + params.folder;
+            filename = params.folder + '/' + filename
+        }
+
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
             this.parent.reset();
         }
 
+        // полный путь к файлу
+        const path = dir + '/' + params.filename;
         if (params?.post?.path) {
-            if(params?.post?.originalFilename){
+            if (params?.post?.originalFilename) {
                 let isRenamed = true;
                 try {
-                    await fsp.rename(params.post.path, dir);
+                    await fsp.rename(params.post.path, path);
                 }
                 catch (err) {
                     isRenamed = false;
                 }
+
                 if (!isRenamed) {
-                    await fsp.copyFile(params.post.path, dir);
+                    await fsp.copyFile(params.post.path, path);
                     await fsp.rm(params.post.path);
                 }
             }
-            else{
-                await fsp.copyFile(params.post.path, dir);
+            else {
+                await fsp.copyFile(params.post.path, path);
             }
 
-            if(params.post.fieldName === 'message'){
-                params.post = await fsp.readFile(dir, {encoding: 'utf-8'});
+            if (params.post.fieldName === 'message') {
+                params.post = await fsp.readFile(path, { encoding: 'utf-8' });
             }
-
         }
         else {
-            await fsp.writeFile(dir, params.post, params);
+            await fsp.writeFile(path, params.post, params);
         }
-        let file = await this._get_item(params.filename, FS.$file);
+
+        const file = await this._get_item(filename, FS.$file);
         file.reset();
         this.reset();
         return await FS.$file.save_to_history.call(file, params);

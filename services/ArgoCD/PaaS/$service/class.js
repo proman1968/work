@@ -1,4 +1,15 @@
 export default {
     icon: 'carbon:ibm-cloud-pak-applications',
     label: 'PaaS',
+    baseDomain: 'odant.org',
+    url: 'https://argocd.odant.org',
+    insecure: false,
+    project: 'bis-work-app',
+    repoURL: 'https://binaries.odant.org/helm/bis-work/develop',
+    chart: 'bis-work',
+    targetRevision: '*',
+    destinationServer: 'https://kubernetes.default.svc',
+    destinationNamespace: 'bis-work',
+    syncPrune: true,
+    syncSelfHeal: true,
 };

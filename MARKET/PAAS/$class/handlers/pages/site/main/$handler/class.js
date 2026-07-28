@@ -144,7 +144,8 @@ ODA({
             <div class="muted">{{resultName}}</div>
         </div>
     `,
-    $item: null,
+    product: null,
+    $context: null,
     formData: {},
     error: '',
     busy: false,
@@ -155,17 +156,17 @@ ODA({
     _pendingOrder: false,
 
     get price() {
-        return this.$item?.price || '';
+        return this.product?.price || '';
     },
     get priceHint() {
-        return this.$item?.priceHint || '';
+        return this.product?.priceHint || '';
     },
     get includes() {
-        const list = this.$item?.includes;
+        const list = this.product?.includes;
         return Array.isArray(list) ? list : [];
     },
     get formFields() {
-        const form = this.$item?.orderForm;
+        const form = this.product?.orderForm;
         const list = Array.isArray(form) ? form : (form ? [form] : []);
         const formBlock = list.find(f => f?.type === 'form') || list[0];
         return Array.isArray(formBlock?.fields) ? formBlock.fields : [];
@@ -185,7 +186,7 @@ ODA({
     attached() {
         this._initForm();
     },
-    $itemChanged() {
+    productChanged() {
         this._initForm();
         this.orderDone = false;
         this.error = '';
@@ -263,7 +264,7 @@ ODA({
     },
     async _send() {
         this._pendingOrder = false;
-        if (this.busy || this.orderDone || !WORK.uid || !this.$item) return;
+        if (this.busy || this.orderDone || !WORK.uid || !this.product) return;
         this.busy = true;
         this.error = '';
         try {
@@ -280,13 +281,13 @@ ODA({
                 role: 'USER',
                 buyer: WORK.uid,
                 created,
-                target: this.$item.path || '',
+                target: this.product.path || '',
                 product: {
-                    id: this.$item.$file?.id || '',
-                    label: this.$item.label || '',
-                    price: this.$item.price || '',
-                    priceHint: this.$item.priceHint || '',
-                    includes: this.$item.includes || [],
+                    id: this.product.$file?.id || '',
+                    label: this.product.label || '',
+                    price: this.product.price || '',
+                    priceHint: this.product.priceHint || '',
+                    includes: this.product.includes || [],
                 },
                 input,
             };
@@ -296,10 +297,16 @@ ODA({
                 filename,
                 { type: 'application/json' }
             );
-            const target = this.$item.$owner || this.$item.$file?.$owner;
-            if (!target) throw new Error('Не найден класс категории для заявки');
-            await target.save_file(file, {
+            const category = this.$context;
+            if (!category?.save_file)
+                throw new Error('Не найден класс категории');
+            await category.save_file(file, {
+                role: 'USER',
                 message: (bid.product.label || '') + (input.name ? ': ' + input.name : ''),
+            });
+            await WORK.fetch('/SERVICES/ArgoCD/PaaS', 'submitOrder', {}, {
+                tariff: this.product.label,
+                subdomain: input.name || input.subdomain,
             });
             this._closeAuth();
             this.orderDone = true;
@@ -393,7 +400,6 @@ export default {
                 } catch {}
                 return {
                     $file: f,
-                    $owner: f.$owner,
                     path: f.path || f.short || '',
                     label: data.label || f.id,
                     icon: data.icon || '',
@@ -409,7 +415,10 @@ export default {
     },
     async openProduct(item) {
         if (!item) return;
-        const el = ODA.createComponent('market-product-order', { $item: item });
+        const el = ODA.createComponent('market-product-order', {
+            product: item,
+            $context: this.$item,
+        });
         try {
             await WORK.showModal(el, {
                 TITLE: { label: item.label || 'Заказать', icon: item.icon },

@@ -254,8 +254,10 @@ globalThis.ODA = async function ODA(prototype = {}){
                     if(prop){
                         if(prop.name === 'rendering')
                             return;
-                        if(prop?.$save)
-                            this.saveToLocalStorage(prop.name, value)
+                        if (prop?.$save)
+                            if (!(value instanceof Promise)) {
+                                this.saveToLocalStorage(prop.name, value)
+                            }
                         this.fire(prop.attr_name + '-changed', value);
                     }
                     this.throttle('rendering', () => {

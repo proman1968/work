@@ -19,19 +19,682 @@
  * вызывается on_save-триггером, микрочатом ($item.fetch('prompt')) и самим собой.
  * Тело пишется через fsp (не this.save — иначе повторный on_save).
  */
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+
 
 const ROOT = process.cwd();
 
+export default {
+    icon: 'bootstrap:robot',
+    TYPES,
+    FIELDS,
+    get body(){
+        return this.load({ encoding: 'utf-8' }).then(raw => this.body = JSON.parse(raw));
+    },
+    /**
+     * @param {object} params — { prompt?, text?, stop?, user?, role?, trustLevel?, _turn? }
+     * @param {string|object} [post] JSON { text, model, role, confirm, answers, stop } | строка
+     */
+    async prompt(params = {}, post) {
+        const body = await this.body;
+        const messages = buildHistoryFromRibbon(body);
+        debugger
+        messages.push({
+            role: 'user',
+            content: params.prompt
+                + '\n\n[инструкция]\n'
+                + TYPES.prompt.servicePrompt,
+        });        
+        if (params.role !== 'ASSISTENT') {
+            await push_block.call(this, {
+                type: 'prompt',
+                content: params.prompt, // в ленту — только чистый текст
+                time: Date.now(),
+                sender: params.user.uid,
+            });
+        }        
+        const model = await WORK.get_item(body.model);
+        await model.init;
+        let fullResponse = '';
+        for await (const chunk of model.streamChat({ messages })) {
+            if (typeof chunk === 'string')
+                fullResponse += chunk;
+            else if (chunk.type === 'content')
+                fullResponse += chunk.content;
+        }
+        await push_block.call(this, {
+            type: 'thinking',
+            content: fullResponse,
+            time: Date.now(),
+            sender: model.path,
+        });
+
+    },  
+
+    async prompt_old(params = {}, post) {
+
+// дальше - мусор
+
+        const { text, requestModel, confirm, answers, wantStop, role: postRole } = parseInput(params, post);
+        const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
+        const wsPath = taskAi.short || fullPath;
+        let turn = Number(params._turn) || 0;
+
+        const rawRole = String(params.role || postRole || '').toUpperCase().trim();
+        const isService = rawRole === 'ASSISTENT' || rawRole === 'ASSISTANT';
+
+        if (wantStop) {
+            requestAbort(fullPath);
+            return { ok: true, stopped: true };
+        }
+        if (turn === 0 && !isService)
+            clearAbort(fullPath);
+        else if (isAborted(fullPath))
+            return finishStopped(fullPath, wsPath, null);
+
+        const body = await loadTaskBody(taskAi);
+        if (!body)
+            throw new Error('Не удалось загрузить тело task.ai');
+        body.ribbon ??= [];
+
+        // Миграция legacy user → type:prompt
+        for (const m of body.ribbon) {
+            if (m.role === 'user' && !m.type) {
+                m.type = 'prompt';
+                delete m.role;
+            }
+        }
+
+        const initialContext = taskAi.$class || taskAi.$parent;
+        if (!initialContext)
+            throw new Error('Не определён класс-контекст для task.ai');
+
+        if (requestModel)
+            body.model = requestModel;
+
+        const { findFirstModel } = await import(
+            pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href
+        );
+        const modelPath = body.model || await findFirstModel();
+        if (!modelPath) {
+            body.ribbon.push({
+                type: 'error',
+                content: 'Нет доступной модели.',
+                time: Date.now(),
+                sender: 'WORK',
+            });
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'Нет модели' });
+            return { ok: true, model: false };
+        }
+        const model = await WORK.get_item(modelPath);
+        if (!model)
+            throw new Error('Модель не найдена: ' + modelPath);
+
+        const { execItemMethod } = await import(
+            pathToFileURL(path.join(ROOT, 'sources/host/http-server.js')).href
+        );
+
+        const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
+        const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
+        const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
+        // Реальная роль пользователя (ACL, адаптация инъекций). ASSISTENT её не меняет.
+        const role = normalizeRole(isService ? body.role : (rawRole || params.user?.role || body.role));
+        body.role = role;
+        // Роль для выбора варианта servicePrompt: служебный ход — ASSISTENT, иначе реальная роль
+        const injRole = isService ? 'ASSISTENT' : role;
+
+        // Контекст: navigate переживает проходы через body.contextPath
+        let currentContext = initialContext;
+        if (body.contextPath && body.contextPath !== initialContext.path) {
+            try {
+                const target = await WORK.get_item(body.contextPath);
+                if (target)
+                    currentContext = target;
+            } catch {}
+        }
+
+        /**
+         * Шаги 9–10: save + рекурсия по служебному промпту.
+         * Тип только что добавленного блока решает следующий ход:
+         * есть servicePrompt (или динамическая инструкция шага) → ASSISTENT-самовызов
+         * с этим текстом как промптом; нет → wait, ждём пользователя.
+         */
+        const finishTurn = async (dynamicFollow) => {
+            body.contextPath = currentContext?.path || '';
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+
+            const target = ribbonTargetOf(body);
+            let last = driverEntry(target);
+            // Свежая задача с пустой лентой (spawn_agent / «Начать») — состояние задаёт сама task
+            if (!target.length)
+                last = findActiveTask(body) || last;
+            const svc = dynamicFollow || resolveServicePrompt(last, injRole);
+            if (!svc) {
+                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                return { ok: true, wait: last?.type || 'none', turn };
+            }
+            if (turn + 1 >= MAX_AUTO_TURNS) {
+                target.push({
+                    type: 'action',
+                    title: 'Лимит ходов',
+                    content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
+                    button: { label: 'Продолжить', color: 'success' },
+                    time: Date.now(),
+                    sender: 'WORK',
+                });
+                await writeTaskBody(fullPath, body);
+                notifyChanged(fullPath);
+                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+                return { ok: true, maxAutoTurns: true, turn };
+            }
+            taskAi.async(() => {
+                taskAi.prompt({
+                    user: params.user,
+                    role: 'ASSISTENT',
+                    trustLevel: params.trustLevel,
+                    prompt: svc,
+                    _turn: turn + 1,
+                }).catch(e => console.warn('[task.ai] auto turn:', e.message));
+            });
+            return { ok: true, continued: true, turn };
+        };
+
+    // === 2–3. Вход пользователя → блоки ленты (только реальный проход, не ASSISTENT) ===
+    let dynamicFollow = null; // динамическая инструкция следующего шага — уйдёт параметром рекурсии
+    if (turn === 0 && !isService) {
+        const applied = await applyUserInput({
+            body, text, confirm, answers, sender, model, wsPath, fullPath,
+            currentContext, initialContext, params, aiUser,
+        });
+        if (applied.early)
+            return applied.early;
+        if (applied.turnOverride !== null)
+            turn = applied.turnOverride;
+        currentContext = applied.currentContext;
+        dynamicFollow = applied.dynamicFollow;
+        body.contextPath = currentContext?.path || '';
+        await writeTaskBody(fullPath, body);
+        notifyChanged(fullPath);
+    }
+
+    if (isAborted(fullPath))
+        return finishStopped(fullPath, wsPath, body);
+
+    // Вход уже дал инструкцию следующего шага («Начать», ответы clarify) — ход модели не нужен
+    if (dynamicFollow)
+        return finishTurn(dynamicFollow);
+
+    const ribbon = ribbonTargetOf(body);
+
+    // Реальный ход без нового промпта (confirm/pendingAction) — модель не зовём:
+    // продолжение решает servicePrompt последнего блока (правило 10)
+    if (!isService && driverEntry(ribbon).type !== 'prompt')
+        return finishTurn(null);
+
+    // === 4. Запрос модели ===
+    // Реальный промпт: единственное действие — думать; к пользовательскому промпту
+    // ВСЕГДА плюсуется служебный «думай» (TYPES.prompt.servicePrompt), functions не передаются.
+    // ASSISTENT: служебный промпт пришёл параметром (text), functions доступны.
+    const svcTip = isService
+        ? (text || resolveServicePrompt(driverEntry(ribbon), 'ASSISTENT'))
+        : resolveServicePrompt({ type: 'prompt' }, injRole);
+
+    const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
+        protocol: model.protocol,
+        autoTurnsLeft: Math.max(0, MAX_AUTO_TURNS - turn),
+    });
+
+    // Служебный промпт ТОЛЬКО на острие текущего вызова:
+    // в ленту не пишется и в историю следующих ходов не попадает.
+    {
+        const tipParts = [];
+        if (isService) {
+            const activeTask = findActiveTask(body);
+            const curStep = activeTask?.steps?.find(s => s.status === 'in_progress');
+            if (curStep)
+                tipParts.push('Текущий пункт плана ' + curStep.step + ': «' + (curStep.description || '') + '».');
+        }
+        if (svcTip)
+            tipParts.push('[инструкция] ' + svcTip);
+        if (tipParts.length)
+            messages.push({ role: 'user', content: tipParts.join('\n\n') });
+    }
+
+    let functions = isService ? await buildFunctionsList(currentContext) : [];
+
+    WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
+
+    let fullResponse = '';
+    let nativeToolCalls = [];
+    let turnUsage = null;
+    try {
+        const streamed = await streamModelWithRetry(model, execItemMethod, messages, functions, wsPath, fullPath);
+        fullResponse = streamed.fullResponse;
+        nativeToolCalls = streamed.nativeToolCalls;
+        turnUsage = streamed.turnUsage;
+        functions = streamed.functions || functions;
+    }
+    catch (e) {
+        console.warn('[task.ai] streamChat:', e.message);
+        if (classifyStreamError(e) === 'transient') {
+            // Ретраи исчерпаны — кнопка «Повторить» с сохранением позиции хода
+            body.pendingRetry = { turn };
+            ribbon.push({
+                type: 'action',
+                title: 'Нет связи с моделью',
+                content: 'Не удалось связаться с моделью — похоже на сетевую проблему или блокировку доступа к API.\n\nТехдетали: ' + e.message,
+                button: { label: 'Повторить', color: 'warning' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+        }
+        else {
+            const http = String(e.message || '').match(/stream error (\d{3})/);
+            const code = http ? Number(http[1]) : 0;
+            const hint = (code === 401 || code === 403)
+                ? ' Проверьте API-ключ и права доступа модели.'
+                : (code === 422 ? ' Модель отклонила формат запроса.' : '');
+            ribbon.push({
+                type: 'error',
+                content: 'Ошибка: ' + e.message + hint,
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+        }
+        await writeTaskBody(fullPath, body);
+        notifyChanged(fullPath);
+        WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: e.message });
+        return { ok: false, error: e.message };
+    }
+
+    if (isAborted(fullPath))
+        return finishStopped(fullPath, wsPath, body);
+
+    applyTurnUsage(body, ribbon, resolveTurnUsage(turnUsage, messages, fullResponse), model);
+
+    // === 6. Реальный ход: каким бы ни был ответ — блок thinking (классификации нет) ===
+    if (!isService) {
+        const content = stripReasoningWrapper(fullResponse);
+        if (!content) {
+            ribbon.push({
+                type: 'error',
+                content: 'Модель вернула пустой ответ на ход размышлений.',
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'empty think turn' });
+            return { ok: false, error: 'empty think turn' };
+        }
+        ribbon.push({
+            type: 'thinking',
+            content,
+            time: Date.now(),
+            sender: model.path || 'WORK',
+        });
+        // thinking имеет servicePrompt → action-ход уйдёт рекурсией (правило 10)
+        return finishTurn(null);
+    }
+
+    // === 7. ASSISTENT: парсинг / function calling → типизированный блок ===
+    const ribbonLenBefore = ribbon.length;
+    // Нормализация prose-каналов слабых моделей (GigaChat <|superquote|> и т.п.)
+    // до parseToolCalls / parseResponseToRibbon.
+    fullResponse = normalizeModelToolProse(fullResponse);
+
+    let toolCalls = nativeToolCalls.length
+        ? nativeToolCalls
+        : parseToolCalls(fullResponse, functions);
+
+    // ACL роли: не-ADMIN не меняет типизаторы / class.js
+    toolCalls = toolCalls.filter(call => {
+        const err = roleBlocksTool(role, call);
+        if (err) {
+            pushToolResult(ribbon, call, { error: err }, model);
+            sendToolResultWs(wsPath, call, { error: err });
+            return false;
+        }
+        return true;
+    });
+
+    // Битые FC args ([object Object] / write без filename) — сразу ошибка модели
+    const validCalls = [];
+    for (const call of toolCalls) {
+        if (isBrokenFcArgs(call.args)
+            || (isFileWriteMethod(call.method) && !(call.args?.filename || call.args?.name))) {
+            const msg = isBrokenFcArgs(call.args)
+                ? 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}) с валидными аргументами.'
+                : 'save_file: нужен filename или name. Вызови save_file({filename, post}).';
+            pushToolResult(ribbon, { ...call, args: sanitizeToolArgsForHistory(call.args) }, { error: msg }, model);
+            sendToolResultWs(wsPath, call, { error: msg });
+        }
+        else {
+            validCalls.push(call);
+        }
+    }
+    toolCalls = validCalls;
+
+    const parsed = parseResponseToRibbon(fullResponse, model.path || 'WORK');
+    let blocks = parsed.blocks || [];
+
+    // ask_user → блок questions (AskQuestion), не «выполнение» tool.
+    // Пустой ask_user → обучающий отказ, а не сфабрикованный опрос
+    let askTeach = null;
+    const askCall = toolCalls.find(c => c.method === ASK_USER_METHOD);
+    if (askCall) {
+        toolCalls = toolCalls.filter(c => c.method !== ASK_USER_METHOD);
+        const qBlock = questionsFromAskUser(askCall.args, model.path || 'WORK');
+        if (qBlock) {
+            blocks = [
+                ...blocks.filter(b => b.type !== 'questions' && b.type !== 'form'),
+                qBlock,
+            ];
+        }
+        else {
+            askTeach = ASK_USER_TEACH;
+        }
+    }
+    // Сырой «<tool>ask_user» / голое имя канала — не мёртвый text, а teach + ретрай
+    else if (!blocks.some(b => b.type === 'questions' || b.type === 'form')
+        && isBareAskUserChannel(fullResponse, blocks)) {
+        askTeach = ASK_USER_TEACH;
+    }
+
+    // Prose-subplan в text-блоке («{subplan}[…]» / «subplan[…]») — декомпозиция,
+    // не мёртвый text; должен подняться ДО фильтра огрызков
+    if (!parsed.pendingSubplan?.length) {
+        const subBlock = blocks.find(b =>
+            b.type === 'text' && parseSubplanTextBlock(b.content));
+        if (subBlock) {
+            parsed.pendingSubplan = parseSubplanTextBlock(subBlock.content);
+            blocks = blocks.filter(b => b !== subBlock);
+        }
+    }
+
+    // Prose propose_plan({…}) в text-блоке — ДО фильтра огрызков
+    // (иначе isBareToolProseText съест весь блок до подъёма в pendingPlan)
+    if (!parsed.pendingPlan?.steps?.length) {
+        const planBlock = blocks.find(b =>
+            b.type === 'text' && parseProposePlanTextBlock(b.content));
+        if (planBlock) {
+            parsed.pendingPlan = parseProposePlanTextBlock(planBlock.content);
+            blocks = blocks.filter(b => b !== planBlock);
+        }
+    }
+
+    // Голые tool-огрызки в прозе («ask_user», сломанный ask_user{…, «{subplan}[») —
+    // всегда мусор: осев text-блоком после teach, они глушат ретрай wait-состоянием
+    blocks = blocks.filter(b => !(b.type === 'text' && isBareToolProseText(b.content)));
+
+    // propose_plan (FC-канал) → pendingPlan (приоритет над XML <plan>)
+    const planCall = toolCalls.find(c => c.method === 'propose_plan');
+    if (planCall) {
+        toolCalls = toolCalls.filter(c => c.method !== 'propose_plan');
+        parsed.pendingPlan = planFromProposeArgs(planCall.args) || parsed.pendingPlan;
+    }
+
+    // subplan (FC-канал) → pendingSubplan
+    const subCall = toolCalls.find(c => c.method === 'subplan');
+    if (subCall) {
+        toolCalls = toolCalls.filter(c => c.method !== 'subplan');
+        parsed.pendingSubplan = subplanFromArgs(subCall.args) || parsed.pendingSubplan;
+    }
+
+    // Голый JSON-массив шагов (ретрай после plan-teach) → попытка плана, не мёртвый text;
+    // дальше отработают ворота качества плана
+    if (!parsed.pendingPlan?.steps?.length) {
+        const jsonBlock = blocks.find(b =>
+            b.type === 'text' && parseJsonStepsArray(b.content));
+        if (jsonBlock) {
+            parsed.pendingPlan = { steps: parseJsonStepsArray(jsonBlock.content), label: 'План' };
+            blocks = blocks.filter(b => b !== jsonBlock);
+        }
+    }
+
+    // report (FC-канал) → text-отчёт + action «Отчёт / Принять»
+    const reportCall = toolCalls.find(c => c.method === 'report');
+    if (reportCall) {
+        toolCalls = toolCalls.filter(c => c.method !== 'report');
+        const content = String(reportCall.args?.content || '').trim();
+        if (content) {
+            blocks = blocks.filter(b => b.type === 'thinking');
+            blocks.push({
+                type: 'text',
+                content,
+                time: Date.now(),
+                sender: model.path || 'WORK',
+            });
+            blocks.push({
+                type: 'action',
+                title: 'Отчёт',
+                content: 'Принять отчёт и закрыть задачу?',
+                button: { label: 'Принять', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+        }
+    }
+
+    // Повтор уже отвеченного опроса — не в ленту: обучающий отказ с готовыми ответами.
+    // Ищем по всему стеку задач: у свежей subplan-задачи своя лента пуста,
+    // а ответы лежат в лентах родителя/корня.
+    let repeatTeach = null;
+    const newQ = blocks.find(b => b.type === 'questions');
+    if (newQ) {
+        const dup = findAnsweredDuplicate(collectAnsweredInteractive(body), newQ);
+        if (dup) {
+            blocks = blocks.filter(b => b !== newQ);
+            repeatTeach = duplicateAskTeach(body, dup);
+        }
+    }
+
+    // Ворота tap-first: вопросы без вариантов → обучающий отказ (один ретрай,
+    // после него открытые поля принимаются — лучше textarea, чем мёртвый цикл)
+    if (!repeatTeach && !askTeach) {
+        const qb = blocks.find(b => b.type === 'questions');
+        const openFields = qb ? questionsFieldsWithoutOptions(qb) : [];
+        if (openFields.length && !hasRecentAskOptionsTeach(ribbon)) {
+            blocks = blocks.filter(b => b !== qb);
+            askTeach = 'Опрос не показан: вопросы без вариантов («' + openFields.join('», «') + '»). '
+                + 'Пользователь на мобильном — минимум ввода: каждому вопросу дай options '
+                + '(3–5 конкретных вариантов из контекста задачи + «Другое»). '
+                + 'Свободный текст уместен только как type: "textarea".';
+        }
+    }
+
+    // Ворота качества плана: фабрикации и огрызки не доходят до кнопки «Начать»
+    let planTeach = null;
+    if (parsed.pendingPlan?.steps?.length) {
+        planTeach = planQualityError(parsed.pendingPlan.steps);
+        if (planTeach)
+            parsed.pendingPlan = null;
+    }
+    else if (parsed.planRejected || planCall)
+        planTeach = planQualityError([]);
+    if (planTeach)
+        blocks = blocks.filter(b => !(b.type === 'action' && b.title === 'План'));
+
+    // План при активной задаче — декомпозиция текущего шага, не второй «План»+«Начать»
+    if (parsed.pendingPlan?.steps?.length
+        && findActiveTask(body)?.steps?.some(s => s.status === 'in_progress')) {
+        parsed.pendingSubplan = parsed.pendingPlan.steps;
+        parsed.pendingPlan = null;
+        // action «План», собранный парсером, — мёртвая кнопка после конверсии
+        blocks = blocks.filter(b => !(b.type === 'action' && b.title === 'План'));
+    }
+
+    // plan (FC или парсер) → action «План» (ждёт «Начать»)
+    if (parsed.pendingPlan?.steps?.length) {
+        blocks = blocks.filter(b => b.type === 'thinking');
+        blocks.push(planToAction(parsed.pendingPlan, model.path || 'WORK'));
+        toolCalls = [];
+    }
+
+    // Проза-обвязка рядом с опросом («Сформулирую вопрос:») → в content опроса
+    blocks = foldProseIntoInteractive(blocks);
+
+    // Шальные action-кнопки модели посреди Do → text (мёртвая кнопка не блокирует поток)
+    blocks = demoteStrayDoActions(body, blocks);
+
+    // Все пункты закрыты, ответ — текст без вызова report: кнопку «Принять» дорисовывает харнесс
+    if (!reportCall) {
+        const doneTask = findActiveTask(body);
+        if (doneTask?.steps?.length
+            && doneTask.steps.every(s => s.status === 'done')
+            && blocks.some(b => b.type === 'text')
+            && !blocks.some(b => b.type === 'action' && b.title === 'Отчёт')) {
+            blocks.push({
+                type: 'action',
+                title: 'Отчёт',
+                content: 'Принять отчёт и закрыть задачу?',
+                button: { label: 'Принять', color: 'success' },
+                time: Date.now(),
+                sender: 'WORK',
+            });
+        }
+    }
+
+    // Обучающие отказы — ДО блоков: wait-блок (questions/action) должен остаться
+    // хвостом ленты, иначе драйвером станет tool_result и опрос повиснет без ответа.
+    // План не принят → tool_result с инструкцией propose_plan
+    if (planTeach) {
+        const fakeCall = { method: 'propose_plan', args: {} };
+        pushToolResult(ribbon, fakeCall, { error: planTeach }, model);
+        sendToolResultWs(wsPath, fakeCall, { error: planTeach });
+    }
+
+    // Повторный или пустой опрос → tool_result
+    const askUserErr = repeatTeach || askTeach;
+    if (askUserErr) {
+        const fakeCall = { method: ASK_USER_METHOD, args: {} };
+        pushToolResult(ribbon, fakeCall, { error: askUserErr }, model);
+        sendToolResultWs(wsPath, fakeCall, { error: askUserErr });
+    }
+
+    for (const b of blocks)
+        ribbon.push(b);
+
+    // subplan (FC или <subplan>) → вложенная подзадача текущего шага (стек задач).
+    // Ворота: копия родительского плана или лимит вложенности → обучающий отказ
+    if (!parsed.pendingPlan?.steps?.length && parsed.pendingSubplan?.length) {
+        const gateErr = subplanGateError(body, parsed.pendingSubplan);
+        if (gateErr) {
+            const fakeCall = { method: 'subplan', args: {} };
+            pushToolResult(ribbon, fakeCall, { error: gateErr }, model);
+            sendToolResultWs(wsPath, fakeCall, { error: gateErr });
+        }
+        else {
+            const applied = applySubplan(body, parsed.pendingSubplan);
+            if (applied) {
+                toolCalls = [];
+                dynamicFollow = applied.instruction;
+            }
+        }
+    }
+
+    // Опасные вызовы / system-modify → pendingAction + подтверждение
+    const trustLevel = Number(model.trustLevel ?? params.trustLevel ?? 0);
+    const dangerous = toolCalls.filter(c =>
+        callNeedsTrustConfirm(c) || (role === 'ADMIN' && isSystemModifyCall(c)));
+    if (dangerous.length && trustLevel < TRUST_AUTOCONFIRM) {
+        body.pendingAction = {
+            calls: toolCalls,
+            contextPath: currentContext.path || '',
+        };
+        ribbon.push({
+            type: 'action',
+            title: 'Действие',
+            content: 'Подтвердите: ' + dangerous
+                .map(c => c.method + '(' + Object.keys(c.args || {}).join(', ') + ')')
+                .join(', '),
+            button: { label: 'Выполнить', color: 'warning' },
+            time: Date.now(),
+            sender: 'WORK',
+        });
+        await writeTaskBody(fullPath, body);
+        notifyChanged(fullPath);
+        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+        return { ok: true, pendingAction: true };
+    }
+
+    // Выполнение tools
+    for (const call of toolCalls) {
+        ribbon.push({
+            type: 'tool',
+            name: call.method,
+            args: call.args,
+            time: Date.now(),
+            sender: model.path || 'WORK',
+        });
+        // complete_step — движок шагов (работает с body, не с контекстом)
+        if (call.method === 'complete_step') {
+            const { result, followPrompt } = completeTaskStep(body, call.args || {});
+            pushToolResult(ribbon, call, result, model);
+            sendToolResultWs(wsPath, call, result);
+            // следующий пункт — параметром рекурсии (самовызов ASSISTENT), не блоком ленты
+            if (followPrompt)
+                dynamicFollow = followPrompt;
+            continue;
+        }
+        const { result, newContext, spawnTask } = await executeToolCall(
+            call, currentContext, initialContext, functions, params, aiUser,
+        );
+        if (newContext)
+            currentContext = newContext;
+        if (spawnTask)
+            body.ribbon.push(spawnTask);
+        pushToolResult(ribbon, call, result, model);
+        sendToolResultWs(wsPath, call, result);
+    }
+
+    // save_file("имя") прозой (позиционный аргумент) — не вызов: обучающая ошибка вместо тишины
+    if (!toolCalls.some(c => isFileWriteMethod(c.method))
+        && /(?:save_file|write_file)\s*\(\s*["'«]/.test(fullResponse)) {
+        const fakeCall = { method: 'save_file', args: {} };
+        const teach = {
+            error: 'save_file не выполнен: вызывается только как tool с объектом аргументов'
+                + ' save_file({filename, post: полное содержимое файла}).'
+                + ' Позиционная строка в тексте не исполняется.',
+        };
+        pushToolResult(ribbon, fakeCall, teach, model);
+        sendToolResultWs(wsPath, fakeCall, teach);
+    }
+
+    // === 8. Ничего не распознано → «Требуется уточнение…» (wait, мёртвого цикла нет) ===
+    if (ribbon.length === ribbonLenBefore && !dynamicFollow) {
+        const raw = String(fullResponse || '').trim();
+        ribbon.push({
+            type: 'text',
+            content: 'Требуется уточнение: ответ модели не распознан как действие.'
+                + (raw ? '\n\n' + raw.slice(0, 2000) : ''),
+            time: Date.now(),
+            sender: model.path || 'WORK',
+        });
+    }
+
+    // Страховка wait-порядка: незакрытый интерактив этого хода (ask_user + tool
+    // в одном ответе) — в хвост ленты, чтобы ход завершился ожиданием пользователя
+    hoistWaitBlock(ribbon, ribbonLenBefore);
+
+    // === 9–10. Save + рекурсия по служебному промпту ===
+    return finishTurn(dynamicFollow);
+    },
+};
+
 /** Максимум авто-проходов подряд без участия пользователя. */
 const MAX_AUTO_TURNS = 30;
-/** Типы-драйверы, после которых ждём пользователя (tip / новый prompt). */
-const WAIT_USER_TYPES = new Set(['text', 'action', 'form', 'questions']);
 /** Опасные методы — подтверждение при trustLevel < TRUST_AUTOCONFIRM. */
 const DANGEROUS_METHODS = ['set_property', 'save_file', 'write_file', 'delete', 'create'];
 const ASK_USER_METHOD = 'ask_user';
+/** Обучающий отказ: пустой / сырой ask_user без questions. */
+const ASK_USER_TEACH = 'ask_user не показан: вопросов нет или вызов написан текстом. '
+    + 'Вызови функцию ask_user (только function call, не строкой в ответе), пример: '
+    + 'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]}) — '
+    + 'сформулируй вопросы по описанию текущего шага, каждому 2–5 вариантов; '
+    + 'открытый ответ — type: "textarea" без options.';
 /** Уровень доверия модели для автоподтверждения опасных действий. */
 const TRUST_AUTOCONFIRM = 3;
 const CONTEXT_LOG_DAYS = 7;
@@ -55,10 +718,7 @@ const TYPES = {
         // Think-ход: functions в запрос не передаются, весь ответ целиком
         // харнесс фиксирует блоком thinking — никакие теги не нужны.
         servicePrompt: [
-            'Сейчас ровно одно действие — думай.',
-            'Напиши размышления обычным текстом: разбери запрос и контекст,',
-            'первой строкой укажи, какое действие сделаешь следующим ходом.',
-            'Tools в этом ходе недоступны. Ответ пользователю не пиши — только размышления.',
+            'Как следует подумай, над тем, что необходимо сделать на следующем шаге, исходя их контекста и последнего промпта, по смыслу, и выдай свои размышления (от 5 до 100 строк)',
         ].join(' '),
         fields: [
             { id: 'type', type: 'string' },
@@ -83,44 +743,61 @@ const TYPES = {
         // либо вызов ОДНОЙ функции по точному имени (function calling).
         servicePrompt: {
             default: [
+                '- если это вопрос, то ответить на него',
+                '- если это задача, и что-то непонятно, то задать уточняющие вопросы (text, queries, form)',
+                '- если это простая задача, и все абсолютно понятно, то выполнить её',
+                '- если это сложная задача, и все абсолютно понятно, создать план из 3-6 шагов (или столько, сколько надо, возможно с вложениями) и предоставить пользователю на согласование',
+                
+                
                 'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
                 '• это вопрос/справка → ответь обычным текстом;',
-                '• не хватает данных пользователя → вызови функцию ask_user({questions: [{prompt, options}]}) — каждому вопросу options 3–5 вариантов + «Другое»;',
-                '• это задача «сделай X» → вызови функцию propose_plan({steps: [{description}, …]}) с 3–6 шагами;',
-                '• нужны внешние факты → вызови функцию search({query}).',
+                '• не хватает данных пользователя → вызови функцию ask_user, пример:',
+                'ask_user({questions: [{prompt: "Какой формат?", options: ["PDF", "HTML", "Другое"]}]});',
+                '• это задача «сделай X» → вызови функцию propose_plan с 3–6 шагами, пример:',
+                'propose_plan({steps: [{description: "Уточнить требования"}, {description: "Собрать структуру"}, {description: "Сохранить файл"}]});',
+                '• нужны внешние факты → вызови функцию search({query: "запрос"}).',
                 'Либо текст, либо один вызов функции — не оба сразу.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
             ].join(' '),
             USER: [
                 'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
                 'вопрос → ответь обычным текстом;',
-                'нужны данные → вызови функцию ask_user({questions}) — только options 3–5 + «Другое», пользователь на мобильном;',
-                'задача → вызови функцию propose_plan({steps}) с 3–6 шагами; результат каждого шага — файл через save_file (текстовый html/md).',
+                'нужны данные → вызови функцию ask_user (каждому вопросу options 3–5 + «Другое», пользователь на мобильном), пример:',
+                'ask_user({questions: [{prompt: "Какой формат презентации?", options: ["PDF", "HTML", "Другое"]}]});',
+                'задача → вызови функцию propose_plan с 3–6 шагами, пример:',
+                'propose_plan({steps: [{description: "Уточнить тему"}, {description: "Собрать структуру"}, {description: "Сохранить presentation.html"}]});',
+                'результат каждого шага — файл через save_file (текстовый html/md).',
                 'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
             ].join(' '),
             BOSS: [
                 'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions});',
-                'задача → вызови функцию propose_plan({steps}): шаги — поручения и контрольные точки, крупные направления — spawn_agent.',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
+                'задача → вызови функцию propose_plan({steps: [{description}, …]}): шаги — поручения и контрольные точки, крупные направления — spawn_agent.',
                 'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
             ].join(' '),
             ADMIN: [
                 'Размышления зафиксированы — не повторяй их. Сделай ровно ОДНО действие:',
-                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions});',
-                'задача по классу → вызови функцию propose_plan({steps}): сначала inspect_schema/read_file, правки точечным edit (diff), затем проверка и обновление readme.md.',
+                'вопрос → ответь обычным текстом; нужны данные → вызови функцию ask_user({questions: [{prompt, options}]});',
+                'задача по классу → вызови функцию propose_plan({steps: [{description}, …]}): сначала inspect_schema/read_file, правки точечным edit (diff), затем проверка и обновление readme.md.',
                 'Либо текст, либо один вызов функции.',
+                'Имя функции в тексте ответа не исполняется — только настоящий вызов.',
             ].join(' '),
             ASSISTENT: [
                 'Размышления зафиксированы — не повторяй их. Выполни текущий пункт плана ровно ОДНИМ вызовом функции:',
-                'артефакт → save_file({filename, post: полное содержимое, текстовый html/md});',
-                'внешние факты → search({query}), затем fetch_url({url}); данные пользователя → ask_user({questions});',
-                'пункт закрыт результатом → complete_step({step, summary}).',
-                'Если все пункты уже закрыты → вызови функцию report({content: итог по реальным артефактам}).',
+                'артефакт → save_file({filename: "presentation.html", post: "<!DOCTYPE html>… полное содержимое"});',
+                'внешние факты → search({query: "запрос"}), затем fetch_url({url: "https://…"});',
+                'данные пользователя → ask_user({questions: [{prompt: "вопрос", options: ["вариант 1", "вариант 2", "Другое"]}]});',
+                'пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
+                'Если все пункты уже закрыты → вызови функцию report({content: "итог по реальным артефактам"}).',
                 'Не отвечай прозой вместо вызова функции, не предлагай новый план.',
+                'Псевдовызовы в тексте («subplan <…>», «{subplan}[…]», «ask_user(…)» строкой) не исполняются — только настоящий function call.',
             ].join(' '),
         },
     },
-    // text / action / form / questions — wait-состояния (WAIT_USER_TYPES):
-    // автомат остановлен, следующего хода модели нет → servicePrompt не бывает.
+    // text / action / form / questions — wait-состояния (без servicePrompt):
+    // автомат остановлен, следующего хода модели нет.
     text: {
         extends: 'TYPES.prompt',
     },
@@ -180,7 +857,8 @@ const TYPES = {
         extends: 'TYPES.prompt',
         servicePrompt: [
             'Задача активна: пункты плана присылает система («Делай пункт N»).',
-            'Пункт закрыт результатом → complete_step({step, summary}).',
+            'Пункт закрыт результатом → complete_step({step: N, summary: "что сделано"}).',
+            'Декомпозиция текущего пункта — только вызов функции subplan({steps: [{description: "подшаг 1"}, {description: "подшаг 2"}]}), не текстом.',
             'Не предлагай новый общий план. completed — только после «Принять».',
         ].join(' '),
         fields: [
@@ -225,9 +903,9 @@ const TYPES = {
         servicePrompt: {
             default: [
                 'Результат tool (ok={ok}, tool={tool}). Ровно ОДНО действие:',
-                'если ok и текущий пункт плана закрыт этим результатом → complete_step({step, summary});',
-                'если ok, но пункт не закрыт → следующий tool пункта;',
-                'если ошибка — в её тексте сказано, что делать: исправленный tool, не тот же вызов без изменений.',
+                'если ok и текущий пункт плана закрыт этим результатом → complete_step({step: N, summary: "что сделано"});',
+                'если ok, но пункт не закрыт → следующий вызов функции пункта (например save_file({filename: "имя.html", post: "полное содержимое"}));',
+                'если ошибка — в её тексте сказано, что делать: исправленный вызов функции, не тот же и не псевдовызов в тексте.',
                 'Не объявляй completed — это делает «Принять». Не отвечай прозой.',
             ].join(' '),
         },
@@ -269,664 +947,7 @@ const FIELDS = [
     },
 ];
 
-export default {
-    icon: 'bootstrap:robot',
-    TYPES,
-    FIELDS,
-    /**
-     * Один проход чата task.ai (this = файл .ai).
-     * Два вида промптов, различаются ролью:
-     * - реальный (role USER|BOSS|ADMIN — всегда приходит с клиента, default USER) → блок в ленту;
-     * - служебный (role ASSISTENT — самовызовы шагов плана и авто-ходы) → ТОЛЬКО на острие
-     *   messages текущего вызова модели; в ленту и в историю следующих ходов не попадает.
-     * @param {object} params — { text?, stop?, user?, role?, trustLevel?, _turn? }
-     * @param {string|object} [post] JSON { text, model, role, confirm, answers, stop } | строка
-     */
-    async prompt(params = {}, post) {
-    const taskAi = this;
-    if (!taskAi?.load)
-        throw new Error('task.ai не найден в контексте');
 
-    const { text, requestModel, confirm, answers, wantStop, role: postRole } = parseInput(params, post);
-    const fullPath = taskAi.path?.startsWith('/') ? taskAi.path : '/' + (taskAi.path || taskAi.short);
-    const wsPath = taskAi.short || fullPath;
-    let turn = Number(params._turn) || 0;
-
-    const rawRole = String(params.role || postRole || '').toUpperCase().trim();
-    const isService = rawRole === 'ASSISTENT' || rawRole === 'ASSISTANT';
-
-    if (wantStop) {
-        requestAbort(fullPath);
-        return { ok: true, stopped: true };
-    }
-    if (turn === 0 && !isService)
-        clearAbort(fullPath);
-    else if (isAborted(fullPath))
-        return finishStopped(fullPath, wsPath, null);
-
-    const body = await loadTaskBody(taskAi);
-    if (!body)
-        throw new Error('Не удалось загрузить тело task.ai');
-    body.ribbon ??= [];
-
-    // Миграция legacy user → type:prompt
-    for (const m of body.ribbon) {
-        if (m.role === 'user' && !m.type) {
-            m.type = 'prompt';
-            delete m.role;
-        }
-    }
-
-    const initialContext = taskAi.$class || taskAi.$parent;
-    if (!initialContext)
-        throw new Error('Не определён класс-контекст для task.ai');
-
-    if (requestModel)
-        body.model = requestModel;
-
-    const { findFirstModel } = await import(
-        pathToFileURL(path.join(ROOT, 'sources/modules/ai-schema.js')).href
-    );
-    const modelPath = body.model || await findFirstModel();
-    if (!modelPath) {
-        body.ribbon.push({
-            type: 'error',
-            content: 'Нет доступной модели.',
-            time: Date.now(),
-            sender: 'WORK',
-        });
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'Нет модели' });
-        return { ok: true, model: false };
-    }
-    const model = await WORK.get_item(modelPath);
-    if (!model)
-        throw new Error('Модель не найдена: ' + modelPath);
-
-    const { execItemMethod } = await import(
-        pathToFileURL(path.join(ROOT, 'sources/host/http-server.js')).href
-    );
-
-    const modelLabel = model.label || model.path?.split('/').pop() || 'AI';
-    const aiUser = { uid: modelLabel, $user: params.user?.$user || params.user, isAI: true };
-    const sender = params.user?.uid || params.user?.$user?.id || 'unknown';
-    // Реальная роль пользователя (ACL, адаптация инъекций). ASSISTENT её не меняет.
-    const role = normalizeRole(isService ? body.role : (rawRole || params.user?.role || body.role));
-    body.role = role;
-    // Роль для выбора варианта инъекции: служебный ход — ASSISTENT, иначе реальная роль
-    const injRole = isService ? 'ASSISTENT' : role;
-    // ASSISTENT-промпт — только на острие, не в ленту
-    const tipText = isService ? text : '';
-
-    /** Следующий служебный проход (шаг плана / авто-ход) — всегда role ASSISTENT. */
-    const scheduleServiceTurn = (stepText) => {
-        taskAi.async(() => {
-            taskAi.prompt({
-                user: params.user,
-                role: 'ASSISTENT',
-                trustLevel: params.trustLevel,
-                text: stepText || undefined,
-                _turn: turn + 1,
-            }).catch(e => console.warn('[task.ai] auto turn:', e.message));
-        });
-    };
-
-    // Контекст: navigate переживает проходы через body.contextPath
-    let currentContext = initialContext;
-    if (body.contextPath && body.contextPath !== initialContext.path) {
-        try {
-            const target = await WORK.get_item(body.contextPath);
-            if (target)
-                currentContext = target;
-        } catch {}
-    }
-
-    // === Вход пользователя (только реальный проход, не ASSISTENT) ===
-    let followInstruction = null; // служебный текст следующего шага — уйдёт самовызовом ASSISTENT
-    if (turn === 0 && !isService) {
-        if (answers) {
-            applyAnswers(body, answers, sender);
-            // Ответы clarify-шага закрывают шаг сами — не ждём complete_step от модели
-            followInstruction = autoAdvanceClarifyStep(body);
-            delete body.pendingAction;
-        }
-        else if (confirm !== undefined && body.pendingRetry) {
-            // «Повторить» после сетевого сбоя: снять блок и повторить ход с той же позиции
-            const retryTurn = Number(body.pendingRetry.turn) || 0;
-            delete body.pendingRetry;
-            const ribbon = ribbonTargetOf(body);
-            const last = ribbon[ribbon.length - 1];
-            const isRetryAction = last?.type === 'action' && last.button?.label === 'Повторить';
-            if (confirm === true) {
-                if (isRetryAction)
-                    ribbon.pop(); // драйвером снова станет реальный prompt/шаг до сбоя
-                turn = retryTurn;
-            }
-            else {
-                if (isRetryAction)
-                    last.answered = true;
-                await writeTaskBody(fullPath, body);
-                notifyChanged(fullPath);
-                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-                return { ok: true, retryDeclined: true };
-            }
-        }
-        else if (confirm !== undefined && body.pendingAction) {
-            const functions = await buildFunctionsList(currentContext);
-            const ribbon = ribbonTargetOf(body);
-            if (confirm === true) {
-                for (const call of body.pendingAction.calls || []) {
-                    ribbon.push({
-                        type: 'tool',
-                        name: call.method,
-                        args: call.args,
-                        time: Date.now(),
-                        sender: model.path || 'WORK',
-                    });
-                    if (call.method === 'complete_step') {
-                        const { result, followPrompt } = completeTaskStep(body, call.args || {});
-                        pushToolResult(ribbon, call, result, model);
-                        sendToolResultWs(wsPath, call, result);
-                        if (followPrompt)
-                            followInstruction = followPrompt;
-                        continue;
-                    }
-                    const { result, newContext, spawnTask } = await executeToolCall(
-                        call, currentContext, initialContext, functions, params, aiUser,
-                    );
-                    if (newContext)
-                        currentContext = newContext;
-                    if (spawnTask)
-                        body.ribbon.push(spawnTask);
-                    pushToolResult(ribbon, call, result, model);
-                    sendToolResultWs(wsPath, call, result);
-                }
-            }
-            else {
-                for (const call of body.pendingAction.calls || []) {
-                    ribbon.push({
-                        type: 'tool_result',
-                        label: '🚫 ' + call.method,
-                        content: 'Действие отменено пользователем',
-                        tool: call.method,
-                        ok: false,
-                        time: Date.now(),
-                        sender,
-                    });
-                }
-            }
-            delete body.pendingAction;
-        }
-        else if (confirm !== undefined) {
-            const applied = applyConfirm(body, confirm, sender);
-            if (applied?.taskCompleted) {
-                body.contextPath = currentContext?.path || '';
-                await writeTaskBody(fullPath, body);
-                notifyChanged(fullPath);
-                WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-                return { ok: true, taskCompleted: true };
-            }
-            // «Начать»: задача создана — первый пункт плана уходит самовызовом ASSISTENT
-            if (applied?.instruction)
-                followInstruction = applied.instruction;
-        }
-        else if (text) {
-            // Текст поверх висящего подтверждения — пользователь его проигнорировал
-            delete body.pendingAction;
-            if (body.pendingRetry) {
-                delete body.pendingRetry;
-                const rb = ribbonTargetOf(body);
-                const tail = rb[rb.length - 1];
-                if (tail?.type === 'action' && tail.button?.label === 'Повторить')
-                    tail.answered = true;
-            }
-            await refreshPromptContext(body, initialContext, params, text);
-            const ribbon = ribbonTargetOf(body);
-            const last = ribbon[ribbon.length - 1];
-            if (!(last?.type === 'prompt' && last.content === text && last.sender === sender)) {
-                ribbon.push({
-                    type: 'prompt',
-                    content: text,
-                    time: Date.now(),
-                    sender,
-                });
-            }
-        }
-        body.contextPath = currentContext?.path || '';
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-    }
-
-    if (isAborted(fullPath))
-        return finishStopped(fullPath, wsPath, body);
-
-    // Пункт плана стартовал на этом входе — модельный ход не нужен, шаг уйдёт ASSISTENT-самовызовом
-    if (followInstruction) {
-        if (turn + 1 < MAX_AUTO_TURNS)
-            scheduleServiceTurn(followInstruction);
-        return { ok: true, continued: true, turn };
-    }
-
-    // === Один ход модели ===
-    const ribbon = ribbonTargetOf(body);
-    const driver = driverEntry(ribbon);
-    // Think-фаза: реальный prompt или ASSISTENT-текст шага — единственное действие «думай».
-    // Functions в запрос не передаются, весь ответ фиксируется блоком thinking (теги не нужны).
-    const thinkPhase = !!tipText || driver.type === 'prompt';
-    const svc = resolveServicePrompt(thinkPhase ? { type: 'prompt' } : driver, injRole);
-
-    const messages = buildHistoryFromRibbon(body, model.functionCalling === true, {
-        protocol: model.protocol,
-        autoTurnsLeft: Math.max(0, MAX_AUTO_TURNS - turn),
-    });
-
-    // Инъекция ТОЛЬКО на острие текущего вызова: ASSISTENT-текст шага + servicePrompt состояния.
-    // В ленту не пишется и в историю следующих ходов не попадает.
-    {
-        const tipParts = [];
-        if (tipText)
-            tipParts.push(tipText);
-        else {
-            const activeTask = findActiveTask(body);
-            const curStep = activeTask?.steps?.find(s => s.status === 'in_progress');
-            if (curStep)
-                tipParts.push('Текущий пункт плана ' + curStep.step + ': «' + (curStep.description || '') + '».');
-        }
-        if (svc)
-            tipParts.push('[инструкция] ' + svc);
-        if (tipParts.length)
-            messages.push({ role: 'user', content: tipParts.join('\n\n') });
-    }
-
-    let functions = thinkPhase ? [] : await buildFunctionsList(currentContext);
-
-    WORK.wsSend?.({ type: 'chat.clear_stream', path: wsPath });
-
-    let fullResponse = '';
-    let nativeToolCalls = [];
-    let turnUsage = null;
-    try {
-        const streamed = await streamModelWithRetry(model, execItemMethod, messages, functions, wsPath, fullPath);
-        fullResponse = streamed.fullResponse;
-        nativeToolCalls = streamed.nativeToolCalls;
-        turnUsage = streamed.turnUsage;
-        functions = streamed.functions || functions;
-    }
-    catch (e) {
-        console.warn('[task.ai] streamChat:', e.message);
-        if (classifyStreamError(e) === 'transient') {
-            // Ретраи исчерпаны — кнопка «Повторить» с сохранением позиции хода
-            body.pendingRetry = { turn };
-            ribbon.push({
-                type: 'action',
-                title: 'Нет связи с моделью',
-                content: 'Не удалось связаться с моделью — похоже на сетевую проблему или блокировку доступа к API.\n\nТехдетали: ' + e.message,
-                button: { label: 'Повторить', color: 'warning' },
-                time: Date.now(),
-                sender: 'WORK',
-            });
-        }
-        else {
-            const http = String(e.message || '').match(/stream error (\d{3})/);
-            const code = http ? Number(http[1]) : 0;
-            const hint = (code === 401 || code === 403)
-                ? ' Проверьте API-ключ и права доступа модели.'
-                : (code === 422 ? ' Модель отклонила формат запроса.' : '');
-            ribbon.push({
-                type: 'error',
-                content: 'Ошибка: ' + e.message + hint,
-                time: Date.now(),
-                sender: model.path || 'WORK',
-            });
-        }
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: e.message });
-        return { ok: false, error: e.message };
-    }
-
-    if (isAborted(fullPath))
-        return finishStopped(fullPath, wsPath, body);
-
-    applyTurnUsage(body, ribbon, resolveTurnUsage(turnUsage, messages, fullResponse), model);
-
-    // === Think-фаза: весь ответ — блок thinking, классификации нет по построению ===
-    if (thinkPhase) {
-        const content = stripReasoningWrapper(fullResponse);
-        if (!content) {
-            ribbon.push({
-                type: 'error',
-                content: 'Модель вернула пустой ответ на ход размышлений.',
-                time: Date.now(),
-                sender: model.path || 'WORK',
-            });
-            await writeTaskBody(fullPath, body);
-            notifyChanged(fullPath);
-            WORK.wsSend?.({ type: 'chat.error', path: wsPath, error: 'empty think turn' });
-            return { ok: false, error: 'empty think turn' };
-        }
-        ribbon.push({
-            type: 'thinking',
-            content,
-            time: Date.now(),
-            sender: model.path || 'WORK',
-        });
-        body.contextPath = currentContext?.path || '';
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        if (turn + 1 >= MAX_AUTO_TURNS) {
-            ribbonTargetOf(body).push({
-                type: 'action',
-                title: 'Лимит ходов',
-                content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
-                button: { label: 'Продолжить', color: 'success' },
-                time: Date.now(),
-                sender: 'WORK',
-            });
-            await writeTaskBody(fullPath, body);
-            notifyChanged(fullPath);
-            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-            return { ok: true, maxAutoTurns: true, turn };
-        }
-        // Action-ход по итогам размышлений — следующим служебным проходом
-        scheduleServiceTurn();
-        return { ok: true, continued: true, think: true, turn };
-    }
-
-    let toolCalls = nativeToolCalls.length
-        ? nativeToolCalls
-        : parseToolCalls(fullResponse, functions);
-
-    // ACL роли: не-ADMIN не меняет типизаторы / class.js
-    toolCalls = toolCalls.filter(call => {
-        const err = roleBlocksTool(role, call);
-        if (err) {
-            pushToolResult(ribbon, call, { error: err }, model);
-            sendToolResultWs(wsPath, call, { error: err });
-            return false;
-        }
-        return true;
-    });
-
-    // Битые FC args ([object Object] / write без filename) — сразу ошибка модели
-    const validCalls = [];
-    for (const call of toolCalls) {
-        if (isBrokenFcArgs(call.args)
-            || (isFileWriteMethod(call.method) && !(call.args?.filename || call.args?.name))) {
-            const msg = isBrokenFcArgs(call.args)
-                ? 'Модель передала битые args FC ([object Object]). Вызови save_file({filename, post}) с валидными аргументами.'
-                : 'save_file: нужен filename или name. Вызови save_file({filename, post}).';
-            pushToolResult(ribbon, { ...call, args: sanitizeToolArgsForHistory(call.args) }, { error: msg }, model);
-            sendToolResultWs(wsPath, call, { error: msg });
-        }
-        else {
-            validCalls.push(call);
-        }
-    }
-    toolCalls = validCalls;
-
-    const parsed = parseResponseToRibbon(fullResponse, model.path || 'WORK');
-    let blocks = parsed.blocks || [];
-
-    // ask_user → блок questions (AskQuestion), не «выполнение» tool.
-    // Пустой ask_user → обучающий отказ, а не сфабрикованный опрос
-    let askTeach = null;
-    const askCall = toolCalls.find(c => c.method === ASK_USER_METHOD);
-    if (askCall) {
-        toolCalls = toolCalls.filter(c => c.method !== ASK_USER_METHOD);
-        const qBlock = questionsFromAskUser(askCall.args, model.path || 'WORK');
-        if (qBlock) {
-            blocks = [
-                ...blocks.filter(b => b.type !== 'questions' && b.type !== 'form'),
-                qBlock,
-            ];
-        }
-        else {
-            askTeach = 'ask_user не показан: вопросов нет. Вызови '
-                + 'ask_user({questions: [{prompt: "вопрос", options: [2–5 вариантов]}…]}) — '
-                + 'сформулируй вопросы по описанию текущего шага; '
-                + 'открытый ответ — type: "textarea" без options.';
-        }
-    }
-
-    // propose_plan (FC-канал) → pendingPlan (приоритет над XML <plan>)
-    const planCall = toolCalls.find(c => c.method === 'propose_plan');
-    if (planCall) {
-        toolCalls = toolCalls.filter(c => c.method !== 'propose_plan');
-        parsed.pendingPlan = planFromProposeArgs(planCall.args) || parsed.pendingPlan;
-    }
-
-    // subplan (FC-канал) → pendingSubplan
-    const subCall = toolCalls.find(c => c.method === 'subplan');
-    if (subCall) {
-        toolCalls = toolCalls.filter(c => c.method !== 'subplan');
-        parsed.pendingSubplan = subplanFromArgs(subCall.args) || parsed.pendingSubplan;
-    }
-
-    // report (FC-канал) → text-отчёт + action «Отчёт / Принять»
-    const reportCall = toolCalls.find(c => c.method === 'report');
-    if (reportCall) {
-        toolCalls = toolCalls.filter(c => c.method !== 'report');
-        const content = String(reportCall.args?.content || '').trim();
-        if (content) {
-            blocks = blocks.filter(b => b.type === 'thinking');
-            blocks.push({
-                type: 'text',
-                content,
-                time: Date.now(),
-                sender: model.path || 'WORK',
-            });
-            blocks.push({
-                type: 'action',
-                title: 'Отчёт',
-                content: 'Принять отчёт и закрыть задачу?',
-                button: { label: 'Принять', color: 'success' },
-                time: Date.now(),
-                sender: 'WORK',
-            });
-        }
-    }
-
-    // Повтор уже отвеченного опроса — не в ленту: обучающий отказ с готовыми ответами
-    let repeatTeach = null;
-    const newQ = blocks.find(b => b.type === 'questions');
-    if (newQ) {
-        const dup = findAnsweredDuplicate(ribbon, newQ);
-        if (dup) {
-            blocks = blocks.filter(b => b !== newQ);
-            repeatTeach = duplicateAskTeach(body, dup);
-        }
-    }
-
-    // Ворота tap-first: вопросы без вариантов → обучающий отказ (один ретрай,
-    // после него открытые поля принимаются — лучше textarea, чем мёртвый цикл)
-    if (!repeatTeach && !askTeach) {
-        const qb = blocks.find(b => b.type === 'questions');
-        const openFields = qb ? questionsFieldsWithoutOptions(qb) : [];
-        if (openFields.length && !hasRecentAskOptionsTeach(ribbon)) {
-            blocks = blocks.filter(b => b !== qb);
-            askTeach = 'Опрос не показан: вопросы без вариантов («' + openFields.join('», «') + '»). '
-                + 'Пользователь на мобильном — минимум ввода: каждому вопросу дай options '
-                + '(3–5 конкретных вариантов из контекста задачи + «Другое»). '
-                + 'Свободный текст уместен только как type: "textarea".';
-        }
-    }
-
-    // Ворота качества плана: фабрикации и огрызки не доходят до кнопки «Начать»
-    let planTeach = null;
-    if (parsed.pendingPlan?.steps?.length) {
-        planTeach = planQualityError(parsed.pendingPlan.steps);
-        if (planTeach)
-            parsed.pendingPlan = null;
-    }
-    else if (parsed.planRejected || planCall)
-        planTeach = planQualityError([]);
-    if (planTeach)
-        blocks = blocks.filter(b => !(b.type === 'action' && b.title === 'План'));
-
-    // План при активной задаче — декомпозиция текущего шага, не второй «План»+«Начать»
-    if (parsed.pendingPlan?.steps?.length
-        && findActiveTask(body)?.steps?.some(s => s.status === 'in_progress')) {
-        parsed.pendingSubplan = parsed.pendingPlan.steps;
-        parsed.pendingPlan = null;
-    }
-
-    // plan (FC или парсер) → action «План» (ждёт «Начать»)
-    if (parsed.pendingPlan?.steps?.length) {
-        blocks = blocks.filter(b => b.type === 'thinking');
-        blocks.push(planToAction(parsed.pendingPlan, model.path || 'WORK'));
-        toolCalls = [];
-    }
-
-    // Шальные action-кнопки модели посреди Do → text (мёртвая кнопка не блокирует поток)
-    blocks = demoteStrayDoActions(body, blocks);
-
-    // Все пункты закрыты, ответ — текст без вызова report: кнопку «Принять» дорисовывает харнесс
-    if (!reportCall) {
-        const doneTask = findActiveTask(body);
-        if (doneTask?.steps?.length
-            && doneTask.steps.every(s => s.status === 'done')
-            && blocks.some(b => b.type === 'text')
-            && !blocks.some(b => b.type === 'action' && b.title === 'Отчёт')) {
-            blocks.push({
-                type: 'action',
-                title: 'Отчёт',
-                content: 'Принять отчёт и закрыть задачу?',
-                button: { label: 'Принять', color: 'success' },
-                time: Date.now(),
-                sender: 'WORK',
-            });
-        }
-    }
-
-    for (const b of blocks)
-        ribbon.push(b);
-
-    // Обучающий отказ: план не принят → tool_result с инструкцией propose_plan
-    if (planTeach) {
-        const fakeCall = { method: 'propose_plan', args: {} };
-        pushToolResult(ribbon, fakeCall, { error: planTeach }, model);
-        sendToolResultWs(wsPath, fakeCall, { error: planTeach });
-    }
-
-    // Обучающий отказ: повторный или пустой опрос → tool_result
-    const askUserErr = repeatTeach || askTeach;
-    if (askUserErr) {
-        const fakeCall = { method: ASK_USER_METHOD, args: {} };
-        pushToolResult(ribbon, fakeCall, { error: askUserErr }, model);
-        sendToolResultWs(wsPath, fakeCall, { error: askUserErr });
-    }
-
-    // subplan (FC или <subplan>) → вложенная подзадача текущего шага (стек задач)
-    if (!parsed.pendingPlan?.steps?.length && parsed.pendingSubplan?.length) {
-        const applied = applySubplan(body, parsed.pendingSubplan);
-        if (applied) {
-            toolCalls = [];
-            followInstruction = applied.instruction;
-        }
-    }
-
-    // Опасные вызовы / system-modify → pendingAction + подтверждение
-    const trustLevel = Number(model.trustLevel ?? params.trustLevel ?? 0);
-    const dangerous = toolCalls.filter(c =>
-        callNeedsTrustConfirm(c) || (role === 'ADMIN' && isSystemModifyCall(c)));
-    if (dangerous.length && trustLevel < TRUST_AUTOCONFIRM) {
-        body.pendingAction = {
-            calls: toolCalls,
-            contextPath: currentContext.path || '',
-        };
-        ribbon.push({
-            type: 'action',
-            title: 'Действие',
-            content: 'Подтвердите: ' + dangerous
-                .map(c => c.method + '(' + Object.keys(c.args || {}).join(', ') + ')')
-                .join(', '),
-            button: { label: 'Выполнить', color: 'warning' },
-            time: Date.now(),
-            sender: 'WORK',
-        });
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-        return { ok: true, pendingAction: true };
-    }
-
-    // Выполнение tools
-    for (const call of toolCalls) {
-        ribbon.push({
-            type: 'tool',
-            name: call.method,
-            args: call.args,
-            time: Date.now(),
-            sender: model.path || 'WORK',
-        });
-        // complete_step — движок шагов (работает с body, не с контекстом)
-        if (call.method === 'complete_step') {
-            const { result, followPrompt } = completeTaskStep(body, call.args || {});
-            pushToolResult(ribbon, call, result, model);
-            sendToolResultWs(wsPath, call, result);
-            // следующий пункт — служебной инъекцией (самовызов ASSISTENT), не блоком ленты
-            if (followPrompt)
-                followInstruction = followPrompt;
-            continue;
-        }
-        const { result, newContext, spawnTask } = await executeToolCall(
-            call, currentContext, initialContext, functions, params, aiUser,
-        );
-        if (newContext)
-            currentContext = newContext;
-        if (spawnTask)
-            body.ribbon.push(spawnTask);
-        pushToolResult(ribbon, call, result, model);
-        sendToolResultWs(wsPath, call, result);
-    }
-
-    // save_file("имя") прозой (позиционный аргумент) — не вызов: обучающая ошибка вместо тишины
-    if (!toolCalls.some(c => isFileWriteMethod(c.method))
-        && /(?:save_file|write_file)\s*\(\s*["'«]/.test(fullResponse)) {
-        const fakeCall = { method: 'save_file', args: {} };
-        const teach = {
-            error: 'save_file не выполнен: вызывается только как tool с объектом аргументов'
-                + ' save_file({filename, post: полное содержимое файла}).'
-                + ' Позиционная строка в тексте не исполняется.',
-        };
-        pushToolResult(ribbon, fakeCall, teach, model);
-        sendToolResultWs(wsPath, fakeCall, teach);
-    }
-    body.contextPath = currentContext?.path || '';
-
-    await writeTaskBody(fullPath, body);
-    notifyChanged(fullPath);
-
-    // === Планирование следующего прохода ===
-    const last = driverEntry(ribbonTargetOf(body));
-    if (!followInstruction && WAIT_USER_TYPES.has(last.type)) {
-        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-        return { ok: true, wait: last.type, turn };
-    }
-
-    if (turn + 1 >= MAX_AUTO_TURNS) {
-        ribbonTargetOf(body).push({
-            type: 'action',
-            title: 'Лимит ходов',
-            content: 'Превышен лимит авто-ходов (' + MAX_AUTO_TURNS + '). Продолжить задачу?',
-            button: { label: 'Продолжить', color: 'success' },
-            time: Date.now(),
-            sender: 'WORK',
-        });
-        await writeTaskBody(fullPath, body);
-        notifyChanged(fullPath);
-        WORK.wsSend?.({ type: 'chat.done', path: wsPath });
-        return { ok: true, maxAutoTurns: true, turn };
-    }
-
-    // Следующий ход — служебный (ASSISTENT), асинхронно, без блокировки текущего запроса.
-    // followInstruction («Делай пункт N» / «сформируй Отчёт») уходит только на острие.
-    scheduleServiceTurn(followInstruction);
-    return { ok: true, continued: true, turn };
-    },
-};
 
 // ============================================================================
 // Вход пользователя и лента
@@ -939,11 +960,11 @@ function parseInput(params = {}, post) {
     let answers = undefined;
     let wantStop = false;
     let role = '';
-    const raw = post ?? params.text ?? params.post ?? '';
+    const raw = post ?? params.prompt ?? params.text ?? params.post ?? '';
     if (typeof raw === 'string' && raw.trim().startsWith('{')) {
         try {
             const parsed = JSON.parse(raw);
-            text = String(parsed.text ?? '').trim();
+            text = String(parsed.text ?? parsed.prompt ?? '').trim();
             requestModel = String(parsed.model ?? '').trim();
             confirm = parsed.confirm;
             wantStop = parsed.stop === true;
@@ -963,27 +984,177 @@ function parseInput(params = {}, post) {
     return { text, requestModel, confirm, answers, wantStop, role };
 }
 
+/**
+ * Предобработка входа реального хода (confirm / answers / retry / pendingAction / text).
+ * Каждая ветка сводится к блокам ленты + опциональной динамической инструкции
+ * следующего шага (dynamicFollow) — либо к раннему выходу (early).
+ * @returns {{ early: object|null, dynamicFollow: string|null,
+ *             turnOverride: number|null, currentContext: object }}
+ */
+async function applyUserInput(ctx) {
+    const { body, text, confirm, answers, sender, model, wsPath, fullPath,
+        initialContext, params, aiUser } = ctx;
+    let currentContext = ctx.currentContext;
+    let dynamicFollow = null;
+    let turnOverride = null;
+
+    if (answers) {
+        applyAnswers(body, answers, sender);
+        // Ответы clarify-шага закрывают шаг сами — не ждём complete_step от модели
+        dynamicFollow = autoAdvanceClarifyStep(body);
+        delete body.pendingAction;
+    }
+    else if (confirm !== undefined && body.pendingRetry) {
+        // «Повторить» после сетевого сбоя: снять блок и повторить ход с той же позиции
+        const retryTurn = Number(body.pendingRetry.turn) || 0;
+        delete body.pendingRetry;
+        const ribbon = ribbonTargetOf(body);
+        const last = ribbon[ribbon.length - 1];
+        const isRetryAction = last?.type === 'action' && last.button?.label === 'Повторить';
+        if (confirm === true) {
+            if (isRetryAction)
+                ribbon.pop(); // драйвером снова станет реальный prompt/шаг до сбоя
+            turnOverride = retryTurn;
+        }
+        else {
+            if (isRetryAction)
+                last.answered = true;
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+            return { early: { ok: true, retryDeclined: true }, dynamicFollow, turnOverride, currentContext };
+        }
+    }
+    else if (confirm !== undefined && body.pendingAction) {
+        const functions = await buildFunctionsList(currentContext);
+        const ribbon = ribbonTargetOf(body);
+        if (confirm === true) {
+            for (const call of body.pendingAction.calls || []) {
+                ribbon.push({
+                    type: 'tool',
+                    name: call.method,
+                    args: call.args,
+                    time: Date.now(),
+                    sender: model.path || 'WORK',
+                });
+                if (call.method === 'complete_step') {
+                    const { result, followPrompt } = completeTaskStep(body, call.args || {});
+                    pushToolResult(ribbon, call, result, model);
+                    sendToolResultWs(wsPath, call, result);
+                    if (followPrompt)
+                        dynamicFollow = followPrompt;
+                    continue;
+                }
+                const { result, newContext, spawnTask } = await executeToolCall(
+                    call, currentContext, initialContext, functions, params, aiUser,
+                );
+                if (newContext)
+                    currentContext = newContext;
+                if (spawnTask)
+                    body.ribbon.push(spawnTask);
+                pushToolResult(ribbon, call, result, model);
+                sendToolResultWs(wsPath, call, result);
+            }
+        }
+        else {
+            for (const call of body.pendingAction.calls || []) {
+                ribbon.push({
+                    type: 'tool_result',
+                    label: '🚫 ' + call.method,
+                    content: 'Действие отменено пользователем',
+                    tool: call.method,
+                    ok: false,
+                    time: Date.now(),
+                    sender,
+                });
+            }
+        }
+        delete body.pendingAction;
+    }
+    else if (confirm !== undefined) {
+        const applied = applyConfirm(body, confirm, sender);
+        if (applied?.taskCompleted) {
+            body.contextPath = currentContext?.path || '';
+            await writeTaskBody(fullPath, body);
+            notifyChanged(fullPath);
+            WORK.wsSend?.({ type: 'chat.done', path: wsPath });
+            return { early: { ok: true, taskCompleted: true }, dynamicFollow, turnOverride, currentContext };
+        }
+        // «Начать»: задача создана — первый пункт плана уходит самовызовом ASSISTENT
+        if (applied?.instruction)
+            dynamicFollow = applied.instruction;
+    }
+    else if (text) {
+        // Текст поверх висящего подтверждения — пользователь его проигнорировал
+        delete body.pendingAction;
+        if (body.pendingRetry) {
+            delete body.pendingRetry;
+            const rb = ribbonTargetOf(body);
+            const tail = rb[rb.length - 1];
+            if (tail?.type === 'action' && tail.button?.label === 'Повторить')
+                tail.answered = true;
+        }
+        await refreshPromptContext(body, initialContext, params, text);
+        const ribbon = ribbonTargetOf(body);
+        const last = ribbon[ribbon.length - 1];
+        if (!(last?.type === 'prompt' && last.content === text && last.sender === sender)) {
+            ribbon.push({
+                type: 'prompt',
+                content: text,
+                time: Date.now(),
+                sender,
+            });
+        }
+    }
+
+    return { early: null, dynamicFollow, turnOverride, currentContext };
+}
+
 /** Последний блок ленты, задающий servicePrompt следующего хода. */
 function driverEntry(ribbon = []) {
     for (let i = ribbon.length - 1; i >= 0; i--) {
         const b = ribbon[i];
         if (!b?.type || b.type === 'step' || b.type === 'ribbon' || b.type === 'details')
             continue;
+        // Отвеченный интерактив — состояние потреблено; драйвер — блок до него
+        if (b.answered === true && (b.type === 'action' || b.type === 'questions' || b.type === 'form'))
+            continue;
         return b;
     }
     return { type: 'prompt' };
 }
 
-/** Последняя активная task в корневой ленте (вершина стека задач). */
-function findActiveTask(body) {
-    return [...(body.ribbon || [])].reverse()
-        .find(b => b.type === 'task' && b.state === 'active') || null;
+/**
+ * Цепочка активных задач от корневой к самой глубокой (настоящий стек).
+ * Subplan регистрируется внутри ribbon родителя — спускаемся рекурсивно.
+ */
+function activeTaskChain(body) {
+    const chain = [];
+    let ribbon = body?.ribbon || [];
+    for (;;) {
+        const task = [...ribbon].reverse()
+            .find(b => b.type === 'task' && b.state === 'active');
+        if (!task)
+            break;
+        chain.push(task);
+        ribbon = task.ribbon || [];
+    }
+    return chain;
 }
 
+/** Самая глубокая активная task (вершина стека вложенных задач). */
+function findActiveTask(body) {
+    const chain = activeTaskChain(body);
+    return chain.length ? chain[chain.length - 1] : null;
+}
+async function push_block(block) {
+    ribbonTargetOf(this.body).push(block);
+    await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
+}
 /** Целевая лента: активная task.ribbon или корень. */
 function ribbonTargetOf(body) {
     const lastTask = findActiveTask(body);
-    return lastTask ? (lastTask.ribbon ??= []) : body.ribbon;
+    return lastTask ? (lastTask.ribbon ??= []) : body.ribbon ??= [] ;
 }
 
 /**
@@ -991,10 +1162,15 @@ function ribbonTargetOf(body) {
  * только на острие messages, в ленту не пишется.
  */
 function makeStepInstruction(step) {
-    const clarify = stepNeedsClarify(step)
-        ? ' Данные этого пункта есть только у пользователя — начни с ask_user (каждый вопрос — options: 3–5 вариантов + «Другое»), не выдумывай значения.'
-        : '';
-    return 'Делай пункт ' + step.step + ' плана: «' + step.description + '».' + clarify;
+    const how = stepNeedsClarify(step)
+        ? ' Данные этого пункта есть только у пользователя — начни с вызова функции'
+            + ' ask_user({questions: [{prompt: "вопрос по пункту", options: ["вариант 1", "вариант 2", "Другое"]}]})'
+            + ' (каждому вопросу options 3–5 вариантов), не выдумывай значения.'
+        : ' Ровно один вызов функции по пункту: save_file({filename: "имя.html", post: "полное содержимое"})'
+            + ' или другой подходящий tool; закрыв пункт результатом —'
+            + ' complete_step({step: ' + step.step + ', summary: "что сделано"}).'
+            + ' Псевдовызов в тексте не исполняется.';
+    return 'Делай пункт ' + step.step + ' плана: «' + step.description + '».' + how;
 }
 
 /**
@@ -1061,7 +1237,7 @@ function hasRecentAskOptionsTeach(ribbon = []) {
 
 /**
  * Action-кнопки модели посреди Do (не «Отчёт»/«План») → text:
- * контент сохраняется, мёртвая кнопка не вешает поток (action в WAIT_USER_TYPES).
+ * контент сохраняется, мёртвая кнопка не вешает поток (action — wait-состояние).
  * WORK-блоки («Действие» pendingAction, «Лимит ходов») сюда не попадают — пушатся отдельно.
  */
 function demoteStrayDoActions(body, blocks = []) {
@@ -1073,6 +1249,38 @@ function demoteStrayDoActions(body, blocks = []) {
         const content = [b.title, b.content].filter(Boolean).join(': ');
         return { type: 'text', content, time: b.time, sender: b.sender };
     });
+}
+
+/**
+ * Незакрытый wait-блок хода (questions/form/action) — всегда хвост ленты:
+ * блоки после него (tool/tool_result) сделали бы драйвером продолжение,
+ * рекурсия уехала бы дальше, а опрос повис бы без ответа.
+ */
+function hoistWaitBlock(ribbon = [], from = 0) {
+    for (let i = ribbon.length - 2; i >= from; i--) {
+        const b = ribbon[i];
+        if ((b?.type === 'questions' || b?.type === 'form' || b?.type === 'action')
+            && !b.answered) {
+            ribbon.splice(i, 1);
+            ribbon.push(b);
+            return;
+        }
+    }
+}
+
+/** Все отвеченные интерактивы (questions/form) по всем лентам стека задач. */
+function collectAnsweredInteractive(body) {
+    const out = [];
+    const walk = (ribbon = []) => {
+        for (const b of ribbon) {
+            if ((b.type === 'questions' || b.type === 'form') && b.answered)
+                out.push(b);
+            if (b.type === 'task' && Array.isArray(b.ribbon))
+                walk(b.ribbon);
+        }
+    };
+    walk(body.ribbon || []);
+    return out;
 }
 
 /** Уже отвеченный опрос с теми же вопросами (по нормализованным label) в этой ленте. */
@@ -1104,7 +1312,8 @@ function duplicateAskTeach(body, dup) {
         + 'Не задавай их повторно — используй готовые ответы.';
     if (open) {
         msg += ' Текущий шаг — ' + open.step + ': «' + (open.description || '') + '». '
-            + 'Сделай tool шага (save_file/{filename, post} или другой tool по задаче); '
+            + 'Сделай вызов функции по шагу, пример: '
+            + 'save_file({filename: "имя.html", post: "полное содержимое"}); '
             + 'новые вопросы — только с другими label. '
             + 'Не вызывай complete_step для уже закрытого шага.';
     }
@@ -1200,9 +1409,9 @@ function completeTaskStep(body, args = {}) {
     if (stepNeedsClarify(cur) && !ev.answered) {
         return {
             result: {
-                error: 'Шаг ' + cur.step + ' — уточнение у пользователя: вызови ask_user'
-                    + ' (select + options, 2–5 вариантов), не выдумывай значения.'
-                    + ' complete_step — после ответов пользователя.',
+                error: 'Шаг ' + cur.step + ' — уточнение у пользователя: вызови функцию'
+                    + ' ask_user({questions: [{prompt: "вопрос по шагу", options: ["вариант 1", "вариант 2", "Другое"]}]}),'
+                    + ' не выдумывай значения. complete_step — после ответов пользователя.',
             },
         };
     }
@@ -1210,8 +1419,10 @@ function completeTaskStep(body, args = {}) {
         return {
             result: {
                 error: 'Шаг ' + cur.step + ' не закрыт: нет результата работы.'
-                    + ' Сохрани артефакт: save_file({filename, post: полное содержимое,'
-                    + ' текстовый формат html/md}) — затем повтори complete_step.',
+                    + ' Сохрани артефакт вызовом функции, пример:'
+                    + ' save_file({filename: "presentation.html", post: "<!DOCTYPE html>… полное содержимое"})'
+                    + ' (текстовый формат html/md) — затем повтори'
+                    + ' complete_step({step: ' + cur.step + ', summary: "что сделано"}).',
             },
         };
     }
@@ -1257,8 +1468,46 @@ function applySubplan(body, rawSteps = []) {
         time: Date.now(),
         sender: 'WORK',
     };
-    body.ribbon.push(sub);
+    // Вложенная задача — в ribbon родителя (настоящий стек), не сосед в корне
+    const target = outer ? (outer.ribbon ??= []) : body.ribbon;
+    target.push(sub);
     return { sub, instruction: makeStepInstruction(steps[0]) };
+}
+
+/** Максимум одновременно активных задач в стеке (корень + вложенные subplan). */
+const MAX_TASK_DEPTH = 3;
+
+/**
+ * Ворота subplan: повтор шагов родительской задачи или превышение глубины стека —
+ * обучающий отказ вместо каскада вложенных задач (модель перепланирует вместо работы).
+ * @returns {string|null} текст ошибки или null (subplan допустим)
+ */
+function subplanGateError(body, rawSteps = []) {
+    const task = findActiveTask(body);
+    if (!task)
+        return null;
+    const cur = task.steps?.find(s => s.status === 'in_progress');
+    const doStep = cur
+        ? ' Делай текущий шаг ' + cur.step + ': «' + (cur.description || '') + '» — '
+            + 'вызови функцию по шагу: save_file({filename: "имя.html", post: "полное содержимое"}) '
+            + 'или ask_user({questions: [{prompt: "вопрос", options: ["вариант 1", "вариант 2", "Другое"]}]}), '
+            + 'затем complete_step({step: ' + cur.step + ', summary: "что сделано"}).'
+        : '';
+    const norm = s => String(s || '').trim().toLowerCase()
+        .replace(/ё/g, 'е').replace(/[^\wа-я ]+/gi, '').replace(/\s+/g, ' ');
+    const subKeys = rawSteps.map(s => norm(stepDescriptionOf(s))).filter(Boolean);
+    if (subKeys.length < 2)
+        return 'Subplan не принят: декомпозиция — минимум 2 подшага, только вызовом функции '
+            + 'subplan({steps: [{description: "подшаг 1"}, {description: "подшаг 2"}]}), не текстом. '
+            + 'Один пункт — не декомпозиция, subplan не нужен.' + doStep;
+    const parentKeys = new Set((task.steps || []).map(s => norm(s.description)));
+    if (subKeys.every(k => parentKeys.has(k)))
+        return 'Subplan не принят: это повтор шагов текущего плана, не декомпозиция.' + doStep;
+    const depth = activeTaskChain(body).length;
+    if (depth >= MAX_TASK_DEPTH)
+        return 'Subplan не принят: лимит вложенности задач (' + MAX_TASK_DEPTH + '). '
+            + 'Не декомпозируй дальше.' + doStep;
+    return null;
 }
 
 /** Описание шага из объекта {description|label|title} или голой строки. */
@@ -1281,7 +1530,9 @@ function planQualityError(steps = []) {
     if (meaningful.length >= 2)
         return null;
     return 'План не принят: нужно минимум 2 осмысленных шага. '
-        + 'Вызови функцию propose_plan({steps: [{description: "конкретное действие"}, …]}) с 3–6 шагами.';
+        + 'Вызови функцию propose_plan (только function call, не текстом), пример: '
+        + 'propose_plan({steps: [{description: "Уточнить требования"}, '
+        + '{description: "Собрать структуру"}, {description: "Сохранить файл"}]}) — 3–6 конкретных шагов.';
 }
 
 /** Args tool propose_plan → pendingPlan (FC-канал плана). */
@@ -1299,12 +1550,126 @@ function planFromProposeArgs(args = {}) {
     };
 }
 
+/**
+ * Text-блок целиком — prose propose_plan({…}) / propose_plan{…} → pendingPlan.
+ * Страховка, если parseToolCalls не поднял call.
+ */
+function parseProposePlanTextBlock(content) {
+    const t = String(content || '').trim();
+    const m = t.match(/^propose_plan\s*/i);
+    if (!m)
+        return null;
+    const parsed = parseJsStyleToolCallAt(t, 0, 'propose_plan');
+    if (!parsed?.args)
+        return null;
+    return planFromProposeArgs(parsed.args);
+}
+
+/**
+ * Голый JSON-массив шагов в прозе ([{description|label|title}|строка, …]) —
+ * ретрай плана после teach, не text. @returns {Array|null} нормализованные шаги
+ */
+function parseJsonStepsArray(text) {
+    const t = String(text || '').trim();
+    if (!t.startsWith('[') || !t.endsWith(']'))
+        return null;
+    let arr;
+    try { arr = JSON.parse(t); }
+    catch { return null; }
+    if (!Array.isArray(arr) || !arr.length)
+        return null;
+    const steps = arr
+        .map(s => ({ description: stepDescriptionOf(s) }))
+        .filter(s => s.description);
+    return steps.length === arr.length ? steps : null;
+}
+
 /** Args tool subplan → массив подшагов (FC-канал декомпозиции). */
 function subplanFromArgs(args = {}) {
     const steps = (Array.isArray(args?.steps) ? args.steps : [])
         .map(s => ({ description: stepDescriptionOf(s) }))
         .filter(s => s.description);
     return steps.length ? steps : null;
+}
+
+/** JSON-фрагмент subplan (массив, {steps:[…]} или одиночный {description}) → шаги. */
+function subplanStepsFromJson(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch { return null; }
+    const rawSteps = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.steps) ? parsed.steps : [parsed];
+    const steps = rawSteps
+        .map(s => ({ description: stepDescriptionOf(s) }))
+        .filter(s => s.description);
+    return steps.length ? steps : null;
+}
+
+/** Сбалансированный JSON-фрагмент ([…] или {…}) начиная с позиции start. */
+function extractBalancedJsonAt(text, start) {
+    let i = start;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const open = text[i];
+    if (open !== '[' && open !== '{')
+        return null;
+    const from = i;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escape) { escape = false; continue; }
+            if (ch === '\\') { escape = true; continue; }
+            if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') { inString = true; continue; }
+        if (ch === '[' || ch === '{')
+            depth++;
+        else if (ch === ']' || ch === '}') {
+            depth--;
+            if (depth === 0)
+                return { raw: text.slice(from, i + 1), end: i + 1 };
+        }
+    }
+    return null;
+}
+
+/**
+ * Prose-форма декомпозиции «{subplan}[{description}…]» / «{subplan}{steps:[…]}» —
+ * GigaChat пишет маркер в фигурных скобках вместо тега <subplan> или FC.
+ * @returns {{ steps: Array, index: number, end: number } | null}
+ */
+function consumeBraceSubplan(text) {
+    const src = String(text || '');
+    const m = src.match(/\{\s*subplan\s*\}\s*/i);
+    if (!m)
+        return null;
+    const extracted = extractBalancedJsonAt(src, m.index + m[0].length);
+    if (!extracted)
+        return null;
+    const steps = subplanStepsFromJson(extracted.raw);
+    if (!steps)
+        return null;
+    return { steps, index: m.index, end: extracted.end };
+}
+
+/**
+ * Text-блок целиком — prose-subplan («{subplan}[…]», «subplan[…]») → шаги.
+ * Страховка prompt(): если полный ответ не разобрался, огрызок в отдельном
+ * блоке всё равно поднимается в pendingSubplan, а не глушит поток как text.
+ */
+function parseSubplanTextBlock(content) {
+    const t = String(content || '').trim();
+    const m = t.match(/^\{?\s*subplan\s*\}?\s*/i);
+    if (!m)
+        return null;
+    const extracted = extractBalancedJsonAt(t, m[0].length);
+    if (!extracted)
+        return null;
+    return subplanStepsFromJson(extracted.raw);
 }
 
 /** pendingPlan → action «План» (ждёт «Начать»). */
@@ -1329,11 +1694,19 @@ function planToAction(pendingPlan, sender) {
 
 /** Последний неотвеченный interactive в ленте (сначала активная task, потом корень). */
 function findOpenInteractive(body) {
+    // Ленты стека от глубокой к корневой + корень: ответ/кнопка может лежать
+    // на любом уровне вложенной задачи
     const scopes = [];
-    const target = ribbonTargetOf(body);
-    scopes.push(target);
-    if (target !== body.ribbon)
-        scopes.push(body.ribbon);
+    const seen = new Set();
+    const push = (r) => {
+        if (!r || seen.has(r))
+            return;
+        seen.add(r);
+        scopes.push(r);
+    };
+    for (const task of [...activeTaskChain(body)].reverse())
+        push(task.ribbon ??= []);
+    push(body.ribbon);
     for (const r of scopes) {
         const open = [...r].reverse().find(b =>
             (b.type === 'action' || b.type === 'form' || b.type === 'questions') && !b.answered);
@@ -1369,7 +1742,10 @@ function applyConfirm(body, confirm, sender) {
     if (open.type === 'action' && open.title === 'План' && open.steps?.length) {
         const task = {
             type: 'task',
-            label: open.content?.split('\n')[0] || 'План',
+            // Первая строка плана без маркера списка («- собрать…» → «собрать…»)
+            label: String(open.content?.split('\n')[0] || '')
+                .replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '')
+                .trim() || 'План',
             state: 'active',
             steps: open.steps.map(s => ({ ...s, status: s.status || 'proposed' })),
             ribbon: [],
@@ -2527,7 +2903,7 @@ function getDoStepPhase(activeTask) {
  */
 function stepNeedsClarify(step) {
     const d = String(step?.description || '').toLowerCase();
-    if (/уточн|спрос|опрос|выясн|согласу|согласов/.test(d))
+    if (/уточн|спрос|опрос|запрос|выясн|согласу|согласов/.test(d))
         return true;
     // Разрыв — только целыми словами, чтобы «сис|темы» не давало ложный матч
     return /(определ|выбер|выбр|подобр)[а-яё]*\s+(?:[а-яё«»-]+[\s,]+){0,3}?(тем[аеуы]|цел[ьеия]|аудитор|адресат|получател|формат|стил|требован|критери|параметр|исходн|данн)/.test(d);
@@ -2556,7 +2932,7 @@ function buildHistoryFromRibbon(body, useFunctionCalling = false, opts = {}) {
             readme: body.readme,
         });
 
-        const activeTask = (body.ribbon || []).slice().reverse().find(b => b.type === 'task' && b.state === 'active');
+        const activeTask = findActiveTask(body);
         if (activeTask) {
             const cur = activeTask.steps?.find(s => s.status === 'in_progress')
                 || activeTask.steps?.find(s => s.status === 'proposed');
@@ -3221,7 +3597,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
 
     // 1. <reasoning> → thinking. Каналы внутри reasoning не глотаем:
     // thinking обрезается на первом теге канала, хвост возвращается в обычный разбор
-    const CHANNEL_TAG_RE = /<(?:plan|subplan|questions|form|action|tool_call)\b/i;
+    const CHANNEL_TAG_RE = /<(?:plan|propose_plan|subplan|questions|form|action|tool_call)\b/i;
     const splitReasoningBody = (inner) => {
         const m = inner.match(CHANNEL_TAG_RE);
         return m
@@ -3256,81 +3632,30 @@ function parseResponseToRibbon(text, sender = 'WORK') {
         catch {}
     }
 
-    // 2. <plan> → pendingPlan (массив; объект → один шаг; битое — вырезать, не text)
-    const planExtract = extractBalancedJsonArray(remaining, '<plan>', '</plan>');
-    if (planExtract) {
-        try {
-            const steps = JSON.parse(planExtract.raw);
-            if (Array.isArray(steps)) {
-                const beforePlan = remaining.slice(0, planExtract.index).trim();
-                if (beforePlan)
-                    proseParts.push(beforePlan);
-                pendingPlan = {
-                    steps,
-                    label: 'План',
-                    content: steps.map(s => s.description).filter(Boolean).join('; '),
-                };
-                remaining = remaining.slice(0, planExtract.index) + remaining.slice(planExtract.end);
-            }
+    // 1c. Prose-форма «{subplan}[…]» / «{subplan}{…}» — GigaChat пишет маркер
+    // в фигурных скобках вместо тега <subplan> или FC
+    if (!pendingSubplan) {
+        const braceSub = consumeBraceSubplan(remaining);
+        if (braceSub) {
+            pendingSubplan = braceSub.steps;
+            remaining = remaining.slice(0, braceSub.index) + remaining.slice(braceSub.end);
         }
-        catch {}
     }
-    if (!pendingPlan) {
-        const planObjMatch = remaining.match(/<plan>\s*(\{[\s\S]*?\})\s*<\/plan>/i);
-        if (planObjMatch) {
-            try {
-                const obj = JSON.parse(planObjMatch[1]);
-                // Обёртка {steps: [...]} — развернуть; одиночный объект — один шаг.
-                // Без осмысленного description план не фабрикуется («Шаг» из ничего)
-                const steps = (Array.isArray(obj.steps) ? obj.steps : [obj])
-                    .map((s, i) => ({
-                        step: Number(s?.step) > 0 ? Number(s.step) : i + 1,
-                        description: stepDescriptionOf(s),
-                        status: 'proposed',
-                    }))
-                    .filter(s => s.description);
-                if (steps.length) {
-                    const beforePlan = remaining.slice(0, planObjMatch.index).trim();
-                    if (beforePlan)
-                        proseParts.push(beforePlan);
-                    pendingPlan = {
-                        steps,
-                        label: 'План',
-                        content: steps.map(s => s.description).join('; '),
-                    };
-                    remaining = remaining.slice(0, planObjMatch.index)
-                        + remaining.slice(planObjMatch.index + planObjMatch[0].length);
-                }
-                else {
-                    planRejected = true;
-                    remaining = remaining.replace(/<plan\b[\s\S]*?(?:<\/plan>|$)/i, '');
-                }
-            }
-            catch {
-                planRejected = true;
-                remaining = remaining.replace(/<plan\b[\s\S]*?(?:<\/plan>|$)/i, '');
-            }
+
+    // 2. <plan> / <propose_plan> → pendingPlan (JSON, нумерованный список, bullet YAML)
+    for (const tagName of ['plan', 'propose_plan']) {
+        if (pendingPlan)
+            break;
+        const consumed = consumePlanXmlTag(remaining, tagName);
+        if (consumed.before)
+            proseParts.push(consumed.before);
+        remaining = consumed.remaining;
+        if (consumed.pendingPlan) {
+            pendingPlan = consumed.pendingPlan;
+            planRejected = false;
         }
-        else if (/<plan\b/i.test(remaining)) {
-            // Толерантный fallback: нумерованный список внутри <plan> → шаги
-            const rawPlan = remaining.match(/<plan\b[^>]*>([\s\S]*?)(?:<\/plan>|$)/i);
-            const listSteps = rawPlan ? parseNumberedListSteps(rawPlan[1]) : [];
-            if (listSteps.length) {
-                const beforePlan = remaining.slice(0, rawPlan.index).trim();
-                if (beforePlan)
-                    proseParts.push(beforePlan);
-                pendingPlan = {
-                    steps: listSteps,
-                    label: 'План',
-                    content: listSteps.map(s => s.description).join('; '),
-                };
-                remaining = remaining.slice(0, rawPlan.index)
-                    + remaining.slice(rawPlan.index + rawPlan[0].length);
-            }
-            else {
-                planRejected = true;
-                remaining = remaining.replace(/<plan\b[\s\S]*?(?:<\/plan>|$)/i, '');
-            }
+        else if (consumed.planRejected) {
+            planRejected = true;
         }
     }
 
@@ -3423,7 +3748,9 @@ function parseResponseToRibbon(text, sender = 'WORK') {
     }
 
     // 6. tool_call / мусор FC в prose — не в ленту
-    remaining = remaining.replace(/<tool>\s*[\w.-]+\s*<\/tool>/gi, '');
+    // Закрытый и незакрытый <tool>name — иначе «<tool>ask_user» оседает мёртвым text
+    remaining = remaining.replace(/<tool>\s*[\w.-]+\s*(?:<\/tool>)?/gi, '');
+    remaining = remaining.replace(/<\/tool>/gi, '');
     remaining = remaining.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
     remaining = remaining.replace(/```tool_call[\s\S]*?```/g, '');
     remaining = remaining.replace(/```ask_user[\s\S]*?```/gi, '');
@@ -3432,7 +3759,7 @@ function parseResponseToRibbon(text, sender = 'WORK') {
     remaining = remaining.replace(/<\/?function_caller>/gi, '');
     remaining = remaining.replace(/<\/?function\s+caller[^>]*>/gi, '');
     // Сырые теги каналов, не разобранные выше, — вырезать, текст внутри оставить
-    remaining = remaining.replace(/<\/?(?:action|plan|subplan|questions|form|reasoning)\b[^>]*>/gi, '');
+    remaining = remaining.replace(/<\/?(?:action|plan|propose_plan|subplan|questions|form|reasoning)\b[^>]*>/gi, '');
     remaining = stripJsStyleToolProse(remaining);
     remaining = stripRawActionJsonFromProse(remaining);
 
@@ -3561,6 +3888,146 @@ function parseNumberedListSteps(text = '') {
     return steps;
 }
 
+/** Bullet/YAML-список: «- …» → шаги (GigaChat <propose_plan> prose). */
+function parseBulletListSteps(text = '') {
+    const steps = [];
+    for (const m of String(text).matchAll(/^\s*-\s+(.+)$/gim)) {
+        const description = m[1].replace(/\*\*/g, '').trim();
+        if (!description || /^(steps|intro)\s*:/i.test(description))
+            continue;
+        steps.push({ step: steps.length + 1, description, status: 'proposed' });
+    }
+    return steps;
+}
+
+/**
+ * Тело <plan>/<propose_plan>: JSON, нумерованный список, bullet YAML.
+ * @returns {{ steps: Array, intro: string }}
+ */
+function parsePlanBodySteps(body = '') {
+    const raw = String(body || '').trim();
+    let intro = '';
+    const introM = raw.match(/^\s*intro\s*:\s*(.+)$/im);
+    if (introM)
+        intro = introM[1].trim();
+
+    if (raw.startsWith('[')) {
+        try {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr) && arr.length) {
+                const steps = arr.map((s, i) => ({
+                    step: Number(s?.step) > 0 ? Number(s.step) : i + 1,
+                    description: stepDescriptionOf(s),
+                    status: 'proposed',
+                })).filter(s => s.description);
+                if (steps.length)
+                    return { steps, intro };
+            }
+        }
+        catch { /* fall through */ }
+    }
+    if (raw.startsWith('{')) {
+        try {
+            const obj = JSON.parse(raw);
+            const steps = (Array.isArray(obj.steps) ? obj.steps : [obj])
+                .map((s, i) => ({
+                    step: Number(s?.step) > 0 ? Number(s.step) : i + 1,
+                    description: stepDescriptionOf(s),
+                    status: 'proposed',
+                }))
+                .filter(s => s.description);
+            if (steps.length) {
+                return {
+                    steps,
+                    intro: intro || String(obj.intro || obj.content || '').trim(),
+                };
+            }
+        }
+        catch { /* fall through */ }
+    }
+
+    const numbered = parseNumberedListSteps(raw);
+    if (numbered.length)
+        return { steps: numbered, intro };
+
+    const bullets = parseBulletListSteps(raw);
+    if (bullets.length)
+        return { steps: bullets, intro };
+
+    return { steps: [], intro };
+}
+
+/**
+ * Вырезать <tag>…</tag> (или unclosed) и собрать pendingPlan / planRejected.
+ * @returns {{ pendingPlan: object|null, planRejected: boolean, remaining: string, before: string }}
+ */
+function consumePlanXmlTag(text, tagName) {
+    const openRe = new RegExp('<' + tagName + '\\b', 'i');
+    if (!openRe.test(text))
+        return { pendingPlan: null, planRejected: false, remaining: text, before: '' };
+
+    // JSON-массив сразу после тега: <plan>[…]</plan>
+    const arrExtract = extractBalancedJsonArray(
+        text,
+        '<' + tagName + '>',
+        '</' + tagName + '>',
+    );
+    if (arrExtract) {
+        try {
+            const arr = JSON.parse(arrExtract.raw);
+            if (Array.isArray(arr)) {
+                const { steps, intro } = parsePlanBodySteps(arrExtract.raw);
+                if (steps.length) {
+                    return {
+                        pendingPlan: {
+                            steps,
+                            label: 'План',
+                            content: intro || steps.map(s => s.description).join('; '),
+                        },
+                        planRejected: false,
+                        remaining: text.slice(0, arrExtract.index) + text.slice(arrExtract.end),
+                        before: text.slice(0, arrExtract.index).trim(),
+                    };
+                }
+            }
+        }
+        catch { /* fall through */ }
+    }
+
+    const rawMatch = text.match(
+        new RegExp('<' + tagName + '\\b[^>]*>([\\s\\S]*?)(?:</' + tagName + '>|$)', 'i'),
+    );
+    if (!rawMatch) {
+        return {
+            pendingPlan: null,
+            planRejected: true,
+            remaining: text.replace(new RegExp('<' + tagName + '\\b[\\s\\S]*$', 'i'), ''),
+            before: '',
+        };
+    }
+    const { steps, intro } = parsePlanBodySteps(rawMatch[1]);
+    if (steps.length) {
+        return {
+            pendingPlan: {
+                steps,
+                label: 'План',
+                content: intro || steps.map(s => s.description).join('; '),
+            },
+            planRejected: false,
+            remaining: text.slice(0, rawMatch.index)
+                + text.slice(rawMatch.index + rawMatch[0].length),
+            before: text.slice(0, rawMatch.index).trim(),
+        };
+    }
+    return {
+        pendingPlan: null,
+        planRejected: true,
+        remaining: text.slice(0, rawMatch.index)
+            + text.slice(rawMatch.index + rawMatch[0].length),
+        before: text.slice(0, rawMatch.index).trim(),
+    };
+}
+
 /**
  * JSON-массив между тегами: скобки с учётом строк (не non-greedy до первого ]).
  * @returns {{ raw: string, index: number, end: number } | null}
@@ -3652,7 +4119,31 @@ function stripBoilerplateContent(text) {
     if (!t) return '';
     if (/^(уточнение|уточните параметры|заполните поля|уточните данные)\.?$/i.test(t))
         return '';
+    if (/^сформулирую [^\n]{0,80}[:.]?$/i.test(t))
+        return '';
     return t;
+}
+
+/**
+ * Короткая проза-обвязка рядом с опросом/формой — в content интерактива,
+ * не отдельным text-блоком: два блока на один ход шумят в UI,
+ * а text перед questions ломает представление «один ход — одно действие».
+ */
+function foldProseIntoInteractive(blocks = []) {
+    const q = blocks.find(b => b.type === 'questions' || b.type === 'form');
+    if (!q)
+        return blocks;
+    const isWrapper = b => b.type === 'text'
+        && String(b.content || '').trim().length < 200
+        && !/\n\s*(?:[-*•]|\d+[.)])/.test(String(b.content || ''));
+    const texts = blocks.filter(isWrapper);
+    if (!texts.length)
+        return blocks;
+    if (!q.content) {
+        q.content = stripBoilerplateContent(
+            texts.map(t => String(t.content || '').trim()).join('\n\n'));
+    }
+    return blocks.filter(b => !texts.includes(b));
 }
 
 /**
@@ -3711,6 +4202,84 @@ function questionsFromAskUser(args = {}, sender = 'WORK') {
         time: Date.now(),
         sender,
     };
+}
+
+/** Текст — только мусор канала ask_user (теги + имя / сломанный ask_user{…}). */
+/** Префикс-мусор перед именем tool («подагент=ask_user…») — срезать перед детектом. */
+function stripToolCallPrefix(text) {
+    return String(text || '').trim().replace(/^[\wа-яё.-]+\s*=\s*/i, '');
+}
+
+/** Несбалансированные {}/() — сломанная попытка вызова, парсер её не возьмёт. */
+function hasUnbalancedBrackets(text) {
+    let depth = 0;
+    for (const ch of String(text || '')) {
+        if (ch === '{' || ch === '(') depth++;
+        else if (ch === '}' || ch === ')') depth--;
+    }
+    return depth !== 0;
+}
+
+function isBareAskUserText(content) {
+    const t = stripToolCallPrefix(content);
+    if (!t) return false;
+    if (/^(?:<\/?tool\b[^>]*>\s*)*ask_user\s*(?:<\/?tool\b[^>]*>\s*)*$/i.test(t))
+        return true;
+    if (/^ask_user\s*[\({]/i.test(t))
+        return true;
+    return /\bask_user\s*[\({]/i.test(t) && hasUnbalancedBrackets(t);
+}
+
+/**
+ * Text-блок — голый tool-огрызок: имя известного канала без аргументов
+ * либо сломанная ask_user-форма. Такой text всегда мусор — ни в одном пути
+ * не полезен, а осев в ленте, становится wait-состоянием и глушит ретрай.
+ */
+function isBareToolProseText(content) {
+    const t = stripToolCallPrefix(content);
+    if (!t)
+        return false;
+    if (/^(?:ask_user|propose_plan|subplan|complete_step|save_file|report|search)\s*$/i.test(t))
+        return true;
+    // Огрызок prose-subplan («{subplan}[…», «subplan[…») — если parseSubplanTextBlock
+    // не поднял его в pendingSubplan (битый JSON), в ленте он не нужен
+    if (/^\{?\s*subplan\s*\}?\s*[\[{]/i.test(t))
+        return true;
+    // Неразобранный prose-вызов канала («propose_plan({…», «ask_user({…») —
+    // не wait-text: иначе глушит ретрай после teach
+    if (/^(?:ask_user|propose_plan|subplan|complete_step|save_file|report|search)\s*[\({]/i.test(t))
+        return true;
+    return isBareAskUserText(content);
+}
+
+/**
+ * Ответ модели — попытка канала ask_user без валидного FC/args
+ * («<tool>ask_user», голое ask_user, «подагент=ask_user{…», сломанный ask_user{…}).
+ */
+function isBareAskUserChannel(fullResponse, blocks = []) {
+    const raw = stripToolCallPrefix(fullResponse);
+    if (/<tool>\s*ask_user\b/i.test(raw))
+        return true;
+    if (/^ask_user\s*$/i.test(raw))
+        return true;
+    if (/^ask_user\s*[\({]/i.test(raw))
+        return true;
+    if (/\bask_user\s*[\({]/i.test(raw) && hasUnbalancedBrackets(raw))
+        return true;
+    return blocks.some(b => b.type === 'text' && isBareAskUserText(b.content));
+}
+
+/**
+ * Нормализация prose tool-вызовов слабых моделей перед парсом.
+ * GigaChat Light подставляет <|superquote|> вместо кавычек и отзеркаливает
+ * маркер служебного промпта «[инструкция] …» строкой в начале ответа.
+ */
+function normalizeModelToolProse(text) {
+    if (!text)
+        return text;
+    return String(text)
+        .replace(/<\|superquote\|>/gi, '"')
+        .replace(/^\s*\[инструкция\][^\n]*\n?/gim, '');
 }
 
 // ============================================================================
@@ -3785,12 +4354,12 @@ function parseToolCalls(text, functions = []) {
         }
     }
 
-    // 5. Голый save_file({…}) для известных tools (если ещё пусто)
+    // 5. Голый save_file({…}) / ask_user{…} для известных tools (если ещё пусто)
     if (calls.length === 0 && functions.length > 0) {
         const knownNames = new Set(functions.map(fn => fn.name));
         for (const name of knownNames) {
             if (!name || !/^\w+$/.test(name)) continue;
-            const startRe = new RegExp('\\b' + name + '\\s*\\(', 'g');
+            const startRe = new RegExp('\\b' + name + '\\s*[\\({]', 'g');
             let sm;
             while ((sm = startRe.exec(text)) !== null) {
                 if (sm.index > 0 && text[sm.index - 1] === '<')
@@ -3806,7 +4375,8 @@ function parseToolCalls(text, functions = []) {
 }
 
 /**
- * Разобрать JS-object literal args: {filename:"a.html", post:"…"} (ключи без кавычек).
+ * Разобрать JS-object literal args: {filename:"a.html", post:"…", steps:[{…}]}
+ * (ключи без кавычек, массивы и вложенные объекты).
  * @returns {object|null}
  */
 function parseJsObjectLiteral(src) {
@@ -3851,39 +4421,89 @@ function parseJsObjectLiteral(src) {
         while (i < s.length && /\s/.test(s[i])) i++;
         if (i >= s.length)
             return null;
-        if (s[i] === '"' || s[i] === "'") {
-            const q = s[i++];
-            let val = '';
-            let esc = false;
-            while (i < s.length) {
-                const c = s[i++];
-                if (esc) { val += c; esc = false; continue; }
-                if (c === '\\') { esc = true; continue; }
-                if (c === q) break;
-                val += c;
-            }
-            out[key] = val;
-        }
-        else if (s[i] === '{') {
-            const nested = extractBalancedObject(s, i);
-            if (!nested)
-                return null;
-            const nestedObj = parseJsObjectLiteral(nested.literal);
-            if (!nestedObj)
-                return null;
-            out[key] = nestedObj;
-            i = nested.end;
-        }
-        else {
-            const m = s.slice(i).match(/^(true|false|null|-?\d+(?:\.\d+)?)/);
-            if (!m)
-                return null;
-            const raw = m[1];
-            out[key] = raw === 'true' ? true : raw === 'false' ? false : raw === 'null' ? null : Number(raw);
-            i += raw.length;
-        }
+        const val = parseJsLiteralValue(s, i);
+        if (!val)
+            return null;
+        out[key] = val.value;
+        i = val.end;
     }
     return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Один JS-literal value начиная с позиции i: строка / число / bool / null / {…} / […].
+ * @returns {{ value: *, end: number }|null}
+ */
+function parseJsLiteralValue(s, i) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length)
+        return null;
+    if (s[i] === '"' || s[i] === "'") {
+        const q = s[i++];
+        let val = '';
+        let esc = false;
+        while (i < s.length) {
+            const c = s[i++];
+            if (esc) { val += c; esc = false; continue; }
+            if (c === '\\') { esc = true; continue; }
+            if (c === q) break;
+            val += c;
+        }
+        return { value: val, end: i };
+    }
+    if (s[i] === '{') {
+        const nested = extractBalancedObject(s, i);
+        if (!nested)
+            return null;
+        const nestedObj = parseJsObjectLiteral(nested.literal);
+        if (!nestedObj)
+            return null;
+        return { value: nestedObj, end: nested.end };
+    }
+    if (s[i] === '[') {
+        const nested = extractBalancedArray(s, i);
+        if (!nested)
+            return null;
+        const arr = parseJsArrayLiteral(nested.literal);
+        if (!arr)
+            return null;
+        return { value: arr, end: nested.end };
+    }
+    const m = s.slice(i).match(/^(true|false|null|-?\d+(?:\.\d+)?)/);
+    if (!m)
+        return null;
+    const raw = m[1];
+    const value = raw === 'true' ? true : raw === 'false' ? false : raw === 'null' ? null : Number(raw);
+    return { value, end: i + raw.length };
+}
+
+/**
+ * Разобрать JS-array literal: [{description:"…"}, …] / ["a","b"] / вложенные массивы.
+ * @returns {Array|null}
+ */
+function parseJsArrayLiteral(src) {
+    const s = String(src ?? '').trim();
+    if (!s.startsWith('[') || !s.endsWith(']'))
+        return null;
+    try {
+        const asJson = JSON.parse(s);
+        if (Array.isArray(asJson))
+            return asJson;
+    }
+    catch { /* JS-style */ }
+    const out = [];
+    let i = 1;
+    while (i < s.length - 1) {
+        while (i < s.length && /[\s,]/.test(s[i])) i++;
+        if (i >= s.length - 1 || s[i] === ']')
+            break;
+        const val = parseJsLiteralValue(s, i);
+        if (!val)
+            return null;
+        out.push(val.value);
+        i = val.end;
+    }
+    return out;
 }
 
 /**
@@ -3891,7 +4511,20 @@ function parseJsObjectLiteral(src) {
  * @returns {{ literal: string, end: number }|null} end — индекс после `}`
  */
 function extractBalancedObject(text, startIdx) {
-    if (!text || text[startIdx] !== '{')
+    return extractBalancedBrackets(text, startIdx, '{', '}');
+}
+
+/**
+ * Вырезать `[…]` с учётом строк и вложенности, начиная с индекса `[`.
+ * @returns {{ literal: string, end: number }|null}
+ */
+function extractBalancedArray(text, startIdx) {
+    return extractBalancedBrackets(text, startIdx, '[', ']');
+}
+
+/** Общий балансер скобок { } или [ ] с учётом строк. */
+function extractBalancedBrackets(text, startIdx, openCh, closeCh) {
+    if (!text || text[startIdx] !== openCh)
         return null;
     let depth = 0;
     let inStr = false;
@@ -3910,9 +4543,9 @@ function extractBalancedObject(text, startIdx) {
             quote = c;
             continue;
         }
-        if (c === '{')
+        if (c === openCh)
             depth++;
-        else if (c === '}') {
+        else if (c === closeCh) {
             depth--;
             if (depth === 0)
                 return { literal: text.slice(startIdx, i + 1), end: i + 1 };
@@ -3921,37 +4554,45 @@ function extractBalancedObject(text, startIdx) {
     return null;
 }
 
-/** Найти call `name({…})` начиная с индекса имени; вернуть { method, args, end }. */
+/** Найти call `name({…})` или `name{…}` начиная с индекса имени; вернуть { method, args, end }. */
 function parseJsStyleToolCallAt(text, nameStart, method) {
     if (!text || nameStart < 0 || !method)
         return null;
     let i = nameStart + method.length;
     while (i < text.length && /\s/.test(text[i])) i++;
-    if (text[i] !== '(')
+    let needCloseParen = false;
+    if (text[i] === '(') {
+        needCloseParen = true;
+        i++;
+        while (i < text.length && /\s/.test(text[i])) i++;
+    }
+    if (text[i] !== '{')
         return null;
-    i++;
-    while (i < text.length && /\s/.test(text[i])) i++;
     const bal = extractBalancedObject(text, i);
     if (!bal)
         return null;
     i = bal.end;
-    while (i < text.length && /\s/.test(text[i])) i++;
-    if (text[i] !== ')')
-        return null;
+    if (needCloseParen) {
+        while (i < text.length && /\s/.test(text[i])) i++;
+        if (text[i] !== ')')
+            return null;
+        i++;
+    }
     const args = parseJsObjectLiteral(bal.literal);
     if (!args || !Object.keys(args).length)
         return null;
-    return { method, args, end: i + 1 };
+    return { method, args, end: i };
 }
 
-/** Убрать голые tool-вызовы name({…}) из prose ленты. */
+/** Убрать голые tool-вызовы name({…}) / name{…} из prose ленты. */
 function stripJsStyleToolProse(text) {
     if (!text)
         return text;
-    const names = ['save_file', 'write_file', 'create', 'ask_user', 'navigate', 'read_file', 'reset_context'];
+    const names = ['save_file', 'write_file', 'create', 'ask_user', 'navigate', 'read_file',
+        'reset_context', 'propose_plan', 'subplan', 'complete_step', 'report'];
     let out = String(text);
     for (const name of names) {
-        const re = new RegExp('\\b' + name + '\\s*\\(', 'g');
+        const re = new RegExp('\\b' + name + '\\s*[\\({]', 'g');
         const ranges = [];
         let sm;
         while ((sm = re.exec(out)) !== null) {
@@ -4052,4 +4693,41 @@ function parseXmlTagAttrs(attrsStr) {
     const parsed = parseXmlToolCallAt(fake, 0, '_x');
     return parsed?.args || {};
 }
+
+// Именованные экспорты для юнит-тестов
+// (tests/prompt-pipeline.test.js, tests/fc-args.test.js, tests/role-acl.test.js)
+export {
+    hoistWaitBlock,
+    collectAnsweredInteractive,
+    findAnsweredDuplicate,
+    subplanGateError,
+    applySubplan,
+    findActiveTask,
+    activeTaskChain,
+    advanceTask,
+    normalizeModelToolProse,
+    foldProseIntoInteractive,
+    stripBoilerplateContent,
+    isBareAskUserText,
+    isBareAskUserChannel,
+    isBareToolProseText,
+    parseJsonStepsArray,
+    parseResponseToRibbon,
+    consumeBraceSubplan,
+    parseSubplanTextBlock,
+    parseProposePlanTextBlock,
+    parseJsObjectLiteral,
+    parseJsStyleToolCallAt,
+    isBrokenFcArgs,
+    sanitizeToolArgsForHistory,
+    stripFcTrailer,
+    formatToolResultMessages,
+    ensureNamedFunction,
+    collectFunctionNamesFromMessages,
+    prepareFunctionsForStream,
+    normalizeRole,
+    formatRoleAclForSystem,
+    isSystemModifyCall,
+    roleBlocksTool,
+};
 
