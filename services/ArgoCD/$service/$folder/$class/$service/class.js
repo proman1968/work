@@ -10,11 +10,14 @@
  *   createApplication                 — POST заявки в Argo CD API
  *   listOrders / acceptOrder / rejectOrder / completeOrder — заявки клиентов
  *
- * Статусы заявки (в JSON записи .order в history):
- *   ''            — в обработке (default после создания)
+ * Статусы заявки (в JSON записи .order в history pass.order):
+ *   ''            — ещё не обработана (default после submitOrder)
  *   'rejected'    — отвергнута
  *   'in_progress' — запущена в работу
  *   'completed'   — завершена вручную
+ *
+ * Тело pass.order: { status, $Link → .bid, product (снимок), input: { domainName } }.
+ * Продукт — не enum тарифов; имя хоста — input.domainName.
  */
 export default {
     icon: 'carbon:kubernetes',
@@ -217,10 +220,12 @@ export default {
 
     // ── заявки (.order в history) ───────────────────────────────────
 
-    /** Папка history файла pass.order (на диске). */
+    /** Папка history файла pass.order (на диске).
+     * save_file кладёт pass.order в meta/order/ (подпапка по расширению). */
     _ordersHistoryDir() {
         const s = /** @type {any} */ (this);
-        return s.dir + '/.pass.order/history';
+        const base = s.meta_folder?.dir || s.dir;
+        return base + '/order/.pass.order/history';
     },
 
     /** @param {any} orderPath */
@@ -259,13 +264,22 @@ export default {
                 try {
                     const order = JSON.parse(await fsp.readFile(fp, 'utf-8'));
                     const status = order.status || '';
+                    const nameParts = f.split('.');
+                    const created = order.created || Number(nameParts[0]) || 0;
+                    const domainName = order.input?.domainName || order.subdomain || '';
+                    const productLabel = order.product?.label || order.tariff || '';
                     orders.push({
                         path: fp,
-                        subdomain: order.subdomain || '',
+                        $Link: order.$Link || '',
+                        domainName,
+                        productLabel,
+                        subdomain: domainName,
                         fqdn: order.fqdn || '',
-                        tariff: order.tariff || '',
-                        buyer: order.buyer || '',
-                        created: order.created || 0,
+                        tariff: productLabel,
+                        product: order.product || null,
+                        input: order.input || null,
+                        buyer: order.buyer || nameParts[1] || '',
+                        created,
                         status,
                         uiStatus: statuses[status] ?? 'в обработке',
                         error: order.error || '',
@@ -278,7 +292,7 @@ export default {
         return orders;
     },
 
-    /** Принять заявку: in_progress → DNS → createApplication.
+    /** Принять заявку: in_progress → DNS → provision (PaaS) или createApplication.
      * @param {any} params
      * @param {any} post
      */
@@ -313,10 +327,20 @@ export default {
             await this._writeOrder(orderPath, order);
         }
 
+        const domainName = order.input?.domainName || order.subdomain;
+        if (!domainName)
+            throw new Error('В заявке нет имени домена');
+
         try {
+            if (typeof s.provision === 'function') {
+                const result = await s.provision({ order, orderPath }, order);
+                order.provision = result;
+                await this._writeOrder(orderPath, order);
+                return { ok: true, order, provision: result };
+            }
             const argo = await this.createApplication({
-                name: order.subdomain,
-                namespace: s.destinationNamespace || order.subdomain,
+                name: domainName,
+                namespace: s.destinationNamespace || domainName,
             });
             order.argo = argo;
             await this._writeOrder(orderPath, order);

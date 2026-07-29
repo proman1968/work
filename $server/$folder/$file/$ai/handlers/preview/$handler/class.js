@@ -4,7 +4,7 @@
  */
 
 const VIEW_TYPES = new Set([
-    'prompt', 'thinking', 'text', 'action', 'task',
+    'prompt', 'thinking', 'text', 'action', 'task', 'plan', 'report',
     'file', 'tool', 'tool_result', 'form', 'questions', 'error',
 ]);
 
@@ -419,7 +419,7 @@ export default {
         window.speechSynthesis?.cancel();
         if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
         if (this.$item?.path) {
-            this.$item.fetch('prompt', {}, JSON.stringify({ stop: true }))
+            this.$item.fetch('stop', {})
                 .catch(e => console.warn('[ai-preview] stop:', e.message));
         }
     },
@@ -585,9 +585,15 @@ export default {
         });
         tree.execute = async (item) => {
             this.selectedModel = item.path;
-            if (this.data) {
+            if (this.data)
                 this.data.model = item.path;
-                try { await this.$item.fetch('save', {}, JSON.stringify(this.data, null, 2)); } catch {}
+            if (this.$item?.path) {
+                try {
+                    await this.$item.fetch('change_model', {}, JSON.stringify({ model: item.path }));
+                }
+                catch (err) {
+                    console.warn('[ai-preview] change_model:', err.message);
+                }
             }
             for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
             this._focus();
@@ -662,6 +668,11 @@ ODA({ is: 'microchat-ribbon',
         if (!item || !viewTag(item)) return false;
         if ((item.type === 'questions' || item.type === 'form') && item.answered)
             return false;
+        // Слова-маршруты автомата (plan/report без кнопки, task без шагов) — служебные, не показываем
+        if ((item.type === 'plan' || item.type === 'report') && !item.button)
+            return false;
+        if (item.type === 'task' && !Array.isArray(item.steps))
+            return false;
         return true;
     },
 });
@@ -669,9 +680,10 @@ ODA({ is: 'microchat-ribbon',
 ODA({ is: 'microchat-streaming',
     template: /*html*/`
         <div vertical light style="padding: 4px 12px; font-size: small;">
-            <div style="padding: 4px; white-space: pre-wrap;">{{text}}</div>
+            <oda-markdown-viewer :value="text"></oda-markdown-viewer>
         </div>
     `,
+    imports: 'oda//markdown//markdown-viewer',
     text: '',
 });
 
@@ -903,6 +915,36 @@ ODA({ is: 'microchat-view-action',
     get title() { return this.data?.title || ''; },
     get content() { return this.data?.content || ''; },
     get usageLine() { return formatUsageLine(this.data?.usage); },
+});
+
+ODA({ is: 'microchat-view-plan',
+    extends: 'microchat-view',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
+                border-radius: 12px; margin: 6px;
+                border-left: 3px solid var(--info-color, #5c6bc0);
+            }
+            .head { @apply --horizontal; align-items: center; gap: 8px; }
+            .title { @apply --bold; font-size: small; }
+            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
+        </style>
+        <div class="head">
+            <div class="title" flex>{{title}}</div>
+            <div class="usage" ~if="usageLine">{{usageLine}}</div>
+        </div>
+        <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
+    `,
+    imports: 'oda//markdown//markdown-viewer',
+    get title() { return this.data?.title || 'План'; },
+    get content() { return this.data?.content || ''; },
+    get usageLine() { return formatUsageLine(this.data?.usage); },
+});
+
+ODA({ is: 'microchat-view-report',
+    extends: 'microchat-view-plan',
+    get title() { return this.data?.title || 'Отчёт'; },
 });
 
 ODA({ is: 'microchat-view-form',

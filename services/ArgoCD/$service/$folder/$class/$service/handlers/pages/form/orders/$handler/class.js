@@ -83,9 +83,8 @@ export default {
         <table>
             <thead>
                 <tr>
-                    <th>Имя</th>
-                    <th>FQDN</th>
-                    <th>Тариф</th>
+                    <th>Домен</th>
+                    <th>Продукт</th>
                     <th>Покупатель</th>
                     <th>Дата</th>
                     <th>Статус</th>
@@ -94,9 +93,8 @@ export default {
             </thead>
             <tbody>
                 <tr ~for="orders" :class="$for.item.status || 'pending'">
-                    <td>{{$for.item.subdomain}}</td>
-                    <td>{{$for.item.fqdn}}</td>
-                    <td>{{$for.item.tariff}}</td>
+                    <td>{{$for.item.domainName || $for.item.subdomain}}</td>
+                    <td>{{$for.item.productLabel || $for.item.tariff}}</td>
                     <td>{{$for.item.buyer}}</td>
                     <td>{{formatDate($for.item.created)}}</td>
                     <td>
@@ -122,13 +120,16 @@ export default {
     async attached() {
         await this.reload();
     },
+    _domainLabel(order) {
+        return order?.domainName || order?.subdomain || '';
+    },
     async reload() {
         if (this.loading) return;
         this.loading = true;
         try {
             this.orders = await this.$item.fetch('listOrders') || [];
         } catch (e) {
-            alert(e.message || e);
+            console.error('[orders]', e);
             this.orders = [];
         } finally {
             this.loading = false;
@@ -141,42 +142,47 @@ export default {
     },
     async _confirm(message) {
         const el = ODA.createElement('oda-button', { label: message, icon: 'icons:warning' });
-        const ok = { label: 'Подтвердить', icon: 'icons:check', tap: () => el.parentElement.close('ok') };
-        const cancel = { label: 'Отмена', icon: 'icons:close', tap: () => el.parentElement.close('cancel') };
         try {
-            const result = await WORK.showDialog(el, { TITLE: { label: 'Подтверждение' }, BUTTONS: [ok, cancel] });
-            return result === 'ok';
+            const result = await WORK.showDialog(el, {
+                TITLE: { label: 'Подтверждение' },
+                OK: { label: 'Подтвердить', icon: 'icons:check' },
+                CANCEL: { label: 'Отмена', icon: 'icons:close' },
+            });
+            return !!result;
         } catch {
             return false;
         }
     },
     async accept(order) {
-        if (!await this._confirm('Принять заявку «' + order.subdomain + '» и запустить развёртывание?'))
+        const name = this._domainLabel(order);
+        if (!await this._confirm('Принять заявку «' + name + '» и запустить развёртывание?'))
             return;
         try {
             await this.$item.fetch('acceptOrder', {}, { orderPath: order.path });
         } catch (e) {
-            alert(e.message || e);
+            console.error('[orders] accept', e);
         }
         await this.reload();
     },
     async reject(order) {
-        if (!await this._confirm('Отвергнуть заявку «' + order.subdomain + '»?'))
+        const name = this._domainLabel(order);
+        if (!await this._confirm('Отвергнуть заявку «' + name + '»?'))
             return;
         try {
             await this.$item.fetch('rejectOrder', {}, { orderPath: order.path });
         } catch (e) {
-            alert(e.message || e);
+            console.error('[orders] reject', e);
         }
         await this.reload();
     },
     async complete(order) {
-        if (!await this._confirm('Завершить заявку «' + order.subdomain + '»?'))
+        const name = this._domainLabel(order);
+        if (!await this._confirm('Завершить заявку «' + name + '»?'))
             return;
         try {
             await this.$item.fetch('completeOrder', {}, { orderPath: order.path });
         } catch (e) {
-            alert(e.message || e);
+            console.error('[orders] complete', e);
         }
         await this.reload();
     },

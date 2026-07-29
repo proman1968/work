@@ -16,6 +16,22 @@ import {
     sendPushNotification,
 } from '../host/push.js';
 
+/** Прототип HTTP/WS-сессии (`$server.users[ssid]` / `params.user`). */
+const sessionProto = {
+    /** Отправить JSON только в сокеты этой сессии. */
+    send(data) {
+        const payload = JSON.stringify(data);
+        for (const sock of Object.values(this.sockets || {})) {
+            try {
+                if (sock?.ws?.readyState === 1)
+                    sock.ws.send(payload);
+            } catch (e) {
+                console.warn('[user.send]', e.message);
+            }
+        }
+    },
+};
+
 export class $server extends $class {
     parent = null;
     path = '';
@@ -155,8 +171,8 @@ export class $server extends $class {
     }
     static users = {};
     static get_user(ssid = '') {
-        ssid ||= this.genGUID()
-        return this.users[ssid] ??= {ssid, sockets: {}};
+        ssid ||= this.genGUID();
+        return this.users[ssid] ??= Object.assign(Object.create(sessionProto), { ssid, sockets: {} });
     }
     static clearUserAuth(session) {
         if (!session)

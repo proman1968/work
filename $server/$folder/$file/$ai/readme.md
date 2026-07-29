@@ -14,19 +14,20 @@
 
 1. Сохранение / обновление `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) вызывает `taskFile.prompt(...)`.
 2. **Два вида промптов, различаются ролью.** Реальный (role `USER|BOSS|ADMIN` — всегда приходит с клиента, default USER) пишется блоком `prompt` в ленту. Служебный (role `ASSISTENT` — самовызовы шагов плана и авто-ходов) подаётся **только на острие** messages текущего вызова модели: в ленту и в историю следующих ходов не попадает.
-3. `prompt` — **инстанс-метод файла** (наследуется из `class.js` типизатора через merge-цепочку, `this` = файл `task.ai`). **Линейный пайплайн одного прохода:** 1) вход — промпт (`params.prompt|text|post`); 2) messages = контекст + история ribbon + промпт на острие, к пользовательскому промпту **всегда плюсуется служебный «думай»**; 3) role != ASSISTENT → блок `prompt` в активный ribbon; 4) запрос модели; 5) ответ; 6) role != ASSISTENT → весь ответ = блок `thinking` (без разбора; functions не передаются), role == ASSISTENT → модель объявляет тип (FC / разметка); 7) парсинг/Func → типизированный блок (+ ворота); 8) не распознан → `text` «Требуется уточнение…»; 9) push блока, save; 10) у типа блока есть `servicePrompt` (или динамическая инструкция шага) → `this.async(() => this.prompt({role:'ASSISTENT', prompt: servicePrompt}))`.
-4. **Служебные промпты.** `TYPES[тип].servicePrompt` — строка или объект ролевых вариантов `{default, USER, BOSS, ADMIN, ASSISTENT}`; резолвится **в момент push блока** и передаётся **параметром рекурсии** — на острие messages, в ленту и историю не попадает. servicePrompt есть только у состояний-продолжений (`prompt`, `thinking`, `tool_result`, `tool`, `task`, `error`); wait-состояния (`text`/`action`/`form`/`questions`) без servicePrompt — стоп, ждём пользователя. ASSISTENT-ход — ровно одно действие: текст ИЛИ один вызов функции (`ask_user`, `propose_plan`, `subplan`, `save_file`, `complete_step`, `report`, `search`…); XML-теги — толерантный fallback парсера. Финальный отчёт — FC `report({content})` → text + action «Отчёт/Принять» строит харнесс.
-5. **Движок шагов:** «Начать» создаёт `TYPE.task`, и пункт уходит динамической инструкцией `this.prompt({role:'ASSISTENT', prompt:'Делай пункт N плана…'})` — step-prompt'ов в ленте нет. `complete_step({step, summary})` ставит `done` и шлёт следующий пункт тем же каналом; после последнего — «сформируй Отчёт» (реальные артефакты из `collectArtifacts`) → action «Отчёт» → «Принять» закрывает задачу без хода модели. `subplan` — вложенная подзадача (стек в `body.ribbon`).
-   **Ворота (`stepEvidence`):** span шага = блоки ленты после `step.startedAt`; clarify-шаг закрывается только answered `questions`/`form`, do-шаг — успешным tool_result. Отказ — обучающая ошибка.
-6. Tools + ACL; опасные — `pendingAction` confirm. Лимит авто-проходов `MAX_AUTO_TURNS` → action «Продолжить».
+3. `prompt` — **инстанс-метод файла** (наследуется из `class.js` типизатора через merge-цепочку, `this` = файл `task.ai`). **Реальный text — двухтактный ход:** 1) messages = system + контекст пары + история ribbon (только факты); 2) блок `prompt` в активный ribbon (чистый текст, без инъекций); 3) **такт 1 «думай»**: на острие промпт + `TYPES.prompt.servicePrompt`, functions не передаются, весь ответ целиком = блок `thinking`; 4) **такт 2 «маршрутизация»**: ответ пользователю обычным текстом (→ `text`, wait, стоп) ЛИБО ровно одно слово `research | plan | task | do | report` → блок-маршрут; 5) маршрут → expect-самовызов `this.async(() => this.prompt({role:'ASSISTENT', expect: тип, prompt: servicePrompt, _turn: turn+1}))`, лимит `MAX_AUTO_TURNS` → кнопка «Продолжить».
+4. **expect-ходы (ASSISTENT, один проход модели, без классификации словом):** `plan` | `report` — весь md-ответ → блок соответствующего типа + кнопка «Принять» (wait); `task` — «Сделай to do список из согласованного плана» → парс шагов → блок `task` (`state: active`, `steps`, свой `ribbon`) + инъекция первого пункта; `step` | `do` | `research` — **FC-ход**: `buildFunctionsList` контекста → `streamChat({messages, functions})` → ровно один вызов функции или ответ текстом (wait). `research` — только read-only набор (`search`, `fetch_url`, `read_file`, `get_schema`, `find_text`, …), авто-цепочка без кнопок.
+5. **Подтверждение изменений.** Любой метод, меняющий файлы (`save_file`/`edit`/`write_file` + `DANGEROUS_METHODS`), — **только через кнопку**: `body.pendingAction = {calls}` + action «Действие/Выполнить», без trust-автопропуска. Read-only вызовы исполняются сразу (`executeToolCall`) → `tool`+`tool_result` → продолжение (в задаче — возврат к пункту, research — следующий поиск, иначе — двухтактный ход). `ask_user({questions})` → блок `questions` (wait).
+6. **Кнопки и ответы (реальный вход).** `confirm` по `pendingAction` — выполнить/отклонить вызовы; «Принять» блока `plan` → expect-ход `task`; «Принять» блока `report` → задача `completed` (без хода модели); прочие кнопки — prompt-факт + продолжение. `answers` → закрытие `questions`/`form` (`applyAnswers`), clarify-шаг закрывается сам (`autoAdvanceClarifyStep`) → следующий пункт.
+   **Движок шагов:** пункт уходит инъекцией `makeStepInstruction` (step-prompt'ов в ленте нет); `complete_step({step, summary})` с воротами `stepEvidence` ставит `done` и шлёт следующий пункт; все пункты done → expect-ход `report`.
 7. Интернет: сервисные tools `search` / `fetch_url` (`services/SearXNG`, `/SERVICES/*` → FC автоматически).
-8. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
+8. **Служебные методы файла:** `stop` — abort текущего цикла (стрим + самовызовы; task/pendingAction не трогает); `change_model({model})` — запись модели в body без on_save.
+9. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
 
 Окно логов по умолчанию: 7 дней / до 60 сжатых строк (`body.logWindow` переопределяет).
 
 ## 4. Из чего это состоит
 
-- `class.js` — **весь ИИ-харнесс**: схема `TYPES` + `servicePrompt`, метод `prompt` (один проход + `this.async`), парсер ответа, tools + ACL, контекст пары, usage
+- `class.js` — **весь ИИ-харнесс**: схема `TYPES` + `servicePrompt`, методы `prompt` / `stop` / `change_model`, tools + ACL, контекст пары
 - `triggers/on_save/$trigger/` — вход в цикл (`taskFile.prompt(...)`)
 - `handlers/preview/$handler/` — микрочат
 
@@ -34,25 +35,26 @@
 
 ## 5. В каком это состоянии
 
-- ✅ PDCA harness, ask_user, idle propose inject
+**Harness — автомат с expect-ходами** (`prompt`). Полный цикл: думай → маршрут словом → expect-ходы (plan/report md + «Принять», task-движок, FC-ходы do/research/step) → подтверждение файл-модифицирующих вызовов кнопкой. Служебные методы файла: `stop` (abort цикла), `change_model` (`body.model` без on_save). Не перенесено: subplan-декомпозиция в ходе, teach-ворота прозы, spawn_agent, usage-учёт, текстовый fallback FC для моделей без functionCalling.
+
+- ✅ Автомат: prompt → thinking → маршрут `research|plan|task|do|report|text`; маршруты в TYPES и истории; продолжение expect-самовызовами с лимитом `MAX_AUTO_TURNS` → «Продолжить»; fallback модели через `findFirstModel`
+- ✅ expect-ходы: `plan`/`report` — md-блок + «Принять» (plan → запуск task, report → completed); `task` — to-do → `task.steps` + инъекции пунктов (`makeStepInstruction`, ворота `stepEvidence`, `complete_step`); `step`/`do`/`research` — FC-ходы (`buildFunctionsList` + `streamChat({functions})`), research — read-only набор
+- ✅ Подтверждение изменений: любой файл-модифицирующий вызов → `pendingAction` + «Выполнить» (без trust-автопропуска); read-only — сразу; `ask_user` → блок `questions`
+- ✅ `stop` — abort текущего цикла (`streamTurn` / самовызовы); `task` / `pendingAction` не сбрасывает; preview → `fetch('stop')`
+- ✅ `change_model` — запись `body.model` через fsp (без on_save); preview → `fetch('change_model')`
 - ✅ Автомат «одно действие за ход»: реальный промпт → думать → thinking → развилка; инъекции только на острие (в ленте и истории нет `[инструкция]`)
 - ✅ Роль-дискриминатор: реальные промпты (USER/BOSS/ADMIN с клиента) vs служебные (ASSISTENT-самовызовы); ролевые варианты `TYPES.*.servicePrompt`
-- ✅ План = action «План» → «Начать» → `TYPE.task`; пункты — ASSISTENT-инъекциями «Делай пункт N»; `completed` после «Принять»
-- ✅ `body.usage` — сумма токенов всех LLM-ходов (API + estimate fallback)
-- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `navigate` / `reset_context` / `complete_step` / `propose_plan` / `subplan`
-- ✅ Каналы как FC-tools + толерантный fallback: reasoning не глотает теги, `<plan>` из нумерованного списка, textarea/text без фабрикации опций, впрыск состояния (evidence, артефакты, бюджет ходов) в Do-блок system
-- ✅ Движок шагов: `complete_step` → done + следующий пункт ASSISTENT-инъекцией; `<subplan>` → стек подзадач; «Принять» Отчёта → `completed`
-- ✅ Ворота `stepEvidence` (по `step.startedAt`): clarify-шаг = answered опрос, do-шаг = успешный tool_result; Отчёт — только реальные артефакты (`collectArtifacts`); позиционный `save_file("имя")` → обучающая ошибка
+- ✅ Движок шагов: `complete_step` → done + следующий пункт ASSISTENT-инъекцией; «Принять» Отчёта → `completed`
+- ✅ Ворота `stepEvidence` (по `step.startedAt`): clarify-шаг = answered опрос, do-шаг = успешный tool_result; Отчёт — только реальные артефакты (`collectArtifacts`)
+- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `navigate` / `reset_context` / `complete_step` / `inspect_schema` / …
 - ✅ Интернет: `search` + `fetch_url` (сервис SearXNG)
-- ✅ Толерантный парсер `<action>`: JSON-канон + атрибутная форма слабых моделей; сырые теги каналов не попадают в text
 - ✅ Skills-as-tools: `list_skills` / `run_skill`
-- ✅ `spawn_agent` (sequential nested task)
-- ✅ `inspect_schema` (подготовка к trust/self-mod)
 - ✅ `@/path` mentions в промпте → сниппеты в context
-- ✅ Однопроходный `prompt` на файле + авто-ходы через `this.async` (лимит `MAX_AUTO_TURNS` → action «Продолжить»)
+- ✅ Авто-ходы через `this.async` (лимит `MAX_AUTO_TURNS` → action «Продолжить»)
 - ✅ GigaChat / z.ai function calling
 - ✅ Контекст пары class+user; ACL + pendingAction
 - ✅ Preview microchat + TTS Piper
+- 🔧 subplan / spawn_agent / usage / teach-ворота — хелперы ещё в файле, в новый `prompt` не подключены
 - ❌ host file-handlers / skill-router (запрещены)
 - 🔧 Параллельные subagents; trust markings UI; hot-reload self-mod (фаза 5)
 
