@@ -185,4 +185,4 @@ styles.applyStyleMixins(text)
 
 - [`styles.js`](styles.js) — палитра, mixins, генерация `[attr]`-правил
 - [`adoptedStyleSheets.js`](adoptedStyleSheets.js) — проброс в shadow root
-- [`.cursor/rules/oda-ui-refactoring.mdc`](../../../.cursor/rules/oda-ui-refactoring.mdc) — чеклист рефакторинга форм WORK
+- [`rules/styles.md`](../../../rules/styles.md) — канон для агентов (когда/как)

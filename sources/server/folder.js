@@ -930,7 +930,7 @@ export class $folder extends $item{
     /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
     get _methods(){
         return new AsyncPromise(async ()=>{
-            const methods = await this.get_item('~/methods/*');
+            const methods = (await this.get_item('~/methods/*')) || [];
             return methods.reduce((res, item)=>{
                 res[item.id] = item;
                 item.$context = this;

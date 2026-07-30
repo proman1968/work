@@ -1,6 +1,122 @@
+ODA({
+    is: 'orders-tree-text-cell',
+    template: /* html */ `
+        <style>
+            :host {
+                box-sizing: border-box;
+                border-left: 1px solid var(--header-background);
+                min-width: 10px;
+                overflow: hidden;
+                height: 100%;
+                align-items: center;
+                @apply --horizontal;
+                @apply --no-flex;
+            }
+            span {
+                margin: 4px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+        </style>
+        <span flex :title="text">{{text}}</span>
+    `,
+    get text() {
+        const v = this.row?.[this.col?.id];
+        return v == null ? '' : String(v);
+    },
+    row: null,
+    col: null,
+});
+
+ODA({
+    is: 'orders-tree-status-cell',
+    template: /* html */ `
+        <style>
+            :host {
+                box-sizing: border-box;
+                border-left: 1px solid var(--header-background);
+                min-width: 10px;
+                overflow: hidden;
+                height: 100%;
+                @apply --vertical;
+                @apply --no-flex;
+                justify-content: center;
+            }
+            .status {
+                margin: 4px;
+                font-size: small;
+                padding: 2px 8px;
+                white-space: nowrap;
+            }
+            .err {
+                margin: 0 4px 4px;
+                font-size: x-small;
+                max-width: 240px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+        </style>
+        <span class="status" :warning="isWarning" :error="isError" :success="isSuccess" :light="isPending">{{row?.uiStatus}}</span>
+        <span ~if="row?.error" class="err" error :title="row.error">{{row.error}}</span>
+    `,
+    row: null,
+    col: null,
+    get isWarning() { return this.row?.status === 'in_progress'; },
+    get isError() { return this.row?.status === 'rejected'; },
+    get isSuccess() { return this.row?.status === 'completed'; },
+    get isPending() { return !this.row?.status; },
+});
+
+ODA({
+    is: 'orders-tree-actions-cell',
+    imports: 'oda//button, oda//icon',
+    template: /* html */ `
+        <style>
+            :host {
+                box-sizing: border-box;
+                border-left: 1px solid var(--header-background);
+                min-width: 10px;
+                overflow: hidden;
+                height: 100%;
+                align-items: center;
+                gap: 6px;
+                @apply --horizontal;
+                @apply --no-flex;
+            }
+        </style>
+        <oda-button ~if="!row?.status" no-flex icon="icons:close" title="Отказать" @tap="call('reject')"></oda-button>
+        <oda-button ~if="!row?.status" no-flex icon="icons:check" title="Принять" @tap="call('accept')"></oda-button>
+        <oda-icon ~if="row?.status === 'in_progress'" icon="spinners:8-dots-rotate" :icon-size="18"></oda-icon>
+        <oda-button ~if="row?.status === 'in_progress'" no-flex icon="icons:done" title="Завершить" @tap="call('complete')"></oda-button>
+    `,
+    row: null,
+    col: null,
+    call(name) {
+        let n = this.$pdp;
+        while (n) {
+            if (typeof n[name] === 'function') {
+                n[name](this.row);
+                return;
+            }
+            n = n.$pdp;
+        }
+    },
+});
+
 export default {
+    imports: 'oda//tree, oda//button, oda//icon',
     icon: 'carbon:list',
     label: 'Заявки',
+    treeLabel: 'Домен',
+    columns: [
+        { id: 'Продукт', template: 'orders-tree-text-cell' },
+        { id: 'Покупатель', template: 'orders-tree-text-cell' },
+        { id: 'Дата', template: 'orders-tree-text-cell' },
+        { id: 'Статус', template: 'orders-tree-status-cell' },
+        { id: 'Действия', template: 'orders-tree-actions-cell' },
+    ],
     allowSave: false,
     allowUse: true,
     template: /*html*/`
@@ -9,109 +125,34 @@ export default {
             @apply --vertical;
             @apply --flex;
             overflow: hidden;
+            min-height: 0;
+            height: 100%;
         }
         .toolbar {
-            @apply --horizontal;
-            align-items: center;
+            @apply --toolbar;
+            @apply --no-flex;
             gap: 8px;
             padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color, rgba(0,0,0,.12));
-        }
-        .toolbar oda-button {
-            flex-shrink: 0;
+            border-bottom: 1px solid var(--border-color);
         }
         .scroll {
             @apply --flex;
+            @apply --vertical;
+            min-height: 0;
             overflow: auto;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-        }
-        th, td {
-            text-align: left;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color, rgba(0,0,0,.08));
-            white-space: nowrap;
-        }
-        th {
-            opacity: .7;
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-            background: var(--bg-color, #fff);
-        }
-        tr.pending td { opacity: 1; }
-        .status {
-            font-size: small;
-            padding: 2px 8px;
-            border-radius: 12px;
-            background: rgba(0,0,0,.06);
-        }
-        .status.in_progress { background: rgba(255,152,0,.18); color: #b25e00; }
-        .status.rejected { background: rgba(244,67,54,.14); color: #b71c1c; }
-        .status.completed { background: rgba(46,125,50,.14); color: #2e7d32; }
-        .actions {
-            @apply --horizontal;
-            gap: 6px;
-            align-items: center;
-        }
-        .actions oda-button {
-            flex-shrink: 0;
         }
         .empty {
             padding: 32px;
             opacity: .6;
             text-align: center;
         }
-        .err {
-            font-size: x-small;
-            color: #b71c1c;
-            max-width: 240px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            display: inline-block;
-        }
     </style>
-    <div class="toolbar">
-        <oda-button icon="icons:refresh" :label="loading ? '' : 'Обновить'" :disabled="loading" @tap="reload"></oda-button>
+    <div class="toolbar" header>
+        <oda-button no-flex icon="icons:refresh" :label="loading ? '' : 'Обновить'" :disabled="loading" @tap="reload"></oda-button>
         <oda-icon ~if="loading" icon="spinners:8-dots-rotate" :icon-size="20"></oda-icon>
     </div>
-    <div class="scroll">
-        <table>
-            <thead>
-                <tr>
-                    <th>Домен</th>
-                    <th>Продукт</th>
-                    <th>Покупатель</th>
-                    <th>Дата</th>
-                    <th>Статус</th>
-                    <th>Действия</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr ~for="orders" :class="$for.item.status || 'pending'">
-                    <td>{{$for.item.domainName || $for.item.subdomain}}</td>
-                    <td>{{$for.item.productLabel || $for.item.tariff}}</td>
-                    <td>{{$for.item.buyer}}</td>
-                    <td>{{formatDate($for.item.created)}}</td>
-                    <td>
-                        <span class="status" :class="$for.item.status || ''">{{$for.item.uiStatus}}</span>
-                        <div ~if="$for.item.error" class="err" :title="$for.item.error">{{$for.item.error}}</div>
-                    </td>
-                    <td>
-                        <div class="actions">
-                            <oda-button ~if="!$for.item.status" icon="icons:close" label="Отказать" @tap="reject($for.item)"></oda-button>
-                            <oda-button ~if="!$for.item.status" icon="icons:check" label="Принять" @tap="accept($for.item)"></oda-button>
-                            <oda-icon ~if="$for.item.status === 'in_progress'" icon="spinners:8-dots-rotate" :icon-size="18"></oda-icon>
-                            <oda-button ~if="$for.item.status === 'in_progress'" icon="icons:done" label="Завершить" @tap="complete($for.item)"></oda-button>
-                        </div>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+    <div class="scroll" flex vertical>
+        <oda-tree content flex show-header :items="orders" :columns :label="treeLabel"></oda-tree>
         <div ~if="!orders.length && !loading" class="empty">Заявок нет</div>
     </div>
     `,
@@ -121,13 +162,20 @@ export default {
         await this.reload();
     },
     _domainLabel(order) {
-        return order?.domainName || order?.subdomain || '';
+        return order?.domainName || order?.subdomain || order?.domain || '';
     },
     async reload() {
         if (this.loading) return;
         this.loading = true;
         try {
-            this.orders = await this.$item.fetch('listOrders') || [];
+            const list = await this.$item.fetch('listOrders') || [];
+            this.orders = list.map(o => ({
+                ...o,
+                id: o.domainName || o.subdomain || o.path || '',
+                'Продукт': o.productLabel || o.tariff || '',
+                'Покупатель': o.buyer || '',
+                'Дата': this.formatDate(o.created),
+            }));
         } catch (e) {
             console.error('[orders]', e);
             this.orders = [];

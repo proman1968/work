@@ -15,7 +15,7 @@ export class $handler extends $class{
         return await prototype;
     }
     async execute(...params) {
-        const module = this.module;
+        const module = await this.module;
         if (module.execute) {
             module.execute.call(this, ...params);
             return;

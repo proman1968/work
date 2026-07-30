@@ -4,6 +4,9 @@ const STATUS_HEADER = 'x-work-status';
 const SENT_AT_HEADER = 'x-work-sent-at';
 const ERROR_HEADER = 'x-work-error';
 const MAILBOX_HEADER = 'x-work-mailbox';
+const IMAP_UID_HEADER = 'x-work-imap-uid';
+const IMAP_UIDVALIDITY_HEADER = 'x-work-imap-uidvalidity';
+const IMAP_FOLDER_HEADER = 'x-work-imap-folder';
 
 export function parseEml(raw) {
     raw = String(raw ?? '');
@@ -33,7 +36,15 @@ export function setEmlHeaders(raw, patch) {
             headers[key] = String(v);
     }
     const standard = ['from', 'to', 'subject', 'date'];
-    const work = [STATUS_HEADER, SENT_AT_HEADER, ERROR_HEADER, MAILBOX_HEADER];
+    const work = [
+        STATUS_HEADER,
+        SENT_AT_HEADER,
+        ERROR_HEADER,
+        MAILBOX_HEADER,
+        IMAP_UID_HEADER,
+        IMAP_UIDVALIDITY_HEADER,
+        IMAP_FOLDER_HEADER,
+    ];
     const lines = [];
     for (const key of standard) {
         if (headers[key])
@@ -119,4 +130,58 @@ export function pendingOutboxEml(raw, address) {
     return raw;
 }
 
-export { STATUS_HEADER, MAILBOX_HEADER };
+/** Имя файла .eml из IMAP path (без расширения). */
+export function imapFolderToFilename(imapPath, delimiter = '/') {
+    let name = String(imapPath ?? '').trim();
+    if (!name)
+        return 'mailbox';
+    if (name.toUpperCase() === 'INBOX')
+        return 'inbox';
+    const delims = new Set(['/', '\\']);
+    if (delimiter)
+        delims.add(delimiter);
+    for (const d of delims) {
+        if (d && name.includes(d))
+            name = name.split(d).filter(Boolean).join('_');
+    }
+    name = name.replace(/[<>:"|?*]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!name)
+        return 'mailbox';
+    if (name.toUpperCase() === 'INBOX')
+        return 'inbox';
+    return name;
+}
+
+/** Курсор синхронизации из текущего .eml */
+export function readImapCursor(raw) {
+    const uid = Number(getEmlHeader(raw, IMAP_UID_HEADER));
+    const uidValidity = getEmlHeader(raw, IMAP_UIDVALIDITY_HEADER);
+    const messageId = getEmlHeader(raw, 'message-id');
+    return {
+        uid: Number.isFinite(uid) && uid > 0 ? uid : 0,
+        uidValidity: uidValidity || '',
+        messageId: messageId || '',
+    };
+}
+
+/** Проставить IMAP-курсор и служебные заголовки в RFC822 */
+export function stampImapCursor(raw, { uid, uidValidity, folder, address } = {}) {
+    const patch = {};
+    if (uid != null && uid !== '')
+        patch[IMAP_UID_HEADER] = String(uid);
+    if (uidValidity != null && uidValidity !== '')
+        patch[IMAP_UIDVALIDITY_HEADER] = String(uidValidity);
+    if (folder)
+        patch[IMAP_FOLDER_HEADER] = String(folder);
+    if (address)
+        patch[MAILBOX_HEADER] = String(address);
+    return setEmlHeaders(raw, patch);
+}
+
+export {
+    STATUS_HEADER,
+    MAILBOX_HEADER,
+    IMAP_UID_HEADER,
+    IMAP_UIDVALIDITY_HEADER,
+    IMAP_FOLDER_HEADER,
+};
