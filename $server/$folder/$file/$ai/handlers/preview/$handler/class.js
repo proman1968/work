@@ -82,7 +82,8 @@ function migrateRibbon(ribbon) {
             b.type = 'questions';
             b.button = b.button || { label: 'Уточнить', color: 'success' };
         }
-        if ((b.type === 'questions' || b.type === 'form' || b.type === 'action') && !b.answered) {
+        if ((b.type === 'questions' || b.type === 'form' || b.type === 'action'
+            || b.type === 'plan' || b.type === 'report') && !b.answered) {
             const follow = ribbon.slice(i + 1).some(x => x.type === 'prompt' || x.role === 'user' || x.type === 'task');
             if (follow) b.answered = true;
         }
@@ -332,12 +333,12 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        const payload = { text: label, confirm: !!ok, role: this._userRole() };
+        const payload = { prompt: label, confirm: !!ok, role: this._userRole() };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;
         }
-        this.$item.fetch('prompt', {}, JSON.stringify(payload))
+        this.$item.fetch('prompt', payload)
             .catch(e => console.warn('[ai-preview] confirm:', e.message))
             .finally(() => { this.sending = false; });
     },
@@ -365,20 +366,6 @@ export default {
         let text = String(this.value ?? '').trim();
         const external = this.files.filter(f => f instanceof File);
         const internal = this.files.filter(f => f.internalPath);
-        if (external.length) {
-            try {
-                const fd = new FormData();
-                fd.append('message', text || 'Файлы без текста');
-                for (const f of external) fd.append('file', f, f.name);
-                const storage = this.$item?.$class || this.$item?.$parent;
-                const result = await storage?.fetch?.('save_files', { message: text || 'Файлы без текста' }, fd);
-                const paths = result?.includes || (result?.path ? [result.path] : []);
-                if (paths.length)
-                    text += (text ? '\n' : '') + 'Загружены файлы:\n' + paths.join('\n');
-            } catch (e) {
-                console.warn('[ai-preview] save_files:', e.message);
-            }
-        }
         if (internal.length)
             text += (text ? '\n\n' : '') + 'Прикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
 
@@ -387,11 +374,17 @@ export default {
         this._autoFollow = true;
         this._scrollBottom();
         try {
-            const result = await this.$item.fetch('prompt', {}, JSON.stringify({
-                text: text || 'Обработай прикреплённые файлы',
+            const params = {
+                prompt: text || (external.length ? 'Обработай прикреплённые файлы' : ''),
                 model: this.selectedModel || undefined,
                 role: this._userRole(),
-            }));
+            };
+            let post = null;
+            if (external.length) {
+                post = new FormData();
+                for (const f of external) post.append('file', f, f.name);
+            }
+            const result = await this.$item.fetch('prompt', params, post);
             if (result?.ok === false) {
                 this.streamingText = '⚠️ ' + (result.error || 'Ошибка');
                 this.pending = false;
