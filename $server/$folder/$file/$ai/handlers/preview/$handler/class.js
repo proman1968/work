@@ -82,7 +82,8 @@ function migrateRibbon(ribbon) {
             b.type = 'questions';
             b.button = b.button || { label: 'Уточнить', color: 'success' };
         }
-        if ((b.type === 'questions' || b.type === 'form' || b.type === 'action') && !b.answered) {
+        if ((b.type === 'questions' || b.type === 'form' || b.type === 'action'
+            || b.type === 'plan' || b.type === 'report') && !b.answered) {
             const follow = ribbon.slice(i + 1).some(x => x.type === 'prompt' || x.role === 'user' || x.type === 'task');
             if (follow) b.answered = true;
         }
@@ -332,7 +333,7 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        const payload = { text: label, confirm: !!ok, role: this._userRole() };
+        const payload = { prompt: label, confirm: !!ok, role: this._userRole() };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;
@@ -388,7 +389,7 @@ export default {
         this._scrollBottom();
         try {
             const result = await this.$item.fetch('prompt', {}, JSON.stringify({
-                text: text || 'Обработай прикреплённые файлы',
+                prompt: text || 'Обработай прикреплённые файлы',
                 model: this.selectedModel || undefined,
                 role: this._userRole(),
             }));
@@ -419,7 +420,7 @@ export default {
         window.speechSynthesis?.cancel();
         if (this._audioEl) { this._audioEl.pause(); this._audioEl = null; }
         if (this.$item?.path) {
-            this.$item.fetch('prompt', {}, JSON.stringify({ stop: true }))
+            this.$item.fetch('stop', {})
                 .catch(e => console.warn('[ai-preview] stop:', e.message));
         }
     },
@@ -585,9 +586,15 @@ export default {
         });
         tree.execute = async (item) => {
             this.selectedModel = item.path;
-            if (this.data) {
+            if (this.data)
                 this.data.model = item.path;
-                try { await this.$item.fetch('save', {}, JSON.stringify(this.data, null, 2)); } catch {}
+            if (this.$item?.path) {
+                try {
+                    await this.$item.fetch('change_model', {}, JSON.stringify({ model: item.path }));
+                }
+                catch (err) {
+                    console.warn('[ai-preview] change_model:', err.message);
+                }
             }
             for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
             this._focus();

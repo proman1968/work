@@ -10,8 +10,8 @@
 
 ## 3. Как это работает
 
-1. Продукт создаётся во вкладке form `products` категории (например PAAS): диалог по `FIELDS` → `save_file` на `$item` формы с ролью form.
-2. Файл попадает в зону роли (`work_zone`): USER → `meta_folder/work/product/*.product`. При создании form дописывает `status: published`.
+1. Продукт создаётся / правится / клонируется во вкладке form `products` категории (например PAAS): диалог по `FIELDS` + поле имени файла → `save_file` на `$item` формы с ролью form (edit с тем же именем заменяет файл целиком).
+2. Файл попадает в зону роли (`work_zone`): USER → `meta_folder/work/product/*.product`. При сохранении form дописывает `status: published`.
 3. Каждый `save_file` перезаписывает файл целиком → history + `data.logs` (канон §1.6).
 4. Удаление — `$file.delete({ role })`; ACL — `WRITE`.
 5. Витрина показывает карточки из `DATA` (только `published`); поля заказа задаёт handler категории, не `.product`.
@@ -19,18 +19,17 @@
 
 ## 4. Из чего это состоит
 
-- `class.js` — схема `FIELDS`: `label`, `price`, `description`
+- `class.js` — схема `FIELDS`: `label`, `price`, `description` (имя файла — только UI формы, не в данных)
 - `template.product` — запасной JSON для общего `create` по расширению
 
 ## 5. В каком это состоянии
 
 - ✅ Нейтральная схема карточки
-- ✅ Создание/удаление на MARKET/PAAS через form/products
+- ✅ Создание / редактирование / клонирование / удаление на MARKET/PAAS через form/products
 - ✅ Витрина MARKET/PAAS на `.product`
 - ❌ Preview / `on_save` (не нужны для MVP)
 
 ## 6. Дальнейшие планы
 
 - Preview карточки в ленте логов
-- Редактирование существующего `.product`
 - Override `$product` в категории, если понадобится специфика

@@ -6,6 +6,7 @@
 | Файл | Назначение |
 |------|------------|
 | [`rules.md`](/rules/rules.md/~/handlers/pages/form/) | Общие правила (документация, декларативный UI, контракты → минимальный код) |
+| [`styles.md`](/rules/styles.md/~/handlers/pages/form/) | Системные стили ODA: когда/как (attrs, `@apply`, тема) |
 | [`user.md`](/rules/user.md/~/handlers/pages/form/) | Роль USER |
 | [`boss.md`](/rules/boss.md/~/handlers/pages/form/) | Роль BOSS |
 | [`admin.md`](/rules/admin.md/~/handlers/pages/form/) | Роль ADMIN |

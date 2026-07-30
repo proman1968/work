@@ -30,6 +30,9 @@ export default {
         </div>
         <item-tree ~if="showHandlers" @resize :hide-tops :hide-roots expander-order="1" expand-all :$item="handlersRoot" :allow-categories></item-tree>
     `,
+    get $context(){
+        return this.$item
+    },
     hideRoots: 2,
     hideTops: 1,
     allowCategories: true,

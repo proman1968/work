@@ -51,7 +51,7 @@ Tip-кнопки — **над** полем «Сообщение…» в `microch
 
 - В **form chat** (нет получателей) выбор нейросети в AI-режиме промпт-бара → поле `model` в создаваемом `task.ai`.
 - `on_save` не затирает клиентский `model` (`body.model || findFirstModel()`).
-- В preview смена модели через `item-node` / `/MODELS` пишет в `data.model` (источник правды для задачи).
+- В preview смена модели через `item-node` / `/MODELS` → `fetch('change_model')` → `body.model` (без полного `save` / `on_save`).
 
 ## TTS
 
@@ -64,7 +64,7 @@ Tip-кнопки — **над** полем «Сообщение…» в `microch
 ## Pending (ИИ работает)
 
 - Слот mic = `av:stop` + `:rainbow="pending"` → `stopGeneration()`; радуга только на кнопке (`:rainbow`, не голый атрибут).
-- Stop → `prompt { stop: true }` + серверный abort текущего цикла; `task` / `pendingPlan` не отменяются.
+- Stop → `fetch('stop')` + серверный abort текущего цикла; `task` / `pendingAction` не отменяются.
 - После Stop UI игнорирует `chat.delta` (`_userStopped`), пока не будет новый `send` / `confirm`.
 - Первый ход после `on_save` (без `send`): `pending` по эвристике «есть prompt, нет ответа AI» + на `chat.delta`.
 - В ленте при стриме — только текст токенов (без панели «Думаю/Генерирую»).
