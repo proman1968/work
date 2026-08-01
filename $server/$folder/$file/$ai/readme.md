@@ -2,7 +2,7 @@
 
 ## 1. Что это
 
-Тип `$ai` — файловый носитель диалога и PDCA-цикла встроенного ИИ WORK (`task.ai`). Технически это JSON с `ribbon`, планом и контекстом; прикладно — панель управления задачей агента в зоне роли USER / BOSS / ADMIN.
+Тип `$ai` — файловый носитель диалога и PDCA-цикла встроенного ИИ WORK (`task.ai`). Технически это JSON с `items`, планом и контекстом; прикладно — панель управления задачей агента в зоне роли USER / BOSS / ADMIN.
 
 **Видение:** агент уровня Cursor/Cline **на пайплайне WORK** (не IDE-host). Дорожная карта — §7.
 
@@ -14,12 +14,17 @@
 
 1. Сохранение / обновление `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) вызывает `taskFile.prompt(...)`.
 2. **Два вида промптов, различаются ролью.** Реальный (role `USER|BOSS|ADMIN` — всегда приходит с клиента, default USER) пишется блоком `prompt` в ленту. Служебный (role `ASSISTENT` — самовызовы шагов плана и авто-ходов) подаётся **только на острие** messages текущего вызова модели: в ленту и в историю следующих ходов не попадает.
-3. `prompt` — **инстанс-метод файла** (наследуется из `class.js` типизатора через merge-цепочку, `this` = файл `task.ai`). **Реальный text — двухтактный ход:** 1) messages = system + контекст пары + история ribbon (только факты); 2) блок `prompt` в активный ribbon (чистый текст, без инъекций); 3) **такт 1 «думай»**: на острие промпт + `TYPES.prompt.servicePrompt`, functions не передаются, весь ответ целиком = блок `thinking`; 4) **такт 2 «маршрутизация»**: ответ пользователю обычным текстом (→ `text`, wait, стоп) ЛИБО ровно одно слово `research | plan | task | do | report` → блок-маршрут; 5) маршрут → expect-самовызов `this.async(() => this.prompt({role:'ASSISTENT', expect: тип, prompt: servicePrompt, _turn: turn+1}))`, лимит `MAX_AUTO_TURNS` → кнопка «Продолжить».
-4. **expect-ходы (ASSISTENT, один проход модели, без классификации словом):** `plan` | `report` — весь md-ответ → блок соответствующего типа + кнопка «Принять» (wait); `task` — «Сделай to do список из согласованного плана» → парс шагов → блок `task` (`state: active`, `steps`, свой `ribbon`) + инъекция первого пункта; `step` | `do` | `research` — **FC-ход**: `buildFunctionsList` контекста → `streamChat({messages, functions})` → ровно один вызов функции или ответ текстом (wait). `research` — только read-only набор (`search`, `fetch_url`, `read_file`, `get_schema`, `find_text`, …), авто-цепочка без кнопок.
-5. **Подтверждение изменений.** Любой метод, меняющий файлы (`save_file`/`edit`/`write_file` + `DANGEROUS_METHODS`), — **только через кнопку**: `body.pendingAction = {calls}` + action «Действие/Выполнить», без trust-автопропуска. Read-only вызовы исполняются сразу (`executeToolCall`) → `tool`+`tool_result` → продолжение (в задаче — возврат к пункту, research — следующий поиск, иначе — двухтактный ход). `ask_user({questions})` → блок `questions` (wait).
-6. **Кнопки и ответы (реальный вход).** `confirm` по `pendingAction` — выполнить/отклонить вызовы; «Принять» блока `plan` → expect-ход `task`; «Принять» блока `report` → задача `completed` (без хода модели); прочие кнопки — prompt-факт + продолжение. `answers` → закрытие `questions`/`form` (`applyAnswers`), clarify-шаг закрывается сам (`autoAdvanceClarifyStep`) → следующий пункт.
-   **Движок шагов:** пункт уходит инъекцией `makeStepInstruction` (step-prompt'ов в ленте нет); `complete_step({step, summary})` с воротами `stepEvidence` ставит `done` и шлёт следующий пункт; все пункты done → expect-ход `report`.
-7. Интернет: сервисные tools `search` / `fetch_url` (`services/SearXNG`, `/SERVICES/*` → FC автоматически).
+3. `prompt` — **инстанс-метод файла** (наследуется из `class.js` типизатора через merge-цепочку, `this` = файл `task.ai`). Реальный text → блок `prompt` в активный `items` → `_walk(await _pipe())`. Служебный вход — сразу `_walk(...)` без блока.
+4. **Конечный автомат `PIPE`** — дерево состояний вынесено в [`pipe.js`](/$server/$folder/$file/$ai/pipe.js) (`export default`, грузится лениво через `pipe` → `importScript` и кэшируется на инстансе). Один движок `_walk`. Узел = состояние: `prompt` (генерация/инъекция), `inject` (подсказка меню родителя), `next` (дети), `button` (wait), `fc` (function-calling), `askType`. Корень — `thinking`.
+   - **Заход в узел**: если есть `prompt` — проход модели (с `fc` если есть, иначе без функций). `thinking` мерджит инструкцию в последний user-промпт; прочие узлы добавляют новое user-сообщение.
+   - **Маршрутизация**: `next` из 1 узла → переход напрямую (ASSISTENT); `next` из N узлов → меню «Ответь ОДНИМ словом:\n» + `step — inject` по детям → модель выбирает → переход; не слово → `text` (wait).
+   - **Wait-узел** (`button`) → блок + кнопка, стоп до клиента. `plan`/`report` — md + «Принять»; `form`/`questions`/`text` — ask/text + кнопка.
+   - **Лист**: `fc`-узел (`web`/`file`/`action`) → `_handle_call` + continue на `thinking`; без `fc` (`step`) → отрендеренный `prompt` как continue-строка (ASSISTENT → `thinking`). `fc`: массив имён | `'*'` (все) | `'readonly'` (только `!mutates` — поиск в рабочей области без записи).
+   - **Ворот `allDone`** в `thinking`: все steps done → форс `report`. При active task — инъекция текущего пункта (`_step_injection`) на острие.
+5. **Подтверждение изменений.** Метод, меняющий файлы/систему, помечен флагом `mutates` (из JSDoc-тега `@mutates` владельца метода — `buildAiSchema` пробрасывает в схему; harness-псевдометоды `save_file`/`edit` несут `mutates` в `HARNESS_FUNCTIONS`). Любой `mutates`-вызов — **только через кнопку**: `body.pendingAction = {calls}` + action «Выполнить», без trust-автопропуска. Read-only вызовы исполняются сразу (`_execute_call`) → `tool`+`tool_result` → continue. `ask_user({questions})` → блок `questions`/`form` (wait).
+6. **Кнопки и ответы (реальный вход, разбор в `prompt` → `_resolve_button`).** `confirm` по `pendingAction` — выполнить/отклонить вызовы; «Принять» блока `plan` → `_walk` к узлу `task`; «Принять» блока `report` → задача `completed` + выход на родительский `items` (если есть); `answers` → значения в поля `questions`/`form` + continue.
+   **Движок шагов:** пункт уходит инъекцией `step.prompt` (step-prompt'ов в ленте нет); `complete_step({step, summary})` ставит `done` и шлёт следующий пункт; все пункты done → ворот `allDone` → `report`.
+7. Интернет: сервисные tools `search` / `fetch_url` (`/SERVICES/*` → FC автоматически).
 8. **Служебные методы файла:** `stop` — abort текущего цикла (стрим + самовызовы; task/pendingAction не трогает); `change_model({model})` — запись модели в body без on_save.
 9. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
 
@@ -27,7 +32,8 @@
 
 ## 4. Из чего это состоит
 
-- `class.js` — **весь ИИ-харнесс**: схема `TYPES` + `servicePrompt`, методы `prompt` / `stop` / `change_model`, tools + ACL, контекст пары
+- `class.js` — **весь ИИ-харнесс**: движок `_walk` + ленивая загрузка дерева `PIPE` из `pipe.js`, методы `prompt` / `stop` / `change_model`, tools + ACL, контекст пары
+- `pipe.js` — **дерево пайплайна** (конечный автомат, `export default`): узлы-состояния, промпты, `inject`/`next`/`button`/`fc`/`askType`
 - `triggers/on_save/$trigger/` — вход в цикл (`taskFile.prompt(...)`)
 - `handlers/preview/$handler/` — микрочат
 
@@ -35,26 +41,26 @@
 
 ## 5. В каком это состоянии
 
-**Harness — автомат с expect-ходами** (`prompt`). Полный цикл: думай → маршрут словом → expect-ходы (plan/report md + «Принять», task-движок, FC-ходы do/research/step) → подтверждение файл-модифицирующих вызовов кнопкой. Служебные методы файла: `stop` (abort цикла), `change_model` (`body.model` без on_save). Не перенесено: subplan-декомпозиция в ходе, teach-ворота прозы, spawn_agent, usage-учёт, текстовый fallback FC для моделей без functionCalling.
+**Harness — конечный автомат `PIPE` с одним движком `_walk`.** Полный цикл: `prompt` → блок prompt → `_walk(thinking)` → думай → маршрут словом → узел (plan/report md + «Принять», task to-do, FC-ходы action/research) → подтверждение файл-модифицирующих вызовов кнопкой. Служебные методы файла: `stop` (abort цикла), `change_model` (`body.model` без on_save). Не перенесено: subplan-декомпозиция в ходе, teach-ворота прозы, spawn_agent, usage-учёт, текстовый fallback FC для моделей без functionCalling.
 
-- ✅ Автомат: prompt → thinking → маршрут `research|plan|task|do|report|text`; маршруты в TYPES и истории; продолжение expect-самовызовами с лимитом `MAX_AUTO_TURNS` → «Продолжить»; fallback модели через `findFirstModel`
-- ✅ expect-ходы: `plan`/`report` — md-блок + «Принять» (plan → запуск task, report → completed); `task` — to-do → `task.steps` + инъекции пунктов (`makeStepInstruction`, ворота `stepEvidence`, `complete_step`); `step`/`do`/`research` — FC-ходы (`buildFunctionsList` + `streamChat({functions})`), research — read-only набор
-- ✅ Подтверждение изменений: любой файл-модифицирующий вызов → `pendingAction` + «Выполнить» (без trust-автопропуска); read-only — сразу; `ask_user` → блок `questions`
-- ✅ `stop` — abort текущего цикла (`streamTurn` / самовызовы); `task` / `pendingAction` не сбрасывает; preview → `fetch('stop')`
-- ✅ `change_model` — запись `body.model` через fsp (без on_save); preview → `fetch('change_model')`
-- ✅ Автомат «одно действие за ход»: реальный промпт → думать → thinking → развилка; инъекции только на острие (в ленте и истории нет `[инструкция]`)
-- ✅ Роль-дискриминатор: реальные промпты (USER/BOSS/ADMIN с клиента) vs служебные (ASSISTENT-самовызовы); ролевые варианты `TYPES.*.servicePrompt`
-- ✅ Движок шагов: `complete_step` → done + следующий пункт ASSISTENT-инъекцией; «Принять» Отчёта → `completed`
-- ✅ Ворота `stepEvidence` (по `step.startedAt`): clarify-шаг = answered опрос, do-шаг = успешный tool_result; Отчёт — только реальные артефакты (`collectArtifacts`)
-- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `navigate` / `reset_context` / `complete_step` / `inspect_schema` / …
-- ✅ Интернет: `search` + `fetch_url` (сервис SearXNG)
-- ✅ Skills-as-tools: `list_skills` / `run_skill`
-- ✅ `@/path` mentions в промпте → сниппеты в context
+- ✅ Конечный автомат `PIPE` вынесен в `pipe.js` (`export default`, геттер `pipe` → `importScript` + кэш): узлы-состояния (`thinking`/`plan`/`task`/`step`/`research`/`search`/`web`/`file`/`ask`/`form`/`questions`/`text`/`action`/`report`), `inject`/`next`/`button`/`fc`; один движок `_walk` (вместо `_<route>` хендлеров и `_confirm`)
+- ✅ Маршрутизация: 1 ребёнок → напрямую; N → меню из `inject`; `thinking` мерджит инструкцию в user-промпт
+- ✅ Wait-узлы: `plan`/`report` — md + «Принять»; `form`/`questions`/`text` — ask/text + кнопка; `action`+pendingAction — «Выполнить»
+- ✅ FC-узлы: `web`/`file`/`action` — `streamChat({functions})` → один вызов или text (wait); `form`/`questions` — `ask_user`. `fc`: массив имён | `'*'` | `'readonly'` (только `!mutates`)
+- ✅ Ворот `allDone` в `thinking` → форс `report`; `_step_injection` при active task
+- ✅ Разбор кнопок в `prompt` → `_resolve_button` (был `_confirm`): pendingAction, answers, «Принять» plan → `task`, «Принять» report → `completed`
+- ✅ Движок шагов: `complete_step` → done + следующий пункт; `step.prompt` как continue-строка
+- ✅ Подтверждение изменений: флаг `mutates` (JSDoc `@mutates` владельца + harness) → `pendingAction` + «Выполнить»; read-only — сразу; `ask_user` → `questions`/`form`. Костыли `WRITE_METHODS`/`WORK_READ_METHODS` удалены — единый владелец инварианта (схема метода)
+- ✅ `stop` — abort текущего цикла; `change_model` — `body.model` через fsp (без on_save)
+- ✅ Роль-дискриминатор: реальные (USER/BOSS/ADMIN с клиента) vs служебные (ASSISTENT-самовызовы)
+- ✅ Harness tools: `read_file` / `save_file` / `edit` / `ask_user` / `complete_step` / `get_schema` / `inspect_schema` / `find_text` / `find_item` / `info` / `logs`
+- ✅ Интернет: `search` + `fetch_url` (`/SERVICES/*`)
 - ✅ Авто-ходы через `this.async` (лимит `MAX_AUTO_TURNS` → action «Продолжить»)
 - ✅ GigaChat / z.ai function calling
 - ✅ Контекст пары class+user; ACL + pendingAction
 - ✅ Preview microchat + TTS Piper
-- 🔧 subplan / spawn_agent / usage / teach-ворота — хелперы ещё в файле, в новый `prompt` не подключены
+- ✅ Вложения через `post` (FormData → `_handle_attachments`)
+- 🔧 subplan / spawn_agent / usage / teach-ворота — не подключены
 - ❌ host file-handlers / skill-router (запрещены)
 - 🔧 Параллельные subagents; trust markings UI; hot-reload self-mod (фаза 5)
 

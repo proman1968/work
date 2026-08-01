@@ -12,9 +12,9 @@
 
 1. Сайт `MARKET` (shell `site` из `~`) — меню категорий.
 2. Категория `PAAS`: handlers под `$class/` — `site/main` с карточками товаров.
-3. Товары — файлы `*.product` (`label`, `price`, `description`) в `work/product/` зоны роли. Main: `~//product`, только `status === published`.
-4. Управление — form-view `products`: таблица, add/delete с ролью form → `save_file` / `delete` на класс категории.
-5. Клик по карточке → модалка: описание + поле **«Имя домена»** (`domainName`) + «Заказать».
+3. Товары — файлы `*.product` по схеме [`$product.FIELDS`](/$server/$folder/$file/$product/class.js/~/handlers/pages/form/) (`label`, `price`, `description`) в зоне роли. Main: `~//product`, только `status === published`.
+4. Управление — form-view `products`: таблица и диалог по `$product.FIELDS` → `save_file` / `delete` на класс категории.
+5. Клик по карточке → модалка: описание + поля заказа из [`$bid.FIELDS`](/$server/$folder/$file/$bid/class.js/~/handlers/pages/form/) → `input.fields` (не хардкод в handler) + «Заказать».
 6. «Заказать» → auth при необходимости → `{uid}.bid` на `/MARKET/PAAS` (`status`, `product` + `$Link`, `input`) → всегда `submitOrder` на `/SERVICES/ArgoCD/PaaS` (`pass.order`: `status`, `$Link` → `.bid`, `product`, `input`).
 
 ## 4. Из чего это состоит
@@ -30,6 +30,7 @@
 
 - ✅ `$product` — нейтральная карточка (название, стоимость, описание)
 - ✅ PAAS form/products + витрина; заказ через `.bid` + `pass.order`
+- ✅ Форма заказа читает `$bid.FIELDS.input`
 - ❌ Биллинг / DNS fqdn в теле заявки (baseDomain — настройка сервиса)
 
 ## 6. Дальнейшие планы

@@ -16,16 +16,18 @@
 4. `listOrders` читает `$service/order/.pass.order/history/`.
 5. `acceptOrder` → `this.provision` → `/PAAS/{domainName}` + `createApplication`.
 
-`baseDomain` / DNS — настройки сервиса, в заказ не пишутся.
+Настройки сервиса — top-level **`FIELDS`** (канон как у `$product`/`$bid`): базовый ArgoCD + слой PaaS (`baseDomain`, `checkDnsUrl`) мержатся по `id`. Значения — корневые props `class.js`. Form **settings** строит UI по `FIELDS`; token — в `#secret`. `baseDomain` / DNS в заказ не пишутся.
 
 ## 4. Из чего это состоит
 
 - `methods/submitOrder` — запись `pass.order` (клиентский fetch с витрины)
-- `$service/class.js` — серверные методы экземпляра
-- Form `orders` (наследование с ArgoCD) — таблица заявок
+- `$folder/$class/.../class.js` — схема `FIELDS` PaaS (`baseDomain`, `checkDnsUrl`)
+- `$service/class.js` — значения настроек + серверные методы экземпляра
+- Form `orders` / `settings` (наследование с ArgoCD)
 
 ## 5. В каком это состоянии
 
 - ✅ Модель product + domainName
 - ✅ Методы на экземпляре PaaS
+- ✅ Настройки через FIELDS (не METADATA.STATIC)
 - ❌ Полный Helm/DNS pipeline

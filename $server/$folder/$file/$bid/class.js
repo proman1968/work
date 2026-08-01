@@ -8,7 +8,13 @@ export default {
             id: 'input',
             type: 'form',
             fields: [
-                { id: 'domainName', type: 'string', label: 'Имя домена' },
+                {
+                    id: 'domainName',
+                    type: 'string',
+                    label: 'Имя домена',
+                    required: true,
+                    placeholder: 'my-company',
+                },
             ],
         },
     ],

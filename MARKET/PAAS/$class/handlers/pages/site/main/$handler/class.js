@@ -1,13 +1,30 @@
-/** Поля заявки PAAS — не из .product. */
-const PAAS_ORDER_FIELDS = [
-    {
-        id: 'domainName',
-        label: 'Имя домена',
-        type: 'text',
-        required: true,
-        placeholder: 'my-company',
-    },
-];
+/** Поля заявки — из $bid.FIELDS → input.fields (не из .product). */
+async function loadBidInputFields() {
+    const urls = [
+        '/$server/$folder/$file/$bid/class.js',
+        '/$folder/$file/$bid/class.js',
+    ];
+    for (const url of urls) {
+        try {
+            const mod = await import(url);
+            const fields = mod?.default?.FIELDS;
+            if (!Array.isArray(fields))
+                continue;
+            const input = fields.find(f => f.id === 'input');
+            if (Array.isArray(input?.fields) && input.fields.length)
+                return input.fields.slice();
+        } catch { /* next */ }
+    }
+    return [
+        {
+            id: 'domainName',
+            label: 'Имя домена',
+            type: 'string',
+            required: true,
+            placeholder: 'my-company',
+        },
+    ];
+}
 
 ODA({
     is: 'market-product-card',
@@ -132,6 +149,7 @@ ODA({
     product: null,
     $context: null,
     formData: {},
+    formFields: [],
     error: '',
     busy: false,
     orderDone: false,
@@ -146,9 +164,6 @@ ODA({
     get description() {
         return this.product?.description || '';
     },
-    get formFields() {
-        return PAAS_ORDER_FIELDS;
-    },
     isText(field) {
         const t = String(field?.type || 'text').toLowerCase();
         return t !== 'textarea';
@@ -161,14 +176,21 @@ ODA({
         if (['text', 'email', 'number', 'date'].includes(t)) return t;
         return 'text';
     },
-    attached() {
+    async attached() {
+        await this._loadFields();
         this._initForm();
     },
-    productChanged() {
+    async productChanged() {
+        await this._loadFields();
         this._initForm();
         this.orderDone = false;
         this.error = '';
         this.resultName = '';
+    },
+    async _loadFields() {
+        if (this.formFields?.length)
+            return;
+        this.formFields = await loadBidInputFields();
     },
     _initForm() {
         const data = {};

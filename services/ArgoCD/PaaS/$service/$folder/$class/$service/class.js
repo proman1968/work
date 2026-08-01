@@ -1,19 +1,8 @@
 export default {
     icon: 'carbon:ibm-cloud-pak-applications',
     label: 'PaaS',
-    METADATA: {
-        STATIC: {
-            id: 'STATIC',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'baseDomain',
-                type: 'String',
-                placeholder: 'odant.org',
-            }, {
-                id: 'checkDnsUrl',
-                type: 'String',
-                placeholder: 'https://ns1.odant.org',
-            }],
-        },
-    },
+    FIELDS: [
+        { id: 'baseDomain', type: 'string', label: 'baseDomain', placeholder: 'odant.org' },
+        { id: 'checkDnsUrl', type: 'string', label: 'checkDnsUrl', placeholder: 'https://ns1.odant.org' },
+    ],
 };

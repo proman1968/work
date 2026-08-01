@@ -17,6 +17,7 @@
     </style>
 </head>
 <body>
+    <dev-mode-panel id="devModePanel" style="display: none;"></dev-mode-panel>
     <script type="module">
         const item_path = "{item_path}";
         const page_handler = "{handler}";
@@ -66,8 +67,65 @@
                             p.hidePopover();
                     }
                 }
-            })
+            });
+            if(window.top === window && {dev_mode}){
+                const devPanel = document.getElementById('devModePanel');
+                devPanel.$item = $item;
+                devPanel.style = '';
+            }
         }
+        ODA({
+            is: 'dev-mode-panel',
+            template: `
+            <style>
+                :host{
+                    @apply --error;
+                    @apply --horizontal;
+                    @apply --center;
+                    flex-wrap: wrap;
+                    width: 100%;
+                    padding: 4px;
+                    gap: 8px;
+
+                    div{
+                        text-align: center;
+                    }
+
+                    oda-button{
+                        @apply --content;
+                        border-radius: 5px;
+                    }
+                }
+            </style>
+            <div>СЕРВЕР РАБОТАЕТ В РЕЖИМЕ ОТЛАДКИ</div>
+            <oda-button ~if="showRebootButton" raised icon="carbon:reset" label="в обычный" @click="reboot"></oda-button>
+            `,
+            $item: null,
+            get showRebootButton(){
+                // todo: сделать правильную проверку на админа
+                if (!this.$item) return false;
+                return Promise.resolve(this.$item.admin).then(admin => admin?.id === WORK.uid);
+            },
+            async reboot(e){
+                const btn = e.currentTarget;
+                btn.setAttribute('disabled', '');
+                try{
+                    const el = document.createElement('p');
+                    el.style = 'margin: 32px;';
+                    el.textContent = 'Вы уверены, что хотите перезапустить сервер в обычном режиме?';
+                    await await WORK.showDialog(el, {
+                        TITLE: { label: 'Подтверждение', icon: 'carbon:warning-alt' },
+                        OK: { label: 'Перезапустить', icon: 'carbon:reset' },
+                        CANCEL: { label: 'Отмена', icon: 'carbon:close' },
+                    });
+                    console.warn('reboot');
+                }
+                catch(err){
+                    console.error(err);
+                }
+                btn.removeAttribute('disabled');
+            }
+        })
     </script>
 </body>
 </html>

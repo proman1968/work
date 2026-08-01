@@ -66,7 +66,10 @@ ODA({
     get isWarning() { return this.row?.status === 'in_progress'; },
     get isError() { return this.row?.status === 'rejected'; },
     get isSuccess() { return this.row?.status === 'completed'; },
-    get isPending() { return !this.row?.status; },
+    get isPending() {
+        const st = this.row?.status;
+        return !st || st === 'in_processing';
+    },
 });
 
 ODA({
@@ -86,13 +89,17 @@ ODA({
                 @apply --no-flex;
             }
         </style>
-        <oda-button ~if="!row?.status" no-flex icon="icons:close" title="Отказать" @tap="call('reject')"></oda-button>
-        <oda-button ~if="!row?.status" no-flex icon="icons:check" title="Принять" @tap="call('accept')"></oda-button>
+        <oda-button ~if="isPending" no-flex icon="icons:close" title="Отказать" @tap="call('reject')"></oda-button>
+        <oda-button ~if="isPending" no-flex icon="icons:check" title="Принять" @tap="call('accept')"></oda-button>
         <oda-icon ~if="row?.status === 'in_progress'" icon="spinners:8-dots-rotate" :icon-size="18"></oda-icon>
         <oda-button ~if="row?.status === 'in_progress'" no-flex icon="icons:done" title="Завершить" @tap="call('complete')"></oda-button>
     `,
     row: null,
     col: null,
+    get isPending() {
+        const st = this.row?.status;
+        return !st || st === 'in_processing';
+    },
     call(name) {
         let n = this.$pdp;
         while (n) {

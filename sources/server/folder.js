@@ -1321,7 +1321,9 @@ export class $folder extends $item{
         let filename = params.filename
         if (params.folder) {
             dir += '/' + params.folder;
-            filename = params.folder + '/' + filename
+            filename = params.folder + '/' + filename;
+            // для правильной работы сохранения history и log
+            delete params.folder;
         }
 
         if (!fs.existsSync(dir)) {

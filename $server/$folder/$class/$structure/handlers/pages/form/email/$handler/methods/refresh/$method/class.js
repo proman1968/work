@@ -113,12 +113,12 @@ async function syncMailboxFolder(client, storage, {
                 });
                 const env = msg.envelope || {};
                 const meta = {
-                    subject: env.subject || getEmlHeader(raw, 'subject') || '(без темы)',
-                    from: formatAddrs(env.from) || getEmlHeader(raw, 'from'),
-                    to: formatAddrs(env.to) || getEmlHeader(raw, 'to'),
+                    subject: env.subject || getEmlHeader(raw, 'Subject') || '(без темы)',
+                    from: formatAddrs(env.from) || getEmlHeader(raw, 'From'),
+                    to: formatAddrs(env.to) || getEmlHeader(raw, 'To'),
                     date: env.date
                         ? new Date(env.date).toISOString()
-                        : (getEmlHeader(raw, 'date') || new Date().toISOString()),
+                        : (getEmlHeader(raw, 'Delivery-Date') || new Date().toISOString()),
                 };
                 await storage.save_file({
                     filename,

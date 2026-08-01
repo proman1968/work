@@ -1,14 +1,78 @@
 export default {
     icon: 'enterprise:email',
-    imports: 'oda//app-layout',
-    extends: 'oda-app-layout',
+    imports: 'oda//button, oda//icon',
     template: /* html */`
-        <oda-form-email slot="main" flex :$item></oda-form-email>
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --flex;
+            }
+            .email-top-panel {
+                @apply --horizontal;
+                gap: 4px;
+                align-items: center;
+            }
+        </style>
+        <div class="email-top-panel" slot="top-panel" horizontal>
+            <oda-button icon="icons:add" @tap="$('oda-form-email')?.createEmail?.()" title="Написать"></oda-button>
+            <oda-button icon="icons:refresh" @tap="$('oda-form-email')?.fetchRefresh?.()" title="Обновить"></oda-button>
+        </div>
+        <oda-form-email flex :$item></oda-form-email>
     `,
     async showSettings($item, ...params) {
         // todo: заменить $item на this, когда заработает bind
         return runEmailSettingsDialog($item);
+    },
+}
+
+/** RFC 2047: один encoded-word → строка (ошибка → null). */
+function decodeMimeWord(charset, encoding, data) {
+    try {
+        let bytes;
+        const enc = String(encoding || '').toUpperCase();
+        if (enc === 'B') {
+            const bin = atob(String(data || '').replace(/\s+/g, ''));
+            bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+        }
+        else if (enc === 'Q') {
+            const q = String(data || '').replace(/_/g, ' ');
+            const out = [];
+            for (let i = 0; i < q.length; i++) {
+                if (q[i] === '=' && i + 2 < q.length) {
+                    const hex = q.slice(i + 1, i + 3);
+                    if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+                        out.push(parseInt(hex, 16));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push(q.charCodeAt(i));
+            }
+            bytes = new Uint8Array(out);
+        }
+        else {
+            return null;
+        }
+        const cs = String(charset || 'utf-8').trim().toLowerCase();
+        const label = cs === 'utf8' ? 'utf-8' : cs;
+        return new TextDecoder(label).decode(bytes);
     }
+    catch {
+        return null;
+    }
+}
+
+/** RFC 2047 encoded-words в значении заголовка; без =?...?= — без изменений. */
+function decodeRfc2047(str) {
+    str = String(str ?? '');
+    if (!str.includes('=?'))
+        return str;
+    // LWSP только между соседними encoded-word удаляется (RFC 2047 §6.2)
+    str = str.replace(/(\=\?[^?]+\?[bBqQ]\?[^?]*\?=)(\s+)(?=\=\?)/g, '$1');
+    return str.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (full, charset, encoding, data) => {
+        const decoded = decodeMimeWord(charset, encoding, data);
+        return decoded != null ? decoded : full;
+    });
 }
 
 function parseEmlClient(raw) {
@@ -22,6 +86,8 @@ function parseEmlClient(raw) {
         if (m)
             headers[m[1].toLowerCase()] = m[2].trim();
     }
+    for (const key of Object.keys(headers))
+        headers[key] = decodeRfc2047(headers[key]);
     return {
         headers,
         body,
@@ -32,9 +98,69 @@ function parseEmlClient(raw) {
     };
 }
 
+/** path лога: …/message/.<account>/<box>.eml… */
 function mailboxFromPath(path) {
-    const m = String(path || '').match(/\/([^/]+)\/email\/([^/]+)\/(inbox|outbox)\.eml\//i);
-    return m ? { structure: m[1], address: m[2], box: m[3].toLowerCase() } : null;
+    const m = String(path || '').match(/\/message\/\.([^/]+)\/(inbox|outbox|trash)\.eml/i);
+    if (!m)
+        return null;
+    return {
+        address: decodeURIComponent(m[1]),
+        box: m[2].toLowerCase(),
+    };
+}
+
+function accountAddresses(mailboxes = {}) {
+    const result = [];
+    for (const [key, box] of Object.entries(mailboxes || {})) {
+        const address = String(box?.auth?.user || box?.address || key || '').trim();
+        if (address && !result.includes(address))
+            result.push(address);
+    }
+    return result;
+}
+
+function asItemArray(value) {
+    if (value == null)
+        return [];
+    if (Array.isArray(value))
+        return value;
+    return [value];
+}
+
+function dayKeyFromEntry(entry) {
+    if (entry?.name)
+        return String(entry.name);
+    const parts = String(entry?.path || '').split('/').filter(Boolean);
+    return parts.pop() || '';
+}
+
+function parseLogContent(row) {
+    let meta = row?.content;
+    if (typeof meta === 'string') {
+        try {
+            meta = JSON.parse(meta);
+        }
+        catch {
+            meta = null;
+        }
+    }
+    if (!meta || typeof meta !== 'object')
+        return {};
+    return meta;
+}
+
+function formatMailDate(value) {
+    if (!value)
+        return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime()))
+        return String(value);
+    return d.toLocaleString([], {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 function defaultEml({ from, to, subject, body, address, status = 'pending' }) {
@@ -112,7 +238,8 @@ function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
 }
 
 async function runEmailSettingsDialog($item) {
-    const settings = await $item.$context.fetch('read_secret', { filename: 'email.json' });
+    const $context = $item.$context?.length ? $item.$context[0] : $item.$context;
+    const settings = await $context.fetch('read_secret', { filename: 'email.json' });
     const el = ODA.createElement('oda-email-settings', {
         accounts: mailboxesToAccounts(settings?.mailboxes),
     });
@@ -135,16 +262,11 @@ async function runEmailSettingsDialog($item) {
     try {
         el.validate();
         const mailboxes = accountsToMailboxes(el.accounts, settings?.mailboxes);
-        await $item.$context.fetch(
+        await $context.fetch(
             'save_secret',
             { filename: 'email.json' },
             JSON.stringify({ mailboxes }),
         );
-        // await $item.fetch(
-        //     'ensure_mailbox_folders',
-        //     {},
-        //     JSON.stringify({ mailboxes }),
-        // );
         return mailboxes;
     }
     catch (e) {
@@ -232,12 +354,6 @@ ODA({
             .port {
                 max-width: 72px;
             }
-            .presets {
-                @apply --horizontal;
-                gap: 4px;
-                flex-wrap: wrap;
-                padding: 4px 0 8px;
-            }
             .empty {
                 padding: 24px;
                 opacity: .6;
@@ -250,7 +366,7 @@ ODA({
                 <oda-button icon="icons:add" title="Добавить ящик" @tap="addAccount"></oda-button>
             </div>
             <div flex style="overflow-y:auto;">
-                <div ~for="accounts" class="account-item"
+                <div ~if="accounts.length" ~for="accounts" class="account-item"
                     :info-invert="index === $for.index"
                     @tap="index = $for.index">
                     <div vertical flex>
@@ -274,9 +390,6 @@ ODA({
                         <input type="password" placeholder="••••••••" ::value="accounts[index].auth.pass">
                     </fieldset>
                 </div>
-                <!--<div class="presets" horizontal>
-                    <oda-button ~for="presetList" @tap="applyPreset($for.item.id)">{{$for.item.label}}</oda-button>
-                </div>-->
                 <fieldset>
                     <legend>Входящая (IMAP)</legend>
                     <input placeholder="imap.example.com" ::value="accounts[index].imap.host">
@@ -314,10 +427,6 @@ ODA({
     get presetList() {
         return Object.entries(MAIL_PRESETS).map(([id, p]) => ({ id, label: p.label }));
     },
-    // get current() {
-    //     return this.accounts[this.index] || null;
-    // },
-    // нужно смотреть reactor
     addAccount() {
         this.accounts.push(emptyMailbox(''));
         this.index = this.accounts.length - 1;
@@ -334,15 +443,6 @@ ODA({
             this.render();
         })
     },
-    // applyPreset(presetId) {
-    //     const acc = this.accounts[this.index];
-    //     const preset = MAIL_PRESETS[presetId];
-    //     if (!acc || !preset)
-    //         return;
-    //     acc.smtp = { ...acc.smtp, ...preset.smtp };
-    //     acc.imap = { ...acc.imap, ...preset.imap };
-    //     this.render();
-    // },
     validate() {
         const logins = this.accounts.map(a => String(a.auth?.user || '').trim()).filter(Boolean);
         if (this.accounts.some(a => !String(a.auth?.user || '').trim()))
@@ -354,97 +454,395 @@ ODA({
 
 ODA({
     is: 'oda-form-email',
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, oda//app-layout',
+    extends: 'oda-app-layout',
     template: /* html */ `
         <style>
             :host {
-                @apply --horizontal;
+                @apply --vertical;
                 @apply --flex;
                 overflow: hidden;
             }
-            .sidebar {
-                width: 200px;
-                min-width: 160px;
+        </style>
+        <!--<oda-mailbox ~for="boxes" slot="left-panel" vertical :box="$for.item" :label="$for.item.label" :icon="$for.item.icon"></oda-mailbox>-->
+        <oda-mailbox slot="left-panel" vertical :box="boxes[0]" label="Входящие" icon="icons:inbox"></oda-mailbox>
+        <oda-mailbox slot="left-panel" vertical :box="boxes[1]" label="Исходящие" icon="iconoir:send-mail"></oda-mailbox>
+        <oda-mailbox slot="left-panel" vertical :box="boxes[2]" label="Корзина" icon="icons:delete"></oda-mailbox>
+        <oda-email-message slot="main" :mode></oda-email-message>
+    `,
+    $item: null,
+    boxes: [
+        { id: 'inbox', label: 'Входящие', icon: 'icons:inbox' },
+        { id: 'outbox', label: 'Исходящие', icon: 'iconoir:send-mail' },
+        { id: 'trash', label: 'Корзина', icon: 'icons:delete' },
+    ],
+    selected: null,
+    mode: 'idle',
+    draft: { to: '', subject: '', body: '' },
+    get _settings() {
+        this.$item?.fetch('read_secret', { filename: 'email.json' }).then(res => {
+            this._settings = res;
+        });
+        return null;
+    },
+    _watch: null,
+    _datesEpoch: 0,
+    get accounts() {
+        return accountAddresses(this._settings?.mailboxes);
+    },
+    async attached() {
+        await this._settings;
+        this.async(() => {
+            this.init();
+        });
+    },
+    async init() {
+        this.bumpDates();
+        if (this._watch)
+            return;
+        const onChanged = () => this.debounce('email-dates', () => this.bumpDates(), 150);
+        this.$item?.listen?.('changed', onChanged);
+        this._watch = true;
+    },
+    async loadSettings() {
+        this._settings = await this.$item.fetch('read_secret', { filename: 'email.json' });
+    },
+    bumpDates() {
+        this._datesEpoch = (this._datesEpoch || 0) + 1;
+        this.render();
+    },
+    async fetchRefresh() {
+        await this.$pdp.$handler.fetch('refresh');
+        await this.loadSettings();
+        this.bumpDates();
+    },
+    selectMessage(row) {
+        this.selected = row;
+        this.mode = 'view';
+        this.render();
+    },
+    createEmail() {
+        const address = this.accounts[0];
+        if (!address) {
+            alert('Сначала настройте почтовый ящик (⚙)');
+            return;
+        }
+        this.selected = null;
+        this.draft = { to: '', subject: '', body: '' };
+        this.mode = 'compose';
+        this.render();
+    },
+    async sendDraft() {
+        const address = this.accounts[0];
+        if (!address) {
+            alert('Сначала настройте почтовый ящик (⚙)');
+            return;
+        }
+        const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
+        const box = settings?.mailboxes?.[address];
+        const eml = defaultEml({
+            from: box?.auth?.user || address,
+            to: this.draft.to,
+            subject: this.draft.subject,
+            body: this.draft.body,
+            address,
+            status: 'pending',
+        });
+        try {
+            await this.$item.save_file(new File([eml], 'outbox.eml', { type: 'message/rfc822' }), {
+                encoding: 'utf-8',
+                folder: address,
+            });
+            this.mode = 'idle';
+            this.draft = { to: '', subject: '', body: '' };
+            this.bumpDates();
+        }
+        catch (e) {
+            alert(e.message);
+        }
+    },
+});
+
+ODA({
+    is: 'oda-mailbox',
+    template: /* html */ `
+        <style>
+            :host {
                 @apply --vertical;
-                @apply --light;
-                border-right: 1px solid var(--border-color, rgba(0,0,0,.08));
+                min-width: 240px;
+                width: 280px;
+                overflow: hidden;
+                border-bottom: 1px solid var(--border-color, rgba(0,0,0,.08));
             }
-            .toolbar {
-                padding: 6px 8px;
-                gap: 4px;
-                @apply --horizontal;
+            .box-title {
                 @apply --header;
-                align-items: center;
-            }
-            .sidebar-section {
-                padding: 6px 10px;
-                font-size: x-small;
-                opacity: .7;
-                text-transform: uppercase;
-            }
-            .mailbox-item, .folder-item {
                 padding: 8px 12px;
-                cursor: pointer;
-                border-radius: 4px;
-                margin: 2px 6px;
+                font-weight: 600;
+                font-size: small;
+                text-transform: uppercase;
+                letter-spacing: .04em;
             }
-            .mailbox-item[active], .folder-item[active] {
-                @apply --selection;
-            }
-            .list-pane {
-                width: 300px;
-                min-width: 220px;
+            .days {
                 @apply --vertical;
-                border-right: 1px solid var(--border-color, rgba(0,0,0,.08));
+                @apply --flex;
+                overflow-y: auto;
+            }
+            .empty {
+                padding: 12px;
+                opacity: .6;
+                font-size: small;
+            }
+        </style>
+        <div class="box-title">{{box?.label || box?.id}}</div>
+        <div class="days" vertical flex>
+            <email-day ~for="dates" :day="$for.item" :box-id="box?.id"></email-day>
+            <div ~if="!dates.length" class="empty">Нет писем</div>
+        </div>
+    `,
+    box: null,
+    dayPaths: {},
+    _loaded: false,
+    _lastEpoch: -1,
+    get dates() {
+        this.refreshDayPaths();
+        return Object.keys(this.dayPaths).sort((a, b) => b.localeCompare(a));
+    },
+    async refreshDayPaths() {
+        const item = this.$pdp.$item;
+        if (!item)
+            return;
+        const map = Object.create(null);
+        try {
+            let entries = await item.get_item('/~/logs/.data.logs/history/*');
+            entries = asItemArray(await Promise.resolve(entries));
+            for (const entry of entries) {
+                const day = dayKeyFromEntry(entry);
+                const path = entry?.path;
+                if (!day || !path)
+                    continue;
+                (map[day] ??= []).push(path);
+            }
+        }
+        catch { /* нет логов аккаунта */ }
+
+        this.dayPaths = map;
+        this.render();
+    },
+});
+
+ODA({
+    is: 'email-day',
+    imports: 'oda//button',
+    template: /* html */ `
+        <style>
+            :host {
+                @apply --vertical;
+                @apply --no-flex;
+            }
+            .day-header {
+                @apply --horizontal;
+                cursor: pointer;
+                padding: 6px 10px;
+                align-items: center;
+                gap: 4px;
+                font-size: small;
+                opacity: .85;
+            }
+            .msg-list {
+                @apply --vertical;
+                gap: 2px;
+                padding: 0 4px 6px;
             }
             .msg-item {
-                padding: 10px 12px;
+                display: grid;
+                grid-template-columns: 1fr auto;
+                grid-template-rows: auto auto;
+                gap: 2px 8px;
+                padding: 8px 10px;
                 cursor: pointer;
-                border-bottom: 1px solid rgba(0,0,0,.06);
-            }
-            .msg-item[active] {
-                @apply --selection;
+                border-radius: 4px;
+                margin: 0 2px;
             }
             .msg-subject {
                 font-weight: 500;
+                font-size: small;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+                min-width: 0;
             }
-            .msg-meta {
+            .msg-date {
+                font-size: x-small;
+                opacity: .7;
+                white-space: nowrap;
+                justify-self: end;
+            }
+            .msg-from, .msg-to {
                 font-size: x-small;
                 opacity: .75;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
             }
-            .preview {
+            .msg-to {
+                justify-self: end;
+                text-align: right;
+            }
+        </style>
+        <div class="day-header" horizontal :accent="expanded" @tap="expanded = !expanded">
+            <span flex>{{label}}</span>
+            <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
+        </div>
+        <div class="msg-list" vertical ~if="expanded">
+            <div ~for="items" class="msg-item"
+                :info-invert="selectedPath === $for.item.path"
+                @tap="$pdp?.selectMessage?.($for.item)">
+                <div class="msg-subject">{{$for.item.subject}}</div>
+                <div class="msg-date">{{$for.item.dateLabel}}</div>
+                <div class="msg-from">{{$for.item.from}}</div>
+                <div class="msg-to">{{$for.item.to}}</div>
+            </div>
+        </div>
+    `,
+    day: '',
+    boxId: '',
+    messages: [],
+    _loading: false,
+    _loadedFor: '',
+    get selectedPath() {
+        return this.$pdp?.selected?.path || '';
+    },
+    get expanderIcon() {
+        return this.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right';
+    },
+    get isFirst() {
+        const dates = this.$pdp?.dates;
+        return Array.isArray(dates) && dates[0] === this.day;
+    },
+    expanded: {
+        $def: false,
+        $attr: true,
+        set(n) {
+            if (n)
+                this.async(() => this.loadMessages());
+        },
+    },
+    get label() {
+        const date = new Date(this.day + 'T12:00:00');
+        if (Number.isNaN(date.getTime()))
+            return this.day;
+        return date.toLocaleDateString(undefined, {
+            weekday: 'short',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+        });
+    },
+    get items() {
+        if (this.expanded)
+            this.async(() => this.loadMessages());
+        return this.messages;
+    },
+    async loadMessages() {
+        if (!this.expanded || !this.day || !this.boxId)
+            return;
+        const key = this.day + '|' + this.boxId + '|' + (this.$pdp?._datesEpoch ?? 0);
+        if (this._loading || this._loadedFor === key)
+            return;
+        this._loading = true;
+        try {
+            const item = this.$pdp?.$item;
+            const paths = this.$pdp?.dayPaths?.[this.day] || [];
+            if (!item || !paths.length) {
+                this.messages = [];
+                this._loadedFor = key;
+                this.render();
+                return;
+            }
+            const rows = [];
+            const seen = new Set();
+            for (const folderPath of paths) {
+                try {
+                    let files = await WORK.get_item(folderPath + '/*');
+                    files = asItemArray(await Promise.resolve(files));
+                    files = await Promise.all(files.map(f => Promise.resolve(f)));
+                    for (const file of files) {
+                        if (!file || typeof file.load !== 'function')
+                            continue;
+                        let row;
+                        try {
+                            const raw = await file.load();
+                            row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        }
+                        catch {
+                            continue;
+                        }
+                        if (!row?.path)
+                            continue;
+                        const hit = mailboxFromPath(row.path);
+                        if (!hit || hit.box !== this.boxId)
+                            continue;
+                        if (seen.has(row.path))
+                            continue;
+                        seen.add(row.path);
+                        const meta = parseLogContent(row);
+                        const dateValue = meta.date || row.time || '';
+                        rows.push({
+                            ...row,
+                            address: hit.address,
+                            box: hit.box,
+                            subject: meta.subject || '(без темы)',
+                            from: meta.from || '',
+                            to: meta.to || '',
+                            date: dateValue,
+                            dateLabel: formatMailDate(dateValue),
+                            sortTime: dateValue ? new Date(dateValue).getTime() : (row.time || 0),
+                        });
+                    }
+                }
+                catch { /* нет файлов в папке дня */ }
+            }
+            rows.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
+            this.messages = rows;
+            this._loadedFor = key;
+            this.render();
+        }
+        finally {
+            this._loading = false;
+        }
+    },
+    attached() {
+        if (this.isFirst)
+            this.expanded = true;
+        else if (this.expanded)
+            this.async(() => this.loadMessages());
+    },
+});
+
+ODA({
+    is: 'oda-email-message',
+    imports: 'oda//button',
+    template: /* html */ `
+        <style>
+            :host {
                 @apply --vertical;
                 @apply --flex;
-                overflow: auto;
-            }
-            .preview-head {
+                overflow: hidden;
                 padding: 12px 16px;
-                @apply --light;
-                border-bottom: 1px solid var(--border-color, rgba(0,0,0,.08));
-            }
-            .preview-body {
-                padding: 16px;
-                white-space: pre-wrap;
-            }
-            .compose {
-                padding: 12px;
-                @apply --vertical;
                 gap: 8px;
             }
-            .compose fieldset {
+            fieldset {
                 border: 1px solid var(--border-color, rgba(0,0,0,.12));
                 border-radius: 4px;
                 padding: 6px 10px;
                 margin: 0;
             }
-            .compose legend {
+            legend {
                 font-size: x-small;
                 padding: 0 4px;
             }
-            .compose input, .compose textarea {
+            input, textarea {
                 border: none;
                 outline: none;
                 background: transparent;
@@ -452,231 +850,102 @@ ODA({
                 box-sizing: border-box;
                 font: inherit;
             }
-            .compose textarea {
-                min-height: 120px;
+            textarea {
+                min-height: 160px;
                 resize: vertical;
             }
+            .idle {
+                @apply --flex;
+                align-items: center;
+                justify-content: center;
+                opacity: .6;
+                padding: 24px;
+            }
+            .msg-meta {
+                font-size: small;
+                opacity: .8;
+            }
+            .toolbar {
+                @apply --horizontal;
+                gap: 8px;
+                align-items: center;
+                justify-content: flex-end;
+            }
+            .view-body {
+                @apply --flex;
+                white-space: pre-wrap;
+                overflow: auto;
+                padding: 8px 0;
+            }
         </style>
-        <div class="sidebar" vertical>
-            <div class="toolbar" horizontal>
-                <oda-button icon="icons:add" @tap="startCompose" title="Написать"></oda-button>
-                <oda-button icon="icons:refresh" @tap="refreshMessages" title="Обновить"></oda-button>
-            </div>
-            <div flex vertical>
-                <div class="sidebar-section">Ящики</div>
-                <div ~for="mailboxList" class="mailbox-item"
-                    :active="selectedAddress === $for.item"
-                    @tap="selectMailbox($for.item)">{{$for.item}}</div>
-                <div ~if="!mailboxList.length" class="sidebar-section">Нет ящиков</div>
-                <div class="sidebar-section">Папки</div>
-                <div class="folder-item" :active="folder === 'inbox'" @tap="folder = 'inbox'">Входящие</div>
-                <div class="folder-item" :active="folder === 'outbox'" @tap="folder = 'outbox'">Исходящие</div>
-            </div>
-        </div>
-        <div ~if="!composing" class="list-pane" vertical flex>
-            <div flex style="overflow-y: auto;">
-                <div ~for="filteredMessages" class="msg-item"
-                    :active="selectedRow?.path === $for.item.path"
-                    @tap="selectMessage($for.item)">
-                    <div class="msg-subject">{{$for.item.subject}}</div>
-                    <div class="msg-meta">{{$for.item.timeLabel}} · {{$for.item.status || $for.item.box}}</div>
-                </div>
-                <div ~if="!filteredMessages.length" class="sidebar-section" style="padding:16px;">Нет писем</div>
-            </div>
-        </div>
-        <div ~if="composing" class="list-pane compose" vertical flex>
+        <div ~if="mode === 'idle'" class="idle" flex>Выберите письмо</div>
+        <div ~if="mode === 'compose'" vertical flex>
             <fieldset>
                 <legend>Кому</legend>
-                <input placeholder="recipient@example.com" ::value="compose.to">
+                <input placeholder="recipient@example.com" ::value="draft.to">
             </fieldset>
             <fieldset>
                 <legend>Тема</legend>
-                <input placeholder="Тема письма" ::value="compose.subject">
+                <input placeholder="Тема письма" ::value="draft.subject">
             </fieldset>
             <fieldset flex>
                 <legend>Текст</legend>
-                <textarea ::value="compose.body" flex></textarea>
+                <textarea ::value="draft.body" flex></textarea>
             </fieldset>
-            <div horizontal style="gap:8px;">
-                <oda-button accent icon="icons:send" @tap="sendCompose">Отправить</oda-button>
-                <oda-button @tap="composing = false">Отмена</oda-button>
+            <div class="toolbar" horizontal>
+                <oda-button icon="icons:send" @tap="$pdp.sendDraft" title="Отправить">Отправить</oda-button>
             </div>
         </div>
-        <div class="preview" vertical flex>
-            <div ~if="selectedRow && !composing" class="preview-head" vertical>
-                <strong>{{preview.subject}}</strong>
-                <span class="msg-meta">От: {{preview.from}}</span>
-                <span class="msg-meta">Кому: {{preview.to}}</span>
-                <span ~if="preview.status" class="msg-meta">Статус: {{preview.status}}</span>
-            </div>
-            <div ~if="selectedRow && !composing" class="preview-body">{{preview.body}}</div>
-            <div ~if="!selectedRow && !composing" flex style="padding:24px; opacity:.6;">Выберите письмо</div>
+        <div ~if="mode === 'view'" vertical flex>
+            <strong>{{view.subject}}</strong>
+            <span class="msg-meta">От: {{view.from}}</span>
+            <span class="msg-meta">Кому: {{view.to}}</span>
+            <span ~if="view.status" class="msg-meta">Статус: {{view.status}}</span>
+            <div class="view-body" flex>{{view.body}}</div>
         </div>
     `,
-    $item: null,
-    composing: false,
-    folder: 'inbox',
-    selectedAddress: '',
-    selectedRow: null,
-    preview: { subject: '', from: '', to: '', body: '', status: '' },
-    messages: [],
-    compose: { to: '', subject: '', body: '' },
-    _settings: null,
-    _watch: null,
-    get structureId() {
-        const item = this.$item;
-        if (!item)
-            return '';
-        return item.id || item.DATA?.id || item.path?.split('/').filter(Boolean).pop() || '';
+    get mode() {
+        return this.$pdp?.mode || 'idle';
     },
-    get mailboxList() {
-        return this._settings?.mailboxes
-            ? Object.keys(this._settings.mailboxes)
-            : [];
+    get draft() {
+        return this.$pdp?.draft || { to: '', subject: '', body: '' };
     },
-    get filteredMessages() {
-        const addr = this.selectedAddress;
-        const folder = this.folder;
-        const structureId = this.structureId;
-        if (!addr || !structureId)
-            return [];
-        return this.messages.filter(m =>
-            m.structure === structureId && m.address === addr && m.box === folder
-        );
+    get view() {
+        const row = this.$pdp?.selected;
+        if (!row)
+            return { subject: '', from: '', to: '', body: '', status: '' };
+        if (row.body == null)
+            this.async(() => this._ensureBody());
+        return {
+            subject: row.subject || '(без темы)',
+            from: row.from || '',
+            to: row.to || '',
+            body: row.body ?? '',
+            status: row.status || '',
+        };
     },
-    attached() {
-        this.async(() => {
-            this.init();
-        });
-    },
-    async init() {
-        await this.loadSettings();
-        if (!this.selectedAddress && this.mailboxList.length)
-            this.selectedAddress = this.mailboxList[0];
-        await this.refreshMessages();
-        if (this._watch)
+    async _ensureBody() {
+        const row = this.$pdp?.selected;
+        if (this.$pdp?.mode !== 'view' || !row || row.body != null)
             return;
-        const onChanged = () => this.debounce('email-refresh', () => this.refreshMessages(), 150);
-        this.$item?.listen?.('changed', onChanged);
-        this._watch = true;
-    },
-    async loadSettings() {
-        this._settings = await this.$item.fetch('read_secret', { filename: 'email.json' });
-    },
-
-    selectMailbox(address) {
-        this.selectedAddress = address;
-        this.selectedRow = null;
-        this.preview = { subject: '', from: '', to: '', body: '', status: '' };
-    },
-    async refreshMessages() {
-        if (!this.$item)
-            return;
-        const to = new Date().toISOString().slice(0, 10);
-        const fromDate = new Date();
-        fromDate.setDate(fromDate.getDate() - 30);
-        const from = fromDate.toISOString().slice(0, 10);
-        let rows = await this.$item.fetch('logs', { mode: 'index', flat: true, from, to, ext: 'eml' });
-        if (!Array.isArray(rows))
-            rows = [];
-        const items = [];
-        for (const row of rows) {
-            const hit = mailboxFromPath(row.path);
-            if (!hit)
-                continue;
-            let subject = '';
-            let status = '';
-            let fromH = '';
-            let toH = '';
-            let body = '';
-            try {
-                const file = await WORK.get_item(row.path, 'info');
-                const raw = await file.load();
-                const parsed = parseEmlClient(raw);
-                subject = parsed.subject;
-                status = parsed.status;
-                fromH = parsed.from;
-                toH = parsed.to;
-                body = parsed.body;
-            }
-            catch { /* skip preview fields */ }
-            items.push({
-                ...row,
-                structure: hit.structure,
-                address: hit.address,
-                box: hit.box,
-                subject,
-                status,
-                from: fromH,
-                to: toH,
-                body,
-                timeLabel: row.time
-                    ? new Date(row.time).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-                    : '',
-            });
-        }
-        items.sort((a, b) => (b.time || 0) - (a.time || 0));
-        this.messages = items;
-        this.render();
-    },
-    async selectMessage(row) {
-        this.selectedRow = row;
-        if (row.body != null) {
-            this.preview = {
-                subject: row.subject,
-                from: row.from,
-                to: row.to,
-                body: row.body,
-                status: row.status,
-            };
-            return;
-        }
         try {
-            const file = await WORK.get_item(row.path, 'info');
-            const raw = await file.load();
+            //const file = await WORK.get_item(row.path);
+            //const raw = await file.load();
+            const res = await fetch(row.path);
+            const raw = await res.text();
             const parsed = parseEmlClient(raw);
-            this.preview = {
-                subject: parsed.subject,
-                from: parsed.from,
-                to: parsed.to,
-                body: parsed.body,
-                status: parsed.status,
-            };
+            row.body = parsed.body;
+            row.subject = parsed.subject;
+            row.from = parsed.from;
+            row.to = parsed.to;
+            row.status = parsed.status;
         }
         catch (e) {
-            this.preview = { subject: row.path, from: '', to: '', body: e.message, status: '' };
+            row.body = e.message;
         }
-    },
-    startCompose() {
-        if (!this.selectedAddress) {
-            alert('Сначала настройте почтовый ящик (⚙)');
-            return;
-        }
-        this.composing = true;
-        this.compose = { to: '', subject: '', body: '' };
-    },
-    async sendCompose() {
-        const address = this.selectedAddress;
-        if (!address)
-            return;
-        const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
-        const box = settings?.mailboxes?.[address];
-        const eml = defaultEml({
-            from: box?.auth?.user || address,
-            to: this.compose.to,
-            subject: this.compose.subject,
-            body: this.compose.body,
-            address,
-            status: 'pending',
-        });
-        try {
-            await this.$item.save_file(new File([eml], 'outbound.eml', { type: 'message/rfc822' }), { encoding: 'utf-8', folder: address });
-            this.composing = false;
-            this.folder = 'outbox';
-            await this.refreshMessages();
-        }
-        catch (e) {
-            alert(e.message);
+        finally {
+            this.view = row;
+            //this.render();
         }
     },
 });

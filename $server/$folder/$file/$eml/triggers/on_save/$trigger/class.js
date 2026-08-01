@@ -20,15 +20,16 @@ export default {
     async execute(params = {}) {
         const storage = this.$owner;
         const filename = params.filename || '';
-        if (filename !== 'outbound.eml')
+        const baseName = String(filename).split('/').pop();
+        if (baseName !== 'outbound.eml')
             return true;
 
         // Динамический импорт локальных модулей
         const emailUtils = await import(pathToFileURL(path.join(ROOT, 'sources/host/email-utils.js')).href);
         const emailSettings = await import(pathToFileURL(path.join(ROOT, '$server/$folder/lib/email/settings.js')).href);
 
-        const { getEmlHeader, mailboxFromHistoryPath, markEmlStatus, pendingOutboxEml, sendOutboxEml } = emailUtils;
-        const { getMailboxFolder, readEmailSettings, resolveStructFolder } = emailSettings;
+        const { getEmlHeader, markEmlStatus, pendingOutboxEml, sendOutboxEml } = emailUtils;
+        const { readEmailSettings } = emailSettings;
 
         let raw = String(params.post ?? '');
         const status = getEmlHeader(raw, 'X-WORK-Status') || 'pending';
@@ -41,7 +42,7 @@ export default {
         const box = address ? settings.mailboxes?.[address] : null;
 
         if (!address || !box)
-            console.warn(`[${filename}]`, 'ящик не настроен', address, structureId);
+            console.warn(`[${filename}]`, 'ящик не настроен', address);
 
         raw = pendingOutboxEml(raw, address);
 
