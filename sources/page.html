@@ -70,7 +70,7 @@
             });
             if(window.top === window && {dev_mode}){
                 const devPanel = document.getElementById('devModePanel');
-                devPanel.$item = $item;
+                devPanel.$item = await WORK.get_item('/');
                 devPanel.style = '';
             }
         }

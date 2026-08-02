@@ -6,32 +6,23 @@
  * microchat-view — expander по умолчанию для любого type.
  * Спец-layout только если зарегистрирован microchat-view-{type}.
  */
-/**
- * Одна высота sticky-шапки у всех типов.
- * CSS height summary/.head ДОЛЖЕН = этому числу, иначе дыры при стыке.
- */
-const STICK_HEADER_H = 36;
-
 /** Open-состояние: tip-путь снаружи, ручное — в UI. */
 ODA({ is: 'microchat-view-core',
     data: null,
     /** снаружи (ribbon): узел на пути к tip */
     autoOpen: { $def: false, $type: Boolean, $attr: true },
-    /** px: sticky top = сумма высот шапок предков */
+    /** px: sticky top (прокидывается в детей как есть) */
     stickTop: { $def: 0, $type: Number },
     /** внутри: ручное раскрытие (не в JSON) */
     userOpen: false,
     /** всегда раскрыт, без возможности свернуть (prompt) */
     get forceOpen() { return false; },
-    /** показывать chevron экспандера */
-    get showChevron() { return true; },
+    /** sticky только у prompt/task */
+    get isSticky() { return false; },
     get open() { return !!(this.forceOpen || this.autoOpen || this.userOpen); },
     get pinned() { return !!(this.autoOpen || this.forceOpen); },
     /** summary в --info-invert; тогда light/accent не вешаем */
     get infoInvert() { return false; },
-    get chevronIcon() {
-        return this.open ? 'icons:chevron-right:90' : 'icons:chevron-right';
-    },
     get label() {
         return this.data?.label || this.data?.type || '';
     },
@@ -41,14 +32,10 @@ ODA({ is: 'microchat-view-core',
     get items() { return this.data?.items || []; },
     get sender() { return null; },
     get timeText() { return ''; },
-    get headerH() { return STICK_HEADER_H; },
-    get nextStickTop() {
-        return (Number(this.stickTop) || 0) + this.headerH;
-    },
-    /** top + z-index: глубже вложенность → меньший z-index (нижестоящие sticky под вышестоящими). */
+    /** top только при isSticky; без z-index-надстроек */
     get stickTopStyle() {
-        const top = Number(this.stickTop) || 0;
-        return { top: top + 'px', zIndex: 1000 - top };
+        if (!this.isSticky) return null;
+        return { top: (Number(this.stickTop) || 0) + 'px' };
     },
     onToggle(e) {
         const el = e?.target;
@@ -77,10 +64,12 @@ ODA({ is: 'microchat-view',
             summary {
                 cursor: pointer;
                 user-select: none;
-                position: sticky;
                 list-style: none;
                 box-sizing: border-box;
                 overflow: hidden;
+            }
+            summary.stick {
+                position: sticky;
             }
             summary::-webkit-details-marker {
                 display: none;
@@ -91,11 +80,9 @@ ODA({ is: 'microchat-view',
             .head-row {
                 @apply --horizontal;
                 align-items: center;
-                gap: 6px;
-                padding: 0 8px;
-                height: 36px;
                 box-sizing: border-box;
                 min-width: 0;
+                padding: 4px;
             }
             .head-row > .label {
                 overflow: hidden;
@@ -103,6 +90,7 @@ ODA({ is: 'microchat-view',
                 white-space: nowrap;
                 font-size: small;
                 opacity: .9;
+                gap: 4px;
                 min-width: 0;
             }
             summary.auto .head-row > .label {
@@ -123,15 +111,14 @@ ODA({ is: 'microchat-view',
         <details :open="open" @toggle="onToggle">
             <summary shadow vertical :bold="open" flex
                     :light="!pinned && !infoInvert" :accent="pinned && !infoInvert"
-                    :info-invert="infoInvert" ~class="{auto: pinned}" ~style="stickTopStyle">
+                    :info-invert="infoInvert" ~class="{auto: pinned, stick: isSticky}" ~style="stickTopStyle">
                 <div class="head-row" horizontal flex>
-                    <oda-icon ~if="showChevron" :icon="chevronIcon" :icon-size></oda-icon>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <span class="label" flex>{{label}}</span>
                     <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
-                <div ~is="bodyTag" ~if="bodyTag" :data :stick-top="nextStickTop" ::collapsed></div>
+                <div ~is="bodyTag" ~if="bodyTag" :data :stick-top="stickTop" ::collapsed></div>
             </summary>
             <div content>
                 <oda-markdown-viewer vertical ~if="showContent" :value="content"></oda-markdown-viewer>
@@ -139,7 +126,7 @@ ODA({ is: 'microchat-view',
                     <microchat-field :field="$for.item"></microchat-field>
                 </div>
                 <microchat-ribbon embedded ~if="items.length" :items
-                    :stick-top="ribbonStickTop"
+                    :stick-top="stickTop"
                     @confirm="fire('confirm')" @cancel="fire('cancel')"></microchat-ribbon>
             </div>
         </details>
@@ -148,13 +135,11 @@ ODA({ is: 'microchat-view',
     get showContent() { return !!this.content; },
     /** тег доп. блока в summary; пусто — нет */
     get bodyTag() { return ''; },
-    /** sticky top для вложенного ribbon (под summary + optional body) */
-    get ribbonStickTop() { return this.nextStickTop; },
     collapsed: true,
 });
 
 /**
- * prompt — тот же expander; info-invert, аватар, без chevron, всегда открыт.
+ * prompt — тот же expander; info-invert, аватар, всегда открыт.
  */
 ODA({ is: 'microchat-view-prompt',
     extends: 'microchat-view',
@@ -165,12 +150,16 @@ ODA({ is: 'microchat-view-prompt',
                 font-weight: bold;
                 opacity: 1;
             }
+            summary{
+                min-height: 36px;
+                z-index: 1;
+            }
         </style>
     `,
     get label() { return this.content || this.data?.label || this.data?.type || 'prompt'; },
     get showContent() { return false; },
-    get showChevron() { return false; },
     get forceOpen() { return true; },
+    get isSticky() { return true; },
     get infoInvert() { return true; },
     get typeIcon() { return ''; },
     get sender() {
@@ -295,14 +284,8 @@ ODA({ is: 'microchat-view-task',
     extends: 'microchat-view',
     get bodyTag() { return 'microchat-task-todo'; },
     get showContent() { return false; },
+    get isSticky() { return true; },
     get label() { return this.data?.type + ': ' + this.data?.label; },
-    get ribbonStickTop() {
-        const base = this.nextStickTop;
-        const head = 36 + 3;
-        if (this.collapsed) return base + head;
-        const n = Array.isArray(this.data?.steps) ? this.data.steps.length : 0;
-        return base + head + 8 + n * 28;
-    },
 });
 
 /** Чеклист task: шапка 1/N + progress + список steps (свой collapse). */
@@ -310,7 +293,6 @@ ODA({ is: 'microchat-task-todo',
     imports: 'oda//icon',
     template: /*html*/`
         <style>
-            /* contents — sticky участвует в родителе content (рядом с ribbon), иначе host = высота todo и не липнет */
             :host {
                 display: contents;
                 @apply --vertical;

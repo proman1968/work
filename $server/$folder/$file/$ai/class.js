@@ -1,56 +1,41 @@
-// Дерево пайплайна (конечный автомат) вынесено в pipe.js (рядом с class.js).
-// Поля узла: step (имя), icon (иконка типа для UI), prompt (генерация/инъекция),
-// inject (подсказка меню родителя), next (дети: 1 → прямой переход, N → выбор словом),
-// button (wait-узел: блок + кнопка), fc (массив | '*' | 'readonly'), askType ('form'|'questions').
-// Лист без next/button: fc-узел → после _handle_call продолжение на thinking;
-// без fc (только prompt, как step) → отрендеренный prompt как continue-строка.
+// PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
+// Линейный реестр pipe.nodes (по id = type блока); корень pipe.root.
+// Движок: _thinking — think + маршрут из this.pipe_node + execute одного узла, пишет this.pipe_node.
+// prompt() — вход: реальный (push блока prompt) / служебный (role ASSISTENT, без блока). Self-call'ов НЕТ —
+// продолжение цикла идёт снаружи через prompt({role:'ASSISTENT'}) от кнопки клиента; состояние живёт в this.pipe_node.
+// Поля узла: prompt, inject, next (массив id), build, button, fc, askType. Router — без prompt/build (только next).
 
 export default {
     icon: 'bootstrap:robot',
 
     /**
-     * Автомат task.ai — обход дерева PIPE (конечный автомат).
-     * Реальный вход (role USER|BOSS|ADMIN): text → блок prompt + _walk(PIPE);
-     * confirm/answers — разбор кнопок/wait-узлов (был _confirm, свёрнут сюда).
-     * Служебный вход (role ASSISTENT): без блока prompt, только острие messages;
-     * продолжения самовызовами с лимитом MAX_AUTO_TURNS → кнопка «Продолжить».
-     * @param {object} params — { prompt?, user?, role?, confirm?, answers?, model?, _turn? }
+     * Вход автомата. Один вызов = один узел (think + маршрут + execute).
+     * Реальный вход (role USER|BOSS|ADMIN): text → блок prompt → _thinking.
+     * Служебный вход (role ASSISTENT): без блока — продолжение по кнопке, состояние в this.pipe_node.
+     * @param {object} params — { prompt?, user?, role?, answers?, model? }
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
-        let {prompt, role, user} = params;
-        try{
+        let { prompt, role, user } = params;
+        try {
             const isService = role === 'ASSISTENT';
-            if(!isService){
-                this._stopped = false; // новый реальный ход снимает Stop прошлого цикл
-                await this._push_block(user,{
+            if (!isService) {
+                this._stopped = false; // новый реальный ход снимает Stop прошлого цикла
+                await this._push_block(user, {
                     type: 'prompt',
                     content: prompt,
                     sender: user?.$user?.id ?? user?.uid ?? '',
                     items: []
-                })
+                });
             }
-            prompt = await this._thinking(prompt, user);
-            if(prompt){
-                this.async(()=>{
-                    this.prompt({
-                        role: 'ASSISTENT',
-                        prompt,
-                        user
-                    })
-                })
-                return {ok: true}
-            }
+            await this._thinking(prompt || '', user);
         }
-        catch(e){
-            await this._push_block(user,{
-                type: 'error',
-                content: e.message
-            })
+        catch (e) {
+            await this._push_block(user, { type: 'error', content: e.message });
         }
 
         user?.send?.({ type: 'chat.done', path: this.short });
-        return {ok: true};
+        return { ok: true };
     },
     async context(){
         const body = await this.body;
@@ -64,51 +49,60 @@ export default {
         const out = [{ role: 'system', content: body.system }];
         return walk(body, out);
     },
+    /**
+     * Один ход автомата: think + маршрут из this.pipe_node + execute одного выбранного узла.
+     * Пишет this.pipe_node = выбранный узел (persisted между вызовами). Self-call'ов нет.
+     * thinking мерджит root.prompt в последний user-промпт (реальный вход); иначе — новое user-сообщение.
+     */
     async _thinking(prompt, userSession){
-        debugger
-        let pipe = await this.pipe;
-        prompt += pipe.prompt;
+        const pipe = await this.pipe;
+        const root = pipe.nodes[pipe.root];
+        prompt += root.prompt;
         let messages = await this.context();
         messages.last.content = prompt;
         let { content, usage } = await this._streamChat({ messages }, userSession);
-        if(this._stopped) return;
-        await this._push_block(userSession, { type: 'thinking', content, usage, icon: pipe.icon });
+        if (this._stopped) return;
+        await this._push_block(userSession, { type: 'thinking', content, usage, icon: root.icon });
         messages = await this.context();
-        // messages.push({role: 'assistant', content});
-        let node = this.pipe_node;
-        let next = node.next || pipe.next;
-        let keys = Object.keys(next);
-        let next_type = keys[0];
-        if(keys.length > 1){
-            let inject = pipe.inject;
-            for(let key of keys){
-                inject += '\n' + key + ' - ' + next[key].inject + ';';
+
+        // маршрут из persisted-состояния (или root на первом ходе)
+        const node = this.pipe_node || root;
+        const nextIds = node.next || root.next || [];
+        if (!nextIds.length) return; // терминал
+
+        let next_id = nextIds[0];
+        if (nextIds.length > 1) {
+            let inject = root.inject;
+            for (const id of nextIds) {
+                inject += '\n' + id + ' - ' + (pipe.nodes[id]?.inject || '') + ';';
             }
-            messages.push({role: 'user', content: inject});
-    
-            ({ content, usage } = await this._streamChat({ messages }, userSession))
-            if(this._stopped) return;
-            messages = await this.context();
-            next_type = content.trim().toLowerCase();
+            messages.push({ role: 'user', content: inject });
+            ({ content, usage } = await this._streamChat({ messages }, userSession));
+            if (this._stopped) return;
+            next_id = content.trim().toLowerCase();
+            if (!pipe.nodes[next_id]) return; // мусор от модели
         }
-        this.pipe_node = next[next_type];
-        messages.push({
-            role: 'user',
-            content: this.pipe_node.prompt
-        });
-        let response = { content, usage } = await this._streamChat({ messages }, userSession);
-        if(this._stopped) return;
-        // await this._push_block(userSession, {
-        //     type: next_type,
-        //     content,
-        //     usage,
-        //     button: this.pipe_node.button,
-        //     icon: this.pipe_node.icon,
-        // });
-        const block = this.pipe_node.build(response);
-        if (block?.type === 'task' && !block.label)
-            block.label = (await this.body).title || 'Задача';
-        await this._push_block(userSession, block);
+
+        const nextNode = pipe.nodes[next_id];
+        this.pipe_node = nextNode; // persist для следующего вызова
+
+        // исполняем выбранный узел (если есть prompt)
+        if (nextNode.prompt) {
+            messages = await this.context();
+            if (next_id === 'thinking' && messages.last?.role === 'user') {
+                messages.last.content = (messages.last.content || '') + nextNode.prompt;
+            } else {
+                messages.push({ role: 'user', content: nextNode.prompt });
+            }
+            const response = await this._streamChat({ messages }, userSession);
+            if (this._stopped) return;
+            const block = nextNode.build?.(response);
+            if (block) {
+                if (block.type === 'task' && !block.label)
+                    block.label = (await this.body).title || 'Задача';
+                await this._push_block(userSession, block);
+            }
+        }
     },
     /**
      * Один стрим-ход модели. context = { messages, functions? };
@@ -136,7 +130,7 @@ export default {
         return {content, usage, calls}
     },
     get pipe_node(){
-        return this.pipe;
+        return null;
     },
     get pipe(){
         return new AsyncPromise(async () =>{

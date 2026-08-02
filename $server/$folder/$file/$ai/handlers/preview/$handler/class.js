@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Preview task.ai — data → getters → binds (rules Part B).
  * JSON в this.data; корень и вложенность — только items.
  */
@@ -389,7 +389,8 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        const payload = { prompt: label, confirm: !!ok, role: this._userRole() };
+        // кнопка = служебный ход (ASSISTENT): без блока prompt в ленте
+        const payload = { prompt: label, role: 'ASSISTENT' };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;
