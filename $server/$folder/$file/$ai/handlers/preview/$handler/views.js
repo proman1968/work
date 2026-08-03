@@ -107,6 +107,7 @@ ODA({ is: 'microchat-view',
             details > div[content] {
                 font-size: small;
                 word-break: break-word;
+                border-left: 3px solid var(--step-color, #ccc);
             }
         </style>
         <details :open="open" @toggle="onToggle">
@@ -121,7 +122,7 @@ ODA({ is: 'microchat-view',
                 </div>
                 <div ~is="bodyTag" ~if="bodyTag" :data :stick-top="stickTop" ::collapsed></div>
             </summary>
-            <div content>
+            <div content ~style="stepStyle">
                 <oda-markdown-viewer vertical ~if="showContent" :value="content"></oda-markdown-viewer>
                 <div ~for="fields">
                     <microchat-field :field="$for.item"></microchat-field>
@@ -136,6 +137,20 @@ ODA({ is: 'microchat-view',
     get showContent() { return !!this.content; },
     /** тег доп. блока в summary; пусто — нет */
     get bodyTag() { return ''; },
+    /** глубина вложенности по дереву microchat-view → цвет левой рамки */
+    get depth() {
+        let d = 0, p = this.parentElement;
+        while (p) {
+            const tag = p.tagName?.toLowerCase() || '';
+            if (tag.startsWith('microchat-view')) d++;
+            p = p.parentElement;
+        }
+        return d;
+    },
+    get stepStyle() {
+        const tones = ['#bdbdbd', '#9e9e9e', '#757575', '#616161', '#424242'];
+        return `--step-color: ${tones[this.depth % tones.length]}`;
+    },
     collapsed: true,
 });
 
@@ -154,6 +169,11 @@ ODA({ is: 'microchat-view-prompt',
             summary{
                 min-height: 36px;
                 z-index: 1;
+            }
+            details > div[content] {
+                margin-left: 0;
+                padding-left: 0;
+                border-left: none;
             }
         </style>
     `,
@@ -184,6 +204,14 @@ ODA({ is: 'microchat-view-questions',
         get() { return !!this.data?.needAnswers; },
         set(v) { if (this.data) this.data.needAnswers = !!v; },
     },
+});
+
+/** step — обычный expander: заголовок = «N. описание» (content), тело = items. */
+ODA({ is: 'microchat-view-step',
+    extends: 'microchat-view',
+    get label() { return this.data?.content || 'step'; },
+    get showContent() { return false; },
+    get typeIcon() { return this.data?.icon || 'av:play-arrow'; },
 });
 
 /** :field = объект из data.fields (мутация value на месте) */
@@ -286,7 +314,11 @@ ODA({ is: 'microchat-view-task',
     get bodyTag() { return 'microchat-task-todo'; },
     get showContent() { return false; },
     get isSticky() { return true; },
-    get label() { return this.data?.type + ': ' + this.data?.label; },
+    get label() {
+        const steps = this.data?.steps || [];
+        const done = steps.filter(s => s.status === 'done').length;
+        return this.data?.label || (steps.length ? `task ${done}/${steps.length}` : 'task');
+    },
 });
 
 /** Чеклист task: шапка 1/N + progress + список steps (свой collapse). */

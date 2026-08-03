@@ -13,10 +13,10 @@ export default {
         let { prompt, role, user } = params;
         try {
             const isService = role === 'AI';
-            // подтверждение complete: служебный ход, лист = complete-блок → закрыть его контейнер
+            // подтверждение complete: служебный ход с label кнопки → закрыть контейнер complete-блока (отказ «нет» — мимо)
             if (isService) {
                 let leaf = await this._active_block();
-                if (leaf?.type === 'complete') {
+                if (leaf?.type === 'complete' && prompt === leaf.button?.label) {
                     let container = await this._active_container();
                     container.closed = true;
                     await this._advance_steps(container);
@@ -41,27 +41,48 @@ export default {
 
             if (active_pipe?.next?.length) {
                 let container = await this._active_container();
-                let options = [...active_pipe.next];
-                if (Array.isArray(container?.items) && container.items.length)
-                    options.push('complete');
-                let menu = 'Исходя из текущего контекста выбери из следующего списка один, наиболее подходящий шаг:';
-                for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
-                menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
-                messages.push({ role: 'user', content: menu });
+                let next_id;
+                if (active_pipe.next.length === 1) {
+                    // единственный маршрут — детерминированный переход, модель не спрашиваем
+                    next_id = active_pipe.next[0];
+                    messages.push({ role: 'user', content: '' });
+                } else {
+                    let options = [...active_pipe.next];
+                    // complete закрывает самый глубокий открытый контейнер; task — только автоматом (_advance_steps)
+                    if (Array.isArray(container?.items) && container.items.length && container.type !== 'task')
+                        options.push('complete');
+                    let menu = 'Исходя из текущего контекста выбери из следующего списка один, наиболее подходящий шаг:';
+                    for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+                    menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
+                    messages.push({ role: 'user', content: menu });
 
-                let choice = await this._streamChat({ messages }, user);
-                if (this._stopped) return;
-                let words = choice.content.toLowerCase().replace(/[«».,;:!?'"\s]+/g, ' ').split(/\s+/).filter(Boolean);
-                let next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
+                    let choice = await this._streamChat({ messages }, user);
+                    if (this._stopped) return;
+                    let words = choice.content.toLowerCase().replace(/[«».,;:!?'"\s]+/g, ' ').split(/\s+/).filter(Boolean);
+                    next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
+                }
                 let next_pipe = pipe[next_id];
 
                 messages.last.content = next_pipe.prompt;
                 let response = await this._streamChat({ messages }, user);
                 if (this._stopped) return;
 
-                let block = next_pipe.build(response);
+                // ctx для build: currentStep — in_progress-шаг активного task (для step.build)
+                let ctx = {};
+                if (container?.type === 'task' && Array.isArray(container.steps))
+                    ctx.currentStep = container.steps.find(s => s.status === 'in_progress');
+
+                let block = next_pipe.build(response, ctx);
                 if (block) {
+                    // autocomplete: служебный контейнер закрывается без подтверждения пользователя
+                    const auto = next_id === 'complete' && pipe[container.type]?.autocomplete;
+                    if (auto) delete block.button;
                     await this._push_block(user, block);
+                    if (auto) {
+                        container.closed = true;
+                        await this._advance_steps(container);
+                        await this._save(user);
+                    }
                     if (!block.button && !next_pipe.stop) {
                         this.async(() => this.prompt({ role: 'AI', user }));
                     }
@@ -81,12 +102,14 @@ export default {
         let pipe = await this.pipe;
         return pipe[block.type];
     },
-    /** Лист дерева (последний блок) — позиция автомата для маршрута. */
+    /** Позиция автомата для маршрута: лист дерева; если последний ребёнок закрыт — сам контейнер. */
     async _active_block(){
         const find__active_block = (block) => {
             if (block.closed || !block.items?.length)
                 return block;
-            return find__active_block(block.items.at(-1));
+            const last = block.items.at(-1);
+            if (last.closed) return block;
+            return find__active_block(last);
         }
         return find__active_block(await this.body);
     },
@@ -120,15 +143,22 @@ export default {
         if (cur) cur.status = 'done';
         const next = task.steps.find(s => s.status === 'pending');
         if (next) next.status = 'in_progress';
+        else task.closed = true;  // все шаги done — закрыть task
     },
     async context(){
         const body = await this.body;
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
-                if( b.type === 'prompt')
+                if (b.type === 'prompt' || b.type === 'step') {
                     out.push({ role: 'user', content: b.content });
-                else{
-                    out.push({ role: 'assistant', content: '*' + b.type + '*\n\n' + b.content });
+                } else {
+                    let content = '*' + b.type + '*\n\n' + (b.content || '');
+                    if (b.type === 'task' && Array.isArray(b.steps)) {
+                        content += '\n\nШаги:\n' + b.steps
+                            .map(s => `${s.number}. [${s.status}] ${s.description}`)
+                            .join('\n');
+                    }
+                    out.push({ role: 'assistant', content });
                 }
                 if (b.items?.length) walk(b, out);
             }

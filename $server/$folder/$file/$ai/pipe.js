@@ -74,26 +74,32 @@ export default {
         next: ['step'],
     },
 
-    /** шаг плана: контейнер. Текущий пункт = steps[in_progress] последнего task-блока.
-     *  Внутри шага — тот же цикл thinking → …; complete закрывает шаг и поднимает к task. */
+    /** шаг плана: промпт-блок. Заголовок = «N. описание» текущего in_progress-шага, тело = items (исполнение).
+     *  В context() уходит как role:'user' (инструкция). Ответ модели на step.prompt → первый thinking внутри items. */
     step: {
         icon: 'av:play-arrow',
         inject: 'если необходимо выполнить один пункт плана',
         prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
             'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
-        build: (r) => ({
-            type: 'step',
-            content: r.content,
-            usage: r.usage,
-            icon: 'av:play-arrow',
-            items: [],
-        }),
+        build: (r, ctx) => {
+            const s = ctx?.currentStep;
+            const title = s ? `${s.number}. ${s.description}` : '';
+            return {
+                type: 'step',
+                content: title,
+                icon: 'av:play-arrow',
+                items: r.content
+                    ? [{ type: 'thinking', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
+                    : [],
+            };
+        },
         next: ['thinking'],
     },
 
     research: {
         inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
-        prompt: ['Сформулируй кратко, что нужно выяснить и зачем, прежде чем искать.'],
+        prompt: 'Сформулируй кратко, что нужно выяснить и зачем, прежде чем искать.',
+        autocomplete: true,
         next: ['search', 'ask'],
         build: (r) => ({
             type: 'research',
@@ -107,7 +113,8 @@ export default {
     search: {
         icon: 'icons:search',
         inject: 'если необходимо искать',
-        prompt: ['Сформулируй кратко, что нужно найти и где (в интернете или в рабочей области), прежде чем искать.'],
+        prompt: 'Сформулируй кратко, что нужно найти и где (в интернете или в рабочей области), прежде чем искать.',
+        autocomplete: true,
         build: (r) => ({
             type: 'search',
             content: r.content,
@@ -154,7 +161,8 @@ export default {
     ask: {
         icon: 'icons:help-outline',
         inject: 'если необходимо уточнить у пользователя',
-        prompt: ['Сформулируй кратко, что именно нужно уточнить у пользователя и в каком виде (форма, вопросы с вариантами, один вопрос текстом).'],
+        prompt: 'Сформулируй кратко, что именно нужно уточнить у пользователя и в каком виде (форма, вопросы с вариантами, один вопрос текстом).',
+        autocomplete: true,
         build: (r) => ({
             type: 'ask',
             content: r.content,
@@ -212,6 +220,7 @@ export default {
     action: {
         inject: 'если необходимо выполнить одно конкретное действие, но только, если уже есть конкретный план.',
         prompt: 'Как следует подумай, что ты собираешься сделать',
+        autocomplete: true,
         build: (r) => ({
             type: 'action',
             content: r.content,
