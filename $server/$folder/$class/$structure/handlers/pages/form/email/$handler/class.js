@@ -8,7 +8,6 @@ export default {
                 @apply --flex;
             }
             .email-top-panel {
-                @apply --horizontal;
                 gap: 4px;
                 align-items: center;
             }
@@ -176,29 +175,6 @@ function defaultEml({ from, to, subject, body, address, status = 'pending' }) {
     ].filter((l, i) => i > 0 || l).join('\r\n');
 }
 
-const MAIL_PRESETS = {
-    gmail: {
-        label: 'Gmail',
-        smtp: { host: 'smtp.gmail.com', port: 465, secure: true },
-        imap: { host: 'imap.gmail.com', port: 993, secure: true },
-    },
-    yandex: {
-        label: 'Яндекс',
-        smtp: { host: 'smtp.yandex.ru', port: 465, secure: true },
-        imap: { host: 'imap.yandex.ru', port: 993, secure: true },
-    },
-    outlook: {
-        label: 'Microsoft 365',
-        smtp: { host: 'smtp.office365.com', port: 587, secure: false },
-        imap: { host: 'outlook.office365.com', port: 993, secure: true },
-    },
-    mailru: {
-        label: 'Mail.ru',
-        smtp: { host: 'smtp.mail.ru', port: 465, secure: true },
-        imap: { host: 'imap.mail.ru', port: 993, secure: true },
-    },
-};
-
 function emptyMailbox(address = '') {
     return {
         address,
@@ -290,22 +266,19 @@ ODA({
             .accounts {
                 width: 220px;
                 min-width: 180px;
-                @apply --vertical;
                 @apply --light;
-                border-right: 1px solid var(--border-color, rgba(0,0,0,.1));
+                border-right: 1px solid var(--border-color);
             }
             .accounts-toolbar {
                 padding: 6px 8px;
                 gap: 4px;
-                @apply --horizontal;
                 @apply --header;
                 align-items: center;
             }
             .account-item {
-                @apply --horizontal;
                 padding: 10px 8px 10px 12px;
                 cursor: pointer;
-                border-bottom: 1px solid rgba(0,0,0,.06);
+                border-bottom: 1px solid var(--border-color);
             }
             .account-title {
                 font-weight: 500;
@@ -318,14 +291,12 @@ ODA({
                 opacity: .75;
             }
             .editor {
-                @apply --vertical;
-                @apply --flex;
                 padding: 12px 16px;
                 gap: 8px;
                 overflow: auto;
             }
             fieldset {
-                border: 1px solid var(--border-color, rgba(0,0,0,.12));
+                border: 1px solid var(--border-color);
                 border-radius: 4px;
                 padding: 8px 12px;
                 margin: 0;
@@ -344,12 +315,8 @@ ODA({
                 font: inherit;
             }
             .row {
-                @apply --horizontal;
                 gap: 12px;
                 align-items: center;
-            }
-            .row fieldset {
-                @apply --flex;
             }
             .port {
                 max-width: 72px;
@@ -366,7 +333,7 @@ ODA({
                 <oda-button icon="icons:add" title="Добавить ящик" @tap="addAccount"></oda-button>
             </div>
             <div flex style="overflow-y:auto;">
-                <div ~if="accounts.length" ~for="accounts" class="account-item"
+                <div ~if="accounts.length" ~for="accounts" class="account-item" horizontal
                     :info-invert="index === $for.index"
                     @tap="index = $for.index">
                     <div vertical flex>
@@ -424,9 +391,6 @@ ODA({
     `,
     accounts: [],
     index: -1,
-    get presetList() {
-        return Object.entries(MAIL_PRESETS).map(([id, p]) => ({ id, label: p.label }));
-    },
     addAccount() {
         this.accounts.push(emptyMailbox(''));
         this.index = this.accounts.length - 1;
@@ -459,15 +423,13 @@ ODA({
     template: /* html */ `
         <style>
             :host {
-                @apply --vertical;
-                @apply --flex;
                 overflow: hidden;
             }
         </style>
-        <!--<oda-mailbox ~for="boxes" slot="left-panel" vertical :box="$for.item" :label="$for.item.label" :icon="$for.item.icon"></oda-mailbox>-->
-        <oda-mailbox slot="left-panel" vertical :box="boxes[0]" label="Входящие" icon="icons:inbox"></oda-mailbox>
-        <oda-mailbox slot="left-panel" vertical :box="boxes[1]" label="Исходящие" icon="iconoir:send-mail"></oda-mailbox>
-        <oda-mailbox slot="left-panel" vertical :box="boxes[2]" label="Корзина" icon="icons:delete"></oda-mailbox>
+        <!--<oda-mailbox ~for="boxes" slot="left-panel" vertical flex :box="$for.item" :label="$for.item.label" :icon="$for.item.icon"></oda-mailbox>-->
+        <oda-mailbox slot="left-panel" vertical flex :box="boxes[0]" label="Входящие" icon="icons:inbox"></oda-mailbox>
+        <oda-mailbox slot="left-panel" vertical flex :box="boxes[1]" label="Исходящие" icon="iconoir:send-mail"></oda-mailbox>
+        <oda-mailbox slot="left-panel" vertical flex :box="boxes[2]" label="Корзина" icon="icons:delete"></oda-mailbox>
         <oda-email-message slot="main" :mode></oda-email-message>
     `,
     $item: null,
@@ -568,11 +530,9 @@ ODA({
     template: /* html */ `
         <style>
             :host {
-                @apply --vertical;
                 min-width: 240px;
-                width: 280px;
                 overflow: hidden;
-                border-bottom: 1px solid var(--border-color, rgba(0,0,0,.08));
+                border-bottom: 1px solid var(--border-color);
             }
             .box-title {
                 @apply --header;
@@ -583,8 +543,6 @@ ODA({
                 letter-spacing: .04em;
             }
             .days {
-                @apply --vertical;
-                @apply --flex;
                 overflow-y: auto;
             }
             .empty {
@@ -601,11 +559,11 @@ ODA({
     `,
     box: null,
     dayPaths: {},
-    _loaded: false,
-    _lastEpoch: -1,
     get dates() {
-        this.refreshDayPaths();
         return Object.keys(this.dayPaths).sort((a, b) => b.localeCompare(a));
+    },
+    attached() {
+        this.refreshDayPaths();
     },
     async refreshDayPaths() {
         const item = this.$pdp.$item;
@@ -640,7 +598,6 @@ ODA({
                 @apply --no-flex;
             }
             .day-header {
-                @apply --horizontal;
                 cursor: pointer;
                 padding: 6px 10px;
                 align-items: center;
@@ -649,7 +606,6 @@ ODA({
                 opacity: .85;
             }
             .msg-list {
-                @apply --vertical;
                 gap: 2px;
                 padding: 0 4px 6px;
             }
@@ -700,12 +656,18 @@ ODA({
                 @tap="$pdp?.selectMessage?.($for.item)">
                 <div class="msg-subject">{{$for.item.subject}}</div>
                 <div class="msg-date">{{$for.item.dateLabel}}</div>
-                <div class="msg-from">{{$for.item.from}}</div>
-                <div class="msg-to">{{$for.item.to}}</div>
+                <div class="msg-from">От: {{$for.item.from}}</div>
+                <div class="msg-to">Кому: {{$for.item.to}}</div>
             </div>
         </div>
     `,
-    day: '',
+    day: {
+        $def: '',
+        set(n) {
+            if (this.isFirst)
+                this.expanded = true;
+        }
+    },
     boxId: '',
     messages: [],
     _loading: false,
@@ -813,9 +775,7 @@ ODA({
         }
     },
     attached() {
-        if (this.isFirst)
-            this.expanded = true;
-        else if (this.expanded)
+        if (this.expanded)
             this.async(() => this.loadMessages());
     },
 });
@@ -833,7 +793,7 @@ ODA({
                 gap: 8px;
             }
             fieldset {
-                border: 1px solid var(--border-color, rgba(0,0,0,.12));
+                border: 1px solid var(--border-color);
                 border-radius: 4px;
                 padding: 6px 10px;
                 margin: 0;
@@ -855,7 +815,6 @@ ODA({
                 resize: vertical;
             }
             .idle {
-                @apply --flex;
                 align-items: center;
                 justify-content: center;
                 opacity: .6;
@@ -866,13 +825,11 @@ ODA({
                 opacity: .8;
             }
             .toolbar {
-                @apply --horizontal;
                 gap: 8px;
                 align-items: center;
                 justify-content: flex-end;
             }
             .view-body {
-                @apply --flex;
                 white-space: pre-wrap;
                 overflow: auto;
                 padding: 8px 0;
@@ -929,8 +886,6 @@ ODA({
         if (this.$pdp?.mode !== 'view' || !row || row.body != null)
             return;
         try {
-            //const file = await WORK.get_item(row.path);
-            //const raw = await file.load();
             const res = await fetch(row.path);
             const raw = await res.text();
             const parsed = parseEmlClient(raw);
@@ -945,7 +900,6 @@ ODA({
         }
         finally {
             this.view = row;
-            //this.render();
         }
     },
 });

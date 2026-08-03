@@ -15,7 +15,7 @@ import {
     removePushSubscription,
     sendPushNotification,
 } from '../host/push.js';
-import { DEV_MODE } from "../host/config.js";
+import { DEV_MODE, setDevMode } from "../host/config.js";
 
 /** Прототип HTTP/WS-сессии (`$server.users[ssid]` / `params.user`). */
 const sessionProto = {
@@ -289,6 +289,11 @@ export class $server extends $class {
     }
     static get mime(){
         return mime;
+    }
+    async toggleDevMode(params){
+        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN)
+        await setDevMode(params.post.value);
+        process.exit(0);
     }
 }
 $server.type_chain = Object.create(null);

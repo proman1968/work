@@ -83,6 +83,7 @@ ODA({ is: 'microchat-view',
                 box-sizing: border-box;
                 min-width: 0;
                 padding: 4px;
+                gap: 4px;
             }
             .head-row > .label {
                 overflow: hidden;
@@ -109,7 +110,7 @@ ODA({ is: 'microchat-view',
             }
         </style>
         <details :open="open" @toggle="onToggle">
-            <summary shadow vertical :bold="open" flex
+            <summary raised vertical :bold="open" flex
                     :light="!pinned && !infoInvert" :accent="pinned && !infoInvert"
                     :info-invert="infoInvert" ~class="{auto: pinned, stick: isSticky}" ~style="stickTopStyle">
                 <div class="head-row" horizontal flex>

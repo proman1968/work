@@ -21,8 +21,11 @@
     <script type="module">
         const item_path = "{item_path}";
         const page_handler = "{handler}";
-
+        
         await import(window.location.origin + '/sources/client.js');
+
+        WORK.DEV_MODE = {dev_mode};
+
         try{
             await WORK.login();
         }
@@ -68,7 +71,7 @@
                     }
                 }
             });
-            if(window.top === window && {dev_mode}){
+            if(window.top === window && WORK.DEV_MODE){
                 const devPanel = document.getElementById('devModePanel');
                 devPanel.$item = await WORK.get_item('/');
                 devPanel.style = '';
@@ -118,7 +121,8 @@
                         OK: { label: 'Перезапустить', icon: 'carbon:reset' },
                         CANCEL: { label: 'Отмена', icon: 'carbon:close' },
                     });
-                    console.warn('reboot');
+                    const method = await this.$item.fetch('handlers', {path: '//rebootWithoutDevMode'});
+                    await method?.execute();
                 }
                 catch(err){
                     console.error(err);

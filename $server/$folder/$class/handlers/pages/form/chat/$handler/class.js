@@ -417,7 +417,7 @@ ODA({is: 'oda-chat',
         return []
     },
     value: {
-        $def: ''
+        $def: 'Сделай презентацию'
     },
     replyTarget: {
         $der: null,

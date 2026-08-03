@@ -1,34 +1,73 @@
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
-// Линейный реестр pipe.nodes (по id = type блока); корень pipe.root.
-// Движок: _thinking — think + маршрут из this.pipe_node + execute одного узла, пишет this.pipe_node.
-// prompt() — вход: реальный (push блока prompt) / служебный (role ASSISTENT, без блока). Self-call'ов НЕТ —
-// продолжение цикла идёт снаружи через prompt({role:'ASSISTENT'}) от кнопки клиента; состояние живёт в this.pipe_node.
-// Поля узла: prompt, inject, next (массив id), build, button, fc, askType. Router — без prompt/build (только next).
-
+// Линейный реестр pipe (по id = type блока); корень — pipe.thinking.
 export default {
     icon: 'bootstrap:robot',
 
     /**
      * Вход автомата. Один вызов = один узел (think + маршрут + execute).
-     * Реальный вход (role USER|BOSS|ADMIN): text → блок prompt → _thinking.
-     * Служебный вход (role ASSISTENT): без блока — продолжение по кнопке, состояние в this.pipe_node.
      * @param {object} params — { prompt?, user?, role?, answers?, model? }
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
+        // debugger
         let { prompt, role, user } = params;
         try {
-            const isService = role === 'ASSISTENT';
+            const isService = role === 'AI';
+            // подтверждение complete: служебный ход, лист = complete-блок → закрыть его контейнер
+            if (isService) {
+                let leaf = await this._active_block();
+                if (leaf?.type === 'complete') {
+                    let container = await this._active_container();
+                    container.closed = true;
+                    await this._advance_steps(container);
+                    await this._save(user);
+                    user?.send?.({ type: 'chat.done', path: this.short });
+                    this.async(() => this.prompt({ role: 'AI', user }));
+                    return { ok: true };
+                }
+            }
             if (!isService) {
-                this._stopped = false; // новый реальный ход снимает Stop прошлого цикла
-                await this._push_block(user, {
+                let block = {
                     type: 'prompt',
                     content: prompt,
                     sender: user?.$user?.id ?? user?.uid ?? '',
                     items: []
-                });
+                }
+                await this._push_block(user, block);
             }
-            await this._thinking(prompt || '', user);
+            let pipe = await this.pipe;
+            let active_pipe = await this._active_pipe();
+            let messages = await this.context();
+
+            if (active_pipe?.next?.length) {
+                let container = await this._active_container();
+                let options = [...active_pipe.next];
+                if (Array.isArray(container?.items) && container.items.length)
+                    options.push('complete');
+                let menu = 'Исходя из текущего контекста выбери из следующего списка один, наиболее подходящий шаг:';
+                for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+                menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
+                messages.push({ role: 'user', content: menu });
+
+                let choice = await this._streamChat({ messages }, user);
+                if (this._stopped) return;
+                let words = choice.content.toLowerCase().replace(/[«».,;:!?'"\s]+/g, ' ').split(/\s+/).filter(Boolean);
+                let next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
+                let next_pipe = pipe[next_id];
+
+                messages.last.content = next_pipe.prompt;
+                let response = await this._streamChat({ messages }, user);
+                if (this._stopped) return;
+
+                let block = next_pipe.build(response);
+                if (block) {
+                    await this._push_block(user, block);
+                    if (!block.button && !next_pipe.stop) {
+                        this.async(() => this.prompt({ role: 'AI', user }));
+                    }
+                }
+            }
+            // терминал (active_pipe без next) — маршрут не нужен; подтверждение кнопок/complete отдельно
         }
         catch (e) {
             await this._push_block(user, { type: 'error', content: e.message });
@@ -37,72 +76,66 @@ export default {
         user?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
+    async _active_pipe(){
+        let block = await this._active_block();
+        let pipe = await this.pipe;
+        return pipe[block.type];
+    },
+    /** Лист дерева (последний блок) — позиция автомата для маршрута. */
+    async _active_block(){
+        const find__active_block = (block) => {
+            if (block.closed || !block.items?.length)
+                return block;
+            return find__active_block(block.items.at(-1));
+        }
+        return find__active_block(await this.body);
+    },
+    /** Контейнер (родитель листа) — куда пушить новый блок. */
+    async _active_container(){
+        const find = (block) => {
+            if (block.closed) return block;
+            const last = block.items?.at(-1);
+            if (!last || last.closed || !Array.isArray(last.items)) return block;
+            return find(last);
+        }
+        return find(await this.body);
+    },
+    /** Закрыт step → найти родительский task, отметить шаг done, следующий pending → in_progress. */
+    async _advance_steps(container){
+        if (container?.type !== 'step') return;
+        const body = await this.body;
+        const findParent = (node) => {
+            for (const b of (node.items || [])) {
+                if (b === container) return node;
+                if (b.items?.length) {
+                    const r = findParent(b);
+                    if (r) return r;
+                }
+            }
+            return null;
+        };
+        const task = findParent(body);
+        if (task?.type !== 'task' || !Array.isArray(task.steps)) return;
+        const cur = task.steps.find(s => s.status === 'in_progress');
+        if (cur) cur.status = 'done';
+        const next = task.steps.find(s => s.status === 'pending');
+        if (next) next.status = 'in_progress';
+    },
     async context(){
         const body = await this.body;
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
-                out.push({ role: b.type === 'prompt' ? 'user' : 'assistant', content: b.content });
+                if( b.type === 'prompt')
+                    out.push({ role: 'user', content: b.content });
+                else{
+                    out.push({ role: 'assistant', content: '*' + b.type + '*\n\n' + b.content });
+                }
                 if (b.items?.length) walk(b, out);
             }
             return out;
         };
         const out = [{ role: 'system', content: body.system }];
         return walk(body, out);
-    },
-    /**
-     * Один ход автомата: think + маршрут из this.pipe_node + execute одного выбранного узла.
-     * Пишет this.pipe_node = выбранный узел (persisted между вызовами). Self-call'ов нет.
-     * thinking мерджит root.prompt в последний user-промпт (реальный вход); иначе — новое user-сообщение.
-     */
-    async _thinking(prompt, userSession){
-        const pipe = await this.pipe;
-        const root = pipe.nodes[pipe.root];
-        prompt += root.prompt;
-        let messages = await this.context();
-        messages.last.content = prompt;
-        let { content, usage } = await this._streamChat({ messages }, userSession);
-        if (this._stopped) return;
-        await this._push_block(userSession, { type: 'thinking', content, usage, icon: root.icon });
-        messages = await this.context();
-
-        // маршрут из persisted-состояния (или root на первом ходе)
-        const node = this.pipe_node || root;
-        const nextIds = node.next || root.next || [];
-        if (!nextIds.length) return; // терминал
-
-        let next_id = nextIds[0];
-        if (nextIds.length > 1) {
-            let inject = root.inject;
-            for (const id of nextIds) {
-                inject += '\n' + id + ' - ' + (pipe.nodes[id]?.inject || '') + ';';
-            }
-            messages.push({ role: 'user', content: inject });
-            ({ content, usage } = await this._streamChat({ messages }, userSession));
-            if (this._stopped) return;
-            next_id = content.trim().toLowerCase();
-            if (!pipe.nodes[next_id]) return; // мусор от модели
-        }
-
-        const nextNode = pipe.nodes[next_id];
-        this.pipe_node = nextNode; // persist для следующего вызова
-
-        // исполняем выбранный узел (если есть prompt)
-        if (nextNode.prompt) {
-            messages = await this.context();
-            if (next_id === 'thinking' && messages.last?.role === 'user') {
-                messages.last.content = (messages.last.content || '') + nextNode.prompt;
-            } else {
-                messages.push({ role: 'user', content: nextNode.prompt });
-            }
-            const response = await this._streamChat({ messages }, userSession);
-            if (this._stopped) return;
-            const block = nextNode.build?.(response);
-            if (block) {
-                if (block.type === 'task' && !block.label)
-                    block.label = (await this.body).title || 'Задача';
-                await this._push_block(userSession, block);
-            }
-        }
     },
     /**
      * Один стрим-ход модели. context = { messages, functions? };
@@ -128,9 +161,6 @@ export default {
             }
         }
         return {content, usage, calls}
-    },
-    get pipe_node(){
-        return null;
     },
     get pipe(){
         return new AsyncPromise(async () =>{
@@ -160,9 +190,9 @@ export default {
         return { ok: true, stopped: true };
     },
     async _push_block(userSession, block){
-        let list = await this.get_active_list();
+        let root = await this._active_container();
         block.time = Date.now();
-        list.push(block);
+        root.items.push(block);
         await this._save(userSession);
     },
     /** Tip-массив для записи: спуск в items последнего контейнера (в т.ч. пустой items: []). */

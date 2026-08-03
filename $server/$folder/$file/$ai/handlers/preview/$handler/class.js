@@ -389,8 +389,8 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        // кнопка = служебный ход (ASSISTENT): без блока prompt в ленте
-        const payload = { prompt: label, role: 'ASSISTENT' };
+        // кнопка = служебный ход (AI): без блока prompt в ленте
+        const payload = { prompt: label, role: 'AI' };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;

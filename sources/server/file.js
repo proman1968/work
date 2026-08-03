@@ -352,7 +352,7 @@ export class $file extends $folder{
         }
         if (actor && actor !== globalThis.WORK && !actor.uid)
             params.user = { uid, $user: actor.$user || actor };
-        params.time = Date.now();
+        params.time ??= Date.now();
         params.dateTime = new Date(params.time);
         let date = params.dateTime.toISOString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
