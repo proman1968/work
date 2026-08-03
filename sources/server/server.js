@@ -15,6 +15,7 @@ import {
     removePushSubscription,
     sendPushNotification,
 } from '../host/push.js';
+import { DEV_MODE, setDevMode } from "../host/config.js";
 
 /** Прототип HTTP/WS-сессии (`$server.users[ssid]` / `params.user`). */
 const sessionProto = {
@@ -151,6 +152,7 @@ export class $server extends $class {
         text = text.replaceAll('{handler-type}', page.parent.id);
         text = text.replaceAll('{server-label}', this.label);
         text = text.replaceAll('{server-icon}', this.icon);
+        text = text.replaceAll('{dev_mode}', DEV_MODE ? 'true' : 'false');
 
         let title = context.label;
         title += ` [${page.label}]`;
@@ -287,6 +289,11 @@ export class $server extends $class {
     }
     static get mime(){
         return mime;
+    }
+    async toggleDevMode(params){
+        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN)
+        await setDevMode(params.post.value);
+        process.exit(0);
     }
 }
 $server.type_chain = Object.create(null);

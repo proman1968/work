@@ -47,11 +47,11 @@ export class $handler extends $class{
         });
     }
     get module() {
-        return new AsyncPromise(async () => {
+        return (async () => {
             const $item = Reactor.activate(this);
             $item.$context = await $item.$context;
             const module = await import($item.short + '/~/class.js');
             return module.default;
-        });
+        })();
     }
 }

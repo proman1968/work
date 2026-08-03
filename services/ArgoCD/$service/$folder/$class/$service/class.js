@@ -1,7 +1,7 @@
 /**
  * ArgoCD — базовая точка подключения к Argo CD.
  *
- * STATIC — параметры подключения и шаблон Application (тело POST /api/v1/applications).
+ * FIELDS — схема настроек (подключение и шаблон Application); значения — корневые props.
  * Token хранится только в #secret/argocd.json и никогда не отдаётся на клиент.
  *
  * Серверные методы (по канону Weather/SearXNG — прямо в class.js):
@@ -11,10 +11,10 @@
  *   listOrders / acceptOrder / rejectOrder / completeOrder — заявки клиентов
  *
  * Статусы заявки (в JSON записи .order в history pass.order):
- *   ''            — ещё не обработана (default после submitOrder)
- *   'rejected'    — отвергнута
- *   'in_progress' — запущена в работу
- *   'completed'   — завершена вручную
+ *   'in_processing' — ещё не обработана (default после submitOrder)
+ *   'rejected'      — отвергнута
+ *   'in_progress'   — запущена в работу
+ *   'completed'     — завершена вручную
  *
  * Тело pass.order: { status, $Link → .bid, product (снимок), input: { domainName } }.
  * Продукт — не enum тарифов; имя хоста — input.domainName.
@@ -22,58 +22,22 @@
 export default {
     icon: 'carbon:kubernetes',
     label: 'Argo CD',
-    METADATA: {
-        STATIC: {
-            id: 'STATIC',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'url',
-                type: 'String',
-                placeholder: 'https://argocd.example.com',
-                required: true,
-            }, {
-                id: 'insecure',
-                type: 'Boolean',
-                placeholder: 'false',
-            }, {
-                id: 'project',
-                type: 'String',
-                placeholder: 'default',
-            }, {
-                id: 'repoURL',
-                type: 'String',
-                placeholder: 'https://binaries.example.com/helm/chart/develop',
-            }, {
-                id: 'chart',
-                type: 'String',
-                placeholder: 'chart',
-            }, {
-                id: 'targetRevision',
-                type: 'String',
-                placeholder: '*',
-            }, {
-                id: 'destinationServer',
-                type: 'String',
-                placeholder: 'https://kubernetes.default.svc',
-            }, {
-                id: 'destinationNamespace',
-                type: 'String',
-                placeholder: 'default',
-            }, {
-                id: 'syncPrune',
-                type: 'Boolean',
-                placeholder: 'true',
-            }, {
-                id: 'syncSelfHeal',
-                type: 'Boolean',
-                placeholder: 'true',
-            }],
-        },
-    },
+    FIELDS: [
+        { id: 'url', type: 'string', label: 'url', placeholder: 'https://argocd.example.com', required: true },
+        { id: 'insecure', type: 'boolean', label: 'insecure', placeholder: 'false' },
+        { id: 'project', type: 'string', label: 'project', placeholder: 'default' },
+        { id: 'repoURL', type: 'string', label: 'repoURL', placeholder: 'https://binaries.example.com/helm/chart/develop' },
+        { id: 'chart', type: 'string', label: 'chart', placeholder: 'chart' },
+        { id: 'targetRevision', type: 'string', label: 'targetRevision', placeholder: '*' },
+        { id: 'destinationServer', type: 'string', label: 'destinationServer', placeholder: 'https://kubernetes.default.svc' },
+        { id: 'destinationNamespace', type: 'string', label: 'destinationNamespace', placeholder: 'default' },
+        { id: 'syncPrune', type: 'boolean', label: 'syncPrune', placeholder: 'true' },
+        { id: 'syncSelfHeal', type: 'boolean', label: 'syncSelfHeal', placeholder: 'true' },
+    ],
 
     /** Статусы заявки для UI/методов. */
     ORDER_STATUSES: {
-        '': 'в обработке',
+        'in_processing': 'в обработке',
         'rejected': 'отвергнута',
         'in_progress': 'в работе',
         'completed': 'завершена',
@@ -170,7 +134,7 @@ export default {
         });
     },
 
-    /** Собрать тело Application из STATIC + параметров заявки.
+    /** Собрать тело Application из FIELDS-значений + параметров заявки.
      * @param {any} params
      */
     _buildAppSpec(params = {}) {
@@ -303,8 +267,9 @@ export default {
             throw new Error('Нет пути заявки');
         const order = await this._readOrder(orderPath);
         const statuses = s.ORDER_STATUSES || {};
-        if (order.status && order.status !== '')
-            throw new Error('Заявка уже обработана: ' + (statuses[order.status] || order.status));
+        const st = order.status || '';
+        if (st && st !== 'in_processing')
+            throw new Error('Заявка уже обработана: ' + (statuses[st] || st));
 
         order.status = 'in_progress';
         order.acceptedAt = Date.now();

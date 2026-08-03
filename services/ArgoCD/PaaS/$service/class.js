@@ -20,7 +20,7 @@ export default {
     syncSelfHeal: true,
 
     ORDER_STATUSES: {
-        '': 'в обработке',
+        'in_processing': 'в обработке',
         'rejected': 'отвергнута',
         'in_progress': 'в работе',
         'completed': 'завершена',
@@ -99,8 +99,9 @@ export default {
             throw new Error('Нет пути заявки');
         const order = await this._readOrder(orderPath);
         const statuses = this.ORDER_STATUSES || {};
-        if (order.status && order.status !== '')
-            throw new Error('Заявка уже обработана: ' + (statuses[order.status] || order.status));
+        const st = order.status || '';
+        if (st && st !== 'in_processing')
+            throw new Error('Заявка уже обработана: ' + (statuses[st] || st));
 
         order.status = 'in_progress';
         order.acceptedAt = Date.now();

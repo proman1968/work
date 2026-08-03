@@ -35,7 +35,7 @@ export default {
             throw new Error('Имя домена "' + domainName + '" уже занято');
 
         const order = {
-            status: '',
+            status: 'in_processing',
             $Link,
             product,
             input: { domainName },

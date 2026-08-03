@@ -1,9 +1,7 @@
 export default {
     icon: 'icons:settings',
     allowSave: true,
-    get allowUse() {
-        return this.$context?.STATIC?.fields?.length;
-    },
+    allowUse: true,
     template: /*html*/`
     <style>
         :host {
@@ -67,8 +65,8 @@ export default {
     <div class="fields">
         <fieldset ~for="fields" :class="$for.item.small ? 'small' : ''">
             <legend>{{$for.item.label}}</legend>
-            <input ~if="$for.item.type !== 'Boolean'" type="text" :placeholder="$for.item.placeholder" :value="getVal($for.item)" @input="setVal($for.item, $this.value)">
-            <label ~if="$for.item.type === 'Boolean'" horizontal style="gap:6px; align-items:center;">
+            <input ~if="!isBoolean($for.item)" type="text" :placeholder="$for.item.placeholder" :value="getVal($for.item)" @input="setVal($for.item, $this.value)">
+            <label ~if="isBoolean($for.item)" horizontal style="gap:6px; align-items:center;">
                 <input type="checkbox" :checked="getVal($for.item)" @change="setVal($for.item, $this.checked)">
                 <span style="font-size:small;">{{$for.item.placeholder || 'да'}}</span>
             </label>
@@ -87,17 +85,20 @@ export default {
     fields: [],
     tokenInput: '',
     tokenSet: false,
-    _node: null,
+    _body: null,
+    isBoolean(field) {
+        return String(field?.type || '').toLowerCase() === 'boolean';
+    },
     async attached() {
-        const node = await this.$item.dataAccessRoot;
-        this._node = node.children.find(n => n.field.id === 'STATIC');
-        this.fields = (this._node?.children || []).map(c => ({
-            id: c.field.id,
-            label: c.field.label || c.field.id,
-            type: c.field.type,
-            placeholder: c.field.placeholder || '',
-            small: c.field.type === 'Boolean',
-            _node: c,
+        const body = await this.$item.body;
+        this._body = body;
+        const schema = body?.FIELDS || this.$item?.FIELDS || this.$context?.FIELDS || [];
+        this.fields = (Array.isArray(schema) ? schema : []).map(f => ({
+            id: f.id,
+            label: f.label || f.id,
+            type: f.type,
+            placeholder: f.placeholder || '',
+            small: String(f.type || '').toLowerCase() === 'boolean',
         }));
         try {
             const status = await this.$item.fetch('tokenStatus');
@@ -105,13 +106,16 @@ export default {
         } catch { /* не ADMIN или нет секрета */ }
     },
     getVal(field) {
-        return field._node.getValue();
+        return this._body?.[field.id];
     },
     setVal(field, value) {
-        field._node.setValue(value);
+        if (!this._body || !field?.id)
+            return;
+        this._body[field.id] = value;
+        this.$item.isChanged = true;
     },
     async save() {
-        await this.$item.save();
+        await this.$item.save(this._body);
         const newToken = String(this.tokenInput || '').trim();
         if (newToken) {
             await this.$item.fetch('saveToken', {}, newToken);

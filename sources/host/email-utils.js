@@ -71,13 +71,12 @@ function workHeaderName(key) {
 }
 
 export function mailboxFromHistoryPath(path) {
-    const m = String(path || '').match(/\/([^/]+)\/email\/([^/]+)\/(inbox|outbox)\.eml\//i);
+    const m = String(path || '').match(/\/message\/\.([^/]+)\/(inbox|outbox|trash)\.eml/i);
     if (!m)
         return null;
     return {
-        structureId: m[1],
-        address: decodeURIComponent(m[2]),
-        box: m[3].toLowerCase(),
+        address: decodeURIComponent(m[1]),
+        box: m[2].toLowerCase(),
     };
 }
 
@@ -135,8 +134,6 @@ export function imapFolderToFilename(imapPath, delimiter = '/') {
     let name = String(imapPath ?? '').trim();
     if (!name)
         return 'mailbox';
-    if (name.toUpperCase() === 'INBOX')
-        return 'inbox';
     const delims = new Set(['/', '\\']);
     if (delimiter)
         delims.add(delimiter);
@@ -147,9 +144,7 @@ export function imapFolderToFilename(imapPath, delimiter = '/') {
     name = name.replace(/[<>:"|?*]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
     if (!name)
         return 'mailbox';
-    if (name.toUpperCase() === 'INBOX')
-        return 'inbox';
-    return name;
+    return name.toLowerCase();
 }
 
 /** Курсор синхронизации из текущего .eml */

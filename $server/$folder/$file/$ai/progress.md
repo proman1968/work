@@ -2,24 +2,27 @@
 
 ## Последние изменения
 
-- [13:40] **PIPE → `pipe.json` + флаг `mutates`.** Дерево пайплайна вынесено из `class.js` в чистый JSON (`pipe.json`, рядом с `class.js`) — грузится лениво через `_pipe()` и кэшируется на инстансе. Промпты инлайнятся в узлы (отдельных `*_PROMPT` констант нет). Костыли `WRITE_METHODS`/`WORK_READ_METHODS` удалены: подтверждение изменений теперь по флагу `mutates` (JSDoc-тег `@mutates` владельца метода → `buildAiSchema` пробрасывает в схему; harness `save_file`/`edit` несут `mutates` в `HARNESS_FUNCTIONS`). `fc`-узел поддерживает сентинель `'readonly'` (только `!mutates`) для ветки поиска в рабочей области. `@mutates` проставлено: `save_file`/`save_files` (`$folder`), `create` (`$class`), `edit` (`$file`).
-- [12:12] **PIPE-канон пайплайна.** Замена плоских `ROUTES`/`RESEARCH_ROUTES` + кучи `_<route>` хендлеров одним деревом `PIPE` (конечный автомат) и одним движком `_walk`. Узел = состояние: `prompt`/`inject`/`next`/`button`/`fc`/`askType`; корень — `thinking`. Маршрутизация: 1 ребёнок → напрямую, N → меню из `inject`. Wait-узлы (`button`) стопят до клиента. Лист: `fc` → `_handle_call` + continue на `thinking`; без `fc` (`step`) → отрендеренный `prompt` как continue-строка. Ворот `allDone` в `thinking` → форс `report`. Разбор кнопок `_confirm` свёрнут в `prompt` → `_resolve_button` (pendingAction, answers, «Принять» plan → `task`, «Принять» report → `completed`). Удалено 14 методов (`_thinking`/`_research`/`_plan`/`_report`/`_task`/`_action`/`_cancel`/`_web`/`_work`/`_question`/`_form`/`_ask_user`/`_fc_move`/`_confirm`) + `_plan_ready_for_task`; убраны константы `ROUTES`/`RESEARCH_ROUTES`/`ACTION_PROMPT`/`RESEARCH_PROMPT`.
-- [09:55] Служебные методы файла `stop` и `change_model`. 1) `stop` — `requestAbort` + `chat.done stopped`; task/pendingAction не трогает. 2) `change_model` — пишет `body.model` через fsp (без on_save). 3) Abort подключён к автомату: `clearAbort` на реальном ходе, проверка в `streamChat` / `_walk` / `_handle_call`. 4) Preview: `fetch('stop')`, `fetch('change_model')` вместо `prompt {stop}` и полного `save`.
+- [18:15] **pipe.js: flatten + узел `complete`.** Убраны `root` и обёртка `nodes` — узлы лежат линейно на верхнем уровне (`pipe[id]`, не `pipe.nodes[id]`). Добавлен `complete`: обычный узел (prompt + build с `button: 'Завершить'`), после подтверждения закрывает текущий контейнер. Движок добавляет `complete` в меню выбора автоматически для блоков с `items`.
+- [18:15] **`button` — единственный источник правды в блоке.** Убраны `button` с уровня узла в `form`/`questions`/`report` (дублирование с `build`). Движок судит об остановке по `block.button`, не по `next_pipe.button`. Поле `next_pipe.stop` оставлено как задел для остановки без кнопки (вопрос/ответ пользователю).
+- [12:00] **Сверка readme vs код.** Признано: readme описывает целевой дизайн, код ему не соответствует — большая часть заявленного отсутствует (`_walk`, FC, harness tools, `complete_step`, `_resolve_button`). Канон правки — только код трёх файлов.
 
 ## В работе
 
-- Обкатка полного цикла на живых прогонах по `PIPE`: thinking → plan → Принять → task → step → action/research → complete_step → … → report → Принять; Stop mid-flight; смена модели.
-- Доработка `PIPE`: subplan-декомпозиция в ходе, teach-ворота прозы, spawn_agent, usage-учёт; текстовый fallback FC для моделей без functionCalling.
+- Доделка движка `prompt()` в `class.js` под модель «дерево = состояние»: маршрутизация по типу последнего блока (`_active_block` уже есть), auto-loop через `this.async` (есть), auto-add `complete` в меню для контейнеров, обработка подтверждения `complete` (закрытие контейнера), проверка остановки по `block.button`.
+- Узлы-контейнеры: `task`/`action`/`research` уже пишут `items: []`; `step`/`prompt` — пока не контейнеры, требуют `build`.
 
 ## Ключевые решения
 
-- **PIPE — конечный автомат**, не плоский список маршрутов: дерево узлов-состояний + один движок `_walk`. Меньше методов, декларативность.
-- **`_walk` один за всё**: генерация/инъекция, FC-проход, маршрутизация (1/N детей), wait-узлы, continue-листья. `_<route>` хендлеры упразднены.
-- **Разбор кнопок — в `prompt`** (`_resolve_button`), не отдельный `_confirm`: pendingAction, answers, «Принять» plan/report.
-- **stop / change_model — методы файла**, рядом с `prompt` (общий abort Map с автоматом), не `$method`-папки и не контрабанда через prompt.
-- **Stop не отменяет задачу** — только текущую генерацию/самовызовы.
-- **change_model не абортит** — новая модель со следующего `resolveChatModel`.
+- **Состояние автомата = тип последнего блока в дереве**, не отдельное persisted-поле. Маршрут берётся из `pipe[_active_block().type].next`. Persisted `pipe_node` — заглушка, удалится.
+- **Поток направленный: вперёд или вверх.** Любой узел с `next` углубляет дерево или пишет sibling'ом; только `complete` закрывает контейнер и поднимает на уровень родителя. `body.closed = true` — терминал, задача закрыта навсегда.
+- **`complete` добавляется в меню автоматически** для блоков с `items`; в `next` узлов его не пишем. Меню строится в `prompt()` по `active_pipe.next` + опциональный пункт `complete - <inject>`.
+- **`button` только в `build`.** Узел не несёт `button`; блок — единственный источник правды для UI и для движка (`if (!block.button && !next_pipe.stop)` → продолжать auto-loop).
+- **Служебная роль переименована: `AI`** (в коде `role === 'AI'`), не `ASSISTENT`. Служебные ходы auto-loop и подтверждений кнопок идут с `role:'AI'`.
 
 ## Блокеры / Открытые вопросы
 
-- Модели без functionCalling: FC-ходы падают в текст (wait) — нужен текстовый fallback вызовов.
+- `step` без `build` — ломает контракт «тип последнего блока = позиция»: после step-инъекции последний блок остаётся `task`, и `task.next = ['step']` выбирается бесконечно. Нужен либо `build` у `step`, либо отдельное понятие виртуальной позиции.
+- FC-слой не подключён: `_streamChat` не передаёт `functions`, `r.calls` всегда пустой, `build` FC-узлов всегда уходит в text-ветку.
+- Исполнение tool-вызовов: `build` узлов `web`/`file`/`action` возвращает `{type:'tool', name, args}`, но блок с типом `tool` не имеет позиции в `pipe` → следующий шаг падает. Требует решения: либо тип узла как тип блока (`type:'action'` для action-узла), либо отдельный `tool`-узел в pipe.
+- `answers` из `confirm()` не доходят до модели: `prompt()` не деструктурирует `params.answers`.
+- `_active_block` после закрытия контейнера должен подниматься к родителю — сейчас возвращает сам закрытый блок.

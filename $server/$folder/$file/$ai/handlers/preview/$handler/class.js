@@ -1,54 +1,86 @@
-﻿/**
+/**
  * Preview task.ai — data → getters → binds (rules Part B).
- * JSON файла в this.data; ribbon :data="$for.item"; view читает this.data.
+ * JSON в this.data; корень и вложенность — только items.
  */
 
-const VIEW_TYPES = new Set([
-    'prompt', 'thinking', 'text', 'action', 'task', 'plan', 'report',
-    'file', 'tool', 'tool_result', 'form', 'questions', 'error',
-]);
+import './views.js';
 
 /**
- * Исполняемая ветка tip:
- * 1) самая глубокая active task → её ribbon (subplan внутри ribbon родителя);
- * 2) иначе task, у хвоста ribbon есть button (Отчёт до accept) → его ribbon;
- * 3) иначе корневой ribbon (action «План» / «Начать»).
+ * Исполняемая ветка tip: deepest active task.items, иначе спуск в items
+ * последнего контейнера, иначе waiting task с button, иначе текущий список.
  */
-function tipBranch(ribbon) {
-    if (!Array.isArray(ribbon) || !ribbon.length) return [];
-    // Спуск к самой глубокой активной задаче (настоящий стек вложенных subplan)
-    let active = [...ribbon].reverse().find(b => b?.type === 'task' && b.state === 'active');
-    while (active && Array.isArray(active.ribbon)) {
-        const deeper = [...active.ribbon].reverse()
-            .find(b => b?.type === 'task' && b.state === 'active');
-        if (!deeper)
-            return active.ribbon;
-        active = deeper;
+function tipBranch(items) {
+    if (!Array.isArray(items) || !items.length) return [];
+    let list = items;
+    while (true) {
+        const active = [...list].reverse()
+            .find(b => b?.type === 'task' && b.state === 'active' && Array.isArray(b.items));
+        if (active) {
+            list = active.items;
+            continue;
+        }
+        const last = list.at(-1);
+        if (last && Array.isArray(last.items) && last.items.length && !last.closed) {
+            list = last.items;
+            continue;
+        }
+        const waiting = [...list].filter(b => b?.type === 'task').reverse().find(b => {
+            const nested = Array.isArray(b.items) ? b.items : [];
+            return nested.length && !!String(nested.at(-1)?.button?.label || '').trim();
+        });
+        if (waiting)
+            return waiting.items;
+        return list;
     }
-    if (active && Array.isArray(active.ribbon))
-        return active.ribbon;
-    const tasks = [...ribbon].filter(b => b?.type === 'task').reverse();
-    const waiting = tasks.find(b => {
-        const nested = Array.isArray(b.ribbon) ? b.ribbon : [];
-        if (!nested.length) return false;
-        return !!String(nested[nested.length - 1]?.button?.label || '').trim();
-    });
-    if (waiting && Array.isArray(waiting.ribbon))
-        return waiting.ribbon;
-    return ribbon;
 }
 
 /**
  * Tip для панели над промптом: последний блок ветки, если у него есть button.label.
  * Не зависит от answered.
  */
-function tipBlock(ribbon) {
-    const branch = tipBranch(ribbon);
+function tipBlock(items) {
+    const branch = tipBranch(items);
     if (!branch.length) return null;
     const last = branch[branch.length - 1];
     const label = String(last?.button?.label || '').trim();
     if (!label) return null;
     return last;
+}
+
+/**
+ * Узлы на пути к tip: предки + конечный лист — для :auto-open.
+ * Тот же спуск, что tipBranch, но собирает Set ссылок на блоки.
+ */
+function tipOpenSet(items) {
+    const open = new Set();
+    if (!Array.isArray(items) || !items.length) return open;
+    let list = items;
+    while (true) {
+        const active = [...list].reverse()
+            .find(b => b?.type === 'task' && b.state === 'active' && Array.isArray(b.items));
+        if (active) {
+            open.add(active);
+            list = active.items;
+            continue;
+        }
+        const last = list.at(-1);
+        if (last && Array.isArray(last.items) && last.items.length && !last.closed) {
+            open.add(last);
+            list = last.items;
+            continue;
+        }
+        const waiting = [...list].filter(b => b?.type === 'task').reverse().find(b => {
+            const nested = Array.isArray(b.items) ? b.items : [];
+            return nested.length && !!String(nested.at(-1)?.button?.label || '').trim();
+        });
+        if (waiting) {
+            open.add(waiting);
+            for (const n of tipOpenSet(waiting.items)) open.add(n);
+            return open;
+        }
+        if (last) open.add(last);
+        return open;
+    }
 }
 
 function answersFrom(fields) {
@@ -64,69 +96,101 @@ function answersFrom(fields) {
     return has ? out : null;
 }
 
-/** Load-only: legacy names + answered flags (мутация in-place, не на render) */
-function migrateRibbon(ribbon) {
-    if (!Array.isArray(ribbon)) return;
-    for (let i = 0; i < ribbon.length; i++) {
-        const b = ribbon[i];
-        if (!b || typeof b !== 'object') continue;
-        if (b.role === 'user' && !b.type) b.type = 'prompt';
-        if (b.type === 'details' || b.type === 'reasoning') b.type = 'thinking';
-        if (b.type === 'block') {
-            b.type = 'task';
-            b.label = b.label || b.content || 'План';
-            b.state = b.state || 'active';
-            b.ribbon = Array.isArray(b.ribbon) ? b.ribbon : [];
-        }
-        if (b.type === 'action' && b.fields?.length) {
-            b.type = 'questions';
-            b.button = b.button || { label: 'Уточнить', color: 'success' };
-        }
-        if ((b.type === 'questions' || b.type === 'form' || b.type === 'action'
-            || b.type === 'plan' || b.type === 'report') && !b.answered) {
-            const follow = ribbon.slice(i + 1).some(x => x.type === 'prompt' || x.role === 'user' || x.type === 'task');
-            if (follow) b.answered = true;
-        }
-        if (b.time && !b.timeText)
-            b.timeText = new Date(b.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        if (b.type === 'task' && Array.isArray(b.ribbon))
-            migrateRibbon(b.ribbon);
-    }
-}
-
+/** Зарегистрирован microchat-view-{type} → он, иначе база microchat-view. */
 function viewTag(item) {
     const t = item?.type;
-    return t && VIEW_TYPES.has(t) ? 'microchat-view-' + t : '';
+    if (!t) return '';
+    const custom = 'microchat-view-' + t;
+    return customElements.get(custom) ? custom : 'microchat-view';
 }
 
-/** Первый ход после on_save: есть user prompt, ещё нет ответа AI → UI busy. */
-function ribbonLooksAwaitingFirstReply(ribbon, data) {
+/** Первый ход: у последнего prompt ещё нет typed-детей в items → UI busy. */
+function itemsLookAwaitingFirstReply(items, data) {
     if (data?.pendingPlan || data?.pendingAction) return false;
-    if (!Array.isArray(ribbon) || !ribbon.length) return false;
-    const hasUser = ribbon.some(b => b.type === 'prompt' || b.role === 'user');
-    if (!hasUser) return false;
-    const done = new Set([
-        'thinking', 'text', 'action', 'task', 'tool', 'tool_result',
-        'error', 'questions', 'form',
-    ]);
-    return !ribbon.some(b => done.has(b.type));
+    if (!Array.isArray(items) || !items.length) return false;
+    const prompt = [...items].reverse().find(b => b?.type === 'prompt');
+    if (!prompt) return false;
+    const kids = prompt.items || [];
+    return !kids.some(b => b?.type);
 }
 
-/** ↑1.2k ↓340 · 12% */
-function formatUsageLine(u) {
-    if (!u || typeof u !== 'object') return '';
-    const fmt = (n) => {
-        const v = Number(n) || 0;
-        if (v >= 10000) return Math.round(v / 1000) + 'k';
-        if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
-        return String(v);
-    };
-    const parts = [];
-    if (u.prompt != null) parts.push('↑' + fmt(u.prompt));
-    if (u.completion != null) parts.push('↓' + fmt(u.completion));
-    if (u.contextPct != null) parts.push(u.contextPct + '%');
-    return parts.join(' · ');
+const DEFAULT_CONTEXT_LIMIT = 128000;
+
+function estimateTokens(text) {
+    const s = String(text || '');
+    if (!s) return 0;
+    return Math.max(1, Math.ceil(s.length / 4));
 }
+
+function fmtTokens(n) {
+    const v = Number(n) || 0;
+    if (v >= 10000) return Math.round(v / 1000) + 'k';
+    if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+    return String(Math.round(v));
+}
+
+/** Сумма usage по дереву items + lastPrompt (последний известный размер контекста запроса). */
+function sumUsageFromItems(items) {
+    let prompt = 0, completion = 0, total = 0, lastPrompt = 0;
+    const walk = (list) => {
+        for (const b of list || []) {
+            const u = b?.usage;
+            if (u && typeof u === 'object') {
+                const p = Number(u.prompt_tokens ?? u.prompt) || 0;
+                const c = Number(u.completion_tokens ?? u.completion) || 0;
+                const t = Number(u.total_tokens ?? u.total) || (p + c);
+                if (p) lastPrompt = p;
+                prompt += p;
+                completion += c;
+                total += t;
+            }
+            if (b?.items?.length) walk(b.items);
+        }
+    };
+    walk(items);
+    return { prompt, completion, total, lastPrompt };
+}
+
+/** Статистика контекста для кнопки и панели. */
+function buildUsageStats(data) {
+    const root = data?.usage && typeof data.usage === 'object' ? data.usage : null;
+    const agg = sumUsageFromItems(data?.items);
+    const system = estimateTokens(data?.system);
+    const used = Number(root?.contextUsed ?? root?.prompt ?? root?.prompt_tokens)
+        || agg.lastPrompt
+        || system;
+    const limit = Number(root?.contextLimit ?? root?.limit) || DEFAULT_CONTEXT_LIMIT;
+    let pct = Number(root?.contextPct);
+    if (!Number.isFinite(pct))
+        pct = limit > 0 ? Math.round(used / limit * 100) : 0;
+    pct = Math.min(100, Math.max(0, pct));
+
+    const conversation = Math.max(0, used - system);
+    const segments = [
+        { id: 'system', label: 'System', tokens: system, color: 'var(--dark-color)' },
+        { id: 'conversation', label: 'Диалог', tokens: conversation, color: 'var(--accent-color)' },
+        { id: 'completion', label: 'Ответы (сессия)', tokens: agg.completion, color: 'var(--success-color)' },
+    ].filter(s => s.tokens > 0);
+
+    const segTotal = segments.reduce((s, x) => s + x.tokens, 0) || 1;
+    for (const s of segments)
+        s.pct = Math.round(s.tokens / segTotal * 100);
+
+    return {
+        pct,
+        used,
+        limit,
+        usedText: fmtTokens(used),
+        limitText: fmtTokens(limit),
+        line: [
+            pct + '%',
+            fmtTokens(used) + ' / ' + fmtTokens(limit),
+            agg.completion ? '↓' + fmtTokens(agg.completion) : '',
+        ].filter(Boolean).join(' · '),
+        segments,
+    };
+}
+
 
 // ─── shell ───────────────────────────────────────────────────────────
 
@@ -162,8 +226,7 @@ export default {
             :tts-mode="ttsMode"
             :tts-title="ttsTitle"
             :sending="sending"
-            :usage-text="usageText"
-            :context-pct="contextPct"
+            :usage-stats="usageStats"
             :pending-action="!!data?.pendingAction"
             :tip-button="open?.button || null"
             @confirm="confirm(true)"
@@ -217,11 +280,11 @@ export default {
         },
     },
     get $saveKey() { return this.$item?.short; },
-    get title() { return this.data?.title || 'task'; },
-    get items() { return this.data?.ribbon || []; },
+    get title() { return this.data?.title || this.$item?.name || 'task'; },
+    get items() { return this.data?.items || []; },
 
     get open() {
-        return tipBlock(this.data?.ribbon);
+        return tipBlock(this.data?.items);
     },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
@@ -240,20 +303,14 @@ export default {
         const label = this.ttsMode === 'local' ? 'piper' : (this.ttsMode || 'off');
         return 'TTS: ' + label;
     },
+    get usageStats() {
+        return buildUsageStats(this.data);
+    },
     get usageText() {
-        const u = this.data?.usage;
-        if (!u) return '';
-        const fmt = n => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n || 0));
-        const parts = [];
-        if (u.total != null) parts.push('Σ ' + fmt(u.total));
-        if (u.prompt != null) parts.push('↑' + fmt(u.prompt));
-        if (u.completion != null) parts.push('↓' + fmt(u.completion));
-        if (u.contextPct != null) parts.push(u.contextPct + '% ctx');
-        return parts.join(' · ');
+        return this.usageStats?.line || '';
     },
     get contextPct() {
-        const p = Number(this.data?.usage?.contextPct);
-        return Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : 0;
+        return this.usageStats?.pct || 0;
     },
 
     attached() {
@@ -268,10 +325,9 @@ export default {
             let raw = await this.$item.load();
             if (raw instanceof Blob) raw = await raw.text();
             const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            data.ribbon ??= [];
-            migrateRibbon(data.ribbon);
+            data.items ??= [];
             this.data = data;
-            if (ribbonLooksAwaitingFirstReply(data.ribbon, data))
+            if (itemsLookAwaitingFirstReply(data.items, data))
                 this.pending = true;
             await this._ensureModel();
             this._autoFollow = true;
@@ -333,7 +389,8 @@ export default {
         this.sending = true;
         this.pending = true;
         this._userStopped = false;
-        const payload = { prompt: label, confirm: !!ok, role: this._userRole() };
+        // кнопка = служебный ход (AI): без блока prompt в ленте
+        const payload = { prompt: label, role: 'AI' };
         if (ok && open?.fields?.length) {
             const a = answersFrom(open.fields);
             if (a) payload.answers = a;
@@ -638,16 +695,20 @@ ODA({ is: 'microchat-ribbon',
                 flex: 1;
                 min-height: 0;
                 scroll-behavior: smooth;
+                padding-bottom: 12px;
+                box-sizing: border-box;
             }
             :host([embedded]) {
                 flex: none;
                 min-height: auto;
                 overflow: visible;
+                padding-bottom: 0;
             }
             .ribbon { @apply --vertical; }
         </style>
   
-        <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item" ~for="items"
+        <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
+                :auto-open="isAutoOpen($for.item)" :stick-top="stickTop" ~for="items"
                 @confirm="fire('confirm')" @cancel="fire('cancel')"></div>
 
         <microchat-streaming ~if="pending && streamingText" :text="streamingText"></microchat-streaming>
@@ -655,16 +716,19 @@ ODA({ is: 'microchat-ribbon',
     items: [],
     streamingText: '',
     pending: false,
+    stickTop: { $def: 0, $type: Number },
     embedded: { $def: false, $type: Boolean, $attr: true },
     tag(item) { return viewTag(item); },
+    get tipOpen() { return tipOpenSet(this.items); },
+    isAutoOpen(item) { return this.tipOpen.has(item); },
     visible(item) {
-        if (!item || !viewTag(item)) return false;
+        if (!item?.type) return false;
         if ((item.type === 'questions' || item.type === 'form') && item.answered)
             return false;
         // Слова-маршруты автомата (plan/report без кнопки, task без шагов) — служебные, не показываем
         if ((item.type === 'plan' || item.type === 'report') && !item.button)
             return false;
-        if (item.type === 'task' && !Array.isArray(item.steps))
+        if (item.type === 'task' && !Array.isArray(item.steps) && !Array.isArray(item.items))
             return false;
         return true;
     },
@@ -715,23 +779,73 @@ ODA({ is: 'microchat-panel',
             .tools { @apply --horizontal; align-items: center; font-size: small; }
             .ctx-wrap { position: relative; flex-shrink: 0; }
             .ctx-btn {
-                width: 20px; height: 20px; border-radius: 50%; border: none; padding: 0;
-                cursor: pointer; flex-shrink: 0;
-                display: flex; align-items: center; justify-content: center;
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                border: none;
+                padding: 0;
+                cursor: pointer;
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
                 background:
-                    radial-gradient(circle at center, var(--content-background, #fff) 46%, transparent 47%),
+                    radial-gradient(circle at center, var(--content-background) 46%, transparent 47%),
                     conic-gradient(
-                        var(--accent-color, #303f9f) calc(var(--pct, 0) * 1%),
-                        #90a4ae 0
+                        var(--accent-color) calc(var(--pct, 0) * 1%),
+                        var(--dark-color) 0
                     );
             }
             .ctx-btn span {
-                font-size: 7px; line-height: 1; font-weight: 600; opacity: .9; pointer-events: none;
+                font-size: 7px;
+                line-height: 1;
+                font-weight: 600;
+                opacity: .9;
+                pointer-events: none;
             }
-            .ctx-tip {
-                position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
-                white-space: nowrap; padding: 4px 8px; border-radius: 8px; font-size: x-small;
-                @apply --dark-invert; @apply --raised; z-index: 2; pointer-events: none;
+            .ctx-panel {
+                position: absolute;
+                left: 0;
+                bottom: calc(100% + 8px);
+                min-width: 220px;
+                max-width: 280px;
+                padding: 10px;
+                border-radius: 12px;
+                gap: 8px;
+                z-index: 3;
+                @apply --vertical;
+                @apply --content;
+                @apply --raised;
+                border: 1px solid var(--border-color);
+            }
+            .ctx-panel .head {
+                font-size: small;
+            }
+            .ctx-panel .muted {
+                font-size: x-small;
+                opacity: .7;
+            }
+            .ctx-bar {
+                height: 8px;
+                border-radius: 4px;
+                overflow: hidden;
+                @apply --horizontal;
+                @apply --dark;
+            }
+            .ctx-bar i {
+                display: block;
+                height: 100%;
+            }
+            .ctx-row {
+                font-size: x-small;
+                gap: 8px;
+                align-items: center;
+            }
+            .ctx-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 2px;
+                flex-shrink: 0;
             }
         </style>
         <div class="tip-actions" ~if="confirmUi">
@@ -759,12 +873,28 @@ ODA({ is: 'microchat-panel',
             <div class="tools">
                 <item-node no-flex :icon-size="iconSize * .8" :$item="selectedModelItem"
                     @pointerdown.stop="fire('select-model', $event)"></item-node>
-                <div class="ctx-wrap" ~if="usageText || contextPct">
-                    <button class="ctx-btn" ~style="'--pct:' + (contextPct || 0)"
-                        :title="usageText || 'Контекст'" @tap.stop="statsOpen = !statsOpen">
-                        <span>{{contextPct || 0}}%</span>
+                <div class="ctx-wrap">
+                    <button class="ctx-btn" ~style="'--pct:' + (usageStats?.pct || 0)"
+                        title="Контекст" @tap.stop="statsOpen = !statsOpen">
+                        <span>{{usageStats?.pct || 0}}%</span>
                     </button>
-                    <div class="ctx-tip" ~if="statsOpen">{{usageText || (contextPct + '% ctx')}}</div>
+                    <div class="ctx-panel" ~if="statsOpen" @tap.stop>
+                        <div class="head" horizontal>
+                            <span bold>{{usageStats?.pct || 0}}% занято</span>
+                            <span flex></span>
+                            <span class="muted">~{{usageStats?.usedText}} / {{usageStats?.limitText}}</span>
+                        </div>
+                        <div class="ctx-bar" ~if="usageStats?.segments?.length">
+                            <i ~for="usageStats.segments"
+                                ~style="'flex:' + ($for.item.pct || 1) + ';background:' + $for.item.color"></i>
+                        </div>
+                        <div class="ctx-row" horizontal ~for="usageStats?.segments || []">
+                            <div class="ctx-dot" ~style="'background:' + $for.item.color"></div>
+                            <span flex>{{$for.item.label}}</span>
+                            <span class="muted">{{fmtTok($for.item.tokens)}}</span>
+                        </div>
+                        <div class="muted" ~if="!(usageStats?.segments?.length)">Нет данных usage</div>
+                    </div>
                 </div>
                 <div flex></div>
                 <oda-button icon="icons:attachment" :icon-size @tap="fire('get-file')"
@@ -801,444 +931,11 @@ ODA({ is: 'microchat-panel',
     ttsMode: 'off',
     ttsTitle: 'TTS: off',
     sending: false,
-    usageText: '',
-    contextPct: 0,
+    usageStats: null,
     statsOpen: false,
-});
-
-// ─── views: :data → getters ──────────────────────────────────────────
-
-ODA({ is: 'microchat-view',
-    data: null,
-});
-
-ODA({ is: 'microchat-view-prompt',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --horizontal; @apply --info-invert; @apply --raised;
-                padding: 8px; position: sticky; top: 0; gap: 8px; align-items: flex-start;
-            }
-            .msg { white-space: pre-wrap; word-break: break-word; }
-            .time { font-size: xx-small; opacity: .5; flex-shrink: 0; }
-        </style>
-        <item-icon :$item="WORK.USER" default="icons:account-circle" icon-size="16"></item-icon>
-        <div flex class="msg">{{content}}</div>
-        <div class="time" ~if="timeText">{{timeText}}</div>
-    `,
-    imports: '~/lib//icon',
-    get content() { return this.data?.content || ''; },
-    get timeText() { return this.data?.timeText || ''; },
-});
-
-ODA({ is: 'microchat-view-thinking',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host { display: block; }
-            details { @apply --light; }
-            summary {
-                @apply --bold; @apply --horizontal;
-                font-size: x-small; opacity: .6; cursor: pointer; user-select: none;
-                align-items: center; gap: 4px; padding: 2px 8px;
-            }
-            summary oda-icon { transition: transform 0.2s; }
-            details[open] summary oda-icon { transform: rotate(90deg); }
-            details[open] summary { opacity: .8; }
-            .details-content {
-                font-size: small; padding: 4px 8px; @apply --raised;
-                border-left: 3px solid var(--success-color); margin-top: 2px;
-                white-space: pre-wrap; word-break: break-word;
-            }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
-        </style>
-        <details>
-            <summary>
-                <oda-icon icon="icons:chevron-right" :icon-size></oda-icon>
-                <span flex>{{label}}</span>
-                <div class="usage" ~if="usageLine">{{usageLine}}</div>
-            </summary>
-            <div class="details-content">{{content}}</div>
-        </details>
-    `,
-    imports: 'oda//icon',
-    get label() { return this.data?.label || 'Мысли'; },
-    get content() { return this.data?.content || ''; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
-});
-
-ODA({ is: 'microchat-view-text',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host { @apply --horizontal; gap: 8px; padding: 2px 4px; align-items: flex-start; }
-            .body { min-width: 0; }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; }
-        </style>
-        <div flex class="body">
-            <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-        </div>
-        <div class="usage" ~if="usageLine">{{usageLine}}</div>
-    `,
-    imports: 'oda//markdown//markdown-viewer',
-    get content() { return this.data?.content || ''; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
-});
-
-ODA({ is: 'microchat-view-action',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 6px;
-            }
-            .head { @apply --horizontal; align-items: center; gap: 8px; }
-            .title { @apply --bold; font-size: small; }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
-        </style>
-        <div class="head" ~if="title || usageLine">
-            <div class="title" flex ~if="title">{{title}}</div>
-            <div class="usage" ~if="usageLine">{{usageLine}}</div>
-        </div>
-        <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-    `,
-    imports: 'oda//markdown//markdown-viewer',
-    get title() { return this.data?.title || ''; },
-    get content() { return this.data?.content || ''; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
-});
-
-ODA({ is: 'microchat-view-plan',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 6px;
-                border-left: 3px solid var(--info-color, #5c6bc0);
-            }
-            .head { @apply --horizontal; align-items: center; gap: 8px; }
-            .title { @apply --bold; font-size: small; }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
-        </style>
-        <div class="head">
-            <div class="title" flex>{{title}}</div>
-            <div class="usage" ~if="usageLine">{{usageLine}}</div>
-        </div>
-        <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-    `,
-    imports: 'oda//markdown//markdown-viewer',
-    get title() { return this.data?.title || 'План'; },
-    get content() { return this.data?.content || ''; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
-});
-
-ODA({ is: 'microchat-view-report',
-    extends: 'microchat-view-plan',
-    get title() { return this.data?.title || 'Отчёт'; },
-});
-
-ODA({ is: 'microchat-view-form',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 2px 4px;
-            }
-            .title { @apply --bold; font-size: small; }
-        </style>
-        <div class="title" ~if="title">{{title}}</div>
-        <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-        <div ~for="fields">
-            <microchat-field :field="$for.item"></microchat-field>
-        </div>
-    `,
-    imports: 'oda//markdown//markdown-viewer',
-    get title() { return this.data?.title || ''; },
-    get content() { return this.data?.content || ''; },
-    get fields() { return this.data?.fields || []; },
-});
-
-ODA({ is: 'microchat-view-questions',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical; @apply --raised; gap: 6px; padding: 8px;
-                border-radius: 12px; margin: 6px;
-            }
-            .title { @apply --bold; font-size: small; }
-            .hint { font-size: x-small; color: var(--error-color, #c62828); padding: 0 2px; }
-            :host([need-answers]) {
-                outline: 2px solid var(--error-color, #c62828);
-                outline-offset: 1px;
-            }
-        </style>
-        <div class="title" ~if="title">{{title}}</div>
-        <oda-markdown-viewer ~if="content" :value="content"></oda-markdown-viewer>
-        <div ~for="fields">
-            <microchat-field :field="$for.item"></microchat-field>
-        </div>
-        <div class="hint" ~if="needAnswers">Выберите варианты или введите «другое…»</div>
-    `,
-    imports: 'oda//markdown//markdown-viewer',
-    get title() { return this.data?.title || ''; },
-    get content() { return this.data?.content || ''; },
-    get fields() { return this.data?.fields || []; },
-    needAnswers: {
-        $attr: true,
-        get() { return !!this.data?.needAnswers; },
-        set(v) { if (this.data) this.data.needAnswers = !!v; },
+    fmtTok(n) {
+        return fmtTokens(n);
     },
-});
-
-/** :field = объект из data.fields (мутация value на месте) */
-ODA({ is: 'microchat-field',
-    template: /*html*/`
-        <style>
-            :host { @apply --vertical; gap: 4px; }
-            label { font-size: medium; @apply --bold; }
-            .opt {
-                @apply --content; border: 1px solid var(--border-color, #ccc); border-radius: 6px;
-                padding: 4px 8px; font-size: small; cursor: pointer; user-select: none;
-                white-space: normal; max-width: 100%;
-            }
-            .opt:hover { @apply --header; }
-            .opt.selected {
-                border-color: var(--success-color, #2e7d32);
-                background: color-mix(in srgb, var(--success-color, #2e7d32) 12%, transparent);
-            }
-            input, textarea {
-                @apply --content; border: 1px solid var(--border-color, #ccc); border-radius: 4px;
-                padding: 6px 8px; font-size: small; font-family: inherit; outline: none;
-                min-width: 6em; flex: 1 1 8em;
-            }
-            textarea { min-height: 3em; resize: vertical; }
-            .other { flex: 1 1 8em; min-width: 6em; }
-        </style>
-        <label ~if="field?.type !== 'checkbox'">{{fieldLabel}}</label>
-        <div ~if="field?.type === 'select'" class="horizontal"
-            style="gap: 4px; flex-wrap: wrap; align-items: center;">
-            <div class="opt" ~for="field.options || []"
-                ~class="{selected: field.value === $for.item}"
-                @tap="pick($for.item)">{{$for.item}}</div>
-            <input class="other" type="text" placeholder="другое…"
-                :value="otherValue" @input="onOther($event)" @tap.stop>
-        </div>
-        <textarea ~if="field?.type === 'textarea'" ::value="field.value" placeholder="Введите ответ..."></textarea>
-        <input type="text" ~if="field?.type === 'text' || !field?.type"
-            ::value="field.value" placeholder="Введите ответ...">
-        <input type="number" ~if="field?.type === 'number'" ::value="field.value">
-        <input type="email" ~if="field?.type === 'email'" ::value="field.value">
-        <input type="date" ~if="field?.type === 'date'" ::value="field.value">
-        <label ~if="field?.type === 'checkbox'" horizontal style="align-items: center; gap: 8px; cursor: pointer;">
-            <input type="checkbox" ::checked="field.value">
-            <span>{{fieldLabel}}</span>
-        </label>
-    `,
-    field: null,
-    get fieldLabel() {
-        return String(this.field?.label || '').replace(/[?？]*[:：]*\s*$/, '') || 'Да';
-    },
-    get otherValue() {
-        const v = this.field?.value;
-        if (v == null || v === '') return '';
-        const opts = this.field?.options || [];
-        return opts.includes(v) ? '' : String(v);
-    },
-    pick(opt) {
-        if (this.field) this.field.value = opt;
-        this.render();
-    },
-    onOther(e) {
-        const v = String(e?.target?.value ?? '').trim();
-        if (this.field) this.field.value = v;
-        this.render();
-    },
-});
-
-ODA({ is: 'microchat-view-task',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host { @apply --vertical; @apply --content; @apply --raised; overflow: visible; }
-            .goal {
-                @apply --bold; 
-                font-size: medium; 
-                padding: 8px 8px 2px;
-                overflow: hidden; 
-                text-overflow: ellipsis; 
-                white-space: nowrap;
-                @apply --header;
-            }
-            .header {
-                @apply --horizontal; @apply --bold; font-size: small; padding: 4px 8px;
-                cursor: pointer; align-items: center; gap: 6px; user-select: none;
-            }
-            .header:hover { @apply --header; }
-            .track { height: 3px; @apply --dark; }
-            .bar { height: 100%; background: var(--success-color); transition: width .3s; }
-            .steps { @apply --vertical; gap: 2px; padding: 4px 8px; }
-            .step {
-                @apply --horizontal; @apply --raised; gap: 8px; align-items: center;
-                font-size: small; padding: 2px 4px;
-            }
-            .step.done { opacity: .5; text-decoration: line-through; }
-            .step.in_progress { @apply --accent; @apply --bold; }
-            .nested {
-                @apply --vertical;
-                border-left: 2px solid var(--border-color, #ccc); margin-left: 2px; overflow: visible;
-            }
-        </style>
-        <div class="goal" ~if="label">{{label}}</div>
-        <div class="header" @tap="collapsed = !collapsed" horizontal>
-            <span info style="border-radius: 16px; padding: 2px 4px;">{{current}}/{{steps.length}}</span>
-            <span flex style="text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">{{currentStepText}}</span>
-            <oda-icon icon="icons:chevron-right" :icon-size
-                ~style="collapsed ? '' : 'transform: rotate(90deg);'"></oda-icon>
-        </div>
-        <div class="track"><div class="bar" ~style="'width:' + progress + '%'"></div></div>
-        <div class="steps" ~if="!collapsed">
-            <div class="step" horizontal ~for="steps" :class="$for.item.status">
-                <oda-icon :icon="stepIcon($for.item.status)" icon-size="16"></oda-icon>
-                <span flex>{{$for.item.description}}</span>
-            </div>
-        </div>
-        <div class="nested" ~if="items.length">
-            <microchat-ribbon embedded :items
-                @confirm="fire('confirm')" @cancel="fire('cancel')"></microchat-ribbon>
-        </div>
-    `,
-    imports: 'oda//icon',
-    collapsed: true,
-    get label() { return this.data?.label || this.data?.content || 'План'; },
-    get steps() { return this.data?.steps || []; },
-    get items() { return this.data?.ribbon || []; },
-    get current() {
-        const s = this.steps;
-        const i = s.findIndex(x => x.status === 'in_progress');
-        if (i >= 0) return i + 1;
-        const p = s.findIndex(x => x.status !== 'done');
-        return p >= 0 ? p + 1 : s.length;
-    },
-    get currentStepText() {
-        const s = this.steps;
-        if (!s.length) return '';
-        const i = s.findIndex(x => x.status === 'in_progress');
-        const step = i >= 0 ? s[i] : (s.find(x => x.status !== 'done') || s[s.length - 1]);
-        return step?.description || '';
-    },
-    get progress() {
-        const s = this.steps;
-        if (!s.length) return 0;
-        return Math.round(s.filter(x => x.status === 'done').length / s.length * 100);
-    },
-    stepIcon(status) {
-        if (status === 'done') return 'icons:check-circle';
-        if (status === 'in_progress') return 'av:play-circle-outline';
-        return 'icons:radio-button-unchecked';
-    },
-});
-
-ODA({ is: 'microchat-view-file',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --horizontal; @apply --raised;
-                padding: 4px 8px; align-items: center; gap: 6px;
-                font-size: small; border-radius: 8px; margin: 2px 4px;
-            }
-        </style>
-        <item-node flex auto-run :$item></item-node>
-    `,
-    imports: '~/lib//node',
-    get path() { return this.data?.path || ''; },
-    /** get_item → $item (info); id fallback для history-имён с пробелами */
-    get $item() {
-        if (!this.path) return null;
-        return WORK.get_item(this.path, 'info').then(item => {
-            if (item && !item.id && item.path) {
-                item.DATA ??= {};
-                item.DATA.id = item.path.split('/').pop();
-            }
-            return item;
-        });
-    },
-});
-
-ODA({ is: 'microchat-view-tool',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <details style="font-size: small;">
-            <summary>🔧 {{name || 'tool'}}</summary>
-            <pre style="margin: 4px; white-space: pre-wrap;">{{argsText}}</pre>
-        </details>
-    `,
-    get name() { return this.data?.name || ''; },
-    get args() { return this.data?.args ?? null; },
-    get argsText() {
-        try { return JSON.stringify(this.args ?? {}, null, 2); } catch { return String(this.args); }
-    },
-});
-
-ODA({ is: 'microchat-view-tool_result',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host { overflow: hidden; display: block; }
-            details { @apply --light; }
-            summary {
-                @apply --bold; @apply --horizontal;
-                font-size: x-small; opacity: .6; cursor: pointer; user-select: none;
-                align-items: center; gap: 4px; padding: 2px 8px;
-            }
-            summary oda-icon { transition: transform 0.2s; }
-            details[open] summary oda-icon { transform: rotate(90deg); }
-            details[open] summary { opacity: .8; }
-            .details-content {
-                font-size: small; padding: 4px 8px; @apply --raised;
-                border-left: 3px solid var(--success-color); margin-top: 2px;
-                white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto;
-            }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; font-weight: normal; }
-        </style>
-        <details>
-            <summary>
-                <oda-icon icon="icons:chevron-right" :icon-size></oda-icon>
-                <span flex>{{ok === false ? '❌' : '✅'}} {{label}}</span>
-                <div class="usage" ~if="usageLine">{{usageLine}}</div>
-            </summary>
-            <pre class="details-content">{{content}}</pre>
-        </details>
-    `,
-    imports: 'oda//icon',
-    get tool() { return this.data?.tool || ''; },
-    get label() { return this.data?.label || this.data?.tool || 'result'; },
-    get content() { return this.data?.content || ''; },
-    get ok() { return this.data?.ok !== false; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
-});
-
-ODA({ is: 'microchat-view-error',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --horizontal; gap: 2px; align-items: flex-start;
-                @apply --error; padding: 6px 8px; font-size: small;
-            }
-            .body { min-width: 0; white-space: pre-wrap; }
-            .usage { font-size: xx-small; opacity: .5; flex-shrink: 0; padding-top: 6px; }
-        </style>
-        <div flex class="body">{{content}}</div>
-        <div class="usage" ~if="usageLine">{{usageLine}}</div>
-    `,
-    get content() { return this.data?.content || ''; },
-    get usageLine() { return formatUsageLine(this.data?.usage); },
 });
 
 // ─── mic ─────────────────────────────────────────────────────────────

@@ -14,8 +14,10 @@
 2. Файл попадает в зону роли (`work_zone`): USER → `meta_folder/work/product/*.product`. При сохранении form дописывает `status: published`.
 3. Каждый `save_file` перезаписывает файл целиком → history + `data.logs` (канон §1.6).
 4. Удаление — `$file.delete({ role })`; ACL — `WRITE`.
-5. Витрина показывает карточки из `DATA` (только `published`); поля заказа задаёт handler категории, не `.product`.
+5. Витрина показывает карточки из `DATA` (только `published`); поля заказа — из `$bid.FIELDS.input`, не из `.product`.
 6. Заказ сохраняет `{uid}.bid` на `$class` категории.
+
+Top-level массив `FIELDS` — канон схемы формы и для файловых типов, и для настроек сервисов (значения сервиса — корневые props `class.js`).
 
 ## 4. Из чего это состоит
 
