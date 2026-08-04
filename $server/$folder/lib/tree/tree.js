@@ -69,6 +69,7 @@ export default {
         },
         hideSystem: false,
         hideReadme: false,
+        onlyClasses: false, // только CORE.$class (site-navigation)
     },
     items: [],
     get step() {
@@ -95,6 +96,8 @@ export default {
             items = items.filter(f=>!f.isType)
         if(this.hideReadme)
             items = items.filter(f => !/^readme\.md$/i.test(f.id))
+        if(this.onlyClasses)
+            items = items.filter(f => f instanceof CORE.$class)
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -345,6 +348,8 @@ ODA({is: 'oda-tree-node',
                 items = items.filter(f=>!f.isType)
             if(this.$pdp.hideReadme)
                 items = items.filter(f => !/^readme\.md$/i.test(f.id))
+            if(this.$pdp.onlyClasses)
+                items = items.filter(f => f instanceof CORE.$class)
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
                     this.$item.expanded = true;

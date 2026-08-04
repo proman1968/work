@@ -695,7 +695,6 @@ ODA({ is: 'microchat-ribbon',
                 flex: 1;
                 min-height: 0;
                 scroll-behavior: smooth;
-                padding-bottom: 12px;
                 box-sizing: border-box;
             }
             :host([embedded]) {

@@ -290,10 +290,12 @@ export class $server extends $class {
     static get mime(){
         return mime;
     }
-    async toggleDevMode(params){
+    async devModeToggle(params){
         await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN)
         await setDevMode(params.post.value);
-        process.exit(0);
+        setTimeout(() => {
+            process.exit(0);
+        }, 1000);
     }
 }
 $server.type_chain = Object.create(null);

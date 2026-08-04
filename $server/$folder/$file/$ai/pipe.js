@@ -15,7 +15,7 @@
 export default {
     /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
     prompt: {
-        next: ['thinking'],
+        next: ['thinking', 'answer'],
     },
 
     /** размышление над следующим шагом; мерджит инструкцию в последний user-промпт */
@@ -25,7 +25,7 @@ export default {
             'Как следует подумай, над тем, что необходимо сделать на следующем шаге ',
             'исходя из контекста, и выдай свои размышления от 5 до 100 строк (от своего лица).',
             'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать'].join(' '),
-        next: ['plan', 'research', 'action', 'report'],
+        next: ['plan', 'research', 'actions'],
         build: (r) => ({
             type: 'thinking',
             content: r.content,
@@ -74,50 +74,52 @@ export default {
         next: ['step'],
     },
 
-    /** шаг плана: инъекция (continue-строка), не блок; после → снова thinking */
+    /** шаг плана: промпт-блок. Заголовок = «N. описание» текущего in_progress-шага, тело = items (исполнение).
+     *  В context() уходит как role:'user' (инструкция). Ответ модели на step.prompt → первый thinking внутри items. */
     step: {
-        icon: 'av:play-arrow',
-        prompt: ['Делай пункт {n}: «{description}». Ровно одно действие;',
-            'закрыв пункт результатом — complete_step({step: {n}, summary: "что сделано"}).'].join('\n'),
+        inject: 'если необходимо выполнить один пункт плана',
+        prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
+            'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
+        build: (r, ctx) => {
+            const s = ctx?.currentStep;
+            const title = s ? `${s.number}. ${s.description}` : '';
+            return {
+                type: 'step',
+                content: title,
+                icon: 'av:play-arrow',
+                items: r.content
+                    ? [{ type: 'thinking', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
+                    : [],
+            };
+        },
         next: ['thinking'],
     },
 
     research: {
         inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
-        next: ['search', 'ask'],
-        build: (r) => ({
-            type: 'thinking',
-            content: r.content,
-            usage: r.usage,
+        autocomplete: true,
+        next: ['work', 'web', 'question', 'form', 'questions'],
+        build: () => ({
+            type: 'research',
             icon: 'icons:search',
             items: []
-        }),        
-    },
-
-    search: {
-        icon: 'icons:search',
-        inject: 'если необходимо искать',
-        next: ['web', 'file'],
+        }),
     },
 
     web: {
         icon: 'icons:language',
-        inject: 'если необходимо найти в интернете',
-        prompt: ['Найди информацию в интернете ровно ОДНИМ вызовом функции:',
-            '\n\n[instruction]\n',
-            'search({query: "запрос"}) — поиск;',
-            'fetch_url({url: "https://…"}) — чтение страницы.',
-            'Если фактов уже достаточно — изложи выводы обычным текстом.'].join('\n'),
+        inject: 'если необходимо найти информацию в интернете',
+        prompt: ['Найди информацию в интернете ровно ОДНИМ вызовом функции:'].join('\n'),
         fc: ['search', 'fetch_url'],
         build: (r) => r.calls?.length
             ? { type: 'tool', name: r.calls[0].method, args: r.calls[0].args }
-            : { type: 'text', content: r.content },
+            : { type: 'answer', content: r.content },
         next: ['thinking'],
     },
 
-    file: {
+    work: {
         icon: 'icons:folder',
-        inject: 'если необходимо найти в рабочей области',
+        inject: 'если необходимо найти файлы или информацию в рабочей области',
         prompt: ['Найди информацию в рабочей области ровно ОДНИМ вызовом функции:',
             '\n\n[instruction]\n',
             'read_file({name}) — файл;',
@@ -129,14 +131,36 @@ export default {
         fc: 'readonly',
         build: (r) => r.calls?.length
             ? { type: 'tool', name: r.calls[0].method, args: r.calls[0].args }
-            : { type: 'text', content: r.content },
+            : { type: 'answer', content: r.content },
         next: ['thinking'],
     },
 
-    ask: {
-        icon: 'icons:help-outline',
-        inject: 'если необходимо уточнить у пользователя',
-        next: ['form', 'questions', 'text'],
+    answer: {
+        inject: 'если точно знаешь ответ на запрос пользователя',
+        prompt: ['Ответь пользователю обычным текстом.',
+            'Только ответ, коротко и по делу, без лишних пояснений.'].join('\n'),
+        build: (r) => ({
+            type: 'answer',
+            content: r.content,
+            usage: r.usage,
+            icon: 'icons:question-answer',
+            stop: true,
+        }),
+        
+    },
+
+    question: {
+        inject: 'если нужно задать один уточняющий вопрос пользователю',
+        prompt: ['Задай пользователю один уточняющий вопрос обычным текстом.',
+            '\n\n[instruction]\n',
+            'Только сам вопрос, коротко, без пояснений.'].join('\n'),
+        build: (r) => ({
+            type: 'question',
+            content: r.content,
+            usage: r.usage,
+            icon: 'lineawesome:question-circle',
+            stop: true,
+        }),
     },
 
     form: {
@@ -173,19 +197,10 @@ export default {
         next: ['thinking'],
     },
 
-    text: {
-        icon: 'icons:chat',
-        next_inject: 'если необходимо задать один вопрос',
-        prompt: ['Задай пользователю один уточняющий вопрос обычным текстом.',
-            '\n\n[instruction]\n',
-            'Только сам вопрос, коротко, без пояснений.'].join('\n'),
-        build: (r) => ({ type: 'text', content: r.content}),
-        next: ['thinking'],
-    },
-
-    action: {
-        inject: 'если необходимо выполнить одно конкретное действие, но только, если уже есть конкретный план.',
+    actions: {
+        inject: 'если необходимо выполнить одно или несколько действий, над системой или в интернете',
         prompt: 'Как следует подумай, что ты собираешься сделать',
+        autocomplete: true,
         build: (r) => ({
             type: 'action',
             content: r.content,

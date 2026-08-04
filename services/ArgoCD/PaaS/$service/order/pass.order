@@ -1,0 +1,9 @@
+{
+  "tariff": "СТАРТ",
+  "subdomain": "test-test-1",
+  "fqdn": "test-test-1.odant.org",
+  "url": "https://test-test-1.odant.org",
+  "buyer": "15D3E0BE98A2BBA7",
+  "created": 1785168133090,
+  "paasPath": "/PAAS/test-test-1"
+}

@@ -9,52 +9,95 @@ export default {
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
-        debugger
+        // debugger
         let { prompt, role, user } = params;
         try {
             const isService = role === 'AI';
+            // подтверждение complete: служебный ход с label кнопки → закрыть контейнер complete-блока (отказ «нет» — мимо)
+            if (isService) {
+                let leaf = await this._active_block();
+                if (leaf?.type === 'complete' && prompt === leaf.button?.label) {
+                    let container = await this._active_container();
+                    container.closed = true;
+                    await this._advance_steps(container);
+                    await this._save(user);
+                    user?.send?.({ type: 'chat.done', path: this.short });
+                    this.async(() => this.prompt({ role: 'AI', user }));
+                    return { ok: true };
+                }
+            }
             if (!isService) {
                 let block = {
                     type: 'prompt',
                     content: prompt,
                     sender: user?.$user?.id ?? user?.uid ?? '',
-                    items: []
+                    // items: []
                 }
                 await this._push_block(user, block);
             }
             let pipe = await this.pipe;
             let active_pipe = await this._active_pipe();
-            if(active_pipe?.next?.length){
-                prompt = 'Исходя из текущего контекста выбери из следующего списка один, наиболее подходящий шаг:';
-                for(let next of active_pipe.next){
-                    let next_pipe = pipe[next];
-                    prompt += '\n' + next + ' - ' + next_pipe.inject + ';'
-                }
-                prompt += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!'
-            }
             let messages = await this.context();
-            messages.push({
-                role: 'user',
-                content: prompt
-            })
 
-            let response = await this._streamChat({ messages }, user);
-            if (this._stopped) return;
-            let next = response.content.trim().toLowerCase();
+            if (active_pipe?.next?.length) {
+                let container = await this._active_container();
+                // let next_id;
+                // if (active_pipe.next.length === 1) {
+                //     // единственный маршрут — детерминированный переход, модель не спрашиваем
+                //     next_id = active_pipe.next[0];
+                //     // messages.push({ role: 'user', content: '' });
+                // } else {
+                    let options = [...active_pipe.next];
+                    // complete: только если есть дети и последний завершён (лист или closed)
+                    if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
+                        options.push('complete');
+                    let menu = 'Выбери из списка один, наиболее подходящий следующий шаг:';
+                    for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+                    menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
+                    console.warn(container.type)
+                    console.log(menu)
+                    messages.push({ role: 'user', content: menu });
 
-            let next_pipe = pipe[next];
-            messages.last.content = next_pipe.prompt;
-            response = await this._streamChat({ messages }, user);
-            let block = next_pipe.build(response);
-            await this._push_block(user, block);
-            if(!block.button && !next_pipe.stop){
-                this.async(()=>{
-                    this.prompt({prompt: next, role: 'AI'});
-                })
+                    let choice = await this._streamChat({ messages }, user);
+                    if (this._stopped) return;
+                    console.warn('choice', choice)
+                    choice = choice.content.trim().toLowerCase();
+                    // let next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
+                // }
+                let next_pipe = pipe[choice];
+
+                // нет prompt — узел без генерации, модель не вызываем
+                let response;
+                if (!next_pipe.prompt) {
+                    response = { content: '', usage: 0, calls: [] };
+                } else {
+                    messages.last.content = next_pipe.prompt;
+                    response = await this._streamChat({ messages }, user);
+                    if (this._stopped) return;
+                }
+
+                // ctx для build: currentStep — in_progress-шаг активного task (для step.build)
+                let ctx = {};
+                if (container?.type === 'task' && Array.isArray(container.steps))
+                    ctx.currentStep = container.steps.find(s => s.status === 'in_progress');
+
+                let block = next_pipe.build(response, ctx);
+                if (block) {
+                    // autocomplete = complete без кнопки
+                    const auto = choice === 'complete' && pipe[container.type]?.autocomplete;
+                    if (auto) delete block.button;
+                    await this._push_block(user, block);
+                    if (auto) {
+                        container.closed = true;
+                        await this._advance_steps(container);
+                        await this._save(user);
+                    }
+                    if (!block.button && !block.stop) {
+                        this.async(() => this.prompt({ role: 'AI', user }));
+                    }
+                }
             }
-
-            
-            // await this._thinking(prompt || '', user);
+            // терминал (active_pipe без next) — маршрут не нужен; подтверждение кнопок/complete отдельно
         }
         catch (e) {
             await this._push_block(user, { type: 'error', content: e.message });
@@ -68,24 +111,63 @@ export default {
         let pipe = await this.pipe;
         return pipe[block.type];
     },
+    /** Позиция автомата для маршрута: лист дерева; если последний ребёнок закрыт — сам контейнер. */
     async _active_block(){
         const find__active_block = (block) => {
-            if(block.closed || !block.items?.length)
+            if (block.closed || !block.items?.length)
                 return block;
-            block = block.items.last;
-            return find__active_block(block);
+            const last = block.items.at(-1);
+            if (last.closed) return block;
+            return find__active_block(last);
         }
-        const block = await this.body;
-        return find__active_block(block);
+        return find__active_block(await this.body);
+    },
+    /** Контейнер (родитель листа) — куда пушить новый блок. */
+    async _active_container(){
+        const find = (block) => {
+            if (block.closed) return block;
+            const last = block.items?.at(-1);
+            if (!last || last.closed || !Array.isArray(last.items)) return block;
+            return find(last);
+        }
+        return find(await this.body);
+    },
+    /** Закрыт step → найти родительский task, отметить шаг done, следующий pending → in_progress. */
+    async _advance_steps(container){
+        if (container?.type !== 'step') return;
+        const body = await this.body;
+        const findParent = (node) => {
+            for (const b of (node.items || [])) {
+                if (b === container) return node;
+                if (b.items?.length) {
+                    const r = findParent(b);
+                    if (r) return r;
+                }
+            }
+            return null;
+        };
+        const task = findParent(body);
+        if (task?.type !== 'task' || !Array.isArray(task.steps)) return;
+        const cur = task.steps.find(s => s.status === 'in_progress');
+        if (cur) cur.status = 'done';
+        const next = task.steps.find(s => s.status === 'pending');
+        if (next) next.status = 'in_progress';
+        else task.closed = true;  // все шаги done — закрыть task
     },
     async context(){
         const body = await this.body;
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
-                if( b.type === 'prompt')
+                if (b.type === 'prompt' || b.type === 'step') {
                     out.push({ role: 'user', content: b.content });
-                else{
-                    out.push({ role: 'assistant', content: '*' + b.type + '*\n\n' + b.content });
+                } else {
+                    let content = (b.content || '');
+                    if (b.type === 'task' && Array.isArray(b.steps)) {
+                        content += '\n\nШаги:\n' + b.steps
+                            .map(s => `${s.number}. [${s.status}] ${s.description}`)
+                            .join('\n');
+                    }
+                    out.push({ role: 'assistant', content });
                 }
                 if (b.items?.length) walk(b, out);
             }
@@ -147,7 +229,7 @@ export default {
         return { ok: true, stopped: true };
     },
     async _push_block(userSession, block){
-        let root = await this._active_block();
+        let root = await this._active_container();
         block.time = Date.now();
         root.items.push(block);
         await this._save(userSession);

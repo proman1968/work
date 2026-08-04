@@ -329,24 +329,45 @@ ODA({
 export default {
     icon: 'icons:home',
     label: 'Главная',
-    imports: 'oda//button, ~/lib//icon',
+    imports: 'oda//button, ~/lib//icon, ~/lib//user',
     template: /* html */ `
         <style>
             :host {
                 @apply --flex;
                 @apply --vertical;
                 @apply --content;
-                overflow: auto;
-                min-height: 100%;
+                overflow: hidden;
+                min-height: 0;
+            }
+            .top-bar {
+                @apply --header;
+                @apply --horizontal;
+                align-items: center;
+                gap: 8px;
+                padding: 4px 8px;
+                flex-shrink: 0;
+            }
+            .top-bar .title {
+                @apply --flex;
+                font-weight: 600;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .top-bar .login-btn {
+                border-radius: 8px;
             }
             .page {
                 @apply --vertical;
+                @apply --flex;
                 max-width: 960px;
                 width: 100%;
                 margin: 0 auto;
                 padding: 32px 24px 48px;
                 gap: 24px;
                 box-sizing: border-box;
+                overflow: auto;
+                min-height: 0;
             }
             h1 {
                 margin: 0;
@@ -370,6 +391,23 @@ export default {
                 padding: 24px 0;
             }
         </style>
+        <div ~if="isTop" class="top-bar" horizontal>
+            <span class="title">{{$item.label}}</span>
+            <oda-button
+                ~if="!isLoggedIn"
+                class="login-btn"
+                label="Войти"
+                icon="icons:account-circle"
+                @tap="open_profile"
+            ></oda-button>
+            <item-user
+                ~if="isLoggedIn"
+                :$item="currentUser"
+                round
+                :icon-size="32"
+                @tap="open_profile"
+            ></item-user>
+        </div>
         <div class="page">
             <h1>{{$item.label}}</h1>
             <p class="lead">Выберите тарифный план и оставьте заявку.</p>
@@ -385,6 +423,43 @@ export default {
             <div ~if="!products.length" class="empty">Товары пока не добавлены</div>
         </div>
     `,
+    get isTop() {
+        return WORK.top === window;
+    },
+    get isLoggedIn() {
+        return !!WORK.uid;
+    },
+    get currentUser() {
+        return WORK.USER;
+    },
+    _onAuth() {
+        this.isLoggedIn = undefined;
+        this.currentUser = undefined;
+    },
+    async open_profile() {
+        const profile = ODA.createComponent('user-profile');
+        try {
+            await WORK.showModal(profile, {
+                TITLE: { label: this.isLoggedIn ? 'Профиль' : 'Вход или регистрация' },
+                allowClose: true,
+                BUTTONS: [],
+            });
+        } catch (_) {
+        } finally {
+            this._onAuth();
+        }
+    },
+    attached() {
+        this._boundAuth = () => this._onAuth();
+        WORK.authEvents?.addEventListener('auth', this._boundAuth);
+        WORK.AUTH_CHANNEL?.addEventListener('message', this._boundAuth);
+    },
+    detached() {
+        if (this._boundAuth) {
+            WORK.authEvents?.removeEventListener('auth', this._boundAuth);
+            WORK.AUTH_CHANNEL?.removeEventListener('message', this._boundAuth);
+        }
+    },
     get products() {
         if (!this.$item) return [];
         return Promise.resolve(this.$item.get_item('/~//product')).then(async (folders) => {

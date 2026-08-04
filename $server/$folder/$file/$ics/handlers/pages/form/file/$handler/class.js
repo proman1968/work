@@ -81,7 +81,7 @@ ODA({
         e.stopPropagation();
         this.events[i][e.target.id] = e.target.value;
         const body = JSON.stringify(this.events);
-        if (!this.$item.body || (this.$item.body !== body)) {
+        if (this.$item && (!this.$item.body || (this.$item.body !== body))) {
             this.$item.body = body;
             this.$item.isChanged = true;
         }
@@ -90,13 +90,16 @@ ODA({
     body: {
         $def: '',
         set(n) {
-            if (n)
+            if (n) {
+                debugger
                 this.events = this.parseICSSimple(n);
+            }
         }
     },
     set $item(n) {
         if (n) {
-            n.load().then(content => {
+            this.async(async () => {
+                const content = await n.load();
                 this.body = content;
             })
         }

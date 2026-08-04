@@ -15,8 +15,8 @@ ODA({ is: 'microchat-view-core',
     stickTop: { $def: 0, $type: Number },
     /** внутри: ручное раскрытие (не в JSON) */
     userOpen: false,
-    /** всегда раскрыт, без возможности свернуть (prompt) */
-    get forceOpen() { return false; },
+    /** всегда раскрыт: user-gate (button|stop) или prompt-view override */
+    get forceOpen() { return !!(this.data?.button || this.data?.stop); },
     /** sticky только у prompt/task */
     get isSticky() { return false; },
     get open() { return !!(this.forceOpen || this.autoOpen || this.userOpen); },
@@ -95,8 +95,6 @@ ODA({ is: 'microchat-view',
                 min-width: 0;
             }
             summary.auto .head-row > .label {
-                font-size: medium;
-                font-weight: bold;
                 opacity: 1;
             }
             .head-row > .time {
@@ -107,6 +105,8 @@ ODA({ is: 'microchat-view',
             details > div[content] {
                 font-size: small;
                 word-break: break-word;
+                border-left: 2px solid var(--step-color, #ccc);
+                padding-left: 2px;
             }
         </style>
         <details :open="open" @toggle="onToggle">
@@ -121,7 +121,7 @@ ODA({ is: 'microchat-view',
                 </div>
                 <div ~is="bodyTag" ~if="bodyTag" :data :stick-top="stickTop" ::collapsed></div>
             </summary>
-            <div content>
+            <div content ~style="stepStyle">
                 <oda-markdown-viewer vertical ~if="showContent" :value="content"></oda-markdown-viewer>
                 <div ~for="fields">
                     <microchat-field :field="$for.item"></microchat-field>
@@ -136,6 +136,20 @@ ODA({ is: 'microchat-view',
     get showContent() { return !!this.content; },
     /** тег доп. блока в summary; пусто — нет */
     get bodyTag() { return ''; },
+    /** глубина вложенности по дереву microchat-view → цвет левой рамки */
+    get depth() {
+        let d = 0, p = this.parentElement;
+        while (p) {
+            const tag = p.tagName?.toLowerCase() || '';
+            if (tag.startsWith('microchat-view')) d++;
+            p = p.parentElement;
+        }
+        return d;
+    },
+    get stepStyle() {
+        const tones = ['#bdbdbd', '#9e9e9e', '#757575', '#616161', '#424242'];
+        return `--step-color: ${tones[this.depth % tones.length]}`;
+    },
     collapsed: true,
 });
 
@@ -146,14 +160,21 @@ ODA({ is: 'microchat-view-prompt',
     extends: 'microchat-view',
     template: /*html*/`
         <style>
+            :host{
+                position: sticky;
+                top: 0px;
+            }
             summary .head-row > .label {
-                font-size: medium;
-                font-weight: bold;
                 opacity: 1;
             }
             summary{
                 min-height: 36px;
                 z-index: 1;
+            }
+            details > div[content] {
+                margin-left: 0;
+                padding-left: 0;
+                border-left: none;
             }
         </style>
     `,
@@ -184,6 +205,14 @@ ODA({ is: 'microchat-view-questions',
         get() { return !!this.data?.needAnswers; },
         set(v) { if (this.data) this.data.needAnswers = !!v; },
     },
+});
+
+/** step — обычный expander: заголовок = «N. описание» (content), тело = items. */
+ODA({ is: 'microchat-view-step',
+    extends: 'microchat-view',
+    get label() { return this.data?.content || 'step'; },
+    get showContent() { return false; },
+    get typeIcon() { return this.data?.icon || 'av:play-arrow'; },
 });
 
 /** :field = объект из data.fields (мутация value на месте) */
@@ -286,7 +315,14 @@ ODA({ is: 'microchat-view-task',
     get bodyTag() { return 'microchat-task-todo'; },
     get showContent() { return false; },
     get isSticky() { return true; },
-    get label() { return this.data?.type + ': ' + this.data?.label; },
+    get label() {
+        const steps = this.data?.steps || [];
+        if (!steps.length) return this.data?.label || 'task';
+        const i = steps.findIndex(s => s.status === 'in_progress');
+        const p = steps.findIndex(s => s.status !== 'done');
+        const current = i >= 0 ? i + 1 : (p >= 0 ? p + 1 : steps.length);
+        return this.data?.label || `task ${current}/${steps.length}`;
+    },
 });
 
 /** Чеклист task: шапка 1/N + progress + список steps (свой collapse). */
