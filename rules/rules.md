@@ -311,13 +311,58 @@ ODA({
 });
 ```
 
-Пример оболочки:
+### B.1.1. Shell preview — эталон чистоты
+
+Образец: [`$server/$folder/$file/$task/handlers/preview/$handler/class.js`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/).
+
+Shell — проекция файла на детей + общие геттеры дерева (`focusedBlock`). Не знает pending, stream, MIME, Blob/JSON.parse.
 
 ```js
-data: null, // JSON task.ai
-get items() { return this.data?.ribbon || []; },
-// template: <microchat-ribbon :items></microchat-ribbon>
+export default {
+    template: /* html */`
+        <microchat-ribbon flex :items :$item></microchat-ribbon>
+        <microchat-panel info-invert no-flex :data :$item></microchat-panel>
+    `,
+    data: null,
+    $item: {
+        $def: null,
+        async set(n) {
+            n?.listen('changed', async () => this.data = await n.load());
+            this.data = await n?.load();
+        },
+    },
+    get title() { return this.data?.title || this.$item?.name || 'task'; },
+    get items() { return this.data?.items; },
+    get focusedBlock() {
+        let items = this.items;
+        while (items?.last?.items?.length && !items.last.closed)
+            items = items.last.items;
+        return items?.last;
+    },
+};
 ```
+
+Инварианты shell:
+
+1. **Владеет** `data` / `items` / `$item` / `focusedBlock` (+ `title` для chrome).
+2. **Связь с детьми** — биндинг `:data` / `:items` / `:$item`; общее дерево — `$pdp.focusedBlock` (см. B.1.2).
+3. **Load** — `$item.load()`; на `changed` снова `load()`. Кэш тела — контракт `$file.load` (свежий fetch).
+4. **Дети в `$handler/ui/`** — ribbon, panel, views, mic, tts, usage. У корня handler только `class.js` (+ readme).
+5. **Без церемоний** — нет `Promise.resolve`, `_load`/`_reload`, `try/catch` «на всякий случай», гидрации model в UI (`ai.task` всегда с `data.model`).
+
+`focusedBlock` — лист последней открытой ветки. Panel: `actionButton = $pdp.focusedBlock?.button` (без `|| null` — см. B.1.2). Action: `value = label` → `send()`.
+
+### B.1.2. `$pdp` + Reactor
+
+- Чтение пропа родителя в геттере ребёнка — через `$pdp`. В `oda.js` get-trap идёт в `Reactor.get(owner, p)`, чтобы deps ребёнка подписались на проп host.
+- **Не возвращай `null` из реактивного геттера**, если «нет значения» = пусто. Reactor кэширует `null` как hit и не пересчитывает; пусто → `undefined` (`return this.$pdp.focusedBlock?.button`).
+- Статусы кнопок — attrs `success` / `warning` / `error` ([`styles.md`](/rules/styles.md/~/handlers/pages/form/)), не локальные `.btn-*`.
+
+### B.1.3. Preview ribbon
+
+- `viewTag`: известные типы → сразу `microchat-view-{type}` (сет контракта); иначе `microchat-view`. **Не** `customElements.get` — гонка async `ODA()`.
+- Скролл вниз при `_autoFollow`: `ResizeObserver` на контейнер ленты (`.feed`), не таймеры 50/150/400ms.
+- Stop/resume стрима: `$item.fire('chat.stop'|'chat.resume')`, не `parentElement.$('microchat-ribbon')`.
 
 ## B.2. Запрещено
 
@@ -325,10 +370,13 @@ get items() { return this.data?.ribbon || []; },
 - Дублировать поля на view (`path: ''` рядом с `data.path`).
 - Hydrate/`$file` на ленте, если view сам резолвит `WORK.get_item(this.path)`.
 - Сжимать код удалением переносов или CSS «в одну строку» ради метрики строк.
+- Раздувать shell preview знанием детей (pending, stream, парсинг тела файла, `findFirstModel`).
+- `|| null` в конце реактивных геттеров «для ясности».
+- Magic-timeout scroll / `customElements.get` для выбора view-тега.
 
 ## B.3. Отладка
 
-Смотреть `$0.data` и геттеры. Если `path === undefined` при живом блоке в JSON — сломан бинд `:data`, а не «файл не найден».
+Смотреть `$0.data` и геттеры. Если `path === undefined` при живом блоке в JSON — сломан бинд `:data`, а не «файл не найден». Если UI «залип» после `$pdp` — проверь `null` в кэше геттера и deps (B.1.2).
 
 ---
 
@@ -341,11 +389,11 @@ WORK построен на **жёстких контрактах** платфо�
 ## C.1. Принципы
 
 1. **Контракт выше защиты.** Платформа гарантирует контекст, жизненный цикл (`init`), наличие методов, схему вызова. Не дублируй проверки в каждом `execute` / handler’е.
-2. **Один владелец инварианта.** Guard, гидрация model, протокол хода, разбор ribbon, запись на диск — в классе-владельце (`$ai.prompt`, `$file.save`, …). Точка входа только готовит аргументы и вызывает владельца.
+2. **Один владелец инварианта.** Guard, гидрация model, протокол хода, разбор ribbon, запись на диск — в классе-владельце (`$task.prompt`, `$file.save`, …). Точка входа только готовит аргументы и вызывает владельца. Shell preview — эталон тонкого владельца `data` (B.1.1).
 3. **Тонкий вход.** `triggers/…/$trigger`, `methods/…/$method`, `handlers/…/$handler` — линейный путь: load → минимум подготовки → вызов метода контекста / владельца. Без второй бизнес-логики рядом.
 4. **Дыра в контракте → ядро.** Если `this.$context` / `prompt` / `load` реально ломаются — чини владельца или платформу, не обходи try/catch и динамическими import в точке вызова.
-5. **Не копируй канон.** Длинный system/protocol, PDCA, формат ответа, ACL — живут в источнике правды (типизатор, servicePrompt, `$ai`). Не размножай тот же текст в триггере «на всякий случай».
-6. **Эталон плотности.** Перед правкой смотри соседний тонкий `class.js` того же слоя и копируй плотность. Не «улучшай» defensive-слоем код, который уже доверяет контракту.
+5. **Не копируй канон.** Длинный system/protocol, PDCA, формат ответа, ACL — живут в источнике правды (типизатор, servicePrompt, `$task`). Не размножай тот же текст в триггере «на всякий случай».
+6. **Эталон плотности.** Перед правкой смотри соседний тонкий `class.js` того же слоя и копируй плотность. Для preview-shell — B.1.1. Не «улучшай» defensive-слоем код, который уже доверяет контракту.
 
 ## C.2. Запрещено (если нет доказанной дыры)
 
@@ -374,5 +422,5 @@ async execute(params = {}) {
 ## C.4. Связь с остальным каноном
 
 - §1.11 — ДНК раскладки (`$method` / `$trigger` / `$handler`): только реализация, без соседних utils.
-- Часть B — декларативный UI: один `data`, геттеры, без hydrate-костылей на ленте.
+- Часть B — декларативный UI: один `data`, геттеры; **B.1.1** shell preview; **B.1.2** `$pdp`/Reactor; **B.1.3** ribbon.
 - `sources/readme.md` → «Принципы архитектуры»: минимализм как архитектурный принцип ядра; эта часть C — то же для **любого** прикладного кода и для ИИ-агентов.

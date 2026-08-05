@@ -2,7 +2,7 @@
 
 Тяжёлые и внешние модули, не являющиеся ядром объектной модели и не являющиеся прикладной семантикой типов (`$ai`, PDCA и т.п.).
 
-Прикладная модель файла `.ai` целиком живёт в типизаторе `$ai` (`$server/$folder/$file/$ai/class.js`), не здесь. См. [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) §1.11.
+Прикладная модель файла `.task` целиком живёт в типизаторе `$task` (`$server/$folder/$file/$task/class.js`), не здесь. См. [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) §1.11.
 
 ## Модули
 

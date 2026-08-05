@@ -864,7 +864,7 @@ Node:{
 
             const proxy = new Proxy(this, {
                 has(target, p) {
-                    if (p === '$for' || p === '$event' || p === '$this') return false;
+                    if (PDP_EXCLUDES.includes(p)) return false;
                     while (target) {
                         if (p in target) return true;
                         target = target.host;
@@ -872,11 +872,17 @@ Node:{
                     return false;
                 },
                 get(target, p, receiver) {
-                    if (p in target) {
-                        const value = target[p];
-                        return typeof value === 'function' ? value.bind(target) : value;
-                    }
-                    return target.host?.$pdp[p];
+                    if (PDP_EXCLUDES.includes(p)) return undefined;
+                    // Владелец пропа вверх по host; Reactor.get — deps ребёнка → host
+                    // (сырой target[p] не регистрировал связь геттера ребёнка с пропом родителя).
+                    let owner = target;
+                    while (owner && !(p in owner))
+                        owner = owner.host;
+                    if (!owner) return undefined;
+                    if (owner[R])
+                        return Reactor.get(owner, p);
+                    const value = owner[p];
+                    return typeof value === 'function' ? value.bind(owner) : value;
                 },
                 set(target, p, value, receiver) {
                     if (target.isComponent) {

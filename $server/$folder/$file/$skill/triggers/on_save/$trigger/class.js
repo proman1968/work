@@ -30,7 +30,7 @@ export default {
         }
         catch { /* ignore — запускаем */ }
 
-        // Находим task.ai, которому принадлежит этот .skill (для планирования)
+        // Находим ai.task, которому принадлежит этот .skill (для планирования)
         const taskPath = normalizePath(params.logFullPath || params.logPath);
 
         const executeSkill = globalThis.__executeSkill;

@@ -175,6 +175,10 @@ export class $file extends $folder{
             return this.DATA.icon || ('files-color:s-' + this.ext);
         return this.DATA.icon || 'files:document';
     }
+    /** MIME тела файла из типизатора `$ext/class.js` (fallback для нестандартных расширений). */
+    get contentType(){
+        return this.DATA?.contentType || '';
+    }
     get $public(){
         return {
             get lastModified(){

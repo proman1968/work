@@ -33,7 +33,7 @@
             console.log(e.message)
         }
 
-        if (!WORK.uid && page_handler !== 'site') {
+        if (!WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
             const base = (!item_path || item_path === '/') ? '' : item_path.replace(/\/$/, '');
             location.replace(location.origin + base + '/~/handlers//site/index.html');
         } else {
@@ -101,17 +101,22 @@
                 }
             </style>
             <div>СЕРВЕР РАБОТАЕТ В РЕЖИМЕ ОТЛАДКИ</div>
-            <oda-button ~if="showRebootButton" raised icon="carbon:reset" label="в обычный" @click="reboot"></oda-button>
+            <oda-button ~if="showRebootButton" :disabled="disableButton" raised icon="carbon:reset" :label="buttonText" @click="reboot"></oda-button>
             `,
             $item: null,
+            disableButton: false,
+            rebooting: false,
             get showRebootButton(){
                 // todo: сделать правильную проверку на админа
                 if (!this.$item) return false;
                 return Promise.resolve(this.$item.admin).then(admin => admin?.id === WORK.uid);
             },
+            get buttonText(){
+                return this.rebooting ?'перезапуск' : 'переключить в обычный';
+            },
             async reboot(e){
-                const btn = e.currentTarget;
-                btn.setAttribute('disabled', '');
+                if (this.rebooting || this.disableButton) return;
+                this.disableButton = true;
                 try{
                     const el = document.createElement('p');
                     el.style = 'margin: 32px;';
@@ -121,13 +126,15 @@
                         OK: { label: 'Перезапустить', icon: 'carbon:reset' },
                         CANCEL: { label: 'Отмена', icon: 'carbon:close' },
                     });
-                    const method = await this.$item.fetch('handlers', {path: '//rebootWithoutDevMode'});
+                    this.rebooting = true;
+                    const method = await this.$item.fetch('handlers', {path: '//toggleDevMode'});
                     await method?.execute();
                 }
                 catch(err){
                     console.error(err);
+                    this.rebooting = false;
+                    this.disableButton = false;
                 }
-                btn.removeAttribute('disabled');
             }
         })
     </script>

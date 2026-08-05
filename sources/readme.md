@@ -40,7 +40,7 @@ WORK построен вокруг `$item`.
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`.
 - `folder.js` — клиентский `$folder extends $item` (из `core.js`): `url`, `open_url`, `fetch`, `get_item`, browser actions, `save_file`, `load`, `save`, `delete`, `create`.
 - `class.js` — клиентский `$class`: import/save `class.js`, metadata, fields, data access.
-- `file.js` — клиентский `$file`. Переопределён `load()` — возвращает сырые данные через `WORK.fetch()` без `__bind` (для чтения JSON-файлов вроде `task.ai`). `reset()` очищает `body` и кэш.
+- `file.js` — клиентский `$file`. Переопределён `load()` — возвращает сырые данные через `WORK.fetch()` без `__bind` (для чтения JSON-файлов вроде `ai.task`). `reset()` очищает `body` и кэш.
 - `user.js` — клиентский `$user`.
 - `handler.js` — клиентская модель handler'а.
 - `field.js` — клиентская модель поля/описателя данных.
@@ -156,7 +156,7 @@ async save_file(params = {}) {
 
 ## Принципы архитектуры
 
-1. **МИНИМАЛИЗМ через контракты** — код тонкий, потому что опирается на жёсткие контракты платформы (`$context`, `load`/`save`, `~`/merge, методы класса), а не защищается от них. `ai-preview` — ~100 строк, не 800. Дыра в контракте чинится в ядре, не обходится в точке выхода. Канон для агентов: [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) часть C.
+1. **МИНИМАЛИЗМ через контракты** — код тонкий, потому что опирается на жёсткие контракты платформы (`$context`, `load`/`save`, `~`/merge, методы класса), а не защищается от них. `ai.task` preview — тонкий shell + panel/ribbon/views. Дыра в контракте чинится в ядре, не обходится в точке выхода. Канон для агентов: [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) часть C.
 2. **Поведение в классе-владельце** — метод живёт в классе объекта, которому принадлежит. Общий метод поднимается в базовый класс.
 3. **Методы ядра, не костыли** — использовать существующие методы (`load()`, `get_item()`, `fetch()`), а не прямые HTTP-вызовы или хардкод путей. В DATA / `$trigger` / `$method` (загрузка через `data:` URL): FS — `WORK.fs` / `WORK.fsp`, TLS/HTTPS — `WORK.https`; не `import 'node:fs'` / `import 'node:https'`.
 4. **Реактивная модель** — геттеры + события `changed`/`reset()` для автообновления. Не поллинг.
@@ -201,22 +201,17 @@ $server/$folder/$file/$prompt/triggers/on_save/$trigger/class.js
 
 Вызов триггера — в `sources/server/file.js`, метод `save_to_log`, через `queueMicrotask`.
 
-### ai-preview — микрочат для task.ai
+### preview — микрочат для ai.task
 
-`ai-preview` (~100 строк) — компонент-превью для `task.ai`.
+Preview (`$file/$task/handlers/preview`) — компонент-превью для `ai.task`.
 
-- `get includes()` — геттер: `$item.load()` → JSON → `includes` → `WORK.get_item(p, 'info')` → массив экземпляров
-- `$item.listen('changed')` → инвалидация кэша `includes` → автообновление
-- `send()` — `save_file('message.prompt')` в storage владельца
-- `compact` режим в `chat-item`: `flex` + `raised` вместо `shadow`
+- shell: `$item.load()` → JSON → `data`/`items`; `$item.listen('changed')` → reload
+- panel: tip / composer / `pending` / `send()` / `stop`
+- ribbon: лента блоков, scroll, live-stream
 
-### task.ai — носитель микрочата
+### ai.task — носитель микрочата
 
-`task.ai` — файл-контейнер для микрочата с ИИ. Создаётся триггером `on_save` при первом `message.prompt`. Содержит JSON:
+`ai.task` — файл-контейнер для микрочата с ИИ (тип `$task`). Создаётся из чата / `files.pack`. Содержит JSON с деревом `items` (PDCA/PIPE).
 
-```json
-{ "content": "", "includes": ["/path/to/prompt", "/path/to/response.md"] }
-```
-
-- `includes` — история диалога (prompts и responses в порядке)
-- Отсутствие LLM-исполнителя не отменяет создание `task.ai` — он хранит includes для последующего выполнения
+- Типизатор: `$server/$folder/$file/$task/`
+- Отсутствие LLM-исполнителя не отменяет создание `ai.task` — он хранит историю для последующего выполнения

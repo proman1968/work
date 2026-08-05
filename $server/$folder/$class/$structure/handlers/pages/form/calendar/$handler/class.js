@@ -1,9 +1,9 @@
 export default {
-    imports: 'oda//app-layout',
-    extends:'oda-app-layout',
+    imports: 'oda//app-layout, ~/lib//chat-item.js',
+    extends: 'oda-app-layout',
     icon: 'enterprise:calendar',
-    template: /* html */`
-        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;"></oda-form-calendar ::day ::day-from ::day-to>
+    template: /*html*/`
+        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" ::day ::day-from ::day-to></oda-form-calendar>
         <div slot="right-panel" vertical flex style="overflow-y: auto; height: 0; padding: 4px 0;">
             <oda-form-calendar-list-view  flex :$item label="Tasks" icon="carbon:table-of-contents:180" :day :day-from :day-to></oda-form-calendar-list-view>
         </div>
@@ -13,27 +13,27 @@ export default {
     dayTo: ''
 }
 
-import '/$server/$folder/$file/$ics/handlers/pages/open/$handler/class.js'
+import '/$server/$folder/$file/$ics/handlers/pages/form/file/$handler/class.js'
 ODA({
     is: 'oda-form-calendar',
-    template: /* html */`
+    template: /*html*/`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 @apply --flex;
             }
             .toolbar {
-                padding: 4px;
                 @apply --vertical;
                 @apply --header;
+                padding: 4px;
                 align-items: normal;
             }
-            .calendar-container{
+            .calendar-container {
                 @apply --vertical;
                 @apply --flex;
                 overflow: auto;
             }
-            .date-picker{
+            .date-picker {
                 border: 1px solid var(--border-color);
                 border-radius: 4px;
                 cursor: pointer;
@@ -44,11 +44,10 @@ ODA({
         </style>
         <item-users accent-invert  flex :$item  slot="top"></item-users>
         <div vertical class="toolbar">
-            
             <div horizontal>
                 <div class="date-nav" horizontal flex>
                     <oda-button icon="icons:chevron-left" @tap="prevPeriod"></oda-button>
-                    <input type="date" class="date-picker" ::value="datePickerValue">
+                    <input type="date" id="date-picker" class="date-picker" ::value="datePickerValue">
                     <oda-button icon="icons:chevron-right" @tap="nextPeriod"></oda-button>
                 </div>
                 <div horizontal>
@@ -96,19 +95,19 @@ ODA({
             this._updateDateRange();
         }
     },
-    _formatDate(date){
+    _formatDate(date) {
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     },
-    _updateDateRange(){
+    _updateDateRange() {
         const date = this.currentDate || new Date();
         this.day = this._formatDate(date);
-        if(this.viewMode === 'day'){
+        if (this.viewMode === 'day') {
             this.dayFrom = this.day;
             this.dayTo = this.day;
-        } else if(this.viewMode === 'week'){
+        } else if (this.viewMode === 'week') {
             const start = new Date(date);
             const dayOfWeek = start.getDay();
             const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
@@ -117,29 +116,34 @@ ODA({
             end.setDate(end.getDate() + 6);
             this.dayFrom = this._formatDate(start);
             this.dayTo = this._formatDate(end);
-        } else if(this.viewMode === 'month'){
+        } else if (this.viewMode === 'month') {
             const start = new Date(date.getFullYear(), date.getMonth(), 1);
             const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
             this.dayFrom = this._formatDate(start);
             this.dayTo = this._formatDate(end);
         }
     },
-    get datePickerValue(){
+    get datePickerValue() {
         this.currentDate ||= new Date();
         const year = this.currentDate.getFullYear();
         const month = String(this.currentDate.getMonth() + 1).padStart(2, '0');
         const day = String(this.currentDate.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     },
-    set datePickerValue(value){
-        if(value){
+    set datePickerValue(value) {
+        if (value) {
             this.currentDate = new Date(value);
         }
     },
     get events() {
-        return []
+        return [];
     },
-    $listeners:{
+    attached() {
+        this.async(() => {
+            this._updateDateRange();
+        })
+    },
+    $listeners: {
         'add-event'(e) {
             this._addEvent(e);
         }
@@ -153,8 +157,7 @@ ODA({
             events: [{
                 startStr: this.toLocalDateTime(start),
                 endStr: this.toLocalDateTime(end)
-            }],
-            $item: this.$item
+            }]
         })
         await WORK.showDialog(el, { TITLE: { label: 'New event', icon: 'enterprise:calendar' } });
         const startDate = new Date(el.events[0].startStr);
@@ -171,9 +174,9 @@ ODA({
     },
     prevPeriod() {
         const newDate = new Date(this.currentDate);
-        if(this.viewMode === 'day'){
+        if (this.viewMode === 'day') {
             newDate.setDate(newDate.getDate() - 1);
-        } else if(this.viewMode === 'week'){
+        } else if (this.viewMode === 'week') {
             newDate.setDate(newDate.getDate() - 7);
         } else {
             newDate.setMonth(newDate.getMonth() - 1);
@@ -183,9 +186,9 @@ ODA({
     },
     nextPeriod() {
         const newDate = new Date(this.currentDate);
-        if(this.viewMode === 'day'){
+        if (this.viewMode === 'day') {
             newDate.setDate(newDate.getDate() + 1);
-        } else if(this.viewMode === 'week'){
+        } else if (this.viewMode === 'week') {
             newDate.setDate(newDate.getDate() + 7);
         } else {
             newDate.setMonth(newDate.getMonth() + 1);
@@ -196,11 +199,11 @@ ODA({
     goToday() {
         this.currentDate = new Date();
     },
-    parseICSDate(dateStr){
+    parseICSDate(dateStr) {
         // Удаляем экранирование
         dateStr = dateStr.replace(/\\/g, '');
         // Формат: 20130802T103400 или 20130802
-        if(dateStr.match(/^\d{8}(T\d{6})?$/)){
+        if (dateStr.match(/^\d{8}(T\d{6})?$/)) {
             const year = dateStr.substring(0, 4);
             const month = dateStr.substring(4, 6);
             const day = dateStr.substring(6, 8);
@@ -216,19 +219,19 @@ ODA({
 
 ODA({
     is: 'oda-calendar-day-view',
-    template: /* html */`
+    template: /*html*/`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 position: relative;
             }
         </style>
         <style>
-            .slot{
+            .slot {
                 cursor: pointer;
                 min-height: 16px;
             }
-            .slot:hover{
+            .slot:hover {
                 background: var(--light-background);
             }
         </style>
@@ -253,7 +256,7 @@ ODA({
     },
     currentDate: new Date(),
     events: [],
-    selectDayTime(hour, intervalIdx) {
+    selectDayTime(intervalIdx, hour) {
         const start = new Date(this.$pdp.currentDate || new Date());
         start.setHours(parseInt(hour), this.interval * intervalIdx, 0, 0);
         const end = new Date(start.getTime() + this.interval * 60 * 1000);
@@ -263,13 +266,13 @@ ODA({
 
 ODA({
     is: 'oda-calendar-week-view',
-    template: /* html */`
+    template: /*html*/`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 overflow: auto;
             }
-            .week-grid{
+            .week-grid {
                 display: grid;
                 grid-template-columns: 60px repeat(7, 1fr);
                 gap: 1px;
@@ -277,34 +280,34 @@ ODA({
                 border-bottom: 1px solid var(--border-color);
                 color: var(--dark-color);
             }
-            .time-header{
+            .time-header {
                 @apply --header;
                 padding: 8px;
             }
-            .day-header{
+            .day-header {
                 @apply --header;
                 padding: 8px;
                 text-align: center;
                 font-weight: normal;
             }
-            .day-header[today]{
+            .day-header[today] {
                 background: var(--info-color);
             }
-            .time-slot{
+            .time-slot {
                 @apply --content;
                 padding: 4px;
                 text-align: center;
             }
-            .hour-cell{
+            .hour-cell {
                 @apply --content;
                 /* min-height: 120px; */
                 padding: 2px;
                 position: relative;
             }
-            .hour-cell:hover{
+            .hour-cell:hover {
                 background: var(--light-background);
             }
-            .event-block{
+            .event-block {
                 background: var(--success-color);
                 padding: 4px;
                 margin: 2px;
@@ -314,7 +317,7 @@ ODA({
                 overflow: hidden;
                 color: var(--dark-color);
             }
-            .event-block:hover{
+            .event-block:hover {
                 opacity: 0.8;
             }
         </style>
@@ -388,27 +391,27 @@ ODA({
 
 ODA({
     is: 'oda-calendar-month-view',
-    template: /* html */`
+    template: /*html*/`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 overflow: auto;
             }
-            .calendar-grid{
+            .calendar-grid {
                 display: grid;
                 grid-template-columns: repeat(7, 1fr);
                 gap: 1px;
                 background: var(--border-color);
                 border: 1px solid var(--border-color);
             }
-            .weekday-header{
+            .weekday-header {
                 @apply --header;
                 padding: 8px;
                 text-align: center;
                 font-weight: normal;
                 font-size: small;
             }
-            .day-cell{
+            .day-cell {
                 @apply --content;
                 min-height: 100px;
                 padding: 4px;
@@ -524,22 +527,20 @@ ODA({
     }
 })
 
-import '/$server/$folder/lib/chat-item/$handler/class.js';
 ODA({
     is: 'oda-form-calendar-list-view',
-    template: `
-        <!-- <div ~for="logs" :$item="$for.item">{{$for.item}}</div> -->
+    template: /*html*/`
         <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
     `,
     logItems: [],
     _logsFolder: null,
-    day: '2026-06-26',
+    day: '',
     dayFrom: '',
     dayTo: '',
-    _sortLogFiles(files){
+    _sortLogFiles(files) {
         return files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
     },
-    async _fetchLogFiles(){
+    async _fetchLogFiles() {
         const logs = this._logsFolder;
         if (!logs)
             return [];
@@ -549,12 +550,12 @@ ODA({
         files = await Promise.all(files.map(f => Promise.resolve(f)));
         return this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs')));
     },
-    async _reloadLogItems(){
+    async _reloadLogItems() {
         this.logItems = await this._fetchLogFiles();
         this.render();
         // this._scrollRibbonDown();
     },
-    async _bindLogsFolder(){
+    async _bindLogsFolder() {
         const source = await Promise.resolve(this.logsSource);
         if (!source)
             return false;
@@ -574,10 +575,10 @@ ODA({
         }
         return true;
     },
-    _ensureLogsWatch(){
+    _ensureLogsWatch() {
         if (this._logsWatch)
             return this._logsWatch;
-        this._logsWatch = Promise.resolve(this.logsSource).then(async source=>{
+        this._logsWatch = Promise.resolve(this.logsSource).then(async source => {
             if (!source)
                 return;
             // const onChanged = e => this._onLogsChanged(e);
@@ -590,15 +591,15 @@ ODA({
         });
         return this._logsWatch;
     },
-    get logs(){
+    get logs() {
         this._ensureLogsWatch();
         return this.logItems;
     },
-    get logsSource(){
-        if(this.$pdp.$item instanceof CORE.$user)
+    get logsSource() {
+        if (this.$pdp.$item instanceof CORE.$user)
             return WORK.USER
-        return Promise.resolve(this.$pdp.$item.admins).then(admins=>{
-            return admins.find(user=>user.id === WORK.uid) ||  WORK.USER
+        return Promise.resolve(this.$pdp.$item.admins).then(admins => {
+            return admins.find(user => user.id === WORK.uid) || WORK.USER
         })
     }
 })

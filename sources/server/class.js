@@ -590,7 +590,7 @@ export class $class extends $folder{
     }
 
     /**
-     * Актуальная JSON-запись лога по path history-файла (для микрочата task.ai).
+     * Актуальная JSON-запись лога по path history-файла (для микрочата ai.task).
      * @param {object} [params]
      * @param {string} [params.path] Путь записи (history-файла)
      * @param {string} [params.taskPath] Альтернативное имя параметра пути
@@ -634,7 +634,7 @@ export class $class extends $folder{
     }
 
     /**
-     * Добавить пути в includes записи лога (например, шаги task.ai).
+     * Добавить пути в includes записи лога (например, шаги ai.task).
      * @param {object} params
      * @param {string} params.entryPath Путь записи лога (history-файла)
      * @param {Array|string} params.includePaths Пути для добавления в includes

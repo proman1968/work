@@ -197,7 +197,7 @@ function sameLogPath(rowPath, target, shortTarget) {
         || rowPath.endsWith(target) || target.endsWith(rowPath);
 }
 
-/** Найти JSON-запись лога по path history-файла (task.ai и т.п.). */
+/** Найти JSON-запись лога по path history-файла (ai.task и т.п.). */
 export async function findEntry(storage, entryPath) {
     if (!entryPath)
         return null;
@@ -277,7 +277,7 @@ export async function appendRow(storage, row, params = {}) {
     return row;
 }
 
-/** Добавить пути в includes записи лога (например, шаги task.ai). */
+/** Добавить пути в includes записи лога (например, шаги ai.task). */
 export async function appendIncludes(storage, entryPath, includePaths = [], params = {}) {
     if (typeof includePaths === 'string')
         includePaths = includePaths.split(',').map(s => s.trim()).filter(Boolean);

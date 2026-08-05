@@ -121,7 +121,7 @@
 - `text-overflow: ellipsis` для длинных имён файлов;
 - **не** дублировать `display:flex`, `background`, `color`.
 
-Образец: [`$server/$folder/$file/$ai/handlers/preview/$handler/class.js`](../../../$server/$folder/$file/$ai/handlers/preview/$handler/class.js).
+Образец: [`$server/$folder/$file/$task/handlers/preview/$handler/class.js`](../../../$server/$folder/$file/$task/handlers/preview/$handler/class.js).
 
 ## Паттерн: карточка / bubble
 

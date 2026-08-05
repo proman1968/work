@@ -11,7 +11,7 @@
 ## 3. Как это работает
 
 1. Сайт `MARKET` (shell `site` из `~`) — меню категорий.
-2. Категория `PAAS`: handlers под `$class/` — `site/main` с карточками товаров.
+2. Категория `PAAS`: handlers под `$class/` — `site-main` с карточками товаров.
 3. Товары — файлы `*.product` по схеме [`$product.FIELDS`](/$server/$folder/$file/$product/class.js/~/handlers/pages/form/) (`label`, `price`, `description`) в зоне роли. Main: `~//product`, только `status === published`.
 4. Управление — form-view `products`: таблица и диалог по `$product.FIELDS` → `save_file` / `delete` на класс категории.
 5. Клик по карточке → модалка: описание + поля заказа из [`$bid.FIELDS`](/$server/$folder/$file/$bid/class.js/~/handlers/pages/form/) → `input.fields` (не хардкод в handler) + «Заказать».
@@ -20,7 +20,7 @@
 ## 4. Из чего это состоит
 
 - `$class/class.js` — витрина «Магазин»
-- `PAAS/$class/` — категория + `handlers/pages/site` (shell + main)
+- `PAAS/$class/` — категория + `handlers/pages/site` + `site-main`
 - `PAAS/$class/handlers/pages/form/products/` — вкладка «Продукты»
 - `PAAS/$class/work/product/*.product` — товары
 - Тип `$product` — [`$server/$folder/$file/$product/`](/$server/$folder/$file/$product/readme.md/~/handlers/pages/form/) (карточка)

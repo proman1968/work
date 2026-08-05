@@ -2,8 +2,8 @@
  * Триггер on_save для файлов .pack.
  *
  * pack — сообщение с вложениями (FormData).
- * Создаёт task.ai с содержимым pack и привязанными includes,
- * затем запускает обработку task.ai (через триггер $ai/on_save).
+ * Создаёт ai.task с содержимым pack и привязанными includes,
+ * затем запускает обработку ai.task (через триггер $task/on_save).
  */
 export default {
     label: 'on_save (.pack)',
@@ -29,7 +29,7 @@ export default {
 
         const sourcePath = normalizePath(params.logFullPath || params.logPath);
         const taskParams = {
-            filename: 'task.ai',
+            filename: 'ai.task',
             post: JSON.stringify({ content: prompt, includes: params.includes || [] }),
             encoding: 'utf-8',
             user: WORK,
@@ -44,8 +44,8 @@ export default {
             const taskLog = await storage.save_file(taskParams);
             const taskPath = taskLog?.logFullPath || taskLog?.path;
 
-            // Запускаем обработку task.ai
-            await globalThis.WORK?.file_handlers?.['task.ai']?.call(storage, {
+            // Запускаем обработку ai.task
+            await globalThis.WORK?.file_handlers?.['ai.task']?.call(storage, {
                 ...taskParams,
                 ...taskLog,
                 logFullPath: taskPath,
