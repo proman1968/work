@@ -10,6 +10,14 @@ import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.j
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 
+function resolveFileContentType(item) {
+    // Типизатор `$ext` главнее системного mime (кастомные расширения / JSON-типы)
+    const fromType = item?.contentType || item?.DATA?.contentType;
+    if (fromType)
+        return fromType;
+    return mime.contentType(item?.id) || 'text/plain';
+}
+
 function sendErrorResponse(response, error) {
     if (DEV_MODE) {
         console.error('[WORK]', error);
@@ -250,7 +258,7 @@ export function createRequestHandler() {
                         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
                         'Accept-Ranges': 'bytes',
                         'Content-Length': chunksize,
-                        'Content-Type': mime.contentType(item.id)
+                        'Content-Type': resolveFileContentType(item)
                     });
 
                     // Стримим файл
@@ -372,7 +380,7 @@ export function createRequestHandler() {
                         // console.error('An error occurred:', err);
                     }
                 };
-                let mime_type = mime.contentType(item.id);
+                let mime_type = resolveFileContentType(item);
                 if(mime_type){
                     header["Content-Type"] = mime_type;
                     if(mime_type === 'image/svg+xml')

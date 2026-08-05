@@ -8,7 +8,7 @@ export class $file extends $folder{
     }
     /** load() возвращает сырые данные файла без __bind */
     load(params = {}) {
-        return this.body ??= new AsyncPromise(async _ => {
+        return this.body = new AsyncPromise(async _ => {
             return WORK.fetch(this.short || '/', 'load', {...params, version: this.__version});
         });
     }

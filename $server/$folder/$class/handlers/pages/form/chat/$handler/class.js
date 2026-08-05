@@ -494,7 +494,7 @@ ODA({is: 'oda-chat',
                     includes,
                 };
                 if (this.model) body.model = this.model;
-                const taskFile = new File([JSON.stringify(body, null, 2)], 'task.ai', { type: 'application/json' });
+                const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
                 params.message = promptText;
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
@@ -820,7 +820,7 @@ ODA({is: 'chat-day',
             files = files ? [files] : [];
         }
         files = await Promise.all(files.map(f => Promise.resolve(f)));
-        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.ai'))));
+        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'))));
     },
     async _onLogsChangedRun(e){
         await this._bindLogsFolder();
@@ -830,14 +830,14 @@ ODA({is: 'chat-day',
         if (!this._logsInit)
             return;
         const initiator = e?.detail?.initiator ?? e?.detail?.value?.initiator;
-        if (initiator && initiator !== '.RAG' && (String(initiator).endsWith('.logs') || String(initiator).endsWith('.ai'))) {
+        if (initiator && initiator !== '.RAG' && (String(initiator).endsWith('.logs') || String(initiator).endsWith('.task'))) {
             try {
                 let file = await folder.get_item('/' + initiator, 'info');
-                if ((file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.ai')) && !this.logItems.some(i => i.id === file.id)) {
+                if ((file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) && !this.logItems.some(i => i.id === file.id)) {
                     this.logItems.push(file);
                     this._scrollRibbonDown();
                     const chat = this.$pdp.$pdp;
-                    if (file?.id?.endsWith?.('.ai') && chat?.awaitTask) {
+                    if (file?.id?.endsWith?.('.task') && chat?.awaitTask) {
                         this.async(()=>{
                             let last = this.$$('chat-item').last;
                             if(last) {
@@ -886,13 +886,13 @@ ODA({is: 'chat-day',
             this.logItems = await this._fetchLogFiles();
             this.render();
             this._scrollRibbonDown();
-            // Раскрыть последний .ai только если ожидается новая задача
+            // Раскрыть последний .task только если ожидается новая задача
             const chat = this.$pdp.$pdp;
             if (chat?.awaitTask && this.last) {
                 this.async(() => {
                     const items = this.$$('chat-item');
                     const lastItem = items.last;
-                    if (lastItem && lastItem.$file?.id?.endsWith('.ai')) {
+                    if (lastItem && lastItem.$file?.id?.endsWith('.task')) {
                         lastItem.expanded = true;
                         chat.awaitTask = false;
                     }

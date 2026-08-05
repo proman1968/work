@@ -311,13 +311,40 @@ ODA({
 });
 ```
 
-Пример оболочки:
+### B.1.1. Shell preview — эталон чистоты
+
+Образец: [`$server/$folder/$file/$task/handlers/preview/$handler/class.js`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/).
+
+Shell — **только** проекция файла на детей. Не знает pending, tip, stream, MIME, Blob/JSON.parse.
 
 ```js
-data: null, // JSON task.ai
-get items() { return this.data?.ribbon || []; },
-// template: <microchat-ribbon :items></microchat-ribbon>
+export default {
+    template: /* html */`
+        <microchat-ribbon flex :items :$item></microchat-ribbon>
+        <microchat-panel info-invert no-flex :data :$item></microchat-panel>
+    `,
+    data: null,
+    $item: {
+        $def: null,
+        async set(n) {
+            n?.listen('changed', async () => this.data = await n.load());
+            this.data = await n?.load();
+        },
+    },
+    get title() { return this.data?.title || this.$item?.name || 'task'; },
+    get items() { return this.data?.items; },
+};
 ```
+
+Инварианты shell:
+
+1. **Владеет** только `data` / `items` / `$item` (+ `title` для chrome).
+2. **Связь с детьми** — биндинг `:data` / `:items` / `:$item`, без prop-drill эвристик.
+3. **Load** — `$item.load()`; на `changed` снова `load()`. Кэш тела — контракт `$file.load` (свежий fetch), не ручной `body = undefined` в UI.
+4. **Дети инкапсулированы** — ribbon (лента/stream), panel (composer/tip/pending), views (блоки). Shell их внутренностей не знает.
+5. **Без церемоний** — нет `Promise.resolve`, `_load`/`_reload`, `try/catch` «на всякий случай», `items ??= []`, если геттер/контракт уже страхуют.
+
+К этой плотности стремиться в любом новом `handlers/preview` и тонком handler-shell.
 
 ## B.2. Запрещено
 
@@ -325,6 +352,7 @@ get items() { return this.data?.ribbon || []; },
 - Дублировать поля на view (`path: ''` рядом с `data.path`).
 - Hydrate/`$file` на ленте, если view сам резолвит `WORK.get_item(this.path)`.
 - Сжимать код удалением переносов или CSS «в одну строку» ради метрики строк.
+- Раздувать shell preview знанием детей (pending, tip, stream, парсинг тела файла).
 
 ## B.3. Отладка
 
@@ -341,11 +369,11 @@ WORK построен на **жёстких контрактах** платфо�
 ## C.1. Принципы
 
 1. **Контракт выше защиты.** Платформа гарантирует контекст, жизненный цикл (`init`), наличие методов, схему вызова. Не дублируй проверки в каждом `execute` / handler’е.
-2. **Один владелец инварианта.** Guard, гидрация model, протокол хода, разбор ribbon, запись на диск — в классе-владельце (`$ai.prompt`, `$file.save`, …). Точка входа только готовит аргументы и вызывает владельца.
+2. **Один владелец инварианта.** Guard, гидрация model, протокол хода, разбор ribbon, запись на диск — в классе-владельце (`$task.prompt`, `$file.save`, …). Точка входа только готовит аргументы и вызывает владельца. Shell preview — эталон тонкого владельца `data` (B.1.1).
 3. **Тонкий вход.** `triggers/…/$trigger`, `methods/…/$method`, `handlers/…/$handler` — линейный путь: load → минимум подготовки → вызов метода контекста / владельца. Без второй бизнес-логики рядом.
 4. **Дыра в контракте → ядро.** Если `this.$context` / `prompt` / `load` реально ломаются — чини владельца или платформу, не обходи try/catch и динамическими import в точке вызова.
-5. **Не копируй канон.** Длинный system/protocol, PDCA, формат ответа, ACL — живут в источнике правды (типизатор, servicePrompt, `$ai`). Не размножай тот же текст в триггере «на всякий случай».
-6. **Эталон плотности.** Перед правкой смотри соседний тонкий `class.js` того же слоя и копируй плотность. Не «улучшай» defensive-слоем код, который уже доверяет контракту.
+5. **Не копируй канон.** Длинный system/protocol, PDCA, формат ответа, ACL — живут в источнике правды (типизатор, servicePrompt, `$task`). Не размножай тот же текст в триггере «на всякий случай».
+6. **Эталон плотности.** Перед правкой смотри соседний тонкий `class.js` того же слоя и копируй плотность. Для preview-shell — B.1.1. Не «улучшай» defensive-слоем код, который уже доверяет контракту.
 
 ## C.2. Запрещено (если нет доказанной дыры)
 
@@ -374,5 +402,5 @@ async execute(params = {}) {
 ## C.4. Связь с остальным каноном
 
 - §1.11 — ДНК раскладки (`$method` / `$trigger` / `$handler`): только реализация, без соседних utils.
-- Часть B — декларативный UI: один `data`, геттеры, без hydrate-костылей на ленте.
+- Часть B — декларативный UI: один `data`, геттеры, без hydrate-костылей на ленте; **B.1.1** — эталон shell preview.
 - `sources/readme.md` → «Принципы архитектуры»: минимализм как архитектурный принцип ядра; эта часть C — то же для **любого** прикладного кода и для ИИ-агентов.

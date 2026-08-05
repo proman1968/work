@@ -17,7 +17,7 @@
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
 - **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
-- **`save_file` → `save_to_history`** — return = history path снимка (карточка file в task.ai показывает его)
+- **`save_file` → `save_to_history`** — return = history path снимка (карточка file в ai.task показывает его)
 
 ## Словарь API (канон имён)
 

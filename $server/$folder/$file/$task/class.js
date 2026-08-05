@@ -2,6 +2,8 @@
 // Линейный реестр pipe (по id = type блока); корень — pipe.thinking.
 export default {
     icon: 'bootstrap:robot',
+    /** Тело файла — JSON; http-server / WORK.fetch резолвят по этому полю. */
+    contentType: 'application/json',
 
     /**
      * Вход автомата. Один вызов = один узел (think + маршрут + execute).
@@ -51,7 +53,7 @@ export default {
                     // complete: только если есть дети и последний завершён (лист или closed)
                     if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
                         options.push('complete');
-                    let menu = 'Выбери из списка один, наиболее подходящий следующий шаг:';
+                    let menu = 'Выбери следующий тип шага, не решай задачу целиком:';
                     for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
                     menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
                     console.warn(container.type)

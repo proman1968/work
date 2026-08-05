@@ -1,5 +1,5 @@
 ﻿export default {
-    label: 'on_save (.ai)',
+    label: 'on_save (.task)',
     icon: 'carbon:ai',
     async execute(params = {}) {
         const file = this.$context;

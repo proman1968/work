@@ -1,8 +1,10 @@
-# $ai — тип файла ИИ-задачи (task.ai)
+# $task — тип файла ИИ-задачи (ai.task)
 
 ## 1. Что это
 
-Тип `$ai` — файловый носитель диалога и PDCA-цикла встроенного ИИ WORK (`task.ai`). Технически это JSON с деревом `items`; прикладно — панель управления задачей агента в зоне роли USER / BOSS / ADMIN.
+Тип `$task` — файловый носитель диалога и PDCA-цикла встроенного ИИ WORK (`ai.task`). Технически это JSON с деревом `items`; прикладно — панель управления задачей агента в зоне роли USER / BOSS / ADMIN.
+
+Расширение `.task` (не `.ai`): у `mime-types` `.ai` = PostScript/Illustrator; каноническое имя файла — `ai.task`.
 
 ## 2. Зачем это нужно
 
@@ -10,12 +12,12 @@
 
 ## 3. Как это работает
 
-1. Сохранение `task.ai` → [`triggers/on_save`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) вызывает `taskFile.prompt(...)`.
+1. Сохранение `ai.task` → [`triggers/on_save`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) вызывает `taskFile.prompt(...)`.
 2. **Два вида промптов, различаются ролью.** Реальный (`USER|BOSS|ADMIN`, с клиента) пишется блоком `prompt` в дерево. Служебный (`AI` — самовызовы шагов и подтверждений кнопок) подаётся только в messages текущего вызова: в ленту не попадает.
 3. `prompt` — инстанс-метод файла. Реальный вход → push блока `prompt` → маршрутизация. Служебный → маршрутизация без блока.
 4. **Состояние автомата = тип последнего блока в дереве.** Не persisted-поле, не отдельный регистр. `_active_block()` спускается в `items.last`, пока блок открыт и имеет детей — это и есть позиция автомата. Маршрут берётся из `pipe[_active_block().type].next`.
 5. **Дерево как поток:** любой узел с `next` углубляет дерево (пишет в `items` текущего контейнера) или рядом (sibling в родителе после close). Только `complete` закрывает контейнер и поднимает на уровень родителя. `body.closed = true` — терминал, задача закрыта.
-6. **Конечный автомат `PIPE`** — линейный реестр узлов в [`pipe.js`](/$server/$folder/$file/$ai/pipe.js) (`export default`, грузится лениво через геттер `pipe` → `importScript`). Узел = метаописание блока своего типа:
+6. **Конечный автомат `PIPE`** — линейный реестр узлов в [`pipe.js`](/$server/$folder/$file/$task/pipe.js) (`export default`, грузится лениво через геттер `pipe` → `importScript`). Узел = метаописание блока своего типа:
    - `prompt` — что спросить у модели при заходе в узел;
    - `inject` — подпись пункта в меню выбора родителя;
    - `next` — массив id детей (вперёд);
@@ -26,14 +28,14 @@
 8. **`complete` — особый узел подъёма.** Не пишется в `next` контейнеров; движок автоматически добавляет пункт `complete` в меню выбора, если у активного блока есть `items`. После подтверждения кнопки «Завершить» → `_active_block().closed = true`, следующий блок пишется в `items` родителя.
 9. **Auto-loop.** Если у созданного блока нет `button` и у узла нет `stop` — движок продолжает через `this.async(() => this.prompt({role:'AI'}))`. Wait-узел прерывает цикл.
 10. **Служебные методы файла:** `stop` — прервать стрим и не планировать auto-loop; `change_model({model})` — записать `body.model` без on_save.
-11. UI — [`handlers/preview`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/).
+11. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/).
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/$server/$folder/$file/$ai/class.js/~/handlers/pages/form/) — ИИ-харнесс: метод `prompt` (маршрут + auto-loop), `_active_block`/`_active_pipe`, `_streamChat`, `_push_block`, `_save`, `stop`, `change_model`, ленивые геттеры `pipe`/`body`/`model`
-- [`pipe.js`](/$server/$folder/$file/$ai/pipe.js/~/handlers/pages/form/) — линейный реестр метаописаний узлов (`export default`)
-- [`triggers/on_save/$trigger/`](/$server/$folder/$file/$ai/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — вход в цикл
-- [`handlers/preview/$handler/`](/$server/$folder/$file/$ai/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (UI-проекция дерева)
+- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — ИИ-харнесс: метод `prompt` (маршрут + auto-loop), `_active_block`/`_active_pipe`, `_streamChat`, `_push_block`, `_save`, `stop`, `change_model`, ленивые геттеры `pipe`/`body`/`model`
+- [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) — линейный реестр метаописаний узлов (`export default`)
+- [`triggers/on_save/$trigger/`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — вход в цикл
+- [`handlers/preview/$handler/`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (UI-проекция дерева)
 
 ## 5. В каком это состоянии
 
@@ -46,6 +48,7 @@
 - ✅ `_active_pipe` — метаописание по `_active_block().type`
 - ✅ Auto-loop через `this.async` (есть, критерий остановки `block.button`/`next_pipe.stop` уточняется)
 - ✅ `stop`, `change_model`
+- ✅ Тип `$file/$task`, расширение `.task` / файл `ai.task`; `contentType: 'application/json'` приоритетнее mime
 - 🔧 Меню выбора: строится по `active_pipe.next`, но `complete` для контейнеров ещё не добавляется автоматически
 - 🔧 Обработка подтверждения `complete` (закрытие контейнера) — не реализована
 - 🔧 `step` без `build` — ломает контракт «тип последнего блока = позиция»

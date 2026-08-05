@@ -41,7 +41,7 @@ before(async () => {
     async execute(p) {
         globalThis.__SMOKE_ON_SAVE__ = (globalThis.__SMOKE_ON_SAVE__ || 0) + 1;
         globalThis.__SMOKE_LAST_LOG__ = p.logFullPath || null;
-        // Регрессия task.ai: методы merged class.js попадают на инстанс только после init
+        // Регрессия ai.task: методы merged class.js попадают на инстанс только после init
         await p.$context.init;
         globalThis.__SMOKE_CTX_PING__ = typeof p.$context.ping;
     }
@@ -125,7 +125,7 @@ describe('steps файла по расширению', () => {
 });
 
 describe('Reactor#async на сервере', () => {
-    // Регрессия task.ai: async(fn) без delay падал с ReferenceError,
+    // Регрессия ai.task: async(fn) без delay падал с ReferenceError,
     // т.к. в Node нет requestAnimationFrame (голый идентификатор)
     it('async(fn) без delay выполняет колбэк', async () => {
         const box = await WORK.get_item('/BOX');

@@ -5,7 +5,9 @@
  * microchat-view-core — open API (autoOpen снаружи / userOpen вручную).
  * microchat-view — expander по умолчанию для любого type.
  * Спец-layout только если зарегистрирован microchat-view-{type}.
+ * Вложенный ribbon — из ribbon.js.
  */
+import './ribbon.js';
 /** Open-состояние: tip-путь снаружи, ручное — в UI. */
 ODA({ is: 'microchat-view-core',
     data: null,
@@ -29,6 +31,20 @@ ODA({ is: 'microchat-view-core',
     get typeIcon() { return this.data?.icon || ''; },
     get content() { return this.data?.content || ''; },
     get fields() { return this.data?.fields || []; },
+    /** Ответы формы/опроса — свойство самого блока (fields → { id: value }). */
+    get answers() {
+        const fields = this.fields;
+        if (!fields.length) return null;
+        const out = {};
+        let has = false;
+        for (const f of fields) {
+            const v = f?.value;
+            if (v === undefined || v === null || String(v).trim() === '') continue;
+            out[f.id] = v;
+            has = true;
+        }
+        return has ? out : null;
+    },
     get items() { return this.data?.items || []; },
     get sender() { return null; },
     get timeText() { return ''; },
@@ -127,8 +143,7 @@ ODA({ is: 'microchat-view',
                     <microchat-field :field="$for.item"></microchat-field>
                 </div>
                 <microchat-ribbon embedded ~if="items.length" :items
-                    :stick-top="stickTop"
-                    @confirm="fire('confirm')" @cancel="fire('cancel')"></microchat-ribbon>
+                    :stick-top="stickTop"></microchat-ribbon>
             </div>
         </details>
     `,
@@ -198,13 +213,17 @@ ODA({ is: 'microchat-view-prompt',
     },
 });
 
-ODA({ is: 'microchat-view-questions',
+ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     needAnswers: {
         $attr: true,
         get() { return !!this.data?.needAnswers; },
         set(v) { if (this.data) this.data.needAnswers = !!v; },
     },
+});
+
+ODA({ is: 'microchat-view-questions',
+    extends: 'microchat-view-form',
 });
 
 /** step — обычный expander: заголовок = «N. описание» (content), тело = items. */
