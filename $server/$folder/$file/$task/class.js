@@ -28,16 +28,17 @@ export default {
                     return { ok: true };
                 }
             }
+            let pipe = await this.pipe;
             if (!isService) {
                 let block = {
                     type: 'prompt',
                     content: prompt,
                     sender: user?.$user?.id ?? user?.uid ?? '',
-                    // items: []
+                    items: []
                 }
                 await this._push_block(user, block);
             }
-            let pipe = await this.pipe;
+            
             let active_pipe = await this._active_pipe();
             let messages = await this.context();
 

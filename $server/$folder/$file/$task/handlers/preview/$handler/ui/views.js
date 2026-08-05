@@ -20,7 +20,7 @@ ODA({ is: 'microchat-view-core',
     /** всегда раскрыт: user-gate (button|stop) или prompt-view override */
     get forceOpen() { return !!(this.data?.button || this.data?.stop); },
     /** sticky только у prompt/task */
-    get isSticky() { return false; },
+    get isSticky() { return true; },
     get open() { return !!(this.forceOpen || this.autoOpen || this.userOpen); },
     get pinned() { return !!(this.autoOpen || this.forceOpen); },
     /** summary в --info-invert; тогда light/accent не вешаем */
@@ -50,8 +50,8 @@ ODA({ is: 'microchat-view-core',
     get timeText() { return ''; },
     /** top только при isSticky; без z-index-надстроек */
     get stickTopStyle() {
-        if (!this.isSticky) return null;
-        return { top: (Number(this.stickTop) || 0) + 'px' };
+        // if (!this.isSticky) return null;
+        return { top: this.top + 'px' };
     },
     onToggle(e) {
         const el = e?.target;
@@ -126,7 +126,7 @@ ODA({ is: 'microchat-view',
             }
         </style>
         <details :open="open" @toggle="onToggle">
-            <summary raised vertical :bold="open" flex
+            <summary raised vertical :bold="open" flex @resize="onResize"
                     :light="!pinned && !infoInvert" :accent="pinned && !infoInvert"
                     :info-invert="infoInvert" ~class="{auto: pinned, stick: isSticky}" ~style="stickTopStyle">
                 <div class="head-row" horizontal flex>
@@ -147,6 +147,13 @@ ODA({ is: 'microchat-view',
             </div>
         </details>
     `,
+    onResize(e) {
+        this.height = e.target.clientHeight;
+    },
+    height: 0,
+    get top(){
+        return (this.host.host.height || 0) + (this.host.host.top || 0);
+    },
     /** false — скрыть markdown (напр. task: сырой todo не дублируем) */
     get showContent() { return !!this.content; },
     /** тег доп. блока в summary; пусто — нет */
