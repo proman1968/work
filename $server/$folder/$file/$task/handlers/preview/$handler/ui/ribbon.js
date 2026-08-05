@@ -1,51 +1,10 @@
 /**
- * Preview ribbon — лента блоков, tip-open, scroll, live-stream.
+ * Preview ribbon — лента блоков, auto-open, scroll, live-stream.
  * Связь с shell: :items :$item.
  */
 
 /**
- * Исполняемая ветка tip: deepest active task.items, иначе спуск в items
- * последнего контейнера, иначе waiting task с button, иначе текущий список.
- */
-export function tipBranch(items) {
-    if (!Array.isArray(items) || !items.length) return [];
-    let list = items;
-    while (true) {
-        const active = [...list].reverse()
-            .find(b => b?.type === 'task' && b.state === 'active' && Array.isArray(b.items));
-        if (active) {
-            list = active.items;
-            continue;
-        }
-        const last = list.at(-1);
-        if (last && Array.isArray(last.items) && last.items.length && !last.closed) {
-            list = last.items;
-            continue;
-        }
-        const waiting = [...list].filter(b => b?.type === 'task').reverse().find(b => {
-            const nested = Array.isArray(b.items) ? b.items : [];
-            return nested.length && !!String(nested.at(-1)?.button?.label || '').trim();
-        });
-        if (waiting)
-            return waiting.items;
-        return list;
-    }
-}
-
-/**
- * Tip для панели над промптом: последний блок ветки, если у него есть button.label.
- */
-export function tipBlock(items) {
-    const branch = tipBranch(items);
-    if (!branch.length) return null;
-    const last = branch[branch.length - 1];
-    const label = String(last?.button?.label || '').trim();
-    if (!label) return null;
-    return last;
-}
-
-/**
- * Узлы на пути к tip: предки + конечный лист — для :auto-open.
+ * Узлы на пути к focusedBlock: предки + лист — для :auto-open.
  */
 export function tipOpenSet(items) {
     const open = new Set();
@@ -128,6 +87,8 @@ ODA({ is: 'microchat-ribbon',
                 item.listen('chat.done', () => this._onDone());
                 item.listen('chat.error', () => this._onDone());
                 item.listen('chat.clear_stream', () => this._onClearStream());
+                item.listen('chat.stop', () => this.markStopped());
+                item.listen('chat.resume', () => this.clearStopped());
             });
         },
     },

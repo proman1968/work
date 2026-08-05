@@ -1,6 +1,6 @@
 /**
  * Preview views — :data → getters (rules Part B).
- * Loaded via shell imports: '~/views'.
+ * Loaded via shell: import './ui/views.js'.
  *
  * microchat-view-core — open API (autoOpen снаружи / userOpen вручную).
  * microchat-view — expander по умолчанию для любого type.

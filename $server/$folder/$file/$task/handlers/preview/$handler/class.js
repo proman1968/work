@@ -1,10 +1,10 @@
 /**
  * Preview ai.task — shell: лента + промптбар.
- * Только data/items/$item; без знания внутренностей детей.
+ * Только data/items/$item/focusedBlock; без знания внутренностей детей.
  */
 
-import './views.js';
-import './panel.js';
+import './ui/views.js';
+import './ui/panel.js';
 
 export default {
     template: /* html */`
@@ -30,4 +30,10 @@ export default {
     },
     get title() { return this.data?.title || this.$item?.name || 'task'; },
     get items() { return this.data?.items; },
+    get focusedBlock() {
+        let items = this.items;
+        while (items?.last?.items?.length && !items.last.closed)
+            items = items.last.items;
+        return items?.last;
+    },
 };
