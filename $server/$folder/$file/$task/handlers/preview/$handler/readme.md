@@ -1,15 +1,13 @@
 # Preview микрочата (ai.task)
 
-Декларативная проекция JSON `ai.task` на ODA-views по [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) Part B.
+Декларативная проекция JSON `ai.task` на ODA-views по [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) Part B (B.1.1–B.1.3).
 
 ## Принцип
 
-Shell абстрактен: лента + промптбар. Компоненты инкапсулированы; связь — биндинг `:data` / `:items` / `:$item`.
-
-Эталон канона: [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) **B.1.1** (shell preview).
+Shell: `data` / `items` / `focusedBlock` / load. Дети в `ui/`. Action и лента читают фокус через `$pdp` / дерево `items`.
 
 ```
-$handler/class.js          ← вход
+$handler/class.js          ← вход + focusedBlock
 $handler/ui/*              ← ribbon, panel, views, mic, tts, usage
 ```
 
@@ -18,16 +16,20 @@ $handler/ui/*              ← ribbon, panel, views, mic, tts, usage
 | Модуль | Владеет |
 |--------|---------|
 | [`class.js`](class.js) | shell: `data`/`items`/`$item`/`focusedBlock`, load по `changed` |
-| [`ui/ribbon.js`](ui/ribbon.js) | лента, scroll, live-stream |
-| [`ui/panel.js`](ui/panel.js) | composer, files, model (`data.model`), action (`$pdp.focusedBlock`); `pending` + `send`/`stop` |
+| [`ui/ribbon.js`](ui/ribbon.js) | лента; `viewTag` по контракту типов; scroll = ResizeObserver на `.feed` |
+| [`ui/panel.js`](ui/panel.js) | composer, files, `data.model`, action (`$pdp.focusedBlock?.button`); pending + send/stop |
 | [`ui/mic.js`](ui/mic.js) | speech recognition |
 | [`ui/tts.js`](ui/tts.js) | TTS (browser / piper) |
-| [`ui/usage.js`](ui/usage.js) | dial контекста из `data.usage` / блоков |
+| [`ui/usage.js`](ui/usage.js) | dial контекста |
 | [`ui/views.js`](ui/views.js) | блоки; `answers` у формы |
 
-## Action-кнопка
+## Контракты UI
 
-`focusedBlock.button.label` → `value` → `send()`.
+- **Модель** всегда в `data.model` — не искать в MODELS из panel.
+- **Action:** `focusedBlock.button` → `value = label` → `send()`. Геттер без `|| null`.
+- **Стили статуса:** attrs `success`/`warning`/`error`, не `.btn-*`.
+- **Stream stop/resume:** `$item.fire('chat.stop'|'chat.resume')`.
+- **`$pdp` + Reactor:** см. rules B.1.2 (`Reactor.get` в proxy; не кэшировать `null`).
 
 ## Pending (panel)
 
@@ -36,4 +38,4 @@ $handler/ui/*              ← ribbon, panel, views, mic, tts, usage
 
 ## Load
 
-`$task.contentType = 'application/json'` → http-server / `WORK.fetch` отдают объект; shell: `this.data = await $item.load()`.
+`$task.contentType = 'application/json'` → object; shell: `this.data = await $item.load()`.

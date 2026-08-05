@@ -38,12 +38,15 @@ export function tipOpenSet(items) {
     }
 }
 
-/** Зарегистрирован microchat-view-{type} → он, иначе база microchat-view. */
+/** Спец-view по type; иначе база microchat-view (без customElements.get — гонка регистрации). */
+const VIEW_TYPES = new Set([
+    'prompt', 'form', 'questions', 'step', 'task', 'file', 'tool', 'tool_result',
+]);
+
 export function viewTag(item) {
     const t = item?.type;
     if (!t) return '';
-    const custom = 'microchat-view-' + t;
-    return customElements.get(custom) ? custom : 'microchat-view';
+    return VIEW_TYPES.has(t) ? 'microchat-view-' + t : 'microchat-view';
 }
 
 ODA({ is: 'microchat-ribbon',
@@ -63,13 +66,14 @@ ODA({ is: 'microchat-ribbon',
                 overflow: visible;
                 padding-bottom: 0;
             }
-            .ribbon { @apply --vertical; }
+            .feed { @apply --vertical; }
         </style>
 
-        <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
-                :auto-open="isAutoOpen($for.item)" :stick-top="stickTop" ~for="items"></div>
-
-        <microchat-streaming ~if="!embedded && streamingText" :text="streamingText"></microchat-streaming>
+        <div class="feed" vertical>
+            <div ~is="tag($for.item)" ~if="visible($for.item)" :data="$for.item"
+                    :auto-open="isAutoOpen($for.item)" :stick-top="stickTop" ~for="items"></div>
+            <microchat-streaming ~if="!embedded && streamingText" :text="streamingText"></microchat-streaming>
+        </div>
     `,
     items: [],
     streamingText: '',
@@ -77,19 +81,17 @@ ODA({ is: 'microchat-ribbon',
     embedded: { $def: false, $type: Boolean, $attr: true },
     _autoFollow: true,
     _userStopped: false,
+    _ro: null,
     $item: {
         $def: null,
         set(n) {
             if (this.embedded) return;
-            Promise.resolve(n).then(item => {
-                if (!item?.listen) return;
-                item.listen('chat.delta', e => this._onDelta(e));
-                item.listen('chat.done', () => this._onDone());
-                item.listen('chat.error', () => this._onDone());
-                item.listen('chat.clear_stream', () => this._onClearStream());
-                item.listen('chat.stop', () => this.markStopped());
-                item.listen('chat.resume', () => this.clearStopped());
-            });
+            n?.listen('chat.delta', e => this._onDelta(e));
+            n?.listen('chat.done', () => this._onDone());
+            n?.listen('chat.error', () => this._onDone());
+            n?.listen('chat.clear_stream', () => this._onClearStream());
+            n?.listen('chat.stop', () => this.markStopped());
+            n?.listen('chat.resume', () => this.clearStopped());
         },
     },
     tag(item) { return viewTag(item); },
@@ -108,14 +110,17 @@ ODA({ is: 'microchat-ribbon',
     attached() {
         if (this.embedded) return;
         this._autoFollow = true;
-        this.scrollBottom(true);
+        this._ro = new ResizeObserver(() => this.scrollBottom());
+        this.async(() => {
+            const feed = this.$('.feed');
+            if (feed) this._ro.observe(feed);
+            this.scrollBottom();
+        });
     },
-    observers: [
-        function _followItems(items, streamingText) {
-            if (this.embedded) return;
-            this.scrollBottom(!!items?.length && !streamingText);
-        },
-    ],
+    detached() {
+        this._ro?.disconnect();
+        this._ro = null;
+    },
     onScroll() {
         if (this.embedded) return;
         this._autoFollow = this.scrollTop + this.clientHeight >= this.scrollHeight - 10;
@@ -123,14 +128,9 @@ ODA({ is: 'microchat-ribbon',
     listeners: {
         scroll: 'onScroll',
     },
-    scrollBottom(forceLayout = false) {
+    scrollBottom() {
         if (this.embedded || !this._autoFollow) return;
-        const go = () => { this.scrollTop = this.scrollHeight; };
-        this.async(go, 50);
-        if (forceLayout) {
-            this.async(go, 150);
-            this.async(go, 400);
-        }
+        this.scrollTop = this.scrollHeight;
     },
     markStopped() {
         this._userStopped = true;

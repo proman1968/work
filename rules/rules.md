@@ -315,7 +315,7 @@ ODA({
 
 Образец: [`$server/$folder/$file/$task/handlers/preview/$handler/class.js`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/).
 
-Shell — **только** проекция файла на детей. Не знает pending, tip, stream, MIME, Blob/JSON.parse.
+Shell — проекция файла на детей + общие геттеры дерева (`focusedBlock`). Не знает pending, stream, MIME, Blob/JSON.parse.
 
 ```js
 export default {
@@ -333,18 +333,36 @@ export default {
     },
     get title() { return this.data?.title || this.$item?.name || 'task'; },
     get items() { return this.data?.items; },
+    get focusedBlock() {
+        let items = this.items;
+        while (items?.last?.items?.length && !items.last.closed)
+            items = items.last.items;
+        return items?.last;
+    },
 };
 ```
 
 Инварианты shell:
 
-1. **Владеет** только `data` / `items` / `$item` (+ `title` для chrome).
-2. **Связь с детьми** — биндинг `:data` / `:items` / `:$item`, без prop-drill эвристик.
-3. **Load** — `$item.load()`; на `changed` снова `load()`. Кэш тела — контракт `$file.load` (свежий fetch), не ручной `body = undefined` в UI.
-4. **Дети инкапсулированы** — ribbon (лента/stream), panel (composer/tip/pending), views (блоки). Shell их внутренностей не знает.
-5. **Без церемоний** — нет `Promise.resolve`, `_load`/`_reload`, `try/catch` «на всякий случай», `items ??= []`, если геттер/контракт уже страхуют.
+1. **Владеет** `data` / `items` / `$item` / `focusedBlock` (+ `title` для chrome).
+2. **Связь с детьми** — биндинг `:data` / `:items` / `:$item`; общее дерево — `$pdp.focusedBlock` (см. B.1.2).
+3. **Load** — `$item.load()`; на `changed` снова `load()`. Кэш тела — контракт `$file.load` (свежий fetch).
+4. **Дети в `$handler/ui/`** — ribbon, panel, views, mic, tts, usage. У корня handler только `class.js` (+ readme).
+5. **Без церемоний** — нет `Promise.resolve`, `_load`/`_reload`, `try/catch` «на всякий случай», гидрации model в UI (`ai.task` всегда с `data.model`).
 
-К этой плотности стремиться в любом новом `handlers/preview` и тонком handler-shell.
+`focusedBlock` — лист последней открытой ветки. Panel: `actionButton = $pdp.focusedBlock?.button` (без `|| null` — см. B.1.2). Action: `value = label` → `send()`.
+
+### B.1.2. `$pdp` + Reactor
+
+- Чтение пропа родителя в геттере ребёнка — через `$pdp`. В `oda.js` get-trap идёт в `Reactor.get(owner, p)`, чтобы deps ребёнка подписались на проп host.
+- **Не возвращай `null` из реактивного геттера**, если «нет значения» = пусто. Reactor кэширует `null` как hit и не пересчитывает; пусто → `undefined` (`return this.$pdp.focusedBlock?.button`).
+- Статусы кнопок — attrs `success` / `warning` / `error` ([`styles.md`](/rules/styles.md/~/handlers/pages/form/)), не локальные `.btn-*`.
+
+### B.1.3. Preview ribbon
+
+- `viewTag`: известные типы → сразу `microchat-view-{type}` (сет контракта); иначе `microchat-view`. **Не** `customElements.get` — гонка async `ODA()`.
+- Скролл вниз при `_autoFollow`: `ResizeObserver` на контейнер ленты (`.feed`), не таймеры 50/150/400ms.
+- Stop/resume стрима: `$item.fire('chat.stop'|'chat.resume')`, не `parentElement.$('microchat-ribbon')`.
 
 ## B.2. Запрещено
 
@@ -352,11 +370,13 @@ export default {
 - Дублировать поля на view (`path: ''` рядом с `data.path`).
 - Hydrate/`$file` на ленте, если view сам резолвит `WORK.get_item(this.path)`.
 - Сжимать код удалением переносов или CSS «в одну строку» ради метрики строк.
-- Раздувать shell preview знанием детей (pending, tip, stream, парсинг тела файла).
+- Раздувать shell preview знанием детей (pending, stream, парсинг тела файла, `findFirstModel`).
+- `|| null` в конце реактивных геттеров «для ясности».
+- Magic-timeout scroll / `customElements.get` для выбора view-тега.
 
 ## B.3. Отладка
 
-Смотреть `$0.data` и геттеры. Если `path === undefined` при живом блоке в JSON — сломан бинд `:data`, а не «файл не найден».
+Смотреть `$0.data` и геттеры. Если `path === undefined` при живом блоке в JSON — сломан бинд `:data`, а не «файл не найден». Если UI «залип» после `$pdp` — проверь `null` в кэше геттера и deps (B.1.2).
 
 ---
 
@@ -402,5 +422,5 @@ async execute(params = {}) {
 ## C.4. Связь с остальным каноном
 
 - §1.11 — ДНК раскладки (`$method` / `$trigger` / `$handler`): только реализация, без соседних utils.
-- Часть B — декларативный UI: один `data`, геттеры, без hydrate-костылей на ленте; **B.1.1** — эталон shell preview.
+- Часть B — декларативный UI: один `data`, геттеры; **B.1.1** shell preview; **B.1.2** `$pdp`/Reactor; **B.1.3** ribbon.
 - `sources/readme.md` → «Принципы архитектуры»: минимализм как архитектурный принцип ядра; эта часть C — то же для **любого** прикладного кода и для ИИ-агентов.

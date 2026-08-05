@@ -178,7 +178,7 @@ ODA({ is: 'microchat-panel',
             });
         },
     },
-    get actionButton() { return this.$pdp.focusedBlock?.button || null; },
+    get actionButton() { return this.$pdp.focusedBlock?.button; },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },

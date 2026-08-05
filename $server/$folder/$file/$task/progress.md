@@ -2,24 +2,27 @@
 
 ## Последние изменения
 
+- [18:45] **Preview polish + канон.** `focusedBlock` на shell; panel через `$pdp` (без tip/findFirstModel); `$pdp`→`Reactor.get` в oda.js; геттеры без `|| null`; `viewTag` без `customElements.get`; scroll = ResizeObserver. Rules: B.1.1–B.1.3.
 - [17:22] **Preview layout.** UI-модули в `$handler/ui/`; у корня только `class.js` + `readme.md`.
-- [17:20] **Panel split.** `mic.js` / `tts.js` / `usage.js` вынесены из `panel.js`; panel = tip + composer + model + send/pending.
-- [17:11] **Эталон shell preview.** `handlers/preview/$handler/class.js` — только `data`/`items`/`$item`, load по `changed`. Зафиксировано в `rules/rules.md` B.1.1.
-- [16:40] **Переименование.** `$file/$ai` → `$file/$task`, расширение `.ai` → `.task`, канон файла `task.ai` → `ai.task`. Обход конфликта `mime-types` (`.ai` = PostScript).
-- [16:06] **`contentType` типизатора файла.** `$task` (и `$bid`/`$product`/`$order`) объявляют `contentType: 'application/json'`. http-server: **тип `contentType` → иначе mime → иначе `text/plain`**. `$file.contentType` геттер из `DATA`. Preview `_load` = `await $item.load()` без Blob/JSON.parse; на `changed` только `body = undefined` + load.
+- [17:20] **Panel split.** `mic.js` / `tts.js` / `usage.js` вынесены из `panel.js`.
+- [17:11] **Эталон shell preview.** Зафиксировано в `rules/rules.md` B.1.1.
+- [16:40] **Переименование.** `$file/$ai` → `$file/$task`, `task.ai` → `ai.task`.
+- [16:06] **`contentType`** типизатора; http-server: тип выше mime.
 
 ## В работе
 
-- Дерево решений pipe: валидация `choice`, условие auto-add `complete`.
-- Остальные JSON-типы без `class.js` (`$skill`/…) — добавить `contentType` при появлении типизатора.
+- Дерево решений pipe: валидация `choice`, auto-add `complete`.
+- JSON-типы без `class.js` — `contentType` при появлении типизатора.
+- Usage dial — при желании вынести в отдельный ODA-компонент.
 
 ## Ключевые решения
 
-- MIME кастомных расширений — поле типизатора `$ext/class.js`, приоритетнее системного mime.
-- UI: shell абстрактен; pending в panel; tip = `value = label` → `send()`.
-- Имя типа `$task` (файл) ≠ `$handler/$task` (cron) ≠ `MODELS/$ai` (модели).
+- MIME — поле типизатора, приоритетнее системного mime.
+- Shell владеет `focusedBlock`; panel/ribbon — потребители.
+- `ai.task` всегда с `model`; UI не гидратит MODELS.
+- Имя `$task` (файл) ≠ `$handler/$task` (cron) ≠ `MODELS/$ai`.
 
 ## Блокеры / Открытые вопросы
 
 - FC отложен.
-- Старые пользовательские `*.ai` / `task.ai` не мигрированы.
+- Старые `*.ai` / `task.ai` не мигрированы.
