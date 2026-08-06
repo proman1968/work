@@ -79,6 +79,13 @@ export default {
     _invalidateEvents() {
         this.events = undefined;
         this._logsFolder = undefined;
+    },
+    async showMeeting($item) {
+        const raw = await $item.load();
+        const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const file = await WORK.get_item(log.path);
+        const el = ODA.createElement('oda-calendar-event-form', { $item: file });
+        await WORK.showDialog(el, { TITLE: { label: 'Event', icon: 'enterprise:calendar' } });
     }
 }
 
@@ -308,25 +315,18 @@ ODA({
                 line-height: 16px;
                 overflow: hidden;
             }
-            .events-layer {
-                position: absolute;
-                top: 0;
-                right: 0;
-                bottom: 0;
-                left: 30px;
-                pointer-events: none;
-            }
             .event-block {
                 position: absolute;
                 box-sizing: border-box;
                 background: var(--success-color);
                 color: var(--dark-color);
                 padding: 2px 4px;
-                border-radius: 2px;
+                border: 1px solid var(--dark-color);
+                border-radius: 4px;
                 font-size: small;
                 overflow: hidden;
                 pointer-events: auto;
-                cursor: default;
+                cursor: pointer;
             }
             .event-block .row {
                 align-items: center;
@@ -350,6 +350,7 @@ ODA({
                 white-space: nowrap;
             }
         </style>
+        <div ~is="'style'" ~text="anchorStyles"></div>
         <div class="day-body">
             <div horizontal ~for="24" style="border-bottom: 1px solid var(--border-color);">
                 <div class="hour-label">
@@ -360,38 +361,57 @@ ODA({
                         <div class="minute-label" disabled>
                             {{String(interval * $for.$for.index).padStart(2, '0')}}
                         </div>
-                        <div flex class="slot" @tap="selectDayTime($for.$for.item, $for.index)">
+                        <div flex class="slot" ~class="'event-block-anchor-' + $for.index + '-' + $for.$for.item" @tap="selectDayTime($for.$for.item, $for.index)">
                         </div>
                     </div>
                 </div>
             </div>
-            <div class="events-layer">
-                <div ~for="laidOutEvents" class="event-block" ~style="$for.item.style" @tap.stop>
-                    <div horizontal class="row">
-                        <div class="interval">{{$for.item.interval}}</div>
-                        <div class="summary">{{$for.item.summary}}</div>
-                    </div>
-                    <div class="location" ~if="$for.item.location">{{$for.item.location}}</div>
+            <div ~for="laidOutEvents" :class="$for.item.class" ~style="$for.item.style" @tap.stop="open($for.item.$item)">
+                <div horizontal class="row">
+                    <div class="interval">{{$for.item.interval}}</div>
+                    <div class="summary">{{$for.item.summary}}</div>
                 </div>
+                <div class="location" ~if="$for.item.location">{{$for.item.location}}</div>
             </div>
         </div>
     `,
     interval: 15,
-    slotHeight: 16,
     get intervalsInHour() {
         return 60 / this.interval;
     },
-    get hourHeight() {
-        return this.intervalsInHour * this.slotHeight;
+    get anchorStyles() {
+        let style = '';
+        for (let h = 0; h < 24; h++) {
+            for (let i = 0; i < this.intervalsInHour; i ++) {
+                style += `.event-block-anchor-${h}-${i} { anchor-name: --slot-${h}-${i}; }\r\n`;
+                // block-anchor-start
+                style += `.bas-${h}-${i} {
+    position-anchor: --slot-${h}-${i};
+    top: anchor(top);
+}\r\n`;
+                // block-anchor-end
+                style += `.bae-${h}-${i} {
+    bottom: anchor(--slot-${h}-${i} top);
+}\r\n`;
+            }
+        }
+        return style;
     },
     currentDate: new Date(),
     events: [],
+    slotAnchor(hour, intervalIdx) {
+        return `--slot-${hour}-${intervalIdx}`;
+    },
+    timeToAnchor(date, edge = 'bas') {
+        const interval = this.interval;
+        const h = date.getHours();
+        const m = ~~(date.getMinutes() / interval);
+        return `${edge}-${h}-${m}`;
+    },
     get laidOutEvents() {
         const events = this.events;
         if (!events || events.then)
             return [];
-        const hourH = this.hourHeight;
-        const slotH = this.slotHeight;
         const gap = 2;
         const pad = n => String(n).padStart(2, '0');
         const hhmm = iso => {
@@ -420,14 +440,10 @@ ODA({
 
         const flush = () => {
             const colCount = Math.max(columns.length, 1);
+            const gutter = 30; // former .events-layer left
             for (const item of cluster) {
-                const startDate = new Date(item.start);
-                const endDate = new Date(item.end);
-                const startMin = startDate.getHours() * 60 + startDate.getMinutes() + startDate.getSeconds() / 60;
-                const endMin = endDate.getHours() * 60 + endDate.getMinutes() + endDate.getSeconds() / 60;
-                let top = startMin / 60;
-                top = top * hourH + top * 2;
-                const height = Math.max(slotH, ((endMin - startMin) / 60) * hourH) + 1;
+                let startClass = this.timeToAnchor(new Date(item.start), 'bas');
+                let endClass = this.timeToAnchor(new Date(item.end), 'bae');
                 const a = hhmm(item.start);
                 const b = hhmm(item.end);
                 result.push({
@@ -436,11 +452,10 @@ ODA({
                     $item: item.$item,
                     interval: a && b ? `${a} - ${b}` : '',
                     style: {
-                        top: `${top}px`,
-                        height: `${height}px`,
-                        left: `calc(${(item._col / colCount) * 100}% + ${gap * 2}px)`,
-                        width: `calc(${100 / colCount}%)`
-                    }
+                        left: `calc(${gutter}px + (100% - ${gutter}px) * ${item._col / colCount} + ${gap * 2}px)`,
+                        width: `calc((100% - ${gutter}px) / ${colCount})`
+                    },
+                    class: `event-block ${startClass} ${endClass}`
                 });
             }
             cluster.length = 0;
@@ -471,6 +486,9 @@ ODA({
         start.setHours(parseInt(hour), this.interval * intervalIdx, 0, 0);
         const end = new Date(start.getTime() + this.interval * 60 * 1000);
         this.fire('add-event', { start, end });
+    },
+    open($item) {
+        this.$pdp.showMeeting($item);
     }
 })
 
@@ -628,20 +646,20 @@ ODA({
                 position: relative;
                 cursor: pointer;
             }
-            .day-cell:hover{
+            .day-cell:hover {
                 background: var(--light-background);
             }
-            .day-cell[other-month]{
+            .day-cell[other-month] {
                 opacity: 0.9;
             }
-            .day-cell[today]{
+            .day-cell[today] {
                 background: var(--info-background);
             }
-            .day-number{
+            .day-number {
                 font-weight: normal;
                 margin-bottom: 4px;
             }
-            .event-badge{
+            .event-badge {
                 font-size: xx-small;
                 padding: 2px 4px;
                 margin: 2px 0;
@@ -740,7 +758,12 @@ ODA({
 ODA({
     is: 'oda-form-calendar-list-view',
     template: /*html*/`
-        <oda-log-view ~for="items" :data="$for.item"></oda-log-view>
+        <style>
+            oda-log-view:hover {
+                @apply --info-invert;
+            }
+        </style>
+        <oda-log-view ~for="items" :data="$for.item" @tap.stop="open($for.item.$item)"></oda-log-view>
     `,
     day: '',
     dayFrom: '',
@@ -752,7 +775,8 @@ ODA({
             return [];
         return events;
     },
-    setFocus(e) {
+    open($item) {
+        this.$pdp.showMeeting($item);
     },
 })
 
@@ -760,10 +784,12 @@ ODA({is: 'oda-log-view',
     template: /*html*/`
         <style>
             :host {
-                @apply --horizontal;
-                align-items: center;
+                @apply --vertical;
+                @apply --flex;
+                min-width: 0;
                 padding: 4px 8px;
                 gap: 4px;
+                cursor: pointer;
             }
             .main {
                 @apply --vertical;
@@ -801,14 +827,11 @@ ODA({is: 'oda-log-view',
                 @apply --selection;
             }
         </style>
-        <div class="main" vertical flex>
             <div class="row1" horizontal>
                 <span class="interval">{{interval}}</span>
                 <span class="summary" flex>{{summary}}</span>
             </div>
             <div class="location">{{location}}</div>
-        </div>
-        <oda-button no-flex icon="box:i-expand"></oda-button>
     `,
     data: null,
     get event() {

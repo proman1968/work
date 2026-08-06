@@ -32,7 +32,7 @@ export default {
             filename: 'ai.task',
             post: JSON.stringify({ content: prompt, includes: params.includes || [] }),
             encoding: 'utf-8',
-            user: WORK,
+            user: {$user: WORK},
             sender: WORK.id,
             logAuthor: params.user,
             skip_file_handler: true,

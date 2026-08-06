@@ -2,83 +2,15 @@
  * Preview views — :data → getters (rules Part B).
  * Loaded via shell: import './ui/views.js'.
  *
- * microchat-view-core — open: tip-путь / forceOpen / userOpen (само поведение блока).
  * microchat-view — expander по умолчанию для любого type.
+ * open = последний в items родительской ленты (или userOpen).
  * Спец-layout только если зарегистрирован microchat-view-{type}.
  * Вложенный ribbon — из ribbon.js.
  */
 import './ribbon.js';
 
-/** node содержит target (сам или потомок в items) — путь к tip. */
-function contains(node, target) {
-    if (!node || !target) return false;
-    if (node === target) return true;
-    for (const c of node.items || [])
-        if (contains(c, target)) return true;
-    return false;
-}
-
-/** Open-состояние — поведение блока, не ленты. */
-ODA({ is: 'microchat-view-core',
-    data: null,
-    /** внутри: ручное раскрытие (не в JSON) */
-    userOpen: false,
-    /** всегда раскрыт: user-gate (button|stop) или prompt-view override */
-    get forceOpen() { return !!(this.data?.button || this.data?.stop); },
-    /** на пути к tip, включая промежуточные узлы */
-    get autoOpen() { return contains(this.data, this.$pdp.focusedBlock); },
-    /** sticky только у prompt/task */
-    get isSticky() { return true; },
-    get open() { return !!(this.forceOpen || this.autoOpen || this.userOpen); },
-    get pinned() { return !!(this.autoOpen || this.forceOpen); },
-    /** summary в --info-invert; тогда light/accent не вешаем */
-    get infoInvert() { return false; },
-    get label() {
-        return this.data?.label || this.data?.type || '';
-    },
-    get typeIcon() { return this.data?.icon || ''; },
-    get content() { return this.data?.content || ''; },
-    get fields() { return this.data?.fields || []; },
-    /** Ответы формы/опроса — свойство самого блока (fields → { id: value }). */
-    get answers() {
-        const fields = this.fields;
-        if (!fields.length) return null;
-        const out = {};
-        let has = false;
-        for (const f of fields) {
-            const v = f?.value;
-            if (v === undefined || v === null || String(v).trim() === '') continue;
-            out[f.id] = v;
-            has = true;
-        }
-        return has ? out : null;
-    },
-    get items() { return this.data?.items || []; },
-    get sender() { return null; },
-    get timeText() { return ''; },
-    /** top только при isSticky; без z-index-надстроек */
-    get stickTopStyle() {
-        // if (!this.isSticky) return null;
-        return { top: this.top + 'px' };
-    },
-    onToggle(e) {
-        const el = e?.target;
-        if (!el || el.localName !== 'details') return;
-        if (this.forceOpen || this.autoOpen) {
-            el.open = true;
-            return;
-        }
-        this.userOpen = !!el.open;
-    },
-    toggleUser() {
-        if (this.forceOpen || this.autoOpen) return;
-        this.userOpen = !this.userOpen;
-    },
-});
-
-/** База-expander: заголовок + содержимое. */
+/** База-expander: open + заголовок + содержимое. */
 ODA({ is: 'microchat-view',
-    extends: 'microchat-view-core',
     imports: 'oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
     template: /*html*/`
         <style>
@@ -86,14 +18,12 @@ ODA({ is: 'microchat-view',
                 @apply --vertical;
             }
             summary {
+                position: sticky;
                 cursor: pointer;
                 user-select: none;
                 list-style: none;
                 box-sizing: border-box;
                 overflow: hidden;
-            }
-            summary.stick {
-                position: sticky;
             }
             summary::-webkit-details-marker {
                 display: none;
@@ -106,8 +36,8 @@ ODA({ is: 'microchat-view',
                 align-items: center;
                 box-sizing: border-box;
                 min-width: 0;
-                padding: 4px;
-                gap: 4px;
+                padding: 4px 8px;
+                gap: 8px;
             }
             .head-row > .label {
                 overflow: hidden;
@@ -134,9 +64,10 @@ ODA({ is: 'microchat-view',
             }
         </style>
         <details :open="open" @toggle="onToggle">
-            <summary raised vertical :bold="open" flex @resize="onResize"
-                    :light="!pinned && !infoInvert" :accent="pinned && !infoInvert"
-                    :info-invert="infoInvert" ~class="{auto: pinned, stick: isSticky}" ~style="stickTopStyle">
+            <summary raised vertical flex @resize="onResize" @click="onSummaryClick"
+                    :success="votedYes" :error="votedNo"
+                    :light="!voted && !pinned && !infoInvert" :accent="!voted && pinned && !infoInvert"
+                    :info-invert="!voted && infoInvert" ~class="{auto: pinned}" ~style="summaryStyle">
                 <div class="head-row" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
@@ -146,7 +77,7 @@ ODA({ is: 'microchat-view',
                 <div ~is="bodyTag" ~if="bodyTag" :data ::collapsed></div>
             </summary>
             <div content ~style="stepStyle">
-                <oda-markdown-viewer vertical ~if="showContent" :value="content"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical ~if="showContent" :value="viewContent"></oda-markdown-viewer>
                 <div ~for="fields">
                     <microchat-field :field="$for.item"></microchat-field>
                 </div>
@@ -154,18 +85,61 @@ ODA({ is: 'microchat-view',
             </div>
         </details>
     `,
-    onResize(e) {
-        this.height = e.target.clientHeight;
+    data: null,
+
+    // --- data ---
+    get content() { return this.data?.content; },
+    get label() { return this.data?.label || this.data?.type || ''; },
+    get typeIcon() { return this.data?.icon || ''; },
+    get fields() { return this.data?.fields || []; },
+    get items() { return this.data?.items || []; },
+    get sender() { return null; },
+    get timeText() { return ''; },
+    get votedYes() { return this.data?.vote === 'yes'; },
+    get votedNo() { return this.data?.vote === 'no'; },
+    get voted() { return !!(this.votedYes || this.votedNo); },
+
+    // --- open: last в host.items (Reactor.get + equal) или userOpen ---
+    userOpen: false,
+    get pinned() {
+        const items = this.host && Reactor.get(this.host, 'items');
+        return Reactor.equal(items?.last, this.data);
     },
+    get open() { return this.pinned || this.userOpen; },
+    /** pinned: не дать details закрыться (иначе мигание open→close→open) */
+    onSummaryClick(e) {
+        if (this.pinned) e.preventDefault();
+    },
+    onToggle(e) {
+        const el = e?.target;
+        if (!el || el.localName !== 'details') return;
+        if (this.pinned) {
+            el.open = true;
+            return;
+        }
+        this.userOpen = !!el.open;
+    },
+
+    // --- stream ---
+    get streamTail() {
+        const text = this.$pdp.streamingText || '';
+        return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
+    },
+    get viewContent() { return (this.content || '') + this.streamTail; },
+    get showContent() { return !!(this.content || this.streamTail); },
+
+    // --- chrome ---
+    get infoInvert() { return false; },
     height: 0,
-    get top(){
-        return (this.host.host.height || 0) + (this.host.host.top || 0);
+    onResize(e) { this.height = e.target.clientHeight; },
+    get top() { return (this.host.host.height || 0) + (this.host.host.top || 0); },
+    /** sticky stack: top по высоте предков; z-index убывает с depth */
+    get summaryStyle() {
+        return { top: this.top + 'px', zIndex: 100 - this.depth };
     },
-    /** false — скрыть markdown (напр. task: сырой todo не дублируем) */
-    get showContent() { return !!this.content; },
-    /** тег доп. блока в summary; пусто — нет */
+
+    // --- hooks ---
     get bodyTag() { return ''; },
-    /** глубина вложенности по дереву microchat-view → цвет левой рамки */
     get depth() {
         let d = 0, p = this.parentElement;
         while (p) {
@@ -183,7 +157,7 @@ ODA({ is: 'microchat-view',
 });
 
 /**
- * prompt — тот же expander; info-invert, аватар, всегда открыт.
+ * prompt — info-invert, аватар; текст в label, не в markdown.
  */
 ODA({ is: 'microchat-view-prompt',
     extends: 'microchat-view',
@@ -198,7 +172,6 @@ ODA({ is: 'microchat-view-prompt',
             }
             summary{
                 min-height: 36px;
-                z-index: 1;
             }
             details > div[content] {
                 margin-left: 0;
@@ -209,8 +182,6 @@ ODA({ is: 'microchat-view-prompt',
     `,
     get label() { return this.content || this.data?.label || this.data?.type || 'prompt'; },
     get showContent() { return false; },
-    get forceOpen() { return true; },
-    get isSticky() { return true; },
     get infoInvert() { return true; },
     get typeIcon() { return ''; },
     get sender() {
@@ -240,12 +211,12 @@ ODA({ is: 'microchat-view-questions',
     extends: 'microchat-view-form',
 });
 
-/** step — обычный expander: заголовок = «N. описание» (content), тело = items. */
+/** step — expander: заголовок = «N. описание», тело = items. */
 ODA({ is: 'microchat-view-step',
     extends: 'microchat-view',
     get label() { return this.data?.content || 'step'; },
     get showContent() { return false; },
-    get typeIcon() { return this.data?.icon || 'av:play-arrow'; },
+    get typeIcon() { return this.data?.icon || 'icons:assignment'; },
 });
 
 /** :field = объект из data.fields (мутация value на месте) */
@@ -346,15 +317,15 @@ ODA({ is: 'microchat-field',
 ODA({ is: 'microchat-view-task',
     extends: 'microchat-view',
     get bodyTag() { return 'microchat-task-todo'; },
-    get showContent() { return false; },
-    get isSticky() { return true; },
+    get showContent() { return !!this.streamTail; },
     get label() {
+        if (this.data?.label) return this.data.label;
         const steps = this.data?.steps || [];
-        if (!steps.length) return this.data?.label || 'task';
+        if (!steps.length) return this.data?.type || '';
         const i = steps.findIndex(s => s.status === 'in_progress');
         const p = steps.findIndex(s => s.status !== 'done');
-        const current = i >= 0 ? i + 1 : (p >= 0 ? p + 1 : steps.length);
-        return this.data?.label || `task ${current}/${steps.length}`;
+        const cur = steps[i >= 0 ? i : (p >= 0 ? p : steps.length - 1)];
+        return cur?.description || '';
     },
 });
 
@@ -486,7 +457,7 @@ ODA({ is: 'microchat-task-todo',
 });
 
 ODA({ is: 'microchat-view-file',
-    extends: 'microchat-view-core',
+    data: null,
     template: /*html*/`
         <style>
             :host {

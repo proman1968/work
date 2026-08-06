@@ -360,11 +360,13 @@ export default {
 
 ### B.1.3. Preview ribbon
 
-- Топ ленты: `$item` → attr `top` (CSS `:host([top])` = scroll); вложенная — только `:items`. **Не** `embedded` / `stickTop` / обёртка `.feed`.
-- `tag(item)`: `microchat-view-{type}` если `customElements.get`, иначе `microchat-view`. Без каталога типов и без `~if`/`visible` по полям блока.
-- Слушает только `chat.delta` / `chat.done`. Докрутка: `attached` → `scrollToBottom(true)`; на delta/done — `scrollToBottom()` (только у низа ±10). Без ResizeObserver / `_autoFollow`.
-- Раскрытие блоков — **не** ribbon: view сам `autoOpen` = `contains(data, $pdp.focusedBlock)` (промежуточные на пути к tip тоже).
-- Stop/resume стрима (panel): `$item.fire('chat.stop'|'chat.resume')`, не `parentElement.$('microchat-ribbon')`.
+- Топ ленты: `$item` → attr `top` (CSS `:host([top])` = scroll); вложенная — только `:items`. **Не** `embedded` / `stickTop` / обёртка `.feed` / хвостовой stream-viewer.
+- `tag(item)`: `microchat-view-{type}` если `customElements.get`, иначе `microchat-view`. Без каталога типов.
+- Scroll: `attached` → `scrollToBottom(true)`; на `chat.delta`/`chat.done` — `scrollToBottom()` у низа (±10).
+- Live-стрим: shell `streamingText` (`$pdp.streamingText`); tip-view = `viewContent` = `content + streamTail`. Choice на сервере — `_streamChat({ silent: true })` без delta; execute — stub блока до стрима.
+- Раскрытие блоков — view: `open` = last в `host.items` (`Reactor.get` + `Reactor.equal`) || `userOpen`.
+- Stream: `streamTail` читает `$pdp.streamingText` до equal (deps); ribbon `tag` — CE или `ODA.telemetry`; scroll на delta после paint.
+- Stop/resume (panel): `$item.fire('chat.stop'|'chat.resume')`.
 
 ## B.2. Запрещено
 

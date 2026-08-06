@@ -15,16 +15,25 @@ export default {
         let { prompt, role, user } = params;
         try {
             const isService = role === 'AI';
-            // подтверждение complete: служебный ход с label кнопки → закрыть контейнер complete-блока (отказ «нет» — мимо)
+            // vote yes/no: метка на блоке, в ленту не пишем; complete закрываем только по yes
             if (isService) {
                 let leaf = await this._active_block();
-                if (leaf?.type === 'complete' && prompt === leaf.button?.label) {
+                if (prompt === 'yes' || prompt === 'no') {
+                    leaf.vote = prompt;
+                    delete leaf.button;
+                    await this._save(user);
+                }
+                if (leaf?.type === 'complete' && prompt === 'yes') {
                     let container = await this._active_container();
                     container.closed = true;
                     await this._advance_steps(container);
                     await this._save(user);
                     user?.send?.({ type: 'chat.done', path: this.short });
                     this.async(() => this.prompt({ role: 'AI', user }));
+                    return { ok: true };
+                }
+                if (leaf?.type === 'complete' && prompt === 'no') {
+                    user?.send?.({ type: 'chat.done', path: this.short });
                     return { ok: true };
                 }
             }
@@ -44,59 +53,56 @@ export default {
 
             if (active_pipe?.next?.length) {
                 let container = await this._active_container();
-                // let next_id;
-                // if (active_pipe.next.length === 1) {
-                //     // единственный маршрут — детерминированный переход, модель не спрашиваем
-                //     next_id = active_pipe.next[0];
-                //     // messages.push({ role: 'user', content: '' });
-                // } else {
-                    let options = [...active_pipe.next];
-                    // complete: только если есть дети и последний завершён (лист или closed)
-                    if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
-                        options.push('complete');
-                    let menu = 'Выбери следующий тип шага, не решай задачу целиком:';
-                    for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
-                    menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
-                    console.warn(container.type)
-                    console.log(menu)
-                    messages.push({ role: 'user', content: menu });
+                let options = [...active_pipe.next];
+                // complete: только если есть дети и последний завершён (лист или closed)
+                if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
+                    options.push('complete');
+                let menu = 'Выбери следующий тип шага, не решай задачу целиком:';
+                for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+                menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
+                messages.push({ role: 'user', content: menu });
 
-                    let choice = await this._streamChat({ messages }, user);
-                    if (this._stopped) return;
-                    console.warn('choice', choice)
-                    choice = choice.content.trim().toLowerCase();
-                    // let next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
-                // }
+                let choice = await this._streamChat({ messages, silent: true, user });
+                if (this._stopped) return;
+                choice = choice.content.trim().toLowerCase();
                 let next_pipe = pipe[choice];
-
-                // нет prompt — узел без генерации, модель не вызываем
-                let response;
-                if (!next_pipe.prompt) {
-                    response = { content: '', usage: 0, calls: [] };
+                if (!next_pipe?.build) {
+                    await this._push_block(user, { type: 'error', content: 'unknown step: ' + choice });
                 } else {
-                    messages.last.content = next_pipe.prompt;
-                    response = await this._streamChat({ messages }, user);
-                    if (this._stopped) return;
-                }
+                    let ctx = {};
+                    if (container?.type === 'task' && Array.isArray(container.steps))
+                        ctx.currentStep = container.steps.find(s => s.status === 'in_progress');
 
-                // ctx для build: currentStep — in_progress-шаг активного task (для step.build)
-                let ctx = {};
-                if (container?.type === 'task' && Array.isArray(container.steps))
-                    ctx.currentStep = container.steps.find(s => s.status === 'in_progress');
-
-                let block = next_pipe.build(response, ctx);
-                if (block) {
-                    // autocomplete = complete без кнопки
                     const auto = choice === 'complete' && pipe[container.type]?.autocomplete;
-                    if (auto) delete block.button;
-                    await this._push_block(user, block);
-                    if (auto) {
-                        container.closed = true;
-                        await this._advance_steps(container);
-                        await this._save(user);
-                    }
-                    if (!block.button && !block.stop) {
-                        this.async(() => this.prompt({ role: 'AI', user }));
+                    let stub = next_pipe.build({ content: '', usage: 0, calls: [] }, ctx);
+                    if (stub) {
+                        if (choice === 'step' && !stub.items?.length)
+                            stub.items = [{ type: 'thinking', content: '', icon: 'carbon:idea' }];
+                        if (auto) delete stub.button;
+
+                        if (!next_pipe.prompt) {
+                            await this._push_block(user, stub);
+                        } else {
+                            messages.last.content = next_pipe.prompt;
+                            await this._push_block(user, stub);
+                            const sink = (choice === 'step' && stub.items?.[0]) ? stub.items[0] : stub;
+                            let response = await this._streamChat({ messages, sink, user });
+                            if (this._stopped) return;
+                            let final = next_pipe.build(response, ctx);
+                            if (final) {
+                                if (auto) delete final.button;
+                                Object.assign(stub, final);
+                                await this._save(user);
+                            }
+                        }
+                        if (auto) {
+                            container.closed = true;
+                            await this._advance_steps(container);
+                            await this._save(user);
+                        }
+                        if (!stub.button && !stub.stop) {
+                            this.async(() => this.prompt({ role: 'AI', user }));
+                        }
                     }
                 }
             }
@@ -180,29 +186,33 @@ export default {
         return walk(body, out);
     },
     /**
-     * Один стрим-ход модели. context = { messages, functions? };
-     * content-чанки → text + delta в WS, function_call → calls[{method, args}].
+     * Один стрим-ход. params: { messages, functions?, silent?, sink?, user }.
+     * silent — без chat.delta (choice). sink — объект с content для дописи токенов.
      */
-    async _streamChat(context, userSession){
+    async _streamChat(params = {}) {
+        const { messages, functions, silent, sink, user } = params;
         const model = await this.model;
         let content = '', usage = 0;
         const calls = [];
-        for await (const chunk of model.streamChat(context)) {
+        for await (const chunk of model.streamChat({ messages, functions })) {
             if (this._stopped)
                 break;
             if (chunk?.type === 'usage')
                 usage = chunk;
             else if (chunk?.type === 'function_call' && chunk.name)
                 calls.push({ method: chunk.name, args: chunk.arguments || {} });
-            else{
-                let token = chunk?.content?chunk?.content:chunk;
+            else {
+                let token = chunk?.content ? chunk?.content : chunk;
                 if (typeof token !== 'string')
                     continue;
                 content += token;
-                userSession?.send?.({ type: 'chat.delta', path: this.short, token });
+                if (sink)
+                    sink.content = (sink.content || '') + token;
+                if (!silent)
+                    user?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
-        return {content, usage, calls}
+        return { content, usage, calls };
     },
     get pipe(){
         return new AsyncPromise(async () =>{

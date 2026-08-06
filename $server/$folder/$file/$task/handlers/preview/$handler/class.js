@@ -1,6 +1,6 @@
 /**
  * Preview ai.task — shell: лента + промптбар.
- * Только data/items/$item/focusedBlock; без знания внутренностей детей.
+ * Только data/items/$item/focusedBlock/streamingText; без знания внутренностей детей.
  */
 
 import './ui/views.js';
@@ -20,11 +20,19 @@ export default {
     `,
     colorMode: 'content',
     data: null,
+    streamingText: '',
 
     $item: {
         $def: null,
         async set(n) {
-            n?.listen('changed', async () => this.data = await n.load());
+            n?.listen('changed', async () => {
+                this.streamingText = '';
+                this.data = await n.load();
+            });
+            n?.listen('chat.delta', e => {
+                this.streamingText += e.detail?.value?.token || '';
+            });
+            n?.listen('chat.done', () => { this.streamingText = ''; });
             this.data = await n?.load();
         },
     },

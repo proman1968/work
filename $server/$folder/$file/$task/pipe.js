@@ -46,24 +46,29 @@ export default {
             button: { label: 'Принять' },
             icon: 'icons:assignment',
         }),
-        next: ['task'],
+        next: ['task', 'thinking'],
     },
 
     task: {
         prompt: ['Сделай todo список из согласованного плана.',
             '\n\n[instruction]\n',
-            'Ответ — ТОЛЬКО нумерованный список: каждый пункт с новой строки,',
+            'Первая строка — короткий заголовок задачи (без слова task, без нумерации).',
+            'Далее — ТОЛЬКО нумерованный список: каждый пункт с новой строки,',
             '"N. описание" — одно проверяемое действие с конечным результатом.',
             'Без вступления и пояснений.'].join('\n'),
         build: (r) => {
             const lines = r.content.split('\n').map(line => line.trim()).filter(Boolean);
-            const steps = lines.map((line, index) => ({
+            const numbered = lines.filter(l => /^\d+\.\s*/.test(l));
+            const titleLine = lines.find(l => !/^\d+\.\s*/.test(l));
+            const src = numbered.length ? numbered : lines;
+            const steps = src.map((line, index) => ({
                 number: index + 1,
                 description: line.replace(/^\d+\.\s*/, ''),
                 status: index === 0 ? 'in_progress' : 'pending',
             }));
             return {
                 type: 'task',
+                label: titleLine || steps[0]?.description || '',
                 content: r.content,
                 steps,
                 items: [],
@@ -74,8 +79,7 @@ export default {
         next: ['step'],
     },
 
-    /** шаг плана: промпт-блок. Заголовок = «N. описание» текущего in_progress-шага, тело = items (исполнение).
-     *  В context() уходит как role:'user' (инструкция). Ответ модели на step.prompt → первый thinking внутри items. */
+    /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
         inject: 'если необходимо выполнить один пункт плана',
         prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
@@ -86,7 +90,7 @@ export default {
             return {
                 type: 'step',
                 content: title,
-                icon: 'av:play-arrow',
+                icon: 'icons:assignment',
                 items: r.content
                     ? [{ type: 'thinking', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
                     : [],

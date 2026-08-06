@@ -2,6 +2,14 @@
 
 ## Последние изменения
 
+- [19:04] **Task/step chrome.** z-index = 100−depth; step icon assignment; task label из первой строки модели (без «task N/M»).
+- [18:11] **Vote yes/no.** Action: form|questions → USER в ленту; иначе `yes`/`no` + role AI, `vote` на блоке, summary success/error.
+- [17:33] **Ribbon pinBottom.** Начальная докрутка после `items` (не только attached); instant scroll; убран smooth.
+- [16:58] **views base.** Убраны toggleUser/answers/isSticky; sticky в CSS summary; top инлайн; геттеры сгруппированы.
+- [16:47] **Stream + tag.** `streamTail` — deps на streamingText до equal; `tag` = CE|telemetry; scroll delta после paint.
+- [16:08] **Open = last.** `pinned` = `Reactor.equal(Reactor.get(host,'items').last, data)`; `open` = pinned || userOpen; без button/stop.
+- [15:51] **Open = last.** `open` = `host.items.last === data` || button/stop || userOpen; убраны contains/autoOpen/forceOpen.
+- [15:26] **Stream into stub.** Choice silent; execute: push stub → sink stream → build merge. `streamingText` на shell → tip-view через `$pdp`; ribbon без хвоста-viewer.
 - [12:08] **Ribbon.** Убран `.feed` (дубль vertical); топ CSS `:host([top])` = scroll; stream без двойного `:value`.
 - [11:08] **Scroll attached.** Вернул начальную докрутку: `attached` → async → `scrollTop = scrollHeight` (только топ / `$item`).
 - [11:05] **Ribbon thinner.** Без `~if type`/`root`; CSS топа `:host([flex])`; `$item.set` только listen.

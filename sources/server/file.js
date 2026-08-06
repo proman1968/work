@@ -394,7 +394,7 @@ export class $file extends $folder{
             log.sender = params.sender;
         else if (params.user?.uid)
             log.sender = params.user.uid;
-        else if (params.user === globalThis.WORK)
+        else if (params.user?.$user === globalThis.WORK)
             log.sender = WORK.id;
         // Инлайн текста — только через params.message (ядро не знает имён файлов).
         if (params.message != null)

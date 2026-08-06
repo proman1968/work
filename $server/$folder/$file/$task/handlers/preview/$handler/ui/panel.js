@@ -179,6 +179,11 @@ ODA({ is: 'microchat-panel',
         },
     },
     get actionButton() { return this.$pdp.focusedBlock?.button; },
+    /** form/questions — сдача данных в ленту; иначе vote yes/no */
+    get isFormAction() {
+        const t = this.$pdp.focusedBlock?.type;
+        return t === 'form' || t === 'questions';
+    },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },
@@ -206,10 +211,32 @@ ODA({ is: 'microchat-panel',
         return this._ttsController ??= new TtsController(this);
     },
     sendAction(ok = true) {
-        this.value = ok
-            ? (String(this.actionButton?.label || '').trim() || 'Да')
-            : 'нет';
-        this.send();
+        if (this.isFormAction) {
+            this.value = ok
+                ? (String(this.actionButton?.label || '').trim() || 'Да')
+                : 'нет';
+            this.send();
+            return;
+        }
+        this.sendVote(ok ? 'yes' : 'no');
+    },
+    async sendVote(vote) {
+        if (this.sending || this.pending || !this.$item?.path) return;
+        this.value = '';
+        this.files = [];
+        this._tts().cancel();
+        this.$item.fire('chat.resume');
+        this.sending = true;
+        this.pending = true;
+        const result = await this.$item.fetch('prompt', {
+            prompt: vote,
+            model: this.data.model,
+            role: 'AI',
+        });
+        this.sending = false;
+        if (result?.ok === false)
+            this.pending = false;
+        this._focus();
     },
     onSendTap() {
         if (this.pending) {
