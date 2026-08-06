@@ -360,9 +360,11 @@ export default {
 
 ### B.1.3. Preview ribbon
 
-- `viewTag`: известные типы → сразу `microchat-view-{type}` (сет контракта); иначе `microchat-view`. **Не** `customElements.get` — гонка async `ODA()`.
-- Скролл вниз при `_autoFollow`: `ResizeObserver` на контейнер ленты (`.feed`), не таймеры 50/150/400ms.
-- Stop/resume стрима: `$item.fire('chat.stop'|'chat.resume')`, не `parentElement.$('microchat-ribbon')`.
+- Топ ленты: `$item` → attr `top` (CSS `:host([top])` = scroll); вложенная — только `:items`. **Не** `embedded` / `stickTop` / обёртка `.feed`.
+- `tag(item)`: `microchat-view-{type}` если `customElements.get`, иначе `microchat-view`. Без каталога типов и без `~if`/`visible` по полям блока.
+- Слушает только `chat.delta` / `chat.done`. Докрутка: `attached` → `scrollToBottom(true)`; на delta/done — `scrollToBottom()` (только у низа ±10). Без ResizeObserver / `_autoFollow`.
+- Раскрытие блоков — **не** ribbon: view сам `autoOpen` = `contains(data, $pdp.focusedBlock)` (промежуточные на пути к tip тоже).
+- Stop/resume стрима (panel): `$item.fire('chat.stop'|'chat.resume')`, не `parentElement.$('microchat-ribbon')`.
 
 ## B.2. Запрещено
 
@@ -372,7 +374,7 @@ export default {
 - Сжимать код удалением переносов или CSS «в одну строку» ради метрики строк.
 - Раздувать shell preview знанием детей (pending, stream, парсинг тела файла, `findFirstModel`).
 - `|| null` в конце реактивных геттеров «для ясности».
-- Magic-timeout scroll / `customElements.get` для выбора view-тега.
+- Magic-timeout scroll / фильтр типов в ribbon / `root`+`embedded`+`stickTop` / вечный RO на follow.
 
 ## B.3. Отладка
 

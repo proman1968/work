@@ -17,6 +17,7 @@ const ROOT = process.cwd();
 export default {
     label: 'on_save (.eml)',
     icon: 'carbon:email',
+    contentType: 'message/rfc822',
     async execute(params = {}) {
         const storage = this.$owner;
         const filename = params.filename || '';

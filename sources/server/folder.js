@@ -918,14 +918,14 @@ export class $folder extends $item{
     }
     /** Контекстные триггеры (~triggers/*), обогащённые class.js и привязанные к владельцу */
     get _triggers(){
-        return new AsyncPromise(async ()=>{
+        return new AsyncPromise(async () => {
             const triggers = await this.get_item('~/triggers/*');
-            return triggers.reduce((res, item)=>{
+            return triggers?.reduce((res, item) => {
                 res[item.id] = item;
                 item.$context = this;
                 return res;
-            },{});
-        })
+            }, {}) || {};
+        });
     }
     /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
     get _methods(){

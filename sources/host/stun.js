@@ -29,6 +29,6 @@ stunServer.on(STUN_EVENT_BINDING_REQUEST, (request, rinfo) => {
 
 if (process.env.WORK_TEST !== '1') {
     udpServer.bind(STUN_PORT, '0.0.0.0', () => {
-        console.log(`STUN server listening on 0.0.0.0:${STUN_PORT}`);
+        console.warn(`STUN server listening on 0.0.0.0:${STUN_PORT}`);
     });
 }

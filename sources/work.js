@@ -27,7 +27,3 @@ await WORK.children;
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);
-else
-    console.log('Security: visibility and method guards enabled (WORK_DEV is off)');
-console.log(`to launch: ${LOCAL_ORIGIN}/index.html`);
-console.log(`to launch: ${LOCAL_ORIGIN}/root/~/handlers//explorer/`);

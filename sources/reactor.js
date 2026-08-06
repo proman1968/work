@@ -402,7 +402,7 @@ export class Reactor extends EventTarget {
     static reset_deps = function (target, key = '', keep_notify = false) {
         const actor = target[R];
         if (!actor) return;
-        
+
         if (key) {
             let deps = actor.deps[key];
             if (deps) {
@@ -660,7 +660,7 @@ Object.equal = Reactor.equal = function (a, b, recurse = 1) {
     if (a === b) return true;
     if (a == null || b == null) return false;
     if (typeof a !== 'object' || typeof b !== 'object') return false;
-    
+
     // Защита от реентерабельности: если equal уже выполняется,
     // используем простое сравнение ссылок
     if (Reactor._inEqual)
@@ -692,12 +692,12 @@ Object.equal = Reactor.equal = function (a, b, recurse = 1) {
 Reactor.join_props = function (parent, child) {
     const result = {};
     const keys = new Set([...Object.keys(parent), ...Object.keys(child)]);
-    
+
     for (let key of keys) {
         const p = parent[key] || {};
         const c = child[key] || {};
         const res = Object.assign({}, p, c);
-        
+
         if (res.get) {
             res.get.getter = c?.get?.getter || p?.get?.getter;
         }
@@ -879,6 +879,25 @@ Array: {
         enumerable: false, configurable: true,
         value: function () {
             return this.filter((v, i, items) => items.indexOf(v) === i || typeof v !== 'object');
+        }
+    });
+}
+
+// ===== Расширение Date =====
+Date: {
+    Object.defineProperty(Date.prototype, 'toISOTimezoneString', {
+        enumerable: false, configurable: true,
+        value: function () {
+            const pad = n => String(n).padStart(2, '0');
+            const d = this;
+            if (isNaN(d))
+                return '';
+            const offMin = -d.getTimezoneOffset();
+            const sign = offMin >= 0 ? '+' : '-';
+            const abs = Math.abs(offMin);
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+                + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+                + `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
         }
     });
 }

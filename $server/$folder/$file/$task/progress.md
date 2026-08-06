@@ -2,7 +2,17 @@
 
 ## Последние изменения
 
-- [18:45] **Preview polish + канон.** `focusedBlock` на shell; panel через `$pdp` (без tip/findFirstModel); `$pdp`→`Reactor.get` в oda.js; геттеры без `|| null`; `viewTag` без `customElements.get`; scroll = ResizeObserver. Rules: B.1.1–B.1.3.
+- [12:08] **Ribbon.** Убран `.feed` (дубль vertical); топ CSS `:host([top])` = scroll; stream без двойного `:value`.
+- [11:08] **Scroll attached.** Вернул начальную докрутку: `attached` → async → `scrollTop = scrollHeight` (только топ / `$item`).
+- [11:05] **Ribbon thinner.** Без `~if type`/`root`; CSS топа `:host([flex])`; `$item.set` только listen.
+- [11:02] **Ribbon thin.** Убран `visible()` (знания типов); `~if type`. Убраны лишние `$item` guard в delta/done.
+- [10:52] **Open в views.** `autoOpen` = contains(data, focusedBlock) в core; ribbon больше не прокидывает `:auto-open`.
+- [10:45] **Ribbon top + scroll.** Топ = `$item` (attr `root`); без `embedded`/`stickTop`. Только `delta`/`done`; докрутка если atBottom±10. Без RO.
+- [10:26] **Ribbon tag.** Убраны `VIEW_TYPES`/`export viewTag`; `tag(item)` → `customElements.get('microchat-view-'+type)` или база.
+- [10:06] **Scroll follow.** RO снова; гейт `_autoFollow` (toggle details → false). Открытие докручивается, expand — нет.
+- [10:03] **Scroll follow.** Убран ResizeObserver; вниз только на delta / рост items; toggle details → `_autoFollow = false`.
+- [09:53] **Ribbon auto-open.** Удалён `tipOpenSet`; `isAutoOpen` = `contains(item, $pdp.focusedBlock)`.
+- [18:45] **Preview polish + канон.** `focusedBlock` на shell; panel через `$pdp`; `$pdp`→`Reactor.get`; Rules B.1.1–B.1.3.
 - [17:22] **Preview layout.** UI-модули в `$handler/ui/`; у корня только `class.js` + `readme.md`.
 - [17:20] **Panel split.** `mic.js` / `tts.js` / `usage.js` вынесены из `panel.js`.
 - [17:11] **Эталон shell preview.** Зафиксировано в `rules/rules.md` B.1.1.

@@ -1,19 +1,89 @@
 export default {
-    imports: 'oda//app-layout, ~/lib//chat-item.js',
+    imports: 'oda//app-layout',
     extends: 'oda-app-layout',
     icon: 'enterprise:calendar',
     template: /*html*/`
-        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" ::day ::day-from ::day-to></oda-form-calendar>
-        <div slot="right-panel" vertical flex style="overflow-y: auto; height: 0; padding: 4px 0;">
-            <oda-form-calendar-list-view  flex :$item label="Tasks" icon="carbon:table-of-contents:180" :day :day-from :day-to></oda-form-calendar-list-view>
+        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::day ::day-from ::day-to></oda-form-calendar>
+        <div slot="right-panel" vertical flex icon="carbon:table-of-contents:180" style="overflow-y: auto; height: 0; padding: 4px 0;">
+            <oda-form-calendar-list-view flex :$item label="Tasks" :events :day :day-from :day-to></oda-form-calendar-list-view>
         </div>
     `,
-    day: '',
+    day: {
+        $def: '',
+        set(n) {
+            this._invalidateEvents();
+        }
+    },
     dayFrom: '',
-    dayTo: ''
+    dayTo: '',
+    get _logsSource() {
+        if (this.$item instanceof CORE.$user)
+            return WORK.USER;
+        return (async () => {
+            const admins = await this.$item.admins;
+            return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
+        })();
+    },
+    get _logsFolder() {
+        const day = this.day;
+        if (!day)
+            return null;
+        return (async () => {
+            const source = await this._logsSource;
+            if (!source)
+                return null;
+            await source.logs(day);
+            const folder = await source.get_item('/~/logs/.data.logs/history/' + day);
+            if (!folder)
+                return null;
+            this._boundOnLogsChanged ||= () => { this.events = undefined; };
+            folder.unlisten?.('changed', this._boundOnLogsChanged);
+            folder.listen?.('changed', this._boundOnLogsChanged);
+            return this._logsFolder = folder;
+        })();
+    },
+    get events() {
+        const day = this.day;
+        if (!day)
+            return [];
+        return (async () => {
+            const folder = await this._logsFolder;
+            if (!folder)
+                return this.events = [];
+            let files = await folder.get_item('/*.logs');
+            if (!Array.isArray(files))
+                files = files ? [files] : [];
+            files = await Promise.all(files.map(f => Promise.resolve(f)));
+            files = files.filter(f => f?.id?.endsWith?.('.logs'));
+            files = files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
+            const events = [];
+            for (const file of files) {
+                const raw = await file.load();
+                const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                let content = log?.content;
+                if (typeof content === 'string')
+                    content = JSON.parse(content);
+                if (!content?.start || !content?.end)
+                    continue;
+                events.push({
+                    start: content.start,
+                    end: content.end,
+                    summary: content.summary ?? '',
+                    location: content.location ?? '',
+                    $item: file
+                });
+            }
+            return this.events = events;
+        })();
+    },
+    _invalidateEvents() {
+        this.events = undefined;
+        this._logsFolder = undefined;
+    }
 }
 
 import '/$server/$folder/$file/$ics/handlers/pages/form/file/$handler/class.js'
+
 ODA({
     is: 'oda-form-calendar',
     template: /*html*/`
@@ -42,7 +112,7 @@ ODA({
                 border-radius: 4px;
             }
         </style>
-        <item-users accent-invert  flex :$item  slot="top"></item-users>
+        <item-users accent-invert flex :$item slot="top"></item-users>
         <div vertical class="toolbar">
             <div horizontal>
                 <div class="date-nav" horizontal flex>
@@ -64,22 +134,20 @@ ODA({
         </div>
     `,
     $item: null,
+    events: [],
     day: {
         $def: '',
         set(n) {
-            // this.$pdp.day = n;
         }
     },
     dayFrom: {
         $def: '',
         set(n) {
-            // this.$pdp.dayFrom = n;
         }
     },
     dayTo: {
         $def: '',
         set(n) {
-            // this.$pdp.dayTo = n;
         }
     },
     viewMode: {
@@ -135,9 +203,6 @@ ODA({
             this.currentDate = new Date(value);
         }
     },
-    get events() {
-        return [];
-    },
     attached() {
         this.async(() => {
             this._updateDateRange();
@@ -155,22 +220,27 @@ ODA({
         const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 60 * 60 * 1000);
         const el = ODA.createElement('oda-calendar-event-form', {
             events: [{
-                startStr: this.toLocalDateTime(start),
-                endStr: this.toLocalDateTime(end)
+                start: start.toISOTimezoneString(),
+                end: end.toISOTimezoneString()
             }]
         })
         await WORK.showDialog(el, { TITLE: { label: 'New event', icon: 'enterprise:calendar' } });
-        const startDate = new Date(el.events[0].startStr);
-        const endDate = new Date(el.events[0].endStr);
-        if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate) return;
-        let body = JSON.stringify(el.events[0]);
+        const persist = eventToPersist(el.events[0]);
+        const startDate = new Date(persist.start);
+        const endDate = new Date(persist.end);
+        if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
+            return;
+
+        const body = JSON.stringify(persist);
         const filename = `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ics`;
-        let file = new File([body || ''], filename, { type: "text/plain" });
-        await this.$item.save_file(file);
-    },
-    toLocalDateTime(date) {
-        const pad = n => String(n).padStart(2, '0');
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        const file = new File([body || ''], filename, { type: 'text/plain' });
+        const message = JSON.stringify({
+            start: persist.start,
+            end: persist.end,
+            summary: persist.summary,
+            location: persist.location
+        });
+        await this.$item.save_file(file, { message, time: startDate.getTime() });
     },
     prevPeriod() {
         const newDate = new Date(this.currentDate);
@@ -198,22 +268,6 @@ ODA({
     },
     goToday() {
         this.currentDate = new Date();
-    },
-    parseICSDate(dateStr) {
-        // Удаляем экранирование
-        dateStr = dateStr.replace(/\\/g, '');
-        // Формат: 20130802T103400 или 20130802
-        if (dateStr.match(/^\d{8}(T\d{6})?$/)) {
-            const year = dateStr.substring(0, 4);
-            const month = dateStr.substring(4, 6);
-            const day = dateStr.substring(6, 8);
-            const hour = dateStr.substring(9, 11) || '00';
-            const minute = dateStr.substring(11, 13) || '00';
-            const second = dateStr.substring(13, 15) || '00';
-
-            return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
-        }
-        return new Date(dateStr);
     }
 })
 
@@ -225,37 +279,193 @@ ODA({
                 @apply --vertical;
                 position: relative;
             }
-        </style>
-        <style>
+            .day-body {
+                position: relative;
+            }
             .slot {
                 cursor: pointer;
+                height: 16px;
                 min-height: 16px;
+                box-sizing: border-box;
             }
             .slot:hover {
                 background: var(--light-background);
             }
+            .hour-label {
+                width: 20px;
+                border-right: 1px solid var(--border-color);
+                font-size: 12px;
+                text-align: center;
+                box-sizing: border-box;
+            }
+            .minute-label {
+                width: 12px;
+                border-right: 1px solid var(--border-color);
+                font-size: 10px;
+                text-align: right;
+                box-sizing: border-box;
+                height: 16px;
+                line-height: 16px;
+                overflow: hidden;
+            }
+            .events-layer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                left: 30px;
+                pointer-events: none;
+            }
+            .event-block {
+                position: absolute;
+                box-sizing: border-box;
+                background: var(--success-color);
+                color: var(--dark-color);
+                padding: 2px 4px;
+                border-radius: 2px;
+                font-size: small;
+                overflow: hidden;
+                pointer-events: auto;
+                cursor: default;
+            }
+            .event-block .row {
+                align-items: center;
+                gap: 8px;
+            }
+            .event-block .interval {
+                white-space: nowrap;
+                opacity: .8;
+                font-size: xx-small;
+            }
+            .event-block .summary {
+                @apply --bold;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .event-block .location {
+                font-size: xx-small;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
         </style>
-        <div horizontal ~for="24" style="border-bottom: 1px solid var(--border-color);">
-            <div style="width: 20px; border-right: 1px solid var(--border-color); font-size: 12px; text-align: center; padding: 4px;">
-                {{String($for.item).padStart(2, '0')}}
+        <div class="day-body">
+            <div horizontal ~for="24" style="border-bottom: 1px solid var(--border-color);">
+                <div class="hour-label">
+                    {{String($for.item).padStart(2, '0')}}
+                </div>
+                <div vertical flex>
+                    <div horizontal ~for="intervalsInHour" flex ~style="{borderTop: $for.$for.index === 0 ? 'none' :'1px dotted var(--border-color)'}">
+                        <div class="minute-label" disabled>
+                            {{String(interval * $for.$for.index).padStart(2, '0')}}
+                        </div>
+                        <div flex class="slot" @tap="selectDayTime($for.$for.item, $for.index)">
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div vertical flex>
-                <div horizontal ~for="intervalsInHour" flex ~style="{borderTop: $for.$for.index === 0 ? 'none' :'1px dotted var(--border-color)'}">
-                    <div style="width: 10px; border-right: 1px solid var(--border-color); font-size: 10px; text-align: right; padding: 4px;" disabled>
-                        {{String(interval * $for.$for.index).padStart(2, '0')}}
+            <div class="events-layer">
+                <div ~for="laidOutEvents" class="event-block" ~style="$for.item.style" @tap.stop>
+                    <div horizontal class="row">
+                        <div class="interval">{{$for.item.interval}}</div>
+                        <div class="summary">{{$for.item.summary}}</div>
                     </div>
-                    <div flex class="slot" @tap="selectDayTime($for.$for.item, $for.index)">
-                    </div>
+                    <div class="location" ~if="$for.item.location">{{$for.item.location}}</div>
                 </div>
             </div>
         </div>
     `,
     interval: 15,
+    slotHeight: 16,
     get intervalsInHour() {
         return 60 / this.interval;
     },
+    get hourHeight() {
+        return this.intervalsInHour * this.slotHeight;
+    },
     currentDate: new Date(),
     events: [],
+    get laidOutEvents() {
+        const events = this.events;
+        if (!events || events.then)
+            return [];
+        const hourH = this.hourHeight;
+        const slotH = this.slotHeight;
+        const gap = 2;
+        const pad = n => String(n).padStart(2, '0');
+        const hhmm = iso => {
+            const d = new Date(iso);
+            if (isNaN(d))
+                return '';
+            return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        };
+        const items = events
+            .map(e => ({
+                start: e.start,
+                end: e.end,
+                summary: e.summary ?? '',
+                location: e.location ?? '',
+                $item: e.$item,
+                _start: new Date(e.start).getTime(),
+                _end: new Date(e.end).getTime()
+            }))
+            .filter(e => !isNaN(e._start) && !isNaN(e._end) && e._end > e._start)
+            .sort((a, b) => a._start - b._start || (b._end - b._start) - (a._end - a._start));
+
+        const result = [];
+        const cluster = [];
+        const columns = [];
+        let clusterEnd = 0;
+
+        const flush = () => {
+            const colCount = Math.max(columns.length, 1);
+            for (const item of cluster) {
+                const startDate = new Date(item.start);
+                const endDate = new Date(item.end);
+                const startMin = startDate.getHours() * 60 + startDate.getMinutes() + startDate.getSeconds() / 60;
+                const endMin = endDate.getHours() * 60 + endDate.getMinutes() + endDate.getSeconds() / 60;
+                let top = startMin / 60;
+                top = top * hourH + top * 2;
+                const height = Math.max(slotH, ((endMin - startMin) / 60) * hourH) + 1;
+                const a = hhmm(item.start);
+                const b = hhmm(item.end);
+                result.push({
+                    summary: item.summary,
+                    location: item.location,
+                    $item: item.$item,
+                    interval: a && b ? `${a} - ${b}` : '',
+                    style: {
+                        top: `${top}px`,
+                        height: `${height}px`,
+                        left: `calc(${(item._col / colCount) * 100}% + ${gap * 2}px)`,
+                        width: `calc(${100 / colCount}%)`
+                    }
+                });
+            }
+            cluster.length = 0;
+            columns.length = 0;
+            clusterEnd = 0;
+        };
+
+        for (const ev of items) {
+            if (cluster.length && ev._start >= clusterEnd)
+                flush();
+            let col = columns.findIndex(end => end <= ev._start);
+            if (col === -1) {
+                col = columns.length;
+                columns.push(ev._end);
+            } else {
+                columns[col] = ev._end;
+            }
+            ev._col = col;
+            cluster.push(ev);
+            clusterEnd = Math.max(clusterEnd, ev._end);
+        }
+        if (cluster.length)
+            flush();
+        return result;
+    },
     selectDayTime(intervalIdx, hour) {
         const start = new Date(this.$pdp.currentDate || new Date());
         start.setHours(parseInt(hour), this.interval * intervalIdx, 0, 0);
@@ -377,8 +587,8 @@ ODA({
         const dayEnd = new Date(dayInfo.fullDate);
         dayEnd.setHours(hourNum, 59, 59, 999);
         return this.events.filter(event => {
-            const eventStart = event.start || new Date(0);
-            return eventStart >= dayStart && eventStart <= dayEnd;
+            const eventStart = new Date(event.start || 0);
+            return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
         })
     },
     selectWeekTime(dayInfo, hour) {
@@ -515,8 +725,8 @@ ODA({
         const dayEnd = new Date(date);
         dayEnd.setHours(23, 59, 59, 999);
         return this.events.filter(event => {
-            const eventStart = event.start || new Date(0);
-            return eventStart >= dayStart && eventStart <= dayEnd;
+            const eventStart = new Date(event.start || 0);
+            return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
         })
     },
     selectMonthDay(dayInfo) {
@@ -530,76 +740,112 @@ ODA({
 ODA({
     is: 'oda-form-calendar-list-view',
     template: /*html*/`
-        <chat-item @tap="setFocus" ~for="logs" :$item="$for.item"></chat-item>
+        <oda-log-view ~for="items" :data="$for.item"></oda-log-view>
     `,
-    logItems: [],
-    _logsFolder: null,
     day: '',
     dayFrom: '',
     dayTo: '',
-    _sortLogFiles(files) {
-        return files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
-    },
-    async _fetchLogFiles() {
-        const logs = this._logsFolder;
-        if (!logs)
+    events: [],
+    get items() {
+        const events = this.events;
+        if (!events || events.then)
             return [];
-        let files = await logs.get_item('/*.logs');
-        if (!Array.isArray(files))
-            files = files ? [files] : [];
-        files = await Promise.all(files.map(f => Promise.resolve(f)));
-        return this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs')));
+        return events;
     },
-    async _reloadLogItems() {
-        this.logItems = await this._fetchLogFiles();
-        this.render();
-        // this._scrollRibbonDown();
+    setFocus(e) {
     },
-    async _bindLogsFolder() {
-        const source = await Promise.resolve(this.logsSource);
-        if (!source)
-            return false;
-        // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
-        await source.logs(this.day);
-        let folder = await source.get_item('/~/logs/.data.logs/history/' + this.day);
-        folder = await Promise.resolve(folder);
-        if (!folder)
-            return false;
-        if (this._logsFolder?.path !== folder.path) {
-            this._logsFolder = folder;
-            this._dayFolderHooked = false;
-        }
-        if (!this._dayFolderHooked) {
-            this._dayFolderHooked = true;
-            folder.listen?.('changed', e => this._onLogsChanged(e));
-        }
-        return true;
+})
+
+ODA({is: 'oda-log-view',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --horizontal;
+                align-items: center;
+                padding: 4px 8px;
+                gap: 4px;
+            }
+            .main {
+                @apply --vertical;
+                @apply --flex;
+                min-width: 0;
+            }
+            .row1 {
+                @apply --horizontal;
+                align-items: baseline;
+                gap: 8px;
+            }
+            .summary {
+                @apply --bold;
+                text-align: left;
+                justify-content: flex-start;
+            }
+            .interval {
+                white-space: nowrap;
+                font-size: small;
+                opacity: .8;
+            }
+            .location {
+                font-size: small;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                text-align: left;
+                justify-content: flex-start;
+            }
+            oda-button {
+                scale: .8;
+                border-radius: 50%;
+            }
+            oda-button:hover {
+                @apply --selection;
+            }
+        </style>
+        <div class="main" vertical flex>
+            <div class="row1" horizontal>
+                <span class="interval">{{interval}}</span>
+                <span class="summary" flex>{{summary}}</span>
+            </div>
+            <div class="location">{{location}}</div>
+        </div>
+        <oda-button no-flex icon="box:i-expand"></oda-button>
+    `,
+    data: null,
+    get event() {
+        return this.data || null;
     },
-    _ensureLogsWatch() {
-        if (this._logsWatch)
-            return this._logsWatch;
-        this._logsWatch = Promise.resolve(this.logsSource).then(async source => {
-            if (!source)
-                return;
-            // const onChanged = e => this._onLogsChanged(e);
-            // source?.listen?.('changed', onChanged);
-            // this.$pdp.$item?.listen?.('changed', onChanged);
-            // const history = await source.get_item('/~/logs/.data.logs/history');
-            // history?.listen?.('changed', onChanged);
-            await this._bindLogsFolder();
-            await this._reloadLogItems();
-        });
-        return this._logsWatch;
+    get interval() {
+        const e = this.event;
+        if (!e?.start || !e?.end)
+            return '';
+        const a = this._hhmm(e.start);
+        const b = this._hhmm(e.end);
+        if (!a || !b)
+            return '';
+        return `${a} - ${b}`;
     },
-    get logs() {
-        this._ensureLogsWatch();
-        return this.logItems;
+    get summary() {
+        return this.event?.summary ?? '';
     },
-    get logsSource() {
-        if (this.$pdp.$item instanceof CORE.$user)
-            return WORK.USER
-        return Promise.resolve(this.$pdp.$item.admins).then(admins => {
-            return admins.find(user => user.id === WORK.uid) || WORK.USER
-        })
+    get location() {
+        return this.event?.location ?? '';
+    },
+    _hhmm(iso) {
+        const d = new Date(iso);
+        if (isNaN(d))
+            return '';
+        const pad = n => String(n).padStart(2, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 })
+
+/** Persist shape from form event (start/end already offset-ISO) */
+function eventToPersist(ev) {
+    return {
+        summary: ev.summary ?? '',
+        location: ev.location ?? '',
+        description: ev.description ?? '',
+        start: ev.start || (ev.startStr ? new Date(ev.startStr).toISOTimezoneString() : ''),
+        end: ev.end || (ev.endStr ? new Date(ev.endStr).toISOTimezoneString() : '')
+    };
+}

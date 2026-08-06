@@ -101,7 +101,7 @@ ODA({ is: 'microchat-panel',
                 icon="icons:check" :icon-size="iconSize * .8"
                 :label="actionButton.label"
                 @tap="sendAction(true)"></oda-button>
-            <oda-button border error icon="icons:close" :icon-size="iconSize * .8"
+            <oda-button border error icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
         <div class="composer" border>

@@ -2,25 +2,33 @@
  * Preview views — :data → getters (rules Part B).
  * Loaded via shell: import './ui/views.js'.
  *
- * microchat-view-core — open API (autoOpen снаружи / userOpen вручную).
+ * microchat-view-core — open: tip-путь / forceOpen / userOpen (само поведение блока).
  * microchat-view — expander по умолчанию для любого type.
  * Спец-layout только если зарегистрирован microchat-view-{type}.
  * Вложенный ribbon — из ribbon.js.
  */
 import './ribbon.js';
-/** Open-состояние: tip-путь снаружи, ручное — в UI. */
+
+/** node содержит target (сам или потомок в items) — путь к tip. */
+function contains(node, target) {
+    if (!node || !target) return false;
+    if (node === target) return true;
+    for (const c of node.items || [])
+        if (contains(c, target)) return true;
+    return false;
+}
+
+/** Open-состояние — поведение блока, не ленты. */
 ODA({ is: 'microchat-view-core',
     data: null,
-    /** снаружи (ribbon): узел на пути к tip */
-    autoOpen: { $def: false, $type: Boolean, $attr: true },
-    /** px: sticky top (прокидывается в детей как есть) */
-    stickTop: { $def: 0, $type: Number },
     /** внутри: ручное раскрытие (не в JSON) */
     userOpen: false,
     /** всегда раскрыт: user-gate (button|stop) или prompt-view override */
     get forceOpen() { return !!(this.data?.button || this.data?.stop); },
+    /** на пути к tip, включая промежуточные узлы */
+    get autoOpen() { return contains(this.data, this.$pdp.focusedBlock); },
     /** sticky только у prompt/task */
-    get isSticky() { return false; },
+    get isSticky() { return true; },
     get open() { return !!(this.forceOpen || this.autoOpen || this.userOpen); },
     get pinned() { return !!(this.autoOpen || this.forceOpen); },
     /** summary в --info-invert; тогда light/accent не вешаем */
@@ -50,8 +58,8 @@ ODA({ is: 'microchat-view-core',
     get timeText() { return ''; },
     /** top только при isSticky; без z-index-надстроек */
     get stickTopStyle() {
-        if (!this.isSticky) return null;
-        return { top: (Number(this.stickTop) || 0) + 'px' };
+        // if (!this.isSticky) return null;
+        return { top: this.top + 'px' };
     },
     onToggle(e) {
         const el = e?.target;
@@ -126,7 +134,7 @@ ODA({ is: 'microchat-view',
             }
         </style>
         <details :open="open" @toggle="onToggle">
-            <summary raised vertical :bold="open" flex
+            <summary raised vertical :bold="open" flex @resize="onResize"
                     :light="!pinned && !infoInvert" :accent="pinned && !infoInvert"
                     :info-invert="infoInvert" ~class="{auto: pinned, stick: isSticky}" ~style="stickTopStyle">
                 <div class="head-row" horizontal flex>
@@ -135,18 +143,24 @@ ODA({ is: 'microchat-view',
                     <span class="label" flex>{{label}}</span>
                     <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
-                <div ~is="bodyTag" ~if="bodyTag" :data :stick-top="stickTop" ::collapsed></div>
+                <div ~is="bodyTag" ~if="bodyTag" :data ::collapsed></div>
             </summary>
             <div content ~style="stepStyle">
                 <oda-markdown-viewer vertical ~if="showContent" :value="content"></oda-markdown-viewer>
                 <div ~for="fields">
                     <microchat-field :field="$for.item"></microchat-field>
                 </div>
-                <microchat-ribbon embedded ~if="items.length" :items
-                    :stick-top="stickTop"></microchat-ribbon>
+                <microchat-ribbon ~if="items.length" :items></microchat-ribbon>
             </div>
         </details>
     `,
+    onResize(e) {
+        this.height = e.target.clientHeight;
+    },
+    height: 0,
+    get top(){
+        return (this.host.host.height || 0) + (this.host.host.top || 0);
+    },
     /** false — скрыть markdown (напр. task: сырой todo не дублируем) */
     get showContent() { return !!this.content; },
     /** тег доп. блока в summary; пусто — нет */
@@ -431,7 +445,6 @@ ODA({ is: 'microchat-task-todo',
         </div>
     `,
     data: null,
-    stickTop: { $def: 0, $type: Number },
     collapsed: true,
     get steps() {
         return (this.data?.steps || []).map(s =>
