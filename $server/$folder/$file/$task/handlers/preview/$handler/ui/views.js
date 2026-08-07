@@ -65,7 +65,7 @@ ODA({ is: 'microchat-view',
         </style>
         <details :open="open" @toggle="onToggle">
             <summary raised vertical flex @resize="onResize" @click="onSummaryClick"
-                    :success="votedYes" :error="votedNo"
+                    :success-invert="votedYes" :error-invert="votedNo"
                     :light="!voted && !pinned && !infoInvert" :accent="!voted && pinned && !infoInvert"
                     :info-invert="!voted && infoInvert" ~class="{auto: pinned}" ~style="summaryStyle">
                 <div class="head-row" horizontal flex>
@@ -141,13 +141,7 @@ ODA({ is: 'microchat-view',
     // --- hooks ---
     get bodyTag() { return ''; },
     get depth() {
-        let d = 0, p = this.parentElement;
-        while (p) {
-            const tag = p.tagName?.toLowerCase() || '';
-            if (tag.startsWith('microchat-view')) d++;
-            p = p.parentElement;
-        }
-        return d;
+        return (this.host.host?.depth ?? 0) + 1;
     },
     get stepStyle() {
         const tones = ['#bdbdbd', '#9e9e9e', '#757575', '#616161', '#424242'];

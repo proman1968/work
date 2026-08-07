@@ -80,12 +80,60 @@ export default {
         this.events = undefined;
         this._logsFolder = undefined;
     },
-    async showMeeting($item) {
-        const raw = await $item.load();
-        const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        const file = await WORK.get_item(log.path);
-        const el = ODA.createElement('oda-calendar-event-form', { $item: file });
-        await WORK.showDialog(el, { TITLE: { label: 'Event', icon: 'enterprise:calendar' } });
+    async showMeeting(arg) {
+        const isEdit = arg && typeof arg.load === 'function';
+        let el;
+        let historyPath;
+
+        if (isEdit) {
+            const raw = await arg.load();
+            const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            historyPath = log.path;
+            const file = await WORK.get_item(log.path);
+            el = ODA.createElement('oda-calendar-event-form', { $item: file });
+        } else {
+            const detail = arg || {};
+            const start = detail.start ? new Date(detail.start) : new Date();
+            if (detail.allDay) start.setHours(9, 0, 0, 0);
+            const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 60 * 60 * 1000);
+            el = ODA.createElement('oda-calendar-event-form', {
+                events: [{
+                    start: start.toISOTimezoneString(),
+                    end: end.toISOTimezoneString()
+                }]
+            });
+        }
+
+        try {
+            await WORK.showDialog(el, {
+                TITLE: { label: isEdit ? 'Event' : 'New event', icon: 'enterprise:calendar' },
+                OK: { label: 'Сохранить', icon: 'icons:save' },
+                CANCEL: { label: 'Отмена', icon: 'icons:close' },
+            });
+        } catch {
+            return null;
+        }
+
+        const persist = eventToPersist(el.events[0]);
+        const startDate = new Date(persist.start);
+        const endDate = new Date(persist.end);
+        if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
+            return;
+
+        const filename = isEdit
+            ? filenameFromHistoryPath(el.$item?.path || historyPath)
+            : `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ics`;
+        const body = isEdit
+            ? (el.$item?.body ?? JSON.stringify(persist))
+            : JSON.stringify(persist);
+        const file = new File([body || ''], filename, { type: 'text/plain' });
+        const message = JSON.stringify({
+            start: persist.start,
+            end: persist.end,
+            summary: persist.summary,
+            location: persist.location
+        });
+        await this.$item.save_file(file, { message, time: startDate.getTime() });
     }
 }
 
@@ -222,32 +270,7 @@ ODA({
     },
     async _addEvent(e) {
         const detail = e?.detail?.value || {};
-        const start = detail.start ? new Date(detail.start) : new Date();
-        if (detail.allDay) start.setHours(9, 0, 0, 0);
-        const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 60 * 60 * 1000);
-        const el = ODA.createElement('oda-calendar-event-form', {
-            events: [{
-                start: start.toISOTimezoneString(),
-                end: end.toISOTimezoneString()
-            }]
-        })
-        await WORK.showDialog(el, { TITLE: { label: 'New event', icon: 'enterprise:calendar' } });
-        const persist = eventToPersist(el.events[0]);
-        const startDate = new Date(persist.start);
-        const endDate = new Date(persist.end);
-        if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
-            return;
-
-        const body = JSON.stringify(persist);
-        const filename = `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ics`;
-        const file = new File([body || ''], filename, { type: 'text/plain' });
-        const message = JSON.stringify({
-            start: persist.start,
-            end: persist.end,
-            summary: persist.summary,
-            location: persist.location
-        });
-        await this.$item.save_file(file, { message, time: startDate.getTime() });
+        await this.$pdp.showMeeting(detail);
     },
     prevPeriod() {
         const newDate = new Date(this.currentDate);
@@ -871,4 +894,12 @@ function eventToPersist(ev) {
         start: ev.start || (ev.startStr ? new Date(ev.startStr).toISOTimezoneString() : ''),
         end: ev.end || (ev.endStr ? new Date(ev.endStr).toISOTimezoneString() : '')
     };
+}
+
+/** `.name.ext` before `/history/` → `name.ext` */
+function filenameFromHistoryPath(path) {
+    const m = String(path).match(/\/([^/]+)\/history(?:\/|$)/);
+    if (!m)
+        throw new Error('Не history-путь: ' + path);
+    return m[1].startsWith('.') ? m[1].slice(1) : m[1];
 }
