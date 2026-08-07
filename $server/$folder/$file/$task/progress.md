@@ -2,6 +2,17 @@
 
 ## Последние изменения
 
+- [16:01] **pipe.role.** Роль в context из `pipe[type].role` (default `assistant`); `prompt`/`step` → `user`. Убран if по типам в `context()`.
+- [15:42] **work.build.** Узел пишет `type: 'work'` (content/usage/icon), без подмены на `answer`/`tool`.
+- [15:14] **hideTitle.** Один details; `summary ~if="!hideTitle"`; убран дубль body / флаг `header`.
+- [15:03] **open fix.** Снова `:open="pinned||userOpen"`; на click заранее `userOpen=true` если открываем — без snap-close и без пустого tip.
+- [14:57] **views open + header/body.** Убран controlled `:open` (snap-close); header(title/subTitle)+body(content/extend/items); answer/question/research без header; `subTitleTag`, без `::collapsed`.
+- [14:27] **extendTag.** `formTag` → `extendTag`; удалены мёртвые `view-file` / `view-tool_result`; `tool` оставлен.
+- [14:20] **questions out.** Узел/view `questions` убраны; один `form` → `fields` (+ content); panel только `type===form`.
+- [14:13] **form stub.** Убраны `microchat-field` / fields из базы; `extendTag` → `microchat-form` (заготовка под oda-form).
+- [13:54] **views fix.** `showContent` снова boolean; `viewContent` — строка. Оверрайд getter’а предка — только через `get` (поле `$def` не перекрывает).
+- [13:48] **views props.** `showContent` = строка (content+stream); константы `colorMode`/`bodyTag`/`showContent: ''` без get.
+- [13:00] **views trim.** Убраны мёртвые `summary.auto` / `gap` на label / `stepStyle`; prompt → `colorMode: info-invert` (без `infoInvert`).
 - [11:55] **color-mode.** В `extractCSSRules` — `[color-mode="имя"]` на каждый mixin; summary → `:color-mode` (`colorMode`).
 - [11:11] **Block time.** `_stamp_time` рекурсивно при push и после merge build — вложенные thinking/items тоже с `time`.
 - [10:36] **Vote fork.** `pipe[type].yes|no` → choice без LLM-меню (plan: yes→task, no→thinking).

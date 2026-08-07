@@ -179,10 +179,9 @@ ODA({ is: 'microchat-panel',
         },
     },
     get actionButton() { return this.$pdp.focusedBlock?.button; },
-    /** form/questions — сдача данных в ленту; иначе vote yes/no */
+    /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
-        const t = this.$pdp.focusedBlock?.type;
-        return t === 'form' || t === 'questions';
+        return this.$pdp.focusedBlock?.type === 'form';
     },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);

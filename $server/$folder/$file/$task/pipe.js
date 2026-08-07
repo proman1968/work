@@ -3,8 +3,8 @@
  * Линейный реестр узлов по id (= type блока). Каждый узел несёт свой next.
  * Движок: _step(from) → исполняет узел → маршрутизирует из from.next → self-call.
  *
- * Поля узла: prompt, inject, next (массив — LLM-меню), yes/no (вилка по vote),
- * build, fc, askType.
+ * Поля узла: role (для context; default assistant), prompt, inject, next (массив — LLM-меню),
+ * yes/no (вилка по vote), build, fc.
  * button живёт в build (блок — единственный источник правды для UI и движка).
  * complete — особый узел подъёма: после подтверждения закрывает текущий контейнер.
  * Для блоков с items движок автоматически добавляет complete в меню выбора.
@@ -14,6 +14,7 @@
 export default {
     /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
     prompt: {
+        role: 'user',
         next: ['thinking', 'answer'],
     },
 
@@ -35,9 +36,9 @@ export default {
 
     plan: {
         inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
-        prompt: ['Исходя из твоих размышлений выше, предложи план работ.',
-            '\n\n[instruction]\n',
-            'В плане должно быть несколько пунктов в один слой;'].join('\n'),
+        prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя.',
+                'Несколько пунктов в один слой. Без вступления.',
+                ].join('\n'),
         build: (r) => ({
             type: 'plan',
             content: r.content,
@@ -81,6 +82,7 @@ export default {
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
+        role: 'user',
         inject: 'если необходимо выполнить один пункт плана',
         prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
             'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
@@ -102,7 +104,7 @@ export default {
     research: {
         inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
         autocomplete: true,
-        next: ['work', 'web', 'question', 'form', 'questions'],
+        next: ['work', 'web', 'question', 'form'],
         build: () => ({
             type: 'research',
             icon: 'icons:search',
@@ -133,9 +135,12 @@ export default {
             'logs({}) — журнал.',
             'Если фактов уже достаточно — изложи выводы обычным текстом.'].join('\n'),
         fc: 'readonly',
-        build: (r) => r.calls?.length
-            ? { type: 'tool', name: r.calls[0].method, args: r.calls[0].args }
-            : { type: 'answer', content: r.content },
+        build: (r) => ({
+            type: 'work',
+            content: r.content,
+            usage: r.usage,
+            icon: 'icons:folder',
+        }),
         next: ['thinking'],
     },
 
@@ -169,34 +174,31 @@ export default {
 
     form: {
         icon: 'icons:view-list',
-        inject: 'если необходимо заполнить форму',
+        inject: 'если необходимо запросить у пользователя данные формой (поля ввода и/или выбор из вариантов)',
         prompt: ['Собери форму для ввода данных.',
             '\n\n[instruction]\n',
-            'Вызови функцию ask_user({questions: [{prompt: "поле"}]}) — вопросы без options станут полями свободного ввода, с options — выбором.'].join('\n'),
+            'Вызови функцию ask_user({questions: [{prompt: "поле"|"вопрос", options?: ["вариант 1", "вариант 2"]}]}).',
+            'Без options — свободный ввод; с options — выбор.',
+            'Первой строкой обычного текста (до вызова) можно дать краткое пояснение к форме.'].join('\n'),
         fc: ['ask_user'],
-        askType: 'form',
         build: (r) => {
             const call = r.calls?.find(c => c.method === 'ask_user');
-            return call
-                ? { type: 'form', questions: call.args.questions, button: { label: 'Продолжить' } }
-                : null;
-        },
-        next: ['thinking'],
-    },
-
-    questions: {
-        icon: 'icons:question-answer',
-        inject: 'если необходимы вопросы с вариантами',
-        prompt: ['Задай пользователю вопросы с вариантами ответов.',
-            '\n\n[instruction]\n',
-            'Вызови функцию ask_user({questions: [{prompt: "вопрос", options: ["вариант 1", "вариант 2", "Другое"]}]}). Каждому вопросу 2–5 конкретных вариантов из контекста задачи.'].join('\n'),
-        fc: ['ask_user'],
-        askType: 'questions',
-        build: (r) => {
-            const call = r.calls?.find(c => c.method === 'ask_user');
-            return call
-                ? { type: 'questions', questions: call.args.questions, needAnswers: true, button: { label: 'Ответить' } }
-                : null;
+            if (!call) return null;
+            const fields = (call.args.questions || []).map((q, i) => {
+                const id = q.id || `f${i + 1}`;
+                const label = q.prompt || q.label || id;
+                const field = { id, type: 'String', label, placeholder: label };
+                if (q.options?.length) field.options = q.options;
+                return field;
+            });
+            const block = {
+                type: 'form',
+                fields,
+                button: { label: 'Продолжить' },
+                icon: 'icons:view-list',
+            };
+            if (r.content?.trim()) block.content = r.content.trim();
+            return block;
         },
         next: ['thinking'],
     },

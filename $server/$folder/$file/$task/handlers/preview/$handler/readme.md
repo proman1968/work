@@ -28,7 +28,7 @@ $handler/ui/*              ← ribbon, panel, views, mic, tts, usage
 - **Модель** всегда в `data.model` — не искать в MODELS из panel.
 - **Action:** `focusedBlock.button` → `value = label` → `send()`. Геттер без `|| null`.
 - **Стили статуса:** attrs `success`/`warning`/`error`, не `.btn-*`.
-- **Stream:** delta → shell `streamingText`; tip-view `viewContent`; ribbon только scroll. Stop/resume: `$item.fire('chat.stop'|'chat.resume')`.
+- **Stream:** delta → shell `streamingText`; tip-view `viewContent` + boolean `showContent`; ribbon только scroll. Stop/resume: `$item.fire('chat.stop'|'chat.resume')`.
 - **`$pdp` + Reactor:** см. rules B.1.2 (`Reactor.get` в proxy; не кэшировать `null`).
 
 ## Pending (panel)

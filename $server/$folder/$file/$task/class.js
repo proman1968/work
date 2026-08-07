@@ -179,19 +179,16 @@ export default {
     },
     async context(){
         const body = await this.body;
+        const pipe = await this.pipe;
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
-                if (b.type === 'prompt' || b.type === 'step') {
-                    out.push({ role: 'user', content: b.content });
-                } else {
-                    let content = (b.content || '');
-                    if (b.type === 'task' && Array.isArray(b.steps)) {
-                        content += '\n\nШаги:\n' + b.steps
-                            .map(s => `${s.number}. [${s.status}] ${s.description}`)
-                            .join('\n');
-                    }
-                    out.push({ role: 'assistant', content });
+                let content = (b.content || '');
+                if (b.type === 'task' && Array.isArray(b.steps)) {
+                    content += '\n\nШаги:\n' + b.steps
+                        .map(s => `${s.number}. [${s.status}] ${s.description}`)
+                        .join('\n');
                 }
+                out.push({ role: pipe[b.type]?.role || 'assistant', content });
                 if (b.items?.length) walk(b, out);
             }
             return out;
