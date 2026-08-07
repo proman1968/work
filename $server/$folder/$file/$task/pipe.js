@@ -4,7 +4,9 @@
  * Движок: _step(from) → исполняет узел → маршрутизирует из from.next → self-call.
  *
  * Поля узла: role (для context; default assistant), prompt, inject, next (массив — LLM-меню),
- * yes/no (вилка по vote), build, fc.
+ * yes/no (вилка по vote; строка = обычный маршрут,
+ *   { convert: id } = hide источника + push build(id) без LLM),
+ * build, fc.
  * button живёт в build (блок — единственный источник правды для UI и движка).
  * complete — особый узел подъёма: после подтверждения закрывает текущий контейнер.
  * Для блоков с items движок автоматически добавляет complete в меню выбора.
@@ -24,7 +26,8 @@ export default {
         prompt: [
             'Как следует подумай, над тем, что необходимо сделать на следующем шаге ',
             'исходя из контекста, и выдай свои размышления от 5 до 100 строк (от своего лица).',
-            'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать'].join(' '),
+            'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать сам,',
+            'а только прими решение каким будет твой выбор (plan, research, actions)'].join(' '),
         next: ['plan', 'research', 'actions'],
         build: (r) => ({
             type: 'thinking',
@@ -37,8 +40,10 @@ export default {
     plan: {
         inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
         prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя.',
-                'Несколько пунктов в один слой. Без вступления.',
-                ].join('\n'),
+            '\n\n[instruction]\n',
+            'Первая строка — короткий заголовок будущей задачи (без нумерации, без слова task).',
+            'Далее — нумерованный список пунктов в один слой. Без вступления и пояснений.',
+        ].join('\n'),
         build: (r) => ({
             type: 'plan',
             content: r.content,
@@ -46,34 +51,40 @@ export default {
             button: { label: 'Принять' },
             icon: 'icons:assignment',
         }),
-        yes: 'task',
-        no: 'thinking'
+        /** accept: hide plan + push task; reject: question — выяснить что не так */
+        yes: { convert: 'task' },
+        no: 'question'
     },
 
+    /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
     task: {
-        prompt: ['Сделай todo список из согласованного плана.',
-            '\n\n[instruction]\n',
-            'Первая строка — короткий заголовок задачи (без слова task, без нумерации), о том, что ты будешь делать в этой задаче',
-            'Далее — ТОЛЬКО нумерованный список: каждый пункт с новой строки,',
-            '"N. описание" — одно проверяемое действие с конечным результатом.',
-            'Без вступления и пояснений.'].join('\n'),
-        build: (r) => {
-            const lines = r.content.split('\n').map(line => line.trim()).filter(Boolean);
-            const numbered = lines.filter(l => /^\d+\.\s*/.test(l));
-            const titleLine = lines.find(l => !/^\d+\.\s*/.test(l));
-            const src = numbered.length ? numbered : lines;
-            const steps = src.map((line, index) => ({
-                number: index + 1,
-                description: line.replace(/^\d+\.\s*/, ''),
-                status: index === 0 ? 'in_progress' : 'pending',
-            }));
+        build: (r, ctx) => {
+            const text = ctx?.from?.content || r.content || '';
+            const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+            const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
+            const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
+            const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
+            const src = numbered.length ? numbered : bullets;
+            const steps = src
+                .map(line => line
+                    .replace(/^\d+\.\s*/, '')
+                    .replace(/^[-*•]\s+/, '')
+                    .replace(/\*\*/g, '')
+                    .trim())
+                .filter(Boolean)
+                .map((description, index) => ({
+                    number: index + 1,
+                    description,
+                    status: index === 0 ? 'in_progress' : 'pending',
+                }));
+            const label = (titleLine || '').replace(/\*\*/g, '').trim()
+                || steps[0]?.description || '';
             return {
                 type: 'task',
-                label: titleLine || steps[0]?.description || '',
-                content: r.content,
+                label,
+                content: text,
                 steps,
                 items: [],
-                usage: r.usage,
                 icon: 'icons:list',
             };
         },
@@ -159,10 +170,11 @@ export default {
     },
 
     question: {
-        inject: 'если нужно задать один уточняющий вопрос пользователю',
+        inject: 'если нужно выяснить у пользователя, что не так с предложением или планом, или задать один уточняющий вопрос',
         prompt: ['Задай пользователю один уточняющий вопрос обычным текстом.',
             '\n\n[instruction]\n',
-            'Только сам вопрос, коротко, без пояснений.'].join('\n'),
+            'Если пользователь отклонил план — спроси, что не устроило или что изменить.',
+            'Не предлагай новый план в этом ходе. Только сам вопрос, коротко, без пояснений.'].join('\n'),
         build: (r) => ({
             type: 'question',
             content: r.content,

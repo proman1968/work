@@ -8,6 +8,7 @@ ODA({ is: 'microchat-ribbon',
     template: /*html*/`
         <style>
             :host {
+                @apply --info-invert;
                 @apply --vertical;
                 flex: none;
                 min-height: auto;
@@ -20,7 +21,7 @@ ODA({ is: 'microchat-ribbon',
                 min-height: 0;
             }
         </style>
-        <div ~is="tag($for.item)" :data="$for.item" ~for="items"></div>
+        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items"></div>
     `,
     top: {
         $def: false,

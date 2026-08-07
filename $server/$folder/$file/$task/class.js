@@ -16,31 +16,39 @@ export default {
         try {
             const isService = role === 'AI';
             let voteChoice;
-            // vote yes/no: метка на блоке, в ленту не пишем; complete закрываем только по yes
+            let convertFrom;
+            // vote yes/no: vote + скрытый prompt-голос; convert — hide источника
             if (isService) {
                 let leaf = await this._active_block();
                 if (prompt === 'yes' || prompt === 'no') {
-                    leaf.vote = prompt;
-                    delete leaf.button;
-                    await this._save(user);
-                }
-                if (leaf?.type === 'complete' && prompt === 'yes') {
-                    let container = await this._active_container();
-                    container.closed = true;
-                    await this._advance_steps(container);
-                    await this._save(user);
-                    user?.send?.({ type: 'chat.done', path: this.short });
-                    this.async(() => this.prompt({ role: 'AI', user }));
-                    return { ok: true };
-                }
-                if (leaf?.type === 'complete' && prompt === 'no') {
-                    user?.send?.({ type: 'chat.done', path: this.short });
-                    return { ok: true };
-                }
-                // вилка узла: pipe[type].yes / .no (напр. plan → task | thinking)
-                if (prompt === 'yes' || prompt === 'no') {
                     const node = (await this.pipe)[leaf.type];
                     voteChoice = node?.[prompt];
+                    if (leaf?.type === 'complete' && prompt === 'yes') {
+                        let container = await this._active_container();
+                        container.closed = true;
+                        await this._advance_steps(container);
+                        await this._save(user);
+                        user?.send?.({ type: 'chat.done', path: this.short });
+                        this.async(() => this.prompt({ role: 'AI', user }));
+                        return { ok: true };
+                    }
+                    if (leaf?.type === 'complete' && prompt === 'no') {
+                        user?.send?.({ type: 'chat.done', path: this.short });
+                        return { ok: true };
+                    }
+                    const btnLabel = leaf.button?.label;
+                    leaf.vote = prompt;
+                    delete leaf.button;
+                    if (voteChoice?.convert)
+                        leaf.hidden = true;
+                    await this._push_block(user, {
+                        type: 'prompt',
+                        content: prompt === 'yes' ? (btnLabel || 'Принять') : 'Отклонить',
+                        hidden: true,
+                        sender: user?.$user?.id ?? user?.uid ?? '',
+                    });
+                    if (voteChoice?.convert)
+                        convertFrom = leaf;
                 }
             }
             let pipe = await this.pipe;
@@ -59,7 +67,22 @@ export default {
             let container = await this._active_container();
             let choice = voteChoice;
 
-            if (!choice && active_pipe?.next?.length) {
+            // convert: push target из источника (hidden), без LLM / replace
+            if (voteChoice?.convert && convertFrom) {
+                const id = voteChoice.convert;
+                const next_pipe = pipe[id];
+                if (!next_pipe?.build) {
+                    await this._push_block(user, { type: 'error', content: 'unknown convert: ' + id });
+                } else {
+                    const stub = next_pipe.build({ content: '', usage: 0, calls: [] }, { from: convertFrom });
+                    if (stub) {
+                        await this._push_block(user, stub);
+                        user?.send?.({ type: 'chat.done', path: this.short });
+                        if (!stub.button && !stub.stop)
+                            this.async(() => this.prompt({ role: 'AI', user }));
+                    }
+                }
+            } else if (!choice && active_pipe?.next?.length) {
                 let options = [...active_pipe.next];
                 // complete: только если есть дети и последний завершён (лист или closed)
                 if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
@@ -74,7 +97,7 @@ export default {
                 choice = pick.content.trim().toLowerCase();
             }
 
-            if (choice) {
+            if (typeof choice === 'string' && choice) {
                 let next_pipe = pipe[choice];
                 if (!next_pipe?.build) {
                     await this._push_block(user, { type: 'error', content: 'unknown step: ' + choice });
@@ -129,27 +152,35 @@ export default {
         user?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
+    /** Последний не-hidden в массиве. */
+    _lastVisible(items) {
+        if (!Array.isArray(items)) return undefined;
+        for (let i = items.length - 1; i >= 0; i--)
+            if (!items[i]?.hidden) return items[i];
+        return undefined;
+    },
     async _active_pipe(){
         let block = await this._active_block();
         let pipe = await this.pipe;
         return pipe[block.type];
     },
-    /** Позиция автомата для маршрута: лист дерева; если последний ребёнок закрыт — сам контейнер. */
+    /** Позиция автомата: лист; hidden в items не участвуют. */
     async _active_block(){
         const find__active_block = (block) => {
-            if (block.closed || !block.items?.length)
-                return block;
-            const last = block.items.at(-1);
+            if (block.closed) return block;
+            const last = this._lastVisible(block.items);
+            if (!last) return block;
             if (last.closed) return block;
+            if (!last.items?.length) return last;
             return find__active_block(last);
         }
         return find__active_block(await this.body);
     },
-    /** Контейнер (родитель листа) — куда пушить новый блок. */
+    /** Контейнер (родитель листа) — куда пушить; hidden пропускаем. */
     async _active_container(){
         const find = (block) => {
             if (block.closed) return block;
-            const last = block.items?.at(-1);
+            const last = this._lastVisible(block.items);
             if (!last || last.closed || !Array.isArray(last.items)) return block;
             return find(last);
         }
@@ -265,14 +296,14 @@ export default {
         root.items.push(block);
         await this._save(userSession);
     },
-    /** Tip-массив для записи: спуск в items последнего контейнера (в т.ч. пустой items: []). */
+    /** Tip-массив для записи: спуск в items последнего видимого контейнера. */
     async get_active_list(){
         let body = await this.body;
         if (body.closed)
             return [];
         let list = body.items ||= [];
         while (true) {
-            const last = list.at(-1);
+            const last = this._lastVisible(list);
             if (last && Array.isArray(last.items) && !last.closed) {
                 list = last.items;
                 continue;

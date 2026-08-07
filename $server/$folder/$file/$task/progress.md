@@ -2,6 +2,10 @@
 
 ## Последние изменения
 
+- [17:25] **convert push+hidden.** Accept: plan.hidden + скрытый prompt «Принять» + push task (не replace). Reject: plan виден + «Отклонить» + `no→question`. Ribbon/FSM/focusedBlock skip `hidden`.
+- [16:52] **task.build steps.** Пункты из `1.` или, если их нет, из `-`/`*`/`•` — пустой `steps` после convert с маркерами больше не бывает.
+- [16:45] **convert UI + plan title.** После convert — `chat.done`; shell на `chat.done` делает `load()`. Plan: первая строка = заголовок задачи; `task.label` из неё (не из `-` подпунктов).
+- [16:27] **convert.** `plan.yes: { convert: 'task' }` — замена блока без LLM; `task.build` из `ctx.from`; `_replace_block`. Rejected plan (`no`) как раньше с `vote`.
 - [16:01] **pipe.role.** Роль в context из `pipe[type].role` (default `assistant`); `prompt`/`step` → `user`. Убран if по типам в `context()`.
 - [15:42] **work.build.** Узел пишет `type: 'work'` (content/usage/icon), без подмены на `answer`/`tool`.
 - [15:14] **hideTitle.** Один details; `summary ~if="!hideTitle"`; убран дубль body / флаг `header`.

@@ -32,7 +32,10 @@ export default {
             n?.listen('chat.delta', e => {
                 this.streamingText += e.detail?.value?.token || '';
             });
-            n?.listen('chat.done', () => { this.streamingText = ''; });
+            n?.listen('chat.done', async () => {
+                this.streamingText = '';
+                this.data = await n.load();
+            });
             this.data = await n?.load();
         },
     },
@@ -40,8 +43,14 @@ export default {
     get items() { return this.data?.items; },
     get focusedBlock() {
         let items = this.items;
-        while (items?.last?.items?.length && !items.last.closed)
-            items = items.last.items;
-        return items?.last;
+        while (items?.length) {
+            let last;
+            for (let i = items.length - 1; i >= 0; i--) {
+                if (!items[i]?.hidden) { last = items[i]; break; }
+            }
+            if (!last || last.closed || !last.items?.length) return last;
+            items = last.items;
+        }
+        return undefined;
     },
 };
