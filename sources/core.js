@@ -25,6 +25,9 @@ export class $item extends Reactor {
             get label() {
                 return (this.DATA?.label || this.name);
             },
+            get icon() {
+                return (this.DATA?.icon);
+            },            
             type: '',
         };
     }

@@ -2,6 +2,9 @@
 
 ## Последние изменения
 
+- [11:55] **color-mode.** В `extractCSSRules` — `[color-mode="имя"]` на каждый mixin; summary → `:color-mode` (`colorMode`).
+- [11:11] **Block time.** `_stamp_time` рекурсивно при push и после merge build — вложенные thinking/items тоже с `time`.
+- [10:36] **Vote fork.** `pipe[type].yes|no` → choice без LLM-меню (plan: yes→task, no→thinking).
 - [19:04] **Task/step chrome.** z-index = 100−depth; step icon assignment; task label из первой строки модели (без «task N/M»).
 - [18:11] **Vote yes/no.** Action: form|questions → USER в ленту; иначе `yes`/`no` + role AI, `vote` на блоке, summary success/error.
 - [17:33] **Ribbon pinBottom.** Начальная докрутка после `items` (не только attached); instant scroll; убран smooth.

@@ -15,6 +15,7 @@ export default {
         let { prompt, role, user } = params;
         try {
             const isService = role === 'AI';
+            let voteChoice;
             // vote yes/no: метка на блоке, в ленту не пишем; complete закрываем только по yes
             if (isService) {
                 let leaf = await this._active_block();
@@ -36,6 +37,11 @@ export default {
                     user?.send?.({ type: 'chat.done', path: this.short });
                     return { ok: true };
                 }
+                // вилка узла: pipe[type].yes / .no (напр. plan → task | thinking)
+                if (prompt === 'yes' || prompt === 'no') {
+                    const node = (await this.pipe)[leaf.type];
+                    voteChoice = node?.[prompt];
+                }
             }
             let pipe = await this.pipe;
             if (!isService) {
@@ -47,12 +53,13 @@ export default {
                 }
                 await this._push_block(user, block);
             }
-            
+
             let active_pipe = await this._active_pipe();
             let messages = await this.context();
+            let container = await this._active_container();
+            let choice = voteChoice;
 
-            if (active_pipe?.next?.length) {
-                let container = await this._active_container();
+            if (!choice && active_pipe?.next?.length) {
                 let options = [...active_pipe.next];
                 // complete: только если есть дети и последний завершён (лист или closed)
                 if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
@@ -62,9 +69,12 @@ export default {
                 menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
                 messages.push({ role: 'user', content: menu });
 
-                let choice = await this._streamChat({ messages, silent: true, user });
+                let pick = await this._streamChat({ messages, silent: true, user });
                 if (this._stopped) return;
-                choice = choice.content.trim().toLowerCase();
+                choice = pick.content.trim().toLowerCase();
+            }
+
+            if (choice) {
                 let next_pipe = pipe[choice];
                 if (!next_pipe?.build) {
                     await this._push_block(user, { type: 'error', content: 'unknown step: ' + choice });
@@ -83,7 +93,10 @@ export default {
                         if (!next_pipe.prompt) {
                             await this._push_block(user, stub);
                         } else {
-                            messages.last.content = next_pipe.prompt;
+                            if (voteChoice)
+                                messages.push({ role: 'user', content: next_pipe.prompt });
+                            else
+                                messages.last.content = next_pipe.prompt;
                             await this._push_block(user, stub);
                             const sink = (choice === 'step' && stub.items?.[0]) ? stub.items[0] : stub;
                             let response = await this._streamChat({ messages, sink, user });
@@ -92,6 +105,7 @@ export default {
                             if (final) {
                                 if (auto) delete final.button;
                                 Object.assign(stub, final);
+                                this._stamp_time(stub);
                                 await this._save(user);
                             }
                         }
@@ -106,7 +120,7 @@ export default {
                     }
                 }
             }
-            // терминал (active_pipe без next) — маршрут не нужен; подтверждение кнопок/complete отдельно
+            // нет next и нет vote-вилки — терминал / ждём button
         }
         catch (e) {
             await this._push_block(user, { type: 'error', content: e.message });
@@ -241,9 +255,16 @@ export default {
         this._stopped = true;
         return { ok: true, stopped: true };
     },
+    /** time на блоке и вложенных items (build часто не ставит). */
+    _stamp_time(block) {
+        if (!block || typeof block !== 'object') return;
+        if (block.time == null) block.time = Date.now();
+        if (Array.isArray(block.items))
+            for (const b of block.items) this._stamp_time(b);
+    },
     async _push_block(userSession, block){
         let root = await this._active_container();
-        block.time = Date.now();
+        this._stamp_time(block);
         root.items.push(block);
         await this._save(userSession);
     },

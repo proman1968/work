@@ -25,12 +25,6 @@ ODA({ is: 'microchat-view',
                 box-sizing: border-box;
                 overflow: hidden;
             }
-            summary::-webkit-details-marker {
-                display: none;
-            }
-            summary.auto {
-                cursor: default;
-            }
             .head-row {
                 @apply --horizontal;
                 align-items: center;
@@ -59,15 +53,13 @@ ODA({ is: 'microchat-view',
             details > div[content] {
                 font-size: small;
                 word-break: break-word;
-                border-left: 2px solid var(--step-color, #ccc);
-                padding-left: 2px;
+                border-left: 2px solid var(--info-color);
+
             }
         </style>
         <details :open="open" @toggle="onToggle">
-            <summary raised vertical flex @resize="onResize" @click="onSummaryClick"
-                    :success-invert="votedYes" :error-invert="votedNo"
-                    :light="!voted && !pinned && !infoInvert" :accent="!voted && pinned && !infoInvert"
-                    :info-invert="!voted && infoInvert" ~class="{auto: pinned}" ~style="summaryStyle">
+            <summary raised vertical flex :color-mode
+                    @resize="onResize" @click="onSummaryClick" ~style="summaryStyle">
                 <div class="head-row" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
@@ -94,7 +86,10 @@ ODA({ is: 'microchat-view',
     get fields() { return this.data?.fields || []; },
     get items() { return this.data?.items || []; },
     get sender() { return null; },
-    get timeText() { return ''; },
+    get timeText() {
+        if (!this.data?.time) return '';
+        return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
     get votedYes() { return this.data?.vote === 'yes'; },
     get votedNo() { return this.data?.vote === 'no'; },
     get voted() { return !!(this.votedYes || this.votedNo); },
@@ -102,8 +97,7 @@ ODA({ is: 'microchat-view',
     // --- open: last в host.items (Reactor.get + equal) или userOpen ---
     userOpen: false,
     get pinned() {
-        const items = this.host && Reactor.get(this.host, 'items');
-        return Reactor.equal(items?.last, this.data);
+        return Reactor.equal(this.host.items?.last, this.data);
     },
     get open() { return this.pinned || this.userOpen; },
     /** pinned: не дать details закрыться (иначе мигание open→close→open) */
@@ -130,6 +124,13 @@ ODA({ is: 'microchat-view',
 
     // --- chrome ---
     get infoInvert() { return false; },
+    get colorMode() {
+        if (this.votedYes) return 'success-invert';
+        if (this.votedNo) return 'error-invert';
+        if (this.infoInvert) return 'info-invert';
+        if (this.pinned) return 'accent';
+        return 'light';
+    },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
     get top() { return (this.host.host.height || 0) + (this.host.host.top || 0); },
@@ -184,12 +185,7 @@ ODA({ is: 'microchat-view-prompt',
         return Promise.resolve(WORK.users).then(users =>
             (users || []).find(u => u.id === id) || null
         );
-    },
-    get timeText() {
-        if (this.data?.timeText) return this.data.timeText;
-        if (!this.data?.time) return '';
-        return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    },
+    }
 });
 
 ODA({ is: 'microchat-view-form',
@@ -312,6 +308,7 @@ ODA({ is: 'microchat-view-task',
     extends: 'microchat-view',
     get bodyTag() { return 'microchat-task-todo'; },
     get showContent() { return !!this.streamTail; },
+    get colorMode() { return 'header'; },
     get label() {
         if (this.data?.label) return this.data.label;
         const steps = this.data?.steps || [];
@@ -341,7 +338,8 @@ ODA({ is: 'microchat-task-todo',
                 box-sizing: border-box;
                 cursor: pointer;
                 align-items: center;
-                gap: 4px;
+                gap: 6px;
+                padding: 0px 4px;
                 user-select: none;
                 white-space: nowrap;
                 min-width: 0;

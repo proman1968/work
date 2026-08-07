@@ -3,9 +3,8 @@
  * Линейный реестр узлов по id (= type блока). Каждый узел несёт свой next.
  * Движок: _step(from) → исполняет узел → маршрутизирует из from.next → self-call.
  *
- * Поля узла: prompt (генерация/инъекция), inject (подсказка меню родителя),
- * next (массив id), build (сборка блока из ответа),
- * fc (массив | '*' | 'readonly'), askType ('form'|'questions').
+ * Поля узла: prompt, inject, next (массив — LLM-меню), yes/no (вилка по vote),
+ * build, fc, askType.
  * button живёт в build (блок — единственный источник правды для UI и движка).
  * complete — особый узел подъёма: после подтверждения закрывает текущий контейнер.
  * Для блоков с items движок автоматически добавляет complete в меню выбора.
@@ -46,13 +45,14 @@ export default {
             button: { label: 'Принять' },
             icon: 'icons:assignment',
         }),
-        next: ['task', 'thinking'],
+        yes: 'task',
+        no: 'thinking'
     },
 
     task: {
         prompt: ['Сделай todo список из согласованного плана.',
             '\n\n[instruction]\n',
-            'Первая строка — короткий заголовок задачи (без слова task, без нумерации).',
+            'Первая строка — короткий заголовок задачи (без слова task, без нумерации), о том, что ты будешь делать в этой задаче',
             'Далее — ТОЛЬКО нумерованный список: каждый пункт с новой строки,',
             '"N. описание" — одно проверяемое действие с конечным результатом.',
             'Без вступления и пояснений.'].join('\n'),
@@ -90,7 +90,7 @@ export default {
             return {
                 type: 'step',
                 content: title,
-                icon: 'icons:assignment',
+                icon: 'icons:chevron-right',
                 items: r.content
                     ? [{ type: 'thinking', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
                     : [],

@@ -691,7 +691,8 @@ function extractCSSRules (style){
             }).join(';\n\t').trim();
             cssRules[key] ??= val;
             key = key.substring(2);
-            adds.push(`.${key}, [${key}] {`)
+            // класс, булев attr и valued color-mode (взаимоисключающая роль)
+            adds.push(`.${key}, [${key}], [color-mode="${key}"] {`)
             adds.push(`${val}`)
             adds.push(`}`)
         }

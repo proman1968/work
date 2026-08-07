@@ -95,13 +95,13 @@ ODA({ is: 'microchat-panel',
             }
         </style>
         <div class="action-bar" ~if="actionButton?.label" horizontal>
-            <oda-button border hide-icon flex
-                :success="(actionButton.color || 'success') === 'success'"
+            <oda-button border hide-icon flex style="border-radius: 16px;"
+                :success-invert="(actionButton.color || 'success') === 'success'"
                 :warning="actionButton.color === 'warning'"
                 icon="icons:check" :icon-size="iconSize * .8"
                 :label="actionButton.label"
                 @tap="sendAction(true)"></oda-button>
-            <oda-button border error icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
+            <oda-button border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
         <div class="composer" border>

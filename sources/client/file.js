@@ -42,9 +42,7 @@ export class $file extends $folder{
         return this.id?.split('.').pop() || '';
     }
     get icon(){
-        if(this.ext)
-            return 'files-color:s-' + this.ext;
-        return 'files:document';
+        return this.DATA.icon || 'files:document';
     }
     static loadPreview(n){
         if(!n?.ext)
