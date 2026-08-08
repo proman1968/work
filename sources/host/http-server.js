@@ -352,9 +352,7 @@ export function createRequestHandler() {
         if (result?.then)
             result = await result;
 
-        const isFilePayload = item?.constructor === CORE.$file
-            && (!method || method === 'load' || method === 'script' || method === 'download');
-        // TODO: canSee-фильтрация
+        const isFilePayload = item?.constructor === CORE.$file && (!method || method === 'load' || method === 'script' || method === 'download');
         const header = { "Access-Control-Allow-Origin": "*", "mode": 'no-cors', "Content-Type": "application/json" };
         // if (method === 'load_icon') {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';

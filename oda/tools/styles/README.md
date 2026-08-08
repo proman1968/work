@@ -33,12 +33,15 @@
 
 ## Атрибуты разметки (= хранилищы темы и layout)
 
-Каждый mixin автоматически становится **и хранилищом, и булевым атрибутом**:
+Каждый mixin автоматически становится **классом, булевым атрибутом и значением `color-mode`**:
 
 ```css
 /* из --horizontal генерируется: */
-.horizontal, [horizontal] { display: flex; flex-direction: row; }
+.horizontal, [horizontal], [color-mode="horizontal"] { display: flex; flex-direction: row; }
 ```
+
+- Статично: булев attr (`light`, `success-invert`).
+- Динамически одна из ролей (без гонки нескольких attrs): `:color-mode` → свойство `colorMode` (имя mixin’а: `'accent'`, `'success-invert'`, …).
 
 В шаблоне ODA предпочтительно писать **атрибуты**, без лишних `class`:
 

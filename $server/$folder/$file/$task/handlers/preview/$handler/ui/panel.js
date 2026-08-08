@@ -1,10 +1,3 @@
-/**
- * Preview panel — промптбар + action focusedBlock.
- * pending: true на send, false на chat.done / stop.
- * Action: value = label → send().
- * Модель — data.model. focusedBlock — $pdp.
- */
-
 import { buildUsageStats, fmtTokens } from './usage.js';
 import { MicAudioController } from './mic.js';
 import { TtsController } from './tts.js';
@@ -95,13 +88,13 @@ ODA({ is: 'microchat-panel',
             }
         </style>
         <div class="action-bar" ~if="actionButton?.label" horizontal>
-            <oda-button border hide-icon flex
-                :success="(actionButton.color || 'success') === 'success'"
+            <oda-button border hide-icon flex style="border-radius: 16px;"
+                :success-invert="(actionButton.color || 'success') === 'success'"
                 :warning="actionButton.color === 'warning'"
                 icon="icons:check" :icon-size="iconSize * .8"
                 :label="actionButton.label"
                 @tap="sendAction(true)"></oda-button>
-            <oda-button border error icon="icons:close" :icon-size="iconSize * .8"
+            <oda-button border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
         <div class="composer" border>
@@ -149,7 +142,7 @@ ODA({ is: 'microchat-panel',
                 <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsMode !== 'off'"
                     style="border-radius: 50%;" :title="ttsTitle"></oda-button>
                 <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size
-                    :rainbow="pending || recording" :disabled="sending && !pending"
+                    :rainbow="pending || recording" :disabled="!pending"
                     :title="pending ? 'Стоп' : ''" @tap="onSendTap"
                     style="border-radius: 50%;"></oda-button>
             </div>
@@ -158,7 +151,6 @@ ODA({ is: 'microchat-panel',
     imports: 'oda//button, oda//icon, ~/lib//tree',
     data: null,
     pending: false,
-    sending: false,
     recording: false,
     timer: '',
     files: [],
@@ -171,14 +163,13 @@ ODA({ is: 'microchat-panel',
         set(n) {
             n?.listen('chat.delta', e => this._tts().onDelta(e));
             n?.listen('chat.done', () => this._onDone());
-            n?.listen('chat.error', () => {
-                this._tts().cancel();
-                this.pending = false;
-                this.sending = false;
-            });
         },
     },
     get actionButton() { return this.$pdp.focusedBlock?.button; },
+    /** form — сдача данных в ленту; иначе vote yes/no */
+    get isFormAction() {
+        return this.$pdp.focusedBlock?.type === 'form';
+    },
     get rows() {
         return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
     },
@@ -205,12 +196,16 @@ ODA({ is: 'microchat-panel',
     _tts() {
         return this._ttsController ??= new TtsController(this);
     },
-    sendAction(ok = true) {
-        this.value = ok
-            ? (String(this.actionButton?.label || '').trim() || 'Да')
-            : 'нет';
-        this.send();
+    async sendAction(ok = true) {
+        this.pending = true;
+        const result = await this.$item.fetch('prompt', {
+            prompt: ok,
+            model: this.data.model,
+            role: 'BUTTON',
+        });
+        this._focus();
     },
+
     onSendTap() {
         if (this.pending) {
             this.stop();
@@ -225,6 +220,7 @@ ODA({ is: 'microchat-panel',
         }
     },
     async send() {
+        if (this.pending) return;
         if (!this.value?.trim() && !this.files.length && !this.recording) {
             this._mic()?.toggle();
             return;
@@ -234,8 +230,7 @@ ODA({ is: 'microchat-panel',
             this.async(() => { if (this.value?.trim()) this.send(); }, 300);
             return;
         }
-        if (this.sending || this.pending || !this.$item?.path) return;
-
+        
         let text = String(this.value ?? '').trim();
         const external = this.files.filter(f => f instanceof File);
         const internal = this.files.filter(f => f.internalPath);
@@ -245,30 +240,23 @@ ODA({ is: 'microchat-panel',
         this.value = '';
         this.files = [];
         this._tts().cancel();
-        this.$item.fire('chat.resume');
 
         let post = null;
         if (external.length) {
             post = new FormData();
             for (const f of external) post.append('file', f, f.name);
         }
-
-        this.sending = true;
         this.pending = true;
         const result = await this.$item.fetch('prompt', {
             prompt: text || (external.length ? 'Обработай прикреплённые файлы' : ''),
             model: this.data.model,
             role: String(this.role || this.$item.role || 'USER').toUpperCase(),
         }, post);
-        this.sending = false;
-        if (result?.ok === false)
-            this.pending = false;
         this._focus();
     },
     stop() {
         this.pending = false;
         this._tts().cancel();
-        this.$item?.fire('chat.stop');
         this.$item?.fetch('stop', {});
     },
     _onDone() {

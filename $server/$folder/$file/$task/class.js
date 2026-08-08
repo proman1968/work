@@ -1,8 +1,7 @@
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
-// Линейный реестр pipe (по id = type блока); корень — pipe.thinking.
+// Линейный реестр pipe (по id = type блока); 
 export default {
     icon: 'bootstrap:robot',
-    /** Тело файла — JSON; http-server / WORK.fetch резолвят по этому полю. */
     contentType: 'application/json',
 
     /**
@@ -11,96 +10,76 @@ export default {
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
-        // debugger
+     
         let { prompt, role, user } = params;
         try {
-            const isService = role === 'AI';
-            // подтверждение complete: служебный ход с label кнопки → закрыть контейнер complete-блока (отказ «нет» — мимо)
-            if (isService) {
-                let leaf = await this._active_block();
-                if (leaf?.type === 'complete' && prompt === leaf.button?.label) {
-                    let container = await this._active_container();
-                    container.closed = true;
-                    await this._advance_steps(container);
-                    await this._save(user);
-                    user?.send?.({ type: 'chat.done', path: this.short });
-                    this.async(() => this.prompt({ role: 'AI', user }));
-                    return { ok: true };
+            switch (role) { 
+                case 'AI':{
+                    debugger
+                } break;
+                case 'BUTTON':{
+                    debugger
+                } break;
+                default:{
+                    let block = {
+                        type: 'prompt',
+                        content: prompt,
+                        sender: user?.$user?.id ?? user?.uid ?? '',
+                        items: []
+                    }
+                    await this._push_block(user, block);
                 }
             }
+     
             let pipe = await this.pipe;
-            if (!isService) {
+            let active_pipe = await this._active_pipe();
+            
+            let container = await this._active_container();
+   
+            let options = [...active_pipe.next];
+            let menu = 'Выбери следующий тип шага, не решай задачу целиком.';
+            menu += '\n\nОтветь одним словом точно из списка без знаков препинания и пояснений:';
+            for (let id of options) menu += '\n\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+            
+
+            let messages = await this.context();
+            if(messages.last?.role === 'user')
+                messages.last.content += '\n\n[instruction]\n\n' + menu;
+            else
+                messages.push({ role: 'user', content: menu });
+
+            let response = await this._streamChat({ messages, silent: true, user });
+            if (this._stopped) return;
+            let choice = response.content.trim().toLowerCase();
+  
+            let next_pipe = pipe[choice];
+            if(!next_pipe){
+                await this._push_block(user, { content: response.content});
+            }
+            else{
                 let block = {
-                    type: 'prompt',
-                    content: prompt,
-                    sender: user?.$user?.id ?? user?.uid ?? '',
-                    items: []
+                    type: choice,
+                    icon: next_pipe.icon || 'carbon:idea',
                 }
                 await this._push_block(user, block);
-            }
-            
-            let active_pipe = await this._active_pipe();
-            let messages = await this.context();
 
-            if (active_pipe?.next?.length) {
-                let container = await this._active_container();
-                // let next_id;
-                // if (active_pipe.next.length === 1) {
-                //     // единственный маршрут — детерминированный переход, модель не спрашиваем
-                //     next_id = active_pipe.next[0];
-                //     // messages.push({ role: 'user', content: '' });
-                // } else {
-                    let options = [...active_pipe.next];
-                    // complete: только если есть дети и последний завершён (лист или closed)
-                    if (container.items?.length && (container.items.last.items === undefined || container.items.last.closed))
-                        options.push('complete');
-                    let menu = 'Выбери следующий тип шага, не решай задачу целиком:';
-                    for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
-                    menu += '\n\nОтветь одним словом из списка без знаков препинания и пояснений!';
-                    console.warn(container.type)
-                    console.log(menu)
-                    messages.push({ role: 'user', content: menu });
 
-                    let choice = await this._streamChat({ messages }, user);
-                    if (this._stopped) return;
-                    console.warn('choice', choice)
-                    choice = choice.content.trim().toLowerCase();
-                    // let next_id = words.find(w => pipe[w] && options.includes(w)) || options[0];
-                // }
-                let next_pipe = pipe[choice];
+                messages = await this.context();
+                if(messages.last?.role === 'user')
+                    messages.last.content += '\n\n[instruction]\n\n' + next_pipe.prompt;
+                else
+                    messages.push({ role: 'user', content: next_pipe.prompt });
 
-                // нет prompt — узел без генерации, модель не вызываем
-                let response;
-                if (!next_pipe.prompt) {
-                    response = { content: '', usage: 0, calls: [] };
-                } else {
-                    messages.last.content = next_pipe.prompt;
-                    response = await this._streamChat({ messages }, user);
-                    if (this._stopped) return;
-                }
-
-                // ctx для build: currentStep — in_progress-шаг активного task (для step.build)
-                let ctx = {};
-                if (container?.type === 'task' && Array.isArray(container.steps))
-                    ctx.currentStep = container.steps.find(s => s.status === 'in_progress');
-
-                let block = next_pipe.build(response, ctx);
-                if (block) {
-                    // autocomplete = complete без кнопки
-                    const auto = choice === 'complete' && pipe[container.type]?.autocomplete;
-                    if (auto) delete block.button;
-                    await this._push_block(user, block);
-                    if (auto) {
-                        container.closed = true;
-                        await this._advance_steps(container);
-                        await this._save(user);
-                    }
-                    if (!block.button && !block.stop) {
-                        this.async(() => this.prompt({ role: 'AI', user }));
-                    }
+                response = await this._streamChat({ messages, user });
+                if (this._stopped) return;
+                Object.assign(block, response);
+                block.button = next_pipe.button;
+                block.stop = next_pipe.stop;
+                await this._save(user);
+                if (!block.button && !block.stop) {
+                    this.async(() => this.prompt({ role: 'AI', user }));
                 }
             }
-            // терминал (active_pipe без next) — маршрут не нужен; подтверждение кнопок/complete отдельно
         }
         catch (e) {
             await this._push_block(user, { type: 'error', content: e.message });
@@ -109,27 +88,35 @@ export default {
         user?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
+    /** Последний не-hidden в массиве. */
+    _lastVisible(items) {
+        if (!Array.isArray(items)) return undefined;
+        for (let i = items.length - 1; i >= 0; i--)
+            if (!items[i]?.hidden) return items[i];
+        return undefined;
+    },
     async _active_pipe(){
         let block = await this._active_block();
         let pipe = await this.pipe;
         return pipe[block.type];
     },
-    /** Позиция автомата для маршрута: лист дерева; если последний ребёнок закрыт — сам контейнер. */
+    /** Позиция автомата: лист; hidden в items не участвуют. */
     async _active_block(){
         const find__active_block = (block) => {
-            if (block.closed || !block.items?.length)
-                return block;
-            const last = block.items.at(-1);
+            if (block.closed) return block;
+            const last = this._lastVisible(block.items);
+            if (!last) return block;
             if (last.closed) return block;
+            if (!last.items?.length) return last;
             return find__active_block(last);
         }
         return find__active_block(await this.body);
     },
-    /** Контейнер (родитель листа) — куда пушить новый блок. */
+    /** Контейнер (родитель листа) — куда пушить; hidden пропускаем. */
     async _active_container(){
         const find = (block) => {
             if (block.closed) return block;
-            const last = block.items?.at(-1);
+            const last = this._lastVisible(block.items);
             if (!last || last.closed || !Array.isArray(last.items)) return block;
             return find(last);
         }
@@ -159,19 +146,16 @@ export default {
     },
     async context(){
         const body = await this.body;
+        const pipe = await this.pipe;
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
-                if (b.type === 'prompt' || b.type === 'step') {
-                    out.push({ role: 'user', content: b.content });
-                } else {
-                    let content = (b.content || '');
-                    if (b.type === 'task' && Array.isArray(b.steps)) {
-                        content += '\n\nШаги:\n' + b.steps
-                            .map(s => `${s.number}. [${s.status}] ${s.description}`)
-                            .join('\n');
-                    }
-                    out.push({ role: 'assistant', content });
+                let content = (b.content || '');
+                if (b.type === 'task' && Array.isArray(b.steps)) {
+                    content += '\n\nШаги:\n' + b.steps
+                        .map(s => `${s.number}. [${s.status}] ${s.description}`)
+                        .join('\n');
                 }
+                out.push({ role: pipe[b.type]?.role || 'assistant', content });
                 if (b.items?.length) walk(b, out);
             }
             return out;
@@ -179,30 +163,28 @@ export default {
         const out = [{ role: 'system', content: body.system }];
         return walk(body, out);
     },
-    /**
-     * Один стрим-ход модели. context = { messages, functions? };
-     * content-чанки → text + delta в WS, function_call → calls[{method, args}].
-     */
-    async _streamChat(context, userSession){
+    async _streamChat(params = {}) {
+        const { messages, functions, silent, user } = params;
         const model = await this.model;
         let content = '', usage = 0;
         const calls = [];
-        for await (const chunk of model.streamChat(context)) {
+        for await (const chunk of model.streamChat({ messages, functions })) {
             if (this._stopped)
                 break;
             if (chunk?.type === 'usage')
                 usage = chunk;
             else if (chunk?.type === 'function_call' && chunk.name)
                 calls.push({ method: chunk.name, args: chunk.arguments || {} });
-            else{
-                let token = chunk?.content?chunk?.content:chunk;
+            else {
+                let token = chunk?.content ? chunk?.content : chunk;
                 if (typeof token !== 'string')
                     continue;
                 content += token;
-                userSession?.send?.({ type: 'chat.delta', path: this.short, token });
+                if (!silent)
+                    user?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
-        return {content, usage, calls}
+        return { content, usage, calls };
     },
     get pipe(){
         return new AsyncPromise(async () =>{
@@ -231,20 +213,27 @@ export default {
         this._stopped = true;
         return { ok: true, stopped: true };
     },
+    /** time на блоке и вложенных items (build часто не ставит). */
+    _stamp_time(block) {
+        if (!block || typeof block !== 'object') return;
+        if (block.time == null) block.time = Date.now();
+        if (Array.isArray(block.items))
+            for (const b of block.items) this._stamp_time(b);
+    },
     async _push_block(userSession, block){
         let root = await this._active_container();
-        block.time = Date.now();
+        this._stamp_time(block);
         root.items.push(block);
         await this._save(userSession);
     },
-    /** Tip-массив для записи: спуск в items последнего контейнера (в т.ч. пустой items: []). */
+    /** Tip-массив для записи: спуск в items последнего видимого контейнера. */
     async get_active_list(){
         let body = await this.body;
         if (body.closed)
             return [];
         let list = body.items ||= [];
         while (true) {
-            const last = list.at(-1);
+            const last = this._lastVisible(list);
             if (last && Array.isArray(last.items) && !last.closed) {
                 list = last.items;
                 continue;

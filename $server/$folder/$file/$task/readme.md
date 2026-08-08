@@ -23,7 +23,7 @@
    - `next` — массив id детей (вперёд);
    - `build(response)` — сборка блока ленты из ответа;
    - `fc` — function-calling контекст;
-   - `askType` — `'form'`/`'questions'` для ask-узлов.
+   - `build` у `form` кладёт `fields` (+ опционально `content` пояснения).
 7. **`button` — единственный источник правды в блоке.** Узел в `pipe.js` не несёт `button`; его кладёт `build` внутрь возвращаемого блока. Движок судит об остановке по `block.button` (есть → ждать клиента), UI рисует кнопку по нему же.
 8. **`complete` — особый узел подъёма.** Не пишется в `next` контейнеров; движок автоматически добавляет пункт `complete` в меню выбора, если у активного блока есть `items`. После подтверждения кнопки «Завершить» → `_active_block().closed = true`, следующий блок пишется в `items` родителя.
 9. **Auto-loop.** Если у созданного блока нет `button` и у узла нет `stop` — движок продолжает через `this.async(() => this.prompt({role:'AI'}))`. Wait-узел прерывает цикл.
@@ -32,7 +32,7 @@
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — ИИ-харнесс: метод `prompt` (маршрут + auto-loop), `_active_block`/`_active_pipe`, `_streamChat`, `_push_block`, `_save`, `stop`, `change_model`, ленивые геттеры `pipe`/`body`/`model`
+- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — ИИ-харнесс: `prompt`, `_streamChat({ messages, silent, sink, user })`, stub→stream→merge, `_push_block`, `_save`, …
 - [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) — линейный реестр метаописаний узлов (`export default`)
 - [`triggers/on_save/$trigger/`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — вход в цикл
 - [`handlers/preview/$handler/`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (UI-проекция дерева)

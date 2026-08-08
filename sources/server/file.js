@@ -357,8 +357,12 @@ export class $file extends $folder{
         if (actor && actor !== globalThis.WORK && !actor.uid)
             params.user = { uid, $user: actor.$user || actor };
         params.time ??= Date.now();
+        if (typeof params.time === 'string') {
+            try { params.time = parseInt(params.time); }
+            catch (e) { params.time = Date.now() }
+        }
         params.dateTime = new Date(params.time);
-        let date = params.dateTime.toISOString();
+        let date = params.dateTime.toISOTimezoneString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
         // Логи (data.logs) пишутся через LOGS.appendRow без role,
@@ -390,7 +394,7 @@ export class $file extends $folder{
             log.sender = params.sender;
         else if (params.user?.uid)
             log.sender = params.user.uid;
-        else if (params.user === globalThis.WORK)
+        else if (params.user?.$user === globalThis.WORK)
             log.sender = WORK.id;
         // Инлайн текста — только через params.message (ядро не знает имён файлов).
         if (params.message != null)

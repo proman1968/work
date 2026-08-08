@@ -12,9 +12,10 @@
 ## Порядок выбора
 
 1. **Атрибут** в разметке: `horizontal`, `vertical`, `flex`, `no-flex`, `center`, `header`, `content`, `light`, `dark`, `border`, `warning`, `error`, `success`, …
-2. **`@apply --имя`** в `<style>` компонента, если нужен mixin на `:host` / классе.
-3. **CSS-переменная** темы: `var(--border-color)`, `var(--header-background)`, `var(--error-color)`, … — без hex/rgba-fallback.
-4. Локальный CSS — только то, чего нет в системе (`overflow`, `gap`, `border-radius`, ellipsis).
+2. **Одна динамическая роль** — `:color-mode` (свойство `colorMode` = имя mixin’а); не несколько конкурирующих `:light` / `:accent` / …
+3. **`@apply --имя`** в `<style>` компонента, если нужен mixin на `:host` / классе.
+4. **CSS-переменная** темы: `var(--border-color)`, `var(--header-background)`, `var(--error-color)`, … — без hex/rgba-fallback.
+5. Локальный CSS — только то, чего нет в системе (`overflow`, `gap`, `border-radius`, ellipsis).
 
 ## Когда что
 
@@ -25,6 +26,7 @@
 | Панель / поле | `content` + `border` |
 | Шапка панели | `header` / `dark` |
 | Статус | attrs `info` / `success` / `warning` / `error` (+ `-invert`) |
+| Переключаемая роль | `:color-mode` → `colorMode` (генерируется из mixin в `styles.js`) |
 
 ## Не делать
 

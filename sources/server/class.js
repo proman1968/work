@@ -403,9 +403,8 @@ export class $class extends $folder{
             roles.push($class.ROLES.ADMIN);
         if (bosses.some(u => u?.id === uid))
             roles.push($class.ROLES.BOSS);
-        // USER — базовая роль для любого залогиненного пользователя.
-        // Рабочие файлы и логи всегда пишутся в личный кабинет (USER зона).
-        roles.push($class.ROLES.USER);
+        if (users.some(u => u?.id === uid))
+            roles.push($class.ROLES.USER);
         return roles;
     }
 
@@ -617,7 +616,7 @@ export class $class extends $folder{
             row.sender = params.sender;
         else if (params.user?.uid)
             row.sender = params.user.uid;
-        else if (params.user === globalThis.WORK)
+        else if (params.user?.$user === globalThis.WORK)
             row.sender = WORK.id;
         if (params.message != null)
             row.content = params.message;
@@ -752,12 +751,15 @@ export class $class extends $folder{
      */
     async canSee(item, params = {}) {
         if ($class.isDevMode) return true;
+        const users = this.DATA['#security']?.USERS;
+        if (Array.isArray(users) && (users).includes('USERS')) return true;
         if (!item || typeof item !== 'object') return true;
         const uid = $class.resolveUid(params);
         if (!uid) {
             // Системные пути без пользователя
             return this._isSystemPath(item);
         }
+        if (this.id === uid) return true;
         // WORK ADMIN видит всё
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
@@ -794,6 +796,7 @@ export class $class extends $folder{
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
+        if (this.id === uid) return true;
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
         if (this._isSystemItem(item))
@@ -820,7 +823,7 @@ export class $class extends $folder{
     async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
         if ($class.isDevMode) return;
         if (!params?.user) return;
-        if (params.user === globalThis.WORK) return;
+        if (params.user?.$user === globalThis.WORK) return;
         const uid = $class.resolveUid(params);
         if (!uid && level !== $class.ACCESS_LEVEL.READ)
             throw new Error(ACCESS_DENIED);
