@@ -14,23 +14,23 @@
  * Лист без next — терминал.
  */
 export default {
-    /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
+    /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thought */
     prompt: {
         role: 'user',
-        next: ['Если можешь ответить на предыдущий запрос пользователя, просто отвечай.',
-            'Если не можешь сразу ответить или решить поставленную задачу, и тебе необходимо над ней подумать, просто напиши слово thinking.'].join('\n'),
+        next: ['plan'],
     },
 
     /** размышление над следующим шагом; мерджит инструкцию в последний user-промпт */
-    thinking: {
+    thought: {
         icon: 'carbon:idea',
         inject: 'если необходимо обдумать дальнейшие действия',
         prompt: [
             'Как следует подумай, над тем, что необходимо сделать на следующем шаге ',
             'исходя из контекста, и выдай свои размышления от 5 до 100 строк (от своего лица).',
-            'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать сам,',
+            'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать сам.',
+            'Не обращайся к пользвателю, т.к. это твои размышления, только для тебя.',
             ].join(' '),
-        next: ['answer', 'plan', 'research', 'actions'],
+        next: ['answer', 'plan'],
     },
     text: {
         icon: 'icons:text',
@@ -75,7 +75,7 @@ export default {
             delete block.button; // план принят — кнопка больше не нужна
             return block;
         },
-        next: ['thinking'],
+        next: ['thought'],
     },
 
     // /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
@@ -127,11 +127,11 @@ export default {
                 content: title,
                 icon: 'icons:chevron-right',
                 items: r.content
-                    ? [{ type: 'thinking', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
+                    ? [{ type: 'thought', content: r.content, usage: r.usage, icon: 'carbon:idea' }]
                     : [],
             };
         },
-        next: ['thinking'],
+        next: ['thought'],
     },
 
     research: {
@@ -149,7 +149,7 @@ export default {
         build: (r) => r.calls?.length
             ? { type: 'tool', name: r.calls[0].method, args: r.calls[0].args }
             : { type: 'answer', content: r.content },
-        next: ['thinking'],
+        next: ['thought'],
     },
 
     work: {
@@ -170,7 +170,7 @@ export default {
             usage: r.usage,
             icon: 'icons:folder',
         }),
-        next: ['thinking'],
+        next: ['thought'],
     },
 
     answer: {
@@ -224,7 +224,7 @@ export default {
             if (r.content?.trim()) block.content = r.content.trim();
             return block;
         },
-        next: ['thinking'],
+        next: ['thought'],
     },
 
     actions: {

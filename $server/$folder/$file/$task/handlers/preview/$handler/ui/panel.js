@@ -199,7 +199,7 @@ ODA({ is: 'microchat-panel',
     async sendAction(ok = true) {
         this.pending = true;
         const result = await this.$item.fetch('prompt', {
-            prompt: ok,
+            prompt: ok?'true':'false',
             model: this.data.model,
             role: 'BUTTON',
         });

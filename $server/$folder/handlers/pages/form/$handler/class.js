@@ -218,7 +218,10 @@ ODA({is: 'work-form',
         return this.getRoleIcon(this.activeRole);
     },
     get roles(){
-        return this.$item?.fetch('roles');
+        return this.$item?.fetch('roles').then(roles=>{
+            roles.add('USER');
+            return roles;
+        });
     },
     get showRoleSelector() {
         return Promise.resolve(this.roles).then(roles =>
