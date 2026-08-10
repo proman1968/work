@@ -26,8 +26,7 @@ export default {
                         } break;
                         case 'false':{
                             active_block.rejected = true; 
-                        } break;
-                            
+                        } break;       
                     }
                     await this._save(user);
                 } break;
@@ -42,17 +41,24 @@ export default {
                     await this._push_block(user, active_block);
                 }
             }
-            active_pipe = pipe[active_block.type];
-            // let options = [...active_pipe.next];
-            // let menu = active_block.menu_inject || 'Выбери следующий тип шага, не решай задачу целиком.';
-            // menu += '\n\nОтветь одним словом точно из списка без знаков препинания и пояснений:';
-            // for (let id of options) menu += '\n\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
-            
             let messages = await this.context();
-            // if(messages.last?.role === 'user')
-            //     messages.last.content += '\n\n[instruction]\n\n' + menu;
-            // else
-            messages.push({ role: 'user', content: active_pipe.next || 'continue' });
+            if(active_block.rejected){
+                messages[0].content = "Твое последнее предложение отклонено пользователем, выясни, что именно не его понравилось."
+            }
+            else{
+                active_pipe = pipe[active_block.type];
+                let options = [...active_pipe.next];
+                let menu = 'Выбери следующий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
+                for (let id of options) menu += '\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
+                if(messages.last?.role === 'user')
+                    messages.last.content += '\n\n[instruction]\n' + menu;
+                else
+                    messages.push({ role: 'user', content: menu});
+            }
+   
+            
+            
+
 
             let response = await this._streamChat({ messages, silent: true, user });
             if (this._stopped) return;
@@ -100,12 +106,20 @@ export default {
         const walk = (node, out) => {
             for (const b of (node.items || [])) {
                 let content = (b.content || '');
-                if (b.type === 'task' && Array.isArray(b.steps)) {
-                    content += '\n\nШаги:\n' + b.steps
-                        .map(s => `${s.number}. [${s.status}] ${s.description}`)
-                        .join('\n');
+                // if (b.type === 'task' && Array.isArray(b.steps)) {
+                //     content += '\n\nШаги:\n' + b.steps
+                //         .map(s => `${s.number}. [${s.status}] ${s.description}`)
+                //         .join('\n');
+                // }
+                switch(pipe[b.type]?.role){
+                    case 'user':{
+                        out.push({ role: pipe[b.type]?.role, content });
+                    } break;
+                    default:{
+                        out.push({ role: 'assistant', content: `<${b.type}>${content}</${b.type}>`});
+                    }
                 }
-                out.push({ role: pipe[b.type]?.role || 'assistant', content });
+                
                 if (b.items?.length) walk(b, out);
             }
             return out;

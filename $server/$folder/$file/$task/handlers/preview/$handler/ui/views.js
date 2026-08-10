@@ -3,12 +3,9 @@
  * Loaded via shell: import './ui/views.js'.
  *
  * microchat-view — details: summary (title + subTitle) + body (content + extend + items).
- * hideTitle — скрыть summary; body всегда виден (open принудительно).
- * pinned = last в host.items; :open = pinned|userOpen|hideTitle.
  */
 import './ribbon.js';
 
-/** База: один details, summary по !hideTitle. */
 ODA({ is: 'microchat-view',
     imports: 'oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
     template: /*html*/`
@@ -58,7 +55,7 @@ ODA({ is: 'microchat-view',
         </style>
 
         <details :open="open" @toggle="onToggle">
-            <summary ~if="!hideTitle" raised vertical flex :color-mode
+            <summary ~show="showTitle" raised vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
@@ -69,7 +66,7 @@ ODA({ is: 'microchat-view',
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
-                <oda-markdown-viewer vertical ~if="showContent" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical ~show="showContent" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>
                 <microchat-ribbon ~if="items.length" :items></microchat-ribbon>
             </div>
@@ -78,9 +75,8 @@ ODA({ is: 'microchat-view',
     data: null,
 
     /** скрыть summary; body всегда на виду */
-    hideTitle: {
-        $def: false,
-        $attr: true,
+    get showTitle() {
+        return this.data && !this.data.stop
     },
 
     // --- data ---
@@ -103,7 +99,7 @@ ODA({ is: 'microchat-view',
         const items = this.host && Reactor.get(this.host, 'items');
         return Reactor.equal(items?.last, this.data);
     },
-    get open() { return this.hideTitle || this.pinned || this.userOpen; },
+    get open() { return !this.showTitle || this.pinned || this.userOpen; },
     onSummaryClick(e) {
         if (this.pinned) {
             e.preventDefault();
@@ -116,7 +112,7 @@ ODA({ is: 'microchat-view',
     onToggle(e) {
         const el = e?.target;
         if (!el || el.localName !== 'details') return;
-        if (this.hideTitle || this.pinned) {
+        if (this.pinned) {
             el.open = true;
             return;
         }
@@ -129,7 +125,9 @@ ODA({ is: 'microchat-view',
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
     get viewContent() { return (this.content || '') + this.streamTail; },
-    get showContent() { return !!(this.content || this.streamTail); },
+    get showContent() {
+         return !!(this.content || this.streamTail || !this.showTitle); 
+    },
 
     // --- title chrome ---
     get colorMode() {
@@ -222,21 +220,6 @@ ODA({ is: 'microchat-form',
     get fields() { return this.data?.fields || []; },
 });
 
-/** answer / question / research — body без title. */
-ODA({ is: 'microchat-view-answer',
-    extends: 'microchat-view',
-    hideTitle: true,
-});
-
-ODA({ is: 'microchat-view-question',
-    extends: 'microchat-view',
-    hideTitle: true,
-});
-
-ODA({ is: 'microchat-view-research',
-    extends: 'microchat-view',
-    hideTitle: true,
-});
 
 /**
  * task — title + subTitle (todo); сырой content в markdown не показываем.
