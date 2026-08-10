@@ -1,41 +1,41 @@
 # Preview микрочата (ai.task)
 
-Декларативная проекция JSON `ai.task` на ODA-views по [`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) Part B (B.1.1–B.1.3).
+Декларативная проекция JSON `ai.task` на ODA-views ([`rules/rules.md`](/rules/rules.md/~/handlers/pages/form/) Part B: один `data`, геттеры, `$pdp`).
 
-## Принцип
+## Что это
 
-Shell: `data` / `items` / `focusedBlock` / `streamingText` / load. Дети в `ui/`. Action и лента читают фокус через `$pdp` / дерево `items`.
+Shell (`class.js`) + `ui/`: лента блоков и промптбар. Источник правды — `data` файла; дети получают `:data` / `:items` / `:$item`.
 
 ```
-$handler/class.js          ← вход + focusedBlock + streamingText
-$handler/ui/*              ← ribbon, panel, views, mic, tts, usage
+$class.js                 ← shell: data, items, focusedBlock, streamingText, load
+ui/views.js               ← ODA-views блоков (+ import ribbon)
+ui/ribbon.js              ← microchat-ribbon
+ui/panel.js               ← microchat-panel (+ mic/tts/usage)
+ui/mic.js                 ← MicAudioController (только panel)
+ui/tts.js                 ← TtsController (только panel)
+ui/usage.js               ← buildUsageStats / fmtTokens (только panel)
 ```
 
 ## Состав
 
-| Модуль | Владеет |
-|--------|---------|
-| [`class.js`](class.js) | shell: `data`/`items`/`focusedBlock`/`streamingText`, load по `changed` |
-| [`ui/ribbon.js`](ui/ribbon.js) | лента; top=`!!$item`; scroll на attached/delta/done |
-| [`ui/panel.js`](ui/panel.js) | composer, files, `data.model`, action (`$pdp.focusedBlock?.button`); pending + send/stop |
-| [`ui/mic.js`](ui/mic.js) | speech recognition |
-| [`ui/tts.js`](ui/tts.js) | TTS (browser / piper) |
-| [`ui/usage.js`](ui/usage.js) | dial контекста |
-| [`ui/views.js`](ui/views.js) | блоки; open = last в слое; tip рисует `$pdp.streamingText` |
+| Модуль | Факт |
+|--------|------|
+| [`class.js`](class.js) | Шаблон: `microchat-ribbon` + `microchat-panel`. `$item.set`: `changed` / `chat.done` → `streamingText=''` + `load()`; `chat.delta` → накопление `streamingText`. `focusedBlock` — последний не-`hidden` в открытой ветке (`closed` / без `items` — стоп). |
+| [`ui/ribbon.js`](ui/ribbon.js) | `top = !!$item` (attr). Рендер: `tag(item)` → `microchat-view-{type}` если CE/`ODA.telemetry`, иначе `microchat-view`; скрывает `hidden`. Scroll только у топа: `pinBottom` / `attached` / `items.set`; на `chat.delta` — follow если `nearBottom`; на `chat.done` — `scrollToBottom`. |
+| [`ui/panel.js`](ui/panel.js) | Composer, files, dial usage, TTS cycle, model picker. `actionButton = $pdp.focusedBlock?.button`. Action-bar: `sendAction(true\|false)` → `fetch('prompt', { prompt: ok, role: 'BUTTON', model })`. `send()` → текст/файлы → `fetch('prompt', …)`; пустой send → mic. `stop()` → `fetch('stop')`. Pending: true на send/sendAction; false на `chat.done` / `stop` / `chat.error` / `result.ok === false`. |
+| [`ui/views.js`](ui/views.js) | База `microchat-view`: `open = hideTitle \|\| pinned \|\| userOpen`; `pinned = Reactor.equal(host.items.last, data)`. Stream: `streamTail` только если блок = `$pdp.focusedBlock`; `viewContent = content + streamTail`; `showContent` — boolean. Типы: `prompt`, `step`, `form` (+ stub `microchat-form`), `answer`/`question`/`research` (`hideTitle`), `task` (+ `microchat-task-todo`). |
+| [`ui/mic.js`](ui/mic.js) | SpeechRecognition → `panel.value` / `recording` / `timer`. |
+| [`ui/tts.js`](ui/tts.js) | Режимы `off` / `local` / `browser`; буфер delta → speak на done. |
+| [`ui/usage.js`](ui/usage.js) | Статистика контекста из `data.usage` + walk `data.items`. |
 
-## Контракты UI
+## Контракты (как в коде)
 
-- **Модель** всегда в `data.model` — не искать в MODELS из panel.
-- **Action:** `focusedBlock.button` → `value = label` → `send()`. Геттер без `|| null`.
-- **Стили статуса:** attrs `success`/`warning`/`error`, не `.btn-*`.
-- **Stream:** delta → shell `streamingText`; tip-view `viewContent` + boolean `showContent`; ribbon только scroll. Stop/resume: `$item.fire('chat.stop'|'chat.resume')`.
-- **`$pdp` + Reactor:** см. rules B.1.2 (`Reactor.get` в proxy; не кэшировать `null`).
-
-## Pending (panel)
-
-- `send()` → `pending = true`
-- `chat.done` / `stop` → `pending = false`
+- **Модель:** чтение `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model')`. Гидрации «найти модель в MODELS, если пусто» нет.
+- **Action:** видимость по `actionButton?.label`; yes/no → `sendAction(true|false)`, не `value = label` и не `send()`.
+- **Статусы кнопок:** attrs `success-invert` / `warning` / `error-invert` на action-bar.
+- **Stream:** shell копит `streamingText`; view читает через `$pdp`; ribbon только скроллит.
+- **`$pdp` / Reactor:** `actionButton` и `streamTail` через `$pdp`; `pinned` через `Reactor.get` / `Reactor.equal`; пусто без `|| null`.
 
 ## Load
 
-`$task.contentType = 'application/json'` → object; shell: `this.data = await $item.load()`.
+`$item.load()` в shell (`$item.set`, `changed`, `chat.done`). Тип тела — контракт `$task` / `$file.load` (JSON → object).

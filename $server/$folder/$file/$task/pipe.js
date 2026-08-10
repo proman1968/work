@@ -17,79 +17,101 @@ export default {
     /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
     prompt: {
         role: 'user',
-        next: ['thinking', 'answer'],
+        next: ['Если можешь ответить на предыдущий запрос пользователя, просто отвечай.',
+            'Если не можешь сразу ответить или решить поставленную задачу, и тебе необходимо над ней подумать, просто напиши слово thinking.'].join('\n'),
     },
 
     /** размышление над следующим шагом; мерджит инструкцию в последний user-промпт */
     thinking: {
+        icon: 'carbon:idea',
         inject: 'если необходимо обдумать дальнейшие действия',
         prompt: [
             'Как следует подумай, над тем, что необходимо сделать на следующем шаге ',
             'исходя из контекста, и выдай свои размышления от 5 до 100 строк (от своего лица).',
             'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать сам,',
-            'а только прими решение каким будет твой выбор (plan, research, actions)'].join(' '),
-        next: ['plan', 'research', 'actions'],
-        build: (r) => ({
-            type: 'thinking',
-            content: r.content,
-            usage: r.usage,
-            icon: 'carbon:idea',
-        }),
+            ].join(' '),
+        next: ['answer', 'plan', 'research', 'actions'],
+    },
+    text: {
+        icon: 'icons:text',
+        prompt: 'Просто ответь пользователю, не выполняя никаких действий.',
+        stop: true,
     },
 
     plan: {
+        icon: 'icons:assignment',
         inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
         prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя.',
             '\n\n[instruction]\n',
             'Первая строка — короткий заголовок будущей задачи (без нумерации, без слова task).',
             'Далее — нумерованный список пунктов в один слой. Без вступления и пояснений.',
         ].join('\n'),
-        build: (r) => ({
-            type: 'plan',
-            content: r.content,
-            usage: r.usage,
-            button: { label: 'Принять' },
-            icon: 'icons:assignment',
-        }),
-        /** accept: hide plan + push task; reject: question — выяснить что не так */
-        yes: { convert: 'task' },
-        no: 'question'
-    },
-
-    /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
-    task: {
-        build: (r, ctx) => {
-            const text = ctx?.from?.content || r.content || '';
-            const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+        button: { label: 'Принять' },
+        convert: (block) => {
+            const text = block.content || '';
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
             const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
             const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
             const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
             const src = numbered.length ? numbered : bullets;
-            const steps = src
+            block.type = 'task';
+            block.label = (titleLine || '').replace(/\*\*/g, '').trim()
+                || src[0]?.replace(/^\d+\.\s*/, '').replace(/^[-*•]\s+/, '').trim()
+                || '';
+            block.steps = src
                 .map(line => line
                     .replace(/^\d+\.\s*/, '')
                     .replace(/^[-*•]\s+/, '')
                     .replace(/\*\*/g, '')
                     .trim())
                 .filter(Boolean)
-                .map((description, index) => ({
-                    number: index + 1,
+                .map((description, i) => ({
+                    number: i + 1,
                     description,
-                    status: index === 0 ? 'in_progress' : 'pending',
+                    status: i === 0 ? 'in_progress' : 'pending',
                 }));
-            const label = (titleLine || '').replace(/\*\*/g, '').trim()
-                || steps[0]?.description || '';
-            return {
-                type: 'task',
-                label,
-                content: text,
-                steps,
-                items: [],
-                icon: 'icons:list',
-            };
+            block.items = [];
+            block.icon = 'icons:list';
+            delete block.button; // план принят — кнопка больше не нужна
+            return block;
         },
-        next: ['step'],
+        next: ['thinking'],
     },
+
+    // /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
+    // task: {
+    //     build: (r, ctx) => {
+    //         const text = ctx?.from?.content || r.content || '';
+    //         const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+    //         const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
+    //         const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
+    //         const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
+    //         const src = numbered.length ? numbered : bullets;
+    //         const steps = src
+    //             .map(line => line
+    //                 .replace(/^\d+\.\s*/, '')
+    //                 .replace(/^[-*•]\s+/, '')
+    //                 .replace(/\*\*/g, '')
+    //                 .trim())
+    //             .filter(Boolean)
+    //             .map((description, index) => ({
+    //                 number: index + 1,
+    //                 description,
+    //                 status: index === 0 ? 'in_progress' : 'pending',
+    //             }));
+    //         const label = (titleLine || '').replace(/\*\*/g, '').trim()
+    //             || steps[0]?.description || '';
+    //         return {
+    //             type: 'task',
+    //             label,
+    //             content: text,
+    //             steps,
+    //             items: [],
+    //             icon: 'icons:list',
+    //         };
+    //     },
+    //     next: ['step'],
+    // },
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
@@ -113,14 +135,10 @@ export default {
     },
 
     research: {
+        icon: 'icons:search',
         inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
         autocomplete: true,
         next: ['work', 'web', 'question', 'form'],
-        build: () => ({
-            type: 'research',
-            icon: 'icons:search',
-            items: []
-        }),
     },
 
     web: {
@@ -156,17 +174,11 @@ export default {
     },
 
     answer: {
+        icon: 'icons:question-answer',
         inject: 'если точно знаешь ответ на запрос пользователя',
         prompt: ['Ответь пользователю обычным текстом.',
             'Только ответ, коротко и по делу, без лишних пояснений.'].join('\n'),
-        build: (r) => ({
-            type: 'answer',
-            content: r.content,
-            usage: r.usage,
-            icon: 'icons:question-answer',
-            stop: true,
-        }),
-        
+        stop: true,
     },
 
     question: {
