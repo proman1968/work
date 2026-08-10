@@ -57,12 +57,10 @@ ODA({is: 'chat-item',
             }
             .title {
                 font-size: xx-small;
-                padding: 2px;
                 transition: background-color .5s;
             }
             item-node{
-                padding: 2px 0px 2px 4px; 
-                border-radius: 16px; 
+                padding: 2px 8px; 
                 font-size: x-small;
             }
         </style>

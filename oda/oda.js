@@ -1347,11 +1347,13 @@ ODA.DIRECTIVES = {
     text(text = '') {
         if (this[R].cache.textContent === text) return;
         this[R].cache.textContent = text;
-        if (!this[R].cache.pendingText) {
-            this[R].cache.pendingText = text;
+        this[R].cache.pendingText = text;
+        if (!this[R].cache.textScheduled) {
+            this[R].cache.textScheduled = true;
             queueMicrotask(() => {
                 this.textContent = this[R].cache.pendingText;
                 this[R].cache.pendingText = null;
+                this[R].cache.textScheduled = false;
             });
         }
     },
@@ -1359,11 +1361,13 @@ ODA.DIRECTIVES = {
         if (this[R].cache.innerHTML === html) return;
         if(typeof html !== 'string') return;
         this[R].cache.innerHTML = html;
-        if (!this[R].cache.pendingHTML) {
-            this[R].cache.pendingHTML = html;
+        this[R].cache.pendingHTML = html;
+        if (!this[R].cache.htmlScheduled) {
+            this[R].cache.htmlScheduled = true;
             queueMicrotask(() => {
                 this.innerHTML = this[R].cache.pendingHTML;
                 this[R].cache.pendingHTML = null;
+                this[R].cache.htmlScheduled = false;
             });
         }
     },

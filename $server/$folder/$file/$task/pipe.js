@@ -17,7 +17,8 @@ export default {
     /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
     prompt: {
         role: 'user',
-        next: ['thinking'],
+        next: ['Если можешь ответить на предыдущий запрос пользователя, просто отвечай.',
+            'Если не можешь сразу ответить или решить поставленную задачу, и тебе необходимо над ней подумать, просто напиши слово thinking.'].join('\n'),
     },
 
     /** размышление над следующим шагом; мерджит инструкцию в последний user-промпт */
@@ -31,6 +32,11 @@ export default {
             ].join(' '),
         next: ['answer', 'plan', 'research', 'actions'],
     },
+    text: {
+        icon: 'icons:text',
+        prompt: 'Просто ответь пользователю, не выполняя никаких действий.',
+        stop: true,
+    },
 
     plan: {
         icon: 'icons:assignment',
@@ -41,44 +47,71 @@ export default {
             'Далее — нумерованный список пунктов в один слой. Без вступления и пояснений.',
         ].join('\n'),
         button: { label: 'Принять' },
-        yes: { convert: 'task' },
-        no: 'question'
-    },
-
-    /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
-    task: {
-        build: (r, ctx) => {
-            const text = ctx?.from?.content || r.content || '';
-            const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+        convert: (block) => {
+            const text = block.content || '';
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
             const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
             const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
             const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
             const src = numbered.length ? numbered : bullets;
-            const steps = src
+            block.type = 'task';
+            block.label = (titleLine || '').replace(/\*\*/g, '').trim()
+                || src[0]?.replace(/^\d+\.\s*/, '').replace(/^[-*•]\s+/, '').trim()
+                || '';
+            block.steps = src
                 .map(line => line
                     .replace(/^\d+\.\s*/, '')
                     .replace(/^[-*•]\s+/, '')
                     .replace(/\*\*/g, '')
                     .trim())
                 .filter(Boolean)
-                .map((description, index) => ({
-                    number: index + 1,
+                .map((description, i) => ({
+                    number: i + 1,
                     description,
-                    status: index === 0 ? 'in_progress' : 'pending',
+                    status: i === 0 ? 'in_progress' : 'pending',
                 }));
-            const label = (titleLine || '').replace(/\*\*/g, '').trim()
-                || steps[0]?.description || '';
-            return {
-                type: 'task',
-                label,
-                content: text,
-                steps,
-                items: [],
-                icon: 'icons:list',
-            };
+            block.items = [];
+            block.icon = 'icons:list';
+            delete block.button; // план принят — кнопка больше не нужна
+            return block;
         },
-        next: ['step'],
+        next: ['thinking'],
     },
+
+    // /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
+    // task: {
+    //     build: (r, ctx) => {
+    //         const text = ctx?.from?.content || r.content || '';
+    //         const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+    //         const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
+    //         const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
+    //         const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
+    //         const src = numbered.length ? numbered : bullets;
+    //         const steps = src
+    //             .map(line => line
+    //                 .replace(/^\d+\.\s*/, '')
+    //                 .replace(/^[-*•]\s+/, '')
+    //                 .replace(/\*\*/g, '')
+    //                 .trim())
+    //             .filter(Boolean)
+    //             .map((description, index) => ({
+    //                 number: index + 1,
+    //                 description,
+    //                 status: index === 0 ? 'in_progress' : 'pending',
+    //             }));
+    //         const label = (titleLine || '').replace(/\*\*/g, '').trim()
+    //             || steps[0]?.description || '';
+    //         return {
+    //             type: 'task',
+    //             label,
+    //             content: text,
+    //             steps,
+    //             items: [],
+    //             icon: 'icons:list',
+    //         };
+    //     },
+    //     next: ['step'],
+    // },
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {

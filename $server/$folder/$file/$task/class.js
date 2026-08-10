@@ -10,43 +10,49 @@ export default {
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
-     
+        debugger
         let { prompt, role, user } = params;
+        let pipe = await this.pipe;
+        let active_block = await this._active_block();
+        let active_pipe = pipe[active_block.type];
         try {
             switch (role) { 
                 case 'AI':{
-                    debugger
                 } break;
                 case 'BUTTON':{
-                    debugger
+                    switch(prompt){ 
+                        case 'true':{
+                            active_pipe.convert(active_block);  
+                        } break;
+                        case 'false':{
+                            active_block.rejected = true; 
+                        } break;
+                            
+                    }
+                    await this._save(user);
                 } break;
                 default:{
                     let block = {
                         type: 'prompt',
                         content: prompt,
-                        sender: user?.$user?.id ?? user?.uid ?? '',
-                        items: []
-                    }
-                    await this._push_block(user, block);
+                    };
+                    if(!active_block?.type)
+                        block.items = [];
+                    active_block = block;
+                    await this._push_block(user, active_block);
                 }
             }
-     
-            let pipe = await this.pipe;
-            let active_pipe = await this._active_pipe();
+            active_pipe = pipe[active_block.type];
+            // let options = [...active_pipe.next];
+            // let menu = active_block.menu_inject || 'Выбери следующий тип шага, не решай задачу целиком.';
+            // menu += '\n\nОтветь одним словом точно из списка без знаков препинания и пояснений:';
+            // for (let id of options) menu += '\n\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
             
-            let container = await this._active_container();
-   
-            let options = [...active_pipe.next];
-            let menu = 'Выбери следующий тип шага, не решай задачу целиком.';
-            menu += '\n\nОтветь одним словом точно из списка без знаков препинания и пояснений:';
-            for (let id of options) menu += '\n\n' + id + ' - ' + (pipe[id]?.inject || '') + ';';
-            
-
             let messages = await this.context();
-            if(messages.last?.role === 'user')
-                messages.last.content += '\n\n[instruction]\n\n' + menu;
-            else
-                messages.push({ role: 'user', content: menu });
+            // if(messages.last?.role === 'user')
+            //     messages.last.content += '\n\n[instruction]\n\n' + menu;
+            // else
+            messages.push({ role: 'user', content: active_pipe.next || 'continue' });
 
             let response = await this._streamChat({ messages, silent: true, user });
             if (this._stopped) return;
@@ -54,31 +60,31 @@ export default {
   
             let next_pipe = pipe[choice];
             if(!next_pipe){
-                await this._push_block(user, { content: response.content});
+                choice = 'text'
+                next_pipe = pipe[choice];
             }
-            else{
-                let block = {
-                    type: choice,
-                    icon: next_pipe.icon || 'carbon:idea',
-                }
-                await this._push_block(user, block);
+
+            let block = {
+                type: choice,
+                icon: next_pipe.icon || 'carbon:idea',
+            }
+            await this._push_block(user, block);
 
 
-                messages = await this.context();
-                if(messages.last?.role === 'user')
-                    messages.last.content += '\n\n[instruction]\n\n' + next_pipe.prompt;
-                else
-                    messages.push({ role: 'user', content: next_pipe.prompt });
+            messages = await this.context();
+            if(messages.last?.role === 'user')
+                messages.last.content += '\n\n[instruction]\n\n' + next_pipe.prompt;
+            else
+                messages.push({ role: 'user', content: next_pipe.prompt });
 
-                response = await this._streamChat({ messages, user });
-                if (this._stopped) return;
-                Object.assign(block, response);
-                block.button = next_pipe.button;
-                block.stop = next_pipe.stop;
-                await this._save(user);
-                if (!block.button && !block.stop) {
-                    this.async(() => this.prompt({ role: 'AI', user }));
-                }
+            response = await this._streamChat({ messages, user });
+            if (this._stopped) return;
+            Object.assign(block, response);
+            block.button = next_pipe.button;
+            block.stop = next_pipe.stop;
+            await this._save(user);
+            if (!block.button && !block.stop) {
+                this.async(() => this.prompt({ role: 'AI', user }));
             }
         }
         catch (e) {
@@ -87,62 +93,6 @@ export default {
 
         user?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
-    },
-    /** Последний не-hidden в массиве. */
-    _lastVisible(items) {
-        if (!Array.isArray(items)) return undefined;
-        for (let i = items.length - 1; i >= 0; i--)
-            if (!items[i]?.hidden) return items[i];
-        return undefined;
-    },
-    async _active_pipe(){
-        let block = await this._active_block();
-        let pipe = await this.pipe;
-        return pipe[block.type];
-    },
-    /** Позиция автомата: лист; hidden в items не участвуют. */
-    async _active_block(){
-        const find__active_block = (block) => {
-            if (block.closed) return block;
-            const last = this._lastVisible(block.items);
-            if (!last) return block;
-            if (last.closed) return block;
-            if (!last.items?.length) return last;
-            return find__active_block(last);
-        }
-        return find__active_block(await this.body);
-    },
-    /** Контейнер (родитель листа) — куда пушить; hidden пропускаем. */
-    async _active_container(){
-        const find = (block) => {
-            if (block.closed) return block;
-            const last = this._lastVisible(block.items);
-            if (!last || last.closed || !Array.isArray(last.items)) return block;
-            return find(last);
-        }
-        return find(await this.body);
-    },
-    /** Закрыт step → найти родительский task, отметить шаг done, следующий pending → in_progress. */
-    async _advance_steps(container){
-        if (container?.type !== 'step') return;
-        const body = await this.body;
-        const findParent = (node) => {
-            for (const b of (node.items || [])) {
-                if (b === container) return node;
-                if (b.items?.length) {
-                    const r = findParent(b);
-                    if (r) return r;
-                }
-            }
-            return null;
-        };
-        const task = findParent(body);
-        if (task?.type !== 'task' || !Array.isArray(task.steps)) return;
-        const cur = task.steps.find(s => s.status === 'in_progress');
-        if (cur) cur.status = 'done';
-        const next = task.steps.find(s => s.status === 'pending');
-        if (next) next.status = 'in_progress';
-        else task.closed = true;  // все шаги done — закрыть task
     },
     async context(){
         const body = await this.body;
@@ -213,33 +163,20 @@ export default {
         this._stopped = true;
         return { ok: true, stopped: true };
     },
-    /** time на блоке и вложенных items (build часто не ставит). */
-    _stamp_time(block) {
-        if (!block || typeof block !== 'object') return;
-        if (block.time == null) block.time = Date.now();
-        if (Array.isArray(block.items))
-            for (const b of block.items) this._stamp_time(b);
-    },
     async _push_block(userSession, block){
-        let root = await this._active_container();
-        this._stamp_time(block);
+        let root = await this._active_block(true);
+        block.time ??= Date.now();
         root.items.push(block);
         await this._save(userSession);
     },
-    /** Tip-массив для записи: спуск в items последнего видимого контейнера. */
-    async get_active_list(){
-        let body = await this.body;
-        if (body.closed)
-            return [];
-        let list = body.items ||= [];
-        while (true) {
-            const last = this._lastVisible(list);
-            if (last && Array.isArray(last.items) && !last.closed) {
-                list = last.items;
-                continue;
-            }
-            return list;
+    async _active_block(only_container = false) {
+        let active_block = await this.body;
+        while (active_block?.items?.length && !active_block.closed) {
+            if(only_container &&  !active_block.items.last?.items)
+                break;
+            active_block = active_block.items.last;
         }
+        return active_block;
     },
     async change_model(params = {}) {
         const {model} = params;
