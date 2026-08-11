@@ -24,54 +24,69 @@ export default {
             return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
         })();
     },
-    get _logsFolder() {
-        const day = this.day;
-        if (!day)
+    get _logsFolders() {
+        const dayFrom = this.dayFrom;
+        const dayTo   = this.dayTo;
+        if (!dayFrom || !dayTo)
             return null;
+        let current = new Date(dayFrom);
+        const end = new Date(dayTo);
         return (async () => {
+            const folders = [];
             const source = await this._logsSource;
             if (!source)
                 return null;
-            await source.logs(day);
-            const folder = await source.get_item('/~/logs/.data.logs/history/' + day);
-            if (!folder)
-                return null;
-            this._boundOnLogsChanged ||= () => { this.events = undefined; };
-            folder.unlisten?.('changed', this._boundOnLogsChanged);
-            folder.listen?.('changed', this._boundOnLogsChanged);
-            return this._logsFolder = folder;
+            while (current <= end) {
+                const day = _formatDate(current)
+                await source.logs(day);
+                const folder = await source.get_item('/~/logs/.data.logs/history/' + day);
+                if (!folder)
+                    return null;
+                this._boundOnLogsChanged ||= () => { this.events = undefined; };
+                folder.unlisten?.('changed', this._boundOnLogsChanged);
+                folder.listen?.('changed', this._boundOnLogsChanged);
+                folders.add(folder);
+                current.setDate(current.getDate() + 1)
+            }
+            return this._logsFolders = folders;
         })();
     },
     get events() {
-        const day = this.day;
-        if (!day)
-            return [];
+        const dayFrom = this.dayFrom;
+        const dayTo   = this.dayTo;
+        if (!dayFrom || !dayTo)
+            return null;
         return (async () => {
-            const folder = await this._logsFolder;
-            if (!folder)
+            const folders = await this._logsFolders;
+            if (!folders)
                 return this.events = [];
-            let files = await folder.get_item('/*.logs');
-            if (!Array.isArray(files))
-                files = files ? [files] : [];
-            files = await Promise.all(files.map(f => Promise.resolve(f)));
-            files = files.filter(f => f?.id?.endsWith?.('.logs'));
-            files = files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
+
             const events = [];
-            for (const file of files) {
-                const raw = await file.load();
-                const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                let content = log?.content;
-                if (typeof content === 'string')
-                    content = JSON.parse(content);
-                if (!content?.start || !content?.end)
-                    continue;
-                events.push({
-                    start: content.start,
-                    end: content.end,
-                    summary: content.summary ?? '',
-                    location: content.location ?? '',
-                    $item: file
-                });
+            for (let folder of folders) {
+                let files = await folder.get_item('/*.logs');
+                if (!Array.isArray(files))
+                    files = files ? [files] : [];
+                files = await Promise.all(files.map(f => Promise.resolve(f)));
+                files = files.filter(f => f?.id?.endsWith?.('.logs'));
+                files = files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
+                for (const file of files) {
+                    const raw = await file.load();
+                    const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    let content = log?.content;
+                    if (typeof content === 'string') {
+                        content = JSON.parse(content);
+                    }
+
+                    if (!content?.start || !content?.end)
+                        continue;
+                    events.push({
+                        start: content.start,
+                        end: content.end,
+                        summary: content.summary ?? '',
+                        location: content.location ?? '',
+                        $item: file
+                    });
+                }
             }
             return this.events = events;
         })();
@@ -158,11 +173,6 @@ ODA({
                 @apply --flex;
                 overflow: auto;
             }
-            .date-picker {
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
-                cursor: pointer;
-            }
             .btn_mode {
                 border-radius: 4px;
             }
@@ -170,11 +180,7 @@ ODA({
         <item-users accent-invert flex :$item slot="top"></item-users>
         <div vertical class="toolbar">
             <div horizontal>
-                <div class="date-nav" horizontal flex>
-                    <oda-button icon="icons:chevron-left" @tap="prevPeriod"></oda-button>
-                    <input type="date" id="date-picker" class="date-picker" ::value="datePickerValue">
-                    <oda-button icon="icons:chevron-right" @tap="nextPeriod"></oda-button>
-                </div>
+                <oda-date-nav :view-mode ::current-date></oda-date-nav>
                 <div horizontal>
                     <oda-button class="btn_mode" icon="bootstrap:calendar2-day" :border="viewMode==='day'" @tap="viewMode='day'"></oda-button>
                     <oda-button class="btn_mode" icon="bootstrap:calendar2-week" :border="viewMode==='week'" @tap="viewMode='week'"></oda-button>
@@ -209,59 +215,12 @@ ODA({
         $def: 'day', // month, week, day, list
         $save: true,
         set(n) {
-            this._updateDateRange();
         }
     },
     currentDate: {
         $def: new Date(),
         set(n) {
-            this._updateDateRange();
         }
-    },
-    _formatDate(date) {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    },
-    _updateDateRange() {
-        const date = this.currentDate || new Date();
-        this.day = this._formatDate(date);
-        if (this.viewMode === 'day') {
-            this.dayFrom = this.day;
-            this.dayTo = this.day;
-        } else if (this.viewMode === 'week') {
-            const start = new Date(date);
-            const dayOfWeek = start.getDay();
-            const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-            start.setDate(start.getDate() + diff);
-            const end = new Date(start);
-            end.setDate(end.getDate() + 6);
-            this.dayFrom = this._formatDate(start);
-            this.dayTo = this._formatDate(end);
-        } else if (this.viewMode === 'month') {
-            const start = new Date(date.getFullYear(), date.getMonth(), 1);
-            const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-            this.dayFrom = this._formatDate(start);
-            this.dayTo = this._formatDate(end);
-        }
-    },
-    get datePickerValue() {
-        this.currentDate ||= new Date();
-        const year = this.currentDate.getFullYear();
-        const month = String(this.currentDate.getMonth() + 1).padStart(2, '0');
-        const day = String(this.currentDate.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    },
-    set datePickerValue(value) {
-        if (value) {
-            this.currentDate = new Date(value);
-        }
-    },
-    attached() {
-        this.async(() => {
-            this._updateDateRange();
-        })
     },
     $listeners: {
         'add-event'(e) {
@@ -272,33 +231,6 @@ ODA({
         const detail = e?.detail?.value || {};
         await this.$pdp.showMeeting(detail);
     },
-    prevPeriod() {
-        const newDate = new Date(this.currentDate);
-        if (this.viewMode === 'day') {
-            newDate.setDate(newDate.getDate() - 1);
-        } else if (this.viewMode === 'week') {
-            newDate.setDate(newDate.getDate() - 7);
-        } else {
-            newDate.setMonth(newDate.getMonth() - 1);
-        }
-        this.currentDate = newDate;
-        this._updateDateRange();
-    },
-    nextPeriod() {
-        const newDate = new Date(this.currentDate);
-        if (this.viewMode === 'day') {
-            newDate.setDate(newDate.getDate() + 1);
-        } else if (this.viewMode === 'week') {
-            newDate.setDate(newDate.getDate() + 7);
-        } else {
-            newDate.setMonth(newDate.getMonth() + 1);
-        }
-        this.currentDate = newDate;
-        this._updateDateRange();
-    },
-    goToday() {
-        this.currentDate = new Date();
-    }
 })
 
 ODA({
@@ -389,7 +321,7 @@ ODA({
                     </div>
                 </div>
             </div>
-            <div ~for="laidOutEvents" :class="$for.item.class" ~style="$for.item.style" @tap.stop="open($for.item.$item)">
+            <div ~for="laidOutEvents" :class="$for.item.class" ~style="$for.item.style" :title="$for.item.title" @tap.stop="open($for.item.$item)">
                 <div horizontal class="row">
                     <div class="interval">{{$for.item.interval}}</div>
                     <div class="summary">{{$for.item.summary}}</div>
@@ -436,13 +368,6 @@ ODA({
         if (!events || events.then)
             return [];
         const gap = 2;
-        const pad = n => String(n).padStart(2, '0');
-        const hhmm = iso => {
-            const d = new Date(iso);
-            if (isNaN(d))
-                return '';
-            return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        };
         const items = events
             .map(e => ({
                 start: e.start,
@@ -467,13 +392,12 @@ ODA({
             for (const item of cluster) {
                 let startClass = this.timeToAnchor(new Date(item.start), 'bas');
                 let endClass = this.timeToAnchor(new Date(item.end), 'bae');
-                const a = hhmm(item.start);
-                const b = hhmm(item.end);
                 result.push({
                     summary: item.summary,
                     location: item.location,
                     $item: item.$item,
-                    interval: a && b ? `${a} - ${b}` : '',
+                    interval: eventInterval(item),
+                    title: eventTitle(item),
                     style: {
                         left: `calc(${gutter}px + (100% - ${gutter}px) * ${item._col / colCount} + ${gap * 2}px)`,
                         width: `calc((100% - ${gutter}px) / ${colCount})`
@@ -554,13 +478,14 @@ ODA({
                 /* min-height: 120px; */
                 padding: 2px;
                 position: relative;
+                overflow: hidden;
             }
             .hour-cell:hover {
                 background: var(--light-background);
             }
             .event-block {
                 background: var(--success-color);
-                padding: 4px;
+                padding: 2px 4px;
                 margin: 2px;
                 border-radius: 2px;
                 font-size: small;
@@ -570,6 +495,23 @@ ODA({
             }
             .event-block:hover {
                 opacity: 0.8;
+            }
+            .event-block .row {
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
+            }
+            .event-block .interval {
+                white-space: nowrap;
+                opacity: .8;
+                font-size: xx-small;
+            }
+            .event-block .summary {
+                @apply --bold;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
             }
         </style>
         <div class="week-grid" style="border-top: 1px solid var(--border-color);">
@@ -584,8 +526,13 @@ ODA({
                 <div class="time-slot">{{$for.item}}</div>
                 <div ~for="weekDays" class="hour-cell" @tap="selectWeekTime($for.$for.item, $for.item)">
                     <div ~for="getEventsForHour($for.$for.item, $for.item)"
-                         class="event-block">
-                        {{$for.$for.$for.item.title}}
+                         class="event-block"
+                         :title="$for.$for.$for.item.title"
+                         @tap.stop="open($for.$for.$for.item.$item)">
+                        <div horizontal class="row">
+                            <div class="interval">{{$for.$for.$for.item.interval}}</div>
+                            <div class="summary">{{$for.$for.$for.item.summary}}</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -627,16 +574,21 @@ ODA({
         dayStart.setHours(hourNum, 0, 0, 0);
         const dayEnd = new Date(dayInfo.fullDate);
         dayEnd.setHours(hourNum, 59, 59, 999);
-        return this.events.filter(event => {
-            const eventStart = new Date(event.start || 0);
-            return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
-        })
+        return this.events
+            .filter(event => {
+                const eventStart = new Date(event.start || 0);
+                return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
+            })
+            .map(eventViewItem);
     },
     selectWeekTime(dayInfo, hour) {
         const start = new Date(dayInfo.fullDate);
         start.setHours(parseInt(hour), 0, 0, 0);
         const end = new Date(start.getTime() + 60 * 60 * 1000);
         this.fire('add-event', { start, end });
+    },
+    open($item) {
+        this.$pdp.showMeeting($item);
     }
 })
 
@@ -668,6 +620,7 @@ ODA({
                 padding: 4px;
                 position: relative;
                 cursor: pointer;
+                overflow: hidden;
             }
             .day-cell:hover {
                 background: var(--light-background);
@@ -677,6 +630,9 @@ ODA({
             }
             .day-cell[today] {
                 background: var(--info-background);
+            }
+            .day-cell[today]:hover {
+                background: var(--light-background);
             }
             .day-number {
                 font-weight: normal;
@@ -688,8 +644,27 @@ ODA({
                 margin: 2px 0;
                 border-radius: 2px;
                 background: var(--success-color);
-                color: var(--info-background);;
-                text-wrap: auto;
+                color: var(--info-background);
+                overflow: hidden;
+                cursor: pointer;
+            }
+            .event-badge:hover {
+                opacity: 0.8;
+            }
+            .event-badge .row {
+                align-items: center;
+                gap: 4px;
+                min-width: 0;
+            }
+            .event-badge .interval {
+                white-space: nowrap;
+                opacity: .8;
+            }
+            .event-badge .summary {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
             }
         </style>
         <div class="calendar-grid">
@@ -700,8 +675,12 @@ ODA({
                  @tap="selectMonthDay($for.item)">
                 <div class="day-number">{{$for.item.day}}</div>
                 <div ~for="$for.item.events" class="event-badge"
-                     :title="$for?.$for?.item.title">
-                    {{$for?.$for?.item.title}}
+                     :title="$for.$for.item.title"
+                     @tap.stop="open($for.$for.item.$item)">
+                    <div horizontal class="row">
+                        <div class="interval">{{$for.$for.item.interval}}</div>
+                        <div class="summary">{{$for.$for.item.summary}}</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -765,16 +744,21 @@ ODA({
         dayStart.setHours(0, 0, 0, 0);
         const dayEnd = new Date(date);
         dayEnd.setHours(23, 59, 59, 999);
-        return this.events.filter(event => {
-            const eventStart = new Date(event.start || 0);
-            return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
-        })
+        return this.events
+            .filter(event => {
+                const eventStart = new Date(event.start || 0);
+                return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
+            })
+            .map(eventViewItem);
     },
     selectMonthDay(dayInfo) {
         const start = new Date(dayInfo.date);
         start.setHours(9, 0, 0, 0);
         const end = new Date(start.getTime() + 60 * 60 * 1000);
         this.fire('add-event', { start, end, allDay: false });
+    },
+    open($item) {
+        this.$pdp.showMeeting($item);
     }
 })
 
@@ -884,6 +868,142 @@ ODA({is: 'oda-log-view',
         return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 })
+ODA({is: 'oda-date-nav',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --horizontal;
+                @apply --flex;
+            }
+            .date-picker {
+                border: 1px solid var(--border-color);
+                border-radius: 4px;
+                cursor: pointer;
+            }
+        </style>
+        <oda-button icon="icons:chevron-left" @tap="prevPeriod"></oda-button>
+        <input type="date" id="date-picker" class="date-picker" ::value="datePickerValue">
+        <oda-button icon="icons:chevron-right" @tap="nextPeriod"></oda-button>
+    `,
+    viewMode: {
+        $def: 'day', // month, week, day, list
+        $save: true,
+        set(n) {
+            this._updateDateRange();
+        }
+    },
+    currentDate: {
+        $def: new Date(),
+        set(n) {
+            this._updateDateRange();
+        }
+    },
+    get datePickerValue() {
+        this.currentDate ||= new Date();
+        const year = this.currentDate.getFullYear();
+        const month = String(this.currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(this.currentDate.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    },
+    set datePickerValue(value) {
+        if (value) {
+            this.currentDate = new Date(value);
+        }
+    },
+    attached() {
+        this.async(() => {
+            this._updateDateRange();
+        })
+    },
+    _updateDateRange() {
+        const date = this.currentDate || new Date();
+        this.$pdp.day = _formatDate(date);
+        if (this.viewMode === 'day') {
+            this.$pdp.dayFrom = this.$pdp.day;
+            this.$pdp.dayTo = this.$pdp.day;
+        } else if (this.viewMode === 'week') {
+            const start = new Date(date);
+            const dayOfWeek = start.getDay();
+            const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+            start.setDate(start.getDate() + diff);
+            const end = new Date(start);
+            end.setDate(end.getDate() + 6);
+            this.$pdp.dayFrom = _formatDate(start);
+            this.$pdp.dayTo = _formatDate(end);
+        } else if (this.viewMode === 'month') {
+            const start = new Date(date.getFullYear(), date.getMonth(), 1);
+            const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+            this.$pdp.dayFrom = _formatDate(start);
+            this.$pdp.dayTo = _formatDate(end);
+        }
+    },
+    prevPeriod() {
+        const newDate = new Date(this.currentDate);
+        if (this.viewMode === 'day') {
+            newDate.setDate(newDate.getDate() - 1);
+        } else if (this.viewMode === 'week') {
+            newDate.setDate(newDate.getDate() - 7);
+        } else {
+            newDate.setMonth(newDate.getMonth() - 1);
+        }
+        this.currentDate = newDate;
+        this._updateDateRange();
+    },
+    nextPeriod() {
+        const newDate = new Date(this.currentDate);
+        if (this.viewMode === 'day') {
+            newDate.setDate(newDate.getDate() + 1);
+        } else if (this.viewMode === 'week') {
+            newDate.setDate(newDate.getDate() + 7);
+        } else {
+            newDate.setMonth(newDate.getMonth() + 1);
+        }
+        this.currentDate = newDate;
+        this._updateDateRange();
+    },
+    goToday() {
+        this.currentDate = new Date();
+    }
+})
+
+function eventHhmm(iso) {
+    const d = new Date(iso);
+    if (isNaN(d))
+        return '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function eventInterval(ev) {
+    if (!ev?.start || !ev?.end)
+        return '';
+    const a = eventHhmm(ev.start);
+    const b = eventHhmm(ev.end);
+    if (!a || !b)
+        return '';
+    return `${a} - ${b}`;
+}
+
+function eventTitle(ev) {
+    const interval = eventInterval(ev);
+    const summary = (ev?.summary ?? '').trim();
+    const location = (ev?.location ?? '').trim();
+    let line1 = interval;
+    if (summary)
+        line1 = interval ? `${interval} | ${summary}` : summary;
+    if (location)
+        return line1 ? `${line1}\n${location}` : location;
+    return line1;
+}
+
+function eventViewItem(ev) {
+    return {
+        interval: eventInterval(ev),
+        summary: ev.summary ?? '',
+        title: eventTitle(ev),
+        $item: ev.$item
+    };
+}
 
 /** Persist shape from form event (start/end already offset-ISO) */
 function eventToPersist(ev) {
@@ -903,3 +1023,11 @@ function filenameFromHistoryPath(path) {
         throw new Error('Не history-путь: ' + path);
     return m[1].startsWith('.') ? m[1].slice(1) : m[1];
 }
+
+function _formatDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+

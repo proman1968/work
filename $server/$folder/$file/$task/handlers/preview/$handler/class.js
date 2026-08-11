@@ -15,7 +15,7 @@ export default {
                 overflow: hidden;
             }
         </style>
-        <microchat-ribbon flex :items :$item></microchat-ribbon>
+        <microchat-ribbon flex :data :$item></microchat-ribbon>
         <microchat-panel info-invert no-flex :data :$item></microchat-panel>
     `,
     colorMode: 'content',

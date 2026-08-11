@@ -8,6 +8,7 @@ export default {
                 flex-wrap: wrap;
                 justify-content: space-between;
                 gap: 8px;
+                min-height: {{iconSize + 6}}px; /* border (2 * 1px) + padding (2 * 2px) */
             }
             .part {
                 gap: 4px;
@@ -34,6 +35,9 @@ export default {
         set(n) {
             this._avail = undefined;
             this._sel = undefined;
+
+            this.availableUsers = undefined;
+            this.selectedUsers = undefined;
         }
     },
     get availableUsers() {
