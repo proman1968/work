@@ -8,6 +8,7 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
+                gap: 1px;
             }
             :host([top]) {
                 overflow-y: auto;
@@ -88,7 +89,6 @@ ODA({ is: 'microchat-view',
                 @apply --vertical;
             }
             summary {
-                position: sticky;
                 cursor: pointer;
                 user-select: none;
                 list-style: none;
@@ -134,7 +134,10 @@ ODA({ is: 'microchat-view',
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="label" flex>{{label}}</span>
+                    <span class="label">{{label}}</span>
+                    <span disabled class="label" ~if="status">{{status}}</span>
+                    <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <div flex></div>
                     <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
@@ -147,6 +150,9 @@ ODA({ is: 'microchat-view',
         </details>
     `,
     data: null,
+    get shevronIcon(){
+        return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
+    },
 
     /** скрыть summary; body всегда на виду */
     get showTitle() {
@@ -155,7 +161,12 @@ ODA({ is: 'microchat-view',
 
     // --- data ---
     get content() { return this.data?.content; },
-    get label() { return this.data?.label || this.data?.type || ''; },
+    get label() { 
+        return this.data?.label || this.data?.type || '';
+    },
+    get status(){
+        return this.data.status;
+    },
     get typeIcon() { return this.data?.icon || ''; },
     get items() { return this.data?.items || []; },
     sender: null,
@@ -163,9 +174,6 @@ ODA({ is: 'microchat-view',
         if (!this.data?.time) return '';
         return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     },
-    get votedYes() { return this.data?.vote === 'yes'; },
-    get votedNo() { return this.data?.vote === 'no'; },
-    get voted() { return !!(this.votedYes || this.votedNo); },
 
     // --- open ---
     userOpen: false,
@@ -200,13 +208,15 @@ ODA({ is: 'microchat-view',
     },
     get viewContent() { return (this.content || '') + this.streamTail; },
     get showContent() {
-         return !!(this.content || this.streamTail || !this.showTitle); 
+         return !!(this.content || this.streamTail || this.items || !this.showTitle); 
     },
 
     // --- title chrome ---
     get colorMode() {
-        if (this.votedYes) return 'success-invert';
-        if (this.votedNo) return 'error-invert';
+        switch(this.status){
+            case 'rejected':
+                return 'error-invert';
+        }
         if (this.pinned) return 'accent';
         return 'light';
     },
@@ -262,13 +272,6 @@ ODA({ is: 'microchat-view-prompt',
     }
 });
 
-/** step — title = «N. описание», body = items. */
-ODA({ is: 'microchat-view-step',
-    extends: 'microchat-view',
-    get label() { return this.data?.content || 'step'; },
-    get showContent() { return false; },
-    get typeIcon() { return this.data?.icon || 'icons:assignment'; },
-});
 
 /** form — content + extend (stub → oda-form). */
 ODA({ is: 'microchat-view-form',
@@ -299,6 +302,15 @@ ODA({ is: 'microchat-form',
  * task — title + subTitle (todo); сырой content в markdown не показываем.
  */
 ODA({ is: 'microchat-view-task',
+    template: /*html*/`
+        <style>
+            :host {
+                position: sticky;
+                top: 0px;
+                z-index: 100;
+            }
+        </style>
+    `,
     extends: 'microchat-view',
     attached(){
         this.subTitleTag = 'microchat-task-todo';

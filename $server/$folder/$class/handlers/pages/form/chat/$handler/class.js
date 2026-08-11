@@ -724,7 +724,7 @@ ODA({is: 'chat-day',
             }
         </style>
         <div flex vertical class="date-line" center>
-            <div class="label" raised dark horizontal :accent="expanded" @tap="expanded = !expanded">
+            <div class="label" raised dark horizontal :accent-invert="expanded" @tap="expanded = !expanded">
                 <label flex style="padding: 0px 4px;">{{label}}</label>
                 <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
             </div>

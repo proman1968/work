@@ -200,9 +200,9 @@ export class $folder extends $item{
         if (owner && owner !== this)
             await owner.assertAccess(params, level);
     }
-    /** @deprecated используй assertAccess */
-    allowAccess(params, level) {
-        return this.assertAccess(params, level);
+
+    allowAccess(params) {
+        return this.$class?.canSee(this, params);
     }
 
     /**

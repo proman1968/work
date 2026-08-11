@@ -6,6 +6,7 @@ import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { assertClassId } from './assert-class-id.js';
 import * as LOGS from './logs.js';
+import { DEV_MODE } from "../host/config.js";
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -29,12 +30,6 @@ export class $class extends $folder{
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
 
-    /** Dev-режим: enforcement безопасности отключён. */
-    static get isDevMode() {
-        const raw = process.env.WORK_DEV ?? process.env.dev;
-        if (raw == null) return false;
-        return String(raw).toLowerCase() !== 'false' && raw !== '0';
-    }
 
     /** Проверить, что путь childPath находится внутри parentPath. */
     static isPathInside(childPath, parentPath) {
@@ -750,13 +745,14 @@ export class $class extends $folder{
      * USER — видит только класс назначения (без дочерних классов).
      */
     async canSee(item, params = {}) {
-        if ($class.isDevMode) return true;
+        if (DEV_MODE) return true;
         const users = this.DATA['#security']?.USERS;
         if (Array.isArray(users) && (users).includes('USERS')) return true;
-        if (!item || typeof item !== 'object') return true;
+
+        if (!item || typeof item !== 'object') return true; // ???
+
         const uid = $class.resolveUid(params);
         if (!uid) {
-            // Системные пути без пользователя
             return this._isSystemPath(item);
         }
         if (this.id === uid) return true;
@@ -792,7 +788,7 @@ export class $class extends $folder{
      * USER → WORK (meta $work, только класс назначения)
      */
     async canWrite(item, params = {}) {
-        if ($class.isDevMode) return true;
+        if (DEV_MODE) return true;
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
@@ -821,7 +817,7 @@ export class $class extends $folder{
      * не получает bypass на ADMIN-операции.
      */
     async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
-        if ($class.isDevMode) return;
+        if (DEV_MODE) return;
         if (!params?.user) return;
         if (params.user?.$user === globalThis.WORK) return;
         const uid = $class.resolveUid(params);
@@ -850,9 +846,18 @@ export class $class extends $folder{
         }
     }
 
-    /** @deprecated используй assertAccess */
-    allowAccess(params, level) {
-        return this.assertAccess(params, level);
+    async allowAccess(params) {
+        let result = await this.canSee(this, params);
+        if (!result) {
+            const items = await this.items;
+            for (const i of items) {
+                if (i instanceof $class && await i.allowAccess(params)) {
+                    result = true;
+                    break;
+                }
+            }
+        }
+        return result;
     }
 
     /** Проверка ADMIN на корневом WORK. */
@@ -865,8 +870,7 @@ export class $class extends $folder{
     _isSystemPath(item) {
         const path = item?.path ?? '';
         if (!path) return true;
-        if (path === '/$server' || path.startsWith('/$server/')) return true;
-        if (path.startsWith('/sources') || path.startsWith('/oda')) return true;
+        if (['/$server', '/sources', '/oda'].some(s => path.startsWith(s))) return true;
         return false;
     }
 

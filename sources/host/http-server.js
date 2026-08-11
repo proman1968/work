@@ -22,12 +22,17 @@ function sendErrorResponse(response, error) {
     if (DEV_MODE) {
         console.error('[WORK]', error);
     }
-    response.writeHead(400, {
-        'Content-Type': 'text/html',
-        mode: 'no-cors',
-        'Access-Control-Allow-Origin': '*',
-    });
-    response.end(error?.toString?.() ?? String(error));
+    try {
+        response.writeHead(400, {
+            'Content-Type': 'text/html',
+            mode: 'no-cors',
+            'Access-Control-Allow-Origin': '*',
+        });
+        response.end(error?.toString?.() ?? String(error));
+    }
+    catch (err) {
+        console.error(err);
+    }
 }
 
 function onListenError(port, err) {
@@ -220,19 +225,37 @@ export function createRequestHandler() {
         let result;
         if (Array.isArray(item)) {
             let items = await Promise.all(item);
-            if(path.includes('~')  && items.map(f=>f.id).unique().length === 1){
+            if (items.length > 0) {
+                let _items = [];
+                for (const i of items) {
+                    const hasAccess = i.allowAccess ? await i.allowAccess(params) : true;
+                    if (hasAccess) {
+                        _items.push(i);
+                    }
+                }
+                if (_items.length === 0) {
+                    throw new Error('Нет доступа.')
+                }
+                items = _items;
+            }
+            if (path.includes('~') && items.map(f => f.id).unique().length === 1) {
                 item = items.last;
-                if(!method){
-                    if(item.constructor === CORE.$file){
+                if (!method) {
+                    if (item.constructor === CORE.$file) {
                         result = await $server.mergeFiles(items);
                     }
                 }
             }
-            else{
+            else {
                 result = items.map(async item => {
                     return execItemMethod(item, method || 'info', params, request) || item
                 });
                 result = await Promise.all(result);
+            }
+        } else if (item instanceof CORE.$class) {
+            const hasAccess = await item.allowAccess(params);
+            if (!hasAccess) {
+                throw new Error('Нет доступа');
             }
         }
         if(!result){
@@ -351,6 +374,21 @@ export function createRequestHandler() {
 
         if (result?.then)
             result = await result;
+
+
+        if (Array.isArray(result)) {
+            const res = []
+            for (const i of result) {
+                if (i instanceof CORE.$class) {
+                    const hasAccess = await i.allowAccess(params);
+                    if (!hasAccess) {
+                        continue;
+                    }
+                }
+                res.push(i);
+            }
+            result = res;
+        }
 
         const isFilePayload = item?.constructor === CORE.$file && (!method || method === 'load' || method === 'script' || method === 'download');
         const header = { "Access-Control-Allow-Origin": "*", "mode": 'no-cors', "Content-Type": "application/json" };

@@ -253,6 +253,19 @@ ODA({
             .slot:hover {
                 background: var(--light-background);
             }
+            .day-header {
+                border-top: 1px solid var(--border-color);
+                border-bottom: 1px solid var(--border-color);
+                height: 32px;
+                align-items: center;
+            }
+            .corner-cell {
+                width: 31px;
+                border-right: 1px solid var(--border-color);
+            }
+            .day-row {
+                border-bottom: 1px solid var(--border-color);
+            }
             .hour-label {
                 width: 20px;
                 border-right: 1px solid var(--border-color);
@@ -307,12 +320,19 @@ ODA({
         </style>
         <div ~is="'style'" ~text="anchorStyles"></div>
         <div class="day-body">
-            <div horizontal ~for="24" style="border-bottom: 1px solid var(--border-color);">
+            <div class="horizontal header day-header" :info="today">
+                <div class="corner-cell"></div>
+                <div horizontal flex>
+                    <div bold>{{dayNum}}</div>
+                    <div flex style="text-align: center;">{{dayName}}</div>
+                </div>
+            </div>
+            <div class="horizontal day-row" ~for="24">
                 <div class="hour-label">
                     {{String($for.item).padStart(2, '0')}}
                 </div>
                 <div vertical flex>
-                    <div horizontal ~for="intervalsInHour" flex ~style="{borderTop: $for.$for.index === 0 ? 'none' :'1px dotted var(--border-color)'}">
+                    <div ~for="intervalsInHour" horizontal flex ~style="{borderTop: $for.$for.index === 0 ? 'none' :'1px dotted var(--border-color)'}">
                         <div class="minute-label" disabled>
                             {{String(interval * $for.$for.index).padStart(2, '0')}}
                         </div>
@@ -331,6 +351,20 @@ ODA({
         </div>
     `,
     interval: 15,
+    currentDate: {
+        $def: new Date(),
+        set(n) {
+            this.today = n?.toLocaleDateString?.() === new Date().toLocaleDateString();
+        }
+    },
+    events: [],
+    get dayNum() {
+        return this.currentDate.getDate();
+    },
+    get dayName() {
+        return dayNames[this.currentDate.getDay()];
+    },
+    today: false,
     get intervalsInHour() {
         return 60 / this.interval;
     },
@@ -352,8 +386,6 @@ ODA({
         }
         return style;
     },
-    currentDate: new Date(),
-    events: [],
     slotAnchor(hour, intervalIdx) {
         return `--slot-${hour}-${intervalIdx}`;
     },
@@ -429,7 +461,7 @@ ODA({
         return result;
     },
     selectDayTime(intervalIdx, hour) {
-        const start = new Date(this.$pdp.currentDate || new Date());
+        const start = new Date(this.currentDate || new Date());
         start.setHours(parseInt(hour), this.interval * intervalIdx, 0, 0);
         const end = new Date(start.getTime() + this.interval * 60 * 1000);
         this.fire('add-event', { start, end });
@@ -550,7 +582,6 @@ ODA({
         const dayOfWeek = current.getDay();
         const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
         current.setDate(current.getDate() + diff);
-        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         for (let i = 0; i < 7; i++) {
@@ -834,11 +865,11 @@ ODA({is: 'oda-log-view',
                 @apply --selection;
             }
         </style>
-            <div class="row1" horizontal>
-                <span class="interval">{{interval}}</span>
-                <span class="summary" flex>{{summary}}</span>
-            </div>
-            <div class="location">{{location}}</div>
+        <div class="row1" horizontal>
+            <span class="interval">{{interval}}</span>
+            <span class="summary" flex>{{summary}}</span>
+        </div>
+        <div class="location">{{location}}</div>
     `,
     data: null,
     get event() {
@@ -965,6 +996,8 @@ ODA({is: 'oda-date-nav',
         this.currentDate = new Date();
     }
 })
+
+const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function eventHhmm(iso) {
     const d = new Date(iso);

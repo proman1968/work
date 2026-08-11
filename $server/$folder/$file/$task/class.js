@@ -25,39 +25,35 @@ export default {
                             active_block = await active_pipe.convert(container, active_block);  
                         } break;
                         case 'false':{
-                            active_block.rejected = true; 
+                            active_block.status = "rejected"; 
                         } break;       
                     }
                     await this._save(user);
                 } break;
                 default:{
-
                     active_block = {
                         type: 'prompt',
                         content: prompt,
                     };
-                    // if(!container.items?.length)
-                    //     active_block.items = [];
                     await this._push_block(user, active_block);
                 }
             }
             let messages = await this.context();
-            if(active_block.rejected){
-                messages[0].content = "Твое последнее предложение отклонено пользователем, выясни, что именно ему не понравилось, и предложи новый вариант."
+            switch(active_block.status){
+                case 'rejected':{
+                    messages[0].content = "Твое последнее предложение отклонено пользователем, выясни, что именно ему не понравилось, и предложи новый вариант."
+                } break;
+                default:{
+                    active_pipe = PIPE[active_block.type];
+                    let options = active_pipe?.next || [];
+                    let menu = 'Выбери следующий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
+                    for (let id of options) menu += '\n' + id + ' - ' + (PIPE[id]?.inject || '') + ';';
+                    if(messages.last?.role === 'user')
+                        messages.last.content += '\n\n[instruction]\n' + menu;
+                    else
+                        messages.push({ role: 'user', content: menu});
+                } break;
             }
-            else {
-                active_pipe = PIPE[active_block.type];
-                let options = [...active_pipe.next];
-                let menu = 'Выбери следующий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
-                for (let id of options) menu += '\n' + id + ' - ' + (PIPE[id]?.inject || '') + ';';
-                if(messages.last?.role === 'user')
-                    messages.last.content += '\n\n[instruction]\n' + menu;
-                else
-                    messages.push({ role: 'user', content: menu});
-            }
-   
-            
-            
 
 
             let response = await this._streamChat({ messages, silent: true, user });
@@ -264,22 +260,40 @@ const PIPE = {
                     status: i === 0 ? 'in_progress' : 'todo',
                 })),
                 get content(){
-                    return this.steps.map(s => `[id: ${s.number}] ${s.description} [status: "${s.status}"]`).join('\n');
+                    let content = this.label + '\n';
+                    content += this.steps.map(s => `[id: ${s.number}] ${s.description} [status: "${s.status}"]`).join('\n');
+                    return content;
                 }
 
             }
             container.items.remove(block);
-            return container.task;
+            let label = container.task.steps[0].description;
+            let step = {
+                type: 'step',
+                status: 'in_progress',
+                get icon(){
+                    switch(this.status){
+                        case 'in_progress': return 'av:play-circle-outline';
+                        case 'todo': return 'icons:radio-button-unchecked';
+                        case 'done': return 'icons:radio-button-checked';
+                    }
+                },
+                label,
+                items: [],
+            }
+            container.items.push(step)
+            return step;
         },
         next: ['text'],
     },
         // /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
     task: {
-        next: ['step']
+        
     },
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
+        icon: 'icons:radio-button-unchecked',
         role: 'user',
         inject: 'если необходимо выполнить один пункт плана',
         prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
