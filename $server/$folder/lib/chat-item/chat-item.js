@@ -11,6 +11,7 @@ ODA({is: 'chat-item',
                 max-height: var(--ribbon-height, none);
                 border-radius: 4px;
                 opacity: 0;
+                transition: opacity .2s ease;
             }
             :host([visible]){
                 opacity: 1;
@@ -124,6 +125,7 @@ ODA({is: 'chat-item',
         this.async(() => {
             this.colorMode = this._color || 'light';
         });
+        this._revealIfReady();
     },
     history: {
         $attr: true,
@@ -137,17 +139,42 @@ ODA({is: 'chat-item',
         $attr: true,
         $def: false,
     },
-    attached(){
-        this.async(()=>{
-            this.visible = true;
-        }, 100)
-    },
     visible:{
         $def: false,
         $attr: true,
     },
     previewIsReady: false,
     senderIsReady: false,
+    _senderFromRef(ref) {
+        if (!ref) return '';
+        const path = ref.path;
+        if (path) {
+            const parsed = CORE.$file.parseHistoryEntryPath(path);
+            if (parsed?.userId) return parsed.userId;
+        }
+        const id = ref.id || (path ? String(path).split('/').pop() : '') || '';
+        const extDot = id.lastIndexOf('.');
+        const name = extDot > 0 ? id.slice(0, extDot) : id;
+        const nameParts = name.split('.');
+        if (nameParts.length > 1 && /^\d+$/.test(nameParts[0]))
+            return nameParts.slice(1).join('.');
+        return '';
+    },
+    _applySenderFromRef(ref) {
+        const uid = this._senderFromRef(ref);
+        if (uid)
+            this.senderId = uid;
+        else if (!ref)
+            this._markSenderReady();
+    },
+    _markSenderReady() {
+        this.senderIsReady = true;
+        this._revealIfReady();
+    },
+    _revealIfReady() {
+        if (this.senderIsReady)
+            this.visible = true;
+    },
     previewTag: 'item-node',
     hasPreview: false,
     _bodyCacheKeys: ['itemBody', 'fileLabel', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
@@ -198,7 +225,7 @@ ODA({is: 'chat-item',
         if (body.sender)
             this.senderId = body.sender;
         else
-            this.senderIsReady = true;
+            this._markSenderReady();
         this.log = body;
         this.previewIsReady = true;
         this.render();
@@ -222,6 +249,10 @@ ODA({is: 'chat-item',
                 const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
                 if (!data.path && item.path)
                     data.path = item.path;
+                if (data.sender && !this.senderIsReady)
+                    this.senderId = data.sender;
+                else if (!this.senderIsReady)
+                    this._markSenderReady();
                 this.previewIsReady = true;
                 this.log = data;
                 this.render();
@@ -280,12 +311,13 @@ ODA({is: 'chat-item',
             })
         },
         set($file) {
-            Promise.resolve($file).then(async file => {
+            const run = async (file) => {
                 this._resetBodyCache();
                 this._includeFile = file;
                 this._historyBody = null;
                 this.previewIsReady = false;
                 this.senderIsReady = false;
+                this._applySenderFromRef(file);
                 await this.loadPreview(file);
                 if (this.history) {
                     await this.applyHistoryFile();
@@ -294,7 +326,11 @@ ODA({is: 'chat-item',
                     this.previewIsReady = true;
                     this.render();
                 }
-            }).catch(() => {});
+            };
+            if ($file != null && typeof $file.then === 'function')
+                $file.then(run).catch(() => {});
+            else
+                run($file).catch(() => {});
         }
     },
     $item: {
@@ -306,12 +342,17 @@ ODA({is: 'chat-item',
             this._includeFile = null;
             this.log = null;
             this._logWatch?.();
+            this._applySenderFromRef(n);
             if (n?.listen && n?.id?.endsWith?.('.logs')) {
                 const applyLog = raw => {
                     const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
                     if (!data?.time)
                         return;
                     this.log = { ...data };
+                    if (data.sender && !this.senderIsReady)
+                        this.senderId = data.sender;
+                    else if (!this.senderIsReady)
+                        this._markSenderReady();
                     this.render();
                 };
                 if (typeof n.load === 'function') {
@@ -328,12 +369,14 @@ ODA({is: 'chat-item',
         $type: String,
         set(n) {
             this.senderIsReady = true;
+            this._revealIfReady();
         }
     },
     get sender() {
         return Promise.resolve(this.itemBody).then(async body => {
             if (!body?.sender) {
-                this.senderIsReady = true;
+                if (!this.senderIsReady)
+                    this._markSenderReady();
                 return null;
             }
             let users = await WORK.users;

@@ -6,6 +6,7 @@ import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { assertClassId } from './assert-class-id.js';
 import * as LOGS from './logs.js';
+import { DEV_MODE } from "../host/config.js";
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -29,12 +30,6 @@ export class $class extends $folder{
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
 
-    /** Dev-режим: enforcement безопасности отключён. */
-    static get isDevMode() {
-        const raw = process.env.WORK_DEV ?? process.env.dev;
-        if (raw == null) return false;
-        return String(raw).toLowerCase() !== 'false' && raw !== '0';
-    }
 
     /** Проверить, что путь childPath находится внутри parentPath. */
     static isPathInside(childPath, parentPath) {
@@ -364,22 +359,24 @@ export class $class extends $folder{
         const security = this.DATA?.['#security'];
         if (!security)
             return false;
-        return Boolean(security.ADMIN) || Boolean(security.BOSS)
-            || (Array.isArray(security.USERS) && security.USERS.length > 0);
+        return ['ADMINS', 'BOSSES', 'USERS']
+            .some(key => Array.isArray(security[key]) && security[key].length > 0);
     }
 
     /**
-     * Первый зарегистрированный пользователь → #security.ADMIN.
-     * Не перезаписывает уже заданного ADMIN.
+     * Первый зарегистрированный пользователь → #security.ADMINS.
+     * Не перезаписывает уже назначенных администраторов.
      */
     async ensureBootstrapAdmin(uid, params = {}) {
         if (!uid)
             return false;
         this.reset();
         await this.init;
-        if (this.DATA?.['#security']?.ADMIN)
+        const security = Object.assign({}, this.DATA?.['#security']);
+        security.ADMINS = Array.isArray(security.ADMINS) ? security.ADMINS.slice() : [];
+        if (security.ADMINS.length)
             return false;
-        const security = Object.assign({}, this.DATA?.['#security'], { ADMIN: uid });
+        security.ADMINS.add(uid);
         const post = this.constructor.toScript({ '#security': security });
         await this.save({ post, user: WORK });
         this.reset?.();
@@ -388,7 +385,7 @@ export class $class extends $folder{
 
     /**
      * Получить список ролей текущего пользователя в классе.
-     * Проверяет геттеры admins/bosses/users (наследуемые/локальные).
+     * Проверяет allAdmins/allBosses (наследуемые) и users (локальные).
      * @param {object} [params]
      * @param {object} [params.user] Объект пользователя из сессии
      * @returns {Promise<string[]>} Массив строк: 'ADMIN', 'BOSS', 'USER'
@@ -398,7 +395,7 @@ export class $class extends $folder{
         if (!uid)
             return [];
         const roles = [];
-        const [admins, bosses, users] = await Promise.all([this.admins, this.bosses, this.users]);
+        const [admins, bosses, users] = await Promise.all([this.allAdmins, this.allBosses, this.users]);
         if (admins.some(u => u?.id === uid))
             roles.push($class.ROLES.ADMIN);
         if (bosses.some(u => u?.id === uid))
@@ -750,13 +747,14 @@ export class $class extends $folder{
      * USER — видит только класс назначения (без дочерних классов).
      */
     async canSee(item, params = {}) {
-        if ($class.isDevMode) return true;
+        if (DEV_MODE) return true;
         const users = this.DATA['#security']?.USERS;
-        if (Array.isArray(users) && (users).includes('USERS')) return true;
-        if (!item || typeof item !== 'object') return true;
+        if (Array.isArray(users) && users.includes('GUEST')) return true;
+
+        if (!item || typeof item !== 'object') return true; // ???
+
         const uid = $class.resolveUid(params);
         if (!uid) {
-            // Системные пути без пользователя
             return this._isSystemPath(item);
         }
         if (this.id === uid) return true;
@@ -792,7 +790,7 @@ export class $class extends $folder{
      * USER → WORK (meta $work, только класс назначения)
      */
     async canWrite(item, params = {}) {
-        if ($class.isDevMode) return true;
+        if (DEV_MODE) return true;
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
@@ -821,7 +819,7 @@ export class $class extends $folder{
      * не получает bypass на ADMIN-операции.
      */
     async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
-        if ($class.isDevMode) return;
+        if (DEV_MODE) return;
         if (!params?.user) return;
         if (params.user?.$user === globalThis.WORK) return;
         const uid = $class.resolveUid(params);
@@ -850,9 +848,18 @@ export class $class extends $folder{
         }
     }
 
-    /** @deprecated используй assertAccess */
-    allowAccess(params, level) {
-        return this.assertAccess(params, level);
+    async allowAccess(params) {
+        let result = await this.canSee(this, params);
+        if (!result) {
+            const items = await this.items;
+            for (const i of items) {
+                if (i instanceof $class && await i.allowAccess(params)) {
+                    result = true;
+                    break;
+                }
+            }
+        }
+        return result;
     }
 
     /** Проверка ADMIN на корневом WORK. */
@@ -865,8 +872,7 @@ export class $class extends $folder{
     _isSystemPath(item) {
         const path = item?.path ?? '';
         if (!path) return true;
-        if (path === '/$server' || path.startsWith('/$server/')) return true;
-        if (path.startsWith('/sources') || path.startsWith('/oda')) return true;
+        if (['/$server', '/sources', '/oda'].some(s => path.startsWith(s))) return true;
         return false;
     }
 
@@ -936,50 +942,27 @@ export class $class extends $folder{
     async members(params = {}) {
         const { role, inherited } = params;
         switch (role) {
-            case $class.ROLES.ADMIN: {
-                if (inherited)
-                    return this.admins;
-                const admin = await this.admin;
-                return admin ? [admin] : [];
-            }
-            case $class.ROLES.BOSS: {
-                if (inherited)
-                    return this.bosses;
-                const boss = await this.boss;
-                return boss ? [boss] : [];
-            }
+            case $class.ROLES.ADMIN:
+                return inherited ? this.allAdmins : this.admins;
+            case $class.ROLES.BOSS:
+                return inherited ? this.allBosses : this.bosses;
             case $class.ROLES.USER:
                 return this.users;
         }
         return this.assignedUsers;
     }
 
-    /** Один администратор класса (из #security.ADMIN, без наследования). Реактивная обёртка members({role:'ADMIN'}). */
-    get admin(){
+    /** Пользователи роли, назначенные локально в #security (без наследования и литералов). */
+    _localRole(role) {
+        const key = role === $class.ROLES.ADMIN ? 'ADMINS'
+            : role === $class.ROLES.BOSS ? 'BOSSES' : 'USERS';
         return Promise.resolve(this.init).then(async () => {
-            const uid = this.DATA['#security']?.ADMIN;
-            if (!uid) return null;
-            const usersRoot = await WORK.$users;
-            return usersRoot.get_item('//' + uid);
-        })
-    }
-    /** Один управляющий класса (из #security.BOSS, без наследования). */
-    get boss(){
-        return Promise.resolve(this.init).then(async () => {
-            const uid = this.DATA['#security']?.BOSS;
-            if (!uid) return null;
-            const usersRoot = await WORK.$users;
-            return usersRoot.get_item('//' + uid);
-        })
-    }
-    /** Исполнители класса (из #security.USERS, без наследования). */
-    get users(){
-        return Promise.resolve(this.init).then(async () => {
-            const ids = this.DATA['#security']?.USERS;
+            const ids = this.DATA['#security']?.[key];
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
             const result = [];
             for (const id of ids) {
+                if (id === 'GUEST') continue;
                 const user = await usersRoot.get_item('//' + id);
                 if (user)
                     result.push(user);
@@ -987,22 +970,32 @@ export class $class extends $folder{
             return result;
         })
     }
-    /** Все администраторы: вышестоящие admins + собственный admin. */
-    get admins(){
-        return Promise.resolve(this.admin).then(async admin => {
-            let admins = (await this.$parent?.admins) ?? [];
-            if (admin && !admins.includes(admin))
-                admins = [...admins, admin];
-            return admins;
-        })
+    /** Исполнители класса из #security.USERS (без наследования). */
+    get users(){
+        return this._localRole($class.ROLES.USER);
     }
-    /** Все управляющие: вышестоящие bosses + собственный boss. */
+    /** Администраторы, назначенные локально в #security.ADMINS (без наследования). */
+    get admins(){
+        return this._localRole($class.ROLES.ADMIN);
+    }
+    /** Управляющие, назначенные локально в #security.BOSSES (без наследования). */
     get bosses(){
-        return Promise.resolve(this.boss).then(async boss => {
-            let bosses = (await this.$parent?.bosses) ?? [];
-            if (boss && !bosses.includes(boss))
-                bosses = [...bosses, boss];
-            return bosses;
+        return this._localRole($class.ROLES.BOSS)
+    }
+    /** Все администраторы: вышестоящие allAdmins + собственные ADMINS. */
+    get allAdmins() {
+        return Promise.all([Promise.resolve(this.$parent?.allAdmins), this._localRole($class.ROLES.ADMIN)])
+            .then(([parents, local]) => {
+                const seen = new Set((parents || []).map(u => u?.id));
+                return [...(parents || []), ...local.filter(u => !seen.has(u.id))];
+            })
+    }
+    /** Все управляющие: вышестоящие allBosses + собственные BOSSES. */
+    get allBosses() {
+        return Promise.all([Promise.resolve(this.$parent?.allBosses), this._localRole($class.ROLES.BOSS)])
+        .then(([parents, local]) => {
+            const seen = new Set((parents || []).map(u => u?.id));
+            return [...(parents || []), ...local.filter(u => !seen.has(u.id))];
         })
     }
     /**
@@ -1043,11 +1036,11 @@ export class $class extends $folder{
         });
     }
 
-    /** Все назначенные пользователи класса (объединение admins + bosses + users). */
+    /** Все назначенные пользователи класса (объединение allAdmins + allBosses + users). */
     get assignedUsers(){
         return Promise.all([
-            Promise.resolve(this.admins),
-            Promise.resolve(this.bosses),
+            Promise.resolve(this.allAdmins),
+            Promise.resolve(this.allBosses),
             Promise.resolve(this.users),
         ]).then(([admins, bosses, users]) => {
             const all = [...admins, ...bosses, ...users];

@@ -79,10 +79,13 @@ export class $folder extends $item {
     get admins() {
         return null;
     }
-    get admin() {
+    get bosses() {
         return null;
     }
-    get boss() {
+    get allAdmins() {
+        return null;
+    }
+    get allBosses() {
         return null;
     }
     reset() {

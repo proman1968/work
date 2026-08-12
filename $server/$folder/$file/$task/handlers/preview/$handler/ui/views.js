@@ -1,10 +1,85 @@
-/**
- * Preview views — :data → getters (rules Part B).
- * Loaded via shell: import './ui/views.js'.
- *
- * microchat-view — details: summary (title + subTitle) + body (content + extend + items).
- */
-import './ribbon.js';
+ODA({ is: 'microchat-ribbon',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --info-invert;
+                @apply --vertical;
+                flex: none;
+                min-height: auto;
+                overflow: visible;
+                box-sizing: border-box;
+                gap: 1px;
+            }
+            :host([top]) {
+                overflow-y: auto;
+                flex: 1;
+                min-height: 0;
+            }
+        </style>
+        <microchat-view-todo ~if="todo" :data="todo"></microchat-view-todo>
+        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items"></div>
+    `,
+    top: {
+        $def: false,
+        $attr: true,
+        get() { return !!this.$item; },
+    },
+    get todo(){
+        return this.data?.todo
+    },
+    data: null,
+    get items(){
+        return this.data?.items
+    },
+    $item: {
+        $def: null,
+        set(n) {
+            n?.listen('chat.delta', () => {
+                const follow = this.nearBottom;
+                this.async(() => { if (follow) this.scrollToBottom(true); });
+            });
+            n?.listen('chat.done', () => this.async(() => this.scrollToBottom()));
+            if (this.items?.length) this.pinBottom();
+        },
+    },
+    /** specialty если CE уже есть или ODA уже стартовал (telemetry) — не ждать define */
+    tag(item) {
+        const name = 'microchat-view-' + item.type;
+        return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
+    },
+    attached() {
+        if (this.top && this.items?.length) this.pinBottom();
+    },
+    /**
+     * Начальная докрутка: не стопать на nearBottom при ещё коротком scrollHeight
+     * (details/open/markdown дорисуют позже). Стоп — высота стабильна и у низа, или лимит.
+     */
+    pinBottom() {
+        if (!this.top) return;
+        const gen = ++this._pinGen;
+        const tick = (left, lastH) => {
+            this.async(() => {
+                if (gen !== this._pinGen) return;
+                this.scrollToBottom(true);
+                const h = this.scrollHeight;
+                if (left <= 1) return;
+                if (h === lastH && this.nearBottom) return;
+                tick(left - 1, h);
+            }, 100);
+        };
+        tick(25, 0);
+    },
+    _pinGen: 0,
+    get nearBottom() {
+        return this.scrollTop + this.clientHeight >= this.scrollHeight - 10;
+    },
+    scrollToBottom(force) {
+        if (!this.top) return true;
+        if (force || this.nearBottom)
+            this.scrollTop = this.scrollHeight;
+        return this.nearBottom;
+    },
+});
 
 ODA({ is: 'microchat-view',
     imports: 'oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
@@ -14,7 +89,6 @@ ODA({ is: 'microchat-view',
                 @apply --vertical;
             }
             summary {
-                position: sticky;
                 cursor: pointer;
                 user-select: none;
                 list-style: none;
@@ -60,19 +134,25 @@ ODA({ is: 'microchat-view',
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="label" flex>{{label}}</span>
+                    <span class="label">{{label}}</span>
+                    <span disabled class="label" ~if="status">{{status}}</span>
+                    <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <div flex></div>
                     <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
-                <oda-markdown-viewer vertical ~show="showContent" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>
-                <microchat-ribbon ~if="items.length" :items></microchat-ribbon>
+                <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
             </div>
         </details>
     `,
     data: null,
+    get shevronIcon(){
+        return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
+    },
 
     /** скрыть summary; body всегда на виду */
     get showTitle() {
@@ -81,7 +161,12 @@ ODA({ is: 'microchat-view',
 
     // --- data ---
     get content() { return this.data?.content; },
-    get label() { return this.data?.label || this.data?.type || ''; },
+    get label() { 
+        return this.data?.label || this.data?.type || '';
+    },
+    get status(){
+        return this.data.status;
+    },
     get typeIcon() { return this.data?.icon || ''; },
     get items() { return this.data?.items || []; },
     sender: null,
@@ -89,9 +174,6 @@ ODA({ is: 'microchat-view',
         if (!this.data?.time) return '';
         return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     },
-    get votedYes() { return this.data?.vote === 'yes'; },
-    get votedNo() { return this.data?.vote === 'no'; },
-    get voted() { return !!(this.votedYes || this.votedNo); },
 
     // --- open ---
     userOpen: false,
@@ -126,15 +208,13 @@ ODA({ is: 'microchat-view',
     },
     get viewContent() { return (this.content || '') + this.streamTail; },
     get showContent() {
-         return !!(this.content || this.streamTail || !this.showTitle); 
+         return !!(this.content || this.streamTail || this.items || !this.showTitle); 
     },
 
     // --- title chrome ---
     get colorMode() {
-        if (this.votedYes) return 'success-invert';
-        if (this.votedNo) return 'error-invert';
         if (this.pinned) return 'accent';
-        return 'light';
+        return 'header';
     },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
@@ -188,13 +268,6 @@ ODA({ is: 'microchat-view-prompt',
     }
 });
 
-/** step — title = «N. описание», body = items. */
-ODA({ is: 'microchat-view-step',
-    extends: 'microchat-view',
-    get label() { return this.data?.content || 'step'; },
-    get showContent() { return false; },
-    get typeIcon() { return this.data?.icon || 'icons:assignment'; },
-});
 
 /** form — content + extend (stub → oda-form). */
 ODA({ is: 'microchat-view-form',
@@ -222,11 +295,26 @@ ODA({ is: 'microchat-form',
 
 
 /**
- * task — title + subTitle (todo); сырой content в markdown не показываем.
+ * todo — title + subTitle (todo); сырой content в markdown не показываем.
  */
-ODA({ is: 'microchat-view-task',
+ODA({ is: 'microchat-view-todo',
+    template: /*html*/`
+        <style>
+            :host {
+                position: sticky;
+                top: 0px;
+                z-index: 100;
+            }
+        </style>
+    `,
     extends: 'microchat-view',
-    subTitleTag: 'microchat-task-todo',
+    attached(){
+        this.subTitleTag = 'microchat-todo-steps';
+        this.showContent = undefined;
+        this.label = undefined;
+        this.icon = undefined;
+        this.content = undefined;
+    },
     get colorMode() { return 'header'; },
     get showContent() { return !!this.streamTail; },
     get label() {
@@ -240,8 +328,8 @@ ODA({ is: 'microchat-view-task',
     },
 });
 
-/** Чеклист task в subTitle: 1/N + progress + steps (свой collapse). */
-ODA({ is: 'microchat-task-todo',
+/** Чеклист todo в subTitle: 1/N + progress + steps (свой collapse). */
+ODA({ is: 'microchat-todo-steps',
     imports: 'oda//icon',
     template: /*html*/`
         <style>
@@ -318,8 +406,8 @@ ODA({ is: 'microchat-task-todo',
             <span flex>{{currentStepText}}</span>
             <oda-icon :icon="stepsChevron" :icon-size></oda-icon>
         </div>
-        <div class="track"><div class="bar" ~style="'width:' + progress + '%'"></div></div>
-        <div class="steps" content ~if="!collapsed">
+        <div class="track" ><div class="bar" ~style="'width:' + progress + '%'"></div></div>
+        <div class="steps" light bold ~if="!collapsed">
             <div class="step" horizontal ~for="steps"
                     ~class="{ done: $for.item.status === 'done', 'in-progress': $for.item.status === 'in_progress' }">
                 <oda-icon :icon="stepIcon($for.item.status)" icon-size="16"></oda-icon>

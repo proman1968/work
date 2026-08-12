@@ -724,7 +724,7 @@ ODA({is: 'chat-day',
             }
         </style>
         <div flex vertical class="date-line" center>
-            <div class="label" raised dark horizontal :accent="expanded" @tap="expanded = !expanded">
+            <div class="label" raised dark horizontal :accent-invert="expanded" @tap="expanded = !expanded">
                 <label flex style="padding: 0px 4px;">{{label}}</label>
                 <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
             </div>
@@ -909,7 +909,7 @@ ODA({is: 'chat-day',
     },
     get logsSource(){
         // Источник логов определяется сервером по роли:
-        // USER/admin → личный кабинет, boss → текущий класс
+        // USER → личный кабинет, ADMIN/BOSS → текущий класс
         return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource')).then(path => {
             if (path && typeof path === 'string')
                 return WORK.get_item(path);

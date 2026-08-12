@@ -100,7 +100,7 @@ export const authMethods = {
 
         let post = CORE.$class.toScript(credentials);
 
-        let res = await $user_item.save({ filename: 'class.js', post, user: WORK });
+        let res = await $user_item.save({ filename: 'class.js', post, user: { $user: WORK } });
         let u = await this.$users;
         (await u.children)?.forEach?.(ch => ch.children = undefined);
         u.children = undefined;

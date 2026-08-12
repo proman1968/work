@@ -142,7 +142,7 @@ ODA({ is: 'microchat-panel',
                 <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsMode !== 'off'"
                     style="border-radius: 50%;" :title="ttsTitle"></oda-button>
                 <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size
-                    :rainbow="pending || recording" :disabled="!pending"
+                    :rainbow="pending || recording" 
                     :title="pending ? 'Стоп' : ''" @tap="onSendTap"
                     style="border-radius: 50%;"></oda-button>
             </div>
@@ -201,7 +201,7 @@ ODA({ is: 'microchat-panel',
         const result = await this.$item.fetch('prompt', {
             prompt: ok?'true':'false',
             model: this.data.model,
-            role: 'BUTTON',
+            role: 'APPROVE',
         });
         this._focus();
     },

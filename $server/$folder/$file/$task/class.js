@@ -1,4 +1,165 @@
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
+const PIPE = {
+    /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thought */
+    prompt: {
+        role: 'user',
+        plan:{
+            next: ['thought'],
+        },
+        do:{
+            next: ['thought'],
+        },
+    },
+    text:{
+
+    },
+    todo:{
+        do:{
+            next: ['step'],
+        },
+    },
+    thought: {
+        icon: 'carbon:idea',
+        plan:{
+            next: ['planning', 'show_form', 'research', 'thought'],
+        },
+        do:{
+            next: ['do', 'complete', 'thought'],
+        },
+        inject: 'если необходимо обдумать дальнейшие действия',
+        prompt: [
+            'Как следует подумай над тем, что необходимо сделать на текущем шаге плана.',
+            'Выдай свои размышления кратко (2-5 строк. если надо, больше) от своего лица.',
+            'Не фантазируй. В конце реши, какое действие нужно выполнить следующим.',
+        ].join(' '),
+    },
+    planning: {
+        icon: 'icons:assignment',
+        inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
+        prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя:',
+            'Заголовок: Краткое название плана работ.',
+            'Содерэание: пронумерованый список пунктов плана работ.',
+        ].join('\n'),
+        allow_approve: 'Принять план',
+        async approve(params = {}){
+            const {container, block, prompt} = params;
+            switch(prompt){
+                case 'true':{
+                    const text = block.content || '';
+                    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+                    const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
+                    const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
+                    const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
+                    const src = numbered.length ? numbered : bullets;
+                    container.todo = {
+                        type: 'todo',
+                        icon:'icons:list',
+                        status: 'in_progress',
+                        label: (titleLine || '').replace(/\*\*/g, '').trim()
+                        || src[0]?.replace(/^\d+\.\s*/, '').replace(/^[-*•]\s+/, '').trim()
+                        || '',
+                        steps: src.map(line => line
+                        .replace(/^\d+\.\s*/, '')
+                        .replace(/^[-*•]\s+/, '')
+                        .replace(/\*\*/g, '')
+                        .trim()).filter(Boolean).map((description, i) => ({
+                            number: i + 1,
+                            description,
+                            status: i === 0 ? 'in_progress' : 'todo',
+                        })),
+                        get content(){
+                            let content = this.label + '\n';
+                            content += this.steps.map(s => `[id: ${s.number}] ${s.description} [status: "${s.status}"]`).join('\n');
+                            return content;
+                        }
+        
+                    }
+                    container.items.remove(block);
+                    container.mode = 'do';
+                    return container.todo;
+                } break;
+                return block;
+            }
+        },
+        plan:{
+            next: [],
+        }
+    },
+
+    /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
+    step: {
+        icon: 'icons:radio-button-unchecked',
+        role: 'user',
+        inject: 'если необходимо выполнить один пункт плана',
+        prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
+            'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
+        items: [],
+        do:{
+            next: ['thought'],
+        },
+    },
+
+    research: {
+        icon: 'icons:search',
+        inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
+        autocomplete: true,
+        next: ['work', 'web', 'question', 'form'],
+    },
+
+    web: {
+        icon: 'icons:language',
+        inject: 'если необходимо найти информацию в интернете',
+        prompt: ['Найди информацию в интернете ровно ОДНИМ вызовом функции:'].join('\n'),
+        fc: ['search', 'fetch_url'],
+        next: ['thought'],
+    },
+
+    work: {
+        icon: 'icons:folder',
+        inject: 'если необходимо найти файлы или информацию в рабочей области',
+        prompt: ['Найди информацию в рабочей области ровно ОДНИМ вызовом функции:',
+            '\n\n[instruction]\n',
+            'read_file({name}) — файл;',
+            'get_schema({}) / inspect_schema({path}) — устройство класса;',
+            'find_text({text}) / find_item({id}) — поиск;',
+            'info({}) — состав;',
+            'logs({}) — журнал.',
+            'Если фактов уже достаточно — изложи выводы обычным текстом.'].join('\n'),
+        fc: 'readonly',
+        build: (r) => ({
+            type: 'work',
+            content: r.content,
+            usage: r.usage,
+            icon: 'icons:folder',
+        }),
+        next: ['thought'],
+    },
+
+    form: {
+        icon: 'icons:view-list',
+        inject: 'если необходимо запросить у пользователя данные формой (поля ввода и/или выбор из вариантов)',
+        prompt: ['Собери форму для ввода данных.',
+            '\n\n[instruction]\n',
+            'Вызови функцию ask_user({questions: [{prompt: "поле"|"вопрос", options?: ["вариант 1", "вариант 2"]}]}).',
+            'Без options — свободный ввод; с options — выбор.',
+            'Первой строкой обычного текста (до вызова) можно дать краткое пояснение к форме.'].join('\n'),
+        next: ['thought'],
+    },
+
+    complete: {
+        inject: 'если считаешь, что текущая задача завершена',
+        prompt: ['Сформируй краткий итог по текущей ветке.',
+            '\n\n[instruction]\n',
+            'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
+        build: (r) => ({
+            type: 'complete',
+            content: r.content,
+            usage: r.usage,
+            button: { label: 'Завершить' },
+        }),
+    },
+};
+
 // Линейный реестр PIPE (по id = type блока); 
 export default {
     icon: 'bootstrap:robot',
@@ -10,52 +171,41 @@ export default {
      * @param {object|FormData} [post] вложения: { files?, urls? } — сохранить в папку задачи
      */
     async prompt(params = {}, post) {
-        // debugger
+        debugger
         let { prompt, role, user } = params;
-        let active_block = await this._active_block();
-        let active_pipe = PIPE[active_block.type];
+        let block = await this._active_block();
+        let container = await this._active_container();
+        let pipe_step = PIPE[block.type] || PIPE.thought;
+        
+        Object.assign(params, {block, container, pipe_step, task: this});
         try {
             switch (role) { 
                 case 'AI':{
+                    // не удалять, пока не переделаем на новый алгоритм
                 } break;
-                case 'BUTTON':{
-                    switch(prompt){ 
-                        case 'true':{
-                            let container = await this._active_block(true);
-                            await active_pipe.convert(container, active_block);  
-                        } break;
-                        case 'false':{
-                            active_block.rejected = true; 
-                        } break;       
-                    }
-                    await this._save(user);
+                case 'APPROVE':{
+                    params.block = await params.pipe_step.approve(params);  
+                    await this._save(user);                    
                 } break;
                 default:{
-                    active_block = {
+                    params.block = {
                         type: 'prompt',
                         content: prompt,
                     };
-                    await this._push_block(user, active_block);
+                    await this._push_block(params);
                 }
             }
-            let messages = await this.context();
-            if(active_block.rejected){
-                messages[0].content = "Твое последнее предложение отклонено пользователем, выясни, что именно ему не понравилось, и предложи новый вариант."
-            }
-            else {
-                active_pipe = PIPE[active_block.type];
-                let options = [...active_pipe.next];
-                let menu = 'Выбери следующий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
-                for (let id of options) menu += '\n' + id + ' - ' + (PIPE[id]?.inject || '') + ';';
-                if(messages.last?.role === 'user')
-                    messages.last.content += '\n\n[instruction]\n' + menu;
-                else
-                    messages.push({ role: 'user', content: menu});
-            }
-   
-            
             
 
+            pipe_step = PIPE[params.block.type];
+            let mode = container.mode || 'plan';
+            let options = pipe_step?.[mode]?.next || [];
+            let menu = 'Выбери следующий, наиболее подходящий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
+            for (let id of options) menu += '\n' + id.toUpperCase() + ' - ' + (PIPE[id]?.inject || '') + ';';
+            menu += '\nНо если пользователь перед этим просто задал вопрос, просто ответь на него, или сам задай вопрос, если что-то непонятно.';
+            let messages = await this.collect_context({prompt: menu});
+
+ 
 
             let response = await this._streamChat({ messages, silent: true, user });
             if (this._stopped) return;
@@ -67,58 +217,71 @@ export default {
                 next_pipe = PIPE[choice];
             }
 
-            let block = {
+            params.block = {
                 type: choice,
                 icon: next_pipe.icon || 'carbon:idea',
+                stop: !next_pipe.plan && !next_pipe.do
             }
-            await this._push_block(user, block);
-
-
-            messages = await this.context();
-            if(messages.last?.role === 'user')
-                messages.last.content += '\n\n[instruction]\n\n' + next_pipe.prompt;
-            else
-                messages.push({ role: 'user', content: next_pipe.prompt });
-
-            response = await this._streamChat({ messages, user });
+            messages = await this.collect_context({prompt: next_pipe.prompt});
+            await this._push_block(params);
+            response = await this._streamChat({messages, user});
             if (this._stopped) return;
-            Object.assign(block, response);
-            block.button = next_pipe.button;
+            Object.assign(params.block, response);
+            params.block.items = next_pipe.items;
             await this._save(user);
-            if (!block.button && next_pipe.next.length > 0) {
-                this.async(() => this.prompt({ role: 'AI', user }));
+            if(next_pipe.allow_approve){
+                let prompt_inject = [`Требуется действие "${next_pipe.allow_approve}". Прими решение и ответь одним словом:`,
+                    'YES - если для согласования необходим пользователь;',
+                    'NO - если ты берешь решение самостоятельно;'].join('\n');
+                messages = await this.collect_context({prompt: prompt_inject});
+                response = await this._streamChat({messages, user});
+                if (this._stopped) return;
+                if(response.content.trim().toLowerCase() === 'yes'){
+                    params.block.button = { label: next_pipe.allow_approve };       
+                    await this._save(user);          
+                }
+               
+                if(!params.block.button){
+                    this.async(() => this.prompt({ role: 'APPROVE', user, prompt: 'true' }));
+                }
             }
+            else if (!params.block.stop) {
+                this.async(() => this.prompt({ role: 'AI', user }));
+            } 
         }
         catch (e) {
-            await this._push_block(user, { type: 'error', content: e.message });
+            params.block = { type: 'error', content: e.message };
+            await this._push_block(params.block);
         }
 
         user?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
-    async context(){
-        const body = await this.body;
-        const walk = (node, out) => {
-            for (const b of (node.items || [])) {
-                let content = (b.content || '');
-                switch(PIPE[b.type]?.role){
-                    case 'user':{
-                        out.push({ role: PIPE[b.type]?.role, content });
-                    } break;
-                    default:{
-                        out.push({ role: 'assistant', content: `<${b.type}>${content}</${b.type}>`});
-                    }
-                }
-                
-                if (b.items?.length) walk(b, out);
-            }
-            return out;
-        };
-        const out = [{ role: 'system', content: body.system }];
-        return walk(body, out);
-    },
+    async collect_context(params = {}) {
+        const {prompt} = params;
+        const container = await this._active_container();
+        let system = container.system || '';
+        if (container.todo)
+            system += '\n\n[todo]\n' + (container.todo.content || '');
+        let role = 'system';
+        const messages = [{ role, content: system }];
+        for (const b of (container.items || [])) {
+            role = PIPE[b.type]?.role || 'assistant';
+            if (messages.last?.role === role)
+                messages.last.content += '\n\n' + b.content;
+            else
+                messages.push({role, content: b.content });
+        }
+        if(prompt){
+            if(messages.last?.role === 'user')
+                messages.last.content += '\n\n[instruction]\n' + prompt;
+            else
+                messages.push({ role: 'user', content: prompt});         
+        }
+        return messages;
+    },    
     async _streamChat(params = {}) {
-        const { messages, functions, silent, user } = params;
+        const {messages, functions, silent, user} = params;
         const model = await this.model;
         let content = '', usage = 0;
         const calls = [];
@@ -158,20 +321,27 @@ export default {
         this._stopped = true;
         return { ok: true, stopped: true };
     },
-    async _push_block(userSession, block){
-        let root = await this._active_block(true);
+    async _push_block(params = {}){
+        const {block, container, user} = params;
         block.time ??= Date.now();
-        root.items.push(block);
-        await this._save(userSession);
+        container.items.push(block);
+        await this._save(user);
     },
-    async _active_block(only_container = false) {
-        let active_block = await this.body;
-        while (active_block?.items?.length && !active_block.closed) {
-            if(only_container &&  !active_block.items.last?.items)
+    async _active_block() {
+        let container = await this._active_container();
+        if(container.todo?.status === 'in_progress')
+            return container.todo;
+        return container.items.last || container;
+    },
+    async _active_container() {
+        let next,container = await this.body;
+        while (next = container.items?.last){
+            if(next.items && !next.ready)
+                container = next;
+            else
                 break;
-            active_block = active_block.items.last;
         }
-        return active_block;
+        return container;
     },
     async change_model(params = {}) {
         const {model} = params;
@@ -184,198 +354,4 @@ export default {
         await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
         userSession?.send?.({ path: this.short });
     }
-};
-const PIPE = {
-    /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thought */
-    prompt: {
-        role: 'user',
-        next: ['plan'],
-    },
-
-    /** размышление над следующим шагом; мерджит инструкцию в последний user-промпт */
-    thought: {
-        icon: 'carbon:idea',
-        inject: 'если необходимо обдумать дальнейшие действия',
-        prompt: [
-            'Как следует подумай, над тем, что необходимо сделать на следующем шаге ',
-            'исходя из контекста, и выдай свои размышления от 5 до 100 строк (от своего лица).',
-            'Не повторяйся внутри размышлений, не фантазируй, не выдумывай и не пытайся ничего делать сам.',
-            'Не обращайся к пользвателю, т.к. это твои размышления, только для тебя.',
-            ].join(' '),
-        next: ['answer', 'plan'],
-    },
-    text: {
-        icon: 'icons:text',
-        prompt: 'Просто ответь пользователю, не выполняя никаких действий.',
-    },
-
-    plan: {
-        icon: 'icons:assignment',
-        inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
-        prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя.',
-            '\n\n[instruction]\n',
-            'Первая строка — короткий заголовок будущей задачи (без нумерации, без слова task).',
-            'Далее — нумерованный список пунктов в один слой. Без вступления и пояснений.',
-        ].join('\n'),
-        button: { label: 'Принять'},
-        async convert(container, block){
-            const text = block.content || '';
-            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-            const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
-            const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
-            const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
-            const src = numbered.length ? numbered : bullets;
-            Object.defineProperty(block, 'content', { get: () => {
-                return block.steps.map(s => `[id: ${s.number}] ${s.description} [status: "${s.status}"]`).join('\n');
-            } });
-            block.type = 'task';
-            block.label = (titleLine || '').replace(/\*\*/g, '').trim()
-                || src[0]?.replace(/^\d+\.\s*/, '').replace(/^[-*•]\s+/, '').trim()
-                || '';
-            block.steps = src
-                .map(line => line
-                    .replace(/^\d+\.\s*/, '')
-                    .replace(/^[-*•]\s+/, '')
-                    .replace(/\*\*/g, '')
-                    .trim())
-                .filter(Boolean)
-                .map((description, i) => ({
-                    number: i + 1,
-                    description,
-                    status: i === 0 ? 'in_progress' : 'todo',
-                }));
-            block.icon = 'icons:list';
-            block.items = [];
-            block.next = ['thought'];
-            delete block.button; // план принят — кнопка больше не нужна
-            container.items.remove(block);
-            container.items.splice(1, 0, block);
-            container.task = block;
-            return block;
-        },
-        next: ['thought'],
-    },
-        // /** Согласованный plan: без LLM, build из ctx.from (блок plan). */
-    task: {
-        
-    },
-
-    /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
-    step: {
-        role: 'user',
-        inject: 'если необходимо выполнить один пункт плана',
-        prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
-            'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
-
-        next: ['thought'],
-    },
-
-    research: {
-        icon: 'icons:search',
-        inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
-        autocomplete: true,
-        next: ['work', 'web', 'question', 'form'],
-    },
-
-    web: {
-        icon: 'icons:language',
-        inject: 'если необходимо найти информацию в интернете',
-        prompt: ['Найди информацию в интернете ровно ОДНИМ вызовом функции:'].join('\n'),
-        fc: ['search', 'fetch_url'],
-        next: ['thought'],
-    },
-
-    work: {
-        icon: 'icons:folder',
-        inject: 'если необходимо найти файлы или информацию в рабочей области',
-        prompt: ['Найди информацию в рабочей области ровно ОДНИМ вызовом функции:',
-            '\n\n[instruction]\n',
-            'read_file({name}) — файл;',
-            'get_schema({}) / inspect_schema({path}) — устройство класса;',
-            'find_text({text}) / find_item({id}) — поиск;',
-            'info({}) — состав;',
-            'logs({}) — журнал.',
-            'Если фактов уже достаточно — изложи выводы обычным текстом.'].join('\n'),
-        fc: 'readonly',
-        build: (r) => ({
-            type: 'work',
-            content: r.content,
-            usage: r.usage,
-            icon: 'icons:folder',
-        }),
-        next: ['thought'],
-    },
-
-
-    form: {
-        icon: 'icons:view-list',
-        inject: 'если необходимо запросить у пользователя данные формой (поля ввода и/или выбор из вариантов)',
-        prompt: ['Собери форму для ввода данных.',
-            '\n\n[instruction]\n',
-            'Вызови функцию ask_user({questions: [{prompt: "поле"|"вопрос", options?: ["вариант 1", "вариант 2"]}]}).',
-            'Без options — свободный ввод; с options — выбор.',
-            'Первой строкой обычного текста (до вызова) можно дать краткое пояснение к форме.'].join('\n'),
-        fc: ['ask_user'],
-        build: (r) => {
-            const call = r.calls?.find(c => c.method === 'ask_user');
-            if (!call) return null;
-            const fields = (call.args.questions || []).map((q, i) => {
-                const id = q.id || `f${i + 1}`;
-                const label = q.prompt || q.label || id;
-                const field = { id, type: 'String', label, placeholder: label };
-                if (q.options?.length) field.options = q.options;
-                return field;
-            });
-            const block = {
-                type: 'form',
-                fields,
-                button: { label: 'Продолжить' },
-                icon: 'icons:view-list',
-            };
-            if (r.content?.trim()) block.content = r.content.trim();
-            return block;
-        },
-        next: ['thought'],
-    },
-
-    actions: {
-        inject: 'если необходимо выполнить одно или несколько действий, над системой или в интернете',
-        prompt: 'Как следует подумай, что ты собираешься сделать',
-        autocomplete: true,
-        build: (r) => ({
-            type: 'action',
-            content: r.content,
-            usage: r.usage,
-            icon: 'icons:build',
-            items: []
-        }),
-    },
-
-    report: {
-        icon: 'icons:description',
-        inject: 'если все пункты закрыты или пора отчитаться',
-        prompt: ['Исходя из твоих размышлений выше, сформируй итоговый отчёт.',
-            '\n\n[instruction]\n',
-            'Что сделано, какие получены результаты и артефакты (только реальные), в формате md. Только факты из ленты, ничего не выдумывай.'].join('\n'),
-        build: (r) => ({
-            type: 'report',
-            content: r.content,
-            usage: r.usage,
-            button: { label: 'Принять' },
-            icon: 'icons:description',
-        }),
-    },
-
-    complete: {
-        inject: 'если считаешь, что текущая задача завершена',
-        prompt: ['Сформируй краткий итог по текущей ветке.',
-            '\n\n[instruction]\n',
-            'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
-        build: (r) => ({
-            type: 'complete',
-            content: r.content,
-            usage: r.usage,
-            button: { label: 'Завершить' },
-        }),
-    },
 };

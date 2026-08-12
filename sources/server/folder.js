@@ -129,15 +129,15 @@ export class $folder extends $item{
      */
     get init(){
         if(this.constructor === FS.$folder)
-            return Promise.resolve(null);
+            return Promise.resolve(this);
         return this[R].cache.init ??= new AsyncPromise(async ()=>{
             let files = await this.tilde;
             files = files.filter(f=>f.id === 'class.js');
-            if(!files.length)
-                return this;
-            let script = await $server.mergeFiles(files);
-            script = await this.constructor.importScript(script);
-            this.DATA = script;
+            if(files.length){
+                let script = await $server.mergeFiles(files);
+                script = await this.constructor.importScript(script);
+                this.DATA = script;
+            }
             return this;
         })
     }
@@ -169,11 +169,11 @@ export class $folder extends $item{
     get bosses(){
         return this.parent.bosses;
     }
-    get admin(){
-        return this.parent.admin;
+    get allAdmins(){
+        return this.parent.allAdmins;
     }
-    get boss(){
-        return this.parent.boss;
+    get allBosses(){
+        return this.parent.allBosses;
     }
     get users(){
         return this.parent.users;
@@ -200,9 +200,9 @@ export class $folder extends $item{
         if (owner && owner !== this)
             await owner.assertAccess(params, level);
     }
-    /** @deprecated используй assertAccess */
-    allowAccess(params, level) {
-        return this.assertAccess(params, level);
+
+    allowAccess(params) {
+        return this.$class?.canSee(this, params);
     }
 
     /**
@@ -846,7 +846,7 @@ export class $folder extends $item{
                     for (let step of steps) {
                         localFolder = await localFolder._get_item(step, FS.$folder);
                         if (localFolder)
-                            folders.push(localFolder);
+                            folders.add(localFolder);
                         if (step === inherit)
                             break;
                     }
@@ -860,6 +860,7 @@ export class $folder extends $item{
         items = await Promise.all(items);
         items = items.flat();
         items = items.filter(f=>!f.isType);
+        items = items.unique();
         return items;
     }
     /**

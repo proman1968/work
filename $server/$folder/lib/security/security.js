@@ -17,8 +17,9 @@ export default {
         $type: Object,
         set(n) {},
     },
+    /** @deprecated отображает только первого админа; используй item-users с role="ADMIN". */
     get admin() {
-        return Promise.resolve(this.$item?.admins).then(admins => {
+        return Promise.resolve(this.$item?.allAdmins).then(admins => {
             return this.admin = admins?.length ? admins.last : null;
         })
     },

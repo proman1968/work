@@ -6,9 +6,12 @@
         const raw = await file.load({ encoding: 'utf-8' });
         const body = JSON.parse(raw);
         let role = params.role;
+        let user_info = await params.user?.$user.info()
+        let class_info = await this.$owner.info()
         body.system = [
             SYSTEM_PROMPT.SYSTEM,
-            `Ты ассистент пользователя: ${params.user?.$user?.path} в классе: ${this.$owner.path}`,
+            `Ты ассистент пользователя:\n${JSON.stringify(user_info, null, 2)}`,
+            `Работаешь в классе:\n${JSON.stringify(class_info, null, 2)}`,
             (SYSTEM_PROMPT[role] || '')
         ].join('\n');
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
