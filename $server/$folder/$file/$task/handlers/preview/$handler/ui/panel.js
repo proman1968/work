@@ -201,7 +201,7 @@ ODA({ is: 'microchat-panel',
         const result = await this.$item.fetch('prompt', {
             prompt: ok?'true':'false',
             model: this.data.model,
-            role: 'BUTTON',
+            role: 'APPROVE',
         });
         this._focus();
     },

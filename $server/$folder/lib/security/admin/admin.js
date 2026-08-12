@@ -23,8 +23,8 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        security.ADMIN = user.id;
-
-        this.$item.save(undefined, {});
+        security.ADMINS ??= [];
+        security.ADMINS.add(user.id);
+        await this.saveSecurity(security);
     }
 }

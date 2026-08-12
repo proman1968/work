@@ -20,7 +20,7 @@ export default {
         if (this.$item instanceof CORE.$user)
             return WORK.USER;
         return (async () => {
-            const admins = await this.$item.admins;
+            const admins = await this.$item.allAdmins;
             return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
         })();
     },

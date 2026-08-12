@@ -42,11 +42,11 @@ export class $class extends $folder{
     get bosses(){
         return this.fetch('bosses');
     }
-    get admin(){
-        return this.fetch('admin');
+    get allAdmins(){
+        return this.fetch('allAdmins');
     }
-    get boss(){
-        return this.fetch('boss');
+    get allBosses(){
+        return this.fetch('allBosses');
     }
     get users(){
         return this.fetch('users');

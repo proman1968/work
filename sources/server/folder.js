@@ -169,11 +169,11 @@ export class $folder extends $item{
     get bosses(){
         return this.parent.bosses;
     }
-    get admin(){
-        return this.parent.admin;
+    get allAdmins(){
+        return this.parent.allAdmins;
     }
-    get boss(){
-        return this.parent.boss;
+    get allBosses(){
+        return this.parent.allBosses;
     }
     get users(){
         return this.parent.users;

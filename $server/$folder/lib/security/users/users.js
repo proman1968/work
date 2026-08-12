@@ -88,25 +88,17 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'BOSS')
-            security.BOSS = user.id;
-        else if (this.role === 'ADMIN')
-            security.ADMIN = user.id;
-        else {
-            security.USERS ??= [];
-            if (!security.USERS.includes(user.id))
-                security.USERS.push(user.id);
-        }
+        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : 'USERS';
+        security[key] ??= [];
+        if (!security[key].includes(user.id))
+            security[key].push(user.id);
         await this.saveSecurity(security);
     },
     async suspendUser(user) {
         const security = await this.getSecurity();
-        if (this.role === 'BOSS')
-            delete security.BOSS;
-        else if (this.role === 'ADMIN')
-            delete security.ADMIN;
-        else if (security.USERS)
-            security.USERS = security.USERS.filter(id => id !== user.id);
+        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : 'USERS';
+        if (security[key])
+            security[key] = security[key].filter(id => id !== user.id);
         await this.saveSecurity(security);
     },
     _userMenu(e) {

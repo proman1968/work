@@ -1,7 +1,7 @@
 export default{
     '#security':{
-        ADMIN: "CA4E097FF6C1D387",
-        BOSS: "CA4E097FF6C1D387",
+        ADMINS: ["CA4E097FF6C1D387", "15D3E0BE98A2BBA7", "70D0EE3157EF4AB7"],
+        BOSSES: ["CA4E097FF6C1D387"],
         USERS: ["CA4E097FF6C1D387"]
     }
 }

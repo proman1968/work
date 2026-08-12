@@ -1,7 +1,7 @@
 export default {
     label: "Base",
     "#security": {
-        BOSS: "CA4E097FF6C1D387", 
+        BOSSES: ["CA4E097FF6C1D387"], 
         USERS: ["635243546352435"]
     },
     METADATA: {

@@ -9,7 +9,7 @@ function mayShowReadme($item) {
 }
 
 export default {
-    imports: '~/lib//icon, ~/lib//user, ~/lib//users',
+    imports: '~/lib//icon, ~/lib//users',
     extends: 'item-icon',
     template: /*html*/`
         <style>
@@ -78,11 +78,11 @@ export default {
         </style>
         <div horizontal flex style="align-items: center;">
             <div vertical flex>
-                <div horizontal flex> 
+                <div horizontal flex>
                     <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
-                    <item-user border ~if="showBoss" :$item="boss" icon-size="16"></item-user>
+                    <item-users icon-size="16" flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
                 <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>
@@ -138,17 +138,13 @@ export default {
     },
     get showBoss(){
         if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
-            return Promise.resolve(this.boss).then(b => !!b);
+            return Promise.resolve(this.$item?.bosses).then(list => !!(list?.length));
         }
     },
     get status(){
         if(this.$item.constructor === CORE.$class)
             return this.$item.status;
         return ''
-    },
-    get boss(){
-        if(!(this.$item instanceof CORE.$class) || this.$item instanceof CORE.$user) return null;
-        return Promise.resolve(this.$item?.boss);
     },
     get icon() {
         if (this.$item instanceof CORE.$handler && this.$item?.id === 'file') {

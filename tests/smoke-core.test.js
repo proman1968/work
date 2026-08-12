@@ -279,7 +279,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members({role}) читает #security, без role — дедуплицированные все', async () => {
         write('USERS/u1/$user/class.js', `export default { label: 'U1' }`);
         write('MBOX/$class/class.js',
-            `export default { label: 'MBOX', '#security': { ADMIN: 'u1', USERS: ['u1'] } }`);
+            `export default { label: 'MBOX', '#security': { ADMINS: ['u1'], USERS: ['u1'] } }`);
         WORK.reset();
 
         const mbox = await WORK.get_item('/MBOX');
@@ -298,6 +298,64 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
         const all = await mbox.members();
         assert.equal(all.length, 1, 'один пользователь во всех ролях — дедупликация по id');
+    });
+
+    it('members по массивам ADMINS/BOSSES, без role — все роли', async () => {
+        write('USERS/u2/$user/class.js', `export default { label: 'U2' }`);
+        write('MBOX2/$class/class.js',
+            `export default { label: 'MBOX2', '#security': { ADMINS: ['u1', 'u2'], BOSSES: ['u1'], USERS: ['u2'] } }`);
+        WORK.reset();
+        (await WORK.$users).reset();
+
+        const mbox2 = await WORK.get_item('/MBOX2');
+        const admins = await mbox2.members({ role: 'ADMIN' });
+        assert.deepEqual(admins.map(u => u.id).sort(), ['u1', 'u2'], 'несколько ADMINS — массив');
+        const bosses = await mbox2.members({ role: 'BOSS' });
+        assert.deepEqual(bosses.map(u => u.id), ['u1'], 'BOSSES — массив');
+        const all = await mbox2.members();
+        assert.deepEqual(all.map(u => u.id).sort(), ['u1', 'u2'], 'дедупликация по id');
+    });
+
+    it('USERS:["GUEST"] — открытый доступ, литерал не резолвится в пользователя', async () => {
+        write('MBOX3/$class/class.js',
+            `export default { label: 'MBOX3', '#security': { USERS: ['GUEST'] } }`);
+        WORK.reset();
+
+        const mbox3 = await WORK.get_item('/MBOX3');
+        const visible = await mbox3.canSee(mbox3, { user: { uid: 'anon' } });
+        assert.equal(visible, true, 'GUEST открывает видимость любому');
+        const users = await mbox3.members({ role: 'USER' });
+        assert.deepEqual(users, [], 'литерал GUEST не попадает в назначенных');
+    });
+
+    it('admins/bosses — локальные, allAdmins/allBosses — с наследованием', async () => {
+        write('ORG/$class/class.js',
+            `export default { label: 'ORG', '#security': { ADMINS: ['u1'], BOSSES: ['u1'] } }`);
+        write('ORG/DEPT/$class/class.js',
+            `export default { label: 'DEPT', '#security': { ADMINS: ['u2'], BOSSES: ['u2'], USERS: ['u2'] } }`);
+        WORK.reset();
+        (await WORK.$users).reset();
+
+        const dept = await WORK.get_item('/ORG/DEPT');
+        const admins = await dept.admins;
+        assert.deepEqual(admins.map(u => u.id), ['u2'], 'admins — только локальные, без наследования');
+        const bosses = await dept.bosses;
+        assert.deepEqual(bosses.map(u => u.id), ['u2'], 'bosses — только локальные, без наследования');
+
+        const allAdmins = await dept.allAdmins;
+        assert.deepEqual(allAdmins.map(u => u.id), ['u1', 'u2'], 'allAdmins — родитель + локальные');
+        const allBosses = await dept.allBosses;
+        assert.deepEqual(allBosses.map(u => u.id), ['u1', 'u2'], 'allBosses — родитель + локальные');
+
+        const roles = await dept.roles({ user: { uid: 'u1' } });
+        assert.ok(roles.includes('ADMIN'), 'родительский админ присутствует в ролях дочернего');
+        assert.ok(roles.includes('BOSS'), 'родительский босс присутствует в ролях дочернего');
+
+        const inherited = await dept.members({ role: 'ADMIN', inherited: true });
+        assert.deepEqual(inherited.map(u => u.id), ['u1', 'u2'], 'members({inherited}) — все админы');
+
+        const all = await dept.members();
+        assert.deepEqual(all.map(u => u.id).sort(), ['u1', 'u2'], 'members() — все назначенные с дедупликацией');
     });
 
     it('work_zone({role}) даёт зону роли, get_storage — deprecated алиас', async () => {

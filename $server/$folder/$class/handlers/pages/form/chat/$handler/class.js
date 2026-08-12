@@ -909,7 +909,7 @@ ODA({is: 'chat-day',
     },
     get logsSource(){
         // Источник логов определяется сервером по роли:
-        // USER/admin → личный кабинет, boss → текущий класс
+        // USER → личный кабинет, ADMIN/BOSS → текущий класс
         return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource')).then(path => {
             if (path && typeof path === 'string')
                 return WORK.get_item(path);

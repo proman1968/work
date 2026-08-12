@@ -16,7 +16,7 @@ ODA({ is: 'microchat-ribbon',
                 min-height: 0;
             }
         </style>
-        <microchat-view-task ~if="task" :data="task"></microchat-view-task>
+        <microchat-view-todo ~if="todo" :data="todo"></microchat-view-todo>
         <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items"></div>
     `,
     top: {
@@ -24,8 +24,8 @@ ODA({ is: 'microchat-ribbon',
         $attr: true,
         get() { return !!this.$item; },
     },
-    get task(){
-        return this.data?.task
+    get todo(){
+        return this.data?.todo
     },
     data: null,
     get items(){
@@ -143,7 +143,7 @@ ODA({ is: 'microchat-view',
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
-                <oda-markdown-viewer vertical ~show="showContent" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>
                 <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
             </div>
@@ -213,12 +213,8 @@ ODA({ is: 'microchat-view',
 
     // --- title chrome ---
     get colorMode() {
-        switch(this.status){
-            case 'rejected':
-                return 'error-invert';
-        }
         if (this.pinned) return 'accent';
-        return 'light';
+        return 'header';
     },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
@@ -299,9 +295,9 @@ ODA({ is: 'microchat-form',
 
 
 /**
- * task — title + subTitle (todo); сырой content в markdown не показываем.
+ * todo — title + subTitle (todo); сырой content в markdown не показываем.
  */
-ODA({ is: 'microchat-view-task',
+ODA({ is: 'microchat-view-todo',
     template: /*html*/`
         <style>
             :host {
@@ -313,7 +309,7 @@ ODA({ is: 'microchat-view-task',
     `,
     extends: 'microchat-view',
     attached(){
-        this.subTitleTag = 'microchat-task-todo';
+        this.subTitleTag = 'microchat-todo-steps';
         this.showContent = undefined;
         this.label = undefined;
         this.icon = undefined;
@@ -332,8 +328,8 @@ ODA({ is: 'microchat-view-task',
     },
 });
 
-/** Чеклист task в subTitle: 1/N + progress + steps (свой collapse). */
-ODA({ is: 'microchat-task-todo',
+/** Чеклист todo в subTitle: 1/N + progress + steps (свой collapse). */
+ODA({ is: 'microchat-todo-steps',
     imports: 'oda//icon',
     template: /*html*/`
         <style>
@@ -410,8 +406,8 @@ ODA({ is: 'microchat-task-todo',
             <span flex>{{currentStepText}}</span>
             <oda-icon :icon="stepsChevron" :icon-size></oda-icon>
         </div>
-        <div class="track"><div class="bar" ~style="'width:' + progress + '%'"></div></div>
-        <div class="steps" content ~if="!collapsed">
+        <div class="track" ><div class="bar" ~style="'width:' + progress + '%'"></div></div>
+        <div class="steps" light bold ~if="!collapsed">
             <div class="step" horizontal ~for="steps"
                     ~class="{ done: $for.item.status === 'done', 'in-progress': $for.item.status === 'in_progress' }">
                 <oda-icon :icon="stepIcon($for.item.status)" icon-size="16"></oda-icon>
