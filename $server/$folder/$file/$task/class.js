@@ -28,57 +28,66 @@ const PIPE = {
         },
         inject: 'если необходимо обдумать дальнейшие действия',
         prompt: [
-            'Как следует подумай над тем, что необходимо сделать на текущем шаге плана.',
-            'Выдай свои размышления кратко (2-5 строк. если надо, больше) от своего лица.',
-            'Не фантазируй. В конце реши, какое действие нужно выполнить следующим.',
-        ].join(' '),
+            'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',            
+            'Не фантазируй, не выдумывай, просто планируй дальнейшие действия.',
+            'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
+        ].join('\n'),
     },
     planning: {
         icon: 'icons:assignment',
-        inject: 'если необходимо сделать несколько действий подряд, сначала надо согласовать план с пользователем',
-        prompt: ['Исходя из размышлений выше, предложи план работ по запросу пользователя:',
-            'Заголовок: Краткое название плана работ.',
-            'Содерэание: пронумерованый список пунктов плана работ.',
+        inject: 'если необходимо сделать несколько действий подряд',
+        prompt: ['Предложи план:',
+            '\n\n[instruction]\n',
+            'СТРОГО в формате markdown:',
+            'Краткое название плана работ.',
+            'Пронумерованый список пунктов плана работ.',
         ].join('\n'),
         allow_approve: 'Принять план',
         async approve(params = {}){
-            const {container, block, prompt} = params;
+            let {container, block, prompt} = params;
+            block.type = 'thought';
+            delete block.button;
             switch(prompt){
                 case 'true':{
-                    const text = block.content || '';
-                    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-                    const numbered = lines.filter(l => /^\d+\.\s+\S/.test(l));
-                    const bullets = lines.filter(l => /^[-*•]\s+\S/.test(l));
-                    const titleLine = lines.find(l => !/^\d+\.\s*/.test(l) && !/^[-*•]\s/.test(l));
-                    const src = numbered.length ? numbered : bullets;
+                    let plan = parsePlanMarkdown(block.content);
                     container.todo = {
                         type: 'todo',
                         icon:'icons:list',
                         status: 'in_progress',
-                        label: (titleLine || '').replace(/\*\*/g, '').trim()
-                        || src[0]?.replace(/^\d+\.\s*/, '').replace(/^[-*•]\s+/, '').trim()
-                        || '',
-                        steps: src.map(line => line
-                        .replace(/^\d+\.\s*/, '')
-                        .replace(/^[-*•]\s+/, '')
-                        .replace(/\*\*/g, '')
-                        .trim()).filter(Boolean).map((description, i) => ({
-                            number: i + 1,
-                            description,
-                            status: i === 0 ? 'in_progress' : 'todo',
-                        })),
-                        get content(){
-                            let content = this.label + '\n';
-                            content += this.steps.map(s => `[id: ${s.number}] ${s.description} [status: "${s.status}"]`).join('\n');
-                            return content;
+                        ...plan,
+                        get content() {
+                            let steps = (container.items || []).filter(b => b.type === 'step');
+                            const lines = this.steps.map((s, i) => {
+                                let step = steps[i];
+                                let label = `${i + 1}. ${s.description}`;
+                                if(step){
+                                    step.label = label;
+                                    s.status = step.status = (step.ready) ? 'done' : 'in_progress';
+                                    s.icon = step.icon = step.status === 'done' ? 'icons:check-circle' : 'av:play-circle-outline';
+                                    return label + ` [${step.status}]`;
+
+                                }
+                                return label + ' [todo]';
+                            });
+                            return this.label + '\n' + lines.join('\n');
                         }
         
                     }
-                    container.items.remove(block);
-                    return container.todo;
+                    container.mode = 'do';
+                    block.content += '\n\nПЛАН ПРИНЯТ! НАЧИНАЕМ ВЫПОЛЕНИЕ';
+                    block.status = 'approved';
+                    block = container.todo;
                 } break;
-                return block;
+                case 'false':{
+                    block.status = 'rejected';
+                    block.content += '\n\nПЛАН ОТВЕРГНУТ, ТРЕБУЕТСЯ ПЕРЕПЛАНИРОВКА';
+                } break;
+                default:{
+                    block.status = 'to modify';
+                    block.content += '\n\nПЛАН ОТВЕРГНУТ, ' + prompt;
+                }
             }
+            return block;
         },
         plan:{
             next: [],
@@ -87,15 +96,11 @@ const PIPE = {
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
-        icon: 'icons:radio-button-unchecked',
-        role: 'user',
         inject: 'если необходимо выполнить один пункт плана',
-        prompt: ['Выполни текущий пункт плана (со статусом in_progress) из последнего task-блока в ленте.',
-            'Ровно одно действие. По завершении — подтверди кнопкой «Завершить» (узел complete).'].join('\n'),
-        items: [],
-        do:{
+        container: true,
+        plan:{
             next: ['thought'],
-        },
+        },        
     },
 
     research: {
@@ -175,8 +180,8 @@ export default {
         let block = await this._active_block();
         let container = await this._active_container();
         let pipe_step = PIPE[block.type] || PIPE.thought;
-        let mode = container.mode || 'plan';
-        Object.assign(params, {block, container, pipe_step, mode, task: this});
+        
+        Object.assign(params, {block, container, pipe_step, task: this});
         try {
             switch (role) { 
                 case 'AI':{
@@ -197,53 +202,50 @@ export default {
             
 
             pipe_step = PIPE[params.block.type];
+            let mode = container.mode || 'plan';
             let options = pipe_step?.[mode]?.next || [];
-            let menu = 'Выбери следующий, наиболее подходящий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
-            for (let id of options) menu += '\n' + id.toUpperCase() + ' - ' + (PIPE[id]?.inject || '') + ';';
-            menu += '\nНо если пользователь прото задал вопрос, просто ответь на него, или сам задай вопрос, если что-то непонятно.';
-            let messages = await this.collect_context({prompt: menu});
-
- 
-
-            let response = await this._streamChat({ messages, silent: true, user });
-            if (this._stopped) return;
-            let choice = response.content.trim().toLowerCase();
-  
+            let messages, response, choice = '';
+            if(options.length === 1) {
+                choice = options[0];
+            }
+            else {
+                let menu = 'Выбери следующий, наиболее подходящий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
+                for (let id of options) menu += '\n' + id.toUpperCase() + ' - ' + (PIPE[id]?.inject || '') + ';';
+                menu += '\nНо если пользователь перед этим просто задал вопрос, просто ответь на него, или сам задай вопрос, если что-то непонятно.';
+                messages = await this.collect_context({prompt: menu});
+    
+                response = await this._streamChat({ messages, silent: true, user });
+                if (this._stopped) return;
+                choice = response.content.trim().toLowerCase();  
+            }
             let next_pipe = PIPE[choice];
             if(!next_pipe){
                 choice = 'text'
                 next_pipe = PIPE[choice];
             }
 
-            params.block = {
+            block = {
                 type: choice,
                 icon: next_pipe.icon || 'carbon:idea',
-                stop: !next_pipe.plan && !next_pipe.do
-            }
-            messages = await this.collect_context({prompt: next_pipe.prompt});
-            await this._push_block(params);
-            response = await this._streamChat({messages, user});
-            if (this._stopped) return;
-            Object.assign(params.block, response);
-            params.block.items = next_pipe.items;
-            await this._save(user);
+                stop: !next_pipe.plan && !next_pipe.do,
+            }  
             if(next_pipe.allow_approve){
-                let prompt_inject = [`Требуется действие "${next_pipe.allow_approve}". Прими решение и ответь одним словом:`,
-                    'YES - если для этого необходимо привлечь пользователя;',
-                    'NO - если ты можешь выполнить все самостоятельно;'].join('\n');
-                messages = await this.collect_context({prompt: prompt_inject});
+                block.button = { label: next_pipe.allow_approve };
+            }
+            if(next_pipe.container){
+                block.items = [];
+            }    
+            params.block = block; 
+            await this._push_block(params);                           
+            if(next_pipe.prompt){
+                messages = await this.collect_context({prompt: next_pipe.prompt});
                 response = await this._streamChat({messages, user});
                 if (this._stopped) return;
-                if(response.content.trim().toLowerCase() === 'yes'){
-                    params.block.button = { label: next_pipe.allow_approve };       
-                    await this._save(user);          
-                }
-               
-                if(!params.block.button){
-                    this.async(() => this.prompt({ role: 'APPROVE', user, prompt: 'true' }));
-                }
+                Object.assign(params.block, response);
+                this._save(user);
             }
-            else if (!params.block.stop) {
+            
+            if (!params.block.stop && !params.block.button) {
                 this.async(() => this.prompt({ role: 'AI', user }));
             } 
         }
@@ -353,3 +355,39 @@ export default {
         userSession?.send?.({ path: this.short });
     }
 };
+function parsePlanMarkdown(text = '') {
+    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    // заголовок: первый ATX (#..) или жирная строка, иначе первая не-списочная
+    let label = '';
+    for (const raw of lines) {
+        const t = raw.trim();
+        if (!t) continue;
+        const h = t.match(/^#{1,6}\s+(.+)$/);
+        if (h) { label = h[1]; break; }
+        const b = t.match(/^\*\*(.+?)\*\*\s*$/);
+        if (b) { label = b[1]; break; }
+        if (!/^(\d+[.)]\s+|[-*•]\s+)/.test(t)) { label = t; break; }
+    }
+    label = label.replace(/\*\*/g, '').replace(/^#+\s*/, '').trim();
+    // пункты: только top-level (без ведущих пробелов), numbered предпочтительнее bullets
+    const itemRe = /^(?:(\d+)[.)]\s+|([-*•])\s+)(.+?)\s*$/;
+    const numbered = [], bullets = [];
+    for (const raw of lines) {
+        if (/^\s/.test(raw) && raw.trim()) continue; // вложенные — пропуск
+        const m = raw.trim().match(itemRe);
+        if (!m || !m[3]) continue;
+        const description = m[3].replace(/\*\*/g, '').trim();
+        if (!description) continue;
+        (m[1] ? numbered : bullets).push(description);
+    }
+    const descriptions = numbered.length ? numbered : bullets;
+    return {
+        label: label || descriptions[0] || '',
+        steps: descriptions.map((description, i) => ({
+            number: i + 1,
+            description,
+            status: 'todo',
+            icon: 'icons:radio-button-unchecked',
+        })),
+    };
+}

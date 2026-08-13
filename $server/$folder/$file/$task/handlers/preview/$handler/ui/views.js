@@ -94,6 +94,7 @@ ODA({ is: 'microchat-view',
                 list-style: none;
                 box-sizing: border-box;
                 overflow: hidden;
+                position: sticky;
             }
             .title {
                 @apply --horizontal;
@@ -135,7 +136,7 @@ ODA({ is: 'microchat-view',
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <span class="label">{{label}}</span>
-                    <span disabled class="label" ~if="status">{{status}}</span>
+                    <span disabled class="label" style="opacity: .5;" ~if="status">{{status}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
                     <span class="time" ~if="timeText">{{timeText}}</span>
@@ -218,7 +219,9 @@ ODA({ is: 'microchat-view',
     },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
-    get top() { return (this.host.host.height || 0) + (this.host.host.top || 0); },
+    get top() { 
+        return (this.host.host.height || 0) + (this.host.host.top || 0); 
+    },
     get headerStyle() {
         return { top: this.top + 'px', zIndex: 100 - this.depth };
     },
@@ -410,7 +413,7 @@ ODA({ is: 'microchat-todo-steps',
         <div class="steps" light bold ~if="!collapsed">
             <div class="step" horizontal ~for="steps"
                     ~class="{ done: $for.item.status === 'done', 'in-progress': $for.item.status === 'in_progress' }">
-                <oda-icon :icon="stepIcon($for.item.status)" icon-size="16"></oda-icon>
+                <oda-icon :icon="$for.item.icon" icon-size="16"></oda-icon>
                 <span flex>{{$for.item.description}}</span>
             </div>
         </div>
@@ -448,10 +451,5 @@ ODA({ is: 'microchat-todo-steps',
     },
     toggleSteps() {
         this.collapsed = !this.collapsed;
-    },
-    stepIcon(status) {
-        if (status === 'done') return 'icons:check-circle';
-        if (status === 'in_progress') return 'av:play-circle-outline';
-        return 'icons:radio-button-unchecked';
-    },
+    }
 });

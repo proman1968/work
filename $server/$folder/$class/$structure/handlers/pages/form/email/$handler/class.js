@@ -214,16 +214,25 @@ function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
 }
 
 async function runEmailSettingsDialog($item) {
-    const $context = $item.$context?.length ? $item.$context[0] : $item.$context;
-    const settings = await $context.fetch('read_secret', { filename: 'email.json' });
-    const el = ODA.createElement('oda-email-settings', {
-        accounts: mailboxesToAccounts(settings?.mailboxes),
-    });
-    if (!el.accounts.length) {
-        el.addAccount();
+    if (runEmailSettingsDialog.opening)
+        return;
+    runEmailSettingsDialog.opening = true;
+    let el, settings, $context;
+    try {
+        $context = $item.$context;
+        settings = await $context.fetch('read_secret', { filename: 'email.json' });
+        el = ODA.createElement('oda-email-settings', {
+            accounts: mailboxesToAccounts(settings?.mailboxes),
+        });
+        if (!el.accounts.length) {
+            el.addAccount();
+        }
+        else {
+            el.index = 0;
+        }
     }
-    else {
-        el.index = 0;
+    finally {
+        runEmailSettingsDialog.opening = false;
     }
     try {
         await WORK.showDialog(el, {

@@ -3,7 +3,7 @@ export default {
     extends: 'oda-app-layout',
     icon: 'enterprise:calendar',
     template: /*html*/`
-        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::day ::day-from ::day-to></oda-form-calendar>
+        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::day ::day-from ::day-to ::selected_users></oda-form-calendar>
         <div slot="right-panel" vertical flex icon="carbon:table-of-contents:180" style="overflow-y: auto; height: 0; padding: 4px 0;">
             <oda-form-calendar-list-view flex :$item label="Tasks" :events :day :day-from :day-to></oda-form-calendar-list-view>
         </div>
@@ -16,13 +16,20 @@ export default {
     },
     dayFrom: '',
     dayTo: '',
+    selected_users: {
+        $def: [],
+        set(n) {
+            this.events = undefined;
+        }
+    },
     get _logsSource() {
-        if (this.$item instanceof CORE.$user)
-            return WORK.USER;
-        return (async () => {
-            const admins = await this.$item.allAdmins;
-            return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
-        })();
+        return this.$item;
+        // if (this.$item instanceof CORE.$user)
+        //     return WORK.USER;
+        // return (async () => {
+        //     const admins = await this.$item.allAdmins;
+        //     return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
+        // })();
     },
     get _logsFolders() {
         const dayFrom = this.dayFrom;
@@ -36,16 +43,19 @@ export default {
             const source = await this._logsSource;
             if (!source)
                 return null;
+            const logFolder = await source.get_item('/~/logs/.data.logs/history');
+            if (!logFolder)
+                return null;
             while (current <= end) {
                 const day = _formatDate(current)
                 await source.logs(day);
-                const folder = await source.get_item('/~/logs/.data.logs/history/' + day);
-                if (!folder)
-                    return null;
-                this._boundOnLogsChanged ||= () => { this.events = undefined; };
-                folder.unlisten?.('changed', this._boundOnLogsChanged);
-                folder.listen?.('changed', this._boundOnLogsChanged);
-                folders.add(folder);
+                const folder = await logFolder.get_item(day);
+                if (folder) {
+                    this._boundOnLogsChanged ||= () => { this.events = undefined; };
+                    folder.unlisten?.('changed', this._boundOnLogsChanged);
+                    folder.listen?.('changed', this._boundOnLogsChanged);
+                    folders.add(folder);
+                }
                 current.setDate(current.getDate() + 1)
             }
             return this._logsFolders = folders;
@@ -56,6 +66,7 @@ export default {
         const dayTo   = this.dayTo;
         if (!dayFrom || !dayTo)
             return null;
+        const selected_users = this.selected_users;
         return (async () => {
             const folders = await this._logsFolders;
             if (!folders)
@@ -68,6 +79,8 @@ export default {
                     files = files ? [files] : [];
                 files = await Promise.all(files.map(f => Promise.resolve(f)));
                 files = files.filter(f => f?.id?.endsWith?.('.logs'));
+                if (selected_users.length)
+                    files = files.filter(f => selected_users.includes(_logUserId(f.id)));
                 files = files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
                 for (const file of files) {
                     const raw = await file.load();
@@ -155,7 +168,7 @@ export default {
 import '/$server/$folder/$file/$ics/handlers/pages/form/file/$handler/class.js'
 
 ODA({
-    is: 'oda-form-calendar',
+    is: 'oda-form-calendar', imports: '~/lib//users.js',
     template: /*html*/`
         <style>
             :host {
@@ -177,7 +190,7 @@ ODA({
                 border-radius: 4px;
             }
         </style>
-        <item-users accent-invert flex :$item slot="top"></item-users>
+        <item-users accent-invert flex :$item ::selected_users slot="top"></item-users>
         <div vertical class="toolbar">
             <div horizontal>
                 <oda-date-nav :view-mode ::current-date></oda-date-nav>
@@ -196,6 +209,7 @@ ODA({
     `,
     $item: null,
     events: [],
+    selected_users: [],
     day: {
         $def: '',
         set(n) {
@@ -736,12 +750,13 @@ ODA({
         const prevMonthLastDay = new Date(year, month, 0).getDate();
         for (let i = firstDayOfWeek - 1; i >= 0; i--) {
             const day = prevMonthLastDay - i;
+            const date = new Date(year, month - 1, day);
             days.push({
                 day,
-                date: new Date(year, month - 1, day),
+                date,
                 otherMonth: true,
                 isToday: false,
-                events: []
+                events: this.getEventsForDay(date)
             });
         }
         // Добавляем дни текущего месяца
@@ -759,12 +774,13 @@ ODA({
         // Добавляем дни следующего месяца до заполнения сетки
         const remainingDays = 42 - days.length; // 6 недель * 7 дней
         for (let day = 1; day <= remainingDays; day++) {
+            const date = new Date(year, month + 1, day);
             days.push({
                 day,
-                date: new Date(year, month + 1, day),
+                date,
                 otherMonth: true,
                 isToday: false,
-                events: []
+                events: this.getEventsForDay(date)
             });
         }
         return days;
@@ -953,19 +969,13 @@ ODA({is: 'oda-date-nav',
             this.$pdp.dayFrom = this.$pdp.day;
             this.$pdp.dayTo = this.$pdp.day;
         } else if (this.viewMode === 'week') {
-            const start = new Date(date);
-            const dayOfWeek = start.getDay();
-            const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-            start.setDate(start.getDate() + diff);
-            const end = new Date(start);
-            end.setDate(end.getDate() + 6);
-            this.$pdp.dayFrom = _formatDate(start);
-            this.$pdp.dayTo = _formatDate(end);
+            this.$pdp.dayFrom = _formatDate(_weekStart(date));
+            this.$pdp.dayTo = _formatDate(_weekEnd(date));
         } else if (this.viewMode === 'month') {
-            const start = new Date(date.getFullYear(), date.getMonth(), 1);
-            const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-            this.$pdp.dayFrom = _formatDate(start);
-            this.$pdp.dayTo = _formatDate(end);
+            const first = new Date(date.getFullYear(), date.getMonth(), 1);
+            const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+            this.$pdp.dayFrom = _formatDate(_weekStart(first));
+            this.$pdp.dayTo = _formatDate(_weekEnd(last));
         }
     },
     prevPeriod() {
@@ -1062,5 +1072,25 @@ function _formatDate(date) {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+function _logUserId(id) {
+    const name = String(id).replace(/\.logs$/, '');
+    const dot = name.indexOf('.');
+    return dot === -1 ? '' : name.slice(dot + 1);
+}
+
+function _weekStart(date) {
+    const start = new Date(date);
+    const dayOfWeek = start.getDay();
+    const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    start.setDate(start.getDate() + diff);
+    return start;
+}
+
+function _weekEnd(date) {
+    const end = _weekStart(date);
+    end.setDate(end.getDate() + 6);
+    return end;
 }
 
