@@ -346,12 +346,12 @@ export class $class extends $folder{
         return folder;
     }
 
-    /** uid пользователя из params.user (сессия host). */
+    /** uid пользователя из params.session (сессия host). */
     static resolveUid(params = {}) {
-        const user = params.user;
-        if (!user?.uid)
+        const session = params.session;
+        if (!session?.uid)
             return null;
-        return user.$user?.id ?? user.uid;
+        return session.$user?.id ?? session.uid;
     }
 
     /** На классе назначен хотя бы один пользователь (любая роль). */
@@ -378,7 +378,7 @@ export class $class extends $folder{
             return false;
         security.ADMINS.add(uid);
         const post = this.constructor.toScript({ '#security': security });
-        await this.save({ post, user: WORK });
+        await this.save({ post, session: WORK });
         this.reset?.();
         return true;
     }
@@ -387,7 +387,7 @@ export class $class extends $folder{
      * Получить список ролей текущего пользователя в классе.
      * Проверяет allAdmins/allBosses (наследуемые) и users (локальные).
      * @param {object} [params]
-     * @param {object} [params.user] Объект пользователя из сессии
+     * @param {object} [params.session] Объект пользователя из сессии
      * @returns {Promise<string[]>} Массив строк: 'ADMIN', 'BOSS', 'USER'
      */
     async roles(params = {}) {
@@ -611,9 +611,9 @@ export class $class extends $folder{
         const row = { time };
         if (params.sender)
             row.sender = params.sender;
-        else if (params.user?.uid)
-            row.sender = params.user.uid;
-        else if (params.user?.$user === globalThis.WORK)
+        else if (params.session?.uid)
+            row.sender = params.session.uid;
+        else if (params.session?.$user === globalThis.WORK)
             row.sender = WORK.id;
         if (params.message != null)
             row.content = params.message;
@@ -637,17 +637,17 @@ export class $class extends $folder{
      * @returns {Promise<object|null>} Обновлённая запись или null
      */
     async append_log_includes(params = {}) {
-        return LOGS.appendIncludes(this, params.entryPath, params.includePaths, { user: params.user });
+        return LOGS.appendIncludes(this, params.entryPath, params.includePaths, { session: params.session });
     }
 
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */
     async appendLogIncludes(entryPath, includePaths = [], params = {}) {
         if (entryPath && typeof entryPath === 'object' && entryPath.entryPath) {
-            params = includePaths?.user ? includePaths : (params?.user ? params : {});
+            params = includePaths?.session ? includePaths : (params?.session ? params : {});
             includePaths = entryPath.includePaths;
             entryPath = entryPath.entryPath;
         }
-        return this.append_log_includes({ entryPath, includePaths, user: params.user });
+        return this.append_log_includes({ entryPath, includePaths, session: params.session });
     }
 
     /** @deprecated используй logs({ mode: 'index' }) */
@@ -820,8 +820,8 @@ export class $class extends $folder{
      */
     async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
         if (DEV_MODE) return;
-        if (!params?.user) return;
-        if (params.user?.$user === globalThis.WORK) return;
+        if (!params?.session) return;
+        if (params.session?.$user === globalThis.WORK) return;
         const uid = $class.resolveUid(params);
         if (!uid && level !== $class.ACCESS_LEVEL.READ)
             throw new Error(ACCESS_DENIED);

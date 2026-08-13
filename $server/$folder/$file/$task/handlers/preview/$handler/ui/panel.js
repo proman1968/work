@@ -198,8 +198,12 @@ ODA({ is: 'microchat-panel',
     },
     async sendAction(ok = true) {
         this.pending = true;
-        const result = await this.$item.fetch('prompt', {
-            prompt: ok?'true':'false',
+        const block = this.$pdp.focusedBlock;
+        let prompt = ok ? 'true' : 'false';
+        if (ok && block?.type === 'form')
+            prompt = JSON.stringify(block.values || block.answers || {});
+        await this.$item.fetch('prompt', {
+            prompt,
             model: this.data.model,
             role: 'APPROVE',
         });

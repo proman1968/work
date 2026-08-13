@@ -1,6 +1,6 @@
 export default {
     async execute(params = {}, post) {
-        const uid = params.user?.uid || params.user?.$user?.id;
+        const uid = params.session?.uid || params.session?.$user?.id;
         if (!uid)
             throw new Error('Требуется авторизация');
 
@@ -30,7 +30,7 @@ export default {
         if (!$Link)
             throw new Error('Нет ссылки на заявку ($Link)');
 
-        const existing = await WORK.get_item('/PAAS/' + domainName, 0, undefined, { user: globalThis.WORK });
+        const existing = await WORK.get_item('/PAAS/' + domainName, 0, undefined, { session: globalThis.WORK });
         if (existing?.type === '$paas')
             throw new Error('Имя домена "' + domainName + '" уже занято');
 
@@ -46,8 +46,8 @@ export default {
             post: JSON.stringify(order, null, 2),
             encoding: 'utf-8',
             message: domainName + ' / ' + (product.label || product.id || ''),
-            user: globalThis.WORK,
-            logAuthor: params.user,
+            session: globalThis.WORK,
+            logAuthor: params.session,
             skip_file_handler: true,
         });
 

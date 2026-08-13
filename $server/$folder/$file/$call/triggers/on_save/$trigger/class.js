@@ -16,7 +16,7 @@ export default {
 
         // Переслать сигнал всем сокетам получателей
         for (const user of params.receivers) {
-            const connect = Object.values($server.users).find(u => u.uid === user.id);
+            const connect = Object.values($server.sessions).find(u => u.uid === user.id);
             if (!connect) continue;
             for (const socket of Object.values(connect.sockets)) {
                 socket.ws.send(JSON.stringify({ type: 'phone.call', message }));

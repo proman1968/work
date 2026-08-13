@@ -27,19 +27,30 @@ ODA({ is: 'microchat-ribbon',
     get todo(){
         return this.data?.todo
     },
-    data: null,
+    data: {
+        $def: null,
+        set(n) {
+            // reload: докрутка только если уже в хвосте
+            if (this.top && n?.items?.length && this.stickBottom) this.pinBottom();
+        },
+    },
     get items(){
         return this.data?.items
     },
+    /** follow только в хвосте; user-scroll вверх — стоп до возврата вниз */
+    stickBottom: true,
+    _pinGen: 0,
+    _ignoreScroll: 0,
     $item: {
         $def: null,
         set(n) {
             n?.listen('chat.delta', () => {
-                const follow = this.nearBottom;
-                this.async(() => { if (follow) this.scrollToBottom(true); });
+                this.async(() => { if (this.stickBottom) this.scrollToBottom(); });
             });
-            n?.listen('chat.done', () => this.async(() => this.scrollToBottom()));
-            if (this.items?.length) this.pinBottom();
+            n?.listen('chat.done', () => this.async(() => {
+                if (this.stickBottom) this.pinBottom();
+            }));
+            if (this.items?.length) this.pinBottom(true);
         },
     },
     /** specialty если CE уже есть или ODA уже стартовал (telemetry) — не ждать define */
@@ -48,19 +59,27 @@ ODA({ is: 'microchat-ribbon',
         return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
     },
     attached() {
-        if (this.top && this.items?.length) this.pinBottom();
+        if (!this.top) return;
+        this.addEventListener('scroll', () => {
+            if (this._ignoreScroll) return;
+            this.stickBottom = this.nearBottom;
+            if (!this.stickBottom) this._pinGen++; // отменить pending pin
+        }, { passive: true });
+        if (this.items?.length) this.pinBottom(true);
     },
     /**
-     * Начальная докрутка: не стопать на nearBottom при ещё коротком scrollHeight
-     * (details/open/markdown дорисуют позже). Стоп — высота стабильна и у низа, или лимит.
+     * Докрутка к хвосту, пока layout растёт (markdown/details).
+     * force — только первый open; иначе только при stickBottom.
      */
-    pinBottom() {
+    pinBottom(force) {
         if (!this.top) return;
+        if (force) this.stickBottom = true;
+        else if (!this.stickBottom) return;
         const gen = ++this._pinGen;
         const tick = (left, lastH) => {
             this.async(() => {
-                if (gen !== this._pinGen) return;
-                this.scrollToBottom(true);
+                if (gen !== this._pinGen || !this.stickBottom) return;
+                this.scrollToBottom();
                 const h = this.scrollHeight;
                 if (left <= 1) return;
                 if (h === lastH && this.nearBottom) return;
@@ -69,14 +88,14 @@ ODA({ is: 'microchat-ribbon',
         };
         tick(25, 0);
     },
-    _pinGen: 0,
     get nearBottom() {
-        return this.scrollTop + this.clientHeight >= this.scrollHeight - 10;
+        return this.scrollTop + this.clientHeight >= this.scrollHeight - 24;
     },
-    scrollToBottom(force) {
-        if (!this.top) return true;
-        if (force || this.nearBottom)
-            this.scrollTop = this.scrollHeight;
+    scrollToBottom() {
+        if (!this.top || !this.stickBottom) return this.nearBottom;
+        this._ignoreScroll++;
+        this.scrollTop = this.scrollHeight;
+        this.async(() => { this._ignoreScroll = Math.max(0, this._ignoreScroll - 1); });
         return this.nearBottom;
     },
 });
@@ -272,13 +291,13 @@ ODA({ is: 'microchat-view-prompt',
 });
 
 
-/** form — content + extend (stub → oda-form). */
+/** form — content + extend (поля → data.values; submit через APPROVE). */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     extendTag: 'microchat-form',
 });
 
-/** Stub: data.fields → позже oda-form. */
+/** Поля формы: ввод в data.values; сдача — panel sendAction → form.approve. */
 ODA({ is: 'microchat-form',
     template: /*html*/`
         <style>
@@ -287,13 +306,68 @@ ODA({ is: 'microchat-form',
                 gap: 8px;
                 padding: 8px;
                 font-size: small;
-                opacity: .7;
             }
+            .field {
+                @apply --vertical;
+                gap: 2px;
+                min-width: 0;
+            }
+            label {
+                font-size: xx-small;
+                opacity: .8;
+            }
+            input, select, textarea {
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                padding: 6px 8px;
+                font: inherit;
+                background: var(--content-background);
+                color: inherit;
+                min-width: 0;
+            }
+            textarea { resize: vertical; min-height: 3em; }
+            .opts { @apply --horizontal; gap: 8px; flex-wrap: wrap; }
+            .opts label { @apply --horizontal; gap: 4px; align-items: center; font-size: small; opacity: 1; }
         </style>
-        <div>form · {{fields.length}} field(s) — stub → oda-form</div>
+        <div class="field" ~for="fields">
+            <label ~if="$for.item.type !== 'checkbox'">{{$for.item.label}}</label>
+            <textarea ~if="$for.item.type === 'textarea'" ::value="values[$for.item.id]"></textarea>
+            <select ~if="$for.item.type === 'select'" ::value="values[$for.item.id]">
+                <option value=""></option>
+                <option ~for="$for.item.options" :value="$for.item">{{$for.item}}</option>
+            </select>
+            <div class="opts" ~if="$for.item.type === 'radio'">
+                <label ~for="$for.item.options">
+                    <input type="radio" :name="$for.$for.item.id" :value="$for.item"
+                        :checked="values[$for.$for.item.id] === $for.item"
+                        @change="values[$for.$for.item.id] = $for.item">{{$for.item}}</label>
+            </div>
+            <label ~if="$for.item.type === 'checkbox'" class="opts">
+                <input type="checkbox" ::checked="values[$for.item.id]">{{$for.item.label}}</label>
+            <input ~if="isPlain($for.item)" :type="$for.item.type === 'number' ? 'number' : 'text'"
+                ::value="values[$for.item.id]">
+        </div>
+        <div ~if="!fields.length" style="opacity:.6">нет полей формы</div>
     `,
     data: null,
-    get fields() { return this.data?.fields || []; },
+    get fields() {
+        if (!this.data) return [];
+        const fields = this.data.fields || [];
+        const v = (this.data.values ??= {});
+        for (const f of fields) {
+            if (f?.id == null) continue;
+            if (!(f.id in v))
+                v[f.id] = f.type === 'checkbox' ? false : '';
+        }
+        return fields;
+    },
+    get values() {
+        if (!this.data) return {};
+        return (this.data.values ??= {});
+    },
+    isPlain(f) {
+        return !['textarea', 'select', 'radio', 'checkbox'].includes(f?.type);
+    },
 });
 
 

@@ -95,6 +95,7 @@ export class $folder extends $item {
             this[R].cache = {};
             this.fire('changed');
         }
+        return true;
     }
     invite(view) {
         return this.fetch('invite', { view });

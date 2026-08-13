@@ -1439,9 +1439,9 @@ export class $folder extends $item{
     reset(initiator){
         this[R].cache = {};
         let key = this.short;
-        for(let user of Object.values($server.users)){
-            for(let id in user.sockets){
-                let socket = user.sockets[id];
+        for(let session of Object.values($server.sessions)){
+            for(let id in session.sockets){
+                let socket = session.sockets[id];
                 let list = socket.events.filter(e=>e.startsWith(key));
                 if(list.length) // todo возможно надо посылать события всем в списке
                     socket.ws.send(JSON.stringify({path: key, initiator: initiator?.id}));
@@ -1463,7 +1463,7 @@ export class $folder extends $item{
                 this.parent.reset(initiator || this);
             }, 100)
         }
-
+        return true;
     }
     /**
      * Создать эту папку на диске (mkdir), если ещё нет.

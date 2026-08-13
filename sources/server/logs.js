@@ -242,7 +242,7 @@ async function writeLogTo(storage, log_param, written) {
  * Записать строку лога в data.logs с fan-out (owner + кабинет автора + receivers).
  * @param {object} storage $class-владелец ленты
  * @param {object} row { time, sender?, content?, includes?, path?, ext?, receivers? }
- * @param {object} [params] user, logAuthor, …
+ * @param {object} [params] session, logAuthor, …
  */
 export async function appendRow(storage, row, params = {}) {
     if (!storage)
@@ -256,7 +256,7 @@ export async function appendRow(storage, row, params = {}) {
     const written = new Set();
     await writeLogTo(storage, log_param, written);
 
-    const authorCabinet = params.logAuthor?.$user ?? params.user?.$user;
+    const authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
     if (authorCabinet && authorCabinet !== globalThis.WORK
         && logClassKey(authorCabinet) !== logClassKey(storage))
         await writeLogTo(authorCabinet, log_param, written);
@@ -307,7 +307,7 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
                 await f.save({
                     post: JSON.stringify(row, null, 2),
                     encoding: 'utf-8',
-                    user: params.user || globalThis.WORK,
+                    session: params.session || globalThis.WORK,
                 });
                 storage.reset();
                 return row;

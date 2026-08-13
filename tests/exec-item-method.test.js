@@ -42,7 +42,7 @@ describe('execItemMethod', () => {
         storage.path = '/root/test/$group';
         Object.defineProperty(storage, '$class', { get: () => storage });
         await assert.rejects(
-            () => execItemMethod(storage, 'delete', { user: { uid: 'user1' } }, { method: 'GET' }),
+            () => execItemMethod(storage, 'delete', { session: { uid: 'user1' } }, { method: 'GET' }),
             /Доступ запрещён/
         );
     });
@@ -59,7 +59,7 @@ describe('execItemMethod', () => {
         folder.path = '/sources';
         Object.defineProperty(folder, '$class', { get: () => owner });
         await assert.rejects(
-            () => execItemMethod(folder, 'save_file', { user: { ssid: 'guest' } }, { method: 'POST' }),
+            () => execItemMethod(folder, 'save_file', { session: { ssid: 'guest' } }, { method: 'POST' }),
             /Доступ запрещён/
         );
     });
@@ -77,7 +77,7 @@ describe('execItemMethod', () => {
             files: [{ originalFilename: 'sample.txt' }],
             message: 'hello',
         };
-        const params = { message: 'hello', post: body, user: { uid: 'TEST' } };
+        const params = { message: 'hello', post: body, session: { uid: 'TEST' } };
         const result = await execItemMethod(storage, 'save_message', params, { method: 'POST' });
         assert.equal(result.post, body);
         assert.equal(result.paramsPost, body);

@@ -2,6 +2,7 @@
  * Preview ribbon — лента блоков, scroll.
  * Топ: shell даёт flex + $item; вложенная — только :items.
  * Стрим-текст — на shell ($pdp.streamingText); раскрытие — views.
+ * Активная копия сейчас в views.js (shell import); держать scroll-контракт в синхе.
  */
 
 ODA({ is: 'microchat-ribbon',
@@ -31,19 +32,24 @@ ODA({ is: 'microchat-ribbon',
     items: {
         $def: [],
         set(n) {
-            // load async: attached на пустой ленте; ждать items
-            if (this.top && n?.length) this.pinBottom();
+            // reload: докрутка только если уже в хвосте
+            if (this.top && n?.length && this.stickBottom) this.pinBottom();
         },
     },
+    /** follow только в хвосте; user-scroll вверх — стоп до возврата вниз */
+    stickBottom: true,
+    _pinGen: 0,
+    _ignoreScroll: 0,
     $item: {
         $def: null,
         set(n) {
             n?.listen('chat.delta', () => {
-                const follow = this.nearBottom;
-                this.async(() => { if (follow) this.scrollToBottom(true); });
+                this.async(() => { if (this.stickBottom) this.scrollToBottom(); });
             });
-            n?.listen('chat.done', () => this.async(() => this.scrollToBottom()));
-            if (this.items?.length) this.pinBottom();
+            n?.listen('chat.done', () => this.async(() => {
+                if (this.stickBottom) this.pinBottom();
+            }));
+            if (this.items?.length) this.pinBottom(true);
         },
     },
     /** specialty если CE уже есть или ODA уже стартовал (telemetry) — не ждать define */
@@ -52,19 +58,27 @@ ODA({ is: 'microchat-ribbon',
         return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
     },
     attached() {
-        if (this.top && this.items?.length) this.pinBottom();
+        if (!this.top) return;
+        this.addEventListener('scroll', () => {
+            if (this._ignoreScroll) return;
+            this.stickBottom = this.nearBottom;
+            if (!this.stickBottom) this._pinGen++; // отменить pending pin
+        }, { passive: true });
+        if (this.items?.length) this.pinBottom(true);
     },
     /**
-     * Начальная докрутка: не стопать на nearBottom при ещё коротком scrollHeight
-     * (details/open/markdown дорисуют позже). Стоп — высота стабильна и у низа, или лимит.
+     * Докрутка к хвосту, пока layout растёт (markdown/details).
+     * force — только первый open; иначе только при stickBottom.
      */
-    pinBottom() {
+    pinBottom(force) {
         if (!this.top) return;
+        if (force) this.stickBottom = true;
+        else if (!this.stickBottom) return;
         const gen = ++this._pinGen;
         const tick = (left, lastH) => {
             this.async(() => {
-                if (gen !== this._pinGen) return;
-                this.scrollToBottom(true);
+                if (gen !== this._pinGen || !this.stickBottom) return;
+                this.scrollToBottom();
                 const h = this.scrollHeight;
                 if (left <= 1) return;
                 if (h === lastH && this.nearBottom) return;
@@ -73,14 +87,14 @@ ODA({ is: 'microchat-ribbon',
         };
         tick(25, 0);
     },
-    _pinGen: 0,
     get nearBottom() {
-        return this.scrollTop + this.clientHeight >= this.scrollHeight - 10;
+        return this.scrollTop + this.clientHeight >= this.scrollHeight - 24;
     },
-    scrollToBottom(force) {
-        if (!this.top) return true;
-        if (force || this.nearBottom)
-            this.scrollTop = this.scrollHeight;
+    scrollToBottom() {
+        if (!this.top || !this.stickBottom) return this.nearBottom;
+        this._ignoreScroll++;
+        this.scrollTop = this.scrollHeight;
+        this.async(() => { this._ignoreScroll = Math.max(0, this._ignoreScroll - 1); });
         return this.nearBottom;
     },
 });

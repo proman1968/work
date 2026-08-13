@@ -1,19 +1,17 @@
-# Прогресс: $task / ai.task
+# Прогресс: $task
 
 ## Последние изменения
-- [10:02] Panel: убраны мёртвые `fire('chat.resume'|'chat.stop')` — в протоколе нет; stop только `fetch('stop')`. Readme обновлён.
+- [17:55] Синхронизированы `readme` `$task` и preview с кодом — убраны устаревшие `pipe.js` / `build`-only / `_active_pipe`, зафиксированы PIPE в `class.js`, form parse/approve, stickBottom, APPROVE+values.
 
 ## В работе
-- Дерево решений pipe: валидация `choice`, auto-add `complete`.
-- JSON-типы без `class.js` — `contentType` при появлении типизатора.
-- Usage dial — при желании вынести в отдельный ODA-компонент.
+- Сведение узлов PIPE к единому контракту `plan`/`do` + wait (`allow_approve` / `approve`)
+- FC и tool-диспетчер ещё не в `prompt()`
 
 ## Ключевые решения
-- MIME — поле типизатора, приоритетнее системного mime.
-- Shell владеет `focusedBlock`; panel/ribbon — потребители.
-- `ai.task` всегда с `model`; UI не гидратит MODELS.
-- Chat-события WS: `delta` / `done` / `error` / `clear_stream` — не `resume`/`stop` через fire.
+- `PIPE` живёт в `class.js`, не в отдельном модуле — один файл = харнесс + реестр.
+- Wait-канал один: `role:'APPROVE'` + `pipe_step.approve`; form передаёт JSON answers в `prompt`, planning — `true`/`false`/текст.
+- Follow ленты только при `stickBottom` (не force на каждый reload).
 
 ## Блокеры / Открытые вопросы
-- FC отложен.
-- Старые `*.ai` / `task.ai` не мигрированы.
+- Узлы с плоским `next` (`research`/`web`/`work`) не попадают в меню thought, пока нет `plan`/`do`
+- `complete.approve` и auto-add в меню контейнеров отсутствуют

@@ -41,7 +41,7 @@ export default {
 
         return executeSkill(skillPath, storage, {
             taskPath,
-            logAuthor: params.logAuthor || params.user,
+            logAuthor: params.logAuthor || params.session,
         });
     },
 };

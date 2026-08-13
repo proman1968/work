@@ -28,9 +28,9 @@ function isSelectableMailbox(mb) {
     return true;
 }
 
-async function loadCurrentEml(storage, role, address, filename, user) {
+async function loadCurrentEml(storage, role, address, filename, session) {
     try {
-        const work = await storage.work_zone({ role, user });
+        const work = await storage.work_zone({ role, session });
         const mimeFolder = await work.getFolderToSaveFile({ filename });
         const rel = `${address}/${filename}`;
         const file = await mimeFolder._get_item(rel);
@@ -80,7 +80,7 @@ async function syncMailboxFolder(client, storage, {
     imapPath,
     delimiter,
     role,
-    user,
+    session,
     stampImapCursor,
     readImapCursor,
     imapFolderToFilename,
@@ -92,7 +92,7 @@ async function syncMailboxFolder(client, storage, {
 
     const lock = await client.getMailboxLock(imapPath);
     try {
-        const existingRaw = await loadCurrentEml(storage, role, address, filename, user);
+        const existingRaw = await loadCurrentEml(storage, role, address, filename, session);
         const cursor = readImapCursor(existingRaw);
         const uids = await resolveUidsToFetch(client, cursor);
         const uidValidity = String(client.mailbox?.uidValidity ?? '');
@@ -129,7 +129,7 @@ async function syncMailboxFolder(client, storage, {
                     message: JSON.stringify(meta),
                     post: raw,
                     time,
-                    user,
+                    session,
                     role,
                 });
                 folderReport.saved++;
@@ -153,7 +153,7 @@ export default {
             throw new Error('Нет контекста хранения');
 
         const role = storage.constructor?.ROLES?.USER || 'USER';
-        const user = params.user;
+        const session = params.session;
 
         const [{ ImapFlow }, emailUtils, emailSettings] = await Promise.all([
             import(pathToFileURL(path.join(ROOT, 'node_modules/imapflow/lib/imap-flow.js')).href),
@@ -217,7 +217,7 @@ export default {
                             imapPath,
                             delimiter: mb.delimiter || '/',
                             role,
-                            user,
+                            session,
                             stampImapCursor,
                             readImapCursor,
                             imapFolderToFilename,

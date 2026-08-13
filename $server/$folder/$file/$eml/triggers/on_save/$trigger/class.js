@@ -75,7 +75,7 @@ async function saveOutboxOnMailbox(storage, folder, post, params) {
         filename: params.filename,
         folder,
         encoding: 'utf-8',
-        user: params.user,
+        session: params.session,
         post,
     });
 }
