@@ -1,11 +1,9 @@
-/** «?» / probe readme.md только для папок и классов под /oda и /sources. */
+/** «?» / probe readme.md у контейнера (папка, класс, handler), не у файла. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
     if ($item.constructor === CORE.$file || $item.type === '$file') return false;
-    const p = String($item.path || '');
-    return p === '/oda' || p === '/sources'
-        || p.startsWith('/oda/') || p.startsWith('/sources/');
+    return true;
 }
 
 export default {

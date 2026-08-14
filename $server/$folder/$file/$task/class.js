@@ -26,10 +26,10 @@ const PIPE = {
         do:{
             next: ['do', 'complete', 'html', 'thought'],
         },
-        inject: 'если необходимо обдумать дальнейшие действия',
+        inject: 'если необходимо проанализировать и обдумать дальнейшие действия',
         prompt: [
             'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',
-            'Не фантазируй, не выдумывай, просто планируй дальнейшие действия.',
+            'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
             'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
         ].join('\n'),
     },
@@ -204,35 +204,21 @@ const PIPE = {
         allow_approve: 'Отправить форму',
     },
 
-    /**
-     * SPA в sandbox-iframe. Не wait, не продолжение FSM (нет plan/do → stop).
-     * Тело: block.html; пояснение — block.content.
-     */
     html: {
         icon: 'editor:code',
         inject: 'если нужно сделать одностраничное HTML-приложение (схема, игра, виджет, интерактив)',
         prompt: [
-            'Собери одностраничное HTML-приложение для показа в ленте внутри iframe.',
+            'Собери одностраничное HTML-приложение для запуска внутри ленты чата в iframe.',
             '[instruction]',
-            'Первой строкой обычного текста можно дать краткое пояснение.',
-            'Далее — полный документ или самодостаточный фрагмент СТРОГО в fenced-блоке:',
-            '```html',
-            '…приложение (html/css/js)…',
-            '```',
-            'Требования:',
-            '- самодостаточное SPA: всё нужное внутри fence (style/script/canvas ок);',
-            '- резиновая вёрстка под ширину iframe (100% / flex/grid), без фиксированной «под 800px»;',
-            '- не обращайся к parent/top; не жди кнопок approve снаружи — это финальный экран ветки;',
-            '- внешние script/src только https при необходимости;',
-            '- один fenced-блок, без markdown вокруг.',
+            'Только один fensed-блок с полным html-кодом, без дополнительных пояснений.',
         ].join('\n'),
         parse(block) {
-            const { content, html } = parseHtmlContent(block.content);
-            block.content = content;
-            block.html = html;
-        },
+            const fence = block.content.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
+            if (fence) {
+                block.content = fence[1].trim();
+            }
+        }
     },
-
     complete: {
         inject: 'если считаешь, что текущая задача (шаг) завершена',
         prompt: ['Сформируй краткий итог по текущей ветке.',
@@ -368,7 +354,7 @@ export default {
         }
         catch (e) {
             params.block = { type: 'error', content: e.message };
-            await this._push_block(params.block);
+            await this._push_block(params);
         }
 
         session?.send?.({ type: 'chat.done', path: this.short });
@@ -462,8 +448,9 @@ export default {
         return container;
     },
     async change_model(params = {}) {
-        const {model} = params;
+        const model = params.model || params.post?.model;
         const session = params.session;
+        if (!model) return { ok: false, error: 'model required' };
         (await this.body).model = model;
         await this._save(session);
         return { ok: true, model};
@@ -569,23 +556,4 @@ function formatFormAnswers(fields = [], answers = {}) {
         lines.push(`${label}: ${v == null || v === '' ? '—' : String(v)}`);
     }
     return lines.join('\n');
-}
-
-/** Вырезать HTML из ответа модели (```html … ``` или сырой фрагмент с <…>). */
-function parseHtmlContent(text = '') {
-    const raw = String(text ?? '');
-    let html = '';
-    let content = raw;
-    const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
-    if (fence) {
-        html = fence[1].trim();
-        content = (raw.slice(0, fence.index) + raw.slice(fence.index + fence[0].length)).trim();
-    } else {
-        const start = raw.search(/<[a-z][\s\S]*>/i);
-        if (start >= 0) {
-            html = raw.slice(start).trim();
-            content = raw.slice(0, start).trim();
-        }
-    }
-    return { content, html };
 }

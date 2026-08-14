@@ -54,7 +54,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 
 ## Контракты (как в коде)
 
-- **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model')`.
+- **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model', { model: path })`.
 - **Action:** `actionButton` = `focusedBlock.button`, но `null` пока `$pdp.streaming`; form — JSON `values`; иначе `true`/`false`.
 - **Form:** слот на ширину ленты; `fields`/`values` после parse; опционально `ui`; сдача APPROVE.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).

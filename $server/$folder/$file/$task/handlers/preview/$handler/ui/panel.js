@@ -300,7 +300,7 @@ ODA({ is: 'microchat-panel',
         });
         tree.execute = async (item) => {
             if (this.data) this.data.model = item.path;
-            await this.$item.fetch('change_model', {}, JSON.stringify({ model: item.path }));
+            await this.$item.fetch('change_model', { model: item.path });
             for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
             this._focus();
         };

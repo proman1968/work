@@ -13,7 +13,7 @@
 - `handlersRoot` = `$item.fetch('handlers', { path })`.
 - Режимы: `tools` | `handlers` | `both`.
 - Корень `handlers` скрыт (`hideTops` / `hideRoots`); дерево показывает categories и пункты.
-- Справка по handlers — через `readme.md` в дереве / explorer, не отдельной кнопкой в меню.
+- Тот же `item-tree` / `item-node`, что explorer: `hide-readme` убирает `readme.md` из списка; «?» на родителе открывает связанный файл.
 
 ## Из чего это состоит
 
@@ -22,7 +22,7 @@
 ## В каком это состоянии
 
 - ✅ режимы tools / handlers / both
-- ✅ без отдельного UI «handlers-help» (архитектура: меню = tools + tree)
+- ✅ `hide-readme` + «?» через `item-node` (не отдельный handlers-help)
 
 ## Дальнейшие планы
 
