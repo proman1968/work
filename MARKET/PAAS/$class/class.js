@@ -3,5 +3,6 @@ export default {
     label: 'PaaS',
     '#security': {
         USERS: ["GUEST"],
+        GUESTS: ["GUEST"]
     }
 }

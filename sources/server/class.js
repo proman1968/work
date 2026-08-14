@@ -22,10 +22,10 @@ export class $class extends $folder{
     static sourceUrl = import.meta.url;
 
     /** Роли пользователей в классе. */
-    static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER' };
+    static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER', GUEST: 'GUEST' };
 
     /** Зоны доступа внутри класса. */
-    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work' };
+    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work', GUESTS: 'guests' };
 
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
@@ -359,7 +359,7 @@ export class $class extends $folder{
         const security = this.DATA?.['#security'];
         if (!security)
             return false;
-        return ['ADMINS', 'BOSSES', 'USERS']
+        return ['ADMINS', 'BOSSES', 'USERS', 'GUESTS']
             .some(key => Array.isArray(security[key]) && security[key].length > 0);
     }
 
@@ -395,13 +395,15 @@ export class $class extends $folder{
         if (!uid)
             return [];
         const roles = [];
-        const [admins, bosses, users] = await Promise.all([this.allAdmins, this.allBosses, this.users]);
+        const [admins, bosses, users, guests] = await Promise.all([this.allAdmins, this.allBosses, this.users, this.guests]);
         if (admins.some(u => u?.id === uid))
             roles.push($class.ROLES.ADMIN);
         if (bosses.some(u => u?.id === uid))
             roles.push($class.ROLES.BOSS);
         if (users.some(u => u?.id === uid))
             roles.push($class.ROLES.USER);
+        if (guests.some(u => u?.id === uid))
+            roles.push($class.ROLES.GUEST);
         return roles;
     }
 
@@ -410,6 +412,7 @@ export class $class extends $folder{
      * ADMIN → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
      * BOSS → управленческая зона (distributed_folder/$work)
      * USER → рабочая зона (meta_folder/$work)
+     * GUEST → зона гостей (meta_folder/guests)
      */
     async work_zone(params = {}){
         const {role} = params;
@@ -421,6 +424,8 @@ export class $class extends $folder{
                 return dist._get_item('work', FS.$folder);
             case $class.ROLES.USER:
                 return this.meta_folder._get_item('work', FS.$folder);
+            case $class.ROLES.GUEST:
+                return this.meta_folder._get_item('guests', FS.$folder);
         }
         return this.meta_folder
     }
@@ -440,11 +445,11 @@ export class $class extends $folder{
         // Явно выбранная роль в UI имеет приоритет
         if (params.role === $class.ROLES.USER)
             return uid ? '/USERS//' + uid : this.path;
-        if (params.role === $class.ROLES.ADMIN || params.role === $class.ROLES.BOSS)
+        if (params.role === $class.ROLES.ADMIN || params.role === $class.ROLES.BOSS || params.role === $class.ROLES.GUEST)
             return this.path;
         // Fallback: без role — по фактическим ролям
         const roles = await this.roles(params);
-        if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS))
+        if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS) || roles.includes($class.ROLES.GUEST))
             return this.path;
         return uid ? '/USERS//' + uid : this.path;
     }
@@ -731,6 +736,8 @@ export class $class extends $folder{
                     return $class.ZONES.MANAGEMENT;
                 return $class.ZONES.WORK;
             }
+            if (p.id === 'guests')
+                return $class.ZONES.GUESTS;
             // Достигли класса — стоп
             if (p instanceof $class && p !== this)
                 break;
@@ -780,6 +787,9 @@ export class $class extends $folder{
         // USER видит только свой класс
         if (roles.includes($class.ROLES.USER))
             return this._isSlaveVisible(item, params);
+        // GUEST видит только свою зону guests (+ логи класса для чата)
+        if (roles.includes($class.ROLES.GUEST))
+            return this._isGuestVisible(item, params);
         return false;
     }
 
@@ -809,6 +819,7 @@ export class $class extends $folder{
             [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
             [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
             [$class.ROLES.USER]: $class.ZONES.WORK,
+            [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
         }[role];
         return zone === allowedZone;
     }
@@ -888,6 +899,17 @@ export class $class extends $folder{
         return itemClass === this;
     }
 
+    /** Гость видит свой класс, зону guests и логи класса (чат); не видит work и системное. */
+    _isGuestVisible(item, params) {
+        if (item === this)
+            return true;
+        if (this.resolveZone(item) === $class.ZONES.GUESTS)
+            return true;
+        // Логи гостя пишутся в класс (meta_folder/logs) — нужны для чата
+        const path = item?.path ?? '';
+        return path.startsWith(this.meta_folder.path + '/logs/');
+    }
+
     /**
      * Прочитать секрет из #secret (fallback: #system). Требует ADMIN.
      * @param {object} [params]
@@ -935,7 +957,7 @@ export class $class extends $folder{
     /**
      * Назначенные пользователи класса по роли.
      * @param {object} [params]
-     * @param {string} [params.role] ADMIN | BOSS | USER; без роли — все назначенные
+     * @param {string} [params.role] ADMIN | BOSS | USER | GUEST; без роли — все назначенные
      * @param {boolean} [params.inherited] Включить вышестоящие классы (для ADMIN и BOSS)
      * @returns {Promise<Array>} Массив пользователей ($user)
      */
@@ -948,14 +970,15 @@ export class $class extends $folder{
                 return inherited ? this.allBosses : this.bosses;
             case $class.ROLES.USER:
                 return this.users;
+            case $class.ROLES.GUEST:
+                return this.guests;
         }
         return this.assignedUsers;
     }
 
     /** Пользователи роли, назначенные локально в #security (без наследования и литералов). */
     _localRole(role) {
-        const key = role === $class.ROLES.ADMIN ? 'ADMINS'
-            : role === $class.ROLES.BOSS ? 'BOSSES' : 'USERS';
+        const key = { [$class.ROLES.ADMIN]: 'ADMINS', [$class.ROLES.BOSS]: 'BOSSES', [$class.ROLES.USER]: 'USERS', [$class.ROLES.GUEST]: 'GUESTS' }[role];
         return Promise.resolve(this.init).then(async () => {
             const ids = this.DATA['#security']?.[key];
             if (!ids?.length) return [];
@@ -973,6 +996,10 @@ export class $class extends $folder{
     /** Исполнители класса из #security.USERS (без наследования). */
     get users(){
         return this._localRole($class.ROLES.USER);
+    }
+    /** Гости класса из #security.GUESTS (без наследования). */
+    get guests(){
+        return this._localRole($class.ROLES.GUEST);
     }
     /** Администраторы, назначенные локально в #security.ADMINS (без наследования). */
     get admins(){
@@ -1036,14 +1063,15 @@ export class $class extends $folder{
         });
     }
 
-    /** Все назначенные пользователи класса (объединение allAdmins + allBosses + users). */
+    /** Все назначенные пользователи класса (объединение allAdmins + allBosses + users + guests). */
     get assignedUsers(){
         return Promise.all([
             Promise.resolve(this.allAdmins),
             Promise.resolve(this.allBosses),
             Promise.resolve(this.users),
-        ]).then(([admins, bosses, users]) => {
-            const all = [...admins, ...bosses, ...users];
+            Promise.resolve(this.guests),
+        ]).then(([admins, bosses, users, guests]) => {
+            const all = [...admins, ...bosses, ...users, ...guests];
             const seen = new Set();
             return all.filter(u => {
                 if (!u?.id || seen.has(u.id))

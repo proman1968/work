@@ -291,26 +291,56 @@ ODA({ is: 'microchat-view-prompt',
 });
 
 
-/** form — content + extend (поля → data.values; submit через APPROVE). */
+/** form — слот в ленте: адаптивная ширина; ui по data.ui или default microchat-form. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
-    extendTag: 'microchat-form',
+    /**
+     * Проекция wait-блока:
+     * - нет ui → microchat-form (fields → values)
+     * - ui: 'game' → microchat-form-game (если CE есть)
+     * - ui: 'my-widget' / полное имя CE → как есть
+     */
+    get extendTag() {
+        const ui = this.data?.ui;
+        if (!ui) return 'microchat-form';
+        const name = String(ui);
+        if (name.includes('-')) return name;
+        return 'microchat-form-' + name;
+    },
+    get showContent() {
+        return !!(this.content || this.streamTail || this.extendTag);
+    },
 });
 
-/** Поля формы: ввод в data.values; сдача — panel sendAction → form.approve. */
+/**
+ * Default-форма в слоте ленты: HTML + flex-wrap под непредсказуемую ширину.
+ * Сдача — data.values → panel APPROVE. Кастом/игра — другой tag через data.ui.
+ */
 ODA({ is: 'microchat-form',
     template: /*html*/`
         <style>
             :host {
-                @apply --vertical;
+                display: flex;
+                flex-wrap: wrap;
                 gap: 8px;
                 padding: 8px;
+                box-sizing: border-box;
+                width: 100%;
+                min-width: 0;
                 font-size: small;
             }
             .field {
-                @apply --vertical;
+                display: flex;
+                flex-direction: column;
                 gap: 2px;
-                min-width: 0;
+                flex: 1 1 12rem;
+                min-width: min(100%, 10rem);
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+            .field.wide {
+                flex: 1 1 100%;
+                min-width: 100%;
             }
             label {
                 font-size: xx-small;
@@ -323,13 +353,30 @@ ODA({ is: 'microchat-form',
                 font: inherit;
                 background: var(--content-background);
                 color: inherit;
+                width: 100%;
                 min-width: 0;
+                box-sizing: border-box;
             }
             textarea { resize: vertical; min-height: 3em; }
-            .opts { @apply --horizontal; gap: 8px; flex-wrap: wrap; }
-            .opts label { @apply --horizontal; gap: 4px; align-items: center; font-size: small; opacity: 1; }
+            .opts {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+            }
+            .opts label {
+                display: inline-flex;
+                gap: 4px;
+                align-items: center;
+                font-size: small;
+                opacity: 1;
+            }
+            .opts input[type="checkbox"],
+            .opts input[type="radio"] {
+                width: auto;
+            }
         </style>
-        <div class="field" ~for="fields">
+        <div class="field" ~for="fields" ~class="{ wide: isWide($for.item) }">
             <label ~if="$for.item.type !== 'checkbox'">{{$for.item.label}}</label>
             <textarea ~if="$for.item.type === 'textarea'" ::value="values[$for.item.id]"></textarea>
             <select ~if="$for.item.type === 'select'" ::value="values[$for.item.id]">
@@ -347,7 +394,7 @@ ODA({ is: 'microchat-form',
             <input ~if="isPlain($for.item)" :type="$for.item.type === 'number' ? 'number' : 'text'"
                 ::value="values[$for.item.id]">
         </div>
-        <div ~if="!fields.length" style="opacity:.6">нет полей формы</div>
+        <div ~if="!fields.length" style="opacity:.6; flex:1 1 100%">нет полей формы</div>
     `,
     data: null,
     get fields() {
@@ -368,7 +415,98 @@ ODA({ is: 'microchat-form',
     isPlain(f) {
         return !['textarea', 'select', 'radio', 'checkbox'].includes(f?.type);
     },
+    isWide(f) {
+        return f?.type === 'textarea' || f?.type === 'radio' || f?.wide;
+    },
 });
+
+/** html — block.html в sandbox-iframe (script ок; без same-origin к родителю). */
+ODA({ is: 'microchat-view-html',
+    extends: 'microchat-view',
+    extendTag: 'microchat-html',
+    get showContent() {
+        return !!(this.content || this.streamTail || this.data?.html);
+    },
+});
+
+ODA({ is: 'microchat-html',
+    template: /*html*/`
+        <style>
+            :host {
+                display: block;
+                width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                padding: 8px;
+            }
+            iframe {
+                display: block;
+                width: 100%;
+                min-width: 0;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: var(--content-background);
+                box-sizing: border-box;
+            }
+        </style>
+        <iframe ~if="html" title="html"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups"
+            :srcdoc
+            ~style="'height:' + frameHeight + 'px'"
+            @load="onFrameLoad"></iframe>
+        <div ~if="!html" style="opacity:.6">нет html</div>
+    `,
+    data: null,
+    frameHeight: 160,
+    get html() { return this.data?.html || ''; },
+    get srcdoc() {
+        return wrapMicrochatHtmlSrcdoc(this.html);
+    },
+    attached() {
+        this._onMsg = (e) => {
+            if (e?.data?.type !== 'microchat-html-resize') return;
+            const frame = this.$('iframe');
+            if (!frame || e.source !== frame.contentWindow) return;
+            const h = Number(e.data.height) || 0;
+            if (h > 0)
+                this.frameHeight = Math.min(Math.max(h, 80), 2400);
+        };
+        window.addEventListener('message', this._onMsg);
+    },
+    detached() {
+        if (this._onMsg)
+            window.removeEventListener('message', this._onMsg);
+    },
+    onFrameLoad() {
+        // высота придёт через postMessage из обёртки (нет allow-same-origin)
+    },
+});
+
+function wrapMicrochatHtmlSrcdoc(html = '') {
+    const raw = String(html).trim();
+    if (!raw) return '';
+    const resize = `<script>(function(){
+function report(){
+  var h=Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0);
+  parent.postMessage({type:'microchat-html-resize',height:h},'*');
+}
+try{
+  if(window.ResizeObserver&&document.body) new ResizeObserver(report).observe(document.body);
+}catch(e){}
+window.addEventListener('load',report);
+setTimeout(report,0);
+setTimeout(report,200);
+setTimeout(report,1000);
+})();<\/script>`;
+    if (/<html[\s>]/i.test(raw)) {
+        if (/<\/body>/i.test(raw))
+            return raw.replace(/<\/body>/i, resize + '</body>');
+        return raw + resize;
+    }
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body{margin:0;padding:8px;box-sizing:border-box}img,video,table,svg,canvas{max-width:100%;height:auto}</style>
+</head><body>${raw}${resize}</body></html>`;
+}
 
 
 /**

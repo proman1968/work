@@ -165,7 +165,13 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    get actionButton() { return this.$pdp.focusedBlock?.button; },
+    /** approve только после стрима; читаем streaming в геттере — иначе кэш ODA не сбросится */
+    get actionButton() {
+        const streaming = this.$pdp.streaming;
+        const button = this.$pdp.focusedBlock?.button;
+        if (streaming) return null;
+        return button;
+    },
     /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
         return this.$pdp.focusedBlock?.type === 'form';

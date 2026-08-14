@@ -368,6 +368,40 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.equal(def, mbox.meta_folder, 'без роли — метапапка');
     });
 
+    it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
+        write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
+        write('GUESTBOX/$class/class.js',
+            `export default { label: 'GUESTBOX', '#security': { GUESTS: ['u3'] } }`);
+        WORK.reset();
+        (await WORK.$users).reset();
+
+        const gbox = await WORK.get_item('/GUESTBOX');
+        const guests = await gbox.guests;
+        assert.deepEqual(guests.map(u => u.id), ['u3'], 'guests читает #security.GUESTS');
+        const members = await gbox.members({ role: 'GUEST' });
+        assert.deepEqual(members.map(u => u.id), ['u3'], 'members({role: GUEST})');
+        const roles = await gbox.roles({ session: { uid: 'u3' } });
+        assert.deepEqual(roles, ['GUEST'], 'roles гостя — только GUEST');
+        const zone = await gbox.work_zone({ role: 'GUEST' });
+        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/guests'), 'GUEST-зона — папка guests');
+        const all = await gbox.assignedUsers;
+        assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
+    });
+
+    it('GUEST видит guests и логи, но не work; пишет только в guests', async () => {
+        const gbox = await WORK.get_item('/GUESTBOX');
+        const guests = await gbox.work_zone({ role: 'GUEST' });
+        const work = await gbox.work_zone({ role: 'USER' });
+        const params = { session: { uid: 'u3' }, role: 'GUEST' };
+
+        assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');
+        assert.equal(await gbox.canSee(guests, params), true, 'видит guests-зону');
+        assert.equal(await gbox.canSee(work, params), false, 'не видит work');
+
+        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в guests');
+        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
+    });
+
     it('assertAccess бросает при отказе, allowAccess — deprecated алиас', async () => {
         const prevWorkDev = process.env.WORK_DEV;
         const prevDev = process.env.dev;

@@ -21,10 +21,10 @@ const PIPE = {
     thought: {
         icon: 'carbon:idea',
         plan:{
-            next: ['planning', 'form', 'thought'],
+            next: ['planning', 'form', 'html', 'thought'],
         },
         do:{
-            next: ['do', 'complete', 'thought'],
+            next: ['do', 'complete', 'html', 'thought'],
         },
         inject: 'если необходимо обдумать дальнейшие действия',
         prompt: [
@@ -165,12 +165,13 @@ const PIPE = {
             '{id: "city", type: "text", options: []}',
             '{id: "country", type: "text", options: []}',
         ].join('\n'),
-        /** после стрима: content → пояснение + fields[] */
+        /** после стрима: content → пояснение + fields[]; ui опционален (кастомный слот в preview) */
         parse(block) {
             const { content, fields } = parseFormContent(block.content);
             block.content = content;
             block.fields = fields;
             block.values ??= {};
+            // block.ui — если задан (модель/харнесс): preview рисует microchat-form-{ui} или CE-имя
         },
         async approve(params = {}) {
             const { block, prompt } = params;
@@ -203,17 +204,66 @@ const PIPE = {
         allow_approve: 'Отправить форму',
     },
 
+    /**
+     * SPA в sandbox-iframe. Не wait, не продолжение FSM (нет plan/do → stop).
+     * Тело: block.html; пояснение — block.content.
+     */
+    html: {
+        icon: 'editor:code',
+        inject: 'если нужно сделать одностраничное HTML-приложение (схема, игра, виджет, интерактив)',
+        prompt: [
+            'Собери одностраничное HTML-приложение для показа в ленте внутри iframe.',
+            '[instruction]',
+            'Первой строкой обычного текста можно дать краткое пояснение.',
+            'Далее — полный документ или самодостаточный фрагмент СТРОГО в fenced-блоке:',
+            '```html',
+            '…приложение (html/css/js)…',
+            '```',
+            'Требования:',
+            '- самодостаточное SPA: всё нужное внутри fence (style/script/canvas ок);',
+            '- резиновая вёрстка под ширину iframe (100% / flex/grid), без фиксированной «под 800px»;',
+            '- не обращайся к parent/top; не жди кнопок approve снаружи — это финальный экран ветки;',
+            '- внешние script/src только https при необходимости;',
+            '- один fenced-блок, без markdown вокруг.',
+        ].join('\n'),
+        parse(block) {
+            const { content, html } = parseHtmlContent(block.content);
+            block.content = content;
+            block.html = html;
+        },
+    },
+
     complete: {
-        inject: 'если считаешь, что текущая задача завершена',
+        inject: 'если считаешь, что текущая задача (шаг) завершена',
         prompt: ['Сформируй краткий итог по текущей ветке.',
             '\n\n[instruction]\n',
             'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
-        build: (r) => ({
-            type: 'complete',
-            content: r.content,
-            usage: r.usage,
-            button: { label: 'Завершить' },
-        }),
+        allow_approve: 'Завершить',
+        async approve(params = {}) {
+            const { container, block, prompt, task } = params;
+            delete block.button;
+            if (prompt === 'false') {
+                block.status = 'rejected';
+                block.content = (block.content || '') + '\n\nИтог отклонён, продолжаем';
+                return block;
+            }
+            block.status = 'approved';
+            block.content = (block.content || '') + '\n\nЗАВЕРШЕНО';
+            // закрыть вышестоящий step (= текущий container, если мы внутри него)
+            if (container?.type === 'step') {
+                container.ready = true;
+                const body = await task.body;
+                if (body.todo?.status === 'in_progress')
+                    return body.todo;
+            }
+            return block;
+        },
+        plan: {
+            next: ['thought'],
+        },
+        do: {
+            next: ['thought'],
+        },
     },
 };
 
@@ -242,6 +292,8 @@ export default {
                 } break;
                 case 'APPROVE':{
                     params.block = await params.pipe_step.approve(params);
+                    // после close step контейнер меняется — не пушить в закрытый
+                    params.container = await this._active_container();
                     await this._save(session);
                 } break;
                 default:{
@@ -517,4 +569,23 @@ function formatFormAnswers(fields = [], answers = {}) {
         lines.push(`${label}: ${v == null || v === '' ? '—' : String(v)}`);
     }
     return lines.join('\n');
+}
+
+/** Вырезать HTML из ответа модели (```html … ``` или сырой фрагмент с <…>). */
+function parseHtmlContent(text = '') {
+    const raw = String(text ?? '');
+    let html = '';
+    let content = raw;
+    const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
+    if (fence) {
+        html = fence[1].trim();
+        content = (raw.slice(0, fence.index) + raw.slice(fence.index + fence[0].length)).trim();
+    } else {
+        const start = raw.search(/<[a-z][\s\S]*>/i);
+        if (start >= 0) {
+            html = raw.slice(start).trim();
+            content = raw.slice(0, start).trim();
+        }
+    }
+    return { content, html };
 }

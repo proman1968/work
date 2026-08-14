@@ -59,6 +59,8 @@ export default {
             return Promise.resolve(this.$item?.bosses).then(list => Array.isArray(list) ? list : []);
         if (this.role === 'ADMIN')
             return Promise.resolve(this.$item?.admins).then(list => Array.isArray(list) ? list : []);
+        if (this.role === 'GUEST')
+            return Promise.resolve(this.$item?.guests).then(list => Array.isArray(list) ? list : []);
         return Promise.resolve(this.$item?.users).then(list => Array.isArray(list) ? list : []);
     },
     _tap(e) {
@@ -88,7 +90,7 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : 'USERS';
+        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : this.role === 'GUEST' ? 'GUESTS' : 'USERS';
         security[key] ??= [];
         if (!security[key].includes(user.id))
             security[key].push(user.id);
@@ -96,7 +98,7 @@ export default {
     },
     async suspendUser(user) {
         const security = await this.getSecurity();
-        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : 'USERS';
+        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : this.role === 'GUEST' ? 'GUESTS' : 'USERS';
         if (security[key])
             security[key] = security[key].filter(id => id !== user.id);
         await this.saveSecurity(security);

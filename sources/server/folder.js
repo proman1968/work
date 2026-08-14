@@ -178,6 +178,9 @@ export class $folder extends $item{
     get users(){
         return this.parent.users;
     }
+    get guests(){
+        return this.parent.guests;
+    }
     get inHistory (){
         return this.parent?.inHistory || this.id === "history"
     }
