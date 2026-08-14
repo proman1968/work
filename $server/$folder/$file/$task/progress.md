@@ -1,17 +1,17 @@
 # Прогресс: $task
 
 ## Последние изменения
-- [17:55] Синхронизированы `readme` `$task` и preview с кодом — убраны устаревшие `pipe.js` / `build`-only / `_active_pipe`, зафиксированы PIPE в `class.js`, form parse/approve, stickBottom, APPROVE+values.
+- [18:14] Меню thought: `plan` = раскладка+research, `do` = форма/execute/итог/html. `work`/`web` только у исполнителя. Вложенный todo на step чужого плана не сажается.
 
 ## В работе
-- Сведение узлов PIPE к единому контракту `plan`/`do` + wait (`allow_approve` / `approve`)
 - FC и tool-диспетчер ещё не в `prompt()`
+- `step` — тот же шаблон `icon` / `do_icon`, иконки ещё не заданы
+- Replan слота todo и самоподтверждение модели — отложены
 
 ## Ключевые решения
-- `PIPE` живёт в `class.js`, не в отдельном модуле — один файл = харнесс + реестр.
-- Wait-канал один: `role:'APPROVE'` + `pipe_step.approve`; form передаёт JSON answers в `prompt`, planning — `true`/`false`/текст.
-- Follow ленты только при `stickBottom` (не force на каждый reload).
+- `text` не пункт меню, а дрифт.
+- Один `todo` на контейнер; корректирующий план — позже.
+- Выход из `do` — только `complete` (пока всегда пользователь).
 
 ## Блокеры / Открытые вопросы
-- Узлы с плоским `next` (`research`/`web`/`work`) не попадают в меню thought, пока нет `plan`/`do`
-- `complete.approve` и auto-add в меню контейнеров отсутствуют
+- FC в `prompt()` ещё нет

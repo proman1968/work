@@ -12,36 +12,37 @@
 
 ## 3. Как это работает
 
-1. **`on_save`** пишет `body.system` (SYSTEM + user/class info + роль) и вызывает `file.prompt({ role, prompt: body.title })`.
+1. **`on_save`** пишет `body.system` (SYSTEM + профиль / рабочая группа; если `path` совпал — один блок «личная зона») и вызывает `file.prompt({ role, prompt: body.title })`.
 2. **Роли входа `prompt()`:**
    - default (USER/…) — push блока `type:'prompt'` с текстом;
-   - `APPROVE` — `PIPE[active].approve(params)`, затем обычный ход автомата;
+   - `APPROVE` — `block.approved = prompt`, затем `approve(params)` (мутация), `_save`, пересчёт `_active_*` и обычный ход автомата;
    - `AI` — без нового user-блока (auto-loop).
 3. **`PIPE`** — константа в [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) (не отдельный `pipe.js`). Узел = метаописание типа блока:
    - `plan` / `do` → `{ next: [...] }` — маршруты по `container.mode || 'plan'`;
    - `prompt` — текст для модели после выбора узла;
    - `inject` — подпись в меню выбора;
-   - `allow_approve` → при создании блока кладётся `button: { label }`;
+   - `stop` — `true` (конец ветки) или лейбл кнопки (wait + APPROVE); копируется в `block.stop`;
    - `container: true` → у блока `items: []`;
    - `parse(block)` — пост-обработка ответа модели (`form`, `html`);
    - `approve(params)` — обработка `APPROVE` (`planning`, `form`, `complete`);
-   - `icon`, `role`, `fc`, `build` — где заданы в реестре.
+   - `actualize(params)` — оживление узла на живом дереве (`todo`, `execute`); у контейнера с `do_icon` пишет `node.icon` (`ready` → `icon`, иначе `do_icon`);
+   - `icon` / `do_icon` — спокойная и живая иконка контейнера (`do_icon` ≠ маршрут `do`); `role`, `fc`, `build` — где заданы.
 4. **Позиция автомата:**
    - `_active_container()` — спуск в `items.last`, пока у узла есть `items` и нет `ready`;
    - `_active_block()` — если у контейнера `todo.status === 'in_progress'`, то `todo`, иначе `items.last` (или сам контейнер).
-5. **Один шаг `prompt()` после входа:** берёт `options = pipe_step[mode].next`; при одном варианте — сразу choice, иначе silent-меню модели по `inject`; неизвестный choice → `text`. Пушит блок `{ type, icon, stop, button?, items? }`, при `next_pipe.prompt` стримит ответ → `Object.assign(block, response)` → `parse?`. Auto-loop: `!block.stop && !block.button` → `this.async(() => prompt({ role:'AI' }))`.
-6. **Wait:** стоп цикла по `block.button` (из `allow_approve`) или `block.stop` (нет `plan`/`do` у узла). UI action-bar шлёт `role:'APPROVE'`.
-7. **Planning approve:** `true` → `parsePlanMarkdown` → `container.todo` + `mode:'do'`, тип блока → `plan`, возврат `todo` как следующего якоря; `false` / иной текст — reject / to modify.
-8. **Form:** wait-блок со слотом в preview. После стрима `parse` → `fields` + пояснение в `content`, `values={}`. Опционально `ui` — кастомный виджет слота. UI пишет в `block.values`. Approve: `false` — отмена; иначе JSON/`values` → `answers` + слепок в `content`.
+5. **Один шаг `prompt()` после входа:** `_actualize(params)` на активных container/block (полный `params`; если якорь не `todo` — ещё `PIPE.todo.actualize`). Меню: у `thought` — `plan`/`do` контейнера-исполнителя (`execute` / `research`), иначе `thought[mode]`; у прочих — свой `next`. Один вариант — сразу choice, иначе silent-меню; неизвестный choice → `text` (дрифт, не пункт меню). `planning` в меню `plan` нет, если слот `todo` занят или узел — step чужого плана. Пушит блок, стримит, `parse?`. Auto-loop: `!block.stop`.
+6. **Wait:** `block.stop` — `true` без кнопки (шапка скрыта) или строка-лейбл (action-bar + шапка, `role:'APPROVE'`). После `approve` — `delete block.stop`.
+7. **Режимы:** `plan` = `planning` / `form` / `research` / `thought`. `do` = `form` / `execute` / `complete` / `html` / `thought`. `work`/`web` только внутри `execute` (rw) или `research` (readonly). `execute` сразу `do` (и родитель, если тот ещё в `plan`). Выход из `do` — `complete` → `container.ready`. Один `todo` на контейнер; на step чужого плана не сажать. Replan и самоподтверждение модели — не сделаны.
+8. **Form / text:** два и больше вопроса — `form` (`next: thought`). `text` — не выбор, а дрифт (`stop: true`, один вопрос). После формы автомат снова в thought.
 9. **Html:** SPA в sandbox-`iframe` (`srcdoc`). `parse` → `block.html`; без `plan`/`do` → `stop` (конец ветки, без approve и auto-loop). Высота через `postMessage`.
-10. **Complete approve:** `allow_approve: 'Завершить'`. `true` → `container.ready = true` на вышестоящем `step`, якорь → `todo` (следующий step); `false` → reject и `thought`. После APPROVE контейнер пересчитывается.
-11. **Контекст:** `collect_context` — `container.system` + `[todo]` + `items[].content` (роли из `PIPE[type].role` или `assistant`) + optional instruction.
+10. **Complete approve:** `stop: 'Завершить'`. `ok` → статус approved, `container.ready = true`, `container.content = block.content`; `cancel` → rejected + «ИТОГ ОТКЛОНЕН, ПРОДОЛЖАЕМ»; иной текст → `to modify` + «ИТОГ ОТКЛОНЕН, » + prompt. Якорь после APPROVE — пересчёт `_active_*`.
+11. **Контекст:** `collect_context` — system + `[todo]` + `items` без склейки assistant: `approved` → user; иначе между двумя assistant — «дальше»; хвостовой instruction к последнему user.
 12. **Служебное:** `stop` — флаг `_stopped` на стрим; `change_model` — `body.model`; `_save` — JSON на диск + `session.send({ path })`.
-13. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/).
+13. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). Стрим-иконка (`spinners:3-dots-scale`) — оверлей на `focusedBlock`, пока `$pdp.streaming`; в JSON не пишется.
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — `PIPE` + харнесс: `prompt`, `collect_context`, `_streamChat`, `_push_block`, `_active_*`, `stop`, `change_model`, `_save`; хелперы `parsePlanMarkdown` / `parseFormContent` / `parseHtmlContent` / `formatFormAnswers`
+- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — `PIPE` + харнесс: `prompt`, `collect_context`, `_streamChat`, `_push_block`, `_active_*`, `stop`, `change_model`, `_save`; хелперы `parsePlanMarkdown` / `parseFormHtml` / `formatFormAnswers`
 - [`triggers/on_save/$trigger/`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — system prompt + первый вход в цикл
 - [`handlers/preview/$handler/`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (лента + panel)
 - [`readme.md`](/$server/$folder/$file/$task/readme.md/~/handlers/pages/form/) / [`progress.md`](/$server/$folder/$file/$task/progress.md/~/handlers/pages/form/) — знания модуля
@@ -51,19 +52,20 @@
 **В активной доработке.** Рабочий каркас FSM в одном `class.js`; полный harness (FC/tools) ещё не подключён.
 
 - ✅ `PIPE` в `class.js`; маршруты через `plan`/`do` + `container.mode`
-- ✅ `prompt()`: меню choice → push → stream → `parse?` → auto-loop / wait по `button`|`stop`
+- ✅ `prompt()`: меню choice → push → stream → `parse?` → auto-loop / wait по `stop`
 - ✅ `planning.approve` → todo + `mode:'do'`
-- ✅ `complete.approve` → закрывает `step.ready`, возврат к `todo`; после APPROVE — refresh container
+- ✅ `complete.approve` → мутация `status`/`ready`/`content`; якорь после APPROVE через `_active_*`
 - ✅ `html`: SPA в iframe, `parse` → `html`, `stop` без approve/auto-loop
-- 🔧 Узлы `research` / `web` / `work`: в реестре есть `next`/`fc`/`build`, но ход автомата читает только `plan`/`do` — ветки фактически не в меню thought
+- ✅ `execute`: `icon` / `do_icon`; `actualize` пишет `node.icon`; стрим-иконка — UI-оверлей
+- ✅ Меню `plan`/`do` разведены; `work`/`web` — у `execute`/`research`; `text` только дрифт
 - 🔧 `_streamChat` принимает `functions`, но `prompt()` их не передаёт; `calls` копятся, диспетчера tool нет
 - 🔧 Auto-add `complete` в меню контейнеров — нет
-- 🔧 Complete на корне (без step) — только status, без закрытия контейнера
 - ❌ Harness tools, `pendingAction`, subplan / spawn_agent
 
 ## 6. Дальнейшие планы
 
-- Свести «висящие» узлы (`research`/`web`/`work`) к контракту `plan`/`do`
+- Replan слота todo с учётом `done`
+- Самоподтверждение модели (без `stop`)
 - Подключить FC: `functions` в `_streamChat`, исполнение `calls`
 - Complete на корне задачи (без step)
 - Harness tools + ACL роли

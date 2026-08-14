@@ -167,10 +167,9 @@ ODA({ is: 'microchat-panel',
     },
     /** approve только после стрима; читаем streaming в геттере — иначе кэш ODA не сбросится */
     get actionButton() {
-        const streaming = this.$pdp.streaming;
-        const button = this.$pdp.focusedBlock?.button;
-        if (streaming) return null;
-        return button;
+        if (this.$pdp.streaming) return null;
+        const stop = this.$pdp.focusedBlock?.stop;
+        return typeof stop === 'string' ? { label: stop } : null;
     },
     /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
@@ -204,10 +203,12 @@ ODA({ is: 'microchat-panel',
     },
     async sendAction(ok = true) {
         this.pending = true;
-        const block = this.$pdp.focusedBlock;
-        let prompt = ok ? 'true' : 'false';
-        if (ok && block?.type === 'form')
-            prompt = JSON.stringify(block.values || block.answers || {});
+        let prompt = ok ? 'ok' : 'cancel';
+        if (ok) {
+            const result = this.$pdp.result;
+            if (result !== undefined)
+                prompt = JSON.stringify(result);
+        }
         await this.$item.fetch('prompt', {
             prompt,
             model: this.data.model,

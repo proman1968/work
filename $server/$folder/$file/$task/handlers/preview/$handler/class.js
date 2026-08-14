@@ -1,6 +1,6 @@
 /**
  * Preview ai.task — shell: лента + промптбар.
- * data/items/$item/focusedBlock/streamingText/streaming; без знания внутренностей детей.
+ * data/items/$item/focusedBlock/result/streamingText/streaming; без знания внутренностей детей.
  */
 
 import './ui/views.js';
@@ -48,6 +48,9 @@ export default {
     },
     get title() { return this.data?.title || this.$item?.name || 'task'; },
     get items() { return this.data?.items; },
+    get result() {
+        return this.$('microchat-ribbon')?.viewFor(this.focusedBlock)?.result;
+    },
     get focusedBlock() {
         let items = this.items;
         while (items?.length) {
@@ -60,11 +63,10 @@ export default {
         }
         return undefined;
     },
-    /** каркас wait-блока: button есть, тела ещё нет */
+    /** каркас wait-блока: stop-лейбл есть, тела ещё нет */
     _isStreamSkeleton(b) {
-        if (!b?.button) return false;
+        if (typeof b?.stop !== 'string') return false;
         if (b.content || b.html) return false;
-        if (b.fields?.length) return false;
         return true;
     },
 };

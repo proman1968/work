@@ -15,14 +15,15 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 - Shell: `streamingText` на delta; `streaming` true на каркасе wait / delta, false на done; `changed`/`chat.done` → `load()`.
 - `focusedBlock` — последний не-`hidden` в открытой ветке (`closed` / без `items` — стоп спуска).
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
-- Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streaming`; form → JSON values; иначе `true`/`false`.
-- Form-слот: 100% ширины ленты; default `microchat-form` (flex-wrap); `data.ui` → другой CE.
+- Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streaming`; prompt = `$pdp.result` или `ok`/`cancel`.
+- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет.
+- Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
 
 ## 4. Из чего это состоит
 
 ```
-$class.js      ← shell: data, focusedBlock, streamingText, streaming
+$class.js      ← shell: data, focusedBlock, result, streamingText, streaming
 ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form (shell import)
 ui/ribbon.js   ← дубль ribbon (scroll-контракт; shell не импортирует)
 ui/panel.js    ← microchat-panel (+ mic/tts/usage)
@@ -36,7 +37,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 | [`class.js`](class.js) | Shell: `streaming` / `streamingText`; каркас wait → `streaming`; delta/done. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
-| [`ui/panel.js`](ui/panel.js) | `actionButton` читает `$pdp.streaming` + `button` (сброс кэша геттера). APPROVE; form → JSON values. |
+| [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при streaming). APPROVE: `$pdp.result` или `ok`/`cancel`. |
 | [`ui/mic.js`](ui/mic.js) | SpeechRecognition → `panel.value` / `recording` / `timer`. |
 | [`ui/tts.js`](ui/tts.js) | `off` / `local` / `browser`; delta → speak на done. |
 | [`ui/usage.js`](ui/usage.js) | Usage из `data.usage` + walk `data.items`. |
@@ -55,8 +56,8 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 ## Контракты (как в коде)
 
 - **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model', { model: path })`.
-- **Action:** `actionButton` = `focusedBlock.button`, но `null` пока `$pdp.streaming`; form — JSON `values`; иначе `true`/`false`.
-- **Form:** слот на ширину ленты; `fields`/`values` после parse; опционально `ui`; сдача APPROVE.
+- **Action:** `actionButton` = строка `focusedBlock.stop`, но `null` пока `$pdp.streaming`; `sendAction` берёт `$pdp.result` или `ok`/`cancel`.
+- **Form:** слот рисует `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
-- **Stream:** shell `streaming` + `streamingText`; view через `$pdp`; ribbon скроллит при stick.
+- **Stream:** shell `streaming` + `streamingText`; view через `$pdp`; `typeIcon` на стримящемся блоке — `spinners:3-dots-scale`; ribbon скроллит при stick.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

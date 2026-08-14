@@ -3,28 +3,56 @@ const PIPE = {
     /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thought */
     prompt: {
         role: 'user',
-        plan:{
-            next: ['thought'],
-        },
-        do:{
-            next: ['thought'],
-        },
+        next: ['thought'],
     },
     text:{
-
+        icon: 'icons:chat',
+        inject: 'если нужно задать пользователю ровно один вопрос',
+        prompt: [
+            'Задай пользователю ровно один вопрос по текущей задаче.',
+            '[instruction]',
+            'Только один вопрос. Без нумерованного списка, без второго уточнения в том же сообщении.',
+            'Если уточнений несколько — это не text, нужна форма.',
+        ].join('\n'),
+        stop: true,
     },
     todo:{
-        do:{
-            next: ['step'],
+        next: ['step'],
+        async actualize(params = {}) {
+            const { container, task } = params;
+            const body = await task.body;
+            const owner = container.todo ? container : (body.todo ? body : null);
+            const todo = owner?.todo;
+            if (!todo) return;
+            const real = (owner.items || []).filter(b => b.type === 'step');
+            const lines = (todo.steps || []).map((s, i) => {
+                const st = real[i];
+                s.status = st?.ready ? 'done' : (st ? 'in_progress' : (s.status || 'todo'));
+                if (st) {
+                    st.label = `${i + 1}. ${s.description}`;
+                    st.status = s.status;
+                    st.icon = s.status === 'done' ? 'icons:check-circle' : 'av:play-circle-outline';
+                }
+                return `${i + 1}. ${s.description} [${s.status}]`;
+            });
+            todo.content = (todo.label || '') + (lines.length ? '\n' + lines.join('\n') : '');
+            owner.mode = 'do';
+            const cur = real.find(s => !s.ready) || real.last;
+            if (cur)
+                cur.system = [
+                    todo.content,
+                    '\n[instruction]',
+                    `Сейчас только пункт "${cur.label}". Остальные уже в плане — не делай их и не спрашивай про них.`,
+                ].join('\n');
         },
     },
     thought: {
         icon: 'carbon:idea',
         plan:{
-            next: ['planning', 'form', 'html', 'thought'],
+            next: ['planning', 'form', 'research', 'thought'],
         },
         do:{
-            next: ['do', 'complete', 'html', 'thought'],
+            next: ['form', 'execute', 'complete', 'html', 'thought'],
         },
         inject: 'если необходимо проанализировать и обдумать дальнейшие действия',
         prompt: [
@@ -42,47 +70,30 @@ const PIPE = {
             'Краткое название плана работ.',
             'Пронумерованый список пунктов плана работ.',
         ].join('\n'),
-        allow_approve: 'Принять план',
+        stop: 'Принять план',
         async approve(params = {}){
             let {container, block, prompt} = params;
             block.type = 'plan';
-            delete block.button;
+            delete block.stop;
             switch(prompt){
-                case 'true':{
+                case 'ok':{
+                    if (!canPlantTodo(container, await params.task?.body)) {
+                        block.status = 'rejected';
+                        block.content += '\n\nПлан не назначен: слот todo занят или это шаг чужого плана.';
+                        break;
+                    }
                     let plan = parsePlanMarkdown(block.content);
                     container.todo = {
                         type: 'todo',
-                        icon:'icons:list',
+                        icon: 'icons:list',
                         status: 'in_progress',
                         ...plan,
-                        get content() {
-                            let real_steps = (container.items || []).filter(b => b.type === 'step');
-                            const lines = real_steps.map((real_step, i)=>{
-                                real_step.mode = 'do';
-                                let step = this.steps[i];
-                                real_step.label = `${i + 1}. ${step.description}`;
-                                step.status = real_step.status = (real_step.ready) ? 'done' : 'in_progress';
-                                step.icon = real_step.icon = step.status === 'done' ? 'icons:check-circle' : 'av:play-circle-outline';
-                                return real_step.label + ` [${step.status}]`;
-                            });
-                            let content = this.label + '\n' + lines.join('\n');
-                            if(real_steps.length > 0)
-                                real_steps.last.system = [
-                                    content, 
-                                    '\n[instruction]',
-                                    `Сейчас твоя задача только выполнить этот пункта плана "${real_steps.last.label}".`,
-                                    `Для этого ты можешь общаться с пользователем, искать информацию, выполнять действия и т.д.`,
-                                ].join('\n');
-                            return content;
-                        }
-
-                    }
+                    };
                     container.mode = 'do';
                     block.content += '\n\nПЛАН ПРИНЯТ! НАЧИНАЕМ ВЫПОЛЕНИЕ';
                     block.status = 'approved';
-                    block = container.todo;
                 } break;
-                case 'false':{
+                case 'cancel':{
                     block.status = 'rejected';
                     block.content += '\n\nПЛАН ОТВЕРГНУТ, ТРЕБУЕТСЯ ПЕРЕПЛАНИРОВКА';
                 } break;
@@ -92,9 +103,6 @@ const PIPE = {
                 }
             }
             return block;
-        },
-        plan:{
-            next: [],
         }
     },
 
@@ -102,16 +110,42 @@ const PIPE = {
     step: {
         inject: 'если необходимо выполнить один пункт плана',
         container: true,
-        plan:{
-            next: ['thought'],
+        next: ['thought'],
+    },
+
+    /** площадка исполнения: файлы, сервисы, FC; субагент в mode do */
+    execute: {
+        icon: 'enterprise:wrench',
+        do_icon: 'spinners:pulse',
+        inject: 'если план не нужен — сразу выполнять текущий пункт (файлы, сервисы, действия)',
+        container: true,
+        next: ['thought'],
+        do: {
+            next: ['work', 'web', 'form', 'complete', 'html', 'thought'],
+        },
+        actualize(params = {}) {
+            const node = [params.container, params.block].find(n => n?.type === 'execute');
+            if (!node) return;
+            node.mode = 'do';
+            node.icon = node.ready ? this.icon : this.do_icon;
+            const parent = parentOf(params.root, node);
+            if (parent && (parent.mode || 'plan') === 'plan')
+                parent.mode = 'do';
         },
     },
 
     research: {
         icon: 'icons:search',
-        inject: 'если тебе что-то непонятно, или неизвестно, и необходимо провести исследование, но только, если уже есть конкретный план.',
-        autocomplete: true,
-        next: ['work', 'web', 'question', 'form'],
+        inject: 'если нужно выяснить факты (обзор, справка), прежде чем планировать',
+        container: true,
+        next: ['thought'],
+        do: {
+            next: ['work', 'web', 'form', 'complete', 'thought'],
+        },
+        actualize(params = {}) {
+            const node = [params.container, params.block].find(n => n?.type === 'research');
+            if (node) node.mode = 'do';
+        },
     },
 
     web: {
@@ -145,44 +179,35 @@ const PIPE = {
 
     form: {
         icon: 'icons:view-list',
-        inject: 'если необходимо выяснить у пользователя несколько параметров одновременно',
-        prompt: ['Собери форму для ввода данных.',
+        inject: 'если нужно выяснить у пользователя сразу несколько вопросов (два и больше) — не текстом',
+        next: ['thought'],
+        prompt: ['Собери HTML-форму для ввода данных по текущей задаче.',
             '[instruction]',
-            'Первой строкой обычного текста (до вызова) можно дать краткое пояснение к форме.',
-            'далее идет массив объектов с полями СТРОГО в формате json как код:',
-            '[{id, label, type, options}]',
-            'id - уникальный идентификатор поля;',
-            'label - текст лейбла поля;',
-            'type - тип поля (text, number, checkbox, radio, select, textarea);',
-            'options - массив вариантов для выбора (только для типа select и radio);',
-            'пример:',
-            '{id: "name", type: "text", options: []}',
-            '{id: "age", type: "number", options: []}',
-            '{id: "gender", type: "radio", options: ["male", "female"]}',
-            '{id: "email", type: "text", options: []}',
-            '{id: "phone", type: "text", options: []}',
-            '{id: "address", type: "text", options: []}',
-            '{id: "city", type: "text", options: []}',
-            '{id: "country", type: "text", options: []}',
+            'Не спрашивай, какие поля нужны — составь их сам по запросу пользователя в ленте, не по профилю и не по карточке группы.',
+            'Первой строкой можно дать краткое пояснение.',
+            'Далее один fenced-блок html.',
+            'Каждый вопрос — свой fieldset + legend. Не группируй вопросы и не ставь fieldset в ряд.',
+            'Варианты: до 5 — radio, больше — select. Всегда пункт «Другое» и рядом input type="text" (своё значение).',
+            'У каждого контрола обязателен name (у «другого» — свой, например name_other).',
+            'Без script, без html/body, без кнопки отправки.',
         ].join('\n'),
-        /** после стрима: content → пояснение + fields[]; ui опционален (кастомный слот в preview) */
+        /** после стрима: пояснение в content, разметка в html */
         parse(block) {
-            const { content, fields } = parseFormContent(block.content);
+            const { content, html } = parseFormHtml(block.content);
             block.content = content;
-            block.fields = fields;
+            block.html = html;
             block.values ??= {};
-            // block.ui — если задан (модель/харнесс): preview рисует microchat-form-{ui} или CE-имя
         },
         async approve(params = {}) {
             const { block, prompt } = params;
-            delete block.button;
-            if (prompt === 'false') {
+            delete block.stop;
+            if (prompt === 'cancel') {
                 block.status = 'rejected';
                 block.content = (block.content || '') + '\n\nФорма отменена';
                 return block;
             }
             let answers = {};
-            if (prompt && prompt !== 'true' && typeof prompt === 'string') {
+            if (prompt && prompt !== 'ok' && typeof prompt === 'string') {
                 try { answers = JSON.parse(prompt); } catch { answers = block.values || {}; }
             } else if (prompt && typeof prompt === 'object') {
                 answers = prompt;
@@ -192,16 +217,10 @@ const PIPE = {
             block.answers = answers;
             block.values = answers;
             block.status = 'submitted';
-            block.content = (block.content || '') + '\n\n' + formatFormAnswers(block.fields, answers);
+            block.content = (block.content || '') + '\n\n' + formatFormAnswers(answers);
             return block;
         },
-        plan:{
-            next: ['planning'],
-        },
-        do:{
-            next: ['thought'],
-        },
-        allow_approve: 'Отправить форму',
+        stop: 'Отправить форму',
     },
 
     html: {
@@ -217,39 +236,34 @@ const PIPE = {
             if (fence) {
                 block.content = fence[1].trim();
             }
-        }
+        },
+        stop: true,
     },
     complete: {
         inject: 'если считаешь, что текущая задача (шаг) завершена',
         prompt: ['Сформируй краткий итог по текущей ветке.',
             '\n\n[instruction]\n',
             'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
-        allow_approve: 'Завершить',
+        stop: 'Завершить',
         async approve(params = {}) {
-            const { container, block, prompt, task } = params;
-            delete block.button;
-            if (prompt === 'false') {
-                block.status = 'rejected';
-                block.content = (block.content || '') + '\n\nИтог отклонён, продолжаем';
-                return block;
+            const { container, block, prompt } = params;
+            delete block.stop;
+            switch (prompt) {
+                case 'ok': {
+                    block.status = 'approved';
+                    container.ready = true;
+                    container.content = block.content;
+                } break;
+                case 'cancel': {
+                    block.status = 'rejected';
+                    block.content = (block.content || '') + '\n\nИТОГ ОТКЛОНЕН, ПРОДОЛЖАЕМ';
+                } break;
+                default: {
+                    block.status = 'to modify';
+                    block.content = (block.content || '') + '\n\nИТОГ ОТКЛОНЕН, ' + prompt;
+                }
             }
-            block.status = 'approved';
-            block.content = (block.content || '') + '\n\nЗАВЕРШЕНО';
-            // закрыть вышестоящий step (= текущий container, если мы внутри него)
-            if (container?.type === 'step') {
-                container.ready = true;
-                const body = await task.body;
-                if (body.todo?.status === 'in_progress')
-                    return body.todo;
-            }
-            return block;
-        },
-        plan: {
-            next: ['thought'],
-        },
-        do: {
-            next: ['thought'],
-        },
+        }
     },
 };
 
@@ -266,20 +280,21 @@ export default {
     async prompt(params = {}, post) {
         // debugger
         let { prompt, role, session } = params;
-        let block = await this._active_block();
-        let container = await this._active_container();
-        let pipe_step = PIPE[block.type] || PIPE.thought;
+        params.block = await this._active_block();
+        params.container = await this._active_container();
+        params.pipe_step = PIPE[params.block.type] || PIPE.thought;
+        params.task = this;
+        params.root = await this.body;
+        await this._actualize(params);
 
-        Object.assign(params, {block, container, pipe_step, task: this});
         try {
             switch (role) {
                 case 'AI':{
                     // не удалять, пока не переделаем на новый алгоритм
                 } break;
                 case 'APPROVE':{
-                    params.block = await params.pipe_step.approve(params);
-                    // после close step контейнер меняется — не пушить в закрытый
-                    params.container = await this._active_container();
+                    params.block.approved = prompt;
+                    await params.pipe_step.approve(params);
                     await this._save(session);
                 } break;
                 default:{
@@ -290,11 +305,13 @@ export default {
                     await this._push_block(params);
                 }
             }
-
-
-            pipe_step = PIPE[params.block.type];
-            let mode = container.mode || 'plan';
-            let options = pipe_step?.[mode]?.next || [];
+            params.block = await this._active_block();
+            params.container = await this._active_container();
+            params.pipe_step = PIPE[params.block.type] || PIPE.thought;
+            params.root = await this.body;
+            await this._actualize(params);
+            let mode = params.container.mode || 'plan';
+            let options = routeNext(params);
             let messages, response, choice = '';
             if(options.length === 1) {
                 choice = options[0];
@@ -302,6 +319,8 @@ export default {
             else {
                 let menu =  ''
                 options = options.filter(id => id !== params.block.type);
+                if (mode === 'plan' && !canPlantTodo(params.container, params.root))
+                    options = options.filter(id => id !== 'planning');
                 if(options.length > 0) {
                     menu += 'Выбери следующий, наиболее подходящий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:';
                     for (let id of options) {
@@ -309,7 +328,7 @@ export default {
                     }
                     
                 }
-                menu += '\nЕсли пользователь перед этим просто задал вопрос, просто ответь на него, или сам задай вопрос, если что-то непонятно.';
+                menu += '\nЕсли ни один тип не подходит — ответь по существу. Несколько вопросов — FORM.';
                 
                 messages = await this.collect_context({prompt: menu});
 
@@ -323,18 +342,15 @@ export default {
                 next_pipe = PIPE[choice];
             }
 
-            block = {
+            params.block = {
                 type: choice,
                 icon: next_pipe.icon || 'carbon:idea',
-                stop: !next_pipe.plan && !next_pipe.do,
             }
-            if(next_pipe.allow_approve){
-                block.button = { label: next_pipe.allow_approve };
-            }
-            if(next_pipe.container){
-                block.items = [];
-            }
-            params.block = block;
+            if (next_pipe.stop)
+                params.block.stop = next_pipe.stop;
+            if(next_pipe.container)
+                params.block.items = [];
+
             await this._push_block(params);
             if(next_pipe.prompt){
                 messages = await this.collect_context({prompt: next_pipe.prompt});
@@ -348,7 +364,7 @@ export default {
                 params.block.content = response.content;
             }
             this._save(session);
-            if (!params.block.stop && !params.block.button) {
+            if (!params.block.stop) {
                 this.async(() => this.prompt({ role: 'AI', session }));
             }
         }
@@ -368,19 +384,28 @@ export default {
             system += '\n\n[todo]\n' + (container.todo.content || '');
         let role = 'system';
         const messages = [{ role, content: system }];
+        const push = (nextRole, content) => {
+            if (!content) return;
+            if (messages.last?.role === nextRole) {
+                if (nextRole === 'assistant')
+                    messages.push({ role: 'user', content: 'дальше' });
+                else {
+                    messages.last.content += '\n\n' + content;
+                    return;
+                }
+            }
+            messages.push({ role: nextRole, content });
+        };
         for (const b of (container.items || [])) {
-            if(!b.content) continue;
-            role = PIPE[b.type]?.role || 'assistant';
-            if (messages.last?.role === role)
-                messages.last.content += '\n\n' + b.content;
-            else
-                messages.push({role, content: b.content });
+            push(PIPE[b.type]?.role || 'assistant', b.content);
+            if (b.approved != null)
+                push('user', typeof b.approved === 'string' ? b.approved : JSON.stringify(b.approved));
         }
-        if(prompt){
-            if(messages.last?.role === 'user')
+        if (prompt) {
+            if (messages.last?.role === 'user')
                 messages.last.content += '\n\n[instruction]\n' + prompt;
             else
-                messages.push({ role: 'user', content: prompt});
+                messages.push({ role: 'user', content: prompt });
         }
         return messages;
     },
@@ -431,6 +456,17 @@ export default {
         container.items.push(block);
         await this._save(session);
     },
+    async _actualize(params = {}) {
+        params.root ??= await this.body;
+        const seen = new Set();
+        for (const node of [params.container, params.block]) {
+            if (!node || seen.has(node)) continue;
+            seen.add(node);
+            await PIPE[node.type]?.actualize?.(params);
+        }
+        if (![params.container, params.block].some(n => n?.type === 'todo'))
+            await PIPE.todo.actualize?.(params);
+    },
     async _active_block() {
         let container = await this._active_container();
         if(container.todo?.status === 'in_progress')
@@ -460,6 +496,40 @@ export default {
         session?.send?.({ path: this.short });
     }
 };
+
+function parentOf(root, node) {
+    if (!root || !node || root === node) return null;
+    for (const b of (root.items || [])) {
+        if (b === node) return root;
+        const p = parentOf(b, node);
+        if (p) return p;
+    }
+    return null;
+}
+
+/** один слот todo; step чужого плана свой не сажает (replan — позже) */
+function canPlantTodo(container, root) {
+    if (!container || container.todo) return false;
+    if (container.type === 'step') {
+        let p = parentOf(root, container);
+        while (p) {
+            if (p.todo) return false;
+            p = parentOf(root, p);
+        }
+    }
+    return true;
+}
+
+/** thought — меню контейнера-исполнителя, иначе свой next */
+function routeNext(params = {}) {
+    const mode = params.container?.mode || 'plan';
+    const host = PIPE[params.container?.type];
+    const step = params.pipe_step;
+    if (params.block?.type === 'thought')
+        return host?.[mode]?.next || step?.[mode]?.next || step?.next || [];
+    return step?.[mode]?.next || step?.next || [];
+}
+
 function parsePlanMarkdown(text = '') {
     const lines = String(text).replace(/\r\n/g, '\n').split('\n');
     // заголовок: первый ATX (#..) или жирная строка, иначе первая не-списочная
@@ -497,63 +567,34 @@ function parsePlanMarkdown(text = '') {
     };
 }
 
-const FORM_FIELD_TYPES = new Set(['text', 'number', 'checkbox', 'radio', 'select', 'textarea']);
-
-/** Вырезать JSON-массив полей из ответа модели; остаток — пояснение. */
-function parseFormContent(text = '') {
+/** Вырезать html-разметку формы; остаток — пояснение. script не храним (это не узел html). */
+function parseFormHtml(text = '') {
     const raw = String(text ?? '');
-    let jsonText = '';
+    let html = '';
     let content = raw;
-    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
     if (fence) {
-        jsonText = fence[1].trim();
+        html = fence[1].trim();
         content = (raw.slice(0, fence.index) + raw.slice(fence.index + fence[0].length)).trim();
     } else {
-        const start = raw.indexOf('[');
-        const end = raw.lastIndexOf(']');
-        if (start >= 0 && end > start) {
-            jsonText = raw.slice(start, end + 1);
-            content = (raw.slice(0, start) + raw.slice(end + 1)).trim();
+        const form = raw.match(/<form\b[\s\S]*<\/form>/i);
+        if (form) {
+            html = form[0].trim();
+            content = (raw.slice(0, form.index) + raw.slice(form.index + form[0].length)).trim();
+        } else if (/^\s*</.test(raw)) {
+            html = raw.trim();
+            content = '';
         }
     }
-    const parsed = tryParseJsonLoose(jsonText);
-    const list = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
-    const fields = list
-        .filter(f => f && typeof f === 'object' && f.id != null && String(f.id).trim())
-        .map(f => {
-            const type = FORM_FIELD_TYPES.has(f.type) ? f.type : 'text';
-            const options = Array.isArray(f.options) ? f.options.map(o => String(o)) : [];
-            return {
-                id: String(f.id).trim(),
-                label: String(f.label ?? f.id).trim(),
-                type,
-                options: (type === 'select' || type === 'radio') ? options : [],
-            };
-        });
-    return { content, fields };
+    html = html.replace(/<script\b[\s\S]*?<\/script>/gi, '').trim();
+    return { content, html };
 }
 
-function tryParseJsonLoose(s) {
-    if (!s?.trim()) return null;
-    try { return JSON.parse(s); } catch { /* fallthrough */ }
-    try {
-        // модели часто отдают ключи без кавычек / одинарные кавычки
-        const fixed = s
-            .replace(/'/g, '"')
-            .replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g, '$1"$2":');
-        return JSON.parse(fixed);
-    } catch {
-        return null;
-    }
-}
-
-function formatFormAnswers(fields = [], answers = {}) {
+function formatFormAnswers(answers = {}) {
     const lines = ['[form answers]'];
-    const ids = fields.length ? fields.map(f => f.id) : Object.keys(answers || {});
-    for (const id of ids) {
-        const label = fields.find(f => f.id === id)?.label || id;
-        const v = answers?.[id];
-        lines.push(`${label}: ${v == null || v === '' ? '—' : String(v)}`);
+    for (const id of Object.keys(answers || {})) {
+        const v = answers[id];
+        lines.push(`${id}: ${v == null || v === '' ? '—' : String(v)}`);
     }
     return lines.join('\n');
 }

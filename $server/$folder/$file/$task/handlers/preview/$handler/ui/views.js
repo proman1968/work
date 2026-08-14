@@ -98,6 +98,16 @@ ODA({ is: 'microchat-ribbon',
         this.async(() => { this._ignoreScroll = Math.max(0, this._ignoreScroll - 1); });
         return this.nearBottom;
     },
+    /** view текущего блока, в т.ч. во вложенной ленте */
+    viewFor(block) {
+        if (!block) return;
+        if (this.todo === block) return this.$('microchat-view-todo');
+        for (const el of this.$$('*')) {
+            if (el.data === block) return el;
+            const found = el.$?.('microchat-ribbon')?.viewFor(block);
+            if (found) return found;
+        }
+    },
 });
 
 ODA({ is: 'microchat-view',
@@ -174,9 +184,9 @@ ODA({ is: 'microchat-view',
         return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
     },
 
-    /** скрыть summary; body всегда на виду */
+    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл */
     get showTitle() {
-        return this.data && !this.data.stop
+        return this.data && this.data.stop !== true;
     },
 
     // --- data ---
@@ -187,7 +197,11 @@ ODA({ is: 'microchat-view',
     get status(){
         return this.data.status;
     },
-    get typeIcon() { return this.data?.icon || ''; },
+    get typeIcon() {
+        if (this.$pdp.streaming && Reactor.equal(this.data, this.$pdp.focusedBlock))
+            return 'spinners:3-dots-scale';
+        return this.data?.icon || '';
+    },
     get items() { return this.data?.items || []; },
     sender: null,
     get timeText() {
@@ -248,6 +262,9 @@ ODA({ is: 'microchat-view',
     // --- slots ---
     subTitleTag: '',
     extendTag: '',
+    get result() {
+        return this.extendTag ? this.$(this.extendTag)?.result : undefined;
+    },
     get depth() {
         return (this.host.host?.depth ?? 0) + 1;
     },
@@ -291,15 +308,9 @@ ODA({ is: 'microchat-view-prompt',
 });
 
 
-/** form — слот в ленте: адаптивная ширина; ui по data.ui или default microchat-form. */
+/** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
-    /**
-     * Проекция wait-блока:
-     * - нет ui → microchat-form (fields → values)
-     * - ui: 'game' → microchat-form-game (если CE есть)
-     * - ui: 'my-widget' / полное имя CE → как есть
-     */
     get extendTag() {
         const ui = this.data?.ui;
         if (!ui) return 'microchat-form';
@@ -313,110 +324,88 @@ ODA({ is: 'microchat-view-form',
 });
 
 /**
- * Default-форма в слоте ленты: HTML + flex-wrap под непредсказуемую ширину.
- * Сдача — data.values → panel APPROVE. Кастом/игра — другой tag через data.ui.
+ * Форма в слоте ленты: HTML модели (data.html), values с name-контролов → APPROVE.
  */
 ODA({ is: 'microchat-form',
     template: /*html*/`
         <style>
             :host {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px;
-                padding: 8px;
-                box-sizing: border-box;
+                @apply --vertical;
+                @apply --light;
                 width: 100%;
                 min-width: 0;
+                box-sizing: border-box;
+                padding: 8px;
                 font-size: small;
             }
-            .field {
-                display: flex;
-                flex-direction: column;
-                gap: 2px;
-                flex: 1 1 12rem;
-                min-width: min(100%, 10rem);
-                max-width: 100%;
+            .slot {
+                @apply --vertical;
+                gap: 8px;
+                width: 100%;
+                min-width: 0;
+            }
+            .slot :where(fieldset) {
+                width: 100%;
+                max-width: 400px;
+                min-width: 0;
                 box-sizing: border-box;
-            }
-            .field.wide {
-                flex: 1 1 100%;
-                min-width: 100%;
-            }
-            label {
-                font-size: xx-small;
-                opacity: .8;
-            }
-            input, select, textarea {
-                border: 1px solid var(--border-color);
                 border-radius: 8px;
+            }
+            .slot :where(input, select, textarea) {
+                border: 1px solid var(--border-color);
+                @apply --content;
                 padding: 6px 8px;
                 font: inherit;
-                background: var(--content-background);
                 color: inherit;
                 width: 100%;
                 min-width: 0;
                 box-sizing: border-box;
             }
-            textarea { resize: vertical; min-height: 3em; }
-            .opts {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px;
-                align-items: center;
-            }
-            .opts label {
-                display: inline-flex;
-                gap: 4px;
-                align-items: center;
-                font-size: small;
-                opacity: 1;
-            }
-            .opts input[type="checkbox"],
-            .opts input[type="radio"] {
-                width: auto;
-            }
+            .slot :where(textarea) { resize: vertical; min-height: 3em; }
+            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; }
         </style>
-        <div class="field" ~for="fields" ~class="{ wide: isWide($for.item) }">
-            <label ~if="$for.item.type !== 'checkbox'">{{$for.item.label}}</label>
-            <textarea ~if="$for.item.type === 'textarea'" ::value="values[$for.item.id]"></textarea>
-            <select ~if="$for.item.type === 'select'" ::value="values[$for.item.id]">
-                <option value=""></option>
-                <option ~for="$for.item.options" :value="$for.item">{{$for.item}}</option>
-            </select>
-            <div class="opts" ~if="$for.item.type === 'radio'">
-                <label ~for="$for.item.options">
-                    <input type="radio" :name="$for.$for.item.id" :value="$for.item"
-                        :checked="values[$for.$for.item.id] === $for.item"
-                        @change="values[$for.$for.item.id] = $for.item">{{$for.item}}</label>
-            </div>
-            <label ~if="$for.item.type === 'checkbox'" class="opts">
-                <input type="checkbox" ::checked="values[$for.item.id]">{{$for.item.label}}</label>
-            <input ~if="isPlain($for.item)" :type="$for.item.type === 'number' ? 'number' : 'text'"
-                ::value="values[$for.item.id]">
-        </div>
-        <div ~if="!fields.length" style="opacity:.6; flex:1 1 100%">нет полей формы</div>
+        <div class="slot" ~if="html" ~html="html" @input="sync" @change="sync"></div>
+        <div ~if="!html" style="opacity:.6">нет разметки формы</div>
     `,
-    data: null,
-    get fields() {
-        if (!this.data) return [];
-        const fields = this.data.fields || [];
-        const v = (this.data.values ??= {});
-        for (const f of fields) {
-            if (f?.id == null) continue;
-            if (!(f.id in v))
-                v[f.id] = f.type === 'checkbox' ? false : '';
+    data: {
+        $def: null,
+        set() { this.async(() => this.restore()); },
+    },
+    get html() {
+        this.async(() => this.restore());
+        return this.data?.html || '';
+    },
+    attached() {
+        this.addEventListener('submit', e => { e.preventDefault(); this.sync(); }, true);
+        this.async(() => this.restore());
+    },
+    get result() {
+        const out = {};
+        for (const el of this.$$('input, select, textarea')) {
+            const key = el.name || el.id;
+            if (!key) continue;
+            if (el.type === 'checkbox')
+                out[key] = !!el.checked;
+            else if (el.type === 'radio') {
+                if (el.checked) out[key] = el.value;
+            } else
+                out[key] = el.value;
         }
-        return fields;
+        return out;
     },
-    get values() {
-        if (!this.data) return {};
-        return (this.data.values ??= {});
+    sync() {
+        if (this.data) this.data.values = this.result;
     },
-    isPlain(f) {
-        return !['textarea', 'select', 'radio', 'checkbox'].includes(f?.type);
-    },
-    isWide(f) {
-        return f?.type === 'textarea' || f?.type === 'radio' || f?.wide;
+    restore() {
+        const values = this.data?.values;
+        if (!values) return;
+        for (const el of this.$$('input, select, textarea')) {
+            const key = el.name || el.id;
+            if (!key || values[key] == null) continue;
+            if (el.type === 'checkbox') el.checked = !!values[key];
+            else if (el.type === 'radio') el.checked = String(el.value) === String(values[key]);
+            else el.value = values[key];
+        }
     },
 });
 
@@ -497,15 +486,11 @@ ODA({ is: 'microchat-todo-steps',
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
-            .track {
+            progress {
+                width: 100%;
                 height: 3px;
-                @apply --dark;
                 flex-shrink: 0;
-            }
-            .bar {
-                height: 100%;
-                background: var(--success-color);
-                transition: width .3s;
+                border: none;
             }
             .steps {
                 @apply --vertical;
@@ -539,7 +524,7 @@ ODA({ is: 'microchat-todo-steps',
             <span flex>{{currentStepText}}</span>
             <oda-icon :icon="stepsChevron" :icon-size></oda-icon>
         </div>
-        <div class="track" ><div class="bar" ~style="'width:' + progress + '%'"></div></div>
+        <progress max="100" :value="progress"></progress>
         <div class="steps" light bold ~if="!collapsed">
             <div class="step" horizontal ~for="steps"
                     ~class="{ done: $for.item.status === 'done', 'in-progress': $for.item.status === 'in_progress' }">
