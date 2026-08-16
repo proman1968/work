@@ -41,8 +41,7 @@ export default {
             params.pipe_step.actualize?.(params);
 
             let mode = params.container.mode || 'plan';
-
-            let options = params.pipe_step[mode]?.next || params.pipe_step?.next || [];
+            let options = next_options(params.container, params.block, mode);
             let messages, response, choice = '';
             if(options.length === 1) {
                 choice = options[0];
@@ -60,7 +59,7 @@ export default {
                 if (this._stopped) return;
                 choice = response.content.trim().toLowerCase();
             }
-            let next_pipe = PIPE[choice];
+            let next_pipe = options.includes(choice) ? PIPE[choice] : null;
             if(!next_pipe){
                 choice = 'text'
                 next_pipe = PIPE[choice];
@@ -79,11 +78,11 @@ export default {
             prompt = next_pipe[mode]?.prompt || next_pipe.prompt;
             if(prompt){
                 messages = await this.context({prompt});
-                response = await this._streamChat({messages, session});
+                response = await this._fc_chat({ messages, session, fc: next_pipe.fc, block: params.block });
                 if (this._stopped) return;
                 Object.assign(params.block, response);
                 next_pipe?.parse?.(params.block);
-                
+                next_pipe?.actualize?.(params);
             }
             await this._save(session);
             if (!params.block.stop) {
@@ -108,7 +107,8 @@ export default {
             if (next?.items && !next.ready) container = next;
             else break;
         }
-        const messages = [{ role: 'system', content: layers.map(l => l.system).filter(Boolean).join('\n\n') }];
+        const mode = container.mode || 'plan';
+        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), '[mode] ' + mode].join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -166,6 +166,88 @@ export default {
             }
         }
         return { content, usage, calls };
+    },
+    async _fc_chat(params = {}) {
+        const { messages, session, fc, block } = params;
+        if (!fc)
+            return this._streamChat({ messages, session });
+        const service = await WORK.get_item(fc);
+        const functions = Object.entries(service.SCHEMA || {}).map(([name, spec]) => ({
+            name,
+            description: spec.description || '',
+            parameters: spec.params || { type: 'object', properties: {} },
+        }));
+        if (block?.type === 'web') {
+            block.icon = PIPE.web.do_icon;
+            await this._save(session);
+        }
+        const calls = [];
+        let content = '', usage = 0;
+        const max = 5;
+        for (let i = 0; i < max; i++) {
+            const turn = await this._streamChat({ messages, functions, session, silent: true });
+            if (this._stopped)
+                return { content, usage, calls };
+            if (turn.usage)
+                usage = turn.usage;
+            if (!turn.calls?.length) {
+                content = turn.content || content;
+                if (content)
+                    session?.send?.({ type: 'chat.delta', path: this.short, token: content });
+                return { content, usage, calls };
+            }
+            for (const call of turn.calls) {
+                calls.push(call);
+                const result = await this._fc_exec(service, call, { block, session });
+                const payload = JSON.stringify(result ?? {});
+                messages.push({
+                    role: 'assistant',
+                    content: '',
+                    function_call: { name: call.method, arguments: call.args || {} },
+                });
+                messages.push({ role: 'function', name: call.method, content: payload });
+                if (!content)
+                    content = payload;
+            }
+        }
+        const last = await this._streamChat({ messages, session });
+        if (this._stopped)
+            return { content, usage, calls };
+        if (last.content)
+            content = last.content;
+        if (last.usage)
+            usage = last.usage;
+        return { content, usage, calls };
+    },
+    async _fc_exec(service, call, { block, session } = {}) {
+        const args = call.args || {};
+        if (call.method === 'search' && args.query && block) {
+            block.label = args.query;
+            await this._save(session);
+        }
+        if (call.method === 'fetch_url' && block?.items) {
+            const url = String(args.url || '').trim();
+            const n = block.items.filter(b => b.type === 'site').length;
+            if (n >= WEB_SITES) {
+                return { error: 'Лимит: не больше ' + WEB_SITES + ' сайтов за один web', url };
+            }
+            const site = {
+                type: 'site',
+                url,
+                label: url,
+                icon: 'spinners:3-dots-scale',
+            };
+            await this._push_block({ block: site, container: block, session });
+            const result = await service.fetch_url?.(args);
+            site.icon = siteFavicon(url);
+            if (result?.title)
+                site.label = result.title;
+            if (result?.error)
+                site.status = result.error;
+            await this._save(session);
+            return result ?? {};
+        }
+        return await service[call.method]?.(args);
     },
     get body(){
         return new AsyncPromise(async () =>{
@@ -227,21 +309,19 @@ export default {
 
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
 const PIPE = {
-    /** вход: блок prompt пушится вручную в prompt(); отсюда auto-переход в thinking */
+    /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
     prompt: {
         role: 'user',
-        next: ['thinking'],
+        next: ['research'],
     },
     thinking: {
         icon: 'carbon:idea',
         plan:{
-            // next: ['research', 'planning', 'activation'],
-            next: ['activation'],
+            next: ['research', /* 'planning', 'activation' */],
             inject: 'если необходимо проанализировать и обдумать дальнейшие планы',
         },
         do:{
-            // next: ['research', 'execute', chek],
-            next: ['execute'],
+            next: ['research', /* 'execute', 'check' */],
             inject: 'если необходимо проанализировать и обдумать дальнейшие действия',
         },
         prompt: [
@@ -342,6 +422,10 @@ const PIPE = {
         container: true,
         // next: ['work', 'web', 'form', 'html'],
         next: ['form'],
+        prompt: [
+            'Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.',
+            'Не делай их и не обращайся к пользователю. Размышления от своего лица в content.',
+        ].join('\n'),
         actualize(params = {}) {
             params.block.mode = 'do';
         },
@@ -350,35 +434,83 @@ const PIPE = {
     research: {
         icon: 'icons:search',
         do_icon: 'spinners:pulse',
-        inject: 'если нужно выяснить факты (обзор, справка), прежде чем планировать',
-        prompt: 'Подумай о том, какую информацию, и каким образом необходимо получить, чтобы продолжить работу',
+        inject: 'если нужно выяснить факты (обзор, справка), не меняя систему',
+        prompt: [
+            'Подумай, что именно исследовать и откуда взять факты, чтобы продолжить работу.',
+            'Не ищи и не обращайся к пользователю. Размышления от своего лица в content.',
+        ].join('\n'),
         container: true,
-        next: ['work', 'web', 'form', 'complete', 'thinking'],
+        next: [/* 'work', */ 'web', /* 'form' */],
         actualize(params = {}) {
-            params.block.mode = 'do';
+            params.block.mode = params.container.mode || params.block.mode || 'plan';
         },
     },
     check:{
         icon: 'icons:check-circle',
-        inject: 'если необходимо проверить факты (обзор, справка), прежде чем планировать',
+        do_icon: 'spinners:pulse',
+        inject: 'если нужно сверить результат с целью, прежде чем закрыть ветку',
+        prompt: [
+            'Это площадка проверки, не исполнение и не план.',
+            'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
+            'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
+            'Когда доказательств достаточно — вердикт.',
+        ].join('\n'),
         container: true,
-        next: ['complete', 'thinking'],
+        next: ['work', 'web', 'thinking', 'verdict'],
+        done: { next: ['complete'] },
         actualize(params = {}) {
             params.block.mode = 'do';
-        }
+        },
+    },
+    verdict: {
+        icon: 'icons:assignment-turned-in',
+        inject: 'если доказательств достаточно — вынести вердикт ok или fail',
+        prompt: [
+            'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами из ленты и прочитанных файлов.',
+            'Не планируй и не обращайся к пользователю.',
+            '[instruction]',
+            'СТРОГО:',
+            'готово: …',
+            'не хватает: …',
+            'итог: ok  или  fail',
+        ].join('\n'),
+        parse(block) {
+            const m = String(block.content || '').match(/итог:\s*(ok|fail)/i);
+            block.verdict = m ? m[1].toLowerCase() : 'fail';
+        },
+        actualize(params = {}) {
+            if (params.block.verdict !== 'ok') return;
+            params.container.ready = true;
+            params.container.content = params.block.content;
+        },
     },
 
     web: {
         icon: 'icons:language',
+        do_icon: 'spinners:pulse',
         inject: 'если необходимо найти информацию в интернете',
-        prompt: ['Найди информацию в интернете ровно ОДНИМ вызовом функции:'].join('\n'),
+        fc: '/SERVICES/SearXNG',
+        container: true,
+        prompt: [
+            'Найди факты в интернете: сначала search({query}), затем fetch_url({url}) по 1–2 подходящим ссылкам.',
+            'Пиши только то, что прочитал на страницах. Не выдумывай цены и факты из сниппетов.',
+        ].join('\n'),
         next: ['thinking'],
+        done: { next: ['complete'] },
         plan:{
             inject: 'если необходимо найти информацию в интернете',
         },
         do:{
             inject: 'если необходимо выполнить конкретные действия в интернете',
-        }
+        },
+        actualize(params = {}) {
+            const b = params.block;
+            b.ready = true;
+            b.icon = PIPE.web.icon;
+        },
+    },
+    site: {
+        icon: 'icons:language',
     },
 
     work: {
@@ -472,6 +604,26 @@ const PIPE = {
         }
     },
 };
+function next_options(container, block, mode) {
+    const node = PIPE[block?.type];
+    if (block?.ready && node?.container && node.done?.next)
+        return node.done.next;
+    const place = PIPE[container?.type];
+    if (place?.container)
+        return place.next || [];
+    return node?.[mode]?.next || node?.next || [];
+}
+
+const WEB_SITES = 2;
+
+function siteFavicon(url) {
+    try {
+        return 'https://icons.duckduckgo.com/ip3/' + new URL(url).hostname + '.ico';
+    } catch {
+        return 'icons:language';
+    }
+}
+
 function parentOf(root, node) {
     if (!root || !node || root === node) return null;
     for (const b of (root.items || [])) {

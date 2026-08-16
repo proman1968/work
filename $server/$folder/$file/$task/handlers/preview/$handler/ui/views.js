@@ -164,7 +164,7 @@ ODA({ is: 'microchat-view',
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="label">{{label}}</span>
+                    <span class="label" ~is="labelTag" :href="data?.url" target="_blank" rel="noopener noreferrer" @click.stop>{{label}}</span>
                     <span disabled class="label" style="opacity: .5;" ~if="status">{{status}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
@@ -194,6 +194,7 @@ ODA({ is: 'microchat-view',
     get label() { 
         return this.data?.label || this.data?.type || '';
     },
+    get labelTag() { return this.data?.url ? 'a' : 'span'; },
     get status(){
         return this.data.status;
     },
@@ -305,6 +306,22 @@ ODA({ is: 'microchat-view-prompt',
             (users || []).find(u => u.id === id) || null
         );
     }
+});
+
+/** site — обычный блок; текст = label (title), ссылка = url, без тела. */
+ODA({ is: 'microchat-view-site',
+    extends: 'microchat-view',
+    template: /*html*/`
+        <style>
+            .title > a.label {
+                flex: 1;
+                min-width: 4em;
+            }
+            .title > div[flex] { flex: none; }
+        </style>
+    `,
+    get label() { return this.data?.label || this.data?.url || ''; },
+    get showContent() { return false; },
 });
 
 

@@ -19,6 +19,7 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 - Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет.
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
+- `site` — обычный блок; лейбл = title, без тела. Шапка: `~is` → `a` при `data.url`, `:href="data.url"`. У `a.label` — `flex: 1` (распорка иначе сжимает title).
 
 ## 4. Из чего это состоит
 
