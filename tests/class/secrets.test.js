@@ -14,7 +14,7 @@ describe('$class secrets', () => {
         delete process.env.dev;
         globalThis.WORK = {
             async roles(p) {
-                return p?.user?.uid === adminUid ? ['ADMIN'] : [];
+                return p?.session?.uid === adminUid ? ['ADMIN'] : [];
             },
         };
         return Promise.resolve(fn()).finally(() => {
@@ -65,11 +65,11 @@ describe('$class secrets', () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'work-secret-'));
         try {
             const item = makeItem(tmp);
-            const user = { uid: 'admin1', $user: { id: 'admin1' } };
+            const session = { uid: 'admin1', $user: { id: 'admin1' } };
             const body = JSON.stringify({ value: 42 }, null, 2);
             const log = await item.save_secret({
                 filename: 'testmodule.json',
-                user,
+                session,
                 role: 'ADMIN',
                 post: body,
                 encoding: 'utf-8',
@@ -79,7 +79,7 @@ describe('$class secrets', () => {
             assert.equal(JSON.parse(fs.readFileSync(secretFile, 'utf-8')).value, 42);
             assert.ok(log?.path?.includes('#secret'), 'log.path указывает на #secret history');
             assert.ok(log.path.includes('history'), 'есть history-снимок');
-            const data = await item.read_secret({ filename: 'testmodule.json', user, role: 'ADMIN' });
+            const data = await item.read_secret({ filename: 'testmodule.json', session, role: 'ADMIN' });
             assert.equal(data.value, 42);
         }
         finally {
@@ -94,8 +94,8 @@ describe('$class secrets', () => {
             const legacyDir = path.join(tmp, '$class', '#system');
             fs.mkdirSync(legacyDir, { recursive: true });
             fs.writeFileSync(path.join(legacyDir, 'email.json'), JSON.stringify({ mailboxes: { 'a@b.c': {} } }));
-            const user = { uid: 'admin1', $user: { id: 'admin1' } };
-            const data = await item.read_secret({ filename: 'email.json', user, role: 'ADMIN' });
+            const session = { uid: 'admin1', $user: { id: 'admin1' } };
+            const data = await item.read_secret({ filename: 'email.json', session, role: 'ADMIN' });
             assert.deepEqual(Object.keys(data.mailboxes), ['a@b.c']);
         }
         finally {
@@ -110,7 +110,7 @@ describe('$class secrets', () => {
             await assert.rejects(
                 () => item.save_secret({
                     filename: 'testmodule.json',
-                    user: { uid: 'other' },
+                    session: { uid: 'other' },
                     post: '{}',
                 }),
                 /Доступ запрещён/
@@ -125,11 +125,11 @@ describe('$class secrets', () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'work-secret-role-'));
         try {
             const item = makeItem(tmp);
-            const user = { uid: 'admin1', $user: { id: 'admin1' } };
+            const session = { uid: 'admin1', $user: { id: 'admin1' } };
             await assert.rejects(
                 () => item.save_secret({
                     filename: 'testmodule.json',
-                    user,
+                    session,
                     role: 'USER',
                     post: '{}',
                 }),
@@ -145,13 +145,13 @@ describe('$class secrets', () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'work-secret-args-'));
         try {
             const item = makeItem(tmp);
-            const user = { uid: 'admin1', $user: { id: 'admin1' } };
+            const session = { uid: 'admin1', $user: { id: 'admin1' } };
             await assert.rejects(
-                () => item.save_secret({ user, role: 'ADMIN', post: '{}' }),
+                () => item.save_secret({ session, role: 'ADMIN', post: '{}' }),
                 /Не указано имя файла/
             );
             await assert.rejects(
-                () => item.save_secret({ filename: 'x.json', user, role: 'ADMIN' }),
+                () => item.save_secret({ filename: 'x.json', session, role: 'ADMIN' }),
                 /Не указано тело файла/
             );
         }

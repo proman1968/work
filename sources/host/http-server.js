@@ -172,13 +172,13 @@ export function createRequestHandler() {
     let item;
     try {
         const cookies = parseCookies(request);
-        let user = $server.get_user(cookies.ssid);
+        let session = $server.get_session(cookies.ssid);
         const url = new URL(`https://${request.headers.host || HOST}` + request.url);
         let path = decodeURIComponent(url.pathname);
 
         // console.log(request.url)
 
-        item = await WORK.get_item(path, 0, undefined, { user });
+        item = await WORK.get_item(path, 0, undefined, { session });
 
         const { method, params } = Array.from(url.searchParams).reduce(
             (res, [k, v], i) => {
@@ -199,8 +199,8 @@ export function createRequestHandler() {
 
 
 
-        user.sockets[request.headers['x-work-wsid']]?.events?.add(path);
-        params.user = user;
+        session.sockets[request.headers['x-work-wsid']]?.events?.add(path);
+        params.session = session;
         if (item === undefined){
             if(!path.includes('/@')){
                 if(path === '/index.html'){
@@ -208,7 +208,7 @@ export function createRequestHandler() {
 
                         Location: encodeURI(`/~/handlers//${'explorer'}/index.html`),
 
-                        // Location: encodeURI(user?.uid
+                        // Location: encodeURI(session?.uid
                         //     ? `/~/handlers//${'explorer'}/index.html`
                         //     : `/PAAS/~/handlers//landing/`),
                     });
@@ -444,7 +444,7 @@ export function createRequestHandler() {
                 }
                 if (encoder) {
                     if (!cookies.ssid)
-                        header['Set-Cookie'] = `ssid=${user.ssid}; HttpOnly; Path=/`;
+                        header['Set-Cookie'] = `ssid=${session.ssid}; HttpOnly; Path=/`;
                     response.writeHead(200, header);
                     pipeline(Readable.from(result), encoder, response, onError);
                     return;
@@ -474,7 +474,7 @@ export function createRequestHandler() {
             result = result?.toString?.();
         }
         if (!cookies.ssid) {
-            header['Set-Cookie'] = `ssid=${user.ssid}; HttpOnly; Path=/`;
+            header['Set-Cookie'] = `ssid=${session.ssid}; HttpOnly; Path=/`;
         }
 
         if (result){

@@ -32,9 +32,9 @@ export default {
             filename: 'ai.task',
             post: JSON.stringify({ content: prompt, includes: params.includes || [] }),
             encoding: 'utf-8',
-            user: {$user: WORK},
+            session: { $user: WORK },
             sender: WORK.id,
-            logAuthor: params.user,
+            logAuthor: params.session,
             skip_file_handler: true,
         };
         if (sourcePath)
@@ -59,8 +59,8 @@ export default {
                 filename: 'error.txt',
                 post: errPost,
                 message: errPost,
-                receivers: params.user?.uid,
-                user: params.user,
+                receivers: params.session?.uid,
+                session: params.session,
             });
         }
         return true;

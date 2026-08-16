@@ -1,19 +1,20 @@
-# Прогресс: $task / ai.task
+# Прогресс: $task
 
 ## Последние изменения
-- [10:02] Panel: убраны мёртвые `fire('chat.resume'|'chat.stop')` — в протоколе нет; stop только `fetch('stop')`. Readme обновлён.
+- [12:29] Prompt `form`: связанные поля можно группировать в один fieldset; контролов вне fieldset нет; label не дублирует legend.
 
 ## В работе
-- Дерево решений pipe: валидация `choice`, auto-add `complete`.
-- JSON-типы без `class.js` — `contentType` при появлении типизатора.
-- Usage dial — при желании вынести в отдельный ODA-компонент.
+- FC и tool-диспетчер ещё не в `prompt()`
+- `step` — тот же шаблон `icon` / `do_icon`, иконки ещё не заданы
+- Replan слота todo и самоподтверждение модели — отложены
 
 ## Ключевые решения
-- MIME — поле типизатора, приоритетнее системного mime.
-- Shell владеет `focusedBlock`; panel/ribbon — потребители.
-- `ai.task` всегда с `model`; UI не гидратит MODELS.
-- Chat-события WS: `delta` / `done` / `error` / `clear_stream` — не `resume`/`stop` через fire.
+- Сигнал кнопки — `accept`, не сравнение с `block.stop`.
+- `WORK.fetch` не кладёт falsy в query: отказ = нет `accept`; объект формы — `JSON.stringify`.
+- Маски формы — только HTML-атрибуты: в разметке нет script.
+- Один слой = `container_context` (items как листья, без спуска в промежуточные контейнеры).
+- `text` не пункт меню, а дрифт.
+- Один `todo` на контейнер; выход из `do` — только `complete`.
 
 ## Блокеры / Открытые вопросы
-- FC отложен.
-- Старые `*.ai` / `task.ai` не мигрированы.
+- FC в `prompt()` ещё нет

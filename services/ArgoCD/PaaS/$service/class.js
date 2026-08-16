@@ -206,7 +206,7 @@ export default {
             throw new Error('provision: /PAAS недоступен');
 
         const paasPath = '/PAAS/' + domainName;
-        let paasItem = await WORK.get_item(paasPath, 0, undefined, { user: globalThis.WORK });
+        let paasItem = await WORK.get_item(paasPath, 0, undefined, { session: globalThis.WORK });
         if (!paasItem || paasItem.type !== '$paas') {
             if (paasItem && paasRoot.__items__)
                 delete paasRoot.__items__[domainName];
@@ -225,14 +225,14 @@ export default {
                     usersActiveToday: 0,
                     '#security': buyer ? { admin: buyer, users: [buyer] } : {},
                 }),
-                user: globalThis.WORK,
+                session: globalThis.WORK,
             });
-            paasItem = await WORK.get_item(paasPath, 0, undefined, { user: globalThis.WORK });
+            paasItem = await WORK.get_item(paasPath, 0, undefined, { session: globalThis.WORK });
         }
         if (paasItem && paasItem.type !== '$paas' && paasRoot.__items__) {
             delete paasRoot.__items__[domainName];
             paasRoot.reset?.();
-            paasItem = await WORK.get_item(paasPath, 0, undefined, { user: globalThis.WORK });
+            paasItem = await WORK.get_item(paasPath, 0, undefined, { session: globalThis.WORK });
         }
         if (!paasItem || paasItem.type !== '$paas')
             throw new Error('provision: не удалось создать $paas ' + paasPath);
@@ -257,7 +257,7 @@ export default {
                 await paasItem.save({
                     filename: 'class.js',
                     post: toDataJs(data),
-                    user: globalThis.WORK,
+                    session: globalThis.WORK,
                     ignore_save_logs: true,
                 });
                 paasItem.reset?.();
@@ -272,7 +272,7 @@ export default {
             const nodesRoot = await WORK.get_item('/NODES');
             if (nodesRoot?.create) {
                 nodePath = '/NODES/' + fqdn;
-                const nodeItem = await WORK.get_item(nodePath, 0, undefined, { user: globalThis.WORK });
+                const nodeItem = await WORK.get_item(nodePath, 0, undefined, { session: globalThis.WORK });
                 if (!nodeItem || nodeItem.type !== '$node') {
                     await nodesRoot.create({
                         type: '$node',
@@ -285,7 +285,7 @@ export default {
                             paasPath,
                             remote: { url, fqdn, status: 'ready' },
                         }),
-                        user: globalThis.WORK,
+                        session: globalThis.WORK,
                     });
                 }
                 try {
@@ -298,7 +298,7 @@ export default {
                                 status: 'работает',
                                 nodePath,
                             }),
-                            user: globalThis.WORK,
+                            session: globalThis.WORK,
                             ignore_save_logs: true,
                         });
                     }

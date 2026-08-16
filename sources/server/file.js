@@ -81,7 +81,7 @@ export class $file extends $folder{
         if (!Array.isArray(logs))
             logs = logs ? [logs] : [];
         const paths = logs.map(l => l?.logFullPath || l?.path).filter(Boolean);
-        const row = await this.$parent.append_log_includes({ entryPath: this.path, includePaths: paths, user: params.user });
+        const row = await this.$parent.append_log_includes({ entryPath: this.path, includePaths: paths, session: params.session });
         if (!row)
             throw new Error(`Не найдена запись о файле ${this.path}`);
         this.reset();
@@ -346,7 +346,7 @@ export class $file extends $folder{
         );
     }
     static async save_to_history(params){
-        const actor = params.user;
+        const actor = params.session;
         let uid = actor?.uid;
         if (!uid) {
             if (actor === globalThis.WORK)
@@ -355,7 +355,7 @@ export class $file extends $folder{
                 uid = actor?.$user?.id || actor?.id || 'system';
         }
         if (actor && actor !== globalThis.WORK && !actor.uid)
-            params.user = { uid, $user: actor.$user || actor };
+            params.session = { uid, $user: actor.$user || actor };
         params.time ??= Date.now();
         if (typeof params.time === 'string') {
             try { params.time = parseInt(params.time); }
@@ -392,9 +392,9 @@ export class $file extends $folder{
         let log = {time};
         if (params.sender)
             log.sender = params.sender;
-        else if (params.user?.uid)
-            log.sender = params.user.uid;
-        else if (params.user?.$user === globalThis.WORK)
+        else if (params.session?.uid)
+            log.sender = params.session.uid;
+        else if (params.session?.$user === globalThis.WORK)
             log.sender = WORK.id;
         // Инлайн текста — только через params.message (ядро не знает имён файлов).
         if (params.message != null)

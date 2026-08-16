@@ -26,28 +26,28 @@ export async function getPublicVapid(vapidKeys) {
 }
 
 export async function storePushSubscription(params) {
-    if (!params.user?.uid) {
+    if (!params.session?.uid) {
         throw new Error('No user id on store_push_subscription');
     }
     const subscription = params.post;
-    const subscriptions = await loadPushSubscriptions(params.user.uid);
+    const subscriptions = await loadPushSubscriptions(params.session.uid);
     const idx = subscriptions.findIndex(s => s.endpoint === subscription.endpoint);
     if (idx > -1) {
         Object.assign(subscriptions[idx], subscription);
     } else {
         subscriptions.push(subscription);
     }
-    await savePushSubscriptions(params.user.uid, subscriptions);
+    await savePushSubscriptions(params.session.uid, subscriptions);
     return true;
 }
 
 export async function removePushSubscription(params) {
     const subscription = params.post;
-    const subscriptions = await loadPushSubscriptions(params.user.uid);
+    const subscriptions = await loadPushSubscriptions(params.session.uid);
     const idx = subscriptions.findIndex(s => s.endpoint === subscription.endpoint);
     if (idx > -1) {
         subscriptions.splice(idx, 1);
-        await savePushSubscriptions(params.user.uid, subscriptions);
+        await savePushSubscriptions(params.session.uid, subscriptions);
     }
     return true;
 }
@@ -65,7 +65,7 @@ export async function sendPushNotification(params, removeFn) {
             catch (err) {
                 console.warn(err);
                 if ([410, 403].includes(err.statusCode)) {
-                    toRemove.push({ user: { uid }, post: s });
+                    toRemove.push({ session: { uid }, post: s });
                 }
             }
         }));

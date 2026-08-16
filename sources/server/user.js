@@ -8,7 +8,7 @@ import { FS } from './index.js';
 import { $class } from './class.js';
 export class $user extends $class{
     get online(){
-        return !!Object.values($server?.users)?.find(u => u.uid === this.id);
+        return !!Object.values($server?.sessions)?.find(u => u.uid === this.id);
     }
     get $public(){
         return {

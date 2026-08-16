@@ -4,7 +4,7 @@ export default {
         if (!skillPath)
             throw new Error('skillPath обязателен');
         const taskPath = params.taskPath || null;
-        const logAuthor = params.user || params.logAuthor;
+        const logAuthor = params.session || params.logAuthor;
         const executeSkill = globalThis.__executeSkill;
         if (typeof executeSkill !== 'function')
             throw new Error('__executeSkill не зарегистрирован');

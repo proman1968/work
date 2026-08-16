@@ -51,6 +51,9 @@ export class $class extends $folder{
     get users(){
         return this.fetch('users');
     }
+    get guests(){
+        return this.fetch('guests');
+    }
     import(){
         return import((this.short || '/') + '?load' + `&version=${this.__version}`).then(module => module?.default);
     }

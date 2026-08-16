@@ -17,7 +17,7 @@ import {
 } from '../host/push.js';
 import { DEV_MODE, setDevMode } from "../host/config.js";
 
-/** Прототип HTTP/WS-сессии (`$server.users[ssid]` / `params.user`). */
+/** Прототип HTTP/WS-сессии (`$server.sessions[ssid]` / `params.session`). */
 const sessionProto = {
     /** Отправить JSON только в сокеты этой сессии. */
     send(data) {
@@ -58,9 +58,9 @@ export class $server extends $class {
      */
     wsSend(data) {
         const payload = JSON.stringify(data);
-        for (const user of Object.values(this.constructor.users)) {
-            for (const id in user.sockets) {
-                const socket = user.sockets[id];
+        for (const session of Object.values(this.constructor.sessions)) {
+            for (const id in session.sockets) {
+                const socket = session.sockets[id];
                 try {
                     socket.ws.send(payload);
                 } catch (e) {
@@ -171,12 +171,12 @@ export class $server extends $class {
         text = text.replaceAll('{title}', title);
         return text;
     }
-    static users = {};
-    static get_user(ssid = '') {
+    static sessions = {};
+    static get_session(ssid = '') {
         ssid ||= this.genGUID();
-        return this.users[ssid] ??= Object.assign(Object.create(sessionProto), { ssid, sockets: {} });
+        return this.sessions[ssid] ??= Object.assign(Object.create(sessionProto), { ssid, sockets: {} });
     }
-    static clearUserAuth(session) {
+    static clearSessionAuth(session) {
         if (!session)
             return;
         delete session.uid;
@@ -188,16 +188,16 @@ export class $server extends $class {
     static clearAllSessionsForUid(uid) {
         if (!uid)
             return;
-        for (const session of Object.values(this.users)) {
+        for (const session of Object.values(this.sessions)) {
             if (session.uid === uid)
-                this.clearUserAuth(session);
+                this.clearSessionAuth(session);
         }
     }
 
     /** WS: смена auth (login/logout/register) — перезагрузка UI во всех вкладках сессии. */
     static broadcastAuthChanged(payload, sessions) {
         const message = JSON.stringify({ type: 'auth-changed', ...payload });
-        const list = sessions ?? Object.values(this.users);
+        const list = sessions ?? Object.values(this.sessions);
         for (const session of list) {
             if (!session?.sockets)
                 continue;
@@ -218,7 +218,7 @@ export class $server extends $class {
             this.broadcastAuthChanged(payload);
             return;
         }
-        const sessions = Object.values(this.users).filter(s => s.uid === uid);
+        const sessions = Object.values(this.sessions).filter(s => s.uid === uid);
         this.broadcastAuthChanged(payload, sessions);
     }
     static merges = {};

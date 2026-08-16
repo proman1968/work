@@ -28,7 +28,7 @@ export default {
                 <div>{{$for.item.label}}</div>
             </div>
         </div>
-        <item-tree ~if="showHandlers" @resize :hide-tops :hide-roots expander-order="1" expand-all :$item="handlersRoot" :allow-categories></item-tree>
+        <item-tree ~if="showHandlers" hide-readme @resize :hide-tops :hide-roots expander-order="1" expand-all :$item="handlersRoot" :allow-categories></item-tree>
     `,
     get $context(){
         return this.$item

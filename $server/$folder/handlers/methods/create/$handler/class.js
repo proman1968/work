@@ -64,7 +64,7 @@ export default {
             files.forEach((file) => {
                 formData.append('file', file, file.name);
             });
-            return ctx.save_files({ post: { files }, user: WORK });
+            return ctx.save_files({ post: { files }, session: WORK });
         }
     }
 }

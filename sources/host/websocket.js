@@ -7,7 +7,7 @@ function broadcastUserPath($user) {
     if (!$user?.short)
         return;
     const message = JSON.stringify({ path: $user.short, initiator: $user.id });
-    for (const session of Object.values($server.users)) {
+    for (const session of Object.values($server.sessions)) {
         for (const sock of Object.values(session.sockets || {})) {
             if (sock?.ws?.readyState === 1)
                 sock.ws.send(message);
@@ -25,26 +25,26 @@ function notifyUserOnline(session) {
 
 export function onWebSocketConnect(ws, request) {
     const cookies = parseCookies(request);
-    let user = $server.get_user(cookies.ssid);
+    let session = $server.get_session(cookies.ssid);
     let wsid = $server.genGUID();
-    user.sockets[wsid] = { ws, events: [] };
+    session.sockets[wsid] = { ws, events: [] };
     ws.send(JSON.stringify({ type: 'connect', wsid }));
-    notifyUserOnline(user);
+    notifyUserOnline(session);
     ws.on('message', (message) => {
         try {
             let str = new TextDecoder('utf-8').decode(message);
             let events = JSON.parse(str);
-            user.sockets[wsid].events.add(...events);
+            session.sockets[wsid].events.add(...events);
         }
         catch (e) {
             console.error(e);
         }
     });
     ws.on('close', () => {
-        user.sockets[wsid] = undefined;
-        delete user.sockets[wsid];
-        if (!Object.keys(user.sockets).length)
-            notifyUserOnline(user);
+        session.sockets[wsid] = undefined;
+        delete session.sockets[wsid];
+        if (!Object.keys(session.sockets).length)
+            notifyUserOnline(session);
     });
 }
 

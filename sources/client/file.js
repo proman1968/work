@@ -14,7 +14,7 @@ export class $file extends $folder{
     }
     reset() {
         this.body = undefined;
-        super.reset();
+        return super.reset();
     }
     import(){
         return this.load().then(body=>{

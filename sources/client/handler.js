@@ -33,7 +33,7 @@ export class $handler extends $class{
         const module = await this.module;
         if (module.showSettings) {
             // todo: заменить на 'call(this', когда заработает bind.
-            module.showSettings(this, ...params);
+            return await module.showSettings(this, ...params);
         }
     }
     get hasSettings() {

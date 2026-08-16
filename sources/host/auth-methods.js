@@ -14,7 +14,7 @@ export const authMethods = {
             throw new Error("Не указан email");
         if (uid?.length !== 16)
             throw new Error("Неверный uid");
-        let user = params.user;
+        let session = params.session;
         let code = crypto.randomInt(1000, 9999).toString();
         const mailOptions = {
             from: `"ODANT-WORK" <${mailer.options.auth.user}>`,
@@ -32,8 +32,8 @@ export const authMethods = {
                 <p>С уважением,<br>WORK</p>
             `,
         };
-        user.check_code = code;
-        user.check_code_at = Date.now();
+        session.check_code = code;
+        session.check_code_at = Date.now();
         if (DEV_MODE) {
             console.log('[DEV] Registration code for', email, ':', code);
         }
@@ -49,17 +49,17 @@ export const authMethods = {
 
     async user_register_process(params = {}) {
         let { uid, email, name, surname, patronymic } = params.post;
-        let { code, user } = params;
-        if (!user.check_code_at || Date.now() - user.check_code_at > REGISTER_CODE_TTL_MS) {
+        let { code, session } = params;
+        if (!session.check_code_at || Date.now() - session.check_code_at > REGISTER_CODE_TTL_MS) {
             throw new Error("Срок действия проверочного кода истёк");
         }
-        if (user.check_code !== code) {
+        if (session.check_code !== code) {
             throw new Error("Введен неверный проверочный код");
         }
-        delete user.check_code;
-        delete user.check_code_at;
+        delete session.check_code;
+        delete session.check_code_at;
         let label = ((surname || '') + ' ' + (name || '') + ' ' + (patronymic || '')).trim() || email;
-        user.credentials = {
+        session.credentials = {
             uid,
             service: "WORK (Extensible Fractal File System)",
             origin: HOST,
@@ -68,19 +68,19 @@ export const authMethods = {
             name: label || email,
             challenge: crypto.randomUUID(),
         };
-        return user.credentials;
+        return session.credentials;
     },
 
     async user_register_finish(params = {}) {
         let { credentials: { uid, icon, surname, name, patronymic, email, publicKey, time }, signature } = params.post;
-        let user = params.user;
+        let session = params.session;
 
         let PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
         const isValid = await crypto.subtle.verify(
             { name: "RSASSA-PKCS1-v1_5" },
             PK,
             Buffer.from(signature, "base64"),
-            new TextEncoder().encode(user.credentials.challenge)
+            new TextEncoder().encode(session.credentials.challenge)
         );
         if (!isValid) throw new Error("registration failed");
 
@@ -100,7 +100,7 @@ export const authMethods = {
 
         let post = CORE.$class.toScript(credentials);
 
-        let res = await $user_item.save({ filename: 'class.js', post, user: { $user: WORK } });
+        let res = await $user_item.save({ filename: 'class.js', post, session: { $user: WORK } });
         let u = await this.$users;
         (await u.children)?.forEach?.(ch => ch.children = undefined);
         u.children = undefined;
@@ -111,20 +111,20 @@ export const authMethods = {
             fs.writeFileSync('./USERS/' + uid + '/$user/icon.png', base64Image);
         }
 
-        user.credentials = { ...user.credentials, ...credentials };
-        user.$user = $user_item;
-        user.id = uid;
-        user.uid = uid;
+        session.credentials = { ...session.credentials, ...credentials };
+        session.$user = $user_item;
+        session.id = uid;
+        session.uid = uid;
 
         await WORK.ensureBootstrapAdmin(uid, params);
 
-        $server.broadcastAuthChangedToSession(user, { uid, reason: 'register' });
+        $server.broadcastAuthChangedToSession(session, { uid, reason: 'register' });
 
         return res;
     },
 
     async user_login_start(params = {}) {
-        const { uid, user, challengeId } = params;
+        const { uid, session, challengeId } = params;
         if (!uid) throw new Error("uid required");
         let users = await WORK.$users;
         let $user = await users.get_item('//' + uid);
@@ -132,11 +132,11 @@ export const authMethods = {
             throw new Error("User not registered");
         $user.reset();
         await $user.init;
-        user.credentials = $user.DATA;
-        user.$user = $user;
-        user.challenge ??= {};
+        session.credentials = $user.DATA;
+        session.$user = $user;
+        session.challenge ??= {};
         const challenge = crypto.randomUUID();
-        user.challenge[challengeId] = {
+        session.challenge[challengeId] = {
             value: challenge,
             expiresAt: Date.now() + CHALLENGE_TTL_MS,
         };
@@ -144,18 +144,18 @@ export const authMethods = {
     },
 
     async user_login_finish(params = {}) {
-        const { uid, user, time, challengeId } = params;
-        if (user.uid !== uid) {
+        const { uid, session, time, challengeId } = params;
+        if (session.uid !== uid) {
             let signature = params.post.signature;
             if (!signature) throw new Error("login session break. Need signature.");
-            const challengeEntry = user.challenge?.[challengeId];
+            const challengeEntry = session.challenge?.[challengeId];
             if (!challengeEntry) throw new Error("login session break. Challenge expired or missing.");
             const challengeValue = challengeEntry.value ?? challengeEntry;
             if (challengeEntry.expiresAt && Date.now() > challengeEntry.expiresAt) {
-                delete user.challenge[challengeId];
+                delete session.challenge[challengeId];
                 throw new Error("login session break. Challenge expired.");
             }
-            let publicKey = user.credentials.keys[time];
+            let publicKey = session.credentials.keys[time];
             if (!publicKey) throw new Error("login session break. Need publicKey.");
             let PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
             const isValid = await crypto.subtle.verify(
@@ -164,33 +164,33 @@ export const authMethods = {
                 Buffer.from(signature, "base64"),
                 new TextEncoder().encode(challengeValue)
             );
-            delete user.challenge[challengeId];
-            if (!isValid) throw new Error("login failed " + user.uid + ':' + uid);
-            user.uid = uid;
-            user.$user.online = undefined;
-            user.$user.reset();
-            $server.broadcastAuthChangedToSession(user, { uid, reason: 'login' });
+            delete session.challenge[challengeId];
+            if (!isValid) throw new Error("login failed " + session.uid + ':' + uid);
+            session.uid = uid;
+            session.$user.online = undefined;
+            session.$user.reset();
+            $server.broadcastAuthChangedToSession(session, { uid, reason: 'login' });
         }
         return "Вход выполнен";
     },
 
     async user_exit(params = {}) {
-        const { user } = params;
-        const uid = user?.uid;
+        const { session } = params;
+        const uid = session?.uid;
         if (!uid) {
-            this.constructor.clearUserAuth(user);
+            this.constructor.clearSessionAuth(session);
             const { time } = params.post || {};
             if (time)
-                delete user[time];
+                delete session[time];
             return "Выход выполнен";
         }
-        const affected = Object.values($server.users).filter(s => s.uid === uid);
+        const affected = Object.values($server.sessions).filter(s => s.uid === uid);
         this.constructor.clearAllSessionsForUid(uid);
         const { time } = params.post || {};
         if (time)
-            delete user[time];
-        for (const session of affected)
-            $server.broadcastAuthChangedToSession(session, { uid: '', reason: 'logout' });
+            delete session[time];
+        for (const s of affected)
+            $server.broadcastAuthChangedToSession(s, { uid: '', reason: 'logout' });
         return "Выход выполнен";
     },
 };

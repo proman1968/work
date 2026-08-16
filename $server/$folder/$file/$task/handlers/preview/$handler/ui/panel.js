@@ -165,7 +165,12 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    get actionButton() { return this.$pdp.focusedBlock?.button; },
+    /** approve только после стрима; читаем streaming в геттере — иначе кэш ODA не сбросится */
+    get actionButton() {
+        if (this.$pdp.streaming) return null;
+        const stop = this.$pdp.focusedBlock?.stop;
+        return typeof stop === 'string' ? { label: stop } : null;
+    },
     /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
         return this.$pdp.focusedBlock?.type === 'form';
@@ -196,10 +201,14 @@ ODA({ is: 'microchat-panel',
     _tts() {
         return this._ttsController ??= new TtsController(this);
     },
-    async sendAction(ok = true) {
+    async sendAction(accept) {
         this.pending = true;
-        const result = await this.$item.fetch('prompt', {
-            prompt: ok?'true':'false',
+        let prompt;
+        if (accept && this.isFormAction)
+            prompt = JSON.stringify(this.$pdp.result || {});
+        await this.$item.fetch('prompt', {
+            accept,
+            prompt,
             model: this.data.model,
             role: 'APPROVE',
         });
@@ -290,7 +299,7 @@ ODA({ is: 'microchat-panel',
         });
         tree.execute = async (item) => {
             if (this.data) this.data.model = item.path;
-            await this.$item.fetch('change_model', {}, JSON.stringify({ model: item.path }));
+            await this.$item.fetch('change_model', { model: item.path });
             for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
             this._focus();
         };

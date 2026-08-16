@@ -322,7 +322,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         WORK.reset();
 
         const mbox3 = await WORK.get_item('/MBOX3');
-        const visible = await mbox3.canSee(mbox3, { user: { uid: 'anon' } });
+        const visible = await mbox3.canSee(mbox3, { session: { uid: 'anon' } });
         assert.equal(visible, true, 'GUEST открывает видимость любому');
         const users = await mbox3.members({ role: 'USER' });
         assert.deepEqual(users, [], 'литерал GUEST не попадает в назначенных');
@@ -347,7 +347,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         const allBosses = await dept.allBosses;
         assert.deepEqual(allBosses.map(u => u.id), ['u1', 'u2'], 'allBosses — родитель + локальные');
 
-        const roles = await dept.roles({ user: { uid: 'u1' } });
+        const roles = await dept.roles({ session: { uid: 'u1' } });
         assert.ok(roles.includes('ADMIN'), 'родительский админ присутствует в ролях дочернего');
         assert.ok(roles.includes('BOSS'), 'родительский босс присутствует в ролях дочернего');
 
@@ -368,6 +368,40 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.equal(def, mbox.meta_folder, 'без роли — метапапка');
     });
 
+    it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
+        write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
+        write('GUESTBOX/$class/class.js',
+            `export default { label: 'GUESTBOX', '#security': { GUESTS: ['u3'] } }`);
+        WORK.reset();
+        (await WORK.$users).reset();
+
+        const gbox = await WORK.get_item('/GUESTBOX');
+        const guests = await gbox.guests;
+        assert.deepEqual(guests.map(u => u.id), ['u3'], 'guests читает #security.GUESTS');
+        const members = await gbox.members({ role: 'GUEST' });
+        assert.deepEqual(members.map(u => u.id), ['u3'], 'members({role: GUEST})');
+        const roles = await gbox.roles({ session: { uid: 'u3' } });
+        assert.deepEqual(roles, ['GUEST'], 'roles гостя — только GUEST');
+        const zone = await gbox.work_zone({ role: 'GUEST' });
+        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/guests'), 'GUEST-зона — папка guests');
+        const all = await gbox.assignedUsers;
+        assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
+    });
+
+    it('GUEST видит guests и логи, но не work; пишет только в guests', async () => {
+        const gbox = await WORK.get_item('/GUESTBOX');
+        const guests = await gbox.work_zone({ role: 'GUEST' });
+        const work = await gbox.work_zone({ role: 'USER' });
+        const params = { session: { uid: 'u3' }, role: 'GUEST' };
+
+        assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');
+        assert.equal(await gbox.canSee(guests, params), true, 'видит guests-зону');
+        assert.equal(await gbox.canSee(work, params), false, 'не видит work');
+
+        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в guests');
+        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
+    });
+
     it('assertAccess бросает при отказе, allowAccess — deprecated алиас', async () => {
         const prevWorkDev = process.env.WORK_DEV;
         const prevDev = process.env.dev;
@@ -375,11 +409,11 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         delete process.env.dev;
         try {
             const mbox = await WORK.get_item('/MBOX');
-            // Без user — no-op (внутренний вызов)
+            // Без session — no-op (внутренний вызов)
             await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
-            // user без uid на WRITE — отказ, через оба имени
-            await assert.rejects(mbox.assertAccess({ user: {} }, FS.$class.ACCESS_LEVEL.WRITE));
-            await assert.rejects(mbox.allowAccess({ user: {} }, FS.$class.ACCESS_LEVEL.WRITE));
+            // session без uid на WRITE — отказ, через оба имени
+            await assert.rejects(mbox.assertAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
+            await assert.rejects(mbox.allowAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
         }
         finally {
             if (prevWorkDev === undefined) delete process.env.WORK_DEV;

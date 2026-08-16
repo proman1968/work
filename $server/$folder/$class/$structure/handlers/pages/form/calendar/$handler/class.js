@@ -1,99 +1,103 @@
 export default {
-    imports: 'oda//app-layout',
+    imports: 'oda//app-layout, ~/lib//calendar-form.js',
     extends: 'oda-app-layout',
     icon: 'enterprise:calendar',
     template: /*html*/`
-        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::day ::day-from ::day-to></oda-form-calendar>
+        <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::view-mode ::current-date ::selected_users></oda-form-calendar>
         <div slot="right-panel" vertical flex icon="carbon:table-of-contents:180" style="overflow-y: auto; height: 0; padding: 4px 0;">
-            <oda-form-calendar-list-view flex :$item label="Tasks" :events :day :day-from :day-to></oda-form-calendar-list-view>
+            <oda-form-calendar-list-view flex label="Tasks" :events></oda-form-calendar-list-view>
         </div>
     `,
-    day: {
-        $def: '',
-        set(n) {
-            this._invalidateEvents();
+    viewMode: {
+        $def: 'day',
+        set() {
+            this.events = undefined;
         }
     },
-    dayFrom: '',
-    dayTo: '',
-    get _logsSource() {
-        if (this.$item instanceof CORE.$user)
-            return WORK.USER;
-        return (async () => {
-            const admins = await this.$item.allAdmins;
-            return this._logsSource = admins.find(user => user.id === WORK.uid) || WORK.USER;
-        })();
+    currentDate: {
+        $def: new Date(),
+        set() {
+            this.events = undefined;
+        }
     },
-    get _logsFolders() {
-        const dayFrom = this.dayFrom;
-        const dayTo   = this.dayTo;
-        if (!dayFrom || !dayTo)
-            return null;
-        let current = new Date(dayFrom);
-        const end = new Date(dayTo);
-        return (async () => {
-            const folders = [];
-            const source = await this._logsSource;
-            if (!source)
-                return null;
-            while (current <= end) {
-                const day = _formatDate(current)
-                await source.logs(day);
-                const folder = await source.get_item('/~/logs/.data.logs/history/' + day);
-                if (!folder)
-                    return null;
-                this._boundOnLogsChanged ||= () => { this.events = undefined; };
-                folder.unlisten?.('changed', this._boundOnLogsChanged);
-                folder.listen?.('changed', this._boundOnLogsChanged);
-                folders.add(folder);
-                current.setDate(current.getDate() + 1)
-            }
-            return this._logsFolders = folders;
-        })();
+    selected_users: {
+        $def: [],
+        set() {
+            this.events = undefined;
+        }
+    },
+    get day() {
+        return _formatDate(_asDate(this.currentDate));
+    },
+    get dayFrom() {
+        const date = _asDate(this.currentDate);
+        const mode = this.viewMode;
+        if (mode === 'week' || mode === 'workweek')
+            return _formatDate(_weekStart(date));
+        if (mode === 'month') {
+            const first = new Date(date.getFullYear(), date.getMonth(), 1);
+            return _formatDate(_weekStart(first));
+        }
+        return this.day;
+    },
+    get dayTo() {
+        const date = _asDate(this.currentDate);
+        const mode = this.viewMode;
+        if (mode === 'workweek') {
+            const friday = _weekStart(date);
+            friday.setDate(friday.getDate() + 4);
+            return _formatDate(friday);
+        }
+        if (mode === 'week')
+            return _formatDate(_weekEnd(date));
+        if (mode === 'month') {
+            const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+            return _formatDate(_weekEnd(last));
+        }
+        return this.day;
     },
     get events() {
         const dayFrom = this.dayFrom;
-        const dayTo   = this.dayTo;
-        if (!dayFrom || !dayTo)
-            return null;
+        const dayTo = this.dayTo;
+        const selected_users = this.selected_users;
+        const source = this.$item;
+        if (!dayFrom || !dayTo || !source)
+            return [];
         return (async () => {
-            const folders = await this._logsFolders;
-            if (!folders)
-                return this.events = [];
-
-            const events = [];
-            for (let folder of folders) {
-                let files = await folder.get_item('/*.logs');
-                if (!Array.isArray(files))
-                    files = files ? [files] : [];
-                files = await Promise.all(files.map(f => Promise.resolve(f)));
-                files = files.filter(f => f?.id?.endsWith?.('.logs'));
-                files = files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
-                for (const file of files) {
-                    const raw = await file.load();
-                    const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                    let content = log?.content;
-                    if (typeof content === 'string') {
-                        content = JSON.parse(content);
-                    }
-
-                    if (!content?.start || !content?.end)
-                        continue;
-                    events.push({
-                        start: content.start,
-                        end: content.end,
-                        summary: content.summary ?? '',
-                        location: content.location ?? '',
-                        $item: file
-                    });
-                }
+            const history = await source.get_item('/~/logs/.data.logs/history');
+            this._boundOnLogsChanged ||= () => { this.events = undefined; };
+            if (history !== this._historyFolder) {
+                this._historyFolder?.unlisten?.('changed', this._boundOnLogsChanged);
+                history?.listen?.('changed', this._boundOnLogsChanged);
+                this._historyFolder = history;
             }
+            const rows = await source.logs({
+                mode: 'bodies',
+                from: dayFrom,
+                to: dayTo,
+                ext: 'ics',
+            });
+            const parsed = [];
+            for (const row of rows || []) {
+                if (selected_users.length && !selected_users.includes(row.sender))
+                    continue;
+                let content = row.content;
+                if (typeof content === 'string')
+                    content = JSON.parse(content);
+                if (!content?.start || !content?.end)
+                    continue;
+                parsed.push({ row, content });
+            }
+            const events = await Promise.all(parsed.map(async ({ row, content }) => ({
+                start: content.start,
+                end: content.end,
+                summary: content.summary ?? '',
+                location: content.location ?? '',
+                $item: row.logsFilePath && await WORK.get_item(row.logsFilePath)
+            })));
+            events.sort((a, b) => String(a.start).localeCompare(String(b.start)));
             return this.events = events;
         })();
-    },
-    _invalidateEvents() {
-        this.events = undefined;
-        this._logsFolder = undefined;
     },
     async showMeeting(arg) {
         const isEdit = arg && typeof arg.load === 'function';
@@ -105,13 +109,13 @@ export default {
             const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
             historyPath = log.path;
             const file = await WORK.get_item(log.path);
-            el = ODA.createElement('oda-calendar-event-form', { $item: file });
+            el = ODA.createElement('calendar-form', { $item: file });
         } else {
             const detail = arg || {};
             const start = detail.start ? new Date(detail.start) : new Date();
             if (detail.allDay) start.setHours(9, 0, 0, 0);
-            const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 60 * 60 * 1000);
-            el = ODA.createElement('oda-calendar-event-form', {
+            const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 30 * 60 * 1000);
+            el = ODA.createElement('calendar-form', {
                 events: [{
                     start: start.toISOTimezoneString(),
                     end: end.toISOTimezoneString()
@@ -126,10 +130,10 @@ export default {
                 CANCEL: { label: 'Отмена', icon: 'icons:close' },
             });
         } catch {
-            return null;
+            return;
         }
 
-        const persist = eventToPersist(el.events[0]);
+        const persist = el.eventToPersist(el.events[0]);
         const startDate = new Date(persist.start);
         const endDate = new Date(persist.end);
         if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
@@ -149,13 +153,12 @@ export default {
             location: persist.location
         });
         await this.$item.save_file(file, { message, time: startDate.getTime() });
+        this.events = undefined;
     }
 }
 
-import '/$server/$folder/$file/$ics/handlers/pages/form/file/$handler/class.js'
-
 ODA({
-    is: 'oda-form-calendar',
+    is: 'oda-form-calendar', imports: '~/lib//users.js',
     template: /*html*/`
         <style>
             :host {
@@ -177,50 +180,32 @@ ODA({
                 border-radius: 4px;
             }
         </style>
-        <item-users accent-invert flex :$item slot="top"></item-users>
+        <item-users accent-invert flex :$item ::selected_users slot="top"></item-users>
         <div vertical class="toolbar">
             <div horizontal>
                 <oda-date-nav :view-mode ::current-date></oda-date-nav>
                 <div horizontal>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-day" :border="viewMode==='day'" @tap="viewMode='day'"></oda-button>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-week" :border="viewMode==='week'" @tap="viewMode='week'"></oda-button>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-month" :border="viewMode==='month'" @tap="viewMode='month'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-day" :border="viewMode==='day'" title="День" @tap="viewMode='day'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-range" :border="viewMode==='workweek'" title="Рабочая неделя" @tap="viewMode='workweek'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-week" :border="viewMode==='week'" title="Неделя" @tap="viewMode='week'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-month" :border="viewMode==='month'" title="Месяц" @tap="viewMode='month'"></oda-button>
                 </div>
             </div>
         </div>
         <div class="calendar-container" flex>
-            <oda-calendar-day-view ~if="viewMode==='day'" :events :current-date="currentDate"></oda-calendar-day-view>
-            <oda-calendar-week-view ~if="viewMode==='week'" :events :current-date="currentDate"></oda-calendar-week-view>
-            <oda-calendar-month-view ~if="viewMode==='month'" :events :current-date="currentDate"></oda-calendar-month-view>
+            <oda-calendar-month-view ~if="viewMode==='month'" :events :current-date :day-from="dayFrom" :day-to="dayTo"></oda-calendar-month-view>
+            <oda-calendar-time-grid ~if="viewMode!=='month'" :events :current-date :view-mode></oda-calendar-time-grid>
         </div>
     `,
     $item: null,
     events: [],
-    day: {
-        $def: '',
-        set(n) {
-        }
-    },
-    dayFrom: {
-        $def: '',
-        set(n) {
-        }
-    },
-    dayTo: {
-        $def: '',
-        set(n) {
-        }
-    },
+    selected_users: [],
     viewMode: {
-        $def: 'day', // month, week, day, list
-        $save: true,
-        set(n) {
-        }
+        $def: 'day',
+        $save: true
     },
     currentDate: {
-        $def: new Date(),
-        set(n) {
-        }
+        $def: new Date()
     },
     $listeners: {
         'add-event'(e) {
@@ -234,254 +219,84 @@ ODA({
 })
 
 ODA({
-    is: 'oda-calendar-day-view',
+    is: 'oda-calendar-event',
     template: /*html*/`
         <style>
             :host {
-                @apply --vertical;
-                position: relative;
-            }
-            .day-body {
-                position: relative;
-            }
-            .slot {
-                cursor: pointer;
-                height: 16px;
-                min-height: 16px;
-                box-sizing: border-box;
-            }
-            .slot:hover {
-                background: var(--light-background);
-            }
-            .day-header {
-                border-top: 1px solid var(--border-color);
-                border-bottom: 1px solid var(--border-color);
-                height: 32px;
-                align-items: center;
-            }
-            .corner-cell {
-                width: 31px;
-                border-right: 1px solid var(--border-color);
-            }
-            .day-row {
-                border-bottom: 1px solid var(--border-color);
-            }
-            .hour-label {
-                width: 20px;
-                border-right: 1px solid var(--border-color);
-                font-size: 12px;
-                text-align: center;
-                box-sizing: border-box;
-            }
-            .minute-label {
-                width: 12px;
-                border-right: 1px solid var(--border-color);
-                font-size: 10px;
-                text-align: right;
-                box-sizing: border-box;
-                height: 16px;
-                line-height: 16px;
-                overflow: hidden;
-            }
-            .event-block {
-                position: absolute;
+                display: block;
                 box-sizing: border-box;
                 background: var(--success-color);
                 color: var(--dark-color);
                 padding: 2px 4px;
-                border: 1px solid var(--dark-color);
-                border-radius: 4px;
+                border-radius: 2px;
                 font-size: small;
                 overflow: hidden;
-                pointer-events: auto;
                 cursor: pointer;
             }
-            .event-block .row {
+            :host(:hover) {
+                opacity: 0.8;
+            }
+            :host([block]) {
+                position: absolute;
+                z-index: 1;
+                border: 1px solid var(--dark-color);
+                border-radius: 4px;
+                pointer-events: auto;
+            }
+            :host([badge]) {
+                font-size: xx-small;
+                margin: 2px 0;
+                color: var(--info-background);
+            }
+            .row {
                 align-items: center;
                 gap: 8px;
+                min-width: 0;
             }
-            .event-block .interval {
+            .interval {
                 white-space: nowrap;
                 opacity: .8;
                 font-size: xx-small;
             }
-            .event-block .summary {
+            .summary {
                 @apply --bold;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-            }
-            .event-block .location {
-                font-size: xx-small;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
+                min-width: 0;
             }
         </style>
-        <div ~is="'style'" ~text="anchorStyles"></div>
-        <div class="day-body">
-            <div class="horizontal header day-header" :info="today">
-                <div class="corner-cell"></div>
-                <div horizontal flex>
-                    <div bold>{{dayNum}}</div>
-                    <div flex style="text-align: center;">{{dayName}}</div>
-                </div>
-            </div>
-            <div class="horizontal day-row" ~for="24">
-                <div class="hour-label">
-                    {{String($for.item).padStart(2, '0')}}
-                </div>
-                <div vertical flex>
-                    <div ~for="intervalsInHour" horizontal flex ~style="{borderTop: $for.$for.index === 0 ? 'none' :'1px dotted var(--border-color)'}">
-                        <div class="minute-label" disabled>
-                            {{String(interval * $for.$for.index).padStart(2, '0')}}
-                        </div>
-                        <div flex class="slot" ~class="'event-block-anchor-' + $for.index + '-' + $for.$for.item" @tap="selectDayTime($for.$for.item, $for.index)">
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div ~for="laidOutEvents" :class="$for.item.class" ~style="$for.item.style" :title="$for.item.title" @tap.stop="open($for.item.$item)">
-                <div horizontal class="row">
-                    <div class="interval">{{$for.item.interval}}</div>
-                    <div class="summary">{{$for.item.summary}}</div>
-                </div>
-                <div class="location" ~if="$for.item.location">{{$for.item.location}}</div>
-            </div>
+        <div horizontal class="row">
+            <div class="interval">{{interval}}</div>
+            <div class="summary">{{summary}}</div>
         </div>
     `,
-    interval: 15,
-    currentDate: {
-        $def: new Date(),
-        set(n) {
-            this.today = n?.toLocaleDateString?.() === new Date().toLocaleDateString();
+    data: null,
+    get interval() {
+        return eventInterval(this.data);
+    },
+    get summary() {
+        return this.data?.summary ?? '';
+    },
+    $listeners: {
+        tap(e) {
+            e.stopPropagation();
+            this.$pdp.showMeeting(this.data?.$item);
         }
-    },
-    events: [],
-    get dayNum() {
-        return this.currentDate.getDate();
-    },
-    get dayName() {
-        return dayNames[this.currentDate.getDay()];
-    },
-    today: false,
-    get intervalsInHour() {
-        return 60 / this.interval;
-    },
-    get anchorStyles() {
-        let style = '';
-        for (let h = 0; h < 24; h++) {
-            for (let i = 0; i < this.intervalsInHour; i ++) {
-                style += `.event-block-anchor-${h}-${i} { anchor-name: --slot-${h}-${i}; }\r\n`;
-                // block-anchor-start
-                style += `.bas-${h}-${i} {
-    position-anchor: --slot-${h}-${i};
-    top: anchor(top);
-}\r\n`;
-                // block-anchor-end
-                style += `.bae-${h}-${i} {
-    bottom: anchor(--slot-${h}-${i} top);
-}\r\n`;
-            }
-        }
-        return style;
-    },
-    slotAnchor(hour, intervalIdx) {
-        return `--slot-${hour}-${intervalIdx}`;
-    },
-    timeToAnchor(date, edge = 'bas') {
-        const interval = this.interval;
-        const h = date.getHours();
-        const m = ~~(date.getMinutes() / interval);
-        return `${edge}-${h}-${m}`;
-    },
-    get laidOutEvents() {
-        const events = this.events;
-        if (!events || events.then)
-            return [];
-        const gap = 2;
-        const items = events
-            .map(e => ({
-                start: e.start,
-                end: e.end,
-                summary: e.summary ?? '',
-                location: e.location ?? '',
-                $item: e.$item,
-                _start: new Date(e.start).getTime(),
-                _end: new Date(e.end).getTime()
-            }))
-            .filter(e => !isNaN(e._start) && !isNaN(e._end) && e._end > e._start)
-            .sort((a, b) => a._start - b._start || (b._end - b._start) - (a._end - a._start));
-
-        const result = [];
-        const cluster = [];
-        const columns = [];
-        let clusterEnd = 0;
-
-        const flush = () => {
-            const colCount = Math.max(columns.length, 1);
-            const gutter = 30; // former .events-layer left
-            for (const item of cluster) {
-                let startClass = this.timeToAnchor(new Date(item.start), 'bas');
-                let endClass = this.timeToAnchor(new Date(item.end), 'bae');
-                result.push({
-                    summary: item.summary,
-                    location: item.location,
-                    $item: item.$item,
-                    interval: eventInterval(item),
-                    title: eventTitle(item),
-                    style: {
-                        left: `calc(${gutter}px + (100% - ${gutter}px) * ${item._col / colCount} + ${gap * 2}px)`,
-                        width: `calc((100% - ${gutter}px) / ${colCount})`
-                    },
-                    class: `event-block ${startClass} ${endClass}`
-                });
-            }
-            cluster.length = 0;
-            columns.length = 0;
-            clusterEnd = 0;
-        };
-
-        for (const ev of items) {
-            if (cluster.length && ev._start >= clusterEnd)
-                flush();
-            let col = columns.findIndex(end => end <= ev._start);
-            if (col === -1) {
-                col = columns.length;
-                columns.push(ev._end);
-            } else {
-                columns[col] = ev._end;
-            }
-            ev._col = col;
-            cluster.push(ev);
-            clusterEnd = Math.max(clusterEnd, ev._end);
-        }
-        if (cluster.length)
-            flush();
-        return result;
-    },
-    selectDayTime(intervalIdx, hour) {
-        const start = new Date(this.currentDate || new Date());
-        start.setHours(parseInt(hour), this.interval * intervalIdx, 0, 0);
-        const end = new Date(start.getTime() + this.interval * 60 * 1000);
-        this.fire('add-event', { start, end });
-    },
-    open($item) {
-        this.$pdp.showMeeting($item);
     }
 })
 
 ODA({
-    is: 'oda-calendar-week-view',
+    is: 'oda-calendar-time-grid',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
+                @apply --flex;
                 overflow: auto;
             }
-            .week-grid {
+            .time-grid {
                 display: grid;
-                grid-template-columns: 60px repeat(7, 1fr);
                 gap: 1px;
                 background: var(--border-color);
                 border-bottom: 1px solid var(--border-color);
@@ -498,128 +313,170 @@ ODA({
                 font-weight: normal;
             }
             .day-header[today] {
-                background: var(--info-color);
+                @apply --info;
             }
-            .time-slot {
+            .time-body {
+                display: grid;
+                position: relative;
+            }
+            .time-col {
                 @apply --content;
-                padding: 4px;
+            }
+            .slot-label {
+                height: 32px;
+                box-sizing: border-box;
+                border-top: 1px dotted var(--border-color);
+                font-size: 10px;
+                align-items: center;
+                justify-content: flex-end;
+                padding-right: 4px;
+                gap: 4px;
+            }
+            .slot-label[hour-start] {
+                border-top: 1px solid var(--border-color);
+            }
+            .slot-label:first-of-type {
+                border-top: none;
+            }
+            .hour-label {
+                font-size: 12px;
                 text-align: center;
             }
-            .hour-cell {
-                @apply --content;
-                /* min-height: 120px; */
-                padding: 2px;
-                position: relative;
+            .minute-label {
+                width: 14px;
+                text-align: right;
                 overflow: hidden;
             }
-            .hour-cell:hover {
+            .day-col {
+                @apply --content;
+                position: relative;
+                min-width: 0;
+                overflow: hidden;
+            }
+            .slot {
+                height: 32px;
+                box-sizing: border-box;
+                cursor: pointer;
+                border-top: 1px dotted var(--border-color);
+                border-left: 1px solid var(--border-color);
+            }
+            .slot:first-child {
+                border-top: none;
+            }
+            .slot[hour-start] {
+                border-top: 1px solid var(--border-color);
+            }
+            .slot[hour-start]:first-child {
+                border-top: none;
+            }
+            .day-col > .slot:first-of-type {
+                border-top: none;
+            }
+            .slot:hover {
                 background: var(--light-background);
             }
-            .event-block {
-                background: var(--success-color);
-                padding: 2px 4px;
-                margin: 2px;
-                border-radius: 2px;
-                font-size: small;
-                cursor: pointer;
-                overflow: hidden;
-                color: var(--dark-color);
-            }
-            .event-block:hover {
-                opacity: 0.8;
-            }
-            .event-block .row {
-                align-items: center;
-                gap: 8px;
-                min-width: 0;
-            }
-            .event-block .interval {
-                white-space: nowrap;
-                opacity: .8;
-                font-size: xx-small;
-            }
-            .event-block .summary {
-                @apply --bold;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-            }
         </style>
-        <div class="week-grid" style="border-top: 1px solid var(--border-color);">
+        <div class="time-grid" style="border-top: 1px solid var(--border-color);" ~style="gridStyle">
             <div class="time-header"></div>
-            <div ~for="weekDays" class="day-header" :today="$for.item.isToday">
+            <div ~for="columns" class="day-header" :today="$for.item.isToday">
                 <div>{{$for.item.dayName}}</div>
                 <div>{{$for.item.date}}</div>
             </div>
         </div>
-        <div ~for="hours" vertical>
-            <div horizontal class="week-grid">
-                <div class="time-slot">{{$for.item}}</div>
-                <div ~for="weekDays" class="hour-cell" @tap="selectWeekTime($for.$for.item, $for.item)">
-                    <div ~for="getEventsForHour($for.$for.item, $for.item)"
-                         class="event-block"
-                         :title="$for.$for.$for.item.title"
-                         @tap.stop="open($for.$for.$for.item.$item)">
-                        <div horizontal class="row">
-                            <div class="interval">{{$for.$for.$for.item.interval}}</div>
-                            <div class="summary">{{$for.$for.$for.item.summary}}</div>
-                        </div>
-                    </div>
+        <div class="time-body" ~style="gridStyle">
+            <div vertical class="time-col">
+                <div ~for="hourSlots" class="slot-label" horizontal :hour-start="$for.item.isHourStart">
+                    <span class="hour-label">{{$for.item.hourLabel}}</span>
+                    <span class="minute-label" disabled>{{$for.item.minuteLabel}}</span>
                 </div>
+            </div>
+            <div ~for="columns" class="day-col" vertical>
+                <div ~for="hourSlots" class="slot" :hour-start="$for.$for.item.isHourStart"
+                     @tap="selectSlot($for.item, $for.$for.item)"></div>
+                <oda-calendar-event block ~for="$for.item.blocks" :data="$for.$for.item" ~style="$for.$for.item.style" :title="$for.$for.item.title"></oda-calendar-event>
             </div>
         </div>
     `,
-    currentDate: new Date(),
+    interval: 30,
+    currentDate: {
+        $def: new Date(),
+        set(n) {
+            this.gridDays = undefined;
+            this.columns = undefined;
+            this.gridStyle = undefined;
+        }
+    },
+    viewMode: {
+        $def: 'day',
+        set(n) {
+            this.gridDays = undefined;
+            this.columns = undefined;
+            this.gridStyle = undefined;
+        }
+    },
     events: [],
-    hours: Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')),
-    get weekDays() {
-        const days = [];
+    get gridStyle() {
+        const n = this.columns?.length || 1;
+        return { gridTemplateColumns: `48px repeat(${n}, 1fr)` };
+    },
+    get hourSlots() {
+        const interval = this.interval;
+        const perHour = 60 / interval;
+        const slots = [];
+        for (let h = 0; h < 24; h++) {
+            for (let i = 0; i < perHour; i++) {
+                slots.push({
+                    hour: h,
+                    intervalIdx: i,
+                    hourLabel: i === 0 ? String(h).padStart(2, '0') : '',
+                    minuteLabel: String(interval * i).padStart(2, '0'),
+                    isHourStart: i === 0
+                });
+            }
+        }
+        return slots;
+    },
+    get gridDays() {
+        const date = _asDate(this.currentDate);
+        const mode = this.viewMode;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        // Находим понедельник текущей недели
-        const current = new Date(this.$pdp.currentDate);
-        const dayOfWeek = current.getDay();
-        const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-        current.setDate(current.getDate() + diff);
         const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        for (let i = 0; i < 7; i++) {
-            const date = new Date(current);
-            date.setDate(current.getDate() + i);
-            const checkToday = new Date(date);
-            checkToday.setHours(0, 0, 0, 0);
-            days.push({
-                date: `${date.getDate()} ${monthsNames[date.getMonth()]}`,
-                dayName: dayNames[date.getDay()],
-                fullDate: date,
-                isToday: checkToday.getTime() === today.getTime()
-            })
+        const toDay = (d) => {
+            const check = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            return {
+                date: `${d.getDate()} ${monthsNames[d.getMonth()]}`,
+                dayName: dayNames[d.getDay()],
+                fullDate: d,
+                isToday: check.getTime() === today.getTime()
+            };
+        };
+        if (mode === 'day')
+            return [toDay(new Date(date.getFullYear(), date.getMonth(), date.getDate()))];
+        const start = _weekStart(date);
+        const count = mode === 'workweek' ? 5 : 7;
+        const days = [];
+        for (let i = 0; i < count; i++) {
+            const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+            days.push(toDay(d));
         }
         return days;
     },
-    getEventsForHour(dayInfo, hour) {
-        if (!this.events || this.events.then) return [];
-        const hourNum = parseInt(hour);
-        const dayStart = new Date(dayInfo.fullDate);
-        dayStart.setHours(hourNum, 0, 0, 0);
-        const dayEnd = new Date(dayInfo.fullDate);
-        dayEnd.setHours(hourNum, 59, 59, 999);
-        return this.events
-            .filter(event => {
-                const eventStart = new Date(event.start || 0);
-                return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
-            })
-            .map(eventViewItem);
+    get columns() {
+        const days = this.gridDays;
+        const events = this.events;
+        const list = (!events || events.then) ? [] : events;
+        return days.map(day => ({
+            ...day,
+            blocks: _layoutDayEvents(list, day.fullDate)
+        }));
     },
-    selectWeekTime(dayInfo, hour) {
-        const start = new Date(dayInfo.fullDate);
-        start.setHours(parseInt(hour), 0, 0, 0);
-        const end = new Date(start.getTime() + 60 * 60 * 1000);
+    selectSlot(column, slot) {
+        const start = new Date(column.fullDate);
+        start.setHours(slot.hour, this.interval * slot.intervalIdx, 0, 0);
+        const end = new Date(start.getTime() + this.interval * 60 * 1000);
         this.fire('add-event', { start, end });
-    },
-    open($item) {
-        this.$pdp.showMeeting($item);
     }
 })
 
@@ -669,34 +526,6 @@ ODA({
                 font-weight: normal;
                 margin-bottom: 4px;
             }
-            .event-badge {
-                font-size: xx-small;
-                padding: 2px 4px;
-                margin: 2px 0;
-                border-radius: 2px;
-                background: var(--success-color);
-                color: var(--info-background);
-                overflow: hidden;
-                cursor: pointer;
-            }
-            .event-badge:hover {
-                opacity: 0.8;
-            }
-            .event-badge .row {
-                align-items: center;
-                gap: 4px;
-                min-width: 0;
-            }
-            .event-badge .interval {
-                white-space: nowrap;
-                opacity: .8;
-            }
-            .event-badge .summary {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-            }
         </style>
         <div class="calendar-grid">
             <div ~for="weekdays" class="weekday-header">{{$for.item}}</div>
@@ -705,91 +534,56 @@ ODA({
                  :today="$for.item.isToday"
                  @tap="selectMonthDay($for.item)">
                 <div class="day-number">{{$for.item.day}}</div>
-                <div ~for="$for.item.events" class="event-badge"
-                     :title="$for.$for.item.title"
-                     @tap.stop="open($for.$for.item.$item)">
-                    <div horizontal class="row">
-                        <div class="interval">{{$for.$for.item.interval}}</div>
-                        <div class="summary">{{$for.$for.item.summary}}</div>
-                    </div>
-                </div>
+                <oda-calendar-event badge ~for="$for.item.events" :data="$for.$for.item" :title="$for.$for.item.title"></oda-calendar-event>
             </div>
         </div>
     `,
     currentDate: new Date(),
     events: [],
+    dayFrom: '',
+    dayTo: '',
     weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     get calendarDays() {
-        const year = this.$pdp.currentDate.getFullYear();
-        const month = this.$pdp.currentDate.getMonth();
-        // Первый день месяца
-        const firstDay = new Date(year, month, 1);
-        // Последний день месяца
-        const lastDay = new Date(year, month + 1, 0);
-        // День недели первого дня (0 = воскресенье, нужно преобразовать к понедельнику = 0)
-        let firstDayOfWeek = firstDay.getDay() - 1;
-        if (firstDayOfWeek < 0) firstDayOfWeek = 6;
-        const days = [];
+        const from = this.dayFrom;
+        const to = this.dayTo;
+        if (!from || !to)
+            return [];
+        const month = _asDate(this.currentDate).getMonth();
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        // Добавляем дни предыдущего месяца
-        const prevMonthLastDay = new Date(year, month, 0).getDate();
-        for (let i = firstDayOfWeek - 1; i >= 0; i--) {
-            const day = prevMonthLastDay - i;
+        const days = [];
+        const cur = _parseDay(from);
+        const end = _parseDay(to);
+        while (cur <= end) {
+            const date = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
             days.push({
-                day,
-                date: new Date(year, month - 1, day),
-                otherMonth: true,
-                isToday: false,
-                events: []
-            });
-        }
-        // Добавляем дни текущего месяца
-        for (let day = 1; day <= lastDay.getDate(); day++) {
-            const date = new Date(year, month, day);
-            const isToday = date.getTime() === today.getTime();
-            days.push({
-                day,
+                day: date.getDate(),
                 date,
-                otherMonth: false,
-                isToday,
+                otherMonth: date.getMonth() !== month,
+                isToday: date.getTime() === today.getTime(),
                 events: this.getEventsForDay(date)
             });
-        }
-        // Добавляем дни следующего месяца до заполнения сетки
-        const remainingDays = 42 - days.length; // 6 недель * 7 дней
-        for (let day = 1; day <= remainingDays; day++) {
-            days.push({
-                day,
-                date: new Date(year, month + 1, day),
-                otherMonth: true,
-                isToday: false,
-                events: []
-            });
+            cur.setDate(cur.getDate() + 1);
         }
         return days;
     },
     getEventsForDay(date) {
-        if (!this.events || this.events.then) return [];
-        const dayStart = new Date(date);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(date);
-        dayEnd.setHours(23, 59, 59, 999);
-        return this.events
-            .filter(event => {
-                const eventStart = new Date(event.start || 0);
-                return !isNaN(eventStart) && eventStart >= dayStart && eventStart <= dayEnd;
-            })
-            .map(eventViewItem);
+        const events = this.events;
+        if (!events || events.then)
+            return [];
+        const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+        return events.filter(event => {
+            const start = new Date(event.start).getTime();
+            const end = new Date(event.end).getTime();
+            return !isNaN(start) && !isNaN(end) && end > dayStart && start < next;
+        }).map(event => ({ ...event, title: eventTitle(event) }));
     },
     selectMonthDay(dayInfo) {
         const start = new Date(dayInfo.date);
         start.setHours(9, 0, 0, 0);
-        const end = new Date(start.getTime() + 60 * 60 * 1000);
-        this.fire('add-event', { start, end, allDay: false });
-    },
-    open($item) {
-        this.$pdp.showMeeting($item);
+        const end = new Date(start.getTime() + 30 * 60 * 1000);
+        this.fire('add-event', { start, end });
     }
 })
 
@@ -803,9 +597,6 @@ ODA({
         </style>
         <oda-log-view ~for="items" :data="$for.item" @tap.stop="open($for.item.$item)"></oda-log-view>
     `,
-    day: '',
-    dayFrom: '',
-    dayTo: '',
     events: [],
     get items() {
         const events = this.events;
@@ -818,7 +609,8 @@ ODA({
     },
 })
 
-ODA({is: 'oda-log-view',
+ODA({
+    is: 'oda-log-view',
     template: /*html*/`
         <style>
             :host {
@@ -829,25 +621,18 @@ ODA({is: 'oda-log-view',
                 gap: 4px;
                 cursor: pointer;
             }
-            .main {
-                @apply --vertical;
-                @apply --flex;
-                min-width: 0;
-            }
             .row1 {
-                @apply --horizontal;
                 align-items: baseline;
                 gap: 8px;
-            }
-            .summary {
-                @apply --bold;
-                text-align: left;
-                justify-content: flex-start;
             }
             .interval {
                 white-space: nowrap;
                 font-size: small;
                 opacity: .8;
+            }
+            .summary {
+                text-align: left;
+                justify-content: flex-start;
             }
             .location {
                 font-size: small;
@@ -857,49 +642,30 @@ ODA({is: 'oda-log-view',
                 text-align: left;
                 justify-content: flex-start;
             }
-            oda-button {
-                scale: .8;
-                border-radius: 50%;
-            }
-            oda-button:hover {
-                @apply --selection;
-            }
         </style>
         <div class="row1" horizontal>
             <span class="interval">{{interval}}</span>
-            <span class="summary" flex>{{summary}}</span>
+            <span class="summary" flex bold>{{summary}}</span>
         </div>
         <div class="location">{{location}}</div>
     `,
     data: null,
     get event() {
-        return this.data || null;
+        return this.data;
     },
     get interval() {
-        const e = this.event;
-        if (!e?.start || !e?.end)
-            return '';
-        const a = this._hhmm(e.start);
-        const b = this._hhmm(e.end);
-        if (!a || !b)
-            return '';
-        return `${a} - ${b}`;
+        return eventInterval(this.event);
     },
     get summary() {
         return this.event?.summary ?? '';
     },
     get location() {
         return this.event?.location ?? '';
-    },
-    _hhmm(iso) {
-        const d = new Date(iso);
-        if (isNaN(d))
-            return '';
-        const pad = n => String(n).padStart(2, '0');
-        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 })
-ODA({is: 'oda-date-nav',
+
+ODA({
+    is: 'oda-date-nav',
     template: /*html*/`
         <style>
             :host {
@@ -917,80 +683,23 @@ ODA({is: 'oda-date-nav',
         <oda-button icon="icons:chevron-right" @tap="nextPeriod"></oda-button>
     `,
     viewMode: {
-        $def: 'day', // month, week, day, list
-        $save: true,
-        set(n) {
-            this._updateDateRange();
-        }
+        $def: 'day'
     },
     currentDate: {
-        $def: new Date(),
-        set(n) {
-            this._updateDateRange();
-        }
+        $def: new Date()
     },
     get datePickerValue() {
-        this.currentDate ||= new Date();
-        const year = this.currentDate.getFullYear();
-        const month = String(this.currentDate.getMonth() + 1).padStart(2, '0');
-        const day = String(this.currentDate.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        return _formatDate(_asDate(this.currentDate));
     },
     set datePickerValue(value) {
-        if (value) {
-            this.currentDate = new Date(value);
-        }
-    },
-    attached() {
-        this.async(() => {
-            this._updateDateRange();
-        })
-    },
-    _updateDateRange() {
-        const date = this.currentDate || new Date();
-        this.$pdp.day = _formatDate(date);
-        if (this.viewMode === 'day') {
-            this.$pdp.dayFrom = this.$pdp.day;
-            this.$pdp.dayTo = this.$pdp.day;
-        } else if (this.viewMode === 'week') {
-            const start = new Date(date);
-            const dayOfWeek = start.getDay();
-            const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-            start.setDate(start.getDate() + diff);
-            const end = new Date(start);
-            end.setDate(end.getDate() + 6);
-            this.$pdp.dayFrom = _formatDate(start);
-            this.$pdp.dayTo = _formatDate(end);
-        } else if (this.viewMode === 'month') {
-            const start = new Date(date.getFullYear(), date.getMonth(), 1);
-            const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-            this.$pdp.dayFrom = _formatDate(start);
-            this.$pdp.dayTo = _formatDate(end);
-        }
+        if (value)
+            this.currentDate = _parseDay(value);
     },
     prevPeriod() {
-        const newDate = new Date(this.currentDate);
-        if (this.viewMode === 'day') {
-            newDate.setDate(newDate.getDate() - 1);
-        } else if (this.viewMode === 'week') {
-            newDate.setDate(newDate.getDate() - 7);
-        } else {
-            newDate.setMonth(newDate.getMonth() - 1);
-        }
-        this.currentDate = newDate;
-        this._updateDateRange();
+        this.currentDate = _shiftDate(_asDate(this.currentDate), this.viewMode, -1);
     },
     nextPeriod() {
-        const newDate = new Date(this.currentDate);
-        if (this.viewMode === 'day') {
-            newDate.setDate(newDate.getDate() + 1);
-        } else if (this.viewMode === 'week') {
-            newDate.setDate(newDate.getDate() + 7);
-        } else {
-            newDate.setMonth(newDate.getMonth() + 1);
-        }
-        this.currentDate = newDate;
-        this._updateDateRange();
+        this.currentDate = _shiftDate(_asDate(this.currentDate), this.viewMode, 1);
     },
     goToday() {
         this.currentDate = new Date();
@@ -1029,27 +738,6 @@ function eventTitle(ev) {
     return line1;
 }
 
-function eventViewItem(ev) {
-    return {
-        interval: eventInterval(ev),
-        summary: ev.summary ?? '',
-        title: eventTitle(ev),
-        $item: ev.$item
-    };
-}
-
-/** Persist shape from form event (start/end already offset-ISO) */
-function eventToPersist(ev) {
-    return {
-        summary: ev.summary ?? '',
-        location: ev.location ?? '',
-        description: ev.description ?? '',
-        start: ev.start || (ev.startStr ? new Date(ev.startStr).toISOTimezoneString() : ''),
-        end: ev.end || (ev.endStr ? new Date(ev.endStr).toISOTimezoneString() : '')
-    };
-}
-
-/** `.name.ext` before `/history/` → `name.ext` */
 function filenameFromHistoryPath(path) {
     const m = String(path).match(/\/([^/]+)\/history(?:\/|$)/);
     if (!m)
@@ -1057,10 +745,132 @@ function filenameFromHistoryPath(path) {
     return m[1].startsWith('.') ? m[1].slice(1) : m[1];
 }
 
+function _asDate(value) {
+    if (value instanceof Date && !isNaN(value))
+        return value;
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value))
+        return _parseDay(value);
+    const d = new Date(value || Date.now());
+    return isNaN(d) ? new Date() : d;
+}
+
+function _parseDay(value) {
+    const s = String(value);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m)
+        return new Date(+m[1], +m[2] - 1, +m[3]);
+    const d = new Date(value);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 function _formatDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const d = _asDate(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 }
 
+function _weekStart(date) {
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dayOfWeek = start.getDay();
+    const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    start.setDate(start.getDate() + diff);
+    return start;
+}
+
+function _weekEnd(date) {
+    const end = _weekStart(date);
+    end.setDate(end.getDate() + 6);
+    return end;
+}
+
+function _shiftDate(date, viewMode, dir) {
+    const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    if (viewMode === 'day')
+        next.setDate(next.getDate() + dir);
+    else if (viewMode === 'week' || viewMode === 'workweek')
+        next.setDate(next.getDate() + dir * 7);
+    else
+        next.setMonth(next.getMonth() + dir);
+    return next;
+}
+
+function _layoutDayEvents(events, date) {
+    const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const startMs = dayStart.getTime();
+    const endMs = dayEnd.getTime();
+    const dayMinutes = (endMs - startMs) / 60000;
+    const gap = 2;
+    const items = [];
+    for (const e of events) {
+        const s = new Date(e.start).getTime();
+        const t = new Date(e.end).getTime();
+        if (isNaN(s) || isNaN(t) || t <= s)
+            continue;
+        if (t <= startMs || s >= endMs)
+            continue;
+        const clipStart = Math.max(s, startMs);
+        const clipEnd = Math.min(t, endMs);
+        items.push({
+            start: e.start,
+            end: e.end,
+            summary: e.summary ?? '',
+            location: e.location ?? '',
+            $item: e.$item,
+            _start: clipStart,
+            _end: clipEnd,
+            _topMin: (clipStart - startMs) / 60000,
+            _durMin: (clipEnd - clipStart) / 60000
+        });
+    }
+    items.sort((a, b) => a._start - b._start || (b._end - a._start) - (a._end - a._start));
+
+    const result = [];
+    const cluster = [];
+    const columns = [];
+    let clusterEnd = 0;
+
+    const flush = () => {
+        const colCount = Math.max(columns.length, 1);
+        for (const item of cluster) {
+            result.push({
+                start: item.start,
+                end: item.end,
+                summary: item.summary,
+                location: item.location,
+                $item: item.$item,
+                title: eventTitle(item),
+                style: {
+                    top: `${item._topMin / dayMinutes * 100}%`,
+                    height: `${Math.max(item._durMin / dayMinutes * 100, 100 / 48)}%`,
+                    left: `calc(${item._col / colCount * 100}% + ${gap}px)`,
+                    width: `calc(${100 / colCount}% - ${gap * 2}px)`
+                }
+            });
+        }
+        cluster.length = 0;
+        columns.length = 0;
+        clusterEnd = 0;
+    };
+
+    for (const ev of items) {
+        if (cluster.length && ev._start >= clusterEnd)
+            flush();
+        let col = columns.findIndex(end => end <= ev._start);
+        if (col === -1) {
+            col = columns.length;
+            columns.push(ev._end);
+        } else {
+            columns[col] = ev._end;
+        }
+        ev._col = col;
+        cluster.push(ev);
+        clusterEnd = Math.max(clusterEnd, ev._end);
+    }
+    if (cluster.length)
+        flush();
+    return result;
+}

@@ -1,11 +1,9 @@
-/** «?» / probe readme.md только для папок и классов под /oda и /sources. */
+/** «?» / probe readme.md у контейнера (папка, класс, handler), не у файла. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
     if ($item.constructor === CORE.$file || $item.type === '$file') return false;
-    const p = String($item.path || '');
-    return p === '/oda' || p === '/sources'
-        || p.startsWith('/oda/') || p.startsWith('/sources/');
+    return true;
 }
 
 export default {
@@ -82,9 +80,9 @@ export default {
                     <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" :icon-size="16" @tap.stop="openReadme" title="readme.md"></oda-icon>
-                    <item-users icon-size="16" flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
+                    <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
-                <item-users icon-size="16" flex ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
+                <item-users icon-size="16" ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>

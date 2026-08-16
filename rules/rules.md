@@ -10,8 +10,9 @@
 | [`user.md`](/rules/user.md/~/handlers/pages/form/) | Роль USER |
 | [`boss.md`](/rules/boss.md/~/handlers/pages/form/) | Роль BOSS |
 | [`admin.md`](/rules/admin.md/~/handlers/pages/form/) | Роль ADMIN |
+| [`guest.md`](/rules/guest.md/~/handlers/pages/form/) | Роль GUEST |
 
-Роли канонические: `USER` | `BOSS` | `ADMIN` (`sources/server/class.js` → `$class.ROLES`).
+Роли канонические: `USER` | `BOSS` | `ADMIN` | `GUEST` (`sources/server/class.js` → `$class.ROLES`).
 
 ---
 
