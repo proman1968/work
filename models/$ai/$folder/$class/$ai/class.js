@@ -333,8 +333,8 @@ export default {
     icon: 'carbon:machine-learning-model',
 
     METADATA: {
-        STATIC: {
-            id: 'STATIC',
+        FIELDS: {
+            id: 'FIELDS',
             icon: 'iconoir:input-field',
             fields: [{
                 id: 'protocol',
@@ -486,6 +486,8 @@ export default {
 
         let funcCallName = '';
         let funcCallArgs = '';
+        let reasoningAcc = '';
+        let contentSeen = false;
 
         const flushFunctionCall = function* () {
             if (!funcCallName)
@@ -513,8 +515,13 @@ export default {
                     const json = JSON.parse(jsonStr);
                     const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
 
+                    const reasoning = delta.reasoning;
+                    if (reasoning)
+                        reasoningAcc += String(reasoning);
+
                     const content = delta.content || delta.text;
                     if (content) {
+                        contentSeen = true;
                         if (useFunctions)
                             yield { type: 'content', content };
                         else
@@ -560,6 +567,13 @@ export default {
                 }
                 catch {}
             }
+        }
+
+        if (!contentSeen && reasoningAcc) {
+            if (useFunctions)
+                yield { type: 'content', content: reasoningAcc };
+            else
+                yield reasoningAcc;
         }
 
         if (useFunctions && funcCallName)

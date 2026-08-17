@@ -854,6 +854,17 @@ Node:{
     })
 
     const PDP_EXCLUDES = ['$for', '$event', '$this'];
+    /** CE-проп: в [R].props (геттеры) или на узле; для with($pdp) в директивах. */
+    function pdpHasProp(node, p) {
+        return !!(node[R]?.props && p in node[R].props) || Reflect.has(node, p);
+    }
+    function pdpOwner(node, p) {
+        while (node) {
+            if (pdpHasProp(node, p)) return node;
+            node = node.host;
+        }
+        return null;
+    }
     Object.defineProperty(Node.prototype, '$pdp', {
         enumerable: false,
         configurable: false,
@@ -864,20 +875,18 @@ Node:{
 
             const proxy = new Proxy(this, {
                 has(target, p) {
+                    // Symbols (@@unscopables) — только Reflect, не Reactor / host-walk
+                    if (typeof p === 'symbol')
+                        return Reflect.has(target, p);
                     if (PDP_EXCLUDES.includes(p)) return false;
-                    while (target) {
-                        if (p in target) return true;
-                        target = target.host;
-                    }
-                    return false;
+                    return !!pdpOwner(target, p);
                 },
                 get(target, p, receiver) {
+                    if (typeof p === 'symbol')
+                        return Reflect.get(target, p, receiver);
                     if (PDP_EXCLUDES.includes(p)) return undefined;
                     // Владелец пропа вверх по host; Reactor.get — deps ребёнка → host
-                    // (сырой target[p] не регистрировал связь геттера ребёнка с пропом родителя).
-                    let owner = target;
-                    while (owner && !(p in owner))
-                        owner = owner.host;
+                    const owner = pdpOwner(target, p);
                     if (!owner) return undefined;
                     if (owner[R])
                         return Reactor.get(owner, p);
@@ -886,17 +895,12 @@ Node:{
                 },
                 set(target, p, value, receiver) {
                     if (target.isComponent) {
-                        let domHost = target;
-                        while (domHost) {
-                            if (p in domHost) {
-                                domHost[p] = value;
-                                break;
-                            }
-                            domHost = domHost.host;
-                        }
+                        const domHost = pdpOwner(target, p);
+                        if (domHost)
+                            domHost[p] = value;
                     }
                     if (typeof value !== 'object') {
-                        if (!(p in target)) {
+                        if (!pdpHasProp(target, p)) {
                             setAttribute.call(target, p.toKebabCase(), value);
                         } else if (target[p] !== value) {
                             target[p] = value;

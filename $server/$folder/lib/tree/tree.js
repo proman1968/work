@@ -35,12 +35,13 @@ export default {
         </div>
         <div vertical flex style="overflow: auto;">
             <div vertical style="overflow: visible;">
-                <oda-tree-node :show-tools :menu-mode :show-users ~is="nodeTemplate" :hide-tops :hide-roots ~for='items'></oda-tree-node>
+                <oda-tree-node :show-tools :menu-mode :show-users :show-status ~is="nodeTemplate" :hide-tops :hide-roots ~for='items'></oda-tree-node>
             </div>
         </div>
     `,
     showUsers: false,
     showSize: false,
+    showStatus: false,
     get expanderIconSize(){
         return ODA.states?.mobileMode ? this.iconSize * 1.5 : this.iconSize;
     },
@@ -230,15 +231,16 @@ ODA({is: 'oda-tree-node',
         <div draggable="true" ~if="hideTops<1" class='node' :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-            <item-node :expanded :info-invert="isFocused" auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item show-status @tap="setItemFocus"></item-node>
+            <item-node :expanded :info-invert="isFocused" auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
         </div>
         <div horizontal flex ~if="expanded" style="min-height: 1px;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
-                <oda-tree-node :show-users ~is="nodeTemplate" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
+                <oda-tree-node :show-status :show-users ~is="nodeTemplate" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
             </div>
         </div>
     `,
+    showStatus: false,
     showUsers: false,
     menuMode: {
         $def: 'handlers',

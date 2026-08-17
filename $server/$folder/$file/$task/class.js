@@ -15,19 +15,29 @@ export default {
                     // не удалять
                 } break;
                 case 'APPROVE':{
+                    this._stopped = false;
                     params.block.answer = prompt;
                     if (params.accept === true || params.accept === 'true') {
-                        params.block.status = 'approved';
+                        params.block.state = 'approved';
                         params.block.icon = 'icons:check';
                         await params.pipe_step.approve?.(params);
                     } else {
-                        params.block.status = 'rejected';
+                        params.block.state = 'rejected';
                         params.block.icon = 'icons:close';
                     }
                     delete params.block.stop;
                     await this._save(session);
                 } break;
                 default:{
+                    this._stopped = false;
+                    if (params.container?.content)
+                        delete params.container.content;
+                    const pending = [...(params.container?.items || [])].reverse().find(b => b.type === 'complete' && b.stop);
+                    if (pending) {
+                        pending.state = 'rejected';
+                        pending.icon = 'icons:close';
+                        delete pending.stop;
+                    }
                     params.block = {
                         type: 'prompt',
                         content: prompt,
@@ -38,10 +48,78 @@ export default {
             params.block = await this._active_block();
             params.container = await this._active_container();
             params.pipe_step = PIPE[params.block.type] || PIPE.thinking;
-            params.pipe_step.actualize?.(params);
+            await params.pipe_step.recalc?.(params);
+            params.block = await this._active_block();
+            params.container = await this._active_container();
 
-            let mode = params.container.mode || 'plan';
+            if (params.block.type === 'web' && !params.block.content && params.block.sites == null) {
+                const query = webQuery(params.block, await this.body);
+                const service = await WORK.get_item(PIPE.web.fc);
+                await this._fc_exec(service, { method: 'search', args: { query } }, {
+                    block: params.block,
+                    session,
+                });
+                params.block.sites ??= [];
+                await webPushNext(params.block, params);
+                await PIPE.web.recalc?.(params);
+                await this._save(session);
+                if (!this._stopped)
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+
+            const web = params.container.type === 'web' ? params.container
+                : (params.block.type === 'web' ? params.block : null);
+            if (web && !web.content && webQueueDone(web)) {
+                const messages = await this.context({ prompt: PIPE.web.done?.prompt });
+                const response = await this._streamChat({ messages, session });
+                if (!this._stopped) {
+                    web.content = response.content;
+                    if (response.usage)
+                        web.usage = response.usage;
+                    await close_up(await this.body, web, params);
+                }
+                await this._save(session);
+                if (!this._stopped)
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+
+            if (params.container.type === 'explore' && !params.container.content && exploreReady(params.container)) {
+                const messages = await this.context({ prompt: PIPE.explore.done?.prompt });
+                const response = await this._streamChat({ messages, session });
+                if (!this._stopped) {
+                    params.container.content = response.content;
+                    if (response.usage)
+                        params.container.usage = response.usage;
+                    await close_up(await this.body, params.container, params);
+                }
+                await this._save(session);
+                if (!this._stopped)
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+
+            if (params.block.type === 'site' && params.block.url && !params.block.content) {
+                const service = await WORK.get_item(PIPE.web.fc);
+                await this._fc_exec(service, { method: 'fetch_url', args: { url: params.block.url } }, {
+                    block: params.block,
+                    session,
+                });
+                await webPushNext(params.container, params);
+                await close_up(await this.body, params.block, params);
+                await this._save(session);
+                if (!this._stopped)
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+
+            let mode = containerMode(await this.body, params.container);
             let options = next_options(params.container, params.block, mode);
+            if (!options.length) {
+                session?.send?.({ type: 'chat.done', path: this.short });
+                return { ok: true };
+            }
             let messages, response, choice = '';
             if(options.length === 1) {
                 choice = options[0];
@@ -56,37 +134,47 @@ export default {
 
                 messages = await this.context({prompt: menu});
                 response = await this._streamChat({ messages, silent: true, session });
-                if (this._stopped) return;
-                choice = response.content.trim().toLowerCase();
+                if (!this._stopped)
+                    choice = response.content.trim().toLowerCase();
             }
-            let next_pipe = options.includes(choice) ? PIPE[choice] : null;
-            if(!next_pipe){
-                choice = 'text'
-                next_pipe = PIPE[choice];
-            }
+            if (!this._stopped) {
+                let next_pipe = options.includes(choice) ? PIPE[choice] : null;
+                if(!next_pipe){
+                    choice = 'text'
+                    next_pipe = PIPE[choice];
+                }
 
-            params.block = {
-                type: choice,
-                icon: next_pipe.icon || 'carbon:idea',
-                stop: next_pipe.stop,
-                label: next_pipe.label,
-            }
-            if(next_pipe.container)
-                params.block.items = [];
+                params.block = {
+                    type: choice,
+                    icon: next_pipe.icon || 'carbon:idea',
+                    stop: next_pipe.stop,
+                    label: next_pipe.label,
+                }
+                if(next_pipe.container)
+                    params.block.items = [];
+                const sys = next_pipe[mode]?.system || next_pipe.system;
+                if (sys)
+                    params.block.system = sys;
 
-            await this._push_block(params);
-            prompt = next_pipe[mode]?.prompt || next_pipe.prompt;
-            if(prompt){
-                messages = await this.context({prompt});
-                response = await this._fc_chat({ messages, session, fc: next_pipe.fc, block: params.block });
-                if (this._stopped) return;
-                Object.assign(params.block, response);
-                next_pipe?.parse?.(params.block);
-                next_pipe?.actualize?.(params);
-            }
-            await this._save(session);
-            if (!params.block.stop) {
-                this.async(() => this.prompt({ role: 'AI', session }));
+                await this._push_block(params);
+                prompt = next_pipe[mode]?.prompt || next_pipe.prompt;
+                if(prompt){
+                    messages = await this.context({prompt});
+                    response = await this._fc_chat({ messages, session, fc: next_pipe.fc, block: params.block });
+                    if (!this._stopped) {
+                        Object.assign(params.block, response);
+                        next_pipe?.parse?.(params.block);
+                        await next_pipe?.recalc?.(params);
+                        await close_up(await this.body, params.block, params);
+                    }
+                }
+                if (!this._stopped) {
+                    await this._save(session);
+                    if (!params.block.stop) {
+                        this.async(() => this.prompt({ role: 'AI', session }));
+                        return { ok: true };
+                    }
+                }
             }
         }
         catch (e) {
@@ -104,10 +192,10 @@ export default {
         for (;;) {
             layers.push(this._container_context(container));
             const next = container.items?.last;
-            if (next?.items && !next.ready) container = next;
+            if (next?.items && !next.content) container = next;
             else break;
         }
-        const mode = container.mode || 'plan';
+        const mode = containerMode(await this.body, container);
         const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), '[mode] ' + mode].join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
@@ -172,11 +260,14 @@ export default {
         if (!fc)
             return this._streamChat({ messages, session });
         const service = await WORK.get_item(fc);
-        const functions = Object.entries(service.SCHEMA || {}).map(([name, spec]) => ({
-            name,
-            description: spec.description || '',
-            parameters: spec.params || { type: 'object', properties: {} },
-        }));
+        const allow = block?.type === 'web' ? ['search'] : block?.type === 'site' ? ['fetch_url'] : null;
+        const functions = Object.entries(service.SCHEMA || {})
+            .filter(([name]) => !allow || allow.includes(name))
+            .map(([name, spec]) => ({
+                name,
+                description: spec.description || '',
+                parameters: spec.params || { type: 'object', properties: {} },
+            }));
         if (block?.type === 'web') {
             block.icon = PIPE.web.do_icon;
             await this._save(session);
@@ -221,29 +312,30 @@ export default {
     },
     async _fc_exec(service, call, { block, session } = {}) {
         const args = call.args || {};
-        if (call.method === 'search' && args.query && block) {
-            block.label = args.query;
-            await this._save(session);
-        }
-        if (call.method === 'fetch_url' && block?.items) {
-            const url = String(args.url || '').trim();
-            const n = block.items.filter(b => b.type === 'site').length;
-            if (n >= WEB_SITES) {
-                return { error: 'Лимит: не больше ' + WEB_SITES + ' сайтов за один web', url };
+        if (call.method === 'search' && block?.type === 'web') {
+            if (args.query)
+                block.label = args.query;
+            const result = await service.search?.(args);
+            const seen = new Set();
+            block.sites = [];
+            for (const url of (result?.results || []).map(r => r.url).filter(Boolean)) {
+                if (seen.has(url))
+                    continue;
+                seen.add(url);
+                block.sites.push(url);
+                if (block.sites.length >= WEB_SITES)
+                    break;
             }
-            const site = {
-                type: 'site',
-                url,
-                label: url,
-                icon: 'spinners:3-dots-scale',
-            };
-            await this._push_block({ block: site, container: block, session });
-            const result = await service.fetch_url?.(args);
-            site.icon = siteFavicon(url);
-            if (result?.title)
-                site.label = result.title;
+            await this._save(session);
+            return result ?? {};
+        }
+        if (call.method === 'fetch_url' && block?.type === 'site') {
+            const url = String(block.url || args.url || '').trim();
+            const result = await service.fetch_url?.({ url });
+            block.icon = siteFavicon(url);
             if (result?.error)
-                site.status = result.error;
+                block.state = 'error';
+            block.content = result?.content || result?.error || '—';
             await this._save(session);
             return result ?? {};
         }
@@ -253,6 +345,7 @@ export default {
         return new AsyncPromise(async () =>{
             let raw = await  this.load();
             this.body = JSON.parse(raw);
+            this.body.type ??= 'task';
             this.body.items ??= [];
             return this.body;
         })
@@ -271,18 +364,23 @@ export default {
         const {block, container, session} = params;
         block.time ??= Date.now();
         container.items.push(block);
+        PIPE[block.type]?.recalc?.({ ...params, block, container });
         await this._save(session);
     },
     async _active_block() {
         let container = await this._active_container();
-        if(container.todo?.status === 'in_progress')
+        const planned = container.todo?.steps || [];
+        const real = (container.items || []).filter(b => b.type === 'step');
+        if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
             return container.todo;
-        return container.items.last || container;
+        const items = container.items || [];
+        const open = items.find(b => !b.content && !b.items);
+        return open || items.last || container;
     },
     async _active_container() {
         let next,container = await this.body;
         while (next = container.items?.last){
-            if(next.items && !next.ready)
+            if(next.items && !next.content)
                 container = next;
             else
                 break;
@@ -309,19 +407,28 @@ export default {
 
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
 const PIPE = {
+    /** корень файла = контейнер task; меню plan/do — здесь, не у thinking */
+    task: {
+        container: true,
+        plan: {
+            next: ['thinking', 'explore', 'complete', /* 'planning', 'activation' */],
+        },
+        do: {
+            next: ['thinking','explore', 'complete', /* 'execute', 'check' */],
+        },
+    },
     /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
     prompt: {
         role: 'user',
-        next: ['research'],
+        next: ['thinking'],
     },
     thinking: {
+        label: 'Мысли',
         icon: 'carbon:idea',
         plan:{
-            next: ['research', /* 'planning', 'activation' */],
             inject: 'если необходимо проанализировать и обдумать дальнейшие планы',
         },
         do:{
-            next: ['research', /* 'execute', 'check' */],
             inject: 'если необходимо проанализировать и обдумать дальнейшие действия',
         },
         prompt: [
@@ -329,6 +436,9 @@ const PIPE = {
             'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
             'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
         ].join('\n'),
+        recalc(params = {}) {
+            delete params.block.state;
+        },
     },
     activation: {
         label: 'Активация',
@@ -354,7 +464,7 @@ const PIPE = {
     },
     todo:{
         next: ['step'],
-        async actualize(params = {}) {
+        async recalc(params = {}) {
             const { container, task } = params;
             const body = await task.body;
             const owner = container.todo ? container : (body.todo ? body : null);
@@ -363,27 +473,31 @@ const PIPE = {
             const real = (owner.items || []).filter(b => b.type === 'step');
             const lines = (todo.steps || []).map((s, i) => {
                 const st = real[i];
-                s.status = st?.ready ? 'done' : (st ? 'in_progress' : (s.status || 'todo'));
+                s.state = st?.content ? 'done' : (st ? 'in_progress' : (s.state || 'todo'));
                 if (st) {
                     st.label = `${i + 1}. ${s.description}`;
-                    st.status = s.status;
-                    st.icon = s.status === 'done' ? 'icons:check-circle' : 'av:play-circle-outline';
+                    st.state = s.state;
+                    st.icon = s.state === 'done' ? 'icons:check-circle' : 'av:play-circle-outline';
                 }
-                return `${i + 1}. ${s.description} [${s.status}]`;
+                return `${i + 1}. ${s.description} [${s.state}]`;
             });
             todo.content = (todo.label || '') + (lines.length ? '\n' + lines.join('\n') : '');
             owner.mode = 'do';
-            const cur = real.find(s => !s.ready) || real.last;
+            const cur = real.find(s => !s.content) || real.last;
             if (cur)
                 cur.system = [
                     todo.content,
                     '\n[instruction]',
                     `Сейчас только пункт "${cur.label}". Остальные уже в плане — не делай их и не спрашивай про них.`,
                 ].join('\n');
+            const total = (todo.steps || []).length;
+            const done = (todo.steps || []).filter(s => s.state === 'done').length;
+            todo.state = total ? `${done}/${total} ${PIPE.step.label}` : '';
         },
     },
 
     planning: {
+        label: 'План',
         icon: 'icons:assignment',
         inject: 'если необходимо сделать несколько действий подряд',
         prompt: ['Предложи план:',
@@ -400,15 +514,17 @@ const PIPE = {
             container.todo = {
                 type: 'todo',
                 icon: 'icons:list',
-                status: 'in_progress',
                 ...plan,
             };
+            const n = (container.todo.steps || []).length;
+            container.todo.state = n ? `0/${n} ${PIPE.step.label}` : '';
             container.mode = 'do';
         }
     },
 
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
+        label: 'Шаг',
         inject: 'если необходимо выполнить один очередной пункт плана',
         container: true,
         next: ['thinking'],
@@ -416,6 +532,7 @@ const PIPE = {
 
     /** площадка исполнения: файлы, сервисы, FC; субагент в mode do */
     execute: {
+        label: 'Выполнение',
         icon: 'enterprise:wrench',
         do_icon: 'spinners:pulse',
         inject: 'если необходимо выполнить конкретные действия над конкретными объектами, файлами, навыками',
@@ -426,30 +543,40 @@ const PIPE = {
             'Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.',
             'Не делай их и не обращайся к пользователю. Размышления от своего лица в content.',
         ].join('\n'),
-        actualize(params = {}) {
+        recalc(params = {}) {
             params.block.mode = 'do';
+            params.block.state = childRollup(params.block, ['web', 'site', 'form', 'work']);
         },
     },
 
-    research: {
+    explore: {
+        label: 'Обзор',
         icon: 'icons:search',
         do_icon: 'spinners:pulse',
         inject: 'если нужно выяснить факты (обзор, справка), не меняя систему',
-        prompt: [
-            'Подумай, что именно исследовать и откуда взять факты, чтобы продолжить работу.',
-            'Не ищи и не обращайся к пользователю. Размышления от своего лица в content.',
+        system: [
+            'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
+            'Не ищи и не обращайся к пользователю.',
         ].join('\n'),
         container: true,
-        next: [/* 'work', */ 'web', /* 'form' */],
-        actualize(params = {}) {
+        next: ['thinking', /* 'work', */ 'web',  'form'],
+        done: {
+            prompt: [
+                'Обобщи, что выяснено в этом обзоре.',
+                'Только факты из ленты (web, site). Кратко, без выдумок и без обращения к пользователю.',
+            ].join('\n'),
+        },
+        recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
+            params.block.state = childRollup(params.block, ['web']);
         },
     },
     check:{
+        label: 'Проверка',
         icon: 'icons:check-circle',
         do_icon: 'spinners:pulse',
         inject: 'если нужно сверить результат с целью, прежде чем закрыть ветку',
-        prompt: [
+        system: [
             'Это площадка проверки, не исполнение и не план.',
             'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
             'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
@@ -458,11 +585,13 @@ const PIPE = {
         container: true,
         next: ['work', 'web', 'thinking', 'verdict'],
         done: { next: ['complete'] },
-        actualize(params = {}) {
+        recalc(params = {}) {
             params.block.mode = 'do';
+            params.block.state = childRollup(params.block, ['work', 'web', 'site']);
         },
     },
     verdict: {
+        label: 'Вердикт',
         icon: 'icons:assignment-turned-in',
         inject: 'если доказательств достаточно — вынести вердикт ok или fail',
         prompt: [
@@ -478,42 +607,61 @@ const PIPE = {
             const m = String(block.content || '').match(/итог:\s*(ok|fail)/i);
             block.verdict = m ? m[1].toLowerCase() : 'fail';
         },
-        actualize(params = {}) {
+        recalc(params = {}) {
+            if (params.block.verdict)
+                params.block.state = params.block.verdict;
             if (params.block.verdict !== 'ok') return;
-            params.container.ready = true;
             params.container.content = params.block.content;
         },
     },
 
     web: {
+        label: 'Интернет',
         icon: 'icons:language',
         do_icon: 'spinners:pulse',
-        inject: 'если необходимо найти информацию в интернете',
         fc: '/SERVICES/SearXNG',
         container: true,
-        prompt: [
-            'Найди факты в интернете: сначала search({query}), затем fetch_url({url}) по 1–2 подходящим ссылкам.',
-            'Пиши только то, что прочитал на страницах. Не выдумывай цены и факты из сниппетов.',
-        ].join('\n'),
-        next: ['thinking'],
-        done: { next: ['complete'] },
-        plan:{
+        next: ['site'],
+        done: {
+            prompt: [
+                'Обобщи только то, что прочитано на страницах site.',
+                'Кратко, по фактам, без выдумок.',
+            ].join('\n'),
+        },
+        plan: {
             inject: 'если необходимо найти информацию в интернете',
+            system: [
+                'Найди ссылки одним вызовом search({query}).',
+                'Не читай страницы — заход сделают блоки site.',
+            ].join('\n'),
         },
-        do:{
+        do: {
             inject: 'если необходимо выполнить конкретные действия в интернете',
+            system: [
+                'Найди рабочие ссылки одним вызовом search({query}) — то, что нужно сделать сейчас.',
+                'Не читай страницы — заход сделают блоки site.',
+            ].join('\n'),
         },
-        actualize(params = {}) {
+        recalc(params = {}) {
             const b = params.block;
-            b.ready = true;
-            b.icon = PIPE.web.icon;
+            const found = (b.sites || []).length;
+            const seen = (b.items || []).filter(x => x.type === 'site' && x.content).length;
+            b.state = found ? `${seen}/${found} ${PIPE.site.label}` : '';
+            b.icon = b.content ? PIPE.web.icon : PIPE.web.do_icon;
         },
     },
     site: {
+        label: 'Сайт',
         icon: 'icons:language',
+        fc: '/SERVICES/SearXNG',
+        recalc(params = {}) {
+            if (params.block.state !== 'error')
+                delete params.block.state;
+        },
     },
 
     work: {
+        label: 'Рабочая область',
         icon: 'icons:folder',
         inject: 'если необходимо найти файлы или информацию в рабочей области',
         prompt: ['Найди информацию в рабочей области ровно ОДНИМ вызовом функции:',
@@ -535,23 +683,36 @@ const PIPE = {
     },
 
     form: {
+        label: 'Форма',
         icon: 'icons:view-list',
         inject: 'если нужно выяснить у пользователя сразу несколько вопросов (два и больше) — не текстом',
-        next: ['thinking'],
-        prompt: ['Собери HTML-форму для ввода данных по текущей задаче.',
+        prompt: [
+            'Собери HTML-форму по запросу в ленте (не по профилю и не по группе).',
             '[instruction]',
-            'Не спрашивай, какие поля нужны — составь их сам по запросу пользователя в ленте, не по профилю и не по карточке группы.',
-            'Первой строкой можно дать краткое пояснение.',
-            'Далее один fenced-блок html.',
-            'Все контролы только внутри fieldset + legend, в том числе radio/select. Заголовки секций (h1–h6, p, div) вместо legend запрещены.',
-            'В одном fieldset можно несколько связанных полей (как в обычной форме этой цели). Fieldset в ряд не ставь.',
-            'Legend — название группы или единственного поля. Label внутри — только если он не повторяет legend. Подсказка — в placeholder.',
-            'Варианты: до 5 — radio, больше — select. Всегда пункт «Другое» и рядом input type="text" (своё значение).',
-            'У каждого контрола обязателен name (у «другого» — свой, например name_other).',
-            'Поля — максимально удобные для ввода: подходящий type (email, tel, date, number, url), inputmode, placeholder, autocomplete, min/max, maxlength, pattern; обязательность — required.',
-            'Маски и ограничения — только HTML-атрибутами, без script.',
-            'Форма должна быть похожа на привычный стандарт для этой цели (заявка, анкета, заказ, контакты и т.п.): состав, порядок и подписи как у обычной такой формы, не выдумывай свою схему.',
-            'Без script, без html/body, без кнопки отправки.',
+            'Первой строкой — краткое пояснение. Далее один fenced-блок html.',
+            'Раскладка: все контролы внутри fieldset+legend. Секции — только legend, не h1–p–div.',
+            'Связанные поля — в одном fieldset. Fieldset в ряд не ставь.',
+            'Label — только если не повторяет legend. Подсказка и единица — в placeholder.',
+            'У каждого контрола свой name. Без oda-icon, эмодзи и ul/li вместо контролов.',
+            'Домен (сначала это):',
+            '- перечислимый — типичные ответы можно назвать заранее: список + «Другое», не text с «например»;',
+            '- открытый — пользователь сам формулирует: text/textarea;',
+            '- скаляр — число, дата, деньги: number/date, не список названий.',
+            'Кардинальность (потом type):',
+            '- одно свободное значение — input или textarea;',
+            '- ровно одно из списка: до 5 — radio (общий name), больше — select; пункт «Другое» + input text со своим name;',
+            '- несколько из списка — checkbox, у каждого свой name. Не select multiple, не size>1.',
+            'Вид свободного значения:',
+            '- целое — type=number inputmode=numeric step=1;',
+            '- дробь — type=number inputmode=decimal step под единицу (0.1);',
+            '- деньги — type=number inputmode=numeric step=1 или 1000, единица в placeholder (₽);',
+            '- дата/время/email/tel/url — свой type + autocomplete;',
+            '- короткая строка — text, maxlength только на text;',
+            '- абзац — textarea.',
+            'min/max — только реальный диапазон. maxlength на number запрещён.',
+            'required — если без поля форму сдавать нельзя.',
+            'Маски — только HTML-атрибутами, без script.',
+            'Состав и порядок — как у обычной формы этой цели. Без script, html/body, кнопки отправки.',
         ].join('\n'),
         /** после стрима: пояснение в content, разметка в html */
         parse(block) {
@@ -563,13 +724,14 @@ const PIPE = {
             const { block, prompt } = params;
             const answers = typeof prompt === 'string' ? JSON.parse(prompt) : (prompt || {});
             block.answer = answers;
-            block.status = 'submitted';
+            block.state = 'submitted';
             block.approved = formatFormAnswers(answers);
         },
         stop: 'Отправить форму',
     },
 
     html: {
+        label: 'HTML',
         icon: 'editor:code',
         inject: 'если нужно сделать одностраничное HTML-приложение (схема, игра, виджет, интерактив)',
         prompt: [
@@ -586,35 +748,47 @@ const PIPE = {
         stop: true,
     },
     complete: {
+        label: 'Завершение',
         inject: 'если считаешь, что текущая задача (шаг) завершена',
-        prompt: ['Сформируй краткий итог по текущей ветке.',
-            '\n\n[instruction]\n',
-            'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
-        stop: 'Завершить',
+        prompt: [
+            'Отдай пользователю итог задачи.',
+            'Не пересказывай процесс. Включи результат из ленты: факты, списки, таблицы.',
+            'Не выдумывай. Формат md.',
+        ].join('\n'),
+        stop: 'Принять',
         async approve(params = {}) {
             const { container, block, prompt } = params;
             if (prompt) {
-                block.status = 'to modify';
+                block.state = 'rejected';
+                block.icon = 'icons:close';
                 block.content = (block.content || '') + '\n\nИТОГ ОТКЛОНЕН, ' + prompt;
                 return;
             }
-            block.status = 'approved';
-            container.ready = true;
+            block.state = 'approved';
             container.content = block.content;
         }
     },
 };
 function next_options(container, block, mode) {
+    if (container?.content)
+        return [];
     const node = PIPE[block?.type];
-    if (block?.ready && node?.container && node.done?.next)
-        return node.done.next;
+    const own = node?.[mode]?.next || node?.next;
     const place = PIPE[container?.type];
-    if (place?.container)
-        return place.next || [];
-    return node?.[mode]?.next || node?.next || [];
+    const parentNext = place?.[mode]?.next || place?.next || [];
+    let options;
+    if (block?.content && node?.container)
+        options = node.done?.next?.length ? node.done.next : parentNext;
+    else if (own?.length)
+        options = own;
+    else
+        options = parentNext;
+    const prev = block?.type;
+    if (prev && !PIPE[prev]?.container)
+        options = options.filter(id => id !== prev);
+    const items = container?.items || [];
+    return options.filter(id => !PIPE[id]?.container || !items.some(s => s.type === id && s.content));
 }
-
-const WEB_SITES = 2;
 
 function siteFavicon(url) {
     try {
@@ -622,6 +796,84 @@ function siteFavicon(url) {
     } catch {
         return 'icons:language';
     }
+}
+
+function childRollup(block, types) {
+    const counts = {};
+    const walk = (n) => {
+        for (const x of n?.items || []) {
+            counts[x.type] = (counts[x.type] || 0) + 1;
+            walk(x);
+        }
+    };
+    walk(block);
+    return types.filter(t => counts[t]).map(t => `${counts[t]} ${PIPE[t]?.label || t}`).join(' · ');
+}
+
+const WEB_SITES = 3;
+
+async function webPushNext(web, params) {
+    if (!web || web.content || web.sites == null)
+        return false;
+    web.items ??= [];
+    const items = web.items.filter(x => x.type === 'site');
+    if (items.some(s => !s.content))
+        return false;
+    const next = web.sites.find(url => !items.some(s => s.url === url));
+    if (!next || !params.task)
+        return false;
+    await params.task._push_block({
+        block: { type: 'site', url: next, label: next, icon: siteFavicon(next) },
+        container: web,
+        session: params.session,
+    });
+    return true;
+}
+
+async function close_up(root, node, params) {
+    let n = node;
+    while (n) {
+        await PIPE[n.type]?.recalc?.({ ...params, block: n, container: parentOf(root, n) || n });
+        n = parentOf(root, n);
+    }
+}
+
+function containerMode(root, node) {
+    let n = node;
+    while (n) {
+        if (n.mode)
+            return n.mode;
+        n = parentOf(root, n);
+    }
+    return 'plan';
+}
+
+function webQueueDone(b) {
+    if (!b || b.sites == null)
+        return false;
+    const items = (b.items || []).filter(x => x.type === 'site');
+    if (items.some(s => !s.content))
+        return false;
+    return !b.sites.some(url => !items.some(s => s.url === url));
+}
+
+function exploreReady(b) {
+    const kids = b?.items || [];
+    if (!kids.length || kids.some(k => !k.content))
+        return false;
+    return kids.some(k => k.type === 'web');
+}
+
+function webQuery(web, body) {
+    if (web?.label && web.label !== PIPE.web.label)
+        return web.label;
+    const asked = String((body.items || []).find(b => b.type === 'prompt')?.content || body.title || '').trim();
+    if (asked)
+        return asked;
+    const parent = parentOf(body, web) || body;
+    const think = [...(parent.items || [])].reverse().find(b => b.type === 'thinking' && b.content);
+    const line = String(think?.content || '').split('\n').map(s => s.trim()).find(Boolean);
+    return (line || '').slice(0, 160);
 }
 
 function parentOf(root, node) {
@@ -666,13 +918,13 @@ function parsePlanMarkdown(text = '') {
         steps: descriptions.map((description, i) => ({
             number: i + 1,
             description,
-            status: 'todo',
+            state: 'todo',
             icon: 'icons:radio-button-unchecked',
         })),
     };
 }
 
-/** Вырезать html-разметку формы; остаток — пояснение. script не храним (это не узел html). */
+/** Вырезать html-разметку формы; остаток — пояснение. script / oda-icon / button / submit не храним. */
 function parseFormHtml(text = '') {
     const raw = String(text ?? '');
     let html = '';
@@ -691,7 +943,12 @@ function parseFormHtml(text = '') {
             content = '';
         }
     }
-    html = html.replace(/<script\b[\s\S]*?<\/script>/gi, '').trim();
+    html = html
+        .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+        .replace(/<oda-icon\b[^>]*(?:\/>|>[\s\S]*?<\/oda-icon>)/gi, '')
+        .replace(/<button\b[\s\S]*?<\/button>/gi, '')
+        .replace(/<input\b[^>]*\btype\s*=\s*["']?(?:submit|button|reset)["']?[^>]*>/gi, '')
+        .trim();
     return { content, html };
 }
 

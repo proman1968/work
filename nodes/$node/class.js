@@ -22,11 +22,6 @@ export default {
                     }]
                 }]
             }]
-        },
-        STAICS: {
-            id: "STAICS",
-            icon: "carbon:tree-view-alt",
-            fields: []
         }
     }
 }

@@ -16,11 +16,6 @@ export default {
                 { id: 'extension', type: 'String', placeholder: 'Расширение' },
                 { id: 'content', type: 'String', placeholder: 'Текст в содержимом' }
             ]
-        },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: []
         }
     },
 

@@ -30,10 +30,5 @@ general conversation`,
                 placeholder: 'Введите вопрос',
             }],
         },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: [],
-        },
     },
 };

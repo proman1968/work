@@ -2,7 +2,7 @@ export default {
     icon: 'editor:mode-edit',
     allowSave: true,
     get allowUse() {
-        return this.$context?.STATIC?.fields?.length;
+        return this.$context?.FIELDS?.fields?.length;
     },
     template: /*html*/`
     <style>
@@ -16,7 +16,7 @@ export default {
     dataAccessNode: null,
     async attached() {
         const node = await this.$item.dataAccessRoot
-        this.dataAccessNode = node.children.find(n => n.field.id === 'STATIC');
+        this.dataAccessNode = node.children.find(n => n.field.id === 'FIELDS');
     }
 };
 ODA({
@@ -104,9 +104,9 @@ ODA({
         switch (this.dataAccessNode.field.type) {
             case 'String':
             case 'Number':
-            case 'DataTime':
+            case 'DateTime':
             case 'Boolean':
-            case 'table':
+            case 'Table':
             default: {
                 return 'item-editor-form-string-field-editor'
             }
@@ -122,7 +122,7 @@ ODA({
     },
     get sizing() {
         switch (this.dataAccessNode?.field.type) {
-            case 'table':
+            case 'Table':
             case 'Text': {
                 return 'full'
             }
@@ -131,7 +131,7 @@ ODA({
             }
             case 'String':
             case 'Number':
-            case 'DataTime':
+            case 'DateTime':
             default: {
                 return 'mid'
             }

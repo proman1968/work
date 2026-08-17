@@ -3,8 +3,37 @@ export default {
 
 const pad = n => String(n).padStart(2, '0');
 
+function allDayBounds(start, end) {
+    const s = new Date(start);
+    const t = new Date(end);
+    s.setHours(0, 0, 0, 0);
+    t.setHours(0, 0, 0, 0);
+    if (t <= s)
+        t.setDate(s.getDate() + 1);
+    return {
+        start: s.toISOTimezoneString(),
+        end: t.toISOTimezoneString()
+    };
+}
+
+function applyAllDayTimes(ev) {
+    const s = new Date(ev.start);
+    if (ev.allDay) {
+        const bounds = allDayBounds(ev.start, ev.end);
+        ev.start = bounds.start;
+        ev.end = bounds.end;
+        return;
+    }
+    if (s.getHours() === 0 && s.getMinutes() === 0) {
+        s.setHours(9, 0, 0, 0);
+        ev.start = s.toISOTimezoneString();
+        ev.end = new Date(s.getTime() + 30 * 60 * 1000).toISOTimezoneString();
+    }
+}
+
 ODA({
     is: 'calendar-form',
+    imports: 'oda//checkbox',
     template: /* html */`
         <style>
             :host {
@@ -51,12 +80,20 @@ ODA({
                 border: 1px solid var(--border-color);
                 border-radius: 4px;
             }
+            .all-day-toggle {
+                align-items: center;
+                gap: 4px;
+            }
         </style>
         <div ~for="events" class="box" light>
             <fieldset>
                 <legend>Title</legend>
                 <input id="summary" :value="$for.item.summary || ''" autofocus @input="(e) => on_input(e, $for.index)">
             </fieldset>
+            <label class="all-day-toggle" horizontal>
+                <oda-checkbox :value="$for.item.allDay" @value-changed="(e) => on_all_day(e, $for.index)"></oda-checkbox>
+                <span>All day</span>
+            </label>
             <div class="row">
                 <fieldset>
                     <legend>Start</legend>
@@ -87,12 +124,21 @@ ODA({
     },
     /** Persist shape from form event (start/end already offset-ISO) */
     eventToPersist(ev) {
+        let start = ev.start || (ev.startStr ? new Date(ev.startStr).toISOTimezoneString() : '');
+        let end = ev.end || (ev.endStr ? new Date(ev.endStr).toISOTimezoneString() : '');
+        const allDay = !!ev.allDay;
+        if (allDay && start && end) {
+            const bounds = allDayBounds(start, end);
+            start = bounds.start;
+            end = bounds.end;
+        }
         return {
             summary: ev.summary ?? '',
             location: ev.location ?? '',
             description: ev.description ?? '',
-            start: ev.start || (ev.startStr ? new Date(ev.startStr).toISOTimezoneString() : ''),
-            end: ev.end || (ev.endStr ? new Date(ev.endStr).toISOTimezoneString() : '')
+            start,
+            end,
+            allDay
         };
     },
     on_input(e, i) {
@@ -102,10 +148,24 @@ ODA({
             this.events[i][id] = new Date(e.target.value).toISOTimezoneString();
         else
             this.events[i][id] = e.target.value;
+        this.commitEvents();
+    },
+    on_all_day(e, i) {
+        e.stopPropagation();
+        const ev = this.events[i];
+        const checked = !!e.detail.value;
+        if (!!ev.allDay === checked)
+            return;
+        ev.allDay = checked;
+        applyAllDayTimes(ev);
+        this.events = [...this.events];
+        this.commitEvents();
+    },
+    commitEvents() {
         const body = JSON.stringify(
             this.events.length === 1
                 ? this.eventToPersist(this.events[0])
-                : this.events.map(this.eventToPersist)
+                : this.events.map(ev => this.eventToPersist(ev))
         );
         if (this.$item && (!this.$item.body || (this.$item.body !== body))) {
             this.$item.body = body;
@@ -133,6 +193,7 @@ ODA({
             summary: raw.summary ?? '',
             location: raw.location ?? '',
             description: raw.description ?? '',
+            allDay: !!raw.allDay,
             start: '',
             end: ''
         };
@@ -186,6 +247,7 @@ ODA({
                     summary: '',
                     location: '',
                     description: '',
+                    allDay: false,
                     start: '',
                     end: ''
                 };

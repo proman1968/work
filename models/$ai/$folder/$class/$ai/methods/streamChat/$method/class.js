@@ -358,6 +358,8 @@ export default {
         // Аккумулятор для function_call (если поддерживается)
         let funcCallName = '';
         let funcCallArgs = '';
+        let reasoningAcc = '';
+        let contentSeen = false;
 
         const flushFunctionCall = function* () {
             if (!funcCallName)
@@ -385,9 +387,15 @@ export default {
                     const json = JSON.parse(jsonStr);
                     const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
 
+                    // Reasoning (thinking-модели: Ollama и др. шлют рассуждения в delta.reasoning)
+                    const reasoning = delta.reasoning;
+                    if (reasoning)
+                        reasoningAcc += String(reasoning);
+
                     // Content (текст ответа)
                     const content = delta.content || delta.text;
                     if (content) {
+                        contentSeen = true;
                         if (useFunctions)
                             yield { type: 'content', content };
                         else
@@ -442,6 +450,15 @@ export default {
         // Flush в конце стрима (finish_reason мог не прийти / потеряться на chunk boundary)
         if (useFunctions && funcCallName)
             yield* flushFunctionCall();
+
+        // Fallback для thinking-моделей: если ответ (content) так и не пришёл,
+        // а модель потратила всё на рассуждения (reasoning) — отдать reasoning как контент.
+        if (!contentSeen && reasoningAcc) {
+            if (useFunctions)
+                yield { type: 'content', content: reasoningAcc };
+            else
+                yield reasoningAcc;
+        }
     },
 };
 

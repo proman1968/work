@@ -1,7 +1,7 @@
 /**
  * ArgoCD — базовая точка подключения к Argo CD.
  *
- * FIELDS — схема настроек (подключение и шаблон Application); значения — корневые props.
+ * METADATA.FIELDS — схема настроек (подключение и шаблон Application); значения — корневые props.
  * Token хранится только в #secret/argocd.json и никогда не отдаётся на клиент.
  *
  * Серверные методы (по канону Weather/SearXNG — прямо в class.js):
@@ -22,18 +22,24 @@
 export default {
     icon: 'carbon:kubernetes',
     label: 'Argo CD',
-    FIELDS: [
-        { id: 'url', type: 'string', label: 'url', placeholder: 'https://argocd.example.com', required: true },
-        { id: 'insecure', type: 'boolean', label: 'insecure', placeholder: 'false' },
-        { id: 'project', type: 'string', label: 'project', placeholder: 'default' },
-        { id: 'repoURL', type: 'string', label: 'repoURL', placeholder: 'https://binaries.example.com/helm/chart/develop' },
-        { id: 'chart', type: 'string', label: 'chart', placeholder: 'chart' },
-        { id: 'targetRevision', type: 'string', label: 'targetRevision', placeholder: '*' },
-        { id: 'destinationServer', type: 'string', label: 'destinationServer', placeholder: 'https://kubernetes.default.svc' },
-        { id: 'destinationNamespace', type: 'string', label: 'destinationNamespace', placeholder: 'default' },
-        { id: 'syncPrune', type: 'boolean', label: 'syncPrune', placeholder: 'true' },
-        { id: 'syncSelfHeal', type: 'boolean', label: 'syncSelfHeal', placeholder: 'true' },
-    ],
+    METADATA: {
+        FIELDS: {
+            id: 'FIELDS',
+            icon: 'iconoir:input-field',
+            fields: [
+                { id: 'url', type: 'string', label: 'url', placeholder: 'https://argocd.example.com', required: true },
+                { id: 'insecure', type: 'boolean', label: 'insecure', placeholder: 'false' },
+                { id: 'project', type: 'string', label: 'project', placeholder: 'default' },
+                { id: 'repoURL', type: 'string', label: 'repoURL', placeholder: 'https://binaries.example.com/helm/chart/develop' },
+                { id: 'chart', type: 'string', label: 'chart', placeholder: 'chart' },
+                { id: 'targetRevision', type: 'string', label: 'targetRevision', placeholder: '*' },
+                { id: 'destinationServer', type: 'string', label: 'destinationServer', placeholder: 'https://kubernetes.default.svc' },
+                { id: 'destinationNamespace', type: 'string', label: 'destinationNamespace', placeholder: 'default' },
+                { id: 'syncPrune', type: 'boolean', label: 'syncPrune', placeholder: 'true' },
+                { id: 'syncSelfHeal', type: 'boolean', label: 'syncSelfHeal', placeholder: 'true' },
+            ],
+        },
+    },
 
     /** Статусы заявки для UI/методов. */
     ORDER_STATUSES: {
@@ -134,7 +140,7 @@ export default {
         });
     },
 
-    /** Собрать тело Application из FIELDS-значений + параметров заявки.
+    /** Собрать тело Application из корневых props + параметров заявки.
      * @param {any} params
      */
     _buildAppSpec(params = {}) {

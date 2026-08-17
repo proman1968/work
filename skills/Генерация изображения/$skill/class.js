@@ -24,11 +24,6 @@ export default {
                 required: true,
             }],
         },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: [],
-        },
     },
     async execute(params = {}, context = {}) {
         const prompt = String(params.data?.prompt ?? params.prompt ?? '').trim();

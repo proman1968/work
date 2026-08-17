@@ -58,7 +58,7 @@ export default {
             for (let i = items.length - 1; i >= 0; i--) {
                 if (!items[i]?.hidden) { last = items[i]; break; }
             }
-            if (!last || last.closed || !last.items?.length) return last;
+            if (!last || last.content || !last.items?.length) return last;
             items = last.items;
         }
         return undefined;

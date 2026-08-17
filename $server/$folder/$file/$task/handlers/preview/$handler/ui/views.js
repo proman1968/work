@@ -8,7 +8,6 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
-                gap: 1px;
             }
             :host([top]) {
                 overflow-y: auto;
@@ -150,11 +149,11 @@ ODA({ is: 'microchat-view',
                 font-size: small;
                 word-break: break-word;
             }
-            details > .body {
-                border-left: 2px solid var(--info-color);
+            :host([container]) details > .body {
+                border-left: 4px solid var(--info-color);
             }
-            :host([hide-title]) details > .body {
-                border-left: none;
+            oda-markdown-viewer{
+                margin-bottom: 1px;
             }
         </style>
 
@@ -164,8 +163,8 @@ ODA({ is: 'microchat-view',
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="label" ~is="labelTag" :href="data?.url" target="_blank" rel="noopener noreferrer" @click.stop>{{label}}</span>
-                    <span disabled class="label" style="opacity: .5;" ~if="status">{{status}}</span>
+                    <span class="label"  @click.stop>{{label}}</span>
+                    <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
                     <span class="time" ~if="timeText">{{timeText}}</span>
@@ -173,13 +172,18 @@ ODA({ is: 'microchat-view',
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>
                 <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
+                <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
     `,
     data: null,
+    container: {
+        $def: false,
+        $attr: true,
+        get() { return Array.isArray(this.data?.items); },
+    },
     get shevronIcon(){
         return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
     },
@@ -194,9 +198,12 @@ ODA({ is: 'microchat-view',
     get label() { 
         return this.data?.label || this.data?.type || '';
     },
-    get labelTag() { return this.data?.url ? 'a' : 'span'; },
-    get status(){
-        return this.data.status;
+    get url() { 
+        return this.data?.url || '';
+    },
+    get labelTag() { return this.url ? 'a' : 'span'; },
+    get state(){
+        return this.data.state;
     },
     get typeIcon() {
         if (this.$pdp.streaming && Reactor.equal(this.data, this.$pdp.focusedBlock))
@@ -213,8 +220,9 @@ ODA({ is: 'microchat-view',
     // --- open ---
     userOpen: false,
     get pinned() {
-        const items = this.host && Reactor.get(this.host, 'items');
-        return Reactor.equal(items?.last, this.data);
+        const focus = this.$pdp?.focusedBlock;
+        if (!focus || !this.data) return false;
+        return Reactor.equal(this.data, focus) || containsBlock(this.data, focus);
     },
     get open() { return !this.showTitle || this.pinned || this.userOpen; },
     onSummaryClick(e) {
@@ -243,7 +251,7 @@ ODA({ is: 'microchat-view',
     },
     get viewContent() { return (this.content || '') + this.streamTail; },
     get showContent() {
-         return !!(this.content || this.streamTail || this.items || !this.showTitle); 
+         return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
     },
 
     // --- title chrome ---
@@ -271,6 +279,13 @@ ODA({ is: 'microchat-view',
     },
 });
 
+function containsBlock(node, target) {
+    for (const b of node?.items || []) {
+        if (Reactor.equal(b, target) || containsBlock(b, target)) return true;
+    }
+    return false;
+}
+
 /**
  * prompt — info-invert, аватар; текст в title, не в markdown.
  */
@@ -281,6 +296,7 @@ ODA({ is: 'microchat-view-prompt',
             :host{
                 position: sticky;
                 top: 0px;
+                z-index: 100;
             }
             summary .title > .label {
                 opacity: 1;
@@ -308,21 +324,21 @@ ODA({ is: 'microchat-view-prompt',
     }
 });
 
-/** site — обычный блок; текст = label (title), ссылка = url, без тела. */
-ODA({ is: 'microchat-view-site',
-    extends: 'microchat-view',
-    template: /*html*/`
-        <style>
-            .title > a.label {
-                flex: 1;
-                min-width: 4em;
-            }
-            .title > div[flex] { flex: none; }
-        </style>
-    `,
-    get label() { return this.data?.label || this.data?.url || ''; },
-    get showContent() { return false; },
-});
+// /** site — обычный блок; текст = label (title), ссылка = url, без тела. */
+// ODA({ is: 'microchat-view-site',
+//     extends: 'microchat-view',
+//     template: /*html*/`
+//         <style>
+//             .title > a.label {
+//                 flex: 1;
+//                 min-width: 4em;
+//             }
+//             .title > div[flex] { flex: none; }
+//         </style>
+//     `,
+//     get label() { return this.data?.label || this.data?.url || ''; },
+//     get showContent() { return false; },
+// });
 
 
 /** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */
@@ -353,6 +369,7 @@ ODA({ is: 'microchat-form',
                 min-width: 0;
                 box-sizing: border-box;
                 padding: 8px;
+                gap: 8px;
                 font-size: small;
             }
             .slot {
@@ -368,12 +385,18 @@ ODA({ is: 'microchat-form',
                 box-sizing: border-box;
                 border-radius: 8px;
                 @apply --header;
+                @apply --vertical;
             }
             .slot :where(legend) {
                 font-size: medium;
                 @apply --dark;
                 padding: 4px 8px;
                 border-radius: 8px;
+            }
+            .slot :where(label) {
+                @apply --horizontal;
+                align-items: center;
+                gap: 8px;
             }
             .slot :where(input, select, textarea) {
                 border: 1px solid var(--border-color);
@@ -386,7 +409,7 @@ ODA({ is: 'microchat-form',
                 box-sizing: border-box;
             }
             .slot :where(textarea) { resize: vertical; min-height: 3em; }
-            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; }
+            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
         </style>
         <div class="slot" ~if="html" ~html="html" @input="sync" @change="sync"></div>
         <div ~if="!html" style="opacity:.6">нет разметки формы</div>
@@ -449,7 +472,7 @@ ODA({ is: 'microchat-view-todo',
             :host {
                 position: sticky;
                 top: 0px;
-                z-index: 100;
+                z-index: 110;
             }
         </style>
     `,
@@ -467,8 +490,8 @@ ODA({ is: 'microchat-view-todo',
         if (this.data?.label) return this.data.label;
         const steps = this.data?.steps || [];
         if (!steps.length) return this.data?.type || '';
-        const i = steps.findIndex(s => s.status === 'in_progress');
-        const p = steps.findIndex(s => s.status !== 'done');
+        const i = steps.findIndex(s => s.state === 'in_progress');
+        const p = steps.findIndex(s => s.state !== 'done');
         const cur = steps[i >= 0 ? i : (p >= 0 ? p : steps.length - 1)];
         return cur?.description || '';
     },
@@ -551,7 +574,7 @@ ODA({ is: 'microchat-todo-steps',
         <progress max="100" :value="progress"></progress>
         <div class="steps" light bold ~if="!collapsed">
             <div class="step" horizontal ~for="steps"
-                    ~class="{ done: $for.item.status === 'done', 'in-progress': $for.item.status === 'in_progress' }">
+                    ~class="{ done: $for.item.state === 'done', 'in-progress': $for.item.state === 'in_progress' }">
                 <oda-icon :icon="$for.item.icon" icon-size="16"></oda-icon>
                 <span flex>{{$for.item.description}}</span>
             </div>
@@ -562,28 +585,28 @@ ODA({ is: 'microchat-todo-steps',
     get steps() {
         return (this.data?.steps || []).map(s =>
             typeof s === 'string'
-                ? { description: String(s).replace(/^\d+\.\s*/, ''), status: 'pending' }
+                ? { description: String(s).replace(/^\d+\.\s*/, ''), state: 'pending' }
                 : s
         );
     },
     get current() {
         const s = this.steps;
-        const i = s.findIndex(x => x.status === 'in_progress');
+        const i = s.findIndex(x => x.state === 'in_progress');
         if (i >= 0) return i + 1;
-        const p = s.findIndex(x => x.status !== 'done');
+        const p = s.findIndex(x => x.state !== 'done');
         return p >= 0 ? p + 1 : s.length;
     },
     get currentStepText() {
         const s = this.steps;
         if (!s.length) return '';
-        const i = s.findIndex(x => x.status === 'in_progress');
-        const step = i >= 0 ? s[i] : (s.find(x => x.status !== 'done') || s[s.length - 1]);
+        const i = s.findIndex(x => x.state === 'in_progress');
+        const step = i >= 0 ? s[i] : (s.find(x => x.state !== 'done') || s[s.length - 1]);
         return step?.description || '';
     },
     get progress() {
         const s = this.steps;
         if (!s.length) return 0;
-        return Math.round(s.filter(x => x.status === 'done').length / s.length * 100);
+        return Math.round(s.filter(x => x.state === 'done').length / s.length * 100);
     },
     get stepsChevron() {
         return this.collapsed ? 'icons:chevron-right' : 'icons:chevron-right:90';

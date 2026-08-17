@@ -5,11 +5,6 @@ export default {
             id: "FIELDS",
             icon: "iconoir:input-field",
             fields: []
-        },
-        STATIC: {
-            id: "STATIC",
-            icon: "carbon:tree-view-alt",
-            fields: []
         }
     },
     label: "Журнал проводок"

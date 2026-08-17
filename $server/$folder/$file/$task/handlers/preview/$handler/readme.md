@@ -13,13 +13,16 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 ## 3. Как это работает
 
 - Shell: `streamingText` на delta; `streaming` true на каркасе wait / delta, false на done; `changed`/`chat.done` → `load()`.
-- `focusedBlock` — последний не-`hidden` в открытой ветке (`closed` / без `items` — стоп спуска).
+- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет.
+- `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
+- `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
 - Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streaming`; зелёная — `accept: true` (+ для form `prompt` = JSON `$pdp.result`); крестик — `accept: false` (в query не уходит, сервер считает отказом).
-- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет.
+- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
+- Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
-- `site` — обычный блок; лейбл = title, без тела. Шапка: `~is` → `a` при `data.url`, `:href="data.url"`. У `a.label` — `flex: 1` (распорка иначе сжимает title).
+- `site` — обычный блок: `label` = url, тело = `content` (текст страницы). `data.url` есть у слота.
 
 ## 4. Из чего это состоит
 
@@ -60,5 +63,6 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 - **Action:** `actionButton` = строка `focusedBlock.stop`, но `null` пока `$pdp.streaming`; `sendAction(accept)` шлёт `accept` и для form — JSON `$pdp.result`.
 - **Form:** слот рисует `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
-- **Stream:** shell `streaming` + `streamingText`; view через `$pdp`; `typeIcon` на стримящемся блоке — `spinners:3-dots-scale`; ribbon скроллит при stick.
+- **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
+- **Stream:** shell `streaming` + `streamingText`; view через `$pdp`; `typeIcon` на стримящемся блоке — `spinners:3-dots-scale`; ribbon скроллит при stick. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

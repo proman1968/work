@@ -80,12 +80,6 @@ export class $class extends $folder{
             return new CORE.$field(meta.FIELDS, this);
         })
     }
-    get $statics(){
-        return Promise.resolve(this.metadata).then(meta => {
-            meta.STATIC ??= {id: 'STATIC', icon: 'carbon:tree-view-alt', fields: []}
-            return new CORE.$field(meta.STATIC, this);
-        })
-    }
     async execute(...params){
         let $item = Reactor.activate(this);
         let module = await import($item.short + '/~/class.js');
@@ -102,7 +96,7 @@ export class $class extends $folder{
         }
     }
     get dataAccessRoot() {
-        return Promise.all([this.metadata, this.$fields, this.$statics]).then(([metadata, ...fieldGroups]) => {
+        return Promise.all([this.metadata, this.$fields]).then(([metadata, ...fieldGroups]) => {
             return new this.constructor.DataAccessRoot({
                 fieldRoot: metadata,
                 fieldGroups,
@@ -265,10 +259,8 @@ $class.DataAccessRoot = class extends $class.DataAccessNode {
     }
     get children() {
         return this.#fieldGroups.map(fg => {
-            const isStatic = fg.id === 'STATIC';
-            const node = new $class.DataAccessNode({field: fg, parent: this, key: isStatic ? undefined : 'data'});
-            if (isStatic)
-                node._rootAccess = true;
+            const node = new $class.DataAccessNode({field: fg, parent: this});
+            node._rootAccess = true;
             return node;
         });
     }

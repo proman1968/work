@@ -161,7 +161,10 @@ ODA({ is: 'microchat-panel',
     $item: {
         $def: null,
         set(n) {
-            n?.listen('chat.delta', e => this._tts().onDelta(e));
+            n?.listen('chat.delta', e => {
+                this.pending = true;
+                this._tts().onDelta(e);
+            });
             n?.listen('chat.done', () => this._onDone());
         },
     },

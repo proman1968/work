@@ -1,5 +1,6 @@
 export default {
-    async function (s, d = {
+    icon: "fontawesome:s-people-group",
+    async function(s, d = {
         d: 44
       }) {
         let a = 100;
@@ -9,5 +10,20 @@ export default {
     "#security": {
         ADMINS: ["15D3E0BE98A2BBA7"],
         USERS: ["70D0EE3157EF4AB7","56449FC224551D14","88F3DD2947E29748","15D3E0BE98A2BBA7","D064CDA53ED68B3B","ED7B0AEBC5E00158","1D47F50215FB8E11","7CBA5D30B07CDA72","5B885D45EF3A1A27","58C2C6451CF9BC5B","D90D9D3E450B12B6","D1B276437F384AAB","70E925FEF2C1D2AB","83468374623940"]
-    }
+    },
+    METADATA: {
+        FIELDS: {
+            id: "FIELDS",
+            icon: "iconoir:input-field",
+            fields: [{
+                id: "asd",
+                type: "String"
+            },{
+                id: "qwe",
+                type: "Number"
+            }]
+        }
+    },
+    asd: "wdadasd",
+    qwe: "13123"
 }

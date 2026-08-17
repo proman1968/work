@@ -217,8 +217,8 @@ async function loadProductFields() {
     for (const url of urls) {
         try {
             const mod = await import(url);
-            if (Array.isArray(mod?.default?.FIELDS) && mod.default.FIELDS.length) {
-                const fields = mod.default.FIELDS.slice();
+            if (Array.isArray(mod?.default?.METADATA?.FIELDS?.fields) && mod.default.METADATA.FIELDS.fields.length) {
+                const fields = mod.default.METADATA.FIELDS.fields.slice();
                 if (!fields.some(f => f.id === 'label'))
                     fields.unshift({ id: 'label', type: 'string', label: 'Название' });
                 return fields;

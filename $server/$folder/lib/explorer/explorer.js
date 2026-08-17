@@ -3,7 +3,7 @@ export default {
     imports: 'oda//app-layout.js, ~/lib//tree.js, ~/lib//node-explorer.js',
     extends: 'oda-app-layout',
     template: /*html*/`
-        <item-tree light slot='left-panel' :items-selector :show-size show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
+        <item-tree light slot='left-panel' :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
         <div flex vertical slot='main' style="overflow: hidden; position: relative;">
             <call-form ~if="showCall" id="callForm"></call-form>
             <item-hexagon-layout ~show="showHexagon" flex id="hexagon"></item-hexagon-layout>

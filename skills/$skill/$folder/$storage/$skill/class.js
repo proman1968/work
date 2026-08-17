@@ -13,11 +13,6 @@ export default {
             id: 'FIELDS',
             icon: 'iconoir:input-field',
             fields: []
-        },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: []
         }
     },
     

@@ -520,7 +520,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await this.$item.save_file(new File([eml], 'outbox.eml', { type: 'message/rfc822' }), {
+            await this.$item.save_file(new File([eml], 'outbound.eml', { type: 'message/rfc822' }), {
                 encoding: 'utf-8',
                 folder: address,
             });

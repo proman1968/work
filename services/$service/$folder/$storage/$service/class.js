@@ -3,8 +3,8 @@
  */
 export default {
     METADATA: {
-        STATIC: {
-            id: 'STATIC',
+        FIELDS: {
+            id: 'FIELDS',
             icon: 'iconoir:input-field',
             fields: [],
         },
