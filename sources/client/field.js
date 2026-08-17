@@ -23,7 +23,9 @@ export class $field extends $item{
                     {id: 'DateTime', icon: 'box:i-calendar'},
                     {id: 'Boolean', icon: 'carbon:checkbox-checked'},
                     {id: 'Table', icon: 'bootstrap:table'},
-                    {id: 'Text', icon: 'bootstrap:card-text'}
+                    {id: 'Text', icon: 'bootstrap:card-text'},
+                    {id: 'Object', icon: 'carbon:database'},
+                    {id: 'Form', icon: 'icons:view-list'}
                 ],
                 set (n){
                     this.update('type', n)
@@ -31,6 +33,18 @@ export class $field extends $item{
             },
             set label(n){
                 this.update('label', n)
+            },
+            placeholder: {
+                $def: '',
+                set(n){
+                    this.update('placeholder', n)
+                }
+            },
+            required: {
+                $def: false,
+                set(n){
+                    this.update('required', n)
+                }
             },
             link:{
                 $def: '',

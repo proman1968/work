@@ -7,11 +7,6 @@ export default {
 				id: "nm m",
 				type: "String"
 			}]
-		},
-		STATICS: {
-			id: "STATICS",
-			icon: "carbon:tree-view-alt",
-			fields: []
 		}
 	}
 }

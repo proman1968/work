@@ -31,10 +31,5 @@ export default {
                 placeholder: '0',
             }],
         },
-        STATIC: {
-            id: 'STATIC',
-            icon: 'carbon:tree-view-alt',
-            fields: [],
-        },
     },
 };

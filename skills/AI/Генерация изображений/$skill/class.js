@@ -52,11 +52,6 @@ export default {
                 required: true,
             }],
         },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: [],
-        },
     },
     async execute(params = {}) {
         const data = { ...(params.data ?? {}) };

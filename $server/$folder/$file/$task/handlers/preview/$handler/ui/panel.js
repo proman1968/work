@@ -161,7 +161,10 @@ ODA({ is: 'microchat-panel',
     $item: {
         $def: null,
         set(n) {
-            n?.listen('chat.delta', e => this._tts().onDelta(e));
+            n?.listen('chat.delta', e => {
+                this.pending = true;
+                this._tts().onDelta(e);
+            });
             n?.listen('chat.done', () => this._onDone());
         },
     },
@@ -201,15 +204,13 @@ ODA({ is: 'microchat-panel',
     _tts() {
         return this._ttsController ??= new TtsController(this);
     },
-    async sendAction(ok = true) {
+    async sendAction(accept) {
         this.pending = true;
-        let prompt = ok ? 'ok' : 'cancel';
-        if (ok) {
-            const result = this.$pdp.result;
-            if (result !== undefined)
-                prompt = JSON.stringify(result);
-        }
+        let prompt;
+        if (accept && this.isFormAction)
+            prompt = JSON.stringify(this.$pdp.result || {});
         await this.$item.fetch('prompt', {
+            accept,
             prompt,
             model: this.data.model,
             role: 'APPROVE',

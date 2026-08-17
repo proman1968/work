@@ -12,11 +12,6 @@ export default {
                 id: "ghjfghj",
                 type: "String"
             }]
-        },
-        STAICS: {
-            id: "STAICS",
-            icon: "carbon:tree-view-alt",
-            fields: []
         }
     }
 }

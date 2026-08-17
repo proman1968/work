@@ -1,4 +1,4 @@
-/** Поля заявки — из $bid.FIELDS → input.fields (не из .product). */
+/** Поля заявки — из $bid.METADATA.FIELDS → input.fields (не из .product). */
 async function loadBidInputFields() {
     const urls = [
         '/$server/$folder/$file/$bid/class.js',
@@ -7,7 +7,7 @@ async function loadBidInputFields() {
     for (const url of urls) {
         try {
             const mod = await import(url);
-            const fields = mod?.default?.FIELDS;
+            const fields = mod?.default?.METADATA?.FIELDS?.fields;
             if (!Array.isArray(fields))
                 continue;
             const input = fields.find(f => f.id === 'input');

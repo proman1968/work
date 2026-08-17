@@ -92,7 +92,7 @@ export default {
     async attached() {
         const body = await this.$item.body;
         this._body = body;
-        const schema = body?.FIELDS || this.$item?.FIELDS || this.$context?.FIELDS || [];
+        const schema = body?.METADATA?.FIELDS?.fields || this.$item?.METADATA?.FIELDS?.fields || [];
         this.fields = (Array.isArray(schema) ? schema : []).map(f => ({
             id: f.id,
             label: f.label || f.id,

@@ -9,8 +9,8 @@ export default {
     description: 'Внешние сервисы и коннекторы',
 
     METADATA: {
-        STATIC: {
-            id: 'STATIC',
+        FIELDS: {
+            id: 'FIELDS',
             icon: 'iconoir:input-field',
             fields: [{
                 id: 'baseUrl',

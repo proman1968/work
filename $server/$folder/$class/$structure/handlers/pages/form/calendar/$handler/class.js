@@ -10,6 +10,7 @@ export default {
     `,
     viewMode: {
         $def: 'day',
+        $save: true,
         set() {
             this.events = undefined;
         }
@@ -93,6 +94,7 @@ export default {
                 end: content.end,
                 summary: content.summary ?? '',
                 location: content.location ?? '',
+                allDay: !!content.allDay,
                 $item: row.logsFilePath && await WORK.get_item(row.logsFilePath)
             })));
             events.sort((a, b) => String(a.start).localeCompare(String(b.start)));
@@ -113,12 +115,24 @@ export default {
         } else {
             const detail = arg || {};
             const start = detail.start ? new Date(detail.start) : new Date();
-            if (detail.allDay) start.setHours(9, 0, 0, 0);
-            const end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 30 * 60 * 1000);
+            let end;
+            if (detail.allDay) {
+                start.setHours(0, 0, 0, 0);
+                end = detail.end ? new Date(detail.end) : new Date(start);
+                if (!detail.end)
+                    end.setDate(end.getDate() + 1);
+                else
+                    end.setHours(0, 0, 0, 0);
+                if (end <= start)
+                    end.setDate(start.getDate() + 1);
+            } else {
+                end = detail.end ? new Date(detail.end) : new Date(start.getTime() + 30 * 60 * 1000);
+            }
             el = ODA.createElement('calendar-form', {
                 events: [{
                     start: start.toISOTimezoneString(),
-                    end: end.toISOTimezoneString()
+                    end: end.toISOTimezoneString(),
+                    allDay: !!detail.allDay
                 }]
             });
         }
@@ -150,7 +164,8 @@ export default {
             start: persist.start,
             end: persist.end,
             summary: persist.summary,
-            location: persist.location
+            location: persist.location,
+            allDay: !!persist.allDay
         });
         await this.$item.save_file(file, { message, time: startDate.getTime() });
         this.events = undefined;
@@ -301,19 +316,48 @@ ODA({
                 background: var(--border-color);
                 border-bottom: 1px solid var(--border-color);
                 color: var(--dark-color);
+                position: sticky;
+                top: 0;
+                z-index: 3;
+                flex-shrink: 0;
             }
             .time-header {
                 @apply --header;
                 padding: 8px;
+                position: sticky;
+                left: 0;
+                z-index: 1;
             }
             .day-header {
                 @apply --header;
-                padding: 8px;
-                text-align: center;
+                padding: 0;
                 font-weight: normal;
+                min-width: 0;
+                height: 100%;
+                box-sizing: border-box;
             }
             .day-header[today] {
                 @apply --info;
+            }
+            .day-title {
+                padding: 8px;
+                align-items: baseline;
+                gap: 8px;
+                min-width: 0;
+            }
+            .day-name {
+                text-align: center;
+            }
+            .all-day {
+                @apply --flex;
+                min-height: 32px;
+                cursor: pointer;
+                border-top: 1px solid var(--border-color);
+                padding: 2px 4px;
+                box-sizing: border-box;
+            }
+            .all-day:hover {
+                background: var(--light-background);
             }
             .time-body {
                 display: grid;
@@ -321,6 +365,9 @@ ODA({
             }
             .time-col {
                 @apply --content;
+                position: sticky;
+                left: 0;
+                z-index: 2;
             }
             .slot-label {
                 height: 32px;
@@ -378,9 +425,14 @@ ODA({
         </style>
         <div class="time-grid" style="border-top: 1px solid var(--border-color);" ~style="gridStyle">
             <div class="time-header"></div>
-            <div ~for="columns" class="day-header" :today="$for.item.isToday">
-                <div>{{$for.item.dayName}}</div>
-                <div>{{$for.item.date}}</div>
+            <div ~for="columns" class="day-header" vertical :today="$for.item.isToday">
+                <div horizontal class="day-title">
+                    <div>{{$for.item.day}}</div>
+                    <div class="day-name flex">{{$for.item.dayName}}</div>
+                </div>
+                <div class="all-day" vertical @tap="selectAllDay($for.item)">
+                    <oda-calendar-event badge ~for="$for.item.allDayBlocks" :data="$for.$for.item" :title="$for.$for.item.title"></oda-calendar-event>
+                </div>
             </div>
         </div>
         <div class="time-body" ~style="gridStyle">
@@ -441,12 +493,10 @@ ODA({
         const mode = this.viewMode;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const toDay = (d) => {
             const check = new Date(d.getFullYear(), d.getMonth(), d.getDate());
             return {
-                date: `${d.getDate()} ${monthsNames[d.getMonth()]}`,
+                day: d.getDate(),
                 dayName: dayNames[d.getDay()],
                 fullDate: d,
                 isToday: check.getTime() === today.getTime()
@@ -469,6 +519,7 @@ ODA({
         const list = (!events || events.then) ? [] : events;
         return days.map(day => ({
             ...day,
+            allDayBlocks: _allDayEvents(list, day.fullDate),
             blocks: _layoutDayEvents(list, day.fullDate)
         }));
     },
@@ -477,6 +528,13 @@ ODA({
         start.setHours(slot.hour, this.interval * slot.intervalIdx, 0, 0);
         const end = new Date(start.getTime() + this.interval * 60 * 1000);
         this.fire('add-event', { start, end });
+    },
+    selectAllDay(column) {
+        const start = new Date(column.fullDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        this.fire('add-event', { start, end, allDay: true });
     }
 })
 
@@ -490,10 +548,13 @@ ODA({
             }
             .calendar-grid {
                 display: grid;
-                grid-template-columns: repeat(7, 1fr);
+                grid-template-columns: auto repeat(7, 1fr);
                 gap: 1px;
                 background: var(--border-color);
                 border: 1px solid var(--border-color);
+            }
+            .week-row {
+                display: contents;
             }
             .weekday-header {
                 @apply --header;
@@ -501,6 +562,14 @@ ODA({
                 text-align: center;
                 font-weight: normal;
                 font-size: small;
+            }
+            .week-label {
+                @apply --content;
+                writing-mode: vertical-rl;
+                transform: rotate(180deg);
+                text-align: center;
+                font-size: small;
+                white-space: nowrap;
             }
             .day-cell {
                 @apply --content;
@@ -528,13 +597,17 @@ ODA({
             }
         </style>
         <div class="calendar-grid">
+            <div class="weekday-header"></div>
             <div ~for="weekdays" class="weekday-header">{{$for.item}}</div>
-            <div ~for="calendarDays" class="day-cell"
-                 :other-month="$for.item.otherMonth"
-                 :today="$for.item.isToday"
-                 @tap="selectMonthDay($for.item)">
-                <div class="day-number">{{$for.item.day}}</div>
-                <oda-calendar-event badge ~for="$for.item.events" :data="$for.$for.item" :title="$for.$for.item.title"></oda-calendar-event>
+            <div ~for="weeks" class="week-row">
+                <div class="week-label">{{$for.item.label}}</div>
+                <div ~for="$for.item.days" class="day-cell"
+                     :other-month="$for.$for.item.otherMonth"
+                     :today="$for.$for.item.isToday"
+                     @tap="selectMonthDay($for.$for.item)">
+                    <div class="day-number">{{$for.$for.item.day}}</div>
+                    <oda-calendar-event badge ~for="$for.$for.item.events" :data="$for.$for.$for.item" :title="$for.$for.$for.item.title"></oda-calendar-event>
+                </div>
             </div>
         </div>
     `,
@@ -566,6 +639,18 @@ ODA({
             cur.setDate(cur.getDate() + 1);
         }
         return days;
+    },
+    get weeks() {
+        const days = this.calendarDays;
+        const weeks = [];
+        for (let i = 0; i < days.length; i += 7) {
+            const row = days.slice(i, i + 7);
+            weeks.push({
+                label: _weekRangeLabel(row[0].date, row[row.length - 1].date),
+                days: row
+            });
+        }
+        return weeks;
     },
     getEventsForDay(date) {
         const events = this.events;
@@ -673,14 +758,28 @@ ODA({
                 @apply --flex;
             }
             .date-picker {
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
+                position: relative;
                 cursor: pointer;
+                border-radius: 4px;
+                padding: 4px 8px;
+                align-content: center;
+                white-space: nowrap;
+            }
+            .date-picker input {
+                position: absolute;
+                inset: 0;
+                opacity: 0;
+                pointer-events: none;
+                width: 100%;
+                height: 100%;
             }
         </style>
-        <oda-button icon="icons:chevron-left" @tap="prevPeriod"></oda-button>
-        <input type="date" id="date-picker" class="date-picker" ::value="datePickerValue">
-        <oda-button icon="icons:chevron-right" @tap="nextPeriod"></oda-button>
+        <oda-button icon="icons:chevron-left" title="Назад" @tap="prevPeriod"></oda-button>
+        <oda-button icon="icons:today" title="Сегодня" @tap="goToday"></oda-button>
+        <oda-button icon="icons:chevron-right" title="Вперёд" @tap="nextPeriod"></oda-button>
+        <div class="date-picker info" title="Выберите дату" @tap="openPicker">{{periodLabel}}
+            <input type="date" tabindex="-1" ::value="datePickerValue">
+        </div>
     `,
     viewMode: {
         $def: 'day'
@@ -695,6 +794,16 @@ ODA({
         if (value)
             this.currentDate = _parseDay(value);
     },
+    get periodLabel() {
+        return _periodLabel(_asDate(this.currentDate), this.viewMode);
+    },
+    openPicker() {
+        const input = this.$('input');
+        if (input.showPicker)
+            input.showPicker();
+        else
+            input.click();
+    },
     prevPeriod() {
         this.currentDate = _shiftDate(_asDate(this.currentDate), this.viewMode, -1);
     },
@@ -707,6 +816,19 @@ ODA({
 })
 
 const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthsFullNames = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+function _weekRangeLabel(first, last) {
+    const d1 = first.getDate();
+    const d2 = last.getDate();
+    const m2 = monthsNames[last.getMonth()];
+    if (first.getMonth() === last.getMonth())
+        return `${d1} - ${d2} ${m2}`;
+    return `${d1} ${monthsNames[first.getMonth()]} - ${d2} ${m2}`;
+}
 
 function eventHhmm(iso) {
     const d = new Date(iso);
@@ -717,6 +839,8 @@ function eventHhmm(iso) {
 }
 
 function eventInterval(ev) {
+    if (ev?.allDay)
+        return 'all day';
     if (!ev?.start || !ev?.end)
         return '';
     const a = eventHhmm(ev.start);
@@ -771,6 +895,32 @@ function _formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
+function _dotDate(date, parts = 'dmy') {
+    const dd = String(date.getDate()).padStart(2, '0');
+    if (parts === 'd')
+        return dd;
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    if (parts === 'dm')
+        return `${dd}.${mm}`;
+    return `${dd}.${mm}.${date.getFullYear()}`;
+}
+
+function _periodLabel(date, viewMode) {
+    const d = _asDate(date);
+    if (viewMode === 'month')
+        return `${monthsFullNames[d.getMonth()]} ${d.getFullYear()}`;
+    if (viewMode === 'week' || viewMode === 'workweek') {
+        const start = _weekStart(d);
+        const end = new Date(start);
+        end.setDate(end.getDate() + (viewMode === 'workweek' ? 4 : 6));
+        const sameYear = start.getFullYear() === end.getFullYear();
+        const sameMonth = sameYear && start.getMonth() === end.getMonth();
+        const left = sameMonth ? _dotDate(start, 'd') : sameYear ? _dotDate(start, 'dm') : _dotDate(start);
+        return `${left} - ${_dotDate(end)}`;
+    }
+    return _dotDate(d);
+}
+
 function _weekStart(date) {
     const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const dayOfWeek = start.getDay();
@@ -796,6 +946,32 @@ function _shiftDate(date, viewMode, dir) {
     return next;
 }
 
+function _allDayEvents(events, date) {
+    const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+    const result = [];
+    for (const e of events) {
+        if (!e.allDay)
+            continue;
+        const s = new Date(e.start).getTime();
+        const t = new Date(e.end).getTime();
+        if (isNaN(s) || isNaN(t) || t <= s)
+            continue;
+        if (t <= dayStart || s >= next)
+            continue;
+        result.push({
+            start: e.start,
+            end: e.end,
+            summary: e.summary ?? '',
+            location: e.location ?? '',
+            allDay: true,
+            $item: e.$item,
+            title: eventTitle(e)
+        });
+    }
+    return result;
+}
+
 function _layoutDayEvents(events, date) {
     const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const dayEnd = new Date(dayStart);
@@ -806,6 +982,8 @@ function _layoutDayEvents(events, date) {
     const gap = 2;
     const items = [];
     for (const e of events) {
+        if (e.allDay)
+            continue;
         const s = new Date(e.start).getTime();
         const t = new Date(e.end).getTime();
         if (isNaN(s) || isNaN(t) || t <= s)

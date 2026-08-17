@@ -25,11 +25,6 @@ disambiguation`,
                 placeholder: 'Уточните запрос или выберите skill из списка',
             }],
         },
-        STATICS: {
-            id: 'STATICS',
-            icon: 'carbon:tree-view-alt',
-            fields: [],
-        },
     },
     async execute(params = {}) {
         const prompt = String(params.data?.prompt ?? params.prompt ?? '').trim();

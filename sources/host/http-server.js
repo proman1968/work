@@ -22,6 +22,11 @@ function sendErrorResponse(response, error) {
     if (DEV_MODE) {
         console.error('[WORK]', error);
     }
+    if (response.headersSent) {
+        if (!response.writableEnded)
+            response.end();
+        return;
+    }
     try {
         response.writeHead(400, {
             'Content-Type': 'text/html',
@@ -483,8 +488,10 @@ export function createRequestHandler() {
                     result.pipe(response);
                     result.on('error', (err) => {
                         console.error('File stream error:', err);
-                        response.writeHead(500, { 'Content-Type': 'text/plain' });
-                        response.end('Server error');
+                        if (!response.headersSent)
+                            response.writeHead(500, { 'Content-Type': 'text/plain' });
+                        if (!response.writableEnded)
+                            response.end('Server error');
                     });
                 }
             else

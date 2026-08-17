@@ -53,9 +53,7 @@ export class $class extends $folder{
     }
     get METADATA(){
         return this.DATA.METADATA ?? {
-            FIELDS: [],
-            STATIC: [],
-            INDEXES: []
+            FIELDS: { id: 'FIELDS', icon: 'iconoir:input-field', fields: [] }
         }
     }
     static validateVarName(name) {
