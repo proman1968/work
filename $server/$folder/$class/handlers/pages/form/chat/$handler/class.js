@@ -26,7 +26,7 @@ ODA({is: 'form-chat',
                 gap: 8px;
                 padding: 4px;
                 align-items: center;
-                justify-content: space-between;
+                justify-content: end;
                 margin-bottom: 1px;
                 @apply --shadow;
             }

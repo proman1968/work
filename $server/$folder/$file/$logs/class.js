@@ -1,4 +1,5 @@
 export default{
+    icon: 'carbon:log',
     template: /* html */`
         <style>
             :host{

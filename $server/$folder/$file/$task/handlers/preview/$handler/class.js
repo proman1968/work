@@ -1,6 +1,6 @@
 /**
  * Preview ai.task — shell: лента + промптбар.
- * data/items/$item/focusedBlock/result/streamingText/streaming; без знания внутренностей детей.
+ * data/items/$item/focusedBlock/streamTarget/result/streamingText/streaming; без знания внутренностей детей.
  */
 
 import './ui/views.js';
@@ -30,8 +30,7 @@ export default {
             n?.listen('changed', async () => {
                 this.streamingText = '';
                 this.data = await n.load();
-                // каркас с button до первого delta — уже стрим-фаза
-                this.streaming = this._isStreamSkeleton(this.focusedBlock);
+                this.streaming = !!this.streamTarget;
             });
             n?.listen('chat.delta', e => {
                 this.streaming = true;
@@ -63,10 +62,9 @@ export default {
         }
         return undefined;
     },
-    /** каркас wait-блока: stop-лейбл есть, тела ещё нет */
-    _isStreamSkeleton(b) {
-        if (typeof b?.stop !== 'string') return false;
-        if (b.content || b.html) return false;
-        return true;
+    /** focused без тела — стрим уже идёт или ещё ждём первый токен */
+    get streamTarget() {
+        const b = this.focusedBlock;
+        return (b && !b.content && !b.html) ? b : undefined;
     },
 };

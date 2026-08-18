@@ -149,6 +149,12 @@ ODA({ is: 'microchat-view',
                 font-size: small;
                 word-break: break-word;
             }
+            details:has(> summary:not([hidden])) .body {
+                font-size: xx-small;
+            }
+            oda-markdown-viewer.stream {
+                font-size: xx-small;
+            }
             :host([container]) details > .body {
                 border-left: 4px solid var(--info-color);
             }
@@ -173,7 +179,7 @@ ODA({ is: 'microchat-view',
             </summary>
             <div class="body" content>
                 <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
@@ -206,8 +212,11 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        if (this.$pdp.streaming && Reactor.equal(this.data, this.$pdp.focusedBlock))
+        const live = this.$pdp?.streamTarget;
+        if (live && Reactor.equal(this.data, live))
             return 'spinners:3-dots-scale';
+        if (live && containsBlock(this.data, live))
+            return 'spinners:pulse';
         return this.data?.icon || '';
     },
     get items() { return this.data?.items || []; },
@@ -256,8 +265,7 @@ ODA({ is: 'microchat-view',
 
     // --- title chrome ---
     get colorMode() {
-        if (this.pinned) return 'accent';
-        return 'header';
+        return this.showTitle ? 'light' : 'content';
     },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
@@ -345,14 +353,15 @@ ODA({ is: 'microchat-view-prompt',
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     get extendTag() {
-        const ui = this.data?.ui;
+        if (!this.data?.html) return '';
+        const ui = this.data.ui;
         if (!ui) return 'microchat-form';
         const name = String(ui);
         if (name.includes('-')) return name;
         return 'microchat-form-' + name;
     },
     get showContent() {
-        return !!(this.content || this.streamTail || this.extendTag);
+        return !!(this.content || this.streamTail || this.data?.html);
     },
 });
 
@@ -364,7 +373,6 @@ ODA({ is: 'microchat-form',
         <style>
             :host {
                 @apply --vertical;
-                @apply --light;
                 width: 100%;
                 min-width: 0;
                 box-sizing: border-box;
@@ -384,19 +392,23 @@ ODA({ is: 'microchat-form',
                 min-width: 0;
                 box-sizing: border-box;
                 border-radius: 8px;
-                @apply --header;
+                @apply --light;
                 @apply --vertical;
+                margin-bottom: 8px;
+                gap: 4px;
             }
             .slot :where(legend) {
-                font-size: medium;
-                @apply --dark;
+                font-size: small;
+                @apply --header;
                 padding: 4px 8px;
-                border-radius: 8px;
+                border-radius: 2px;
+                @apply --raised;
             }
             .slot :where(label) {
                 @apply --horizontal;
                 align-items: center;
                 gap: 8px;
+                font-size: xx-small;
             }
             .slot :where(input, select, textarea) {
                 border: 1px solid var(--border-color);
@@ -406,13 +418,15 @@ ODA({ is: 'microchat-form',
                 color: inherit;
                 width: 100%;
                 min-width: 0;
+                border-radius: 4px;
                 box-sizing: border-box;
+                outline: none;
             }
             .slot :where(textarea) { resize: vertical; min-height: 3em; }
             .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
+            .slot :where([hidden]) { display: none !important; }
         </style>
-        <div class="slot" ~if="html" ~html="html" @input="sync" @change="sync"></div>
-        <div ~if="!html" style="opacity:.6">нет разметки формы</div>
+        <div class="slot" ~if="html" ~html="html" @input="onEdit" @change="onEdit"></div>
     `,
     data: {
         $def: null,
@@ -440,21 +454,87 @@ ODA({ is: 'microchat-form',
         }
         return out;
     },
+    onEdit() {
+        this.syncOther();
+        this.sync();
+    },
     sync() {
         if (this.data) this.data.values = this.result;
     },
     restore() {
         const values = this.data?.values;
-        if (!values) return;
-        for (const el of this.$$('input, select, textarea')) {
-            const key = el.name || el.id;
-            if (!key || values[key] == null) continue;
-            if (el.type === 'checkbox') el.checked = !!values[key];
-            else if (el.type === 'radio') el.checked = String(el.value) === String(values[key]);
-            else el.value = values[key];
+        if (values) {
+            for (const el of this.$$('input, select, textarea')) {
+                const key = el.name || el.id;
+                if (!key || values[key] == null) continue;
+                if (el.type === 'checkbox') el.checked = !!values[key];
+                else if (el.type === 'radio') el.checked = String(el.value) === String(values[key]);
+                else el.value = values[key];
+            }
+        }
+        this.syncOther();
+    },
+    syncOther() {
+        for (const sel of this.$$('select'))
+            hideOtherInput(otherInputNear(sel), choiceIsOther(sel));
+        const seen = new Set();
+        for (const radio of this.$$('input[type="radio"]')) {
+            const name = radio.name;
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            const group = [...this.$$(`input[type="radio"][name="${cssEscape(name)}"]`)];
+            const checked = group.find(r => r.checked);
+            const otherRadio = group.find(r => choiceIsOther(r));
+            hideOtherInput(otherInputNear(otherRadio || checked || radio), choiceIsOther(checked));
+        }
+        for (const box of this.$$('input[type="checkbox"]')) {
+            if (!isOtherToken(box.value) && !isOtherToken(box.closest('label')?.textContent))
+                continue;
+            hideOtherInput(otherInputNear(box), !!box.checked);
         }
     },
 });
+
+function isOtherToken(v) {
+    return /друг|other/i.test(String(v || '').trim());
+}
+
+function choiceIsOther(el) {
+    if (!el) return false;
+    if (el.localName === 'select') {
+        const opt = el.selectedOptions?.[0];
+        return isOtherToken(el.value) || isOtherToken(opt?.textContent);
+    }
+    if (el.type === 'radio' || el.type === 'checkbox')
+        return isOtherToken(el.value) || isOtherToken(el.closest('label')?.textContent);
+    return false;
+}
+
+function otherInputNear(el) {
+    if (!el) return;
+    const box = el.closest('fieldset') || el.parentElement;
+    if (!box) return;
+    const all = [...box.querySelectorAll('select, input, textarea')];
+    const i = all.indexOf(el);
+    for (let j = i + 1; j < all.length; j++) {
+        const n = all[j];
+        if (n.localName === 'select' || n.type === 'radio' || n.type === 'checkbox')
+            break;
+        if (!['checkbox', 'radio', 'hidden', 'submit', 'button'].includes(n.type))
+            return n;
+    }
+    return all.find(n => n !== el && isOtherToken(n.name || n.id || n.placeholder));
+}
+
+function hideOtherInput(el, show) {
+    if (!el) return;
+    const wrap = el.closest('label') || el;
+    wrap.hidden = !show;
+}
+
+function cssEscape(name) {
+    return String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
 
 /** html — block.html в sandbox-iframe (script ок; без same-origin к родителю). */
 ODA({ is: 'microchat-view-html',
@@ -484,7 +564,6 @@ ODA({ is: 'microchat-view-todo',
         this.icon = undefined;
         this.content = undefined;
     },
-    get colorMode() { return 'header'; },
     get showContent() { return !!this.streamTail; },
     get label() {
         if (this.data?.label) return this.data.label;

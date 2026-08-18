@@ -1,4 +1,4 @@
-/** «?» / probe readme.md у контейнера (папка, класс, handler), не у файла. */
+/** «?» у контейнера (папка, класс, handler), не у файла: только если readme.md уже в items. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
@@ -101,20 +101,10 @@ export default {
         return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
     },
     get readmeItem() {
-        if (!mayShowReadme(this.$item)) return null;
-        return Promise.resolve(this.$item.items).then(async items => {
-            if (Array.isArray(items)) {
-                const found = items.find(f => /^readme\.md$/i.test(f.id));
-                if (found) return found;
-            }
-            if (typeof this.$item.get_item === 'function') {
-                try {
-                    const readme = await this.$item.get_item('/readme.md');
-                    if (readme && !Array.isArray(readme)) return readme;
-                } catch {}
-            }
-            return null;
-        })
+        if (!mayShowReadme(this.$item)) return undefined;
+        return Promise.resolve(this.$item.items).then(items =>
+            Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined
+        );
     },
     get hasReadme() {
         return Promise.resolve(this.readmeItem).then(r => !!r);

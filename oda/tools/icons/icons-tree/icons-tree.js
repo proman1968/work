@@ -15,7 +15,7 @@ ODA({is: 'oda-icons-tree', imports: 'oda//tree', extends: 'this, oda-tree',
                 align-items: center;
             }
         </style>
-        <div raised horizontal style="padding:5px; align-items: center; z-index:3; position: sticky; top: 0px;">
+        <div raised header horizontal style="padding:5px; align-items: center; z-index:3; position: sticky; top: 0px;">
             <div raised class="search" horizontal flex content>
                 <input autofocus ::value="filter" id="site-search" content type="search" placeholder="Search" flex />
             </div>
@@ -95,6 +95,8 @@ ODA({is: 'icons-tree-lib',
             .lib {
                 flex-wrap: wrap;
                 justify-content: center;
+                gap: 4px;
+                padding: 8px;
             }
         </style>  
         <div ~show="items?.length" class="lib">  
@@ -103,21 +105,27 @@ ODA({is: 'icons-tree-lib',
     `,
     $listeners:{
         'items-changed'(e){
-            this.host.useExpander = false;
-            this.host.hidden = !this.items.length
+            const hide = Array.isArray(this.data)
+                && this.$pdp.filter?.length > 1
+                && !this.items.length;
+            this.host.hidden = hide;
+            const folder = this.host.host;
+            if (folder?.localName === 'oda-tree-item')
+                folder.hidden = hide;
         }
     },
-    get filter(){
-        return this.host.filter;
-    },
     get items(){
-        return this.filter?.length > 1 ? this.data?.filter?.(i=>i.split(':')[1].includes(this.filter)):this.data || [];
+        const list = this.data;
+        if (!Array.isArray(list)) return [];
+        const q = this.$pdp.filter;
+        if (!(q?.length > 1)) return list;
+        return list.filter(i => i.split(':')[1].includes(q));
     },
     get data(){
-        let lib = this.host.row?.file.name;
-        return this.host.row?.file?.fetch('svg_icons_list').then(items=>{
-            return this.data = items.map(id => lib +':'+ id);
-        })
+        const file = this.host.row?.file;
+        const lib = file?.name;
+        if (!file) return undefined;
+        return file.fetch('svg_icons_list').then(ids => ids.map(id => lib + ':' + id));
     },
     onIconTap(e, icon) {
         if (!icon) return;

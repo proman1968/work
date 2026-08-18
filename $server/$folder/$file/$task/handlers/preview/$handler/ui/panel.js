@@ -170,7 +170,7 @@ ODA({ is: 'microchat-panel',
     },
     /** approve только после стрима; читаем streaming в геттере — иначе кэш ODA не сбросится */
     get actionButton() {
-        if (this.$pdp.streaming) return null;
+        if (this.$pdp.streamTarget) return null;
         const stop = this.$pdp.focusedBlock?.stop;
         return typeof stop === 'string' ? { label: stop } : null;
     },
