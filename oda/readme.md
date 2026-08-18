@@ -17,4 +17,4 @@ Reactor создаёт прокси над целевым объектом. Пр
 
 Компоненты объявляются через `ODA(prototype)` — это аналог customElements.define с интеграцией Reactor.
 
-`$pdp` (на `Node`) — Proxy для `with` в директивах/`:`/`@`: строки резолвятся по `[R].props` и host-цепочке; Symbols (`@@unscopables`) — через `Reflect`, без Reactor.
+`$pdp` (на `Node`) — Proxy для `with` в директивах/`:`/`@`: строки резолвятся по `[R].props` и host-цепочке; Symbols (`@@unscopables`) — через `Reflect`, без Reactor. Чтение `$pdp.X` из геттера `X` того же узла идёт к предку (не в себя).

@@ -16,6 +16,7 @@
 ## Методы `$file`
 
 - `load()` — чтение содержимого
+- `read_text()` — текст файла (utf-8 или извлечение Kreuzberg для office/pdf)
 - `save()` — сохранение (перезапись)
 - `edit()` — точечное редактирование через SEARCH/REPLACE (deprecated-алиас: `edit_file`)
 - `download()` — скачивание как потока

@@ -115,7 +115,7 @@ ODA({is: 'form-chat',
     }
 })
 ODA({is: 'oda-chat',
-    imports: 'oda//button, oda//icon, ~/lib//pack, ~/lib//tree',
+    imports: 'oda//button, oda//icon, ~/lib//pack, ~/lib//tree, ~/lib//user',
     template:/* html */`
         <style>
             :host{
@@ -142,9 +142,6 @@ ODA({is: 'oda-chat',
                 border-radius: 16px;
                 padding: 4px 8px;
                 gap: 2px;
-            }
-            .prompt-row{
-                align-items: flex-end;
             }
             .prompt-tools{
                 align-items: center;
@@ -244,17 +241,14 @@ ODA({is: 'oda-chat',
             </div>
             <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
             <div class="prompt-bar" raised content @tap="focusedItem = null">
-                <div class="prompt-row" horizontal>
-                    <oda-button ~if="!isAIMode" icon="icons:add" @tap="getFile"></oda-button>
-                    <textarea id="text" ~if="!recording" @keydown type="text" autofocus :rows ::value :placeholder></textarea>
-                    <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
-                    <oda-button ~if="!isAIMode" :icon="sendIcon" :rainbow="recording" @tap="send"></oda-button>
-                </div>
-                <div ~if="isAIMode" class="prompt-tools" horizontal>
-                    <item-node ~if="modelItem" no-flex :icon-size="20" :$item="modelItem"
+                <textarea id="text" ~if="!recording" @keydown type="text" autofocus :rows ::value :placeholder></textarea>
+                <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
+                <div class="prompt-tools" horizontal>
+                    <item-node ~if="isAIMode && modelItem" no-flex :icon-size="20" :$item="modelItem"
                         @pointerdown.stop="selectModel($event)"></item-node>
-                    <oda-button ~if="!modelItem" icon="carbon:ai" :icon-size="20"
+                    <oda-button ~if="isAIMode && !modelItem" icon="carbon:ai" :icon-size="20"
                         @tap="selectModel($event)" title="Выбрать модель"></oda-button>
+                    <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="20"></item-user>
                     <div flex></div>
                     <oda-button icon="icons:attachment" :icon-size="24" @tap="getFile" title="Прикрепить файл"></oda-button>
                     <oda-button :icon="sendIcon" :icon-size="24" :rainbow="recording" @tap="send"></oda-button>
@@ -277,7 +271,6 @@ ODA({is: 'oda-chat',
     },
     removeFile(index){
         this.files.splice(index, 1);
-        this.render();
     },
     async getFile(){
         const fileDialog = await ODA.showFileDialog({ multiple: true });
@@ -316,6 +309,9 @@ ODA({is: 'oda-chat',
         const isForeign = this.$pdp?.isPrivate && this.$pdp?.$item?.id !== WORK.uid;
         const hasReceivers = !!(this.$pdp?.receivers?.length);
         return !isForeign && !hasReceivers;
+    },
+    get receivers(){
+        return this.$pdp.receivers;
     },
     model: '',
     get $saveKey(){
@@ -474,24 +470,35 @@ ODA({is: 'oda-chat',
             //     sender: WORK.uid,
             // }];
             try {
-                let includes = []
+                const items = [];
+                if (text)
+                    items.push({ type: 'prompt', content: text, time: Date.now(), sender: WORK.uid });
+                const files = [];
                 for (const f of [...this.files]) {
                     const res = await this.$pdp.$item.save_file(f, { encoding: 'utf-8', ignore_save_logs: true });
                     const path = res?.logFullPath || res?.path || res?.logPath;
                     if (path) {
-                        includes.push({
+                        files.push({
                             type: 'file',
                             path: path.startsWith('/') ? path : '/' + path,
-                            name: f.name || path.split('/').pop(),
+                            label: f.name || path.split('/').pop(),
+                            icon: 'icons:description',
                             time: Date.now(),
-                            sender: WORK.uid,
                         });
                     }
+                }
+                if (files.length) {
+                    items.push({
+                        type: 'includes',
+                        icon: 'icons:attachment',
+                        label: 'Вложения',
+                        items: files,
+                    });
                 }
                 const body = {
                     title: promptText || 'task',
                     created: Date.now(),
-                    includes,
+                    items,
                 };
                 if (this.model) body.model = this.model;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });

@@ -7,7 +7,7 @@
 - `index.js` — сборка `CORE` и registry `FS`: `$folder`, `$class`, `$handler`, `$user`, `$file`
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file`, `find_text`, `get_schema`
 - `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`
-- `file.js` — `$file`: load/save/edit, history, RAG, триггеры `on_save`
+- `file.js` — `$file`: load/read_text/save/edit, history, RAG, триггеры `on_save`
 - `handler.js` — `$handler extends $class`: исполняемый элемент (execute в class.js)
 - `user.js` — `$user`: пользовательская storage-сущность, online-статус
 - `server.js` — `$server`: корневой серверный `$class`, HTTP-сессии, merge `class.js`

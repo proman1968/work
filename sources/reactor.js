@@ -425,7 +425,6 @@ export class Reactor extends EventTarget {
                     this.reset_deps(target, key);
                 }
             }
-            return;
         }
 
         // Уведомляем с дедупликацией — _notifyBatch гарантирует один вызов за microtask

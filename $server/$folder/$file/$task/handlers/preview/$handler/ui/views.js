@@ -173,7 +173,7 @@ ODA({ is: 'microchat-view',
             </summary>
             <div class="body" content>
                 <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
@@ -296,6 +296,7 @@ ODA({ is: 'microchat-view-prompt',
             :host{
                 position: sticky;
                 top: 0px;
+                z-index: 100;
             }
             summary .title > .label {
                 opacity: 1;
@@ -368,6 +369,7 @@ ODA({ is: 'microchat-form',
                 min-width: 0;
                 box-sizing: border-box;
                 padding: 8px;
+                gap: 8px;
                 font-size: small;
             }
             .slot {
@@ -383,12 +385,18 @@ ODA({ is: 'microchat-form',
                 box-sizing: border-box;
                 border-radius: 8px;
                 @apply --header;
+                @apply --vertical;
             }
             .slot :where(legend) {
                 font-size: medium;
                 @apply --dark;
                 padding: 4px 8px;
                 border-radius: 8px;
+            }
+            .slot :where(label) {
+                @apply --horizontal;
+                align-items: center;
+                gap: 8px;
             }
             .slot :where(input, select, textarea) {
                 border: 1px solid var(--border-color);
@@ -401,7 +409,7 @@ ODA({ is: 'microchat-form',
                 box-sizing: border-box;
             }
             .slot :where(textarea) { resize: vertical; min-height: 3em; }
-            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; }
+            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
         </style>
         <div class="slot" ~if="html" ~html="html" @input="sync" @change="sync"></div>
         <div ~if="!html" style="opacity:.6">нет разметки формы</div>
@@ -464,7 +472,7 @@ ODA({ is: 'microchat-view-todo',
             :host {
                 position: sticky;
                 top: 0px;
-                z-index: 100;
+                z-index: 110;
             }
         </style>
     `,

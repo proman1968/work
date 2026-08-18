@@ -885,8 +885,9 @@ Node:{
                     if (typeof p === 'symbol')
                         return Reflect.get(target, p, receiver);
                     if (PDP_EXCLUDES.includes(p)) return undefined;
-                    // Владелец пропа вверх по host; Reactor.get — deps ребёнка → host
-                    const owner = pdpOwner(target, p);
+                    // Геттер X читает $pdp.X — не себя, иначе рекурсия. with($pdp) в шаблоне — с себя.
+                    const reentering = Reactor._collectorTarget === target && Reactor._collectorKey === p;
+                    const owner = pdpOwner(reentering ? target.host : target, p);
                     if (!owner) return undefined;
                     if (owner[R])
                         return Reactor.get(owner, p);

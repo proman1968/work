@@ -30,6 +30,14 @@ export default {
                 } break;
                 default:{
                     this._stopped = false;
+                    if (params.container?.content)
+                        delete params.container.content;
+                    const pending = [...(params.container?.items || [])].reverse().find(b => b.type === 'complete' && b.stop);
+                    if (pending) {
+                        pending.state = 'rejected';
+                        pending.icon = 'icons:close';
+                        delete pending.stop;
+                    }
                     params.block = {
                         type: 'prompt',
                         content: prompt,
@@ -77,15 +85,29 @@ export default {
                 return { ok: true };
             }
 
-            if (params.container.type === 'explore' && !params.container.content && exploreReady(params.container)) {
-                const messages = await this.context({ prompt: PIPE.explore.done?.prompt });
+            const playground = params.container;
+            const playgroundReady = playground?.type === 'explore' ? exploreReady(playground)
+                : playground?.type === 'work' ? workReady(playground)
+                : playground?.type === 'includes' ? includesReady(playground)
+                : false;
+            if (playgroundReady && !playground.content && PIPE[playground.type]?.done?.prompt) {
+                const messages = await this.context({ prompt: PIPE[playground.type].done.prompt });
                 const response = await this._streamChat({ messages, session });
                 if (!this._stopped) {
-                    params.container.content = response.content;
+                    playground.content = response.content;
                     if (response.usage)
-                        params.container.usage = response.usage;
-                    await close_up(await this.body, params.container, params);
+                        playground.usage = response.usage;
+                    await close_up(await this.body, playground, params);
                 }
+                await this._save(session);
+                if (!this._stopped)
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+
+            if (params.block.type === 'file' && params.block.path && !params.block.content) {
+                await fillFileContent(params.block);
+                await close_up(await this.body, params.block, params);
                 await this._save(session);
                 if (!this._stopped)
                     this.async(() => this.prompt({ role: 'AI', session }));
@@ -251,9 +273,11 @@ export default {
         const { messages, session, fc, block } = params;
         if (!fc)
             return this._streamChat({ messages, session });
-        const service = await WORK.get_item(fc);
-        const allow = block?.type === 'web' ? ['search'] : block?.type === 'site' ? ['fetch_url'] : null;
-        const functions = Object.entries(service.SCHEMA || {})
+        const service = (await WORK.get_item(fc)) || WORK;
+        const node = PIPE[block?.type];
+        const schema = node?.schema || service.SCHEMA || {};
+        const allow = node?.allow;
+        const functions = Object.entries(schema)
             .filter(([name]) => !allow || allow.includes(name))
             .map(([name, spec]) => ({
                 name,
@@ -270,11 +294,11 @@ export default {
         for (let i = 0; i < max; i++) {
             const turn = await this._streamChat({ messages, functions, session, silent: true });
             if (this._stopped)
-                return { content, usage, calls };
+                return { content: block?.content || content, usage, calls };
             if (turn.usage)
                 usage = turn.usage;
             if (!turn.calls?.length) {
-                content = turn.content || content;
+                content = block?.content || turn.content || content;
                 if (content)
                     session?.send?.({ type: 'chat.delta', path: this.short, token: content });
                 return { content, usage, calls };
@@ -295,11 +319,13 @@ export default {
         }
         const last = await this._streamChat({ messages, session });
         if (this._stopped)
-            return { content, usage, calls };
+            return { content: block?.content || content, usage, calls };
         if (last.content)
             content = last.content;
         if (last.usage)
             usage = last.usage;
+        if (block?.content)
+            content = block.content;
         return { content, usage, calls };
     },
     async _fc_exec(service, call, { block, session } = {}) {
@@ -315,6 +341,8 @@ export default {
                     continue;
                 seen.add(url);
                 block.sites.push(url);
+                if (block.sites.length >= WEB_SITES)
+                    break;
             }
             await this._save(session);
             return result ?? {};
@@ -328,6 +356,56 @@ export default {
             block.content = result?.content || result?.error || '—';
             await this._save(session);
             return result ?? {};
+        }
+        if ((call.method === 'semantic_search' || call.method === 'find_text') && block?.type === 'search') {
+            const query = String(args.prompt || args.text || '').trim();
+            if (query)
+                block.label = query;
+            const result = await service[call.method]?.(args);
+            block.content = formatFileHits(result);
+            await this._save(session);
+            return result ?? {};
+        }
+        if ((call.method === 'read_text' || call.method === 'load') && block?.type === 'read') {
+            const path = String(args.path || block.path || '').trim();
+            block.path = path;
+            block.label = path || PIPE.read.label;
+            try {
+                const file = await WORK.get_item(path);
+                if (!file)
+                    throw new Error('файл не найден: ' + path);
+                const text = await file.read_text();
+                block.content = typeof text === 'string' && text.trim() ? text : '—';
+            } catch (e) {
+                block.state = 'error';
+                block.content = shortError(e);
+            }
+            await this._save(session);
+            return { path, content: block.content, error: block.state === 'error' ? block.content : undefined };
+        }
+        if (['save_file', 'save', 'edit'].includes(call.method) && block?.type === 'write') {
+            const path = String(args.path || block.path || '').trim();
+            try {
+                if (call.method === 'save_file') {
+                    const folder = path ? await WORK.get_item(path) : service;
+                    const dest = [(folder.path || folder.short || path || '').replace(/\/$/, ''), args.filename].filter(Boolean).join('/');
+                    await folder.save_file({ filename: args.filename, post: args.post, message: args.message });
+                    block.path = dest;
+                    block.label = dest;
+                    block.content = 'записано: ' + dest;
+                } else {
+                    const file = await WORK.get_item(path);
+                    await file[call.method]({ post: args.post });
+                    block.path = path;
+                    block.label = path;
+                    block.content = (call.method === 'edit' ? 'правка: ' : 'записано: ') + path;
+                }
+            } catch (e) {
+                block.state = 'error';
+                block.content = e.message || '—';
+            }
+            await this._save(session);
+            return { path: block.path, content: block.content, error: block.state === 'error' ? block.content : undefined };
         }
         return await service[call.method]?.(args);
     },
@@ -401,10 +479,10 @@ const PIPE = {
     task: {
         container: true,
         plan: {
-            next: ['thinking', 'explore', /* 'planning', 'activation' */],
+            next: ['thinking', 'explore', 'complete', /* 'planning', 'activation' */],
         },
         do: {
-            next: ['thinking','explore', /* 'execute', 'check' */],
+            next: ['thinking','explore', 'complete', /* 'execute', 'check' */],
         },
     },
     /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
@@ -546,20 +624,179 @@ const PIPE = {
         inject: 'если нужно выяснить факты (обзор, справка), не меняя систему',
         system: [
             'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
-            'Не ищи и не обращайся к пользователю.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web',  'form'],
+        next: ['thinking', /* 'work',  */'web', 'form'],
         done: {
             prompt: [
                 'Обобщи, что выяснено в этом обзоре.',
-                'Только факты из ленты (web, site). Кратко, без выдумок и без обращения к пользователю.',
+                'Только факты из ленты (web, site, work, search, read). Кратко, без выдумок и без обращения к пользователю.',
             ].join('\n'),
         },
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
-            params.block.state = childRollup(params.block, ['web']);
+            params.block.state = childRollup(params.block, ['web', 'work']);
         },
+    },
+    work: {
+        label: 'Рабочая область',
+        icon: 'icons:folder',
+        container: true,
+        plan: {
+            inject: 'если необходимо найти файлы или информацию в рабочей области',
+            next: ['search', 'read'],
+        },
+        do: {
+            inject: 'если необходимо сделать действия над файлами в рабочей области',
+            next: ['search', 'read', 'write'],
+        },
+        system: [
+            'Подумай, какие именно действия над файлами необходимо выполнить.',
+        ].join('\n'),
+        done: {
+            prompt: [
+                'Обобщи только то, что найдено, прочитано или записано в блоках search, read и write.',
+                'Кратко, по фактам, без выдумок.',
+            ].join('\n'),
+        },
+        recalc(params = {}) {
+            params.block.state = childRollup(params.block, ['search', 'read', 'write']);
+        },
+    },
+    includes: {
+        label: 'Вложения',
+        icon: 'icons:attachment',
+        container: true,
+        done: {
+            prompt: [
+                'Обобщи только то, что прочитано во вложениях (блоки file).',
+                'Кратко, по фактам, без выдумок.',
+            ].join('\n'),
+        },
+        recalc(params = {}) {
+            const files = (params.block.items || []).filter(x => x.type === 'file');
+            const seen = files.filter(x => x.content).length;
+            params.block.state = files.length ? `${seen}/${files.length} ${PIPE.file.label}` : '';
+        },
+    },
+    file: {
+        label: 'Файл',
+        icon: 'icons:description',
+    },
+    search: {
+        label: 'Поиск',
+        icon: 'icons:search',
+        inject: 'если нужно найти файлы в рабочей области',
+        fc: '/',
+        allow: ['semantic_search', 'find_text'],
+        schema: {
+            semantic_search: {
+                description: 'Семантический поиск файлов. Результат — список путей.',
+                params: {
+                    type: 'object',
+                    properties: {
+                        prompt: { type: 'string', description: 'О чём искать' },
+                    },
+                    required: ['prompt'],
+                },
+            },
+            find_text: {
+                description: 'Поиск по содержимому файлов (grep). Результат — путь, строка, фрагмент.',
+                params: {
+                    type: 'object',
+                    properties: {
+                        text: { type: 'string', description: 'Текст или подстрока' },
+                        ext: { type: 'string', description: 'Расширение без точки' },
+                        limit: { type: 'number', description: 'Макс. число совпадений' },
+                    },
+                    required: ['text'],
+                },
+            },
+        },
+        system: [
+            'Найди файлы одним вызовом semantic_search({prompt}) или find_text({text}).',
+            'Не читай и не меняй файлы.',
+        ].join('\n'),
+        prompt: [
+            'Вызови инструмент поиска по текущей задаче. Не выдумывай пути.',
+        ].join('\n'),
+    },
+    read: {
+        label: 'Файл',
+        icon: 'icons:description',
+        inject: 'если нужно прочитать конкретный файл по пути',
+        fc: '/',
+        allow: ['read_text'],
+        schema: {
+            read_text: {
+                description: 'Прочитать текст файла по пути WORK (utf-8 или извлечение из office/pdf).',
+                params: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Абсолютный путь файла в WORK' },
+                    },
+                    required: ['path'],
+                },
+            },
+        },
+        system: [
+            'Прочитай один файл вызовом read_text({path}).',
+            'Путь — из ленты (search) или запроса. Не выдумывай.',
+        ].join('\n'),
+        prompt: [
+            'Вызови read_text с путём файла, который нужно прочитать.',
+        ].join('\n'),
+    },
+    write: {
+        label: 'Запись',
+        icon: 'editor:mode-edit',
+        inject: 'если нужно записать или поправить файл',
+        fc: '/',
+        allow: ['save_file', 'save', 'edit'],
+        schema: {
+            save_file: {
+                description: 'Создать или перезаписать файл в папке. Новый файл — save_file.',
+                params: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Папка, в которую писать' },
+                        filename: { type: 'string', description: 'Имя файла' },
+                        post: { type: 'string', description: 'Полное содержимое' },
+                        message: { type: 'string', description: 'Текст для лога' },
+                    },
+                    required: ['filename', 'post'],
+                },
+            },
+            save: {
+                description: 'Перезаписать существующий файл целиком.',
+                params: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Путь файла' },
+                        post: { type: 'string', description: 'Новое содержимое' },
+                    },
+                    required: ['path', 'post'],
+                },
+            },
+            edit: {
+                description: 'Точечная правка SEARCH/REPLACE существующего файла.',
+                params: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Путь файла' },
+                        post: { type: 'string', description: 'Блоки SEARCH/REPLACE' },
+                    },
+                    required: ['path', 'post'],
+                },
+            },
+        },
+        system: [
+            'Измени файлы одним вызовом save_file, save или edit.',
+            'Не выдумывай пути. Новый файл — save_file, существующий целиком — save, фрагмент — edit.',
+        ].join('\n'),
+        prompt: [
+            'Вызови инструмент записи для текущего шага.',
+        ].join('\n'),
     },
     check:{
         label: 'Проверка',
@@ -610,6 +847,7 @@ const PIPE = {
         icon: 'icons:language',
         do_icon: 'spinners:pulse',
         fc: '/SERVICES/SearXNG',
+        allow: ['search'],
         container: true,
         next: ['site'],
         done: {
@@ -644,52 +882,44 @@ const PIPE = {
         label: 'Сайт',
         icon: 'icons:language',
         fc: '/SERVICES/SearXNG',
+        allow: ['fetch_url'],
         recalc(params = {}) {
             if (params.block.state !== 'error')
                 delete params.block.state;
         },
     },
 
-    work: {
-        label: 'Рабочая область',
-        icon: 'icons:folder',
-        inject: 'если необходимо найти файлы или информацию в рабочей области',
-        prompt: ['Найди информацию в рабочей области ровно ОДНИМ вызовом функции:',
-            '\n\n[instruction]\n',
-            'read_file({name}) — файл;',
-            'get_schema({}) / inspect_schema({path}) — устройство класса;',
-            'find_text({text}) / find_item({id}) — поиск;',
-            'info({}) — состав;',
-            'logs({}) — журнал.',
-            'Если фактов уже достаточно — изложи выводы обычным текстом.'].join('\n'),
-        fc: 'readonly',
-        build: (r) => ({
-            type: 'work',
-            content: r.content,
-            usage: r.usage,
-            icon: 'icons:folder',
-        }),
-        next: ['thinking'],
-    },
-
     form: {
         label: 'Форма',
         icon: 'icons:view-list',
         inject: 'если нужно выяснить у пользователя сразу несколько вопросов (два и больше) — не текстом',
-        prompt: ['Собери HTML-форму для ввода данных по текущей задаче.',
+        prompt: [
+            'Собери HTML-форму по запросу в ленте (не по профилю и не по группе).',
             '[instruction]',
-            'Не спрашивай, какие поля нужны — составь их сам по запросу пользователя в ленте, не по профилю и не по карточке группы.',
-            'Первой строкой можно дать краткое пояснение.',
-            'Далее один fenced-блок html.',
-            'Все контролы только внутри fieldset + legend, в том числе radio/select. Заголовки секций (h1–h6, p, div) вместо legend запрещены.',
-            'В одном fieldset можно несколько связанных полей (как в обычной форме этой цели). Fieldset в ряд не ставь.',
-            'Legend — название группы или единственного поля. Label внутри — только если он не повторяет legend. Подсказка — в placeholder.',
-            'Варианты: до 5 — radio, больше — select. Всегда пункт «Другое» и рядом input type="text" (своё значение).',
-            'У каждого контрола обязателен name (у «другого» — свой, например name_other).',
-            'Поля — максимально удобные для ввода: подходящий type (email, tel, date, number, url), inputmode, placeholder, autocomplete, min/max, maxlength, pattern; обязательность — required.',
-            'Маски и ограничения — только HTML-атрибутами, без script.',
-            'Форма должна быть похожа на привычный стандарт для этой цели (заявка, анкета, заказ, контакты и т.п.): состав, порядок и подписи как у обычной такой формы, не выдумывай свою схему.',
-            'Без script, без html/body, без кнопки отправки.',
+            'Первой строкой — краткое пояснение. Далее один fenced-блок html.',
+            'Раскладка: все контролы внутри fieldset+legend. Секции — только legend, не h1–p–div.',
+            'Связанные поля — в одном fieldset. Fieldset в ряд не ставь.',
+            'Label — только если не повторяет legend. Подсказка и единица — в placeholder.',
+            'У каждого контрола свой name. Без oda-icon, эмодзи и ul/li вместо контролов.',
+            'Домен (сначала это):',
+            '- перечислимый — типичные ответы можно назвать заранее: список + «Другое», не text с «например»;',
+            '- открытый — пользователь сам формулирует: text/textarea;',
+            '- скаляр — число, дата, деньги: number/date, не список названий.',
+            'Кардинальность (потом type):',
+            '- одно свободное значение — input или textarea;',
+            '- ровно одно из списка: до 5 — radio (общий name), больше — select; пункт «Другое» + input text со своим name;',
+            '- несколько из списка — checkbox, у каждого свой name. Не select multiple, не size>1.',
+            'Вид свободного значения:',
+            '- целое — type=number inputmode=numeric step=1;',
+            '- дробь — type=number inputmode=decimal step под единицу (0.1);',
+            '- деньги — type=number inputmode=numeric step=1 или 1000, единица в placeholder (₽);',
+            '- дата/время/email/tel/url — свой type + autocomplete;',
+            '- короткая строка — text, maxlength только на text;',
+            '- абзац — textarea.',
+            'min/max — только реальный диапазон. maxlength на number запрещён.',
+            'required — если без поля форму сдавать нельзя.',
+            'Маски — только HTML-атрибутами, без script.',
+            'Состав и порядок — как у обычной формы этой цели. Без script, html/body, кнопки отправки.',
         ].join('\n'),
         /** после стрима: пояснение в content, разметка в html */
         parse(block) {
@@ -727,14 +957,17 @@ const PIPE = {
     complete: {
         label: 'Завершение',
         inject: 'если считаешь, что текущая задача (шаг) завершена',
-        prompt: ['Сформируй краткий итог по текущей ветке.',
-            '\n\n[instruction]\n',
-            'Что было сделано в рамках текущей задачи, какой получен результат. Кратко, по фактам из ленты, в формате md.'].join('\n'),
-        stop: 'Завершить',
+        prompt: [
+            'Отдай пользователю итог задачи.',
+            'Не пересказывай процесс. Включи результат из ленты: факты, списки, таблицы.',
+            'Не выдумывай. Формат md.',
+        ].join('\n'),
+        stop: 'Принять',
         async approve(params = {}) {
             const { container, block, prompt } = params;
             if (prompt) {
-                block.state = 'to modify';
+                block.state = 'rejected';
+                block.icon = 'icons:close';
                 block.content = (block.content || '') + '\n\nИТОГ ОТКЛОНЕН, ' + prompt;
                 return;
             }
@@ -744,6 +977,8 @@ const PIPE = {
     },
 };
 function next_options(container, block, mode) {
+    if (container?.content)
+        return [];
     const node = PIPE[block?.type];
     const own = node?.[mode]?.next || node?.next;
     const place = PIPE[container?.type];
@@ -781,6 +1016,8 @@ function childRollup(block, types) {
     walk(block);
     return types.filter(t => counts[t]).map(t => `${counts[t]} ${PIPE[t]?.label || t}`).join(' · ');
 }
+
+const WEB_SITES = 3;
 
 async function webPushNext(web, params) {
     if (!web || web.content || web.sites == null)
@@ -831,7 +1068,50 @@ function exploreReady(b) {
     const kids = b?.items || [];
     if (!kids.length || kids.some(k => !k.content))
         return false;
-    return kids.some(k => k.type === 'web');
+    return kids.some(k => k.type === 'web' || k.type === 'work');
+}
+
+function workReady(b) {
+    const kids = b?.items || [];
+    if (!kids.length || kids.some(k => !k.content))
+        return false;
+    return kids.some(k => k.type === 'read' || k.type === 'write');
+}
+
+function includesReady(b) {
+    const kids = (b?.items || []).filter(x => x.type === 'file');
+    return kids.length > 0 && kids.every(k => k.content);
+}
+
+function shortError(e) {
+    return String(e?.message || e || '—').split('\n')[0].slice(0, 200);
+}
+
+async function fillFileContent(block) {
+    const path = String(block.path || '').trim();
+    block.label = block.label || path;
+    try {
+        const file = await WORK.get_item(path);
+        if (!file)
+            throw new Error('файл не найден: ' + path);
+        const text = await file.read_text();
+        block.content = typeof text === 'string' && text.trim() ? text : '—';
+    } catch (e) {
+        block.state = 'error';
+        block.content = shortError(e);
+    }
+}
+
+function formatFileHits(result) {
+    const items = Array.isArray(result) ? result : [];
+    if (!items.length)
+        return 'Ничего не найдено';
+    return items.map(r => {
+        const path = r.path || r.name || '';
+        const extra = r.line != null ? ':' + r.line : '';
+        const snip = r.text ? ' — ' + String(r.text).trim().slice(0, 200) : '';
+        return '- ' + path + extra + snip;
+    }).join('\n');
 }
 
 function webQuery(web, body) {
@@ -894,7 +1174,7 @@ function parsePlanMarkdown(text = '') {
     };
 }
 
-/** Вырезать html-разметку формы; остаток — пояснение. script не храним (это не узел html). */
+/** Вырезать html-разметку формы; остаток — пояснение. script / oda-icon / button / submit не храним. */
 function parseFormHtml(text = '') {
     const raw = String(text ?? '');
     let html = '';
@@ -913,7 +1193,12 @@ function parseFormHtml(text = '') {
             content = '';
         }
     }
-    html = html.replace(/<script\b[\s\S]*?<\/script>/gi, '').trim();
+    html = html
+        .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+        .replace(/<oda-icon\b[^>]*(?:\/>|>[\s\S]*?<\/oda-icon>)/gi, '')
+        .replace(/<button\b[\s\S]*?<\/button>/gi, '')
+        .replace(/<input\b[^>]*\btype\s*=\s*["']?(?:submit|button|reset)["']?[^>]*>/gi, '')
+        .trim();
     return { content, html };
 }
 
