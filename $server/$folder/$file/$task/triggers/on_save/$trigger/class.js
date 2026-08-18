@@ -18,7 +18,7 @@
         await file.init;
         return file.prompt({
             session: params.session,
-            role,
+            role: body.items?.length ? 'AI' : role,
             prompt: body.title,
         });
     },

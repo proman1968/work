@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { $item } from '../core.js';
 import * as mime from "mime-types";
-import { extractor } from '../modules/embeddings/embeddings.js';
+import * as kreuzberg from '@kreuzberg/node';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
@@ -10,6 +10,7 @@ import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
+    static TEXT_EXTS = new Set(['js', 'txt', 'html', 'mjs', 'css', 'xml', 'svg', 'yaml', 'py', 'ts', 'mts', 'json', 'md', 'task', 'logs', 'chat', 'skill']);
 
     metadata = null;
     meta_file = null;
@@ -205,6 +206,30 @@ export class $file extends $folder{
         if(ancestor)
             return ancestor.load(params)
         throw new Error(`file ${this.path} not found`);
+    }
+    /**
+     * Прочитать файл как текст: utf-8 для текстовых расширений, Kreuzberg для office/pdf и пр.
+     * @param {object} [params]
+     * @returns {Promise<string>} Извлечённый текст
+     */
+    async read_text(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        const ext = String(this.ext || '').toLowerCase();
+        if ($file.TEXT_EXTS.has(ext) || !ext) {
+            const raw = await this.load({ ...params, encoding: 'utf-8' });
+            return typeof raw === 'string' ? raw : '';
+        }
+        if (!fs.existsSync(this.dir)) {
+            const ancestor = await this.inherit_ancestor;
+            if (ancestor)
+                return ancestor.read_text(params);
+            throw new Error(`file ${this.path} not found`);
+        }
+        const result = await kreuzberg.extractFile(this.dir);
+        if (typeof result?.content === 'string' && result.content.trim())
+            return result.content;
+        const chunks = result?.chunks || [];
+        return chunks.map(c => c.content || c.text || '').filter(Boolean).join('\n\n');
     }
     async inherit() {
         return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
