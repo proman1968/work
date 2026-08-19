@@ -3,6 +3,8 @@ export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
     async prompt(params = {}, post) {
+        
+        // debugger;
         let { prompt, role, session } = params;
         params.block = await this._active_block();
         params.container = await this._active_container();
@@ -55,19 +57,6 @@ export default {
 
             if (await params.pipe_step.run?.(params))
                 return this._continue(params);
-
-            const place = PIPE[params.container?.type];
-            if (!params.container?.content && place?.done?.prompt && place.ready?.(params.container)) {
-                const messages = await this.context({ prompt: place.done.prompt });
-                const response = await this._streamChat({ messages, session });
-                if (!this._stopped) {
-                    params.container.content = response.content;
-                    if (response.usage)
-                        params.container.usage = response.usage;
-                    await close_up(await this.body, params.container, params);
-                }
-                return this._continue(params);
-            }
 
             let mode = containerMode(await this.body, params.container);
             let options = next_options(params.container, params.block, mode);
@@ -125,6 +114,7 @@ export default {
                         next_pipe?.parse?.(params.block);
                         await next_pipe?.recalc?.(params);
                         await close_up(await this.body, params.block, params);
+                        next_pipe?.drop?.(params);
                     }
                 }
                 if (!this._stopped) {
@@ -155,8 +145,10 @@ export default {
             else break;
         }
         const mode = containerMode(await this.body, container);
-        const modeLine = mode === 'do' ? 'Сейчас режим исполнения.' : 'Сейчас режим планирования.';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), modeLine].join('\n\n') }];
+        const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
+        const stage = PIPE[container.type]?.label || container.label;
+        const stageLine = stage ? 'Текущий этап: ' + stage : 'Текущий этап';
+        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), stageLine, modeLine].join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -549,7 +541,7 @@ const PIPE = {
         label: 'Шаг',
         inject: 'если необходимо выполнить один очередной пункт плана',
         container: true,
-        next: ['thinking'],
+        next: ['thinking', 'report'],
     },
 
     /** площадка исполнения: файлы, сервисы, FC; субагент в mode do */
@@ -559,8 +551,7 @@ const PIPE = {
         do_icon: 'spinners:pulse',
         inject: 'если необходимо выполнить конкретные действия над конкретными объектами, файлами, навыками',
         container: true,
-        // next: ['work', 'web', 'form', 'html'],
-        next: ['form'],
+        next: ['work', 'web', 'form', 'html', 'check', 'report'],
         prompt: [
             'Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.',
             'Не делай их и не обращайся к пользователю. Размышления от своего лица в content.',
@@ -580,41 +571,27 @@ const PIPE = {
             'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work',  */'web', 'form'],
-        ready: exploreReady,
-        done: {
-            prompt: [
-                'Обобщи, что выяснено в этом обзоре.',
-                'Только факты из ленты (web, site, work, search, read). Кратко, без выдумок и без обращения к пользователю.',
-            ].join('\n'),
-        },
+        next: ['thinking', 'work', 'web', 'form', 'report'],
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'work']);
         },
     },
     work: {
-        label: 'Рабочая область',
+        label: 'Работа c системой',
         icon: 'icons:folder',
         container: true,
         plan: {
             inject: 'если необходимо найти файлы или информацию в рабочей области',
-            next: ['search', 'read'],
+            next: ['search', 'read', 'report'],
         },
         do: {
             inject: 'если необходимо сделать действия над файлами в рабочей области',
-            next: ['search', 'read', 'write'],
+            next: ['search', 'read', 'write', 'report'],
         },
         system: [
             'Подумай, какие именно действия над файлами необходимо выполнить.',
         ].join('\n'),
-        ready: workReady,
-        done: {
-            prompt: [
-                'Обобщи только то, что найдено, прочитано или записано в блоках search, read и write.',
-                'Кратко, по фактам, без выдумок.',
-            ].join('\n'),
-        },
         recalc(params = {}) {
             params.block.state = childRollup(params.block, ['search', 'read', 'write']);
         },
@@ -623,13 +600,7 @@ const PIPE = {
         label: 'Вложения',
         icon: 'icons:attachment',
         container: true,
-        ready: includesReady,
-        done: {
-            prompt: [
-                'Обобщи только то, что прочитано во вложениях (блоки file).',
-                'Кратко, по фактам, без выдумок.',
-            ].join('\n'),
-        },
+        next: ['report'],
         recalc(params = {}) {
             const files = (params.block.items || []).filter(x => x.type === 'file');
             const seen = files.filter(x => x.content).length;
@@ -771,38 +742,33 @@ const PIPE = {
             'Это площадка проверки, не исполнение и не план.',
             'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
             'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
-            'Когда доказательств достаточно — вердикт.',
+            'Когда доказательств достаточно — отчёт (report) или continue.',
         ].join('\n'),
         container: true,
-        next: ['work', 'web', 'thinking', 'verdict'],
-        done: { next: ['complete'] },
+        next: ['thinking', 'work', 'web', 'report'],
         recalc(params = {}) {
             params.block.mode = 'do';
             params.block.state = childRollup(params.block, ['work', 'web', 'site']);
         },
     },
-    verdict: {
-        label: 'Вердикт',
+    report: {
+        label: 'Отчёт',
         icon: 'icons:assignment-turned-in',
-        inject: 'если доказательств достаточно — вынести вердикт ok или fail',
+        close: true,
+        inject: 'если текущий этап завершён — закрыть отчётом',
         prompt: [
-            'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами из ленты и прочитанных файлов.',
-            'Не планируй и не обращайся к пользователю.',
-            '[instruction]',
-            'СТРОГО:',
-            'готово: …',
-            'не хватает: …',
-            'итог: ok  или  fail',
+            'Если считаешь, что работа по текущему этапу завершена, напиши отчёт.',
+            'Если нет — одно слово continue.',
         ].join('\n'),
-        parse(block) {
-            const m = String(block.content || '').match(/итог:\s*(ok|fail)/i);
-            block.verdict = m ? m[1].toLowerCase() : 'fail';
-        },
         recalc(params = {}) {
-            if (params.block.verdict)
-                params.block.state = params.block.verdict;
-            if (params.block.verdict !== 'ok') return;
+            const text = String(params.block.content || '').trim();
+            if (/^continue$/i.test(text)) return;
             params.container.content = params.block.content;
+        },
+        drop(params = {}) {
+            const items = params.container?.items;
+            const i = items?.indexOf(params.block) ?? -1;
+            if (i >= 0) items.splice(i, 1);
         },
     },
 
@@ -813,8 +779,7 @@ const PIPE = {
         fc: '/SERVICES/SearXNG',
         allow: ['search'],
         container: true,
-        next: ['site'],
-        ready: webQueueDone,
+        next: ['site', 'report'],
         async run(params = {}) {
             const b = params.block;
             if (b.content || b.sites != null) return false;
@@ -828,12 +793,6 @@ const PIPE = {
             await webPushNext(b, params);
             await PIPE.web.recalc?.(params);
             return true;
-        },
-        done: {
-            prompt: [
-                'Обобщи только то, что прочитано на страницах site.',
-                'Кратко, по фактам, без выдумок.',
-            ].join('\n'),
         },
         plan: {
             inject: 'если необходимо найти информацию в интернете',
@@ -1042,34 +1001,6 @@ function containerMode(root, node) {
         n = parentOf(root, n);
     }
     return 'plan';
-}
-
-function webQueueDone(b) {
-    if (!b || b.sites == null)
-        return false;
-    const items = (b.items || []).filter(x => x.type === 'site');
-    if (items.some(s => !s.content))
-        return false;
-    return !b.sites.some(url => !items.some(s => s.url === url));
-}
-
-function exploreReady(b) {
-    const kids = b?.items || [];
-    if (!kids.length || kids.some(k => !k.content))
-        return false;
-    return kids.some(k => k.type === 'web' || k.type === 'work');
-}
-
-function workReady(b) {
-    const kids = b?.items || [];
-    if (!kids.length || kids.some(k => !k.content))
-        return false;
-    return kids.some(k => k.type === 'read' || k.type === 'write');
-}
-
-function includesReady(b) {
-    const kids = (b?.items || []).filter(x => x.type === 'file');
-    return kids.length > 0 && kids.every(k => k.content);
 }
 
 function shortError(e) {

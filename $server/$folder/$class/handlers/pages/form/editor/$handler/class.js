@@ -9,6 +9,7 @@ export default {
         :host {
             @apply --vertical;
             overflow: hidden;
+            @apply --light;
         }
     </style>
     <item-editor-form ~if="dataAccessNode" :data-access-node="dataAccessNode"></item-editor-form>
@@ -92,7 +93,7 @@ ODA({
     <fieldset>
         <legend>{{label}}</legend>
         <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
-        <div class="editor-box">
+        <div class="editor-box" border>
             <div ~is="editorTag" :data-access-node></div>
             <div ~if="children?.length && expanded" class="children-box">
                 <item-editor-form-field-container ~for="children" :data-access-node="$for?.item"></item-editor-form-field-container>
@@ -180,6 +181,7 @@ ODA({
             font-size: 125%;
             border: none;
             border-radius: 4px;
+            text-overflow: ellipsis;
         }
     </style>
     <input type="text" size="12" :value="getValue()" @input="setValue($this.value)">

@@ -13,6 +13,261 @@
  *   capabilities, functionCalling, accessToken
  */
 
+export default {
+    icon: 'carbon:machine-learning-model',
+    form: 'editor',
+    label: 'ИИ Модель',
+    METADATA: {
+        FIELDS: {
+            id: 'FIELDS',
+            icon: 'iconoir:input-field',
+            fields: [{
+                id: 'protocol',
+                type: 'String',
+                placeholder: 'openai | anthropic | gigachat | custom',
+                required: true,
+            }, {
+                id: 'baseUrl',
+                type: 'String',
+                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/chat/completions',
+                required: true,
+            }, {
+                id: 'apiKey',
+                type: 'String',
+                placeholder: 'sk-...',
+            }, {
+                id: 'token',
+                type: 'String',
+                placeholder: 'Authorization key (GigaChat OAuth)',
+                required: true,
+            }, {
+                id: 'authUrl',
+                type: 'String',
+                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/oauth',
+            }, {
+                id: 'scope',
+                type: 'String',
+                placeholder: 'GIGACHAT_API_PERS',
+            }, {
+                id: 'model',
+                type: 'String',
+                placeholder: 'GigaChat-Pro',
+                required: true,
+            }, {
+                id: 'maxTokens',
+                type: 'Number',
+                placeholder: '4096',
+            }, {
+                id: 'capabilities',
+                type: 'String',
+                placeholder: 'chat, stream',
+            }, {
+                id: 'functionCalling',
+                type: 'Boolean',
+                placeholder: 'false',
+            }, {
+                id: 'trustLevel',
+                type: 'Number',
+                placeholder: '0',
+            }],
+        },
+    },
+
+    /** Кэш access token для протоколов с OAuth */
+    get accessToken() {
+        return this._accessToken ?? null;
+    },
+    set accessToken(v) {
+        this._accessToken = v;
+    },
+
+    /**
+     * Стриминговый чат с поддержкой function calling.
+     * Обычный method (не async*): Reactor/babel-merge ломают AsyncGenerator на DATA;
+     * возвращаем async generator изнутри.
+     * @param {object} [params]
+     * @param {string|object} [post]
+     * @returns {AsyncGenerator}
+     */
+    streamChat(params = {}, post) {
+        const ai = params.$ai || this;
+        return (async function* () {
+        const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
+        const useFunctions = Array.isArray(options.functions) && options.functions.length > 0;
+        const isGigachat = ai.protocol === 'gigachat';
+        let messages = options.messages || [];
+        if (!isGigachat)
+            messages = normalizeOpenAiMessages(messages);
+
+        const body = {
+            model: options.model || ai.model || '',
+            messages,
+            max_tokens: Math.min(options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096, 131072),
+            temperature: options.temperature ?? 0.7,
+            stream: true,
+        };
+        if (options.stop)
+            body.stop = options.stop;
+        if (!isGigachat)
+            body.stream_options = { include_usage: true };
+
+        if (useFunctions && ai.functionCalling === true) {
+            if (isGigachat) {
+                let gigaFns = sanitizeGigaChatFunctions(options.functions);
+                const forcedName = options.function_call && typeof options.function_call === 'object'
+                    ? options.function_call.name
+                    : null;
+                if (forcedName === 'save_file') {
+                    const saveFn = gigaFns.find(f => f.name === 'save_file') || {
+                        name: 'save_file',
+                        description: 'Создать или перезаписать файл. filename + post.',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                filename: { type: 'string', description: 'Имя файла' },
+                                post: { type: 'string', description: 'Содержимое' },
+                            },
+                            required: ['filename', 'post'],
+                        },
+                    };
+                    gigaFns = [saveFn];
+                }
+                body.functions = gigaFns;
+                body.messages = sanitizeGigaChatMessages(messages, gigaFns);
+                if (options.function_call)
+                    body.function_call = options.function_call;
+            } else {
+                body.tools = toOpenAiTools(options.functions);
+                body.tool_choice = resolveOpenAiToolChoice(options);
+            }
+        }
+
+        const headers = await getAuthHeaders(ai);
+        const url = new URL(ai.baseUrl);
+
+        const res = await new Promise((resolve, reject) => {
+            const req = WORK.https.request({
+                hostname: url.hostname,
+                port: url.port || 443,
+                path: url.pathname + url.search,
+                method: 'POST',
+                agent: isGigachat ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+                headers,
+            }, (res) => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    const chunks = [];
+                    res.on('data', c => chunks.push(c));
+                    res.on('end', () => {
+                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + Buffer.concat(chunks).toString('utf-8')));
+                    });
+                    return;
+                }
+                resolve(res);
+            });
+            req.on('error', reject);
+            req.write(JSON.stringify(body));
+            req.end();
+        });
+
+        let funcCallName = '';
+        let funcCallArgs = '';
+        let reasoningAcc = '';
+        let contentSeen = false;
+
+        const flushFunctionCall = function* () {
+            if (!funcCallName)
+                return;
+            const parsedArgs = parseFunctionArgs(funcCallArgs);
+            yield {
+                type: 'function_call',
+                name: funcCallName,
+                arguments: parsedArgs,
+            };
+            funcCallName = '';
+            funcCallArgs = '';
+        };
+
+        for await (const chunk of res) {
+            const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
+            const lines = text.split('\n');
+            for (const line of lines) {
+                if (!line.startsWith('data: '))
+                    continue;
+                const jsonStr = line.slice(6).trim();
+                if (!jsonStr || jsonStr === '[DONE]')
+                    continue;
+                try {
+                    const json = JSON.parse(jsonStr);
+                    const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
+
+                    const reasoning = delta.reasoning;
+                    if (reasoning)
+                        reasoningAcc += String(reasoning);
+
+                    const content = delta.content || delta.text;
+                    if (content) {
+                        contentSeen = true;
+                        if (useFunctions)
+                            yield { type: 'content', content };
+                        else
+                            yield content;
+                    }
+
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            if (tc.function?.name)
+                                funcCallName = tc.function.name;
+                            if (tc.function?.arguments != null)
+                                funcCallArgs = appendFunctionArgs(funcCallArgs, tc.function.arguments);
+                        }
+                    }
+                    if (delta.function_call) {
+                        if (delta.function_call.name)
+                            funcCallName = delta.function_call.name;
+                        if (delta.function_call.arguments != null)
+                            funcCallArgs = appendFunctionArgs(funcCallArgs, delta.function_call.arguments);
+                    }
+
+                    const finishReason = json.choices?.[0]?.finish_reason;
+                    if (
+                        finishReason === 'function_call'
+                        || finishReason === 'tool_calls'
+                        || (finishReason === 'stop' && funcCallName)
+                    ) {
+                        yield* flushFunctionCall();
+                    }
+
+                    if (json.usage) {
+                        const u = json.usage;
+                        const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
+                        const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
+                        const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
+                        yield {
+                            type: 'usage',
+                            prompt_tokens: promptTokens,
+                            completion_tokens: completionTokens,
+                            total_tokens: totalTokens,
+                        };
+                    }
+                }
+                catch {}
+            }
+        }
+
+        if (!contentSeen && reasoningAcc) {
+            if (useFunctions)
+                yield { type: 'content', content: reasoningAcc };
+            else
+                yield reasoningAcc;
+        }
+
+        if (useFunctions && funcCallName)
+            yield* flushFunctionCall();
+        })();
+    },
+};
+
+
 /**
  * Накопить arguments FC: string-чанки склеиваются, object → JSON (GigaChat).
  * @param {string} acc
@@ -329,255 +584,3 @@ async function gigachatAuth(ai) {
     });
 }
 
-export default {
-    icon: 'carbon:machine-learning-model',
-
-    METADATA: {
-        FIELDS: {
-            id: 'FIELDS',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'protocol',
-                type: 'String',
-                placeholder: 'openai | anthropic | gigachat | custom',
-                required: true,
-            }, {
-                id: 'baseUrl',
-                type: 'String',
-                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/chat/completions',
-                required: true,
-            }, {
-                id: 'apiKey',
-                type: 'String',
-                placeholder: 'sk-...',
-            }, {
-                id: 'token',
-                type: 'String',
-                placeholder: 'Authorization key (GigaChat OAuth)',
-                required: true,
-            }, {
-                id: 'authUrl',
-                type: 'String',
-                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/oauth',
-            }, {
-                id: 'scope',
-                type: 'String',
-                placeholder: 'GIGACHAT_API_PERS',
-            }, {
-                id: 'model',
-                type: 'String',
-                placeholder: 'GigaChat-Pro',
-                required: true,
-            }, {
-                id: 'maxTokens',
-                type: 'Number',
-                placeholder: '4096',
-            }, {
-                id: 'capabilities',
-                type: 'String',
-                placeholder: 'chat, stream',
-            }, {
-                id: 'functionCalling',
-                type: 'Boolean',
-                placeholder: 'false',
-            }, {
-                id: 'trustLevel',
-                type: 'Number',
-                placeholder: '0',
-            }],
-        },
-    },
-
-    /** Кэш access token для протоколов с OAuth */
-    get accessToken() {
-        return this._accessToken ?? null;
-    },
-    set accessToken(v) {
-        this._accessToken = v;
-    },
-
-    /**
-     * Стриминговый чат с поддержкой function calling.
-     * Обычный method (не async*): Reactor/babel-merge ломают AsyncGenerator на DATA;
-     * возвращаем async generator изнутри.
-     * @param {object} [params]
-     * @param {string|object} [post]
-     * @returns {AsyncGenerator}
-     */
-    streamChat(params = {}, post) {
-        const ai = params.$ai || this;
-        return (async function* () {
-        const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
-        const useFunctions = Array.isArray(options.functions) && options.functions.length > 0;
-        const isGigachat = ai.protocol === 'gigachat';
-        let messages = options.messages || [];
-        if (!isGigachat)
-            messages = normalizeOpenAiMessages(messages);
-
-        const body = {
-            model: options.model || ai.model || '',
-            messages,
-            max_tokens: Math.min(options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096, 131072),
-            temperature: options.temperature ?? 0.7,
-            stream: true,
-        };
-        if (options.stop)
-            body.stop = options.stop;
-        if (!isGigachat)
-            body.stream_options = { include_usage: true };
-
-        if (useFunctions && ai.functionCalling === true) {
-            if (isGigachat) {
-                let gigaFns = sanitizeGigaChatFunctions(options.functions);
-                const forcedName = options.function_call && typeof options.function_call === 'object'
-                    ? options.function_call.name
-                    : null;
-                if (forcedName === 'save_file') {
-                    const saveFn = gigaFns.find(f => f.name === 'save_file') || {
-                        name: 'save_file',
-                        description: 'Создать или перезаписать файл. filename + post.',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                filename: { type: 'string', description: 'Имя файла' },
-                                post: { type: 'string', description: 'Содержимое' },
-                            },
-                            required: ['filename', 'post'],
-                        },
-                    };
-                    gigaFns = [saveFn];
-                }
-                body.functions = gigaFns;
-                body.messages = sanitizeGigaChatMessages(messages, gigaFns);
-                if (options.function_call)
-                    body.function_call = options.function_call;
-            } else {
-                body.tools = toOpenAiTools(options.functions);
-                body.tool_choice = resolveOpenAiToolChoice(options);
-            }
-        }
-
-        const headers = await getAuthHeaders(ai);
-        const url = new URL(ai.baseUrl);
-
-        const res = await new Promise((resolve, reject) => {
-            const req = WORK.https.request({
-                hostname: url.hostname,
-                port: url.port || 443,
-                path: url.pathname + url.search,
-                method: 'POST',
-                agent: isGigachat ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
-                headers,
-            }, (res) => {
-                if (res.statusCode < 200 || res.statusCode >= 300) {
-                    const chunks = [];
-                    res.on('data', c => chunks.push(c));
-                    res.on('end', () => {
-                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + Buffer.concat(chunks).toString('utf-8')));
-                    });
-                    return;
-                }
-                resolve(res);
-            });
-            req.on('error', reject);
-            req.write(JSON.stringify(body));
-            req.end();
-        });
-
-        let funcCallName = '';
-        let funcCallArgs = '';
-        let reasoningAcc = '';
-        let contentSeen = false;
-
-        const flushFunctionCall = function* () {
-            if (!funcCallName)
-                return;
-            const parsedArgs = parseFunctionArgs(funcCallArgs);
-            yield {
-                type: 'function_call',
-                name: funcCallName,
-                arguments: parsedArgs,
-            };
-            funcCallName = '';
-            funcCallArgs = '';
-        };
-
-        for await (const chunk of res) {
-            const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
-            const lines = text.split('\n');
-            for (const line of lines) {
-                if (!line.startsWith('data: '))
-                    continue;
-                const jsonStr = line.slice(6).trim();
-                if (!jsonStr || jsonStr === '[DONE]')
-                    continue;
-                try {
-                    const json = JSON.parse(jsonStr);
-                    const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
-
-                    const reasoning = delta.reasoning;
-                    if (reasoning)
-                        reasoningAcc += String(reasoning);
-
-                    const content = delta.content || delta.text;
-                    if (content) {
-                        contentSeen = true;
-                        if (useFunctions)
-                            yield { type: 'content', content };
-                        else
-                            yield content;
-                    }
-
-                    if (delta.tool_calls) {
-                        for (const tc of delta.tool_calls) {
-                            if (tc.function?.name)
-                                funcCallName = tc.function.name;
-                            if (tc.function?.arguments != null)
-                                funcCallArgs = appendFunctionArgs(funcCallArgs, tc.function.arguments);
-                        }
-                    }
-                    if (delta.function_call) {
-                        if (delta.function_call.name)
-                            funcCallName = delta.function_call.name;
-                        if (delta.function_call.arguments != null)
-                            funcCallArgs = appendFunctionArgs(funcCallArgs, delta.function_call.arguments);
-                    }
-
-                    const finishReason = json.choices?.[0]?.finish_reason;
-                    if (
-                        finishReason === 'function_call'
-                        || finishReason === 'tool_calls'
-                        || (finishReason === 'stop' && funcCallName)
-                    ) {
-                        yield* flushFunctionCall();
-                    }
-
-                    if (json.usage) {
-                        const u = json.usage;
-                        const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
-                        const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
-                        const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
-                        yield {
-                            type: 'usage',
-                            prompt_tokens: promptTokens,
-                            completion_tokens: completionTokens,
-                            total_tokens: totalTokens,
-                        };
-                    }
-                }
-                catch {}
-            }
-        }
-
-        if (!contentSeen && reasoningAcc) {
-            if (useFunctions)
-                yield { type: 'content', content: reasoningAcc };
-            else
-                yield reasoningAcc;
-        }
-
-        if (useFunctions && funcCallName)
-            yield* flushFunctionCall();
-        })();
-    },
-};
