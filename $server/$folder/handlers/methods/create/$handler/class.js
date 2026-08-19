@@ -2,10 +2,10 @@ export default {
     icon: 'icons:add',
     access: 'c',
     async execute(filter) {
-        const ctx = this.$item.$context;
-        const props = { $item: ctx, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
+        const $context = await this.$item.$context;
+        const props = { $item: $context, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
         if (filter) {
-            props.type = ctx.type;
+            props.type = $context.type;
         }
         const el = ODA.createElement('input-name-type', props);
         const upload = {
@@ -20,7 +20,9 @@ export default {
             const type = el.type || '';
             const name = el.name;
             if (type.startsWith('$') && type !== '$file' && type !== '$folder') {
-                const owner = [ctx.$class, ctx.$owner, ctx].find(o =>
+                const $class = await $context.$class;
+                const $owner = await $context.$owner;
+                const owner = [$class, $owner, $context].find(o =>
                     o && typeof o.create === 'function'
                     && o.constructor?.name !== '$folder'
                     && o.constructor?.name !== '$file'
@@ -30,7 +32,7 @@ export default {
                 return owner.create({ type, id: name });
             }
             if (type === '$folder') {
-                return ctx.ensure_folder({ id: name });
+                return $context.ensure_folder({ id: name });
             }
             const fullName = type === '$file'
                 ? name
@@ -45,7 +47,7 @@ export default {
                         post = WORK.fs.readFileSync('.' + ext_tmp.path);
                 } catch { /* empty */ }
             }
-            return ctx.save_file({ filename: fullName, post, encoding: 'utf-8' });
+            return $context.save_file({ filename: fullName, post, encoding: 'utf-8' });
         } else if (result === 'upload') {
             const fileDialog = await ODA.showFileDialog({ multiple: true });
             let files = Array.from(fileDialog).map(f => {
@@ -65,7 +67,7 @@ export default {
             files.forEach((file) => {
                 formData.append('file', file, file.name);
             });
-            return ctx.save_files({ post: { files }, session: WORK });
+            return $context.save_files({ post: { files }, session: WORK });
         }
     }
 }

@@ -1046,19 +1046,22 @@ export class $class extends $folder{
         if (type === '$class')
             assertClassId(id);
 
-        let folder = await this._get_next_item(id, FS.$folder);
-        await folder.save();
-        folder = await folder._get_next_item(type, FS.$folder);
-        await folder.save();
+        const ctor = FS[type] || FS.$class;
+        const item = await this._get_next_item(id, ctor);
+        const meta = await item._get_next_item(type, FS.$folder);
         const post = p.post ?? `export default {
     label: '${id}'
 }`;
-        return folder.save_file({
+        const log = await meta.save_file({
             ...p,
             filename: 'class.js',
             post,
             ignore_save_logs: true,
         });
+        // meta.reset();
+        // item.reset();
+        this.reset();
+        return log;
     }
 
     /** Все назначенные пользователи класса (объединение allAdmins + allBosses + users + guests). */

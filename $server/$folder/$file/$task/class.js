@@ -100,12 +100,11 @@ export default {
                 }
                 if(next_pipe.container)
                     params.block.items = [];
-                const sys = next_pipe[mode]?.system || next_pipe.system;
-                if (sys)
-                    params.block.system = sys;
 
                 await this._push_block(params);
-                prompt = next_pipe[mode]?.prompt || next_pipe.prompt;
+                prompt = (next_pipe.close && PIPE[params.container?.type]?.close_prompt)
+                    || next_pipe[mode]?.prompt
+                    || next_pipe.prompt;
                 if(prompt){
                     messages = await this.context({prompt});
                     response = await this._fc_chat({ messages, session, fc: next_pipe.fc, block: params.block });
@@ -114,7 +113,6 @@ export default {
                         next_pipe?.parse?.(params.block);
                         await next_pipe?.recalc?.(params);
                         await close_up(await this.body, params.block, params);
-                        next_pipe?.drop?.(params);
                     }
                 }
                 if (!this._stopped) {
@@ -146,9 +144,7 @@ export default {
         }
         const mode = containerMode(await this.body, container);
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
-        const stage = PIPE[container.type]?.label || container.label;
-        const stageLine = stage ? 'Текущий этап: ' + stage : 'Текущий этап';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), stageLine, modeLine].join('\n\n') }];
+        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), modeLine].join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -173,12 +169,16 @@ export default {
         return messages;
     },
     _container_context(container) {
-        let system = container.system || '';
+        const node = PIPE[container.type];
+        const mode = container.mode || 'plan';
+        let system = node?.[mode]?.system || node?.system || container.system || '';
         if (container.todo)
             system += '\n\n[todo]\n' + (container.todo.content || '');
         const messages = [];
         for (const b of (container.items || [])) {
-            messages.push({ role: PIPE[b.type]?.role || 'assistant', content: b.content });
+            if (PIPE[b.type]?.close)
+                continue;
+            messages.push({ role: PIPE[b.type]?.role || 'assistant', content: b.content || stageOpen(b) });
             if (b.answer != null)
                 messages.push({ role: 'user', content: typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer) });
         }
@@ -272,15 +272,13 @@ export default {
             if (args.query)
                 block.label = args.query;
             const result = await service.search?.(args);
-            const seen = new Set();
+            const seen = usedSiteUrls(parentOf(await this.body, block), block);
             block.sites = [];
             for (const url of (result?.results || []).map(r => r.url).filter(Boolean)) {
                 if (seen.has(url))
                     continue;
                 seen.add(url);
                 block.sites.push(url);
-                if (block.sites.length >= WEB_SITES)
-                    break;
             }
             await this._save(session);
             return result ?? {};
@@ -291,7 +289,6 @@ export default {
             block.icon = siteFavicon(url);
             if (result?.error)
                 block.state = 'error';
-            block.content = result?.content || result?.error || '—';
             await this._save(session);
             return result ?? {};
         }
@@ -370,6 +367,8 @@ export default {
         const {block, container, session} = params;
         block.time ??= Date.now();
         container.items.push(block);
+        container.last = block.type;
+        delete container.close_n;
         PIPE[block.type]?.recalc?.({ ...params, block, container });
         await this._save(session);
     },
@@ -424,7 +423,7 @@ const PIPE = {
     task: {
         container: true,
         plan: {
-            next: ['thinking', 'explore', 'complete', /* 'planning', 'activation' */],
+            next: ['thinking', 'explore', 'complete',  'planning', 'activation' ],
         },
         do: {
             next: ['thinking','explore', 'complete', /* 'execute', 'check' */],
@@ -571,7 +570,8 @@ const PIPE = {
             'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
         ].join('\n'),
         container: true,
-        next: ['thinking', 'work', 'web', 'form', 'report'],
+        limit: 1,
+        next: ['thinking', /* 'work', */ 'web', /* 'form', */ 'report'],
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'work']);
@@ -742,7 +742,7 @@ const PIPE = {
             'Это площадка проверки, не исполнение и не план.',
             'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
             'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
-            'Когда доказательств достаточно — отчёт (report) или continue.',
+            'Когда доказательств достаточно — сверни факты отчётом. Если фактов мало — отклони отчёт: continue.',
         ].join('\n'),
         container: true,
         next: ['thinking', 'work', 'web', 'report'],
@@ -755,20 +755,28 @@ const PIPE = {
         label: 'Отчёт',
         icon: 'icons:assignment-turned-in',
         close: true,
-        inject: 'если текущий этап завершён — закрыть отчётом',
+        inject: 'если считаешь, что на данный этап готов к закрытию',
         prompt: [
-            'Если считаешь, что работа по текущему этапу завершена, напиши отчёт.',
-            'Если нет — одно слово continue.',
+            'Подробный отчёт этапа в markdown: факты, цифры, прайсы, таблицы; схемы mermaid если есть что сравнить.',
+            'Картинки и видео — только url из ленты, не выдумывай.',
+            'Общие фразы без названий — не отчёт.',
+            'Не пиши имена шагов и не пиши одно слово.',
+            'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.',
         ].join('\n'),
         recalc(params = {}) {
             const text = String(params.block.content || '').trim();
-            if (/^continue$/i.test(text)) return;
+            const word = text.toLowerCase();
+            if (word === 'continue' || PIPE[word]) {
+                if (word === 'continue') {
+                    params.block.state = 'rejected';
+                    params.block.icon = 'icons:close';
+                }
+                return;
+            }
             params.container.content = params.block.content;
-        },
-        drop(params = {}) {
-            const items = params.container?.items;
-            const i = items?.indexOf(params.block) ?? -1;
-            if (i >= 0) items.splice(i, 1);
+            const sites = params.container.sites;
+            if (sites?.length)
+                params.container.content += '\n\n[sites]\n' + sites.join('\n');
         },
     },
 
@@ -779,7 +787,14 @@ const PIPE = {
         fc: '/SERVICES/SearXNG',
         allow: ['search'],
         container: true,
+        limit: 2,
         next: ['site', 'report'],
+        close_prompt: [
+            'Подробный отчёт по посещённым страницам в markdown: факты, цифры, прайсы, таблицы; схемы mermaid если есть что сравнить.',
+            'Картинки и видео — только url из ленты, не выдумывай.',
+            'Общие фразы без названий — не отчёт.',
+            'Не пиши имена шагов и не пиши одно слово.',
+        ].join('\n'),
         async run(params = {}) {
             const b = params.block;
             if (b.content || b.sites != null) return false;
@@ -810,27 +825,56 @@ const PIPE = {
         },
         recalc(params = {}) {
             const b = params.block;
-            const found = (b.sites || []).length;
-            const seen = (b.items || []).filter(x => x.type === 'site' && x.content).length;
-            b.state = found ? `${seen}/${found} ${PIPE.site.label}` : '';
+            const limit = PIPE.site.limit;
+            const ok = (b.items || []).filter(siteOk).length;
+            b.state = limit != null ? `${ok}/${limit} ${PIPE.site.label}` : '';
             b.icon = b.content ? PIPE.web.icon : PIPE.web.do_icon;
         },
     },
     site: {
         label: 'Сайт',
         icon: 'icons:language',
+        limit: 3,
         fc: '/SERVICES/SearXNG',
         allow: ['fetch_url'],
+        prompt: [
+            'Вытащи с страницы всё полезное по задаче в markdown: факты, прайсы, таблицы, ссылки, картинки, видео.',
+            'Только то, что есть в [page]. Не выдумывай url и цифры.',
+            'Не пересказывай меню, футер и навигацию.',
+        ].join('\n'),
         async run(params = {}) {
             const b = params.block;
             if (!b.url || b.content) return false;
             const service = await WORK.get_item(PIPE.web.fc);
-            await params.task._fc_exec(service, { method: 'fetch_url', args: { url: b.url } }, {
+            const result = await params.task._fc_exec(service, { method: 'fetch_url', args: { url: b.url } }, {
                 block: b,
                 session: params.session,
             });
-            await webPushNext(params.container, params);
-            await close_up(await params.task.body, b, params);
+            if (b.state === 'error')
+                b.content = shortError(result?.error || result?.content || '—');
+            else {
+                const page = clipPage(result?.content);
+                if (!page)
+                    b.content = '—';
+                else {
+                    const messages = await params.task.context({ prompt: PIPE.site.prompt });
+                    if (messages.last?.role === 'user')
+                        messages.last.content += '\n\n[page]\n' + page;
+                    else
+                        messages.push({ role: 'user', content: '[page]\n' + page });
+                    const response = await params.task._streamChat({ messages, session: params.session });
+                    if (response.content)
+                        b.content = response.content;
+                    else if (!params.task._stopped)
+                        b.content = '—';
+                    if (response.usage)
+                        b.usage = response.usage;
+                }
+            }
+            if (b.content) {
+                await webPushNext(params.container, params);
+                await close_up(await params.task.body, b, params);
+            }
             return true;
         },
         recalc(params = {}) {
@@ -938,11 +982,29 @@ function next_options(container, block, mode) {
         options = own;
     else
         options = parentNext;
-    const prev = block?.type;
-    if (prev && !PIPE[prev]?.container)
-        options = options.filter(id => id !== prev);
-    const items = container?.items || [];
-    return options.filter(id => !PIPE[id]?.container || !items.some(s => s.type === id && s.content));
+    const prev = new Set([container.last, container.items?.last?.type].filter(Boolean));
+    if (prev.size)
+        options = options.filter(id => !prev.has(id));
+    return options.filter(id => {
+        if (PIPE[id]?.close && !can_close(container))
+            return false;
+        const n = PIPE[id]?.limit;
+        if (n != null && afterLastPrompt(container.items).filter(b => b.type === id).length >= n)
+            return false;
+        return true;
+    });
+}
+
+function afterLastPrompt(items) {
+    const list = items || [];
+    for (let i = list.length - 1; i >= 0; i--)
+        if (list[i].type === 'prompt')
+            return list.slice(i + 1);
+    return list;
+}
+
+function can_close(container) {
+    return (container?.items || []).some(b => b.content && !PIPE[b.type]?.close && b.type !== 'thinking' && b.type !== 'prompt');
 }
 
 function siteFavicon(url) {
@@ -965,7 +1027,37 @@ function childRollup(block, types) {
     return types.filter(t => counts[t]).map(t => `${counts[t]} ${PIPE[t]?.label || t}`).join(' · ');
 }
 
-const WEB_SITES = 3;
+function stageOpen(block) {
+    if (!PIPE[block?.type]?.container) return '';
+    const label = PIPE[block.type].label || block.label || block.type;
+    return 'Текущий этап далее (' + label + ').';
+}
+
+const SITE_PAGE = 6000;
+
+function siteOk(s) {
+    return s?.type === 'site' && s.content && s.state !== 'error';
+}
+
+function usedSiteUrls(parent, web) {
+    const used = new Set();
+    for (const b of parent?.items || []) {
+        if (b === web)
+            continue;
+        for (const u of b.sites || [])
+            used.add(u);
+        for (const s of b.items || [])
+            if (s.url)
+                used.add(s.url);
+    }
+    return used;
+}
+
+function clipPage(text) {
+    const s = String(text || '').trim();
+    if (!s) return '';
+    return s.length <= SITE_PAGE ? s : s.slice(0, SITE_PAGE);
+}
 
 async function webPushNext(web, params) {
     if (!web || web.content || web.sites == null)
@@ -973,6 +1065,9 @@ async function webPushNext(web, params) {
     web.items ??= [];
     const items = web.items.filter(x => x.type === 'site');
     if (items.some(s => !s.content))
+        return false;
+    const limit = PIPE.site.limit;
+    if (limit != null && items.filter(siteOk).length >= limit)
         return false;
     const next = web.sites.find(url => !items.some(s => s.url === url));
     if (!next || !params.task)

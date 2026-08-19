@@ -23,7 +23,7 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 - Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`. Поле ввода у «Другое» скрыто, пока пункт не выбран.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
-- `site` — обычный блок: `label` = url, тело = `content` (текст страницы). `data.url` есть у слота.
+- `site` — обычный блок: `label` = url, тело = `content` (обзор страницы). `data.url` есть у слота.
 
 ## 4. Из чего это состоит
 

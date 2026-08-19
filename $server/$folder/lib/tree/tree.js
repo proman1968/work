@@ -193,6 +193,7 @@ ODA({is: 'oda-tree-node',
             :host {
                 @apply --vertical;
                 overflow: hidden;
+                padding: 2px;
             }
             .node {
                 @apply --horizontal;
