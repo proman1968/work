@@ -812,54 +812,58 @@ export class $folder extends $item{
         let folder = this.$folder;
         let folders = [folder];
         let steps = await this.type_chain;
-        // if(inherit != '$folder'){
-            for(let step of steps){
-                folder = await folder._get_next_item(step, FS.$folder);
-                if(folder)
-                    folders.add(folder);
-                if(step === inherit)
-                    break;
+
+        const horizontal_folders = [];
+        for(let step of steps){
+            folder = await folder._get_next_item(step, FS.$folder);
+            if(folder)
+                horizontal_folders.add(folder);
+            if(step === inherit)
+                break;
+        }
+
+        if (!inherit && this.meta_folder) {
+            // Корень типа: meta верхнего $parent с тем же type.
+            // Тот же walk, что у meta: typeRoot/$folder + type_chain.
+            let typeRoot = null;
+            for (let p = this.$parent; p; p = p.$parent) {
+                if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
+                    typeRoot = p.meta_folder;
             }
-            if(!inherit && this.meta_folder){
-                // Корень типа: meta верхнего $parent с тем же type.
-                // Тот же walk, что у meta: typeRoot/$folder + type_chain.
-                let typeRoot = null;
-                for (let p = this.$parent; p; p = p.$parent) {
-                    if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
-                        typeRoot = p.meta_folder;
-                }
-                if (typeRoot && typeRoot !== this.meta_folder) {
-                    let domain = typeRoot.$folder;
-                    if (domain) {
-                        folders.add(domain);
-                        for (let step of steps) {
-                            domain = await domain._get_next_item(step, FS.$folder);
-                            if (domain)
-                                folders.add(domain);
-                        }
-                    }
-                }
-                // Локальная цепочка наследования внутри метапапки:
-                // meta_folder/$folder/$class/$type/...
-                // ВАЖНО: локальная цепочка ДОЛЖНА быть ПЕРЕД meta_folder (SELF),
-                // чтобы meta_folder всегда был последним в массиве folders
-                let localFolder = this.meta_folder.$folder;
-                if (localFolder) {
-                    folders.push(localFolder);
+            if (typeRoot && typeRoot !== this.meta_folder) {
+                let domain = typeRoot.$folder;
+                if (domain) {
+                    folders.add(domain);
                     for (let step of steps) {
-                        localFolder = await localFolder._get_next_item(step, FS.$folder);
-                        if (localFolder)
-                            folders.add(localFolder);
-                        if (step === inherit)
-                            break;
+                        domain = await domain._get_next_item(step, FS.$folder);
+                        if (domain)
+                            folders.add(domain);
                     }
                 }
-                // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
-                folders.push(this.meta_folder);
             }
-        // }
-        folders = folders.filter(Boolean)
-        let items = folders.map(f=>f.children);
+
+
+            folders.push(...horizontal_folders);
+
+            // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
+            folders.push(this.meta_folder);
+        }
+        else {
+            folders = horizontal_folders;
+        }
+        // folders = horizontal_folders;
+        if (this.meta_folder) {
+            folders.push(this.meta_folder);
+        }
+        folders = folders.filter(Boolean);
+        const _folders = folders.toReversed();
+        folders = [];
+        for (const f of _folders) {
+            if (folders.every(ff => ff.real_dir !== f.real_dir)) {
+                folders.unshift(f);
+            }
+        }
+        let items = folders.map(f=>f.inherit_children);
         items = await Promise.all(items);
         items = items.flat();
         items = items.filter(f=>!f.isType);
@@ -1020,6 +1024,56 @@ export class $folder extends $item{
                         files.push(file);
                     }
                 }
+            }
+            files = this.sortItems(files, this.inHistory);
+            return files;
+        })
+    }
+    get inherit_children() {
+        return new AsyncPromise(async ()=>{
+            let files = [];
+            let dir = this.dir; // сборка собственных файлов
+            if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
+                for(let id of fs.readdirSync(dir)){
+                    let path = dir + '/' + id;
+                    let data = fs.statSync(path);
+                    let file = FS.$file;
+                    if(!data.isFile()){
+                        file = FS.$folder;
+                        if(id[0] !== '$'){
+                            let meta = fs.readdirSync(path).find(f=>f[0] === '$');
+                            if(meta){
+                                data = fs.statSync(path + '/' + meta);
+                                if(!data.isFile())
+                                    file = (FS[meta] || FS.$class)
+                                    // file = $class;
+                            }
+                        }
+                    }
+                    switch(id){
+                        case this.meta_folder?.id:
+                            file = this.meta_folder;
+                            break;
+                        case '$folder':
+                            file = this.$folder;
+                            break;
+                        default:{
+                            if(id[0] === '#')
+                                continue;
+                            file = file.build(id, this);
+                        }
+                    }
+                    files.push(file);
+                }
+            }
+            if(this.isMetaFolder){
+                if(!files.find(f => f.id === '$folder'))
+                    files.push(this.parent.$folder)
+            }
+            let ancestor = await this.inherit_ancestor;
+            if(ancestor){
+                let a_files = await ancestor.inherit_children;
+                files.push(...a_files);
             }
             files = this.sortItems(files, this.inHistory);
             return files;
