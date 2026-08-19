@@ -335,7 +335,7 @@ export class $class extends $folder{
     async resolveDistributedFolder() {
         let folder = this.$folder;
         for (const step of await this.type_chain) {
-            folder = await folder._get_item(step, $folder);
+            folder = await folder._get_next_item(step, $folder);
             if (!folder)
                 break;
         }
@@ -416,14 +416,14 @@ export class $class extends $folder{
         const {role} = params;
         switch(role){
             case $class.ROLES.ADMIN:
-                return this.$folder._get_item('work', FS.$folder);
+                return this.$folder._get_next_item('work', FS.$folder);
             case $class.ROLES.BOSS:
                 const dist = await this.resolveDistributedFolder();
-                return dist._get_item('work', FS.$folder);
+                return dist._get_next_item('work', FS.$folder);
             case $class.ROLES.USER:
-                return this.meta_folder._get_item('work', FS.$folder);
+                return this.meta_folder._get_next_item('work', FS.$folder);
             case $class.ROLES.GUEST:
-                return this.meta_folder._get_item('guests', FS.$folder);
+                return this.meta_folder._get_next_item('guests', FS.$folder);
         }
         return this.meta_folder
     }
@@ -948,7 +948,7 @@ export class $class extends $folder{
             throw new Error('Не указано тело файла');
         if (!this.meta_folder)
             throw new Error('Нет метапапки класса');
-        const secretFolder = await this.meta_folder._get_item('#secret', FS.$folder);
+        const secretFolder = await this.meta_folder._get_next_item('#secret', FS.$folder);
         return secretFolder.save_file({ ...params });
     }
 
@@ -1046,9 +1046,9 @@ export class $class extends $folder{
         if (type === '$class')
             assertClassId(id);
 
-        let folder = await this._get_item(id, FS.$folder);
+        let folder = await this._get_next_item(id, FS.$folder);
         await folder.save();
-        folder = await folder._get_item(type, FS.$folder);
+        folder = await folder._get_next_item(type, FS.$folder);
         await folder.save();
         const post = p.post ?? `export default {
     label: '${id}'

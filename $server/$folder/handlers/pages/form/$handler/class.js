@@ -116,7 +116,7 @@ ODA({is: 'work-form',
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
-                                <oda-button ~if="view?.id === $for.item.id && $for.item?.hasSettings" icon="icons:settings" @pointerdown.stop.prevent="$for.item?.showSettings?.()" style="padding: 0;"></oda-button>
+                                <oda-button ~if="view?.id === $for.item.id && view?.hasSettings" icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()" style="padding: 0;"></oda-button>
                             </item-node>
                         </div>
                     </div>

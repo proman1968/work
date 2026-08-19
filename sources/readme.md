@@ -29,7 +29,7 @@ WORK построен вокруг `$item`.
 - `$server.js` — `$server` (бывший `WorkServer`): корневой серверный `$class`, HTTP-сессии, merge `class.js`, шаблоны страниц.
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, manifest, сортировка.
 - `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata. Модель наследования: [`../docs/storage-inheritance.md`](/docs/storage-inheritance.md/~/handlers/pages/form/).
-- `file.js` — `$file`: load/save, history, restore, file-specific behavior. Переопределён `collect_tilde` — для файлов tilde ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки.
+- `file.js` — `$file`: load/save, history, restore, file-specific behavior. Переопределён `_collect_tilde` — для файлов tilde ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки.
 - `llm.js` — `$llm extends $class`: подключение к внешним языковым моделям. Методы: `chat()` (полный ответ), `streamChat()` (AsyncGenerator). Протоколы: `openai`, `anthropic`, `gigachat` (OAuth + self-signed SSL).
 - `user.js` — `$user`: пользовательская storage-сущность.
 
@@ -184,7 +184,7 @@ services/LLM/<Провайдер>/<Модель>/$llm/class.js — конкре�
 ~/triggers/on_save/~/class.js
 ```
 
-- **Первая `~`** — `collect_tilde` для типа файла. Для `$file` переопределён: ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки внутри файла.
+- **Первая `~`** — `_collect_tilde` для типа файла. Для `$file` переопределён: ищет через глобальную цепочку типов (`WORK.$folder → $file → $prompt`), а не через локальные мета-папки внутри файла.
 - **Вторая `~`** — поиск `class.js` внутри мета-папок `on_save` (через `$trigger`).
 - **Результат** — массив `class.js`, мерджится через `$server.mergeFiles`, импортируется через `$folder.importScript`.
 

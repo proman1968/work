@@ -161,7 +161,7 @@ export class $folder extends $item{
             }
         }
 
-        return this._get_item(folder_name, FS.$folder);
+        return this._get_next_item(folder_name, FS.$folder);
     }
     get admins(){
         return this.parent.admins;
@@ -335,7 +335,7 @@ export class $folder extends $item{
         // if(this.inherit_source)
         //     return this.inherit_source.real_source;
         // if(this.parent)
-        //     return this.parent._get_item(this.id, FS.$folder).real_source;
+        //     return this.parent._get_next_item(this.id, FS.$folder).real_source;
         // return this.dir;
 
 
@@ -409,7 +409,7 @@ export class $folder extends $item{
         if(this.id === '.RAG')
             return 'skipped .RAG: ' + this.path;
         let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
-        let rag_folder = await rag_target_folder._get_item('.RAG');
+        let rag_folder = await rag_target_folder._get_next_item('.RAG');
         let clear = 'checked: ' + this.path;
         if(rag_folder) {
             try{
@@ -441,14 +441,14 @@ export class $folder extends $item{
             let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
 
 
-            let rag_folder = await rag_target_folder._get_item('.RAG', FS.$folder);
+            let rag_folder = await rag_target_folder._get_next_item('.RAG', FS.$folder);
 
             let files = await rag_target_folder.children;
             files = files.filter(f=>{
                 return !WORK.exclude_for_rag.includes(f.id) && f.id !== '.RAG';
             });
 
-            const RAG = await rag_folder._get_item('index.json', FS.$file);
+            const RAG = await rag_folder._get_next_item('index.json', FS.$file);
             let body;
             let need_save = false;
             if(fs.existsSync(RAG.real_dir)){
@@ -580,7 +580,7 @@ export class $folder extends $item{
             folders.push(folder)
             let steps = await this.type_chain;
             for(let step of steps){
-                folder = await folder._get_item(step, FS.$folder);
+                folder = await folder._get_next_item(step, FS.$folder);
                 if(folder){
                     folders.push(folder);
                 }
@@ -804,19 +804,19 @@ export class $folder extends $item{
     }
     get tilde(){
         return new AsyncPromise(_=>{
-            return this.collect_tilde();
+            return this._collect_tilde();
         });
     }
-    async collect_tilde(p = {}){
+    async _collect_tilde(p = {}){
         let {inherit} = p;
         let folder = this.$folder;
         let folders = [folder];
         let steps = await this.type_chain;
-        if(inherit != '$folder'){
+        // if(inherit != '$folder'){
             for(let step of steps){
-                folder = await folder._get_item(step, FS.$folder);
+                folder = await folder._get_next_item(step, FS.$folder);
                 if(folder)
-                    folders.push(folder);
+                    folders.add(folder);
                 if(step === inherit)
                     break;
             }
@@ -831,11 +831,11 @@ export class $folder extends $item{
                 if (typeRoot && typeRoot !== this.meta_folder) {
                     let domain = typeRoot.$folder;
                     if (domain) {
-                        folders.push(domain);
+                        folders.add(domain);
                         for (let step of steps) {
-                            domain = await domain._get_item(step, FS.$folder);
+                            domain = await domain._get_next_item(step, FS.$folder);
                             if (domain)
-                                folders.push(domain);
+                                folders.add(domain);
                         }
                     }
                 }
@@ -847,7 +847,7 @@ export class $folder extends $item{
                 if (localFolder) {
                     folders.push(localFolder);
                     for (let step of steps) {
-                        localFolder = await localFolder._get_item(step, FS.$folder);
+                        localFolder = await localFolder._get_next_item(step, FS.$folder);
                         if (localFolder)
                             folders.add(localFolder);
                         if (step === inherit)
@@ -857,7 +857,7 @@ export class $folder extends $item{
                 // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
                 folders.push(this.meta_folder);
             }
-        }
+        // }
         folders = folders.filter(Boolean)
         let items = folders.map(f=>f.children);
         items = await Promise.all(items);
@@ -1035,11 +1035,11 @@ export class $folder extends $item{
             return entries.filter(f => f.constructor === FS.$folder);
         })
     }
-    async _get_item(id, force_type){
+    async _get_next_item(id, force_type){
         let children = await this.children;
         let item = children.find(f => f.id === id);
         if(!item && force_type){
-            let real = await this.real_source._get_item(id);
+            let real = await this.real_source._get_next_item(id);
             if(real){
                 // inherit копирует [R].__data__ исходника — DATA должна быть собрана
                 await real.init;
@@ -1108,7 +1108,7 @@ export class $folder extends $item{
             case '~': {
                 const inherit = step.slice(1);
                 if (inherit)
-                    result = await item.collect_tilde({ inherit });
+                    result = await item._collect_tilde({ inherit });
                 else
                     result = await item.tilde;
                 const next = steps.shift();
@@ -1141,9 +1141,9 @@ export class $folder extends $item{
                             return WORK.getIndexForPage(item, $tilde);
                         }
                         case '$folder': {
-                            result = await item._get_item(step);
+                            result = await item._get_next_item(step);
                             if (!result) {
-                                const file = await item._get_item(item.id + '.js');
+                                const file = await item._get_next_item(item.id + '.js');
                                 if (file) {
                                     result = WORK.getIndexForTest(file);
                                 }
@@ -1364,7 +1364,7 @@ export class $folder extends $item{
             await fsp.writeFile(path, params.post, params);
         }
 
-        const file = await this._get_item(filename, FS.$file);
+        const file = await this._get_next_item(filename, FS.$file);
         file.reset();
         this.reset();
         return await FS.$file.save_to_history.call(file, params);
@@ -1398,7 +1398,7 @@ export class $folder extends $item{
                     obj.stream.close();
                     delete this.write_streams[params.filename];
                     this.reset();
-                    let file = await this._get_item(params.filename);
+                    let file = await this._get_next_item(params.filename);
                     file.reset();
                     let log = await FS.$file.save_to_history.call(file, params);
                     return log;
@@ -1510,7 +1510,7 @@ export class $folder extends $item{
         const id = String(p.id ?? p.name ?? '').trim();
         if (!id)
             throw new Error('ensure_folder: нужен id');
-        const folder = await this._get_item(id, FS.$folder);
+        const folder = await this._get_next_item(id, FS.$folder);
         await folder.save();
         return folder;
     }

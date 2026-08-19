@@ -10,6 +10,7 @@ export default {
         const el = ODA.createElement('input-name-type', props);
         const upload = {
             icon: 'icons:file-upload',
+            title: 'Загрузить файлы',
             tap: (e) => {
                 el.parentElement.close('upload');
             }
@@ -39,7 +40,7 @@ export default {
             if (ext) {
                 try {
                     const ext_folder = await WORK.$folder.find_item('$' + ext, (item) => item.id?.[0] === '$');
-                    const ext_tmp = await ext_folder?._get_item('template.' + ext);
+                    const ext_tmp = await ext_folder?._get_next_item('template.' + ext);
                     if (ext_tmp)
                         post = WORK.fs.readFileSync('.' + ext_tmp.path);
                 } catch { /* empty */ }
@@ -96,6 +97,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 border-radius: 4px;
                 border: 1px solid var(--dark-background);
                 min-width: 0px;
+                align-items: center;
 
                 oda-icon {
                     cursor: pointer;
@@ -104,9 +106,6 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             legend {
                 font-size: small;
                 padding: 0px 8px;
-            }
-            select {
-                min-width: 64px;
             }
             .validity {
                 @apply --error;
@@ -132,18 +131,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         </fieldset>
         <fieldset id="select-type" class="horizontal flex">
             <legend>Type:</legend>
-            <input
-                id="typeInput"
-                no-translate
-                bold
-                tabindex="0"
-                autocomplete="off"
-                :value="type"
-                :focused="focusedInput === $this"
-                @input="_inputType"
-                @blur="_blur"
-                @focus="_focus"
-            >
+            <type-node flex :row="typeRow" @tap="_selectType"></type-node>
             <oda-icon icon="icons:chevron-right:90" @tap="_selectType"></oda-icon>
         </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
@@ -154,9 +142,23 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         this._dirty = true;
         this.name = e.target.value;
     },
-    _inputType(e) {
-        this.type = e.target.value;
+    get typeRow() {
+        const selected = this._selectedTypeRow;
+        if (selected?.id) {
+            const selectedType = selected.path?.includes('$file')
+                ? selected.id.substring(1)
+                : selected.id;
+            if (selectedType === this.type)
+                return selected;
+        }
+        const type = this.type || '$folder';
+        if (type === '$folder')
+            return { id: '$folder', icon: 'fontawesome:r-folder' };
+        if (type.startsWith('$'))
+            return { id: type };
+        return { id: '$' + type, icon: 'files-color:s-' + type };
     },
+    _selectedTypeRow: undefined,
     async _selectType(e) {
         e.stopPropagation();
         e.preventDefault();
@@ -317,6 +319,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         );
         const res = await WORK.showDropdown(menu, { TITLE: { label: 'Выберите создаваемый тип' } }, this.$('#select-type'));
         if (res) {
+            this._selectedTypeRow = res;
             this.type = res.path?.includes('$file') ? res.id.substring(1) : res.id;
         }
     },
@@ -430,9 +433,12 @@ ODA({
     onTap(e) {
         if (this.row?.isCategory) {
             this.$pdp.expanded = !this.$pdp.expanded;
+            return;
         }
-        else if (this.$pdp) {
-            this.$pdp.execute(e.currentTarget.$for?.item || e.currentTarget.host.row);
+        const item = e.currentTarget.$for?.item || this.row;
+        if (typeof this.$pdp.tree?.execute === 'function') {
+            this.$pdp.tree.execute(item);
+            return;
         }
     }
 })

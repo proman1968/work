@@ -12,7 +12,7 @@ import { $server } from '../sources/server/server.js';
  * Smoke-тесты ядра на изолированном дереве (песочница в tmp).
  * Фиксируют инварианты, которые обязаны пережить рефакторинг:
  * 1. get_item: имя, ~, ~/x, *
- * 2. collect_tilde: порядок слоёв, SELF (meta_folder) — последний
+ * 2. _collect_tilde: порядок слоёв, SELF (meta_folder) — последний
  * 3. Сборка DATA из цепочки class.js (merge + import)
  * 4. save_file → снимок в history/YYYY-MM-DD → запись лога → триггер on_save
  * 5. steps файла по расширению ($file → $smoke)
@@ -85,7 +85,7 @@ describe('get_item: базовый синтаксис путей', () => {
     });
 });
 
-describe('collect_tilde: порядок слоёв', () => {
+describe('_collect_tilde: порядок слоёв', () => {
     it('SELF (meta_folder) — последний слой в ~/class.js', async () => {
         const box = await WORK.get_item('/BOX');
         const files = await box.get_item('~/class.js');
@@ -119,7 +119,7 @@ describe('сборка DATA из цепочки class.js', () => {
 describe('steps файла по расширению', () => {
     it('файл .smoke получает цепочку [$file, $smoke]', async () => {
         const box = await WORK.get_item('/BOX');
-        const file = await box._get_item('probe.smoke', FS.$file);
+        const file = await box._get_next_item('probe.smoke', FS.$file);
         assert.deepEqual(await file.type_chain, ['$file', '$smoke']);
     });
 });

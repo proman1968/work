@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:deepseek',
     label: 'DeepSeek V4 Flash',
 
     model: 'deepseek-v4-flash',

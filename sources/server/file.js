@@ -399,8 +399,8 @@ export class $file extends $folder{
         let id = params.time + '.' + uid + '.' + this.ext;
         dir += '/' + id;
         await fsp.copyFile(this.dir, dir);
-        let history = await this.storage_folder._get_item('history', FS.$folder);
-        let data_history = await history._get_item(params.date, FS.$folder);
+        let history = await this.storage_folder._get_next_item('history', FS.$folder);
+        let data_history = await history._get_next_item(params.date, FS.$folder);
 
         let file = FS.$file.build(id, data_history);
 

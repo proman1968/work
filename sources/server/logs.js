@@ -95,7 +95,7 @@ export async function dayFolder(storage, day) {
     const history = await historyFolder(storage);
     if (!history)
         return null;
-    const folder = await history._get_item(day, FS.$folder);
+    const folder = await history._get_next_item(day, FS.$folder);
     await folder.save();
     return folder;
 }
