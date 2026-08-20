@@ -1,16 +1,16 @@
 # Прогресс: item-tree
 
 ## Последние изменения
-- [2026-07-23] «?» / get_item(readme.md) только под /oda и /sources, не на $file. Причина: лавина GET …/readme.md?info 400 в корне explorer.
-- [2026-07-20] Фильтр `readme.md` только при `hideReadme` — в explorer файлы снова видны; меню handlers передаёт флаг само
-- [2026-07-20] В `getItems` и `oda-tree-node.items` добавлен фильтр `readme.md` — документация уровня не попадает в навигационный список; данные `$item.items` не очищаются
+- [15:47] `hideReadme` заменён на `hideFiles`: при флаге скрываются все `$file`, не только `readme.md`. Причина: в меню handlers рядом с пунктами оставались `progress.md` и прочие файлы.
+- [15:47] Фильтры `hideSystem` / `hideFiles` / `onlyClasses` сведены в `applyTreeFilters` — один путь для `getItems` и `oda-tree-node.items`.
 
 ## В работе
 - —
 
 ## Ключевые решения
-- Скрытие readme не глобальное: explorer показывает файлы, меню — нет
-- Фильтр только в UI-дереве, не в серверном `folder.items`
+- Скрытие файлов не глобальное: explorer показывает файлы, меню передаёт `hide-files` само.
+- Критерий — `instanceof CORE.$file`, не regex по имени: пункты меню (`$handler` / `$class` / `$folder`) остаются.
+- Фильтр только в UI-дереве, не в серверном `folder.items`. Кнопка «?» читает полный `$item.items`.
 
 ## Блокеры / Открытые вопросы
 - —

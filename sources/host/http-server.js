@@ -21,6 +21,15 @@ function resolveFileContentType(item) {
     return mime.contentType(item?.id) || 'text/plain';
 }
 
+/** JSON / text/* — строка; иначе байты (octet-stream, video, office…). */
+function parsePostBody(buffer, contentType) {
+    if (contentType === 'application/json')
+        return JSON.parse(buffer.toString('utf-8'));
+    if (!contentType || contentType.startsWith('text/'))
+        return buffer.toString('utf-8');
+    return buffer;
+}
+
 function isStaticAssetType(mime_type) {
     const t = String(mime_type || '').split(';')[0].trim();
     return t === 'image/svg+xml'
@@ -373,30 +382,17 @@ export function createRequestHandler() {
 
                             await promise;
                         }
-                        else if (contentType === 'video/webm') {
-                            let chunks = [];
-                            for await (let chunk of request) {
-                                chunks.push(chunk);
-                            }
-                            const buffer = Buffer.concat(chunks);
-                            params.post = buffer;
-                            request.post = params.post;
-                        }
                         else {
                             let chunks = [];
-                            try{
+                            try {
                                 for await (let chunk of request) {
                                     chunks.push(chunk);
                                 }
                             }
-                            catch(e){
+                            catch (e) {
                                 console.error(e)
                             }
-
-                            const buffer = Buffer.concat(chunks);
-                            params.post = buffer.toString('utf-8');
-                            if (contentType === 'application/json')
-                                params.post = JSON.parse(params.post);
+                            params.post = parsePostBody(Buffer.concat(chunks), contentType);
                             request.post = params.post;
                         }
                     }

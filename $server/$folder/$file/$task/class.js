@@ -6,6 +6,7 @@ export default {
         
         // debugger;
         let { prompt, role, session } = params;
+        keepHere(session, params.here);
         params.block = await this._active_block();
         params.container = await this._active_container();
         params.pipe_step = PIPE[params.block.type] || PIPE.thinking;
@@ -76,7 +77,7 @@ export default {
                 menu.push('Если ни один вариант не подходит — ответь по существу.');
                 menu = menu.join('\n');
 
-                messages = await this.context({prompt: menu});
+                messages = await this.context({prompt: menu, session});
                 response = await this._streamChat({ messages, silent: true, session });
                 if (!this._stopped)
                     choice = response.content.trim().toLowerCase();
@@ -106,7 +107,7 @@ export default {
                     || next_pipe[mode]?.prompt
                     || next_pipe.prompt;
                 if(prompt){
-                    messages = await this.context({prompt});
+                    messages = await this.context({prompt, session});
                     response = await this._fc_chat({ messages, session, fc: next_pipe.fc, block: params.block });
                     if (!this._stopped) {
                         Object.assign(params.block, response);
@@ -144,7 +145,7 @@ export default {
         }
         const mode = containerMode(await this.body, container);
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), modeLine].join('\n\n') }];
+        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), hereNow(params.session), modeLine].filter(Boolean).join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -871,7 +872,7 @@ const PIPE = {
                 b.content = shortError(result?.error || 'пусто');
             }
             else {
-                const messages = await params.task.context({ prompt: PIPE.site.prompt });
+                const messages = await params.task.context({ prompt: PIPE.site.prompt, session: params.session });
                 if (messages.last?.role === 'user')
                     messages.last.content += '\n\n[page]\n' + page;
                 else
@@ -1102,10 +1103,22 @@ const IMG_EXT = /\.(?:jpe?g|png|gif|webp|avif)(?:\?|$)/i;
 const VID_FILE = /\.(?:mp4|webm|ogg)(?:\?|$)/i;
 const VID_HOST = /youtu(?:\.be|be\.com)|vimeo\.com|rutube\.ru/i;
 
+function decodePct(s) {
+    let t = String(s ?? '');
+    for (let i = 0; i < 2; i++) {
+        if (!/%[0-9A-Fa-f]{2}/.test(t)) break;
+        try { t = decodeURIComponent(t.replace(/\+/g, '%20')); }
+        catch { break; }
+    }
+    return t;
+}
+
 function fileAlt(url) {
     try {
-        const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
-        return name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').slice(0, 80);
+        const name = decodePct(new URL(url).pathname.split('/').pop() || '');
+        const t = name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim();
+        if (!t || /\s0\s+1\s+[a-f0-9]{8,}$/i.test(t)) return '';
+        return t.slice(0, 80);
     } catch {
         return '';
     }
@@ -1119,7 +1132,8 @@ function harvestMedia(text, into) {
         if (kind === 'image' && !IMG_EXT.test(url)) return;
         if (kind === 'video' && !VID_FILE.test(url) && !VID_HOST.test(url)) return;
         into.seen.add(url);
-        into[kind].push({ url, alt: String(alt || '').replace(/\s+/g, ' ').trim().slice(0, 80) });
+        const cap = decodePct(alt).replace(/\s+/g, ' ').trim();
+        into[kind].push({ url, alt: (/\s0\s+1\s+[a-f0-9]{8,}$/i.test(cap) ? '' : cap).slice(0, 80) });
     };
     let m;
     const bang = /!\[([^\]]*)\]\((https?:[^)\s]+)\)/gi;
@@ -1252,16 +1266,54 @@ function formatFileHits(result) {
     }).join('\n');
 }
 
+function webAsk(s) {
+    const t = String(s || '').trim();
+    return t && t !== PIPE.web.label && !/^(есть вложения|task)$/i.test(t);
+}
+
 function webQuery(web, body) {
-    if (web?.label && web.label !== PIPE.web.label)
+    if (webAsk(web?.label) && web.label !== PIPE.web.label)
         return web.label;
     const asked = String((body.items || []).find(b => b.type === 'prompt')?.content || body.title || '').trim();
-    if (asked)
+    if (webAsk(asked))
         return asked;
     const parent = parentOf(body, web) || body;
     const think = [...(parent.items || [])].reverse().find(b => b.type === 'thinking' && b.content);
     const line = String(think?.content || '').split('\n').map(s => s.trim()).find(Boolean);
     return (line || '').slice(0, 160);
+}
+
+function keepHere(session, raw) {
+    if (!session) return;
+    let here = raw;
+    if (typeof here === 'string') {
+        try { here = JSON.parse(here); } catch { return; }
+    }
+    if (!here || typeof here !== 'object') return;
+    const next = { ...session.here };
+    if (here.tz) next.tz = String(here.tz);
+    const lat = +here.lat;
+    const lon = +here.lon;
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        next.lat = lat;
+        next.lon = lon;
+    }
+    if (next.tz || (next.lat != null && next.lon != null))
+        session.here = next;
+}
+
+function hereNow(session) {
+    const here = session?.here;
+    const tz = here?.tz;
+    const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+    if (tz) opts.timeZone = tz;
+    let when;
+    try { when = new Date().toLocaleString('ru-RU', opts); }
+    catch { when = new Date().toLocaleString('ru-RU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); }
+    const parts = [`Сейчас: ${when}${tz ? ` (${tz})` : ''}.`];
+    if (here?.lat != null && here?.lon != null)
+        parts.push(`Место: ${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}. Если в запросе другое место — оно важнее.`);
+    return parts.join(' ');
 }
 
 function parentOf(root, node) {

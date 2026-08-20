@@ -460,28 +460,28 @@ ODA({is: 'oda-chat',
         if (isAI) {
             this.awaitTask = true;
             const text = String(this.value ?? '').trim();
-            const promptText = text || (this.files.length ? 'есть вложения' : '');
-            // const time = Date.now();
-            // const ribbon = [{
-            //     type: 'prompt',
-            //     role: 'user',
-            //     content: promptText,
-            //     time,
-            //     sender: WORK.uid,
-            // }];
+            const names = [...this.files].map(f => f.name).filter(Boolean).join(', ');
             try {
-                const items = [];
-                if (text)
-                    items.push({ type: 'prompt', content: text, time: Date.now(), sender: WORK.uid });
+                const items = [{
+                    type: 'prompt',
+                    content: text || names,
+                    time: Date.now(),
+                    sender: WORK.uid,
+                }];
+                const list = [...this.files];
+                const saved = await Promise.all(list.map(f =>
+                    this.$pdp.$item.save_file(f, { ignore_save_logs: true })
+                ));
                 const files = [];
-                for (const f of [...this.files]) {
-                    const res = await this.$pdp.$item.save_file(f, { encoding: 'utf-8', ignore_save_logs: true });
+                for (let i = 0; i < saved.length; i++) {
+                    const res = saved[i];
+                    const f = list[i];
                     const path = res?.logFullPath || res?.path || res?.logPath;
                     if (path) {
                         files.push({
                             type: 'file',
                             path: path.startsWith('/') ? path : '/' + path,
-                            label: f.name || path.split('/').pop(),
+                            label: f?.name || path.split('/').pop(),
                             icon: 'icons:description',
                             time: Date.now(),
                         });
@@ -495,6 +495,8 @@ ODA({is: 'oda-chat',
                         items: files,
                     });
                 }
+                const promptText = text || names || files.map(f => f.label).filter(Boolean).join(', ');
+                items[0].content = promptText;
                 const body = {
                     title: promptText || 'task',
                     created: Date.now(),
@@ -507,7 +509,9 @@ ODA({is: 'oda-chat',
                 await this.$pdp.$item.save_file(taskFile, params);
             } catch (err) {
                 onFail(err);
+                this.awaitTask = false;
             }
+            this.async(() => { this.awaitTask = false; }, 4000);
             this.$('#ribbon').scrollDown = true;
             return;
         }

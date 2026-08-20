@@ -35,7 +35,8 @@ describe('$class.resolveDistributedFolder', () => {
         const expected = await expectedDistributedFolder(item);
         assert.equal(resolved.path, expected.path);
         // Ось — inherit-прокси: $folder класса (якорь — метапапка) + шаги type_chain.
-        assert.match(resolved.path, /\/\$folder\/\$service$/);
+        // type_chain $service = ['$class', '$service'] → путь заканчивается $folder/$class/$service.
+        assert.match(resolved.path, /\/\$folder\/\$class\/\$service$/);
     });
 
     it('distributed folder is parent of class.js layer in ~/class.js chain', async () => {

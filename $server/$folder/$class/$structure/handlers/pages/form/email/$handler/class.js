@@ -21,9 +21,8 @@ export default {
     get odaFormEmail() {
         return this.$('oda-form-email');
     },
-    async showSettings($item, ...params) {
-        // todo: заменить $item на this, когда заработает bind
-        return runEmailSettingsDialog($item);
+    async showSettings(...params) {
+        return runEmailSettingsDialog(this);
     },
 }
 

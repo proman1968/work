@@ -137,7 +137,6 @@ ODA({ is: 'microchat-view',
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 font-size: small;
-                opacity: .9;
                 min-width: 0;
             }
             .title > .time {
@@ -258,7 +257,14 @@ ODA({ is: 'microchat-view',
         const text = this.$pdp.streamingText || '';
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
-    get viewContent() { return (this.content || '') + this.streamTail; },
+    get docked() {
+        return !!(this.container && this.content && this.$pdp?.showDock);
+    },
+    get viewContent() {
+        if (this.docked)
+            return this.streamTail;
+        return (this.content || '') + this.streamTail;
+    },
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
     },

@@ -337,6 +337,12 @@ ODA({
 - **Не возвращай `null` из реактивного геттера**, если «нет значения» = пусто. Reactor кэширует `null` как hit и не пересчитывает; пусто → `undefined`.
 - Статусы — attrs `success` / `warning` / `error` ([`styles.md`](/rules/styles.md/~/handlers/pages/form/)), не локальные `.btn-*`.
 
+### B.1.2. Раскладка = attrs ODA
+
+Заполнить предка — `flex`. Колонка/ряд — `vertical` / `horizontal`. Фиксированный низ/кнопки — `no-flex`. Ось, которую родитель уже повесил на хост (`flex vertical` у chat-item), не перебивать `@apply` на `:host` — ряд внутри, `div horizontal flex`. Ряд с боковой панелью — `overflow: hidden` (иначе `flex-basis: auto` раздувает высоту, панель уезжает под обрез). Боковая панель — `no-flex` + ширина сплиттера, не второй `flex` на той же оси.
+
+**Не** чинить вёрстку через `height: 100%`, `width: 100%`, `min-height: 0` и свои `px`. Канон — [`styles.md`](/rules/styles.md/~/handlers/pages/form/).
+
 ## B.2. Запрещено
 
 - Размазывать блок JSON по пропсам через `~props` / `assignProps`.
@@ -344,6 +350,7 @@ ODA({
 - Hydrate/`$file` на ленте, если view сам резолвит `WORK.get_item(this.path)`.
 - Сжимать код удалением переносов или CSS «в одну строку» ради метрики строк.
 - `|| null` в конце реактивных геттеров «для ясности».
+- Костыли раскладки (`height: 100%`, магические `px`) вместо attrs `flex` / `no-flex` (B.1.2).
 
 ## B.3. Отладка
 

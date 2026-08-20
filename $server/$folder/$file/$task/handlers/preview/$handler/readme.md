@@ -4,7 +4,7 @@
 
 ## 1. Что это
 
-Shell + `ui/`: лента блоков и промптбар. Источник правды — `data` файла; дети получают `:data` / `:$item`.
+Shell + `ui/`: лента, док закрытых контейнеров (wide), промптбар. Источник правды — `data` файла; дети получают `:data` / `:$item`.
 
 ## 2. Зачем это нужно
 
@@ -13,7 +13,8 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 ## 3. Как это работает
 
 - Shell: `streamTarget` = focused без `content`/`html`; `streamingText` на delta; `streaming` true на `streamTarget` / delta, false на done; `changed`/`chat.done` → `load()`.
-- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет.
+- Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Список — кто закрылся раньше (дети, потом родители). `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Вьюер `content`. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`. В ленте у `docked` markdown тела нет.
+- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. С `prompt` уходит `here` (JSON: пояс + координаты из `geolocation`, если браузер дал).
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
@@ -29,8 +30,9 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 ## 4. Из чего это состоит
 
 ```
-$class.js      ← shell: data, focusedBlock, streamTarget, result, streamingText, streaming
+$class.js      ← shell: data, focusedBlock, streamTarget, result, streamingText, streaming, dockReports
 ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form (shell import)
+ui/dock.js     ← док: селектор + content закрытых
 ui/ribbon.js   ← дубль ribbon (scroll-контракт; shell не импортирует)
 ui/panel.js    ← microchat-panel (+ mic/tts/usage)
 ui/mic.js      ← MicAudioController
@@ -40,7 +42,8 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 
 | Модуль | Факт |
 |--------|------|
-| [`class.js`](class.js) | Shell: `streamTarget` / `streaming` / `streamingText`; delta/done. |
+| [`class.js`](class.js) | Shell: `streamTarget` / `streaming` / `streamingText` / `dockReports`; delta/done. |
+| [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + markdown `content`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
 | [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при `streamTarget`). APPROVE: `accept` + для form `prompt` = JSON `$pdp.result`. |

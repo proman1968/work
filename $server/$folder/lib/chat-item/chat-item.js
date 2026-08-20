@@ -79,7 +79,7 @@ ODA({is: 'chat-item',
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
             <div class="body" flex vertical ~if="expanded">
-                <div ~if="hasPreview && $file" ~is="previewTag" flex vertical :$item="$file" :log="log" :log-content="logContent"></div>
+                <div ~if="hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
                 <div ~for="includeFiles" class="item">
                     <chat-item visible history compact :$file="$for.item"></chat-item>
                 </div>

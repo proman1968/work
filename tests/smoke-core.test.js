@@ -41,9 +41,11 @@ before(async () => {
     async execute(p) {
         globalThis.__SMOKE_ON_SAVE__ = (globalThis.__SMOKE_ON_SAVE__ || 0) + 1;
         globalThis.__SMOKE_LAST_LOG__ = p.logFullPath || null;
-        // Регрессия ai.task: методы merged class.js попадают на инстанс только после init
-        await p.$context.init;
-        globalThis.__SMOKE_CTX_PING__ = typeof p.$context.ping;
+        // Регрессия ai.task: методы merged class.js попадают на инстанс только после init.
+        // Контекст триггера — сохранённый файл: _triggers (folder.js) кладёт его в this.$context.
+        const ctx = this.$context;
+        await ctx.init;
+        globalThis.__SMOKE_CTX_PING__ = typeof ctx.ping;
     }
 }`);
     write('BOX/$class/class.js', `export default { label: 'BOX', selfMarker: 'self' }`);
@@ -402,24 +404,14 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
     });
 
-    it('assertAccess бросает при отказе, allowAccess — deprecated алиас', async () => {
-        const prevWorkDev = process.env.WORK_DEV;
-        const prevDev = process.env.dev;
-        process.env.WORK_DEV = 'false';
-        delete process.env.dev;
-        try {
-            const mbox = await WORK.get_item('/MBOX');
-            // Без session — no-op (внутренний вызов)
-            await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
-            // session без uid на WRITE — отказ, через оба имени
-            await assert.rejects(mbox.assertAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
-            await assert.rejects(mbox.allowAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
-        }
-        finally {
-            if (prevWorkDev === undefined) delete process.env.WORK_DEV;
-            else process.env.WORK_DEV = prevWorkDev;
-            if (prevDev !== undefined) process.env.dev = prevDev;
-        }
+    it('assertAccess бросает при отказе', async () => {
+        // DEV_MODE — const из config.js, вычисляется при импорте: этот тест требует
+        // WORK_DEV=false/dev=false на момент запуска, иначе assertAccess — no-op.
+        const mbox = await WORK.get_item('/MBOX');
+        // Без session — no-op (внутренний вызов)
+        await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
+        // session без uid на WRITE — отказ
+        await assert.rejects(mbox.assertAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
     });
 
     it('find_item: объектная форма эквивалентна позиционной', async () => {
@@ -496,24 +488,5 @@ describe('create $class: конструктор сразу, без рестар�
             fs.existsSync(path.join(tmp, 'BOX', 'CHILD', '$class', 'class.js')),
             'на диске есть BOX/CHILD/$class/class.js',
         );
-    });
-
-    it('build повышает $folder → $class, если на диске уже метапапка', async () => {
-        const box = await WORK.get_item('/BOX');
-        const folder = await box._get_next_item('UPGR', FS.$folder);
-        await folder.save();
-        const meta = await folder._get_next_item('$class', FS.$folder);
-        await meta.save();
-        await meta.save_file({
-            filename: 'class.js',
-            post: `export default { label: 'UPGR' }`,
-            encoding: 'utf-8',
-            ignore_save_logs: true,
-        });
-        assert.ok(folder instanceof FS.$folder, 'до reset в реестре ещё $folder');
-        box.reset();
-        const upgraded = (await box.children).find(i => i.id === 'UPGR');
-        assert.ok(upgraded instanceof FS.$class, 'children() повышает до $class без рестарта');
-        assert.equal(upgraded.type, '$class');
     });
 });

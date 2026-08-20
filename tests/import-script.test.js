@@ -23,8 +23,8 @@ ODA({ is: 'x' });`;
     });
 
     // Регрессия: merged export default должен идти после const-объявлений слоёв,
-    // иначе шортхенды (TYPES, FIELDS) падают с TDZ ReferenceError при импорте data-URL
-    it('merged chain $folder → $file → $ai imports without TDZ error', async () => {
+    // иначе шортхенды (FIELDS) падают с TDZ ReferenceError при импорте data-URL.
+    it('merged chain $folder → $file → $task imports without TDZ error', async () => {
         const { MERGE } = await import('../sources/host/babel-merge.js');
         const layers = [
             './$server/$folder/class.js',
@@ -33,8 +33,20 @@ ODA({ is: 'x' });`;
         ].map(p => fs.readFileSync(p, 'utf8'));
         const merged = layers.reduce((acc, code) => MERGE.mergeScripts(acc, code));
         const data = await CORE.$folder.importScript(merged);
-        assert.equal(typeof data.prompt, 'function');
-        assert.ok(data.TYPES?.prompt, 'TYPES.prompt доступен из merged export default');
-        assert.ok(Array.isArray(data.FIELDS), 'FIELDS доступен из merged export default');
+        assert.equal(typeof data.prompt, 'function', 'prompt() метода $task переживает merge');
+        assert.equal(data.label, undefined, 'нет label на уровне типов (данные класс-специфичны)');
+    });
+
+    it('merged export default идёт после const-объявлений (TDZ)', async () => {
+        const { MERGE } = await import('../sources/host/babel-merge.js');
+        const base = 'export default { label: "base" };';
+        const layer = 'const FIELDS = [{ id: "a" }, { id: "b" }];\nexport default { FIELDS, built: true };';
+        const merged = MERGE.mergeScripts(base, layer);
+        assert.ok(merged.indexOf('export default') > merged.indexOf('const FIELDS'),
+            'export default следует за const-объявлениями');
+        const data = await CORE.$folder.importScript(merged);
+        assert.equal(data.label, 'base');
+        assert.deepEqual(data.FIELDS.map(f => f.id), ['a', 'b'], 'шортхенд FIELDS доступен без TDZ');
+        assert.equal(data.built, true);
     });
 });

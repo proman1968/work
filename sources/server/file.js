@@ -537,8 +537,9 @@ export class $file extends $folder{
         if (!params.skip_file_handler) {
             queueMicrotask(async () => {
                 try {
-                    const triggers = await this._triggers;
-                    triggers?.on_save.execute(params);
+                    const on_save = (await this._triggers)?.on_save;
+                    if (on_save)
+                        on_save.execute(params);
                 }
                 catch (e) {
                     console.warn('[file] on_save trigger', e.message);

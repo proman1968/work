@@ -1392,7 +1392,8 @@ export class $folder extends $item{
             }
         }
         else {
-            await fsp.writeFile(path, params.post, params);
+            const data = params.post;
+            await fsp.writeFile(path, data, Buffer.isBuffer(data) ? undefined : params);
         }
 
         const file = await this._get_next_item(filename, FS.$file);

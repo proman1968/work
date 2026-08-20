@@ -15,7 +15,7 @@ export class $handler extends $class{
         return await prototype;
     }
     async execute(...params) {
-        const module = await this.module;
+        const module = await this.getModule();
         if (module.execute) {
             module.execute.call(this, ...params);
             return;
@@ -30,28 +30,25 @@ export class $handler extends $class{
         window.open(this.short + '/');
     }
     async showSettings(...params) {
-        const module = await this.module;
+        const module = await this.getModule();
         if (module.showSettings) {
-            // todo: заменить на 'call(this', когда заработает bind.
-            return await module.showSettings(this, ...params);
+            return await module.showSettings.call(this, ...params);
         }
     }
     get hasSettings() {
         return new AsyncPromise(async () => {
             try {
-                const module = await this.module;
+                const module = await this.getModule();
                 return typeof module?.showSettings === 'function';
             } catch {
                 return false;
             }
         });
     }
-    get module() {
-        return (async () => {
-            const $item = Reactor.activate(this);
-            $item.$context = await $item.$context;
-            const module = await import($item.short + '/~/class.js');
-            return module.default;
-        })();
+    async getModule() {
+        const $item = Reactor.activate(this);
+        $item.$context = await $item.$context;
+        const module = await import($item.short + '/~/class.js');
+        return module.default;
     }
 }

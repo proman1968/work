@@ -99,6 +99,10 @@ pre {
     word-break: break-all;
     word-wrap: break-word;
 }
+pre:has(.mermaid) {
+    word-break: normal;
+    word-wrap: normal;
+}
 .mermaid {
     display: flex;
     justify-content: center;
@@ -112,6 +116,7 @@ pre {
 .mermaid:not(:has(svg)) {
     display: block;
     white-space: pre-wrap;
+    word-break: normal;
     font-family: monospace;
     font-size: 14px;
     background-color: color-mix(in oklch, var(--dark-background) 35%, transparent);

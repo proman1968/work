@@ -16,9 +16,10 @@
         ].join('\n');
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
+        const hasPrompt = (body.items || []).some(b => b.type === 'prompt' && b.content);
         return file.prompt({
             session: params.session,
-            role: body.items?.length ? 'AI' : role,
+            role: hasPrompt ? 'AI' : role,
             prompt: body.title,
         });
     },

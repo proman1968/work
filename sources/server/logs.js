@@ -307,7 +307,7 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
                 await f.save({
                     post: JSON.stringify(row, null, 2),
                     encoding: 'utf-8',
-                    session: params.session || globalThis.WORK,
+                    session: params.session || { $user: globalThis.WORK },
                 });
                 storage.reset();
                 return row;

@@ -57,24 +57,15 @@ function fencesClosed(text) {
     return true;
 }
 
-function mermaidClosed(text) {
-    const s = String(text || '');
-    const openRe = /^(```+|~~~+)mermaid\b/gim;
-    let m;
-    while ((m = openRe.exec(s))) {
-        const mark = m[1].replace(/`/g, '\\`');
-        const from = m.index + m[0].length;
-        const closeAt = s.slice(from).search(new RegExp('\\n' + mark + '(?:\\s|$)'));
-        if (closeAt < 0) return false;
-        openRe.lastIndex = from + closeAt + 1;
-    }
-    return true;
+function looksMermaid(raw) {
+    return /^(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|gitGraph|mindmap)\b/i
+        .test(String(raw || '').trim());
 }
 
 function codeHtml(lang, raw) {
     if (raw.length > CODE_HL)
         return escapeHtml(raw);
-    if (String(lang || '').toLowerCase() === 'mermaid')
+    if (String(lang || '').toLowerCase() === 'mermaid' || looksMermaid(raw))
         return `<div class="mermaid">${escapeHtml(raw)}</div>`;
     const hljs = globalThis.hljs;
     if (!hljs)
@@ -131,6 +122,24 @@ function videoEmbed(href) {
     return '';
 }
 
+function decodePct(s) {
+    let t = String(s ?? '');
+    for (let i = 0; i < 2; i++) {
+        if (!/%[0-9A-Fa-f]{2}/.test(t)) break;
+        try { t = decodeURIComponent(t.replace(/\+/g, '%20')); }
+        catch { break; }
+    }
+    return t;
+}
+
+function isMediaSlug(s) {
+    const t = decodePct(s).replace(/[-_]+/g, ' ').trim();
+    if (!t) return true;
+    const enc = (t.match(/%[0-9A-Fa-f]{2}/g) || []).join('');
+    if (enc && enc.length / t.length > 0.4) return true;
+    return /\s0\s+1\s+[a-f0-9]{8,}$/i.test(t);
+}
+
 function isImageHref(href) {
     try {
         return /\.(?:jpe?g|png|gif|webp|avif)$/i.test(new URL(href).pathname);
@@ -140,12 +149,13 @@ function isImageHref(href) {
 }
 
 function mediaCaption(href, text) {
-    const t = String(text || '').trim();
-    if (t && t !== href && !/^https?:/i.test(t) && !/^\[(?:images|video)\]$/i.test(t))
+    const t = decodePct(String(text || '').trim());
+    if (t && t !== href && !/^https?:/i.test(t) && !/^\[(?:images|video)\]$/i.test(t) && !isMediaSlug(t))
         return t;
     try {
-        const name = decodeURIComponent(new URL(href).pathname.split('/').pop() || '');
-        return name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ');
+        const name = decodePct(new URL(href).pathname.split('/').pop() || '')
+            .replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim();
+        return isMediaSlug(name) ? '' : name;
     } catch {
         return '';
     }
@@ -156,9 +166,25 @@ function stripDumpMarks(s) {
 }
 
 function hideDumpMarks(root) {
-    for (const el of [...root.querySelectorAll('p, li, h1, h2, h3, h4, strong')])
-        if (/^\[(?:images|video)\]$/i.test(el.textContent.trim()))
+    for (const el of [...root.querySelectorAll('p, li, h1, h2, h3, h4, strong')]) {
+        const t = el.textContent.trim();
+        if (/^\[(?:images|video)\]$/i.test(t))
             el.remove();
+        else if (isMediaSlug(t) && !el.querySelector('img, a[href], figure, video, iframe'))
+            el.remove();
+    }
+}
+
+function decodePctText(root) {
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walk.nextNode()) {
+        if (walk.currentNode.parentElement?.closest('pre, code')) continue;
+        if (/%[0-9A-Fa-f]{2}/.test(walk.currentNode.data))
+            nodes.push(walk.currentNode);
+    }
+    for (const n of nodes)
+        n.data = decodePct(n.data);
 }
 
 function imageFigure(src, cap) {
@@ -184,6 +210,7 @@ function imageFigure(src, cap) {
 
 function embedMedia(root) {
     if (!root) return;
+    decodePctText(root);
     hideDumpMarks(root);
     for (const a of [...root.querySelectorAll('a[href]')]) {
         if (a.closest('pre, code, figure.md-img')) continue;
@@ -217,7 +244,7 @@ async function renderMermaid(root) {
         const src = node.textContent.trim();
         if (!src) continue;
         try {
-            if (!await mermaid.parse(src, { suppressErrors: true })) continue;
+            if (await mermaid.parse(src, { suppressErrors: true }) === false) continue;
             const { svg } = await mermaid.render('mmd-' + Math.random().toString(36).slice(2, 10), src);
             if (svg) node.innerHTML = svg;
         } catch { /* неполный / битый — исходник */ }
@@ -246,8 +273,9 @@ ODA({ is: 'oda-markdown-viewer',
                     if (needsHljs(src)) {
                         await loadHljs();
                         if (gen !== this._mdGen) return;
-                        root.innerHTML = parseMarkdown(src);
                     }
+                    if (!root) return;
+                    root.innerHTML = parseMarkdown(src);
                     if (needsMath(src)) {
                         await loadMathJax();
                         if (gen !== this._mdGen) return;
@@ -256,7 +284,7 @@ ODA({ is: 'oda-markdown-viewer',
                         await MathJax.typesetPromise([root]);
                     }
                     if (gen !== this._mdGen) return;
-                    if (/^(```+|~~~+)mermaid\b/im.test(src) && mermaidClosed(src))
+                    if (root.querySelector('.mermaid'))
                         await renderMermaid(root);
                     if (gen !== this._mdGen) return;
                     embedMedia(root);

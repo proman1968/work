@@ -1,8 +1,33 @@
 import '../sources/reactor.js';
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as CORE from '../sources/server/index.js';
 import { execItemMethod } from '../sources/host/http-server.js';
+
+// assertAccess (class.js) пропускает проверку, если session.$user === globalThis.WORK:
+// при отсутствии WORK (undefined) любая сессия без $user совпадает и проверка молчит.
+// Мок WORK без роли ADMIN, чтобы ветки доступа отрабатывали по-настоящему.
+let prevWork;
+
+before(() => {
+    prevWork = globalThis.WORK;
+    globalThis.WORK = { roles: async () => [] };
+});
+
+after(() => {
+    globalThis.WORK = prevWork;
+});
+
+// В unit-тестах нет WORK.$folder, поэтому геттер _methods ядра (доступ к ~/methods/*)
+// падал бы с TypeError, который tryHandlerMethod глотает (catch {}) — тест проходил,
+// но консоль засорялась и ветка хендлеров не тестировалась. Заглушка _methods
+// отдаёт собственный набор хендлеров теста (__handlers) и позволяет проверить
+// ветку tryHandlerMethod по-настоящему.
+const withStubMethods = (Base) => class extends Base {
+    get _methods() {
+        return Promise.resolve(this.__handlers || {});
+    }
+};
 
 describe('execItemMethod', () => {
     it('returns non-folder items as-is', () => {
@@ -23,13 +48,41 @@ describe('execItemMethod', () => {
     });
 
     it('throws on unknown method', async () => {
-        class TestFolder extends CORE.$folder {}
+        class TestFolder extends withStubMethods(CORE.$folder) {}
         const folder = new TestFolder({ id: 'test' });
         folder.path = '/test';
         await assert.rejects(
             () => execItemMethod(folder, 'missing_method', {}, { method: 'GET' }),
             /Unknown method/
         );
+    });
+
+    it('runs ~/methods/* handler branch (tryHandlerMethod)', async () => {
+        class TestFolder extends withStubMethods(CORE.$folder) {}
+        const folder = new TestFolder({ id: 'test' });
+        folder.path = '/test';
+        folder.__handlers = {
+            ping: {
+                async execute(p) {
+                    return { called: true, ctxIsItem: p.$context === folder };
+                },
+            },
+        };
+        const result = await execItemMethod(folder, 'ping', {}, { method: 'POST' });
+        assert.deepEqual(result, { called: true, ctxIsItem: true });
+    });
+
+    it('class method wins over handler with same name', async () => {
+        class TestFolder extends withStubMethods(CORE.$folder) {
+            async ping() {
+                return { fromClass: true };
+            }
+        }
+        const folder = new TestFolder({ id: 'test' });
+        folder.path = '/test';
+        folder.__handlers = { ping: { async execute() { return { fromHandler: true }; } } };
+        const result = await execItemMethod(folder, 'ping', {}, { method: 'POST' });
+        assert.deepEqual(result, { fromClass: true });
     });
 
     it('blocks delete for non-admin user', async () => {
@@ -54,7 +107,7 @@ describe('execItemMethod', () => {
         owner.path = '/root/test/$group';
         Object.defineProperty(owner, '$class', { get: () => owner });
 
-        class TestFolder extends CORE.$folder {}
+        class TestFolder extends withStubMethods(CORE.$folder) {}
         const folder = new TestFolder({ id: 'sources' });
         folder.path = '/sources';
         Object.defineProperty(folder, '$class', { get: () => owner });
