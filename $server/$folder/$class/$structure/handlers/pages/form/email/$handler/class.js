@@ -13,14 +13,16 @@ export default {
             }
         </style>
         <div class="email-top-panel" slot="top-panel" horizontal>
-            <oda-button icon="icons:add" @tap="$('oda-form-email')?.createEmail?.()" title="Написать"></oda-button>
-            <oda-button icon="icons:refresh" @tap="$('oda-form-email')?.fetchRefresh?.()" title="Обновить"></oda-button>
+            <oda-button icon="icons:add" @tap="odaFormEmail?.createEmail?.()" title="Написать"></oda-button>
+            <oda-button icon="icons:refresh" @tap="odaFormEmail?.fetchRefresh?.()" title="Обновить"></oda-button>
         </div>
         <oda-form-email flex :$item></oda-form-email>
     `,
-    async showSettings($item, ...params) {
-        // todo: заменить $item на this, когда заработает bind
-        return runEmailSettingsDialog($item);
+    get odaFormEmail() {
+        return this.$('oda-form-email');
+    },
+    async showSettings(...params) {
+        return runEmailSettingsDialog(this);
     },
 }
 

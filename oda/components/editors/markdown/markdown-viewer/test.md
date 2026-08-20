@@ -157,6 +157,14 @@ var foo = function (bar) {
 console.log(foo(5));
 ```
 
+Mermaid
+
+``` mermaid
+graph TD
+    A[Start] --> B{Branch};
+    B --> C[Done];
+```
+
 ## Tables
 
 | Option | Description |

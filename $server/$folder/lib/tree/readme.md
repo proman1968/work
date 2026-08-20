@@ -12,17 +12,18 @@
 
 - Дети берутся через `itemsSelector` (по умолчанию `items`).
 - `hideSystem` убирает `$…` типы.
-- `hideReadme` (по умолчанию выкл.) скрывает `readme.md` из списка — включает только `item-menu` handlers; в explorer файлы `readme.md` видны.
-- Узлы с собственным `readme.md` показывают «?» на `item-node` — только папки/$class под `/oda` и `/sources` (файлы и прочие пути без probe).
+- `hideFiles` (по умолчанию выкл.) скрывает все `$file` из списка — включает только `item-menu` handlers; в explorer файлы видны.
+- Фильтры дерева (`hideSystem` / `hideFiles` / `onlyClasses`) сводятся в `applyTreeFilters`: `getItems` и `oda-tree-node.items` используют одну функцию.
+- Узлы с собственным `readme.md` показывают «?» на `item-node`. Дерево может скрыть файлы из списка (`hideFiles`) — «?» берётся из полного `$item.items`.
 
 ## Из чего это состоит
 
-- [`tree.js`](/$server/$folder/lib/tree/tree.js/~/handlers/pages/form/) — `item-tree` / `oda-tree-node`: загрузка детей, опциональный `hideReadme`, expand/focus/check (навигация по иерархии)
+- [`tree.js`](/$server/$folder/lib/tree/tree.js/~/handlers/pages/form/) — `item-tree` / `oda-tree-node`: загрузка детей, опциональный `hideFiles`, expand/focus/check (навигация по иерархии)
 
 ## В каком это состоянии
 
 - ✅ дерево, категории, hideTops/hideRoots
-- ✅ `hideReadme` только по флагу (меню), не глобально
+- ✅ `hideFiles` только по флагу (меню), не глобально
 - ✅ совместимость с кнопкой справки на `item-node`
 
 ## Дальнейшие планы

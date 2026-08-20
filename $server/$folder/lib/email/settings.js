@@ -46,14 +46,14 @@ export function readEmailSettings(item) {
 export async function ensureMailboxFolders(item, mailboxes = {}) {
     if (!item || !Object.keys(mailboxes).length)
         return;
-    let emailRoot = await item._get_item('email', FS.$folder);
+    let emailRoot = await item._get_next_item('email', FS.$folder);
     if (!emailRoot)
         emailRoot = await item.create({ type: '$folder', id: 'email' });
     if (emailRoot)
         await emailRoot.save();
     for (const [address, box] of Object.entries(mailboxes)) {
         const folderId = String(box?.folder || address).replace(/^email\//, '').split('/').pop() || address;
-        let folder = emailRoot ? await emailRoot._get_item(folderId, FS.$folder) : null;
+        let folder = emailRoot ? await emailRoot._get_next_item(folderId, FS.$folder) : null;
         if (!folder && emailRoot) {
             folder = await emailRoot.create({ type: '$folder', id: folderId });
             box.folder = folderId;
@@ -76,7 +76,7 @@ export async function getMailboxFolder(item, address) {
 export async function resolveStructFolder(storage, structureId) {
     if (!structureId || storage.id === structureId)
         return storage;
-    if (storage._get_item)
-        return storage._get_item(structureId, FS.$folder);
+    if (storage._get_next_item)
+        return storage._get_next_item(structureId, FS.$folder);
     return null;
 }

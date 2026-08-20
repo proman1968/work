@@ -90,7 +90,7 @@ export const authMethods = {
         };
 
         let users = await this.$users;
-        let $user_item = await users._get_item(uid, CORE.$user);
+        let $user_item = await users._get_next_item(uid, CORE.$user);
         credentials.keys = $user_item.keys || {};
         credentials.keys[time] = publicKey;
 

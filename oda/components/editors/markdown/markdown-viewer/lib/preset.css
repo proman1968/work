@@ -44,6 +44,49 @@ a:not(pre) > code {
     color: inherit !important;
     font-size: inherit;
 }
+img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 8px 0;
+}
+figure.md-img {
+    margin: 1em 0;
+    max-width: 100%;
+}
+figure.md-img a {
+    display: block;
+    text-decoration: none;
+}
+figure.md-img img {
+    margin: 0;
+}
+figure.md-img figcaption {
+    font-size: small;
+    opacity: .8;
+    margin-top: 4px;
+}
+.md-video {
+    margin: 1em 0;
+    max-width: 100%;
+}
+.md-video iframe,
+.md-video video {
+    width: 100%;
+    border: 0;
+    border-radius: 4px;
+}
+.md-video iframe {
+    aspect-ratio: 16 / 9;
+}
+.md-video video {
+    max-height: 360px;
+}
+.md-video-cap {
+    font-size: small;
+    opacity: .8;
+    margin-bottom: 4px;
+}
 pre {
     background-color: color-mix(in oklch, var(--dark-background) 35%, transparent);
     border: 1px solid color-mix(in oklch, var(--dark-color) 25%, transparent);
@@ -55,6 +98,31 @@ pre {
     color: var(--content-color);
     word-break: break-all;
     word-wrap: break-word;
+}
+pre:has(.mermaid) {
+    word-break: normal;
+    word-wrap: normal;
+}
+.mermaid {
+    display: flex;
+    justify-content: center;
+    overflow-x: auto;
+    margin: 1em 0;
+}
+.mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+.mermaid:not(:has(svg)) {
+    display: block;
+    white-space: pre-wrap;
+    word-break: normal;
+    font-family: monospace;
+    font-size: 14px;
+    background-color: color-mix(in oklch, var(--dark-background) 35%, transparent);
+    border: 1px solid color-mix(in oklch, var(--dark-color) 25%, transparent);
+    border-radius: 2px;
+    padding: 12px 8px;
 }
 code {
     font-size: 90%;

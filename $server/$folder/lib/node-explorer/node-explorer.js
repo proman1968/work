@@ -73,7 +73,10 @@ export default {
             let item = this.$item;
             const result = [item];
             while (item && item !== this.expandedItem) {
-                item = await item.parent;
+                if(item instanceof CORE.$handler)
+                    item = await item.$context;
+                else
+                    item = await item.parent;
                 if (item ) {
                     result.push(item);
                 }

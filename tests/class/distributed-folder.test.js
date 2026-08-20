@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { $folder, $class } from '../../sources/server/index.js';
 import { $server } from '../../sources/server/server.js';
 
-/** Ожидаемая distributed-папка: та же прогулка, что collect_tilde до meta_folder. */
+/** Ожидаемая distributed-папка: та же прогулка, что _collect_tilde до meta_folder. */
 async function expectedDistributedFolder(storage) {
     let folder = storage.$folder;
     for (const step of await storage.type_chain) {
-        folder = await folder._get_item(step, $folder);
+        folder = await folder._get_next_item(step, $folder);
         if (!folder)
             break;
     }
@@ -25,7 +25,7 @@ async function distributedDataJsDir(storage) {
 }
 
 describe('$class.resolveDistributedFolder', () => {
-    it('matches collect_tilde axis ($folder of class + type_chain)', async () => {
+    it('matches _collect_tilde axis ($folder of class + type_chain)', async () => {
         globalThis.WORK = new $server();
         const item = await WORK.get_item('/SERVICES');
         assert.ok(item instanceof $class);
@@ -35,7 +35,8 @@ describe('$class.resolveDistributedFolder', () => {
         const expected = await expectedDistributedFolder(item);
         assert.equal(resolved.path, expected.path);
         // Ось — inherit-прокси: $folder класса (якорь — метапапка) + шаги type_chain.
-        assert.match(resolved.path, /\/\$folder\/\$service$/);
+        // type_chain $service = ['$class', '$service'] → путь заканчивается $folder/$class/$service.
+        assert.match(resolved.path, /\/\$folder\/\$class\/\$service$/);
     });
 
     it('distributed folder is parent of class.js layer in ~/class.js chain', async () => {

@@ -33,7 +33,7 @@ describe('$class secrets', () => {
             get() {
                 return {
                     dir: metaDir,
-                    async _get_item(id, type) {
+                    async _get_next_item(id, type) {
                         assert.equal(id, '#secret');
                         assert.equal(type, CORE.$folder);
                         const secretDir = path.join(metaDir, '#secret');

@@ -12,7 +12,7 @@ import { $server } from '../sources/server/server.js';
  * Smoke-тесты ядра на изолированном дереве (песочница в tmp).
  * Фиксируют инварианты, которые обязаны пережить рефакторинг:
  * 1. get_item: имя, ~, ~/x, *
- * 2. collect_tilde: порядок слоёв, SELF (meta_folder) — последний
+ * 2. _collect_tilde: порядок слоёв, SELF (meta_folder) — последний
  * 3. Сборка DATA из цепочки class.js (merge + import)
  * 4. save_file → снимок в history/YYYY-MM-DD → запись лога → триггер on_save
  * 5. steps файла по расширению ($file → $smoke)
@@ -41,9 +41,11 @@ before(async () => {
     async execute(p) {
         globalThis.__SMOKE_ON_SAVE__ = (globalThis.__SMOKE_ON_SAVE__ || 0) + 1;
         globalThis.__SMOKE_LAST_LOG__ = p.logFullPath || null;
-        // Регрессия ai.task: методы merged class.js попадают на инстанс только после init
-        await p.$context.init;
-        globalThis.__SMOKE_CTX_PING__ = typeof p.$context.ping;
+        // Регрессия ai.task: методы merged class.js попадают на инстанс только после init.
+        // Контекст триггера — сохранённый файл: _triggers (folder.js) кладёт его в this.$context.
+        const ctx = this.$context;
+        await ctx.init;
+        globalThis.__SMOKE_CTX_PING__ = typeof ctx.ping;
     }
 }`);
     write('BOX/$class/class.js', `export default { label: 'BOX', selfMarker: 'self' }`);
@@ -85,7 +87,7 @@ describe('get_item: базовый синтаксис путей', () => {
     });
 });
 
-describe('collect_tilde: порядок слоёв', () => {
+describe('_collect_tilde: порядок слоёв', () => {
     it('SELF (meta_folder) — последний слой в ~/class.js', async () => {
         const box = await WORK.get_item('/BOX');
         const files = await box.get_item('~/class.js');
@@ -119,7 +121,7 @@ describe('сборка DATA из цепочки class.js', () => {
 describe('steps файла по расширению', () => {
     it('файл .smoke получает цепочку [$file, $smoke]', async () => {
         const box = await WORK.get_item('/BOX');
-        const file = await box._get_item('probe.smoke', FS.$file);
+        const file = await box._get_next_item('probe.smoke', FS.$file);
         assert.deepEqual(await file.type_chain, ['$file', '$smoke']);
     });
 });
@@ -402,24 +404,14 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
     });
 
-    it('assertAccess бросает при отказе, allowAccess — deprecated алиас', async () => {
-        const prevWorkDev = process.env.WORK_DEV;
-        const prevDev = process.env.dev;
-        process.env.WORK_DEV = 'false';
-        delete process.env.dev;
-        try {
-            const mbox = await WORK.get_item('/MBOX');
-            // Без session — no-op (внутренний вызов)
-            await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
-            // session без uid на WRITE — отказ, через оба имени
-            await assert.rejects(mbox.assertAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
-            await assert.rejects(mbox.allowAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
-        }
-        finally {
-            if (prevWorkDev === undefined) delete process.env.WORK_DEV;
-            else process.env.WORK_DEV = prevWorkDev;
-            if (prevDev !== undefined) process.env.dev = prevDev;
-        }
+    it('assertAccess бросает при отказе', async () => {
+        // DEV_MODE — const из config.js, вычисляется при импорте: этот тест требует
+        // WORK_DEV=false/dev=false на момент запуска, иначе assertAccess — no-op.
+        const mbox = await WORK.get_item('/MBOX');
+        // Без session — no-op (внутренний вызов)
+        await mbox.assertAccess({}, FS.$class.ACCESS_LEVEL.READ);
+        // session без uid на WRITE — отказ
+        await assert.rejects(mbox.assertAccess({ session: {} }, FS.$class.ACCESS_LEVEL.WRITE));
     });
 
     it('find_item: объектная форма эквивалентна позиционной', async () => {
@@ -478,5 +470,23 @@ describe('мультифайл на чистых логах: save_message / save
         assert.ok(Array.isArray(logs));
         assert.equal(logs.length, 1);
         assert.ok(logs[0].path?.includes('c.smoke'));
+    });
+});
+
+describe('create $class: конструктор сразу, без рестарта', () => {
+    it('create: дочерний класс сразу $class, не $folder', async () => {
+        const box = await WORK.get_item('/BOX');
+        await box.create({ id: 'CHILD', type: '$class' });
+        const child = await WORK.get_item('/BOX/CHILD');
+        assert.ok(child, 'CHILD должен находиться');
+        assert.ok(child instanceof FS.$class, 'CHILD должен быть $class');
+        assert.equal(child.type, '$class');
+        const items = await box.items;
+        const found = items.find(i => i.id === 'CHILD');
+        assert.ok(found instanceof FS.$class, 'в items родителя — $class');
+        assert.ok(
+            fs.existsSync(path.join(tmp, 'BOX', 'CHILD', '$class', 'class.js')),
+            'на диске есть BOX/CHILD/$class/class.js',
+        );
     });
 });

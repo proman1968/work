@@ -33,7 +33,7 @@ async function loadCurrentEml(storage, role, address, filename, session) {
         const work = await storage.work_zone({ role, session });
         const mimeFolder = await work.getFolderToSaveFile({ filename });
         const rel = `${address}/${filename}`;
-        const file = await mimeFolder._get_item(rel);
+        const file = await mimeFolder._get_next_item(rel);
         const dir = file?.dir || (mimeFolder.dir + '/' + rel);
         if (!fs.existsSync(dir))
             return '';

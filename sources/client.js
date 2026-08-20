@@ -552,6 +552,7 @@ class WebSocketEvents {
                         delete item[key];
                         if (item[R]?.cache)
                             item[R].cache[key] = undefined;
+                        Reactor.reset_deps(item, key);
                     }
                     item.fire('changed', data);
                     item.increaseVersion();

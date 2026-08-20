@@ -1,3 +1,14 @@
+function applyTreeFilters(items, host) {
+    items = items || [];
+    if (host.hideSystem)
+        items = items.filter(f => !f.isType);
+    if (host.hideFiles)
+        items = items.filter(f => !(f instanceof CORE.$file));
+    if (host.onlyClasses)
+        items = items.filter(f => f instanceof CORE.$class);
+    return items;
+}
+
 export default {
     template: /*html*/`
         <style>
@@ -69,7 +80,7 @@ export default {
             $list: ['tools', 'handlers', 'both']
         },
         hideSystem: false,
-        hideReadme: false,
+        hideFiles: false,
         onlyClasses: false, // только CORE.$class (site-navigation)
     },
     items: [],
@@ -92,13 +103,7 @@ export default {
         }
     },
     async getItems($item, deep = 0) {
-        let items = (await $item?.[this.itemsSelector]) || [];
-        if(this.hideSystem)
-            items = items.filter(f=>!f.isType)
-        if(this.hideReadme)
-            items = items.filter(f => !/^readme\.md$/i.test(f.id))
-        if(this.onlyClasses)
-            items = items.filter(f => f instanceof CORE.$class)
+        let items = applyTreeFilters(await $item?.[this.itemsSelector], this);
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -193,6 +198,7 @@ ODA({is: 'oda-tree-node',
             :host {
                 @apply --vertical;
                 overflow: hidden;
+                padding: 2px;
             }
             .node {
                 @apply --horizontal;
@@ -345,13 +351,7 @@ ODA({is: 'oda-tree-node',
     },
     get items() {
         return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
-            let items = raw || [];
-            if(this.$pdp.hideSystem)
-                items = items.filter(f=>!f.isType)
-            if(this.$pdp.hideReadme)
-                items = items.filter(f => !/^readme\.md$/i.test(f.id))
-            if(this.$pdp.onlyClasses)
-                items = items.filter(f => f instanceof CORE.$class)
+            let items = applyTreeFilters(raw, this.$pdp);
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
                     this.$item.expanded = true;

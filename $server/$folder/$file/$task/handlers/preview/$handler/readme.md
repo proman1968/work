@@ -4,7 +4,7 @@
 
 ## 1. Что это
 
-Shell + `ui/`: лента блоков и промптбар. Источник правды — `data` файла; дети получают `:data` / `:$item`.
+Shell + `ui/`: лента, док закрытых контейнеров (wide), промптбар. Источник правды — `data` файла; дети получают `:data` / `:$item`.
 
 ## 2. Зачем это нужно
 
@@ -13,23 +13,26 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 ## 3. Как это работает
 
 - Shell: `streamTarget` = focused без `content`/`html`; `streamingText` на delta; `streaming` true на `streamTarget` / delta, false на done; `changed`/`chat.done` → `load()`.
-- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет.
+- Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Список — кто закрылся раньше (дети, потом родители). `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Вьюер `content`. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`. Тот же `content` в ленте и в доке.
+- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. С `prompt` уходит `here` (JSON: пояс + координаты из `geolocation`, если браузер дал).
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
+- Sticky: `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo). Контейнер — `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
 - Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streamTarget`; зелёная — `accept: true` (+ для form `prompt` = JSON `$pdp.result`); крестик — `accept: false` (в query не уходит, сервер считает отказом).
 - Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
 - Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`.
 - Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`. Поле ввода у «Другое» скрыто, пока пункт не выбран.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
-- `site` — обычный блок: `label` = url, тело = `content` (текст страницы). `data.url` есть у слота.
+- `site` — обычный блок: `label` = url, тело = `content` (обзор страницы). `data.url` есть у слота.
 
 ## 4. Из чего это состоит
 
 ```
-$class.js      ← shell: data, focusedBlock, streamTarget, result, streamingText, streaming
+$class.js      ← shell: data, focusedBlock, streamTarget, result, streamingText, streaming, dockReports
 ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form (shell import)
+ui/dock.js     ← док: селектор + content закрытых
 ui/ribbon.js   ← дубль ribbon (scroll-контракт; shell не импортирует)
 ui/panel.js    ← microchat-panel (+ mic/tts/usage)
 ui/mic.js      ← MicAudioController
@@ -39,7 +42,8 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 
 | Модуль | Факт |
 |--------|------|
-| [`class.js`](class.js) | Shell: `streamTarget` / `streaming` / `streamingText`; delta/done. |
+| [`class.js`](class.js) | Shell: `streamTarget` / `streaming` / `streamingText` / `dockReports`; delta/done. |
+| [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + markdown `content`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
 | [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при `streamTarget`). APPROVE: `accept` + для form `prompt` = JSON `$pdp.result`. |
@@ -65,5 +69,5 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 - **Form:** слот только при `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
 - **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
-- **Stream:** `streamTarget` = focused без тела. Волна на нём, `spinners:pulse` на контейнерах над ним; `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
+- **Stream:** `streamTarget` = focused без тела. `typeIcon`: `spinners:3-dots-scale` на нём и на контейнерах над ним; в JSON не пишется. `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

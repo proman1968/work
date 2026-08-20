@@ -396,7 +396,8 @@ export class Reactor extends EventTarget {
     static _notifyTarget(target) {
         if (!target)
             return;
-        target.notify?.();
+        if (typeof target.notify === 'function')
+            target.notify();
     }
 
     static reset_deps = function (target, key = '', keep_notify = false) {
@@ -497,7 +498,8 @@ export class Reactor extends EventTarget {
                         res = getTypeConverter(prop?.$type)(res);
                         res = actor.cache[key] = Reactor.activate(res, target);
                         Reactor.reset_deps(target, key);
-                        target.notify?.(prop, res);
+                        if (typeof target.notify === 'function')
+                            target.notify(prop, res);
                     }).catch(err => {
                         // При ошибке очищаем кэш без уведомления — избегаем цикла повторных вызовов
                         if (actor.cache[key] === pending) {
@@ -510,7 +512,8 @@ export class Reactor extends EventTarget {
                     value = getTypeConverter(prop?.$type)(value);
                 value = actor.cache[key] = Reactor.activate(value, target);
                 Reactor.reset_deps(target, key);
-                target.notify?.(prop, value);
+                if (typeof target.notify === 'function')
+                    target.notify(prop, value);
             }
 
         }
@@ -532,7 +535,8 @@ export class Reactor extends EventTarget {
             else
                 Reflect.set(target, key, value)
             Reactor.reset_deps(target, key);
-            target.notify?.(prop, value);
+            if (typeof target.notify === 'function')
+                target.notify(prop, value);
         }
         return true;
     }

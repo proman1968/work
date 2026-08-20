@@ -6,7 +6,7 @@
   "main": "work.js",
   "scripts": {
     "start": "node run.mjs",
-    "test": "node --test \"tests/*.test.js\"",
+    "test": "node --test \"tests/**/*.test.js\"",
     "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
     "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-sync.ps1",
@@ -33,6 +33,7 @@
     "stun": "^1.1.0",
     "web-push": "^3.6.7",
     "ws": "^8.21.0",
+    "xlsx": "^0.18.5",
     "xmldom": "^0.6.0"
   }
 }

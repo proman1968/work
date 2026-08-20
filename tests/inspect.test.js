@@ -1,8 +1,9 @@
 import '../sources/reactor.js';
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { $file, $folder, $class } from '../sources/server/index.js';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs/promises';
 
 describe('get_schema', () => {
@@ -24,7 +25,6 @@ describe('get_schema', () => {
         
         // Проверяем наличие реальных методов $folder
         const methodNames = schema.methods.map(m => m.name);
-        console.log('Found methods:', methodNames);
         assert.ok(methodNames.includes('info'), 'info должен быть в методах');
         assert.ok(methodNames.includes('save_file'), 'save_file должен быть в методах');
         assert.ok(methodNames.includes('get_item'), 'get_item должен быть в методах');
@@ -70,23 +70,44 @@ describe('get_schema', () => {
 });
 
 describe('get_imports', () => {
-    it('парсит импорты через регулярку', async () => {
-        const content = `
+    let tmp;
+
+    before(async () => {
+        tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'work-inspect-'));
+    });
+
+    after(async () => {
+        try {
+            await fs.rm(tmp, { recursive: true, force: true });
+        }
+        catch { /* tmp почистит ОС */ }
+    });
+
+    function makeFile(content) {
+        const file = new $file({ id: 'sample.js' });
+        file.path = '/sample.js';
+        const filePath = path.join(tmp, 'sample.js');
+        Object.defineProperty(file, 'dir', { configurable: true, get: () => filePath });
+        return fs.writeFile(filePath, content, 'utf-8').then(() => file);
+    }
+
+    it('возвращает import-операторы реального файла', async () => {
+        const file = await makeFile(`
 import React from 'react';
 import { useState } from 'react';
 import * as utils from './utils.js';
-`;
-        const matches = content.match(/^\s*import\s+.*$/gmi);
-        assert.ok(Array.isArray(matches));
-        assert.ok(matches.length >= 3);
-        assert.ok(matches.some(m => m.trim().includes("import React from 'react'")));
-        assert.ok(matches.some(m => m.trim().includes("import { useState } from 'react'")));
-        assert.ok(matches.some(m => m.trim().includes("import * as utils from './utils.js'")));
+const x = 1;
+`);
+        const imports = await file.get_imports({});
+        assert.deepEqual(imports, [
+            "import React from 'react';",
+            "import { useState } from 'react';",
+            "import * as utils from './utils.js';",
+        ]);
     });
 
-    it('возвращает null для файла без импортов', async () => {
-        const content = 'просто текст\nвторая строка';
-        const matches = content.match(/^\s*import\s+.*$/gmi);
-        assert.equal(matches, null);
+    it('возвращает пустой массив для файла без импортов', async () => {
+        const file = await makeFile('просто текст\nвторая строка');
+        assert.deepEqual(await file.get_imports({}), []);
     });
 });

@@ -193,6 +193,7 @@ ODA({ is: 'microchat-panel',
     get usageStats() { return buildUsageStats(this.data); },
     attached() {
         this._focus();
+        this._geo();
     },
     fmtTok(n) { return fmtTokens(n); },
     _focus() {
@@ -214,6 +215,7 @@ ODA({ is: 'microchat-panel',
             prompt,
             model: this.data.model,
             role: 'APPROVE',
+            here: await this.here(),
         });
         this._focus();
     },
@@ -246,8 +248,8 @@ ODA({ is: 'microchat-panel',
         let text = String(this.value ?? '').trim();
         const external = this.files.filter(f => f instanceof File);
         const internal = this.files.filter(f => f.internalPath);
-        if (internal.length)
-            text += (text ? '\n\n' : '') + 'Прикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
+        if (internal.length && text)
+            text += '\n\nПрикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
 
         this.value = '';
         this.files = [];
@@ -260,9 +262,10 @@ ODA({ is: 'microchat-panel',
         }
         this.pending = true;
         const result = await this.$item.fetch('prompt', {
-            prompt: text || (external.length ? 'Обработай прикреплённые файлы' : ''),
+            prompt: text,
             model: this.data.model,
             role: String(this.role || this.$item.role || 'USER').toUpperCase(),
+            here: await this.here(),
         }, post);
         this._focus();
     },
@@ -311,5 +314,24 @@ ODA({ is: 'microchat-panel',
     cycleTts() {
         this._tts().cycle();
         this._focus();
+    },
+    async here() {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const pos = await this._geo();
+        return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
+    },
+    _geo() {
+        if (this._geoFix) return this._geoFix;
+        if (!navigator.geolocation) return null;
+        return this._geoWait ??= new Promise(resolve => {
+            navigator.geolocation.getCurrentPosition(
+                p => {
+                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
+                    resolve(this._geoFix);
+                },
+                () => resolve(null),
+                { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
+            );
+        });
     },
 });

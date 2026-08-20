@@ -2,14 +2,15 @@ export default {
     icon: 'icons:add',
     access: 'c',
     async execute(filter) {
-        const ctx = this.$item.$context;
-        const props = { $item: ctx, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
+        const $context = await this.$item.$context;
+        const props = { $item: $context, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
         if (filter) {
-            props.type = ctx.type;
+            props.type = $context.type;
         }
         const el = ODA.createElement('input-name-type', props);
         const upload = {
             icon: 'icons:file-upload',
+            title: 'Загрузить файлы',
             tap: (e) => {
                 el.parentElement.close('upload');
             }
@@ -19,17 +20,20 @@ export default {
             const type = el.type || '';
             const name = el.name;
             if (type.startsWith('$') && type !== '$file' && type !== '$folder') {
-                const owner = [ctx.$class, ctx.$owner, ctx].find(o =>
+                const $class = await $context.$class;
+                const $owner = await $context.$owner;
+                const owner = [$class, $owner, $context].find(o =>
                     o && typeof o.create === 'function'
                     && o.constructor?.name !== '$folder'
                     && o.constructor?.name !== '$file'
                 );
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
-                return owner.create({ type, id: name });
+                const id = name.replace(/[<>:"|?*]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+                return owner.create({ type, id, label: name });
             }
             if (type === '$folder') {
-                return ctx.ensure_folder({ id: name });
+                return $context.ensure_folder({ id: name });
             }
             const fullName = type === '$file'
                 ? name
@@ -39,12 +43,12 @@ export default {
             if (ext) {
                 try {
                     const ext_folder = await WORK.$folder.find_item('$' + ext, (item) => item.id?.[0] === '$');
-                    const ext_tmp = await ext_folder?._get_item('template.' + ext);
+                    const ext_tmp = await ext_folder?._get_next_item('template.' + ext);
                     if (ext_tmp)
                         post = WORK.fs.readFileSync('.' + ext_tmp.path);
                 } catch { /* empty */ }
             }
-            return ctx.save_file({ filename: fullName, post, encoding: 'utf-8' });
+            return $context.save_file({ filename: fullName, post, encoding: 'utf-8' });
         } else if (result === 'upload') {
             const fileDialog = await ODA.showFileDialog({ multiple: true });
             let files = Array.from(fileDialog).map(f => {
@@ -64,7 +68,7 @@ export default {
             files.forEach((file) => {
                 formData.append('file', file, file.name);
             });
-            return ctx.save_files({ post: { files }, session: WORK });
+            return $context.save_files({ post: { files }, session: WORK });
         }
     }
 }
@@ -96,6 +100,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 border-radius: 4px;
                 border: 1px solid var(--dark-background);
                 min-width: 0px;
+                align-items: center;
 
                 oda-icon {
                     cursor: pointer;
@@ -104,9 +109,6 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             legend {
                 font-size: small;
                 padding: 0px 8px;
-            }
-            select {
-                min-width: 64px;
             }
             .validity {
                 @apply --error;
@@ -132,18 +134,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         </fieldset>
         <fieldset id="select-type" class="horizontal flex">
             <legend>Type:</legend>
-            <input
-                id="typeInput"
-                no-translate
-                bold
-                tabindex="0"
-                autocomplete="off"
-                :value="type"
-                :focused="focusedInput === $this"
-                @input="_inputType"
-                @blur="_blur"
-                @focus="_focus"
-            >
+            <type-node flex :row="typeRow" @tap="_selectType"></type-node>
             <oda-icon icon="icons:chevron-right:90" @tap="_selectType"></oda-icon>
         </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
@@ -154,9 +145,23 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         this._dirty = true;
         this.name = e.target.value;
     },
-    _inputType(e) {
-        this.type = e.target.value;
+    get typeRow() {
+        const selected = this._selectedTypeRow;
+        if (selected?.id) {
+            const selectedType = selected.path?.includes('$file')
+                ? selected.id.substring(1)
+                : selected.id;
+            if (selectedType === this.type)
+                return selected;
+        }
+        const type = this.type || '$folder';
+        if (type === '$folder')
+            return { id: '$folder', icon: 'fontawesome:r-folder' };
+        if (type.startsWith('$'))
+            return { id: type };
+        return { id: '$' + type, icon: 'files-color:s-' + type };
     },
+    _selectedTypeRow: undefined,
     async _selectType(e) {
         e.stopPropagation();
         e.preventDefault();
@@ -291,9 +296,18 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         }
         else if (this.$item.isCustom) {
             // в custom'ых item'ах только папки и custom'ные типы
-            const $custom = (this.$item.type === '$folder') ? this.$item.$parent : this.$item;
-            const $type = { id: $custom.type };
-            $type.icon = await getIcon($custom);
+            let $custom = (this.$item.type === '$folder') ? await this.$item.$parent : this.$item;
+            while (true) {
+                const $parent = await $custom.$parent;
+                if ($parent.type === $custom.type) {
+                    $custom = $parent;
+                }
+                else {
+                    break;
+                }
+            }
+            const $type = { id: $custom.type, path: $custom.path + '/' + $custom.type, isCustom: true };
+            $type.icon = await getIcon($type);
             $folder[itemsSelector] = [$type];
 
             items = [$folder];
@@ -317,6 +331,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         );
         const res = await WORK.showDropdown(menu, { TITLE: { label: 'Выберите создаваемый тип' } }, this.$('#select-type'));
         if (res) {
+            this._selectedTypeRow = res;
             this.type = res.path?.includes('$file') ? res.id.substring(1) : res.id;
         }
     },
@@ -399,12 +414,12 @@ ODA({
             }
         </style>
         <div horizontal ~if="!isExtensions" :light="row?.isCategory" style="padding: 4px; cursor: pointer;" @tap="onTap">
-            <oda-icon :icon="row?.icon || categoryIcon" :default="categoryIcon"></oda-icon>
+            <oda-icon :icon="icon" :default="iconDefault"></oda-icon>
             <label flex class="label">{{label}}</label>
         </div>
         <div ~if="isExtensions" class="container horizontal">
             <div vertical ~for="extensions" @tap="onTap" :title="$for.item.id.slice(1)">
-                <oda-icon center default="files:file"  :icon="'files-color:s-' + $for.item.id.slice(1)" :icon-size :light="this.$pdp?.focusedItem === $for.item" ~style="{borderRadius: isFocused ? '50%' : ''}"></oda-icon>
+                <oda-icon center default="files:file"  :icon="typeIcon($for.item)" :icon-size :light="this.$pdp?.focusedItem === $for.item" ~style="{borderRadius: isFocused ? '50%' : ''}"></oda-icon>
                 <span style="cursor: pointer;" center>{{$for.item.id.slice(1)}}</span>
             </div>
         </div>
@@ -427,12 +442,36 @@ ODA({
             return 'fontawesome:r-folder-open';
         return 'fontawesome:r-folder';
     },
+    isFileExt(row) {
+        const id = row?.id;
+        if (!id || id[0] !== '$')
+            return false;
+        if (id === '$file' || id === '$folder' || id === 'ext')
+            return false;
+        if (row.isCategory)
+            return false;
+        return row.path?.includes('$file');
+    },
+    typeIcon(row) {
+        if (this.isFileExt(row))
+            return 'files-color:s-' + row.id.slice(1);
+        return row?.icon || this.categoryIcon;
+    },
+    get icon() {
+        return this.typeIcon(this.row);
+    },
+    get iconDefault() {
+        return this.isFileExt(this.row) ? 'files:file' : this.categoryIcon;
+    },
     onTap(e) {
         if (this.row?.isCategory) {
             this.$pdp.expanded = !this.$pdp.expanded;
+            return;
         }
-        else if (this.$pdp) {
-            this.$pdp.execute(e.currentTarget.$for?.item || e.currentTarget.host.row);
+        const item = e.currentTarget.$for?.item || this.row;
+        if (typeof this.$pdp.tree?.execute === 'function') {
+            this.$pdp.tree.execute(item);
+            return;
         }
     }
 })

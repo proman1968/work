@@ -137,7 +137,6 @@ ODA({ is: 'microchat-view',
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 font-size: small;
-                opacity: .9;
                 min-width: 0;
             }
             .title > .time {
@@ -216,7 +215,7 @@ ODA({ is: 'microchat-view',
         if (live && Reactor.equal(this.data, live))
             return 'spinners:3-dots-scale';
         if (live && containsBlock(this.data, live))
-            return 'spinners:pulse';
+            return 'spinners:3-dots-scale';
         return this.data?.icon || '';
     },
     get items() { return this.data?.items || []; },
@@ -258,7 +257,9 @@ ODA({ is: 'microchat-view',
         const text = this.$pdp.streamingText || '';
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
-    get viewContent() { return (this.content || '') + this.streamTail; },
+    get viewContent() {
+        return (this.content || '') + this.streamTail;
+    },
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
     },
@@ -269,10 +270,53 @@ ODA({ is: 'microchat-view',
     },
     height: 0,
     onResize(e) { this.height = e.target.clientHeight; },
-    get top() { 
-        return (this.host.host.height || 0) + (this.host.host.top || 0); 
+    get headerHeight() { return this.showTitle ? (this.height || 0) : 0; },
+    get parentView() {
+        const el = this.host?.host;
+        return el?.localName?.startsWith('microchat-view') ? el : null;
+    },
+    get todoView() {
+        let n = this;
+        while (n) {
+            const r = n.host;
+            if (r?.top)
+                return r.$?.('microchat-view-todo') || null;
+            n = r?.host;
+        }
+        return null;
+    },
+    get prevPrompt() {
+        let el = this.previousElementSibling;
+        while (el) {
+            if (el.localName === 'microchat-view-prompt' || el.data?.type === 'prompt')
+                return el;
+            el = el.previousElementSibling;
+        }
+        return null;
+    },
+    get top() {
+        if (this.localName === 'microchat-view-todo' || this.data?.type === 'todo')
+            return 0;
+        const parent = this.parentView;
+        const above = parent
+            ? (parent.top || 0) + (parent.headerHeight || 0)
+            : (this.todoView?.headerHeight || 0);
+        if (this.data?.type === 'prompt')
+            return above;
+        return above + (this.prevPrompt?.headerHeight || 0);
+    },
+    get hostSticky() {
+        return this.data?.type === 'prompt' || this.data?.type === 'todo'
+            || this.localName === 'microchat-view-prompt'
+            || this.localName === 'microchat-view-todo';
     },
     get headerStyle() {
+        if (this.hostSticky) {
+            this.style.position = 'sticky';
+            this.style.top = this.top + 'px';
+            this.style.zIndex = (this.data?.type === 'todo' || this.localName === 'microchat-view-todo') ? 120 : 115;
+            return { top: '0px', zIndex: 100 - this.depth };
+        }
         return { top: this.top + 'px', zIndex: 100 - this.depth };
     },
 
@@ -301,11 +345,6 @@ ODA({ is: 'microchat-view-prompt',
     extends: 'microchat-view',
     template: /*html*/`
         <style>
-            :host{
-                position: sticky;
-                top: 0px;
-                z-index: 100;
-            }
             summary .title > .label {
                 opacity: 1;
             }
@@ -331,22 +370,6 @@ ODA({ is: 'microchat-view-prompt',
         );
     }
 });
-
-// /** site — обычный блок; текст = label (title), ссылка = url, без тела. */
-// ODA({ is: 'microchat-view-site',
-//     extends: 'microchat-view',
-//     template: /*html*/`
-//         <style>
-//             .title > a.label {
-//                 flex: 1;
-//                 min-width: 4em;
-//             }
-//             .title > div[flex] { flex: none; }
-//         </style>
-//     `,
-//     get label() { return this.data?.label || this.data?.url || ''; },
-//     get showContent() { return false; },
-// });
 
 
 /** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */
@@ -547,15 +570,6 @@ ODA({ is: 'microchat-view-html',
  * todo — title + subTitle (todo); сырой content в markdown не показываем.
  */
 ODA({ is: 'microchat-view-todo',
-    template: /*html*/`
-        <style>
-            :host {
-                position: sticky;
-                top: 0px;
-                z-index: 110;
-            }
-        </style>
-    `,
     extends: 'microchat-view',
     attached(){
         this.subTitleTag = 'microchat-todo-steps';

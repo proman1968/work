@@ -161,7 +161,7 @@ export class $folder extends $item{
             }
         }
 
-        return this._get_item(folder_name, FS.$folder);
+        return this._get_next_item(folder_name, FS.$folder);
     }
     get admins(){
         return this.parent.admins;
@@ -335,7 +335,7 @@ export class $folder extends $item{
         // if(this.inherit_source)
         //     return this.inherit_source.real_source;
         // if(this.parent)
-        //     return this.parent._get_item(this.id, FS.$folder).real_source;
+        //     return this.parent._get_next_item(this.id, FS.$folder).real_source;
         // return this.dir;
 
 
@@ -409,7 +409,7 @@ export class $folder extends $item{
         if(this.id === '.RAG')
             return 'skipped .RAG: ' + this.path;
         let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
-        let rag_folder = await rag_target_folder._get_item('.RAG');
+        let rag_folder = await rag_target_folder._get_next_item('.RAG');
         let clear = 'checked: ' + this.path;
         if(rag_folder) {
             try{
@@ -441,14 +441,14 @@ export class $folder extends $item{
             let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
 
 
-            let rag_folder = await rag_target_folder._get_item('.RAG', FS.$folder);
+            let rag_folder = await rag_target_folder._get_next_item('.RAG', FS.$folder);
 
             let files = await rag_target_folder.children;
             files = files.filter(f=>{
                 return !WORK.exclude_for_rag.includes(f.id) && f.id !== '.RAG';
             });
 
-            const RAG = await rag_folder._get_item('index.json', FS.$file);
+            const RAG = await rag_folder._get_next_item('index.json', FS.$file);
             let body;
             let need_save = false;
             if(fs.existsSync(RAG.real_dir)){
@@ -580,7 +580,7 @@ export class $folder extends $item{
             folders.push(folder)
             let steps = await this.type_chain;
             for(let step of steps){
-                folder = await folder._get_item(step, FS.$folder);
+                folder = await folder._get_next_item(step, FS.$folder);
                 if(folder){
                     folders.push(folder);
                 }
@@ -804,62 +804,66 @@ export class $folder extends $item{
     }
     get tilde(){
         return new AsyncPromise(_=>{
-            return this.collect_tilde();
+            return this._collect_tilde();
         });
     }
-    async collect_tilde(p = {}){
+    async _collect_tilde(p = {}){
         let {inherit} = p;
         let folder = this.$folder;
         let folders = [folder];
         let steps = await this.type_chain;
-        if(inherit != '$folder'){
-            for(let step of steps){
-                folder = await folder._get_item(step, FS.$folder);
-                if(folder)
-                    folders.push(folder);
-                if(step === inherit)
-                    break;
+
+        const horizontal_folders = [];
+        for(let step of steps){
+            folder = await folder._get_next_item(step, FS.$folder);
+            if(folder)
+                horizontal_folders.add(folder);
+            if(step === inherit)
+                break;
+        }
+
+        if (!inherit && this.meta_folder) {
+            // Корень типа: meta верхнего $parent с тем же type.
+            // Тот же walk, что у meta: typeRoot/$folder + type_chain.
+            let typeRoot = null;
+            for (let p = this.$parent; p; p = p.$parent) {
+                if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
+                    typeRoot = p.meta_folder;
             }
-            if(!inherit && this.meta_folder){
-                // Корень типа: meta верхнего $parent с тем же type.
-                // Тот же walk, что у meta: typeRoot/$folder + type_chain.
-                let typeRoot = null;
-                for (let p = this.$parent; p; p = p.$parent) {
-                    if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
-                        typeRoot = p.meta_folder;
-                }
-                if (typeRoot && typeRoot !== this.meta_folder) {
-                    let domain = typeRoot.$folder;
-                    if (domain) {
-                        folders.push(domain);
-                        for (let step of steps) {
-                            domain = await domain._get_item(step, FS.$folder);
-                            if (domain)
-                                folders.push(domain);
-                        }
-                    }
-                }
-                // Локальная цепочка наследования внутри метапапки:
-                // meta_folder/$folder/$class/$type/...
-                // ВАЖНО: локальная цепочка ДОЛЖНА быть ПЕРЕД meta_folder (SELF),
-                // чтобы meta_folder всегда был последним в массиве folders
-                let localFolder = this.meta_folder.$folder;
-                if (localFolder) {
-                    folders.push(localFolder);
+            if (typeRoot && typeRoot !== this.meta_folder) {
+                let domain = typeRoot.$folder;
+                if (domain) {
+                    folders.add(domain);
                     for (let step of steps) {
-                        localFolder = await localFolder._get_item(step, FS.$folder);
-                        if (localFolder)
-                            folders.add(localFolder);
-                        if (step === inherit)
-                            break;
+                        domain = await domain._get_next_item(step, FS.$folder);
+                        if (domain)
+                            folders.add(domain);
                     }
                 }
-                // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
-                folders.push(this.meta_folder);
+            }
+
+
+            folders.push(...horizontal_folders);
+
+            // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
+            folders.push(this.meta_folder);
+        }
+        else {
+            folders = horizontal_folders;
+        }
+        // folders = horizontal_folders;
+        if (!this.meta_folder) {
+            folders.push(this.$folder);
+        }
+        folders = folders.filter(Boolean);
+        const _folders = folders.toReversed();
+        folders = [];
+        for (const f of _folders) {
+            if (folders.every(ff => ff.real_dir !== f.real_dir)) {
+                folders.unshift(f);
             }
         }
-        folders = folders.filter(Boolean)
-        let items = folders.map(f=>f.children);
+        let items = folders.map(f=>f.inherit_children);
         items = await Promise.all(items);
         items = items.flat();
         items = items.filter(f=>!f.isType);
@@ -962,68 +966,95 @@ export class $folder extends $item{
             return entries.filter(f => f instanceof FS.$file);
         })
     }
+    /** Сборка собственных файлов папки (без наследования). */
+    _collect_own(){
+        let files = [];
+        let dir = this.dir;
+        if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
+            for(let entry of fs.readdirSync(dir, {withFileTypes: true})){
+                let id = entry.name;
+                let path = dir + '/' + id;
+                let file = FS.$file;
+                let isDir = entry.isDirectory();
+                if(entry.isSymbolicLink())
+                    isDir = fs.statSync(path).isDirectory();
+                if(isDir){
+                    file = FS.$folder;
+                    if(id[0] !== '$'){
+                        let meta = fs.readdirSync(path).find(f=>f[0] === '$');
+                        if(meta){
+                            let data = fs.statSync(path + '/' + meta);
+                            if(!data.isFile())
+                                file = (FS[meta] || FS.$class)
+                                // file = $class;
+                        }
+                    }
+                }
+                switch(id){
+                    case this.meta_folder?.id:
+                        file = this.meta_folder;
+                        break;
+                    case '$folder':
+                        file = this.$folder;
+                        break;
+                    default:{
+                        if(id[0] === '#')
+                            continue;
+                        file = file.build(id, this);
+                    }
+                }
+                files.push(file);
+            }
+        }
+        if(this.isMetaFolder){
+            if(!files.find(f => f.id === '$folder'))
+                files.push(this.parent.$folder)
+        }
+        return files;
+    }
     /**
-     * Список всех дочерних элементов (папки и файлы).
+     * Единая точка сборки дочерних элементов: собственные файлы + наследуемые от предка.
+     * @param {boolean} recursive Рекурсивно тянуть полный поток наследования
+     *   (inherit_children), иначе — бизнес-вид (children): один уровень + скрытие
+     *   типизирующих элементов прямого предка.
      * @returns {Promise<Array>} Массив элементов
      */
-    get children(){
+    _children(recursive){
         return new AsyncPromise(async ()=>{
-            let files = [];
-            let dir = this.dir; // сборка собственных файлов
-            if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
-                for(let id of fs.readdirSync(dir)){
-                    let path = dir + '/' + id;
-                    let data = fs.statSync(path);
-                    let file = FS.$file;
-                    if(!data.isFile()){
-                        file = FS.$folder;
-                        if(id[0] !== '$'){
-                            let meta = fs.readdirSync(path).find(f=>f[0] === '$');
-                            if(meta){
-                                data = fs.statSync(path + '/' + meta);
-                                if(!data.isFile())
-                                    file = (FS[meta] || FS.$class)
-                                    // file = $class;
-                            }
-                        }
-                    }
-                    switch(id){
-                        case this.meta_folder?.id:
-                            file = this.meta_folder;
-                            break;
-                        case '$folder':
-                            file = this.$folder;
-                            break;
-                        default:{
-                            if(id[0] === '#')
-                                continue;
-                            file = file.build(id, this);
-                        }
-                    }
-                    files.push(file);
-                }
-            }
-            if(this.isMetaFolder){
-                if(!files.find(f => f.id === '$folder'))
-                    files.push(this.parent.$folder)
-            }
+            let files = this._collect_own();
+            let ids = new Set(files.map(f=>f.id));
             let ancestor = await this.inherit_ancestor;
             if(ancestor){
-                let a_files = await ancestor.children;
-                if(Reactor.equal(this.parent, ancestor)){
+                let a_files = recursive ? await ancestor.inherit_children : await ancestor.children;
+                if(!recursive && Reactor.equal(this.parent, ancestor))
                     a_files = a_files.filter(f => !f.isType);
-                }
                 for(let file of a_files){
-                    let old = files.find(f=>f.id === file.id);
-                    if(!old){
+                    if(!ids.has(file.id)){
+                        ids.add(file.id);
                         file = this.constructor.inherit(file, this);
                         files.push(file);
                     }
                 }
             }
-            files = this.sortItems(files, this.inHistory);
-            return files;
+            return this.sortItems(files, this.inHistory);
         })
+    }
+    /**
+     * Бизнес-вид дерева: собственные файлы + один уровень наследования от предка.
+     * Унаследованные типизирующие элементы ($-папки) от прямого предка скрываются.
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get children(){
+        return this._children(false);
+    }
+    /**
+     * Рекурсивный поток наследования (для ~/tilde): собственные файлы + всё,
+     * что транзитивно наследуется от предков, включая типизирующие элементы.
+     * Используется _collect_tilde и самим children (через ancestor.children).
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get inherit_children(){
+        return this._children(true);
     }
     /**
      * Только папки (без скрытых).
@@ -1035,11 +1066,11 @@ export class $folder extends $item{
             return entries.filter(f => f.constructor === FS.$folder);
         })
     }
-    async _get_item(id, force_type){
+    async _get_next_item(id, force_type){
         let children = await this.children;
         let item = children.find(f => f.id === id);
         if(!item && force_type){
-            let real = await this.real_source._get_item(id);
+            let real = await this.real_source._get_next_item(id);
             if(real){
                 // inherit копирует [R].__data__ исходника — DATA должна быть собрана
                 await real.init;
@@ -1108,7 +1139,7 @@ export class $folder extends $item{
             case '~': {
                 const inherit = step.slice(1);
                 if (inherit)
-                    result = await item.collect_tilde({ inherit });
+                    result = await item._collect_tilde({ inherit });
                 else
                     result = await item.tilde;
                 const next = steps.shift();
@@ -1141,9 +1172,9 @@ export class $folder extends $item{
                             return WORK.getIndexForPage(item, $tilde);
                         }
                         case '$folder': {
-                            result = await item._get_item(step);
+                            result = await item._get_next_item(step);
                             if (!result) {
-                                const file = await item._get_item(item.id + '.js');
+                                const file = await item._get_next_item(item.id + '.js');
                                 if (file) {
                                     result = WORK.getIndexForTest(file);
                                 }
@@ -1361,10 +1392,11 @@ export class $folder extends $item{
             }
         }
         else {
-            await fsp.writeFile(path, params.post, params);
+            const data = params.post;
+            await fsp.writeFile(path, data, Buffer.isBuffer(data) ? undefined : params);
         }
 
-        const file = await this._get_item(filename, FS.$file);
+        const file = await this._get_next_item(filename, FS.$file);
         file.reset();
         this.reset();
         return await FS.$file.save_to_history.call(file, params);
@@ -1398,7 +1430,7 @@ export class $folder extends $item{
                     obj.stream.close();
                     delete this.write_streams[params.filename];
                     this.reset();
-                    let file = await this._get_item(params.filename);
+                    let file = await this._get_next_item(params.filename);
                     file.reset();
                     let log = await FS.$file.save_to_history.call(file, params);
                     return log;
@@ -1510,7 +1542,7 @@ export class $folder extends $item{
         const id = String(p.id ?? p.name ?? '').trim();
         if (!id)
             throw new Error('ensure_folder: нужен id');
-        const folder = await this._get_item(id, FS.$folder);
+        const folder = await this._get_next_item(id, FS.$folder);
         await folder.save();
         return folder;
     }

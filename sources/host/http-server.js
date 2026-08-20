@@ -10,12 +10,58 @@ import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.j
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 
+const COMPRESS_MAX = 256 * 1024;
+const STATIC_CACHE = 'must-revalidate, public, max-age=3600';
+
 function resolveFileContentType(item) {
     // Типизатор `$ext` главнее системного mime (кастомные расширения / JSON-типы)
     const fromType = item?.contentType || item?.DATA?.contentType;
     if (fromType)
         return fromType;
     return mime.contentType(item?.id) || 'text/plain';
+}
+
+/** JSON / text/* — строка; иначе байты (octet-stream, video, office…). */
+function parsePostBody(buffer, contentType) {
+    if (contentType === 'application/json')
+        return JSON.parse(buffer.toString('utf-8'));
+    if (!contentType || contentType.startsWith('text/'))
+        return buffer.toString('utf-8');
+    return buffer;
+}
+
+function isStaticAssetType(mime_type) {
+    const t = String(mime_type || '').split(';')[0].trim();
+    return t === 'image/svg+xml'
+        || t === 'text/css'
+        || t === 'application/javascript'
+        || t === 'text/javascript'
+        || t === 'application/wasm';
+}
+
+function createBodyEncoder(acceptEncoding, size = 0) {
+    if (size > COMPRESS_MAX)
+        return null;
+    if (/\bbr\b/.test(acceptEncoding)) {
+        return {
+            encoding: 'br',
+            stream: zlib.createBrotliCompress({
+                params: {
+                    [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+                    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: size,
+                },
+            }),
+        };
+    }
+    if (/\bgzip\b/.test(acceptEncoding))
+        return { encoding: 'gzip', stream: zlib.createGzip({ level: 4 }) };
+    if (/\bdeflate\b/.test(acceptEncoding))
+        return { encoding: 'deflate', stream: zlib.createDeflate({ level: 4 }) };
+    return null;
+}
+
+function isFileBodyMethod(method) {
+    return !method || method === 'load' || method === 'script';
 }
 
 function sendErrorResponse(response, error) {
@@ -336,30 +382,17 @@ export function createRequestHandler() {
 
                             await promise;
                         }
-                        else if (contentType === 'video/webm') {
-                            let chunks = [];
-                            for await (let chunk of request) {
-                                chunks.push(chunk);
-                            }
-                            const buffer = Buffer.concat(chunks);
-                            params.post = buffer;
-                            request.post = params.post;
-                        }
                         else {
                             let chunks = [];
-                            try{
+                            try {
                                 for await (let chunk of request) {
                                     chunks.push(chunk);
                                 }
                             }
-                            catch(e){
+                            catch (e) {
                                 console.error(e)
                             }
-
-                            const buffer = Buffer.concat(chunks);
-                            params.post = buffer.toString('utf-8');
-                            if (contentType === 'application/json')
-                                params.post = JSON.parse(params.post);
+                            params.post = parsePostBody(Buffer.concat(chunks), contentType);
                             request.post = params.post;
                         }
                     }
@@ -369,7 +402,10 @@ export function createRequestHandler() {
                         if(steps.last === '~')
                             params.hasTilde = true;
                     }
-                    result = execItemMethod(item, method, params, request)
+                    if (item.constructor === CORE.$file && request.method !== 'POST' && isFileBodyMethod(method))
+                        result = item.download(params);
+                    else
+                        result = execItemMethod(item, method, params, request)
                 }
             }
             else
@@ -409,52 +445,34 @@ export function createRequestHandler() {
                 header["Content-Disposition"] = "attachment; filename=" + item.id;
                 header["Cache-Control"] = 'no-cache';
             }
-            else if (!method || method === 'load' || method === 'script') {
+            else if (isFileBodyMethod(method)) {
                 const onError = (err) => {
                     if (err) {
-                        // If an error occurs, there's not much we can do because
-                        // the server has already sent the 200 response code and
-                        // some amount of data has already been sent to the client.
-                        // The best we can do is terminate the response immediately
-                        // and log the error.
                         response.end(err.toString());
-                        // console.error('An error occurred:', err);
                     }
                 };
                 let mime_type = resolveFileContentType(item);
                 if(mime_type){
                     header["Content-Type"] = mime_type;
-                    if(mime_type === 'image/svg+xml')
-                        header["Cache-Control"] = "must-revalidate, public, max-age=3600";
+                    if (isStaticAssetType(mime_type))
+                        header["Cache-Control"] = STATIC_CACHE;
                 }
                 else
                     header["Content-Type"] = 'text/plain';
-                // header["Cache-Control"] = "max-age=60";
 
-                // header["Cache-Control"] = "must-revalidate, public, max-age=3600";
-
-                const acceptEncoding = request.headers['accept-encoding'] || '';
-                let encoder = null;
-                if (/\bbr\b/.test(acceptEncoding)) {
-                    header["Content-Encoding"] = 'br';
-                    encoder = zlib.createBrotliCompress();
-                }
-                else if (/\bgzip\b/.test(acceptEncoding)) {
-                    header["Content-Encoding"] = 'gzip';
-                    encoder = zlib.createGzip();
-                }
-                else if (/\bdeflate\b/.test(acceptEncoding)) {
-                    header["Content-Encoding"] = 'deflate';
-                    encoder = zlib.createDeflate();
-                }
-                if (encoder) {
+                const size = Number(item.size) || (typeof result === 'string' ? Buffer.byteLength(result) : 0);
+                const packed = createBodyEncoder(request.headers['accept-encoding'] || '', size);
+                if (packed) {
+                    header["Content-Encoding"] = packed.encoding;
                     if (!cookies.ssid)
                         header['Set-Cookie'] = `ssid=${session.ssid}; HttpOnly; Path=/`;
                     response.writeHead(200, header);
-                    pipeline(Readable.from(result), encoder, response, onError);
+                    const source = result?.pipe ? result : Readable.from(result);
+                    pipeline(source, packed.stream, response, onError);
                     return;
                 }
-                // нет поддерживаемой кодировки — отдаём без сжатия ниже
+                if (size)
+                    header['Content-Length'] = size;
             }
             else if (Buffer.isBuffer(result)) {
                 // method вроде ?tts — сырой WAV, не JSON.stringify(Buffer)
