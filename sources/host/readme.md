@@ -20,4 +20,6 @@ URL = путь к объекту, первый query-параметр без з�
 - `/BASE?get_schema` → `item.get_schema()`
 - `/BASE?save_file&filename=test.txt` → `item.save_file({filename: 'test.txt'})`
 
+GET тела `$file` (без метода, `?load`, `?script`) — поток с диска (`download`), не `load()`. Сжатие быстрое (brotli/gzip level 4) и только до 256 КБ; крупнее отдаётся как есть. JS/CSS/WASM/SVG — `Cache-Control: must-revalidate, public, max-age=3600`. `load()` — чтение содержимого для кода. `~` merge нескольких JS — по-прежнему строка в памяти. `?download` — вложение, без кэша.
+
 Разрешение метода: сначала метод класса FS, затем (legacy) `~/handlers/methods/`.

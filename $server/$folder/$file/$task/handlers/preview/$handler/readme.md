@@ -17,6 +17,7 @@ Shell + `ui/`: лента блоков и промптбар. Источник �
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
+- Sticky: `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo). Контейнер — `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
 - Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streamTarget`; зелёная — `accept: true` (+ для form `prompt` = JSON `$pdp.result`); крестик — `accept: false` (в query не уходит, сервер считает отказом).
 - Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
 - Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`.

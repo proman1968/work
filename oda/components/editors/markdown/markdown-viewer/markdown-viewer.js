@@ -1,18 +1,38 @@
 import * as markdown from './lib/markdown-wasm/markdown.es.js';
-import './lib/mathjax-config.js';
-import './lib/mathjax/tex-mml-chtml.js';
-import './lib/highlight.min.js';
-import './lib/mermaid.min.js';
 await markdown.ready;
-await MathJax.startup.promise;
 
-const mermaid = globalThis.mermaid;
-mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    suppressErrorRendering: true,
-    theme: 'neutral',
-});
+let hljsReady, mermaidReady, mathReady;
+
+function loadHljs() {
+    return hljsReady ??= import('./lib/highlight.min.js').then(() => globalThis.hljs);
+}
+
+function loadMermaid() {
+    return mermaidReady ??= import('./lib/mermaid.min.js').then(() => {
+        const mermaid = globalThis.mermaid;
+        mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            suppressErrorRendering: true,
+            theme: 'neutral',
+        });
+        return mermaid;
+    });
+}
+
+function loadMathJax() {
+    return mathReady ??= import('./lib/mathjax-config.js')
+        .then(() => import('./lib/mathjax/tex-mml-chtml.js'))
+        .then(() => globalThis.MathJax.startup.promise);
+}
+
+function needsHljs(text) {
+    return fencesClosed(text) && /^(```+|~~~+)(?!\s*mermaid\b)/im.test(text);
+}
+
+function needsMath(text) {
+    return /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\d)[^$\n]{1,80}\$/.test(text);
+}
 
 function escapeHtml(s) {
     return s.replace(/[&<>"']/g, ch => ({
@@ -56,6 +76,9 @@ function codeHtml(lang, raw) {
         return escapeHtml(raw);
     if (String(lang || '').toLowerCase() === 'mermaid')
         return `<div class="mermaid">${escapeHtml(raw)}</div>`;
+    const hljs = globalThis.hljs;
+    if (!hljs)
+        return escapeHtml(raw);
     try {
         if (lang && hljs.getLanguage(lang))
             return hljs.highlight(lang, raw).value;
@@ -187,7 +210,9 @@ function embedMedia(root) {
 }
 
 async function renderMermaid(root) {
-    if (!mermaid || !root) return;
+    if (!root) return;
+    const mermaid = await loadMermaid();
+    if (!mermaid) return;
     for (const node of root.querySelectorAll('.mermaid')) {
         const src = node.textContent.trim();
         if (!src) continue;
@@ -217,12 +242,21 @@ ODA({ is: 'oda-markdown-viewer',
             this.async(async ()=>{
                 if (gen !== this._mdGen) return;
                 const root = this.$('div');
-                MathJax.texReset();
-                MathJax.typesetClear();
                 try {
-                    await MathJax.typesetPromise([root]);
+                    if (needsHljs(src)) {
+                        await loadHljs();
+                        if (gen !== this._mdGen) return;
+                        root.innerHTML = parseMarkdown(src);
+                    }
+                    if (needsMath(src)) {
+                        await loadMathJax();
+                        if (gen !== this._mdGen) return;
+                        MathJax.texReset();
+                        MathJax.typesetClear();
+                        await MathJax.typesetPromise([root]);
+                    }
                     if (gen !== this._mdGen) return;
-                    if (mermaidClosed(src))
+                    if (/^(```+|~~~+)mermaid\b/im.test(src) && mermaidClosed(src))
                         await renderMermaid(root);
                     if (gen !== this._mdGen) return;
                     embedMedia(root);

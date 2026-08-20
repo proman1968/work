@@ -865,26 +865,26 @@ const PIPE = {
                 block: b,
                 session: params.session,
             });
-            if (b.state === 'error')
-                b.content = shortError(result?.error || result?.content || '—');
+            const page = !result?.error && b.state !== 'error' ? clipPage(result?.content) : '';
+            if (b.state === 'error' || !page || page.replace(/\s+/g, ' ').trim().length < 40) {
+                b.state = 'error';
+                b.content = shortError(result?.error || 'пусто');
+            }
             else {
-                const page = clipPage(result?.content);
-                if (!page)
-                    b.content = '—';
-                else {
-                    const messages = await params.task.context({ prompt: PIPE.site.prompt });
-                    if (messages.last?.role === 'user')
-                        messages.last.content += '\n\n[page]\n' + page;
-                    else
-                        messages.push({ role: 'user', content: '[page]\n' + page });
-                    const response = await params.task._streamChat({ messages, session: params.session });
+                const messages = await params.task.context({ prompt: PIPE.site.prompt });
+                if (messages.last?.role === 'user')
+                    messages.last.content += '\n\n[page]\n' + page;
+                else
+                    messages.push({ role: 'user', content: '[page]\n' + page });
+                const response = await params.task._streamChat({ messages, session: params.session });
                     if (response.content)
                         b.content = response.content;
-                    else if (!params.task._stopped)
-                        b.content = '—';
-                    if (response.usage)
-                        b.usage = response.usage;
-                }
+                    else if (!params.task._stopped) {
+                        b.state = 'error';
+                        b.content = shortError('пусто');
+                    }
+                if (response.usage)
+                    b.usage = response.usage;
             }
             if (b.content) {
                 await webPushNext(params.container, params);
@@ -1004,8 +1004,12 @@ function next_options(container, block, mode) {
         if (PIPE[id]?.close && !can_close(container))
             return false;
         const n = PIPE[id]?.limit;
-        if (n != null && afterLastPrompt(container).filter(b => b.type === id).length >= n)
-            return false;
+        if (n != null) {
+            const kids = afterLastPrompt(container).filter(b => b.type === id);
+            const used = id === 'site' ? kids.filter(siteOk).length : kids.length;
+            if (used >= n)
+                return false;
+        }
         return true;
     });
     if (limited.length && !options.some(id => PIPE[id]?.limit != null))
@@ -1036,7 +1040,8 @@ function dropReport(container, block) {
 }
 
 function can_close(container) {
-    return (container?.items || []).some(b => b.content && !PIPE[b.type]?.close && b.type !== 'thinking' && b.type !== 'prompt');
+    return (container?.items || []).some(b =>
+        b.content && b.state !== 'error' && !PIPE[b.type]?.close && b.type !== 'thinking' && b.type !== 'prompt');
 }
 
 function siteFavicon(url) {

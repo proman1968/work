@@ -4,13 +4,103 @@ import { $item } from '../core.js';
 import * as mime from "mime-types";
 import * as kreuzberg from '@kreuzberg/node';
 import { DOMParser } from 'linkedom';
+import * as XLSX from 'xlsx';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
+
+const SHEET_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
+
+function sniffKind(buf, ext) {
+    const e = String(ext || '').toLowerCase();
+    if (buf.length >= 2 && buf[0] === 0x50 && buf[1] === 0x4B)
+        return 'zip';
+    if (buf.length >= 4 && buf[0] === 0xD0 && buf[1] === 0xCF && buf[2] === 0x11 && buf[3] === 0xE0)
+        return 'ole';
+    const head = buf.subarray(0, 400).toString('utf8').replace(/^\uFEFF/, '').trimStart();
+    if (/^<!DOCTYPE\s+html/i.test(head) || /^<html[\s>]/i.test(head))
+        return 'html';
+    if (/^<\?xml/i.test(head))
+        return 'xml';
+    if ($file.TEXT_EXTS.has(e) || !e)
+        return 'text';
+    return e || 'bin';
+}
+
+function looksUtf8(buf) {
+    const n = Math.min(buf.length, 4096);
+    if (!n) return true;
+    let nul = 0, odd = 0;
+    for (let i = 0; i < n; i++) {
+        if (buf[i] === 0) nul++;
+        if (buf[i] < 9 || (buf[i] > 13 && buf[i] < 32)) odd++;
+    }
+    return nul === 0 && odd / n < 0.08;
+}
+
+function htmlToText(html) {
+    try {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        const t = doc.body?.textContent || doc.documentElement?.textContent || '';
+        return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    } catch {
+        return String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+}
+
+function markupText(buf, kind) {
+    const s = buf.toString('utf8');
+    if (kind === 'html' || (kind === 'xml' && /<html[\s>]/i.test(s.slice(0, 2000))))
+        return htmlToText(s);
+    return s;
+}
+
+function kreuzbergText(result) {
+    if (typeof result?.content === 'string' && result.content.trim())
+        return result.content.trim();
+    return (result?.chunks || []).map(c => c.content || c.text || '').filter(Boolean).join('\n\n').trim();
+}
+
+function sheetText(buf) {
+    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true, raw: false });
+    return (wb.SheetNames || []).map(name => {
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name] || {}).trim();
+        if (!csv) return '';
+        return (wb.SheetNames.length > 1 ? name + '\n' : '') + csv;
+    }).filter(Boolean).join('\n\n');
+}
+
+async function extractText(buf, ext, path) {
+    const kind = sniffKind(buf, ext);
+    if (kind === 'text' || kind === 'html' || kind === 'xml')
+        return markupText(buf, kind);
+    let lastErr;
+    try {
+        const text = kreuzbergText(await kreuzberg.extractFile(path));
+        if (text) return text;
+    } catch (e) {
+        lastErr = e;
+    }
+    const head = buf.subarray(0, 400).toString('utf8');
+    if (kind === 'html' || /<!DOCTYPE\s+html|<html[\s>]/i.test(head))
+        return htmlToText(buf.toString('utf8'));
+    if (kind === 'zip' || kind === 'ole' || SHEET_EXTS.has(String(ext || '').toLowerCase())) {
+        try {
+            const text = sheetText(buf);
+            if (text) return text;
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    if (looksUtf8(buf))
+        return buf.toString('utf8');
+    throw lastErr || new Error('не удалось извлечь текст');
+}
+
 export class $file extends $folder{
     static sourceUrl = import.meta.url;
-    static TEXT_EXTS = new Set(['js', 'txt', 'html', 'mjs', 'css', 'xml', 'svg', 'yaml', 'py', 'ts', 'mts', 'json', 'md', 'task', 'logs', 'chat', 'skill']);
+    static TEXT_EXTS = new Set(['js', 'txt', 'html', 'mjs', 'css', 'xml', 'svg', 'yaml', 'py', 'ts', 'mts', 'json', 'md', 'task', 'logs', 'chat', 'skill', 'csv', 'tsv']);
 
     metadata = null;
     meta_file = null;
@@ -208,28 +298,20 @@ export class $file extends $folder{
         throw new Error(`file ${this.path} not found`);
     }
     /**
-     * Прочитать файл как текст: utf-8 для текстовых расширений, Kreuzberg для office/pdf и пр.
+     * Прочитать файл как текст: sniff байтов, utf-8 / html, Kreuzberg, запасной разбор таблиц.
      * @param {object} [params]
      * @returns {Promise<string>} Извлечённый текст
      */
     async read_text(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
-        const ext = String(this.ext || '').toLowerCase();
-        if ($file.TEXT_EXTS.has(ext) || !ext) {
-            const raw = await this.load({ ...params, encoding: 'utf-8' });
-            return typeof raw === 'string' ? raw : '';
-        }
         if (!fs.existsSync(this.dir)) {
             const ancestor = await this.inherit_ancestor;
             if (ancestor)
                 return ancestor.read_text(params);
             throw new Error(`file ${this.path} not found`);
         }
-        const result = await kreuzberg.extractFile(this.dir);
-        if (typeof result?.content === 'string' && result.content.trim())
-            return result.content;
-        const chunks = result?.chunks || [];
-        return chunks.map(c => c.content || c.text || '').filter(Boolean).join('\n\n');
+        const buf = await fsp.readFile(this.dir);
+        return extractText(buf, this.ext, this.dir);
     }
     async inherit() {
         return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
@@ -251,7 +333,12 @@ export class $file extends $folder{
      */
     async download(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
-        return fs.createReadStream(this.dir, params);
+        if(fs.existsSync(this.dir))
+            return fs.createReadStream(this.dir);
+        const ancestor = await this.inherit_ancestor;
+        if(ancestor)
+            return ancestor.download(params);
+        throw new Error(`file ${this.path} not found`);
     }
     /**
      * Сохранить содержимое этого файла целиком (перезапись).

@@ -414,12 +414,12 @@ ODA({
             }
         </style>
         <div horizontal ~if="!isExtensions" :light="row?.isCategory" style="padding: 4px; cursor: pointer;" @tap="onTap">
-            <oda-icon :icon="row?.icon || categoryIcon" :default="categoryIcon"></oda-icon>
+            <oda-icon :icon="icon" :default="iconDefault"></oda-icon>
             <label flex class="label">{{label}}</label>
         </div>
         <div ~if="isExtensions" class="container horizontal">
             <div vertical ~for="extensions" @tap="onTap" :title="$for.item.id.slice(1)">
-                <oda-icon center default="files:file"  :icon="'files-color:s-' + $for.item.id.slice(1)" :icon-size :light="this.$pdp?.focusedItem === $for.item" ~style="{borderRadius: isFocused ? '50%' : ''}"></oda-icon>
+                <oda-icon center default="files:file"  :icon="typeIcon($for.item)" :icon-size :light="this.$pdp?.focusedItem === $for.item" ~style="{borderRadius: isFocused ? '50%' : ''}"></oda-icon>
                 <span style="cursor: pointer;" center>{{$for.item.id.slice(1)}}</span>
             </div>
         </div>
@@ -441,6 +441,27 @@ ODA({
         if (this.host.expanded)
             return 'fontawesome:r-folder-open';
         return 'fontawesome:r-folder';
+    },
+    isFileExt(row) {
+        const id = row?.id;
+        if (!id || id[0] !== '$')
+            return false;
+        if (id === '$file' || id === '$folder' || id === 'ext')
+            return false;
+        if (row.isCategory)
+            return false;
+        return row.path?.includes('$file');
+    },
+    typeIcon(row) {
+        if (this.isFileExt(row))
+            return 'files-color:s-' + row.id.slice(1);
+        return row?.icon || this.categoryIcon;
+    },
+    get icon() {
+        return this.typeIcon(this.row);
+    },
+    get iconDefault() {
+        return this.isFileExt(this.row) ? 'files:file' : this.categoryIcon;
     },
     onTap(e) {
         if (this.row?.isCategory) {

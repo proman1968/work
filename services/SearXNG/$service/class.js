@@ -16,6 +16,11 @@ const IMAGES_MARK = '\n\n[images]\n';
 const VIDEO_MARK = '\n\n[video]\n';
 
 /** HTML → плоский текст: без script/style/навигации, entities, сжатые пробелы. */
+function pageBlocked(html, text) {
+    return /не робот|не являетесь роботом|i['’]m not a robot|recaptcha|h-captcha|g-recaptcha|smartcaptcha|cf-challenge|challenge-platform|checking your browser before|enable javascript and cookies to continue/i
+        .test(String(html || '') + '\n' + String(text || ''));
+}
+
 function htmlToText(html = '') {
     return String(html)
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -323,6 +328,8 @@ export default {
 
             const title = (raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
             const text = htmlToText(raw);
+            if (pageBlocked(raw, text) || text.replace(/\s+/g, ' ').trim().length < 40)
+                return { error: 'страница недоступна', url };
             const pageUrl = response.url || url;
             const images = pageImages(raw, pageUrl);
             const videos = pageVideos(raw, pageUrl);

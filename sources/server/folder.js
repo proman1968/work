@@ -852,8 +852,8 @@ export class $folder extends $item{
             folders = horizontal_folders;
         }
         // folders = horizontal_folders;
-        if (this.meta_folder) {
-            folders.push(this.meta_folder);
+        if (!this.meta_folder) {
+            folders.push(this.$folder);
         }
         folders = folders.filter(Boolean);
         const _folders = folders.toReversed();
@@ -966,118 +966,95 @@ export class $folder extends $item{
             return entries.filter(f => f instanceof FS.$file);
         })
     }
+    /** Сборка собственных файлов папки (без наследования). */
+    _collect_own(){
+        let files = [];
+        let dir = this.dir;
+        if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
+            for(let entry of fs.readdirSync(dir, {withFileTypes: true})){
+                let id = entry.name;
+                let path = dir + '/' + id;
+                let file = FS.$file;
+                let isDir = entry.isDirectory();
+                if(entry.isSymbolicLink())
+                    isDir = fs.statSync(path).isDirectory();
+                if(isDir){
+                    file = FS.$folder;
+                    if(id[0] !== '$'){
+                        let meta = fs.readdirSync(path).find(f=>f[0] === '$');
+                        if(meta){
+                            let data = fs.statSync(path + '/' + meta);
+                            if(!data.isFile())
+                                file = (FS[meta] || FS.$class)
+                                // file = $class;
+                        }
+                    }
+                }
+                switch(id){
+                    case this.meta_folder?.id:
+                        file = this.meta_folder;
+                        break;
+                    case '$folder':
+                        file = this.$folder;
+                        break;
+                    default:{
+                        if(id[0] === '#')
+                            continue;
+                        file = file.build(id, this);
+                    }
+                }
+                files.push(file);
+            }
+        }
+        if(this.isMetaFolder){
+            if(!files.find(f => f.id === '$folder'))
+                files.push(this.parent.$folder)
+        }
+        return files;
+    }
     /**
-     * Список всех дочерних элементов (папки и файлы).
+     * Единая точка сборки дочерних элементов: собственные файлы + наследуемые от предка.
+     * @param {boolean} recursive Рекурсивно тянуть полный поток наследования
+     *   (inherit_children), иначе — бизнес-вид (children): один уровень + скрытие
+     *   типизирующих элементов прямого предка.
      * @returns {Promise<Array>} Массив элементов
      */
-    get children(){
+    _children(recursive){
         return new AsyncPromise(async ()=>{
-            let files = [];
-            let dir = this.dir; // сборка собственных файлов
-            if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
-                for(let id of fs.readdirSync(dir)){
-                    let path = dir + '/' + id;
-                    let data = fs.statSync(path);
-                    let file = FS.$file;
-                    if(!data.isFile()){
-                        file = FS.$folder;
-                        if(id[0] !== '$'){
-                            let meta = fs.readdirSync(path).find(f=>f[0] === '$');
-                            if(meta){
-                                data = fs.statSync(path + '/' + meta);
-                                if(!data.isFile())
-                                    file = (FS[meta] || FS.$class)
-                                    // file = $class;
-                            }
-                        }
-                    }
-                    switch(id){
-                        case this.meta_folder?.id:
-                            file = this.meta_folder;
-                            break;
-                        case '$folder':
-                            file = this.$folder;
-                            break;
-                        default:{
-                            if(id[0] === '#')
-                                continue;
-                            file = file.build(id, this);
-                        }
-                    }
-                    files.push(file);
-                }
-            }
-            if(this.isMetaFolder){
-                if(!files.find(f => f.id === '$folder'))
-                    files.push(this.parent.$folder)
-            }
+            let files = this._collect_own();
+            let ids = new Set(files.map(f=>f.id));
             let ancestor = await this.inherit_ancestor;
             if(ancestor){
-                let a_files = await ancestor.children;
-                if(Reactor.equal(this.parent, ancestor)){
+                let a_files = recursive ? await ancestor.inherit_children : await ancestor.children;
+                if(!recursive && Reactor.equal(this.parent, ancestor))
                     a_files = a_files.filter(f => !f.isType);
-                }
                 for(let file of a_files){
-                    let old = files.find(f=>f.id === file.id);
-                    if(!old){
+                    if(!ids.has(file.id)){
+                        ids.add(file.id);
                         file = this.constructor.inherit(file, this);
                         files.push(file);
                     }
                 }
             }
-            files = this.sortItems(files, this.inHistory);
-            return files;
+            return this.sortItems(files, this.inHistory);
         })
     }
-    get inherit_children() {
-        return new AsyncPromise(async ()=>{
-            let files = [];
-            let dir = this.dir; // сборка собственных файлов
-            if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
-                for(let id of fs.readdirSync(dir)){
-                    let path = dir + '/' + id;
-                    let data = fs.statSync(path);
-                    let file = FS.$file;
-                    if(!data.isFile()){
-                        file = FS.$folder;
-                        if(id[0] !== '$'){
-                            let meta = fs.readdirSync(path).find(f=>f[0] === '$');
-                            if(meta){
-                                data = fs.statSync(path + '/' + meta);
-                                if(!data.isFile())
-                                    file = (FS[meta] || FS.$class)
-                                    // file = $class;
-                            }
-                        }
-                    }
-                    switch(id){
-                        case this.meta_folder?.id:
-                            file = this.meta_folder;
-                            break;
-                        case '$folder':
-                            file = this.$folder;
-                            break;
-                        default:{
-                            if(id[0] === '#')
-                                continue;
-                            file = file.build(id, this);
-                        }
-                    }
-                    files.push(file);
-                }
-            }
-            if(this.isMetaFolder){
-                if(!files.find(f => f.id === '$folder'))
-                    files.push(this.parent.$folder)
-            }
-            let ancestor = await this.inherit_ancestor;
-            if(ancestor){
-                let a_files = await ancestor.inherit_children;
-                files.push(...a_files);
-            }
-            files = this.sortItems(files, this.inHistory);
-            return files;
-        })
+    /**
+     * Бизнес-вид дерева: собственные файлы + один уровень наследования от предка.
+     * Унаследованные типизирующие элементы ($-папки) от прямого предка скрываются.
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get children(){
+        return this._children(false);
+    }
+    /**
+     * Рекурсивный поток наследования (для ~/tilde): собственные файлы + всё,
+     * что транзитивно наследуется от предков, включая типизирующие элементы.
+     * Используется _collect_tilde и самим children (через ancestor.children).
+     * @returns {Promise<Array>} Массив элементов
+     */
+    get inherit_children(){
+        return this._children(true);
     }
     /**
      * Только папки (без скрытых).
