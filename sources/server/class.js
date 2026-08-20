@@ -1050,7 +1050,7 @@ export class $class extends $folder{
         const item = await this._get_next_item(id, ctor);
         const meta = await item._get_next_item(type, FS.$folder);
         const post = p.post ?? `export default {
-    label: '${id}'
+    label: '${p.label || id}'
 }`;
         const log = await meta.save_file({
             ...p,

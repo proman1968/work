@@ -2,7 +2,7 @@
  * SearXNG — сервис метапоиска.
  *
  * search — Instant Answer, если пусто — HTML-выдача DuckDuckGo.
- * fetch_url — чтение веб-страницы (HTML → плоский текст).
+ * fetch_url — чтение веб-страницы (HTML → плоский текст + хвосты [images] / [video]).
  * Погода вынесена в отдельный сервис Weather.
  *
  * SCHEMA — описание методов для ИИ (function calling).
@@ -10,6 +10,10 @@
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 const MAX_PAGE_TEXT = 20000;
 const MAX_RESULTS = 8;
+const MAX_IMAGES = 12;
+const MAX_VIDEO = 8;
+const IMAGES_MARK = '\n\n[images]\n';
+const VIDEO_MARK = '\n\n[video]\n';
 
 /** HTML → плоский текст: без script/style/навигации, entities, сжатые пробелы. */
 function htmlToText(html = '') {
@@ -45,6 +49,113 @@ function decodeEntities(s = '') {
         .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function attr(tag, name) {
+    return (tag.match(new RegExp('\\b' + name + '="([^"]*)"', 'i')) || [])[1]
+        || (tag.match(new RegExp('\\b' + name + "='([^']*)'", 'i')) || [])[1]
+        || '';
+}
+
+function absUrl(src, base) {
+    const s = decodeEntities(String(src || '').trim());
+    if (!s || /^(data:|javascript:|blob:)/i.test(s)) return '';
+    try {
+        const u = new URL(s, base);
+        return /^https?:$/i.test(u.protocol) ? u.href : '';
+    } catch {
+        return '';
+    }
+}
+
+function skipImage(url, alt) {
+    const t = (url + ' ' + alt).toLowerCase();
+    return /\.(svg|ico)(\?|$)/i.test(url)
+        || /favicon|sprite|icon[-_/]|tracking|pixel|1x1|spacer|blank\.|gravatar/.test(t);
+}
+
+function pageImages(html, pageUrl) {
+    const out = [];
+    const seen = new Set();
+    const add = (src, alt, force) => {
+        const url = absUrl(src, pageUrl);
+        if (!url || seen.has(url) || out.length >= MAX_IMAGES) return;
+        if (!force && skipImage(url, alt)) return;
+        seen.add(url);
+        const label = decodeEntities(alt).replace(/\s+/g, ' ').slice(0, 80);
+        out.push({ url, alt: /^(og:image|twitter:image)/i.test(label) ? '' : label });
+    };
+    let m;
+    const metaRe = /<meta\b[^>]*>/gi;
+    while ((m = metaRe.exec(html))) {
+        const tag = m[0];
+        const prop = attr(tag, 'property') || attr(tag, 'name');
+        if (/^(og:image|twitter:image)/i.test(prop))
+            add(attr(tag, 'content'), '', true);
+    }
+    const body = String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<(?:head|nav|footer|noscript)[\s\S]*?<\/(?:head|nav|footer|noscript)>/gi, ' ');
+    const imgRe = /<img\b[^>]*>/gi;
+    while ((m = imgRe.exec(body))) {
+        const tag = m[0];
+        const w = +(attr(tag, 'width') || 0);
+        const h = +(attr(tag, 'height') || 0);
+        if ((w && w < 32) || (h && h < 32)) continue;
+        let src = attr(tag, 'src') || attr(tag, 'data-src') || attr(tag, 'data-original');
+        if (!src) {
+            const set = attr(tag, 'srcset') || attr(tag, 'data-srcset');
+            src = set.split(',')[0].trim().split(/\s+/)[0] || '';
+        }
+        add(src, attr(tag, 'alt'));
+    }
+    return out;
+}
+
+function formatMedia(mark, items) {
+    if (!items?.length) return '';
+    return mark + items.map(i => (i.alt ? i.alt + ' ' : '') + i.url).join('\n');
+}
+
+function skipVideo(url) {
+    return /doubleclick|googlesyndication|facebook\.com\/tr|\bpixel\b/i.test(url);
+}
+
+function pageVideos(html, pageUrl) {
+    const out = [];
+    const seen = new Set();
+    const add = (src, alt, force) => {
+        const url = absUrl(src, pageUrl);
+        if (!url || seen.has(url) || out.length >= MAX_VIDEO) return;
+        if (!force && (skipVideo(url) || !isVideoUrl(url))) return;
+        if (force && skipVideo(url)) return;
+        seen.add(url);
+        out.push({ url, alt: decodeEntities(alt).replace(/\s+/g, ' ').slice(0, 80) });
+    };
+    let m;
+    const metaRe = /<meta\b[^>]*>/gi;
+    while ((m = metaRe.exec(html))) {
+        const tag = m[0];
+        const prop = attr(tag, 'property') || attr(tag, 'name');
+        if (/^(og:video|og:video:url|twitter:player)/i.test(prop))
+            add(attr(tag, 'content'), '', true);
+    }
+    const body = String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    const mediaRe = /<(?:video|source)\b[^>]*>/gi;
+    while ((m = mediaRe.exec(body)))
+        add(attr(m[0], 'src') || attr(m[0], 'data-src'), attr(m[0], 'title'));
+    const iframeRe = /<iframe\b[^>]*>/gi;
+    while ((m = iframeRe.exec(html)))
+        add(attr(m[0], 'src'), attr(m[0], 'title'));
+    return out;
+}
+
+function isVideoUrl(url) {
+    return /youtu(?:\.be|be\.com)|vimeo\.com|rutube\.ru/i.test(url)
+        || /\.(mp4|webm|ogg)(\?|$)/i.test(url);
 }
 
 function unwrapDdgUrl(href) {
@@ -148,7 +259,7 @@ export default {
             },
         },
         fetch_url: {
-            description: 'Прочитать веб-страницу по URL: плоский текст без разметки (до 20000 символов). Используй после search для выбранных ссылок.',
+            description: 'Прочитать веб-страницу по URL: плоский текст (до 20000) и хвосты [images] / [video] — абсолютные url. Используй после search.',
             params: {
                 type: 'object',
                 properties: {
@@ -212,10 +323,15 @@ export default {
 
             const title = (raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
             const text = htmlToText(raw);
+            const pageUrl = response.url || url;
+            const images = pageImages(raw, pageUrl);
+            const videos = pageVideos(raw, pageUrl);
             return {
-                url,
+                url: pageUrl,
                 title,
-                content: text.slice(0, MAX_PAGE_TEXT),
+                images,
+                videos,
+                content: text.slice(0, MAX_PAGE_TEXT) + formatMedia(IMAGES_MARK, images) + formatMedia(VIDEO_MARK, videos),
                 truncated: text.length > MAX_PAGE_TEXT,
             };
         }

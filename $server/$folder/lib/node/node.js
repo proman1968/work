@@ -107,7 +107,10 @@ export default {
         );
     },
     get hasReadme() {
-        return Promise.resolve(this.readmeItem).then(r => !!r);
+        Promise.resolve(this.readmeItem).then(r => {
+            this.hasReadme = !!r || null;
+        });
+        return null;
     },
     async openReadme(e) {
         e?.stopPropagation?.();

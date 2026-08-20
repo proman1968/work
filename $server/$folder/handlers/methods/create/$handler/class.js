@@ -29,7 +29,8 @@ export default {
                 );
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
-                return owner.create({ type, id: name });
+                const id = name.replace(/[<>:"|?*]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+                return owner.create({ type, id, label: name });
             }
             if (type === '$folder') {
                 return $context.ensure_folder({ id: name });
@@ -295,9 +296,18 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         }
         else if (this.$item.isCustom) {
             // в custom'ых item'ах только папки и custom'ные типы
-            const $custom = (this.$item.type === '$folder') ? this.$item.$parent : this.$item;
-            const $type = { id: $custom.type };
-            $type.icon = await getIcon($custom);
+            let $custom = (this.$item.type === '$folder') ? await this.$item.$parent : this.$item;
+            while (true) {
+                const $parent = await $custom.$parent;
+                if ($parent.type === $custom.type) {
+                    $custom = $parent;
+                }
+                else {
+                    break;
+                }
+            }
+            const $type = { id: $custom.type, path: $custom.path + '/' + $custom.type, isCustom: true };
+            $type.icon = await getIcon($type);
             $folder[itemsSelector] = [$type];
 
             items = [$folder];

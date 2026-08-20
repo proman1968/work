@@ -480,3 +480,40 @@ describe('мультифайл на чистых логах: save_message / save
         assert.ok(logs[0].path?.includes('c.smoke'));
     });
 });
+
+describe('create $class: конструктор сразу, без рестарта', () => {
+    it('create: дочерний класс сразу $class, не $folder', async () => {
+        const box = await WORK.get_item('/BOX');
+        await box.create({ id: 'CHILD', type: '$class' });
+        const child = await WORK.get_item('/BOX/CHILD');
+        assert.ok(child, 'CHILD должен находиться');
+        assert.ok(child instanceof FS.$class, 'CHILD должен быть $class');
+        assert.equal(child.type, '$class');
+        const items = await box.items;
+        const found = items.find(i => i.id === 'CHILD');
+        assert.ok(found instanceof FS.$class, 'в items родителя — $class');
+        assert.ok(
+            fs.existsSync(path.join(tmp, 'BOX', 'CHILD', '$class', 'class.js')),
+            'на диске есть BOX/CHILD/$class/class.js',
+        );
+    });
+
+    it('build повышает $folder → $class, если на диске уже метапапка', async () => {
+        const box = await WORK.get_item('/BOX');
+        const folder = await box._get_next_item('UPGR', FS.$folder);
+        await folder.save();
+        const meta = await folder._get_next_item('$class', FS.$folder);
+        await meta.save();
+        await meta.save_file({
+            filename: 'class.js',
+            post: `export default { label: 'UPGR' }`,
+            encoding: 'utf-8',
+            ignore_save_logs: true,
+        });
+        assert.ok(folder instanceof FS.$folder, 'до reset в реестре ещё $folder');
+        box.reset();
+        const upgraded = (await box.children).find(i => i.id === 'UPGR');
+        assert.ok(upgraded instanceof FS.$class, 'children() повышает до $class без рестарта');
+        assert.equal(upgraded.type, '$class');
+    });
+});

@@ -222,10 +222,6 @@ export default {
                 description: spec.description || '',
                 parameters: spec.params || { type: 'object', properties: {} },
             }));
-        if (block?.type === 'web') {
-            block.icon = PIPE.web.do_icon;
-            await this._save(session);
-        }
         const calls = [];
         let content = '', usage = 0;
         const max = 5;
@@ -274,11 +270,12 @@ export default {
             const result = await service.search?.(args);
             const seen = usedSiteUrls(parentOf(await this.body, block), block);
             block.sites = [];
-            for (const url of (result?.results || []).map(r => r.url).filter(Boolean)) {
-                if (seen.has(url))
+            for (const r of result?.results || []) {
+                const url = r.url;
+                if (!url || seen.has(url))
                     continue;
                 seen.add(url);
-                block.sites.push(url);
+                block.sites.push({ url, title: r.title || '' });
             }
             await this._save(session);
             return result ?? {};
@@ -369,6 +366,8 @@ export default {
         container.items.push(block);
         container.last = block.type;
         delete container.close_n;
+        if (block.type === 'prompt')
+            delete container.cut;
         PIPE[block.type]?.recalc?.({ ...params, block, container });
         await this._save(session);
     },
@@ -417,16 +416,22 @@ export default {
 //-----------------------------------------------------------------------------
 
 
+const MERMAID = [
+    'Схема mermaid — только если есть 2+ сущности сравнить: один блок ```mermaid, graph TD или graph LR.',
+    'Подписи в ["текст"] без кавычек и переносов; стрелка --> или -->|"коротко"| на одной строке.',
+    'Не вышло — таблица, не ломаный mermaid.',
+].join('\n');
+
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
 const PIPE = {
     /** корень файла = контейнер task; меню plan/do — здесь, не у thinking */
     task: {
         container: true,
         plan: {
-            next: ['thinking', 'explore', 'complete',  'planning', 'activation' ],
+            next: ['thinking', 'explore', 'planning', 'activation', 'complete'],
         },
         do: {
-            next: ['thinking','explore', 'complete', /* 'execute', 'check' */],
+            next: ['thinking', 'execute', 'explore', 'complete'],
         },
     },
     /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
@@ -540,14 +545,18 @@ const PIPE = {
         label: 'Шаг',
         inject: 'если необходимо выполнить один очередной пункт плана',
         container: true,
-        next: ['thinking', 'report'],
+        plan: {
+            next: ['thinking', 'explore', 'planning', 'activation', 'complete'],
+        },
+        do: {
+            next: ['thinking', 'explore', 'execute', 'complete'],
+        },
     },
 
     /** площадка исполнения: файлы, сервисы, FC; субагент в mode do */
     execute: {
         label: 'Выполнение',
         icon: 'enterprise:wrench',
-        do_icon: 'spinners:pulse',
         inject: 'если необходимо выполнить конкретные действия над конкретными объектами, файлами, навыками',
         container: true,
         next: ['work', 'web', 'form', 'html', 'check', 'report'],
@@ -564,7 +573,6 @@ const PIPE = {
     explore: {
         label: 'Обзор',
         icon: 'icons:search',
-        do_icon: 'spinners:pulse',
         inject: 'если нужно выяснить факты (обзор, справка), не меняя систему',
         system: [
             'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
@@ -574,7 +582,7 @@ const PIPE = {
         next: ['thinking', /* 'work', */ 'web', /* 'form', */ 'report'],
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
-            params.block.state = childRollup(params.block, ['web', 'work']);
+            params.block.state = childRollup(params.block, ['web', 'form', 'work']);
         },
     },
     work: {
@@ -736,7 +744,6 @@ const PIPE = {
     check:{
         label: 'Проверка',
         icon: 'icons:check-circle',
-        do_icon: 'spinners:pulse',
         inject: 'если нужно сверить результат с целью, прежде чем закрыть ветку',
         system: [
             'Это площадка проверки, не исполнение и не план.',
@@ -757,41 +764,49 @@ const PIPE = {
         close: true,
         inject: 'если считаешь, что на данный этап готов к закрытию',
         prompt: [
-            'Подробный отчёт этапа в markdown: факты, цифры, прайсы, таблицы; схемы mermaid если есть что сравнить.',
-            'Картинки и видео — только url из ленты, не выдумывай.',
+            'Подробный отчёт этапа в markdown: факты, цифры, прайсы, таблицы.',
+            MERMAID,
+            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
             'Общие фразы без названий — не отчёт.',
             'Не пиши имена шагов и не пиши одно слово.',
             'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.',
         ].join('\n'),
         recalc(params = {}) {
             const text = String(params.block.content || '').trim();
-            const word = text.toLowerCase();
-            if (word === 'continue' || PIPE[word]) {
-                if (word === 'continue') {
-                    params.block.state = 'rejected';
-                    params.block.icon = 'icons:close';
-                }
+            if (!text)
                 return;
+            const container = params.container;
+            const word = text.toLowerCase();
+            const rejected = word === 'continue' || !!PIPE[word];
+            if (!rejected) {
+                container.content = params.block.content;
+                const gallery = formatGallery(container, container.content);
+                if (gallery)
+                    container.content += gallery;
+                const list = formatSites(container.sites);
+                if (list)
+                    container.content += list;
             }
-            params.container.content = params.block.content;
-            const sites = params.container.sites;
-            if (sites?.length)
-                params.container.content += '\n\n[sites]\n' + sites.join('\n');
+            dropReport(container, params.block);
+            if (rejected) {
+                delete container.last;
+                container.cut = (container.items || []).length;
+            }
         },
     },
 
     web: {
         label: 'Интернет',
         icon: 'icons:language',
-        do_icon: 'spinners:pulse',
         fc: '/SERVICES/SearXNG',
         allow: ['search'],
         container: true,
-        limit: 2,
+        limit: 1,
         next: ['site', 'report'],
         close_prompt: [
-            'Подробный отчёт по посещённым страницам в markdown: факты, цифры, прайсы, таблицы; схемы mermaid если есть что сравнить.',
-            'Картинки и видео — только url из ленты, не выдумывай.',
+            'Подробный отчёт по посещённым страницам в markdown: факты, цифры, прайсы, таблицы.',
+            MERMAID,
+            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
             'Общие фразы без названий — не отчёт.',
             'Не пиши имена шагов и не пиши одно слово.',
         ].join('\n'),
@@ -825,21 +840,21 @@ const PIPE = {
         },
         recalc(params = {}) {
             const b = params.block;
-            const limit = PIPE.site.limit;
-            const ok = (b.items || []).filter(siteOk).length;
-            b.state = limit != null ? `${ok}/${limit} ${PIPE.site.label}` : '';
-            b.icon = b.content ? PIPE.web.icon : PIPE.web.do_icon;
+            const sites = (b.items || []).filter(x => x.type === 'site');
+            const ok = sites.filter(siteOk).length;
+            b.state = sites.length ? `Сайты ${ok}/${sites.length}` : '';
         },
     },
     site: {
         label: 'Сайт',
         icon: 'icons:language',
-        limit: 3,
+        limit: 1,
         fc: '/SERVICES/SearXNG',
         allow: ['fetch_url'],
         prompt: [
             'Вытащи с страницы всё полезное по задаче в markdown: факты, прайсы, таблицы, ссылки, картинки, видео.',
-            'Только то, что есть в [page]. Не выдумывай url и цифры.',
+            'Картинки — ![подпись](url) только из [images] в [page]. Видео — [подпись](url) только из [video]. Не выдумывай url.',
+            'Только то, что есть в [page]. Не выдумывай цифры.',
             'Не пересказывай меню, футер и навигацию.',
         ].join('\n'),
         async run(params = {}) {
@@ -982,25 +997,42 @@ function next_options(container, block, mode) {
         options = own;
     else
         options = parentNext;
-    const prev = new Set([container.last, container.items?.last?.type].filter(Boolean));
-    if (prev.size)
-        options = options.filter(id => !prev.has(id));
-    return options.filter(id => {
+    if (container.last)
+        options = options.filter(id => id !== container.last);
+    const limited = options.filter(id => PIPE[id]?.limit != null);
+    options = options.filter(id => {
         if (PIPE[id]?.close && !can_close(container))
             return false;
         const n = PIPE[id]?.limit;
-        if (n != null && afterLastPrompt(container.items).filter(b => b.type === id).length >= n)
+        if (n != null && afterLastPrompt(container).filter(b => b.type === id).length >= n)
             return false;
         return true;
     });
+    if (limited.length && !options.some(id => PIPE[id]?.limit != null))
+        options = options.filter(id => PIPE[id]?.close);
+    return options;
 }
 
-function afterLastPrompt(items) {
-    const list = items || [];
-    for (let i = list.length - 1; i >= 0; i--)
-        if (list[i].type === 'prompt')
-            return list.slice(i + 1);
-    return list;
+function afterLastPrompt(container) {
+    const list = container?.items || [];
+    let from = 0;
+    for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].type === 'prompt') {
+            from = i + 1;
+            break;
+        }
+    }
+    if (container?.cut != null)
+        from = Math.max(from, Number(container.cut) || 0);
+    return list.slice(from);
+}
+
+function dropReport(container, block) {
+    const items = container?.items;
+    if (!items) return;
+    const i = items.indexOf(block);
+    if (i >= 0)
+        items.splice(i, 1);
 }
 
 function can_close(container) {
@@ -1024,7 +1056,7 @@ function childRollup(block, types) {
         }
     };
     walk(block);
-    return types.filter(t => counts[t]).map(t => `${counts[t]} ${PIPE[t]?.label || t}`).join(' · ');
+    return types.filter(t => counts[t]).map(t => `${PIPE[t]?.label || t} ${counts[t]}`).join(', ');
 }
 
 function stageOpen(block) {
@@ -1034,9 +1066,90 @@ function stageOpen(block) {
 }
 
 const SITE_PAGE = 6000;
+const IMAGES_MARK = '\n\n[images]\n';
+const VIDEO_MARK = '\n\n[video]\n';
 
 function siteOk(s) {
     return s?.type === 'site' && s.content && s.state !== 'error';
+}
+
+function siteRef(item) {
+    if (!item) return { url: '', title: '' };
+    if (typeof item === 'string') return { url: item, title: '' };
+    return { url: String(item.url || ''), title: String(item.title || '') };
+}
+
+function siteTitle(item) {
+    const { url, title } = siteRef(item);
+    const t = String(title || '').replace(/\s+/g, ' ').trim();
+    if (t && t !== url) return t.slice(0, 80);
+    try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+function formatSites(sites) {
+    const lines = (sites || []).map(siteRef).filter(s => s.url).map(s =>
+        '- [' + siteTitle(s).replace(/[\[\]]/g, '') + '](' + s.url + ')'
+    );
+    return lines.length ? '\n\n**Источники**\n\n' + lines.join('\n') : '';
+}
+
+const IMG_EXT = /\.(?:jpe?g|png|gif|webp|avif)(?:\?|$)/i;
+const VID_FILE = /\.(?:mp4|webm|ogg)(?:\?|$)/i;
+const VID_HOST = /youtu(?:\.be|be\.com)|vimeo\.com|rutube\.ru/i;
+
+function fileAlt(url) {
+    try {
+        const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+        return name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').slice(0, 80);
+    } catch {
+        return '';
+    }
+}
+
+function harvestMedia(text, into) {
+    const s = String(text || '');
+    const add = (kind, url, alt) => {
+        url = String(url || '').trim().replace(/[.,;]+$/, '');
+        if (!url || into.seen.has(url)) return;
+        if (kind === 'image' && !IMG_EXT.test(url)) return;
+        if (kind === 'video' && !VID_FILE.test(url) && !VID_HOST.test(url)) return;
+        into.seen.add(url);
+        into[kind].push({ url, alt: String(alt || '').replace(/\s+/g, ' ').trim().slice(0, 80) });
+    };
+    let m;
+    const bang = /!\[([^\]]*)\]\((https?:[^)\s]+)\)/gi;
+    while ((m = bang.exec(s)))
+        add('image', m[2], m[1]);
+    const link = /\[([^\]]*)\]\((https?:[^)\s]+)\)/gi;
+    while ((m = link.exec(s))) {
+        if (IMG_EXT.test(m[2]))
+            add('image', m[2], m[1]);
+        else
+            add('video', m[2], m[1]);
+    }
+    const bare = /https?:\/\/[^\s)<>\]]+/gi;
+    while ((m = bare.exec(s)))
+        IMG_EXT.test(m[0]) ? add('image', m[0], fileAlt(m[0])) : add('video', m[0], '');
+}
+
+function walkMedia(node, into) {
+    if (!node || PIPE[node.type]?.close) return;
+    harvestMedia(node.content, into);
+    for (const c of node.items || [])
+        walkMedia(c, into);
+}
+
+function formatGallery(container, already) {
+    const skip = { image: [], video: [], seen: new Set() };
+    harvestMedia(already, skip);
+    const out = { image: [], video: [], seen: skip.seen };
+    for (const c of container?.items || [])
+        walkMedia(c, out);
+    if (!out.image.length && !out.video.length)
+        return '';
+    const img = out.image.map(i => '![' + (i.alt || fileAlt(i.url)).replace(/[\[\]]/g, '') + '](' + i.url + ')');
+    const vid = out.video.map(v => '[' + (v.alt || 'видео').replace(/[\[\]]/g, '') + '](' + v.url + ')');
+    return '\n\n' + [...img, ...vid].join('\n\n');
 }
 
 function usedSiteUrls(parent, web) {
@@ -1045,7 +1158,7 @@ function usedSiteUrls(parent, web) {
         if (b === web)
             continue;
         for (const u of b.sites || [])
-            used.add(u);
+            used.add(siteRef(u).url);
         for (const s of b.items || [])
             if (s.url)
                 used.add(s.url);
@@ -1056,24 +1169,29 @@ function usedSiteUrls(parent, web) {
 function clipPage(text) {
     const s = String(text || '').trim();
     if (!s) return '';
-    return s.length <= SITE_PAGE ? s : s.slice(0, SITE_PAGE);
+    const marks = [s.indexOf(IMAGES_MARK), s.indexOf(VIDEO_MARK)].filter(i => i >= 0);
+    const i = marks.length ? Math.min(...marks) : -1;
+    if (i < 0)
+        return s.length <= SITE_PAGE ? s : s.slice(0, SITE_PAGE);
+    const body = s.slice(0, i);
+    return (body.length <= SITE_PAGE ? body : body.slice(0, SITE_PAGE)) + s.slice(i);
 }
 
 async function webPushNext(web, params) {
     if (!web || web.content || web.sites == null)
         return false;
     web.items ??= [];
-    const items = web.items.filter(x => x.type === 'site');
+    const items = afterLastPrompt(web).filter(x => x.type === 'site');
     if (items.some(s => !s.content))
         return false;
     const limit = PIPE.site.limit;
     if (limit != null && items.filter(siteOk).length >= limit)
         return false;
-    const next = web.sites.find(url => !items.some(s => s.url === url));
+    const next = web.sites.map(siteRef).find(s => s.url && !items.some(x => x.url === s.url));
     if (!next || !params.task)
         return false;
     await params.task._push_block({
-        block: { type: 'site', url: next, label: next, icon: siteFavicon(next) },
+        block: { type: 'site', url: next.url, label: siteTitle(next), icon: siteFavicon(next.url) },
         container: web,
         session: params.session,
     });
@@ -1081,7 +1199,7 @@ async function webPushNext(web, params) {
 }
 
 async function close_up(root, node, params) {
-    let n = node;
+    let n = parentOf(root, node) ? node : params.container;
     while (n) {
         await PIPE[n.type]?.recalc?.({ ...params, block: n, container: parentOf(root, n) || n });
         n = parentOf(root, n);

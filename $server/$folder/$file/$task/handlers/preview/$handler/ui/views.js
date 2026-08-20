@@ -216,7 +216,7 @@ ODA({ is: 'microchat-view',
         if (live && Reactor.equal(this.data, live))
             return 'spinners:3-dots-scale';
         if (live && containsBlock(this.data, live))
-            return 'spinners:pulse';
+            return 'spinners:3-dots-scale';
         return this.data?.icon || '';
     },
     get items() { return this.data?.items || []; },
@@ -331,22 +331,6 @@ ODA({ is: 'microchat-view-prompt',
         );
     }
 });
-
-// /** site — обычный блок; текст = label (title), ссылка = url, без тела. */
-// ODA({ is: 'microchat-view-site',
-//     extends: 'microchat-view',
-//     template: /*html*/`
-//         <style>
-//             .title > a.label {
-//                 flex: 1;
-//                 min-width: 4em;
-//             }
-//             .title > div[flex] { flex: none; }
-//         </style>
-//     `,
-//     get label() { return this.data?.label || this.data?.url || ''; },
-//     get showContent() { return false; },
-// });
 
 
 /** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */

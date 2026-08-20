@@ -65,5 +65,5 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 - **Form:** слот только при `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
 - **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
-- **Stream:** `streamTarget` = focused без тела. Волна на нём, `spinners:pulse` на контейнерах над ним; `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
+- **Stream:** `streamTarget` = focused без тела. `typeIcon`: `spinners:3-dots-scale` на нём и на контейнерах над ним; в JSON не пишется. `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.
