@@ -418,7 +418,7 @@ const PIPE = {
     /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
     prompt: {
         role: 'user',
-        next: ['thinking', 'question'],
+        next: ['thinking', 'question', 'text'],
     },
     thinking: {
         label: 'Мысли',
@@ -460,6 +460,8 @@ const PIPE = {
         icon: 'icons:chat',
         stop: true,
         fallback: true,
+        inject: 'если хочешь что-то ответить или сообщить пользователю.',
+        prompt: 'Ответь пользователю в свободной форме, то, что ты хотел сообщить.',
     },
     question: {
         label: 'Вопрос',
@@ -1217,6 +1219,8 @@ async function fillFileContent(block) {
         const file = await WORK.get_item(path);
         if (!file)
             throw new Error('файл не найден: ' + path);
+        if (file.icon)
+            block.icon = file.icon;
         const text = await file.read_text();
         block.content = head + (typeof text === 'string' && text.trim() ? text : '—');
     } catch (e) {
@@ -1299,12 +1303,22 @@ function keepHere(session, raw) {
 function hereNow(session) {
     const here = session?.here;
     const tz = here?.tz;
-    const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
-    if (tz) opts.timeZone = tz;
-    let when;
-    try { when = new Date().toLocaleString('ru-RU', opts); }
-    catch { when = new Date().toLocaleString('ru-RU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); }
-    const parts = [`Сейчас: ${when}${tz ? ` (${tz})` : ''}.`];
+    const now = new Date();
+    const dayOpts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    const timeOpts = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    if (tz) {
+        dayOpts.timeZone = tz;
+        timeOpts.timeZone = tz;
+    }
+    let day, clock;
+    try {
+        day = now.toLocaleDateString('ru-RU', dayOpts);
+        clock = now.toLocaleTimeString('ru-RU', timeOpts);
+    } catch {
+        day = now.toLocaleDateString('ru-RU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        clock = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    }
+    const parts = [`Сейчас: ${day}, время ${clock}${tz ? ` (${tz})` : ''}.`];
     if (here?.lat != null && here?.lon != null)
         parts.push(`Место: ${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}. Если в запросе другое место — оно важнее.`);
     return parts.join(' ');

@@ -480,11 +480,18 @@ ODA({is: 'oda-chat',
                     const f = list[i];
                     const path = res?.logFullPath || res?.path || res?.logPath;
                     if (path) {
+                        const full = path.startsWith('/') ? path : '/' + path;
+                        let icon = 'icons:description';
+                        try {
+                            const item = await WORK.get_item(full);
+                            if (item?.icon)
+                                icon = item.icon;
+                        } catch {}
                         files.push({
                             type: 'file',
-                            path: path.startsWith('/') ? path : '/' + path,
-                            label: f?.name || path.split('/').pop(),
-                            icon: 'icons:description',
+                            path: full,
+                            label: f?.name || full.split('/').pop(),
+                            icon,
                             time: Date.now(),
                         });
                     }
