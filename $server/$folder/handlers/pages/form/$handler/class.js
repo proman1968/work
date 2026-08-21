@@ -336,7 +336,7 @@ ODA({is: 'work-form',
                     this.removeChild(old);
             }
             if (!el) {
-                await n?.import?.(`class.js`);
+                await n?.importView?.() ?? n?.import?.('class.js');
                 el =  ODA.createComponent('item-' + n.id, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
                 this.controls[n.id] = el;
                 this.appendChild(el);

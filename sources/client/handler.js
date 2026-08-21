@@ -14,6 +14,14 @@ export class $handler extends $class{
         await WORK(prototype);
         return await prototype;
     }
+    /** Визуалка: `{id}.js` в метапапке, иначе class.js. */
+    async importView() {
+        try {
+            return await this.import(this.id);
+        } catch {
+            return await this.import('class.js');
+        }
+    }
     async execute(...params) {
         const module = await this.getModule();
         if (module.execute) {

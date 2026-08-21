@@ -80,12 +80,19 @@ ODA({is: 'chat-item',
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
             <div class="body" flex vertical ~if="expanded">
-                <div ~if="hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
+                <div ~is="formTag" flex :$item="$file"></div>
             </div>
         </div>
     `,
-    get content() {
-        return this.log?.content ?? '';
+    get formTag() {
+        return Promise.resolve(this.$file).then(async file => {
+            if (!file)
+                return 'item-node';
+            const name = file.form || 'file';
+            const view = await file.get_item('/~/handlers//form/' + name);
+            await view?.importView?.();
+            return 'item-' + (view?.id || name);
+        });
     },
     get includeFiles() {
         const raw = this.log?.includes;

@@ -30,10 +30,11 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 ## 4. Из чего это состоит
 
 ```
-$class.js      ← shell: data, focusedBlock, streamTarget, result, streamingText, streaming, dockReports
-ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form (shell import)
+class.js       ← мета хендлера (init)
+file.js        ← визуалка-шелл: data, focusedBlock, streamTarget, dockReports
+ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form
 ui/dock.js     ← док: селектор + content закрытых
-ui/ribbon.js   ← дубль ribbon (scroll-контракт; shell не импортирует)
+ui/ribbon.js   ← дубль ribbon (scroll-контракт; шелл не импортирует)
 ui/panel.js    ← microchat-panel (+ mic/tts/usage)
 ui/mic.js      ← MicAudioController
 ui/tts.js      ← TtsController
@@ -42,7 +43,8 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 
 | Модуль | Факт |
 |--------|------|
-| [`class.js`](class.js) | Shell: `streamTarget` / `streaming` / `streamingText` / `dockReports`; delta/done. |
+| [`class.js`](class.js) | Мета. Без ESM. |
+| [`file.js`](file.js) | Шелл: `streamTarget` / `streaming` / `streamingText` / `dockReports`; delta/done. |
 | [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + markdown `content`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
