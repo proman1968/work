@@ -248,8 +248,8 @@ ODA({ is: 'microchat-panel',
         let text = String(this.value ?? '').trim();
         const external = this.files.filter(f => f instanceof File);
         const internal = this.files.filter(f => f.internalPath);
-        if (internal.length)
-            text += (text ? '\n\n' : '') + 'Прикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
+        if (internal.length && text)
+            text += '\n\nПрикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
 
         this.value = '';
         this.files = [];
@@ -262,7 +262,7 @@ ODA({ is: 'microchat-panel',
         }
         this.pending = true;
         const result = await this.$item.fetch('prompt', {
-            prompt: text || (external.length ? 'Обработай прикреплённые файлы' : ''),
+            prompt: text,
             model: this.data.model,
             role: String(this.role || this.$item.role || 'USER').toUpperCase(),
             here: await this.here(),

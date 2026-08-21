@@ -38,7 +38,7 @@ WORK построен вокруг `$item`.
 Клиентская proxy-модель. Классы повторяют серверные сущности, но вместо прямой работы с диском обращаются к серверу.
 
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`.
-- `folder.js` — клиентский `$folder extends $item` (из `core.js`): `url`, `open_url`, `fetch`, `get_item`, browser actions, `save_file`, `load`, `save`, `delete`, `create`.
+- `folder.js` — клиентский `$folder extends $item` (из `core.js`): `url`, `open_url`, `fetch`, `get_item`, browser actions, `save_file`, `load`, `save`, `delete`, `create`, `ensure_folder`.
 - `class.js` — клиентский `$class`: import/save `class.js`, metadata, fields, data access.
 - `file.js` — клиентский `$file`. Переопределён `load()` — возвращает сырые данные через `WORK.fetch()` без `__bind` (для чтения JSON-файлов вроде `ai.task`). `reset()` очищает `body` и кэш.
 - `user.js` — клиентский `$user`.

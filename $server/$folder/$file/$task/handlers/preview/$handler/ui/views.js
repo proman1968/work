@@ -257,12 +257,7 @@ ODA({ is: 'microchat-view',
         const text = this.$pdp.streamingText || '';
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
-    get docked() {
-        return !!(this.container && this.content && this.$pdp?.showDock);
-    },
     get viewContent() {
-        if (this.docked)
-            return this.streamTail;
         return (this.content || '') + this.streamTail;
     },
     get showContent() {

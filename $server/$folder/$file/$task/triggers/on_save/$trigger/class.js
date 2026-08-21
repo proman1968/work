@@ -16,11 +16,11 @@
         ].join('\n');
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
-        const hasPrompt = (body.items || []).some(b => b.type === 'prompt' && b.content);
+        const seeded = (body.items || []).length > 0;
         return file.prompt({
             session: params.session,
-            role: hasPrompt ? 'AI' : role,
-            prompt: body.title,
+            role: seeded ? 'AI' : role,
+            prompt: seeded ? '' : body.title,
         });
     },
 };

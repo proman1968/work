@@ -460,14 +460,16 @@ ODA({is: 'oda-chat',
         if (isAI) {
             this.awaitTask = true;
             const text = String(this.value ?? '').trim();
-            const names = [...this.files].map(f => f.name).filter(Boolean).join(', ');
             try {
-                const items = [{
-                    type: 'prompt',
-                    content: text || names,
-                    time: Date.now(),
-                    sender: WORK.uid,
-                }];
+                const items = [];
+                if (text) {
+                    items.push({
+                        type: 'prompt',
+                        content: text,
+                        time: Date.now(),
+                        sender: WORK.uid,
+                    });
+                }
                 const list = [...this.files];
                 const saved = await Promise.all(list.map(f =>
                     this.$pdp.$item.save_file(f, { ignore_save_logs: true })
@@ -478,11 +480,18 @@ ODA({is: 'oda-chat',
                     const f = list[i];
                     const path = res?.logFullPath || res?.path || res?.logPath;
                     if (path) {
+                        const full = path.startsWith('/') ? path : '/' + path;
+                        let icon = 'icons:description';
+                        try {
+                            const item = await WORK.get_item(full);
+                            if (item?.icon)
+                                icon = item.icon;
+                        } catch {}
                         files.push({
                             type: 'file',
-                            path: path.startsWith('/') ? path : '/' + path,
-                            label: f?.name || path.split('/').pop(),
-                            icon: 'icons:description',
+                            path: full,
+                            label: f?.name || full.split('/').pop(),
+                            icon,
                             time: Date.now(),
                         });
                     }
@@ -492,19 +501,18 @@ ODA({is: 'oda-chat',
                         type: 'includes',
                         icon: 'icons:attachment',
                         label: 'Вложения',
-                        items: files,
+                        files: files.map(f => ({ path: f.path, label: f.label, icon: f.icon })),
+                        items: [],
                     });
                 }
-                const promptText = text || names || files.map(f => f.label).filter(Boolean).join(', ');
-                items[0].content = promptText;
                 const body = {
-                    title: promptText || 'task',
+                    title: text || 'task',
                     created: Date.now(),
                     items,
                 };
                 if (this.model) body.model = this.model;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
-                params.message = promptText;
+                params.message = text;
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
             } catch (err) {

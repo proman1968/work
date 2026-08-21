@@ -48,7 +48,7 @@ export default {
                         post = WORK.fs.readFileSync('.' + ext_tmp.path);
                 } catch { /* empty */ }
             }
-            return $context.save_file({ filename: fullName, post, encoding: 'utf-8' });
+            return $context.save_file(new File([post ?? ''], fullName));
         } else if (result === 'upload') {
             const fileDialog = await ODA.showFileDialog({ multiple: true });
             let files = Array.from(fileDialog).map(f => {
@@ -134,8 +134,8 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         </fieldset>
         <fieldset id="select-type" class="horizontal flex">
             <legend>Type:</legend>
-            <type-node flex :row="typeRow" @tap="_selectType"></type-node>
-            <oda-icon icon="icons:chevron-right:90" @tap="_selectType"></oda-icon>
+            <type-node flex :row="typeRow" title="Выберите тип создаваемого item'а" @tap="_selectType"></type-node>
+            <oda-icon icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
         </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
     `,
