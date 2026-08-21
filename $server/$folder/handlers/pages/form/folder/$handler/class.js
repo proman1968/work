@@ -1,17 +1,4 @@
-export default{
-    imports: '~/lib//tree.js',
+/** Мета хендлера form/folder. Визуалка — folder.js. */
+export default {
     icon: 'icons:pageview',
-    template: /* html */`
-        <style>
-            :host{
-                @apply --vertical;
-                overflow-y: hidden;
-                @apply --content;
-            }
-        </style>     
-        <item-tree flex :$item="storage" show-size hide-system items-selector="entries" hide-tops="1" hide-roots="1" ></item-tree>
-    `,
-    get storage(){
-        return this.$item?.storage_folder;
-    }
 }
