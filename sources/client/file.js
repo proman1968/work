@@ -51,8 +51,13 @@ export class $file extends $folder{
             return $file.previews[n.ext];
         return $file.previews[n.ext] = new AsyncPromise(async _=>{
             try{
-                let path = n.short + '/~/handlers/preview/~/class.js';
-                let module = await import(path);
+                let path = n.short + '/~/handlers/preview/~/preview.js';
+                let module;
+                try {
+                    module = await import(path);
+                } catch {
+                    module = await import(n.short + '/~/handlers/preview/~/class.js');
+                }
                 let def = module?.default;
                 def.is ??= n.ext + '-preview';
                 WORK(def);

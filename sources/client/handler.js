@@ -4,22 +4,22 @@ export class $handler extends $class{
     get size(){
         return 0;
     }
-    async import(path){
+    async import(path, is){
         path = this.short + '/~/' + path;
         if(!path.endsWith('.js'))
             path += '.js'
         const module = await import(path);
         let prototype = module?.default;
-        prototype.is ??= 'item-' + this.id;
+        prototype.is ??= is || ('item-' + this.id);
         await WORK(prototype);
         return await prototype;
     }
-    /** Визуалка: `{id}.js` в метапапке, иначе class.js. */
-    async importView() {
+    /** Визуалка: `{id}.js` в метапапке, иначе class.js. `is` — тег страницы (pages-explorer), иначе item-{id}. */
+    async importView(is) {
         try {
-            return await this.import(this.id);
+            return await this.import(this.id, is);
         } catch {
-            return await this.import('class.js');
+            return await this.import('class.js', is);
         }
     }
     async execute(...params) {
