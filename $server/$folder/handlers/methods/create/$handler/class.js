@@ -286,7 +286,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             items = [$item];
             await filterItems(items);
         }
-        else if (this.$item.type === '$file') {
+        else if (this.$item.type === '$folder' || (this.$item.type === '$file')) {
             // в файле только папки и файлы
             const $file = await WORK.fetch(location.origin + '/$server/$folder/$file', '', { deep: 4, items: itemsSelector, mask: '$*' })
             prepareFiles($file);

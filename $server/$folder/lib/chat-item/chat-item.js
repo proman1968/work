@@ -69,20 +69,18 @@ ODA({is: 'chat-item',
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
-        <div class="card" shadow light :flex="expanded" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
+        <div class="card"  shadow light :flex="expanded || compact" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
             <div class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node flex auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
+                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
                 <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
-            <div class="content" ~if="!expanded && content" ~html="content" style="padding: 8px; font-size: small;"></div>
-            <div ~if="!expanded && includeFiles?.length" vertical style="padding: 4px 8px;">
+            <div ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
+            <div ~if="!expanded && includeFiles?.length" vertical style="padding: 4px 8px; gap: 4px;">
+                <span style="font-size: x-small;">Attachments:</span>
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
             <div class="body" flex vertical ~if="expanded">
                 <div ~if="hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
-                <div ~for="includeFiles" class="item">
-                    <chat-item visible history compact :$file="$for.item"></chat-item>
-                </div>
             </div>
         </div>
     `,
@@ -90,11 +88,30 @@ ODA({is: 'chat-item',
         return this.log?.content ?? '';
     },
     get includeFiles() {
-        const paths = this.log?.includes;
-        if (!paths?.length)
+        const raw = this.log?.includes;
+        let paths = raw;
+        if (!Array.isArray(paths)) {
+            if (typeof raw !== 'string' || !raw.trim())
+                return [];
+            const s = raw.trim();
+            if (s[0] === '[') {
+                try {
+                    const parsed = JSON.parse(s);
+                    paths = Array.isArray(parsed) ? parsed : [s];
+                } catch {
+                    paths = s.includes(',/') ? s.split(',') : [s];
+                }
+            } else
+                paths = s.includes(',/') ? s.split(',') : [s];
+        }
+        if (!paths.length)
             return [];
-        return Promise.all(paths.map(p => WORK.get_item(p.startsWith('/') ? p : '/' + p, 'info')))
-            .then(items => items.filter(Boolean));
+        return Promise.all(paths.map(p => {
+            p = String(p ?? '').trim();
+            if (!p)
+                return null;
+            return WORK.get_item(p.startsWith('/') ? p : '/' + p, 'info');
+        })).then(items => items.filter(Boolean));
     },
     get expanderIcon(){
         return this.expanded?'icons:close':'box:i-expand';

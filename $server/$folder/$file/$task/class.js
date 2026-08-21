@@ -73,8 +73,11 @@ export default {
             if (await params.pipe_step.run?.(params))
                 return this._continue(params);
 
-            if (params.pipe_step.prompt && !params.block.content && !params.pipe_step.container) {
-                if (await this._pipe_stream(params) && !this._stopped && !params.block.stop)
+            let streamed = false;
+            if (!params.pipe_step.container && !params.block.content)
+                streamed = await this._pipe_stream(params);
+            if (streamed) {
+                if (!this._stopped && !params.block.stop)
                     return { ok: true };
             }
             else {
@@ -185,10 +188,13 @@ export default {
     async _pipe_stream(params = {}) {
         const { session, block } = params;
         const pipe = params.pipe_step || PIPE[block?.type];
+        if (pipe?.container)
+            return false;
         const mode = containerMode(await this.body, params.container);
-        const text = (pipe.close && PIPE[params.container?.type]?.close_prompt)
-            || pipe[mode]?.prompt
-            || pipe.prompt;
+        const place = PIPE[params.container?.type];
+        const text = pipe.close
+            ? [place?.prompt, CONTINUE].filter(Boolean).join('\n')
+            : (pipe[mode]?.prompt || pipe.prompt);
         if (!text)
             return false;
         const messages = await this.context({ prompt: text, session });
@@ -414,6 +420,17 @@ const MERMAID = [
     'Не вышло — таблица, не ломаный mermaid.',
 ].join('\n');
 
+const CONTINUE = 'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.';
+
+const STAGE_PROMPT = [
+    'Подробный отчёт этапа в markdown: факты, цифры, таблицы по теме.',
+    ON_TOPIC,
+    MERMAID,
+    'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
+    'Общие фразы без названий — не отчёт.',
+    'Не пиши имена шагов и не пиши одно слово.',
+].join('\n');
+
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
 const PIPE = {
     /** корень файла = контейнер task; меню plan/do — здесь, не у thinking */
@@ -563,10 +580,11 @@ const PIPE = {
         inject: 'если необходимо выполнить конкретные действия над конкретными объектами, файлами, навыками',
         container: true,
         next: ['work', 'web', 'form', 'html', 'check', 'report'],
-        prompt: [
+        system: [
             'Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.',
-            'Не делай их и не обращайся к пользователю. Размышления от своего лица в content.',
+            'Не делай их и не обращайся к пользователю.',
         ].join('\n'),
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = 'do';
             params.block.state = childRollup(params.block, ['web', 'site', 'form', 'work']);
@@ -582,6 +600,7 @@ const PIPE = {
         ].join('\n'),
         container: true,
         next: ['thinking', /* 'work', */ 'web', /* 'form', */ 'report'],
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'form', 'work']);
@@ -602,6 +621,7 @@ const PIPE = {
         system: [
             'Подумай, какие именно действия над файлами необходимо выполнить.',
         ].join('\n'),
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.state = childRollup(params.block, ['search', 'read', 'write']);
         },
@@ -611,7 +631,7 @@ const PIPE = {
         icon: 'icons:attachment',
         container: true,
         next: ['file', 'report'],
-        close_prompt: [
+        prompt: [
             'Кратко изложи только вложенные файлы: имя и суть содержимого.',
             'Бери факты из детей file. Не выдумывай тему, не спрашивай, не пиши отчёт по задаче.',
         ].join('\n'),
@@ -727,6 +747,7 @@ const PIPE = {
         ].join('\n'),
         container: true,
         next: ['thinking', 'work', 'web', 'report'],
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = 'do';
             params.block.state = childRollup(params.block, ['work', 'web', 'site']);
@@ -737,15 +758,6 @@ const PIPE = {
         icon: 'icons:assignment-turned-in',
         close: true,
         inject: 'если считаешь, что на данный этап готов к закрытию',
-        prompt: [
-            'Подробный отчёт этапа в markdown: факты, цифры, таблицы по теме.',
-            ON_TOPIC,
-            MERMAID,
-            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
-            'Общие фразы без названий — не отчёт.',
-            'Не пиши имена шагов и не пиши одно слово.',
-            'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.',
-        ].join('\n'),
         recalc(params = {}) {
             const text = String(params.block.content || '').trim();
             if (!text)
@@ -772,7 +784,7 @@ const PIPE = {
         service: '/SERVICES/SearXNG',
         container: true,
         next: ['site', 'report'],
-        close_prompt: [
+        prompt: [
             'Подробный отчёт по посещённым страницам в markdown: факты, цифры, таблицы по теме.',
             ON_TOPIC,
             MERMAID,

@@ -10,6 +10,37 @@ import { FS } from './index.js';
 
 export const today = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * includes из query/post: массив путей, JSON-строка или один путь.
+ * WORK.fetch кладёт params в query — массив там становится строкой.
+ */
+export function normalizeIncludes(v) {
+    if (v == null || v === '')
+        return [];
+    let list = v;
+    if (typeof v === 'string') {
+        const s = v.trim();
+        if (!s)
+            return [];
+        if (s[0] === '[') {
+            try {
+                const parsed = JSON.parse(s);
+                list = Array.isArray(parsed) ? parsed : [s];
+            } catch {
+                list = s.includes(',/') ? s.split(',') : [s];
+            }
+        } else
+            list = s.includes(',/') ? s.split(',') : [s];
+    } else if (!Array.isArray(v))
+        list = [v];
+    return list.map(p => {
+        p = String(p ?? '').trim();
+        if (!p)
+            return '';
+        return p.startsWith('/') ? p : '/' + p;
+    }).filter(Boolean);
+}
+
 /** Нормализация запроса: строка → {day}, ext → массив exts в нижнем регистре. */
 export function normalizeQuery(params = {}) {
     if (typeof params === 'string')
@@ -279,10 +310,7 @@ export async function appendRow(storage, row, params = {}) {
 
 /** Добавить пути в includes записи лога (например, шаги ai.task). */
 export async function appendIncludes(storage, entryPath, includePaths = [], params = {}) {
-    if (typeof includePaths === 'string')
-        includePaths = includePaths.split(',').map(s => s.trim()).filter(Boolean);
-    if (!Array.isArray(includePaths))
-        includePaths = includePaths ? [includePaths] : [];
+    includePaths = normalizeIncludes(includePaths);
     if (!entryPath || !includePaths.length)
         return null;
     const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;

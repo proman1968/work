@@ -559,12 +559,6 @@ function cssEscape(name) {
     return String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** html — block.html в sandbox-iframe (script ок; без same-origin к родителю). */
-ODA({ is: 'microchat-view-html',
-    extends: 'microchat-view',
-    extendTag: 'microchat-html',
-});
-
 
 /**
  * todo — title + subTitle (todo); сырой content в markdown не показываем.
@@ -577,7 +571,9 @@ ODA({ is: 'microchat-view-todo',
         this.label = undefined;
         this.icon = undefined;
         this.content = undefined;
+        this.colorMode = 'header';
     },
+    
     get showContent() { return !!this.streamTail; },
     get label() {
         if (this.data?.label) return this.data.label;

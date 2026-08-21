@@ -505,14 +505,18 @@ ODA({is: 'oda-chat',
                         items: [],
                     });
                 }
+                const names = files.map(f => f.label);
                 const body = {
-                    title: text || 'task',
+                    title: text || names.map(n => `"${n}"`).join(', ') || 'task',
                     created: Date.now(),
                     items,
                 };
                 if (this.model) body.model = this.model;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
-                params.message = text;
+                if (text)
+                    params.message = text;
+                if (files.length)
+                    params.includes = JSON.stringify(files.map(f => f.path));
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
             } catch (err) {

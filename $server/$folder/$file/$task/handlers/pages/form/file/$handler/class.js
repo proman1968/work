@@ -22,11 +22,21 @@ export default {
                 right: 0;
                 z-index: 200;
                 margin: 4px;
-                padding: 0px;
+                padding: 0px 8px 0px 0px;
+                border-radius: 16px;
+            }
+            .feed {
+                overflow: hidden;
+                max-width: {{showDock ?  '100%': '720px'}};
+                margin: 0px auto;
+                transition: width, max-width 0.3s ease-in-out;
+            }
+            microchat-dock: {
+                min-width: 30%;
             }
         </style>
    
-        <div flex vertical ~if="showFeed">
+        <div flex vertical shadow class="feed" ~if="showFeed">
             <div flex vertical style="overflow: hidden;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
@@ -34,7 +44,7 @@ export default {
         </div>
         <oda-splitter ~if="showDock && !mobile" left ::width="dockWidth"></oda-splitter>
         <microchat-dock no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
-        <oda-button class="dock-over" content ~if="showDockBtn" round shadow icon="icons:chevron-left" :icon-size title="Отчёты" @tap="dockOpen = true"></oda-button>                
+        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="dockOpen = true"></oda-button>                
 
     `,
     colorMode: 'content',
