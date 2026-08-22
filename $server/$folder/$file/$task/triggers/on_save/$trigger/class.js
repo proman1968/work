@@ -14,6 +14,8 @@
             placeContext(user_info, class_info),
             (SYSTEM_PROMPT[role] || '')
         ].join('\n');
+        body.location = await readLocation(params.location);
+        delete body.here;
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
         const seeded = (body.items || []).length > 0;
@@ -21,10 +23,52 @@
             session: params.session,
             role: seeded ? 'AI' : role,
             prompt: seeded ? '' : body.title,
-            here: params.here,
         });
     },
 };
+
+async function readLocation(raw) {
+    let loc = raw;
+    if (typeof loc === 'string') {
+        try { loc = JSON.parse(loc); } catch { loc = null; }
+    }
+    if (!loc || typeof loc !== 'object')
+        return;
+    const out = {};
+    if (loc.tz)
+        out.tz = String(loc.tz);
+    const lat = +loc.lat;
+    const lon = +loc.lon;
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        out.lat = lat;
+        out.lon = lon;
+        await fillLocationPlace(out);
+    }
+    if (!(out.tz || (out.lat != null && out.lon != null)))
+        return;
+    return out;
+}
+
+async function fillLocationPlace(loc) {
+    if (!loc || loc.place || loc.lat == null || loc.lon == null)
+        return;
+    const q = new URL('https://nominatim.openstreetmap.org/reverse');
+    q.searchParams.set('lat', String(loc.lat));
+    q.searchParams.set('lon', String(loc.lon));
+    q.searchParams.set('format', 'json');
+    q.searchParams.set('accept-language', 'ru');
+    try {
+        const res = await fetch(q, { headers: { 'User-Agent': 'WORK-task/1.0' } });
+        if (!res.ok)
+            return;
+        const data = await res.json();
+        const a = data?.address || {};
+        const city = a.city || a.town || a.village || a.municipality || a.county;
+        const place = [city, a.country].filter(Boolean).join(', ');
+        if (place)
+            loc.place = place;
+    } catch { /* реверс недоступен — в location останутся координаты */ }
+}
 
 function samePlace(a, b) {
     if (!a || !b) return false;

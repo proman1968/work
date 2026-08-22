@@ -222,7 +222,6 @@ ODA({ is: 'microchat-panel',
             await this.$item.fetch('prompt', {
                 model: this.data.model,
                 role: 'AI',
-                here: await this.here(),
             });
             this._focus();
             return;
@@ -235,7 +234,6 @@ ODA({ is: 'microchat-panel',
             prompt,
             model: this.data.model,
             role: 'APPROVE',
-            here: await this.here(),
         });
         this._focus();
     },
@@ -285,7 +283,6 @@ ODA({ is: 'microchat-panel',
             prompt: text,
             model: this.data.model,
             role: String(this.role || this.$item.role || 'USER').toUpperCase(),
-            here: await this.here(),
         }, post);
         this._focus();
     },
@@ -334,24 +331,5 @@ ODA({ is: 'microchat-panel',
     cycleTts() {
         this._tts().cycle();
         this._focus();
-    },
-    async here() {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const pos = await this._geo();
-        return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
-    },
-    _geo() {
-        if (this._geoFix) return this._geoFix;
-        if (!navigator.geolocation) return null;
-        return this._geoWait ??= new Promise(resolve => {
-            navigator.geolocation.getCurrentPosition(
-                p => {
-                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
-                    resolve(this._geoFix);
-                },
-                () => resolve(null),
-                { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
-            );
-        });
     },
 });

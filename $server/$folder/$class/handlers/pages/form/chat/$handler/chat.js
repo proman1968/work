@@ -460,7 +460,7 @@ ODA({is: 'oda-chat',
 
         if (isAI) {
             this.awaitTask = true;
-            params.here = await this.here();
+            params.location = await this.location();
             const text = String(this.value ?? '').trim();
             try {
                 const items = [];
@@ -565,7 +565,7 @@ ODA({is: 'oda-chat',
     get chatAudioController() {
         return this._audioController ??= new chatAudioController(this);
     },
-    async here() {
+    async location() {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const pos = await this._geo();
         return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
