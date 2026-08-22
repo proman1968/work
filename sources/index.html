@@ -26,11 +26,7 @@
         let handler = "{handler}";
         const component_name = "{handler-type}-" + handler;
         handler = await WORK.get_item(item_path + '/~/handlers//' + handler);
-        // handler = handler[0];
-        let module = await import(handler.short + `/~/class.js`);
-        module = module.default
-        module.is ??= component_name;
-        await WORK(module);
+        let module = await handler.importView(component_name);
         const el = document.createElement(component_name);
         el.$handler = handler;
         el.view_name ??= '{view_name}';

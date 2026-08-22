@@ -64,7 +64,7 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
         showTools:  false,
     },
     items: [],
-p(){
+    get step() {
         return (this.iconSize || 24) / 2;
     },
     async getItems(item, deep = 0) {

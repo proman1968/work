@@ -5,7 +5,7 @@
 ## Файлы
 
 - `index.js` — сборка клиентского `CORE` и реэкспорт `$item` из `../core.js`
-- `folder.js` — клиентский `$folder`: `url`, `fetch`, `get_item`, `save_file`, `load`, `save`, `delete`, `create`
+- `folder.js` — клиентский `$folder`: `url`, `fetch`, `get_item`, `save_file`, `load`, `save`, `delete`, `create`, `ensure_folder`
 - `class.js` — клиентский `$class`: import/save `class.js`, metadata, fields
 - `file.js` — клиентский `$file`: загрузка/скачивание по HTTP
 - `user.js` — клиентский `$user`

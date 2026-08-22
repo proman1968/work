@@ -1,38 +1,18 @@
 import * as markdown from './lib/markdown-wasm/markdown.es.js';
+import './lib/mathjax-config.js';
+import './lib/mathjax/tex-mml-chtml.js';
+import './lib/highlight.min.js';
+import './lib/mermaid.min.js';
 await markdown.ready;
+await MathJax.startup.promise;
 
-let hljsReady, mermaidReady, mathReady;
-
-function loadHljs() {
-    return hljsReady ??= import('./lib/highlight.min.js').then(() => globalThis.hljs);
-}
-
-function loadMermaid() {
-    return mermaidReady ??= import('./lib/mermaid.min.js').then(() => {
-        const mermaid = globalThis.mermaid;
-        mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'strict',
-            suppressErrorRendering: true,
-            theme: 'neutral',
-        });
-        return mermaid;
-    });
-}
-
-function loadMathJax() {
-    return mathReady ??= import('./lib/mathjax-config.js')
-        .then(() => import('./lib/mathjax/tex-mml-chtml.js'))
-        .then(() => globalThis.MathJax.startup.promise);
-}
-
-function needsHljs(text) {
-    return fencesClosed(text) && /^(```+|~~~+)(?!\s*mermaid\b)/im.test(text);
-}
-
-function needsMath(text) {
-    return /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\d)[^$\n]{1,80}\$/.test(text);
-}
+const mermaid = globalThis.mermaid;
+mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    suppressErrorRendering: true,
+    theme: 'neutral',
+});
 
 function escapeHtml(s) {
     return s.replace(/[&<>"']/g, ch => ({
@@ -52,7 +32,7 @@ function fencesClosed(text) {
         const from = m.index + m[0].length;
         const closeAt = s.slice(from).search(new RegExp('\\n' + mark + '(?:\\s|$)'));
         if (closeAt < 0) return false;
-        openRe.lastIndex = from + closeAt + 1;
+        openRe.lastIndex = from + closeAt + 1 + m[1].length;
     }
     return true;
 }
@@ -237,9 +217,7 @@ function embedMedia(root) {
 }
 
 async function renderMermaid(root) {
-    if (!root) return;
-    const mermaid = await loadMermaid();
-    if (!mermaid) return;
+    if (!root || !mermaid) return;
     for (const node of root.querySelectorAll('.mermaid')) {
         const src = node.textContent.trim();
         if (!src) continue;
@@ -265,27 +243,16 @@ ODA({ is: 'oda-markdown-viewer',
     get html(){
         if (this.value){
             const gen = ++this._mdGen;
-            const src = this.value;
             this.async(async ()=>{
                 if (gen !== this._mdGen) return;
                 const root = this.$('div');
+                if (!root) return;
                 try {
-                    if (needsHljs(src)) {
-                        await loadHljs();
-                        if (gen !== this._mdGen) return;
-                    }
-                    if (!root) return;
-                    root.innerHTML = parseMarkdown(src);
-                    if (needsMath(src)) {
-                        await loadMathJax();
-                        if (gen !== this._mdGen) return;
-                        MathJax.texReset();
-                        MathJax.typesetClear();
-                        await MathJax.typesetPromise([root]);
-                    }
+                    MathJax.texReset();
+                    MathJax.typesetClear();
+                    await MathJax.typesetPromise([root]);
                     if (gen !== this._mdGen) return;
-                    if (root.querySelector('.mermaid'))
-                        await renderMermaid(root);
+                    await renderMermaid(root);
                     if (gen !== this._mdGen) return;
                     embedMedia(root);
                 } catch (err) {
@@ -293,7 +260,7 @@ ODA({ is: 'oda-markdown-viewer',
                 }
                 if (gen === this._mdGen)
                     this.fire('loaded');
-            })
+            });
             return parseMarkdown(this.value);
         }
     }

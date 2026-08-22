@@ -52,9 +52,11 @@ ODA({ is: 'microchat-ribbon',
             if (this.items?.length) this.pinBottom(true);
         },
     },
-    /** specialty если CE уже есть или ODA уже стартовал (telemetry) — не ждать define */
+    /** specialty этого файла — сразу; остальные — если CE/telemetry уже есть */
     tag(item) {
         const name = 'microchat-view-' + item.type;
+        if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo')
+            return name;
         return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
     },
     attached() {
@@ -115,6 +117,8 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
+                margin-bottom: 8px;
+                border-radius: 8px;
             }
             summary {
                 cursor: pointer;
@@ -148,22 +152,16 @@ ODA({ is: 'microchat-view',
                 font-size: small;
                 word-break: break-word;
             }
-            details:has(> summary:not([hidden])) .body {
-                font-size: xx-small;
-            }
             oda-markdown-viewer.stream {
                 font-size: xx-small;
             }
             :host([container]) details > .body {
                 border-left: 4px solid var(--info-color);
             }
-            oda-markdown-viewer{
-                margin-bottom: 1px;
-            }
         </style>
 
         <details :open="open" @toggle="onToggle">
-            <summary ~show="showTitle" raised vertical flex :color-mode
+            <summary ~show="showTitle" shadow vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
@@ -211,7 +209,7 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        const live = this.$pdp?.streamTarget;
+        const live = this.$pdp?.streaming && this.$pdp?.streamTarget;
         if (live && Reactor.equal(this.data, live))
             return 'spinners:3-dots-scale';
         if (live && containsBlock(this.data, live))
@@ -417,7 +415,6 @@ ODA({ is: 'microchat-form',
                 border-radius: 8px;
                 @apply --light;
                 @apply --vertical;
-                margin-bottom: 8px;
                 gap: 4px;
             }
             .slot :where(legend) {
@@ -559,12 +556,6 @@ function cssEscape(name) {
     return String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** html — block.html в sandbox-iframe (script ок; без same-origin к родителю). */
-ODA({ is: 'microchat-view-html',
-    extends: 'microchat-view',
-    extendTag: 'microchat-html',
-});
-
 
 /**
  * todo — title + subTitle (todo); сырой content в markdown не показываем.
@@ -577,7 +568,9 @@ ODA({ is: 'microchat-view-todo',
         this.label = undefined;
         this.icon = undefined;
         this.content = undefined;
+        this.colorMode = 'header';
     },
+    
     get showContent() { return !!this.streamTail; },
     get label() {
         if (this.data?.label) return this.data.label;
@@ -587,6 +580,31 @@ ODA({ is: 'microchat-view-todo',
         const p = steps.findIndex(s => s.state !== 'done');
         const cur = steps[i >= 0 ? i : (p >= 0 ? p : steps.length - 1)];
         return cur?.description || '';
+    },
+});
+
+/** step — шапка как todo (`header`); label = «N. название» из recalc, иначе из todo.steps. */
+ODA({ is: 'microchat-view-step',
+    extends: 'microchat-view',
+    get colorMode() { return 'header'; },
+    get state() { return ''; },
+    get todoOwner() {
+        let n = this.host;
+        while (n) {
+            if (n.todo || n.data?.todo) return n;
+            n = n.host;
+        }
+        return null;
+    },
+    get label() {
+        const raw = String(this.data?.label || '').trim();
+        if (raw && raw !== 'step' && raw !== 'Шаг') return raw;
+        const owner = this.todoOwner;
+        const todo = owner?.todo || owner?.data?.todo;
+        const items = (owner?.items || owner?.data?.items || []).filter(b => b.type === 'step');
+        const i = items.findIndex(b => Reactor.equal(b, this.data));
+        const desc = (i >= 0 && todo?.steps?.[i]?.description) || '';
+        return desc ? `${i + 1}. ${desc}` : (raw || 'Шаг');
     },
 });
 

@@ -620,8 +620,9 @@ export class $class extends $folder{
             row.sender = WORK.id;
         if (params.message != null)
             row.content = params.message;
-        if (params.includes?.length)
-            row.includes = params.includes.map(p => (p?.startsWith('/') ? p : '/' + p));
+        const includes = LOGS.normalizeIncludes(params.includes);
+        if (includes.length)
+            row.includes = includes;
         if (typeof params.receivers === 'string')
             row.receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
         else if (Array.isArray(params.receivers))

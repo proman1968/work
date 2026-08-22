@@ -6,7 +6,8 @@ export default {
         
         // debugger;
         let { prompt, role, session } = params;
-        keepHere(session, params.here);
+        keepHere(session, params.here, await this.body);
+        await fillHerePlace(session?.here || (await this.body).here);
         params.block = await this._active_block();
         params.container = await this._active_container();
         params.pipe_step = PIPE[params.block.type] || PIPE.thinking;
@@ -15,7 +16,7 @@ export default {
         try {
             switch (role) {
                 case 'AI':{
-                    // не удалять
+                    this._stopped = false;
                 } break;
                 case 'APPROVE':{
                     this._stopped = false;
@@ -49,6 +50,17 @@ export default {
                         };
                         await this._push_block(params);
                     }
+                    const files = await attachFiles(this, post || params.post, session);
+                    if (files.length) {
+                        params.block = {
+                            type: 'includes',
+                            icon: PIPE.includes.icon,
+                            label: PIPE.includes.label,
+                            files,
+                            items: [],
+                        };
+                        await this._push_block(params);
+                    }
                 }
             }
             params.block = await this._active_block();
@@ -62,8 +74,11 @@ export default {
             if (await params.pipe_step.run?.(params))
                 return this._continue(params);
 
-            if (params.pipe_step.prompt && !params.block.content && !params.pipe_step.container) {
-                if (await this._pipe_stream(params) && !this._stopped && !params.block.stop)
+            let streamed = false;
+            if (!params.pipe_step.container && !params.block.content)
+                streamed = await this._pipe_stream(params);
+            if (streamed) {
+                if (!this._stopped && !params.block.stop)
                     return { ok: true };
             }
             else {
@@ -79,10 +94,8 @@ export default {
             }
             else {
                 let menu =  options.map(id => id.toUpperCase() + ' - ' + (PIPE[id]?.[mode]?.inject || PIPE[id]?.inject || 'пропустить'));
-                if(menu.length > 0) 
-                    menu.unshift('Выбери следующий, наиболее подходящий тип шага, не решай задачу целиком, ответь одним словом точно из списка без знаков препинания и пояснений:');
-
-                menu.push('Если ни один вариант не подходит — ответь по существу.');
+                if(menu.length > 0)
+                    menu.unshift('Выбери один тип из списка. Ответ одним словом, без знаков и пояснений. Бери шаг, без которого нельзя выполнить текущий запрос. Факт уже в контексте — TEXT. Лишний шаг хуже, чем сразу ответить.');
                 menu = menu.join('\n');
 
                 messages = await this.context({prompt: menu, session});
@@ -147,7 +160,7 @@ export default {
         }
         const mode = containerMode(await this.body, container);
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), hereNow(params.session), modeLine].filter(Boolean).join('\n\n') }];
+        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), hereNow(params.session, await this.body), modeLine].filter(Boolean).join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -174,10 +187,13 @@ export default {
     async _pipe_stream(params = {}) {
         const { session, block } = params;
         const pipe = params.pipe_step || PIPE[block?.type];
+        if (pipe?.container)
+            return false;
         const mode = containerMode(await this.body, params.container);
-        const text = (pipe.close && PIPE[params.container?.type]?.close_prompt)
-            || pipe[mode]?.prompt
-            || pipe.prompt;
+        const place = PIPE[params.container?.type];
+        const text = pipe.close
+            ? [place?.prompt, CONTINUE].filter(Boolean).join('\n')
+            : (pipe[mode]?.prompt || pipe.prompt);
         if (!text)
             return false;
         const messages = await this.context({ prompt: text, session });
@@ -234,7 +250,9 @@ export default {
     async _fc_exec(service, call, { block, session } = {}) {
         const args = call.args || {};
         if (call.method === 'search' && block?.type === 'web') {
-            const result = await service.search?.(args);
+            const result = typeof service?.search === 'function'
+                ? await service.search(args)
+                : { error: 'сервис поиска недоступен' };
             const seen = usedSiteUrls(parentOf(await this.body, block), block);
             block.sites = [];
             for (const r of result?.results || []) {
@@ -243,6 +261,10 @@ export default {
                     continue;
                 seen.add(url);
                 block.sites.push({ url, title: r.title || '' });
+            }
+            if (result?.error || !block.sites.length) {
+                block.state = 'error';
+                block.content = shortError(result?.error || 'пусто');
             }
             await this._save(session);
             return result ?? {};
@@ -391,16 +413,13 @@ export default {
 //-----------------------------------------------------------------------------
 
 
-const ON_TOPIC = [
-    'Только факты по теме запроса. Рекламу, сайдбар, «похожие товары» и прочий шум не пиши.',
-    'Цены — только если тема задачи про цены или стоимость.',
-].join('\n');
+const CONTINUE = 'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.';
 
-const MERMAID = [
-    'Схема mermaid — только если есть 2+ сущности сравнить: один блок ```mermaid, graph TD или graph LR.',
-    'Id узлов только латиница (A, B, C). Подпись только A["текст"] — без пробела перед скобкой, без ;, без кириллицы в id.',
-    'Стрелка --> или -->|"коротко"| на одной строке.',
-    'Не вышло — таблица, не ломаный mermaid.',
+const STAGE_PROMPT = [
+    'Подробный отчёт этапа в markdown: факты, цифры, таблицы по теме.',
+    'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
+    'Общие фразы без названий — не отчёт.',
+    'Не пиши имена шагов и не пиши одно слово.',
 ].join('\n');
 
 // PIPE — конечный автомат (FSM): состояние = блок, переходы = next у каждого узла.
@@ -409,28 +428,29 @@ const PIPE = {
     task: {
         container: true,
         plan: {
-            next: ['thinking', 'question', 'explore', 'planning', 'activation', 'complete'],
+            next: ['thinking', 'explore', 'question', 'form', 'text', 'planning', 'activation', 'complete'],
         },
         do: {
-            next: ['thinking', 'question', 'execute', 'explore', 'complete'],
+            next: ['thinking', 'explore', 'question', 'form', 'text', 'execute',  'complete'],
         },
     },
     /** вход: блок prompt пушится вручную в prompt(); отсюда в площадку (настройка в её content) */
     prompt: {
         role: 'user',
-        next: ['thinking', 'question', 'text'],
+        next: ['thinking'],
     },
     thinking: {
-        label: 'Мысли',
+        label: 'Размышления',
         icon: 'carbon:idea',
         plan:{
-            inject: 'если необходимо проанализировать и обдумать дальнейшие планы',
+            inject: 'разобрать, какой шаг дальше; не ответ пользователю',
         },
         do:{
-            inject: 'если необходимо проанализировать и обдумать дальнейшие действия',
+            inject: 'разобрать, какое действие дальше; не ответ пользователю',
         },
         prompt: [
             'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',
+            'Если ответ или факт уже в контексте — дальше TEXT, не explore и не planning.',
             'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
             'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
         ].join('\n'),
@@ -441,7 +461,7 @@ const PIPE = {
     activation: {
         label: 'Активация',
         icon: 'icons:check-box-outline-blank',
-        inject: 'если необходимо перейти из режима планирования в режим выполнения',
+        inject: 'без режима исполнения нельзя (файлы, сервисы, навыки)',
         prompt: [
             'После активации ты перестанешь планировать и перейдешь к конкретным действиям над системой.',
             'Ты получишь доступ к файлам, сервисам, навыкам, функциям системы и к интернету для исполнения поставленной задачи.',
@@ -456,26 +476,33 @@ const PIPE = {
             params.container.mode = 'do';
         }
     },
+    comment:{
+        icon: 'icons:chat',
+        fallback: true,
+    },
     text:{
         icon: 'icons:chat',
         stop: true,
-        fallback: true,
-        inject: 'если хочешь что-то ответить или сообщить пользователю.',
-        prompt: 'Ответь пользователю в свободной форме, то, что ты хотел сообщить.',
+        inject: 'ответить или сообщить; факт уже в контексте',
+        prompt: 'Ответь пользователю по фактам из контекста. Не обещай поиск и не придумывай этапы.',
     },
     question: {
         label: 'Вопрос',
         icon: 'icons:help',
-        inject: 'если нет задачи или не очень понятно, что делать, надо задать вопрос пользователю.',
+        inject: 'без одного ответа пользователя нельзя идти',
         stop: true,
-        prompt: 'Задай вопрос пользователю, чтобы понять, что тебе делать дальше.',
+        prompt: 'Задай один вопрос, без ответа на который нельзя идти дальше.',
     },
     todo:{
         next: ['step'],
         async recalc(params = {}) {
             const { container, task } = params;
             const body = await task.body;
-            const owner = container.todo ? container : (body.todo ? body : null);
+            let owner = container;
+            while (owner && !owner.todo)
+                owner = parentOf(body, owner);
+            if (!owner?.todo && body.todo)
+                owner = body;
             const todo = owner?.todo;
             if (!todo) return;
             const real = (owner.items || []).filter(b => b.type === 'step');
@@ -509,7 +536,7 @@ const PIPE = {
     planning: {
         label: 'План',
         icon: 'icons:assignment',
-        inject: 'если необходимо сделать несколько действий подряд',
+        inject: 'несколько ещё не сделанных действий',
         prompt: ['Предложи план:',
             '\n\n[instruction]\n',
             'СТРОГО в формате markdown:',
@@ -535,8 +562,11 @@ const PIPE = {
     /** шаг плана: заголовок = «N. описание» текущего in_progress, тело = items. */
     step: {
         label: 'Шаг',
-        inject: 'если необходимо выполнить один очередной пункт плана',
+        inject: 'без очередного пункта плана нельзя идти',
         container: true,
+        recalc(params = {}) {
+            return PIPE.todo.recalc(params);
+        },
         plan: {
             next: ['thinking', 'question', 'explore', 'planning', 'activation', 'complete'],
         },
@@ -549,13 +579,14 @@ const PIPE = {
     execute: {
         label: 'Выполнение',
         icon: 'enterprise:wrench',
-        inject: 'если необходимо выполнить конкретные действия над конкретными объектами, файлами, навыками',
+        inject: 'нужны действия над объектами, файлами, навыками',
         container: true,
         next: ['work', 'web', 'form', 'html', 'check', 'report'],
-        prompt: [
+        system: [
             'Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.',
-            'Не делай их и не обращайся к пользователю. Размышления от своего лица в content.',
+            'Не делай их и не обращайся к пользователю.',
         ].join('\n'),
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = 'do';
             params.block.state = childRollup(params.block, ['web', 'site', 'form', 'work']);
@@ -565,12 +596,13 @@ const PIPE = {
     explore: {
         label: 'Обзор',
         icon: 'icons:search',
-        inject: 'если нужно выяснить факты (обзор, справка), не меняя систему',
+        inject: 'нужны внешние факты, в контексте их нет',
         system: [
-            'Подумай, что именно выяснить и откуда взять факты, чтобы продолжить работу.',
+            'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web', /* 'form', */ 'report'],
+        next: ['thinking', /* 'work', */ 'web', 'thought'],
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'form', 'work']);
@@ -581,16 +613,17 @@ const PIPE = {
         icon: 'icons:folder',
         container: true,
         plan: {
-            inject: 'если необходимо найти файлы или информацию в рабочей области',
+            inject: 'факты в рабочей области, в контексте их нет',
             next: ['search', 'read', 'report'],
         },
         do: {
-            inject: 'если необходимо сделать действия над файлами в рабочей области',
+            inject: 'без действий над файлами области нельзя',
             next: ['search', 'read', 'write', 'report'],
         },
         system: [
             'Подумай, какие именно действия над файлами необходимо выполнить.',
         ].join('\n'),
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.state = childRollup(params.block, ['search', 'read', 'write']);
         },
@@ -600,7 +633,7 @@ const PIPE = {
         icon: 'icons:attachment',
         container: true,
         next: ['file', 'report'],
-        close_prompt: [
+        prompt: [
             'Кратко изложи только вложенные файлы: имя и суть содержимого.',
             'Бери факты из детей file. Не выдумывай тему, не спрашивай, не пиши отчёт по задаче.',
         ].join('\n'),
@@ -637,7 +670,7 @@ const PIPE = {
     search: {
         label: 'Поиск',
         icon: 'icons:search',
-        inject: 'если нужно найти файлы в рабочей области',
+        inject: 'нужен поиск файлов в области, путь неизвестен',
         async run(params = {}) {
             const b = params.block;
             if (b.content)
@@ -658,7 +691,7 @@ const PIPE = {
     read: {
         label: 'Файл',
         icon: 'icons:description',
-        inject: 'если нужно прочитать конкретный файл по пути',
+        inject: 'нужен текст конкретного файла по пути',
         async run(params = {}) {
             const b = params.block;
             if (b.content)
@@ -675,7 +708,7 @@ const PIPE = {
     write: {
         label: 'Запись',
         icon: 'editor:mode-edit',
-        inject: 'если нужно записать или поправить файл',
+        inject: 'без записи или правки файла нельзя',
         prompt: [
             'Первая строка — путь файла в WORK.',
             'Дальше полный текст или блоки SEARCH/REPLACE.',
@@ -707,7 +740,7 @@ const PIPE = {
     check:{
         label: 'Проверка',
         icon: 'icons:check-circle',
-        inject: 'если нужно сверить результат с целью, прежде чем закрыть ветку',
+        inject: 'сверить результат с целью, прежде чем закрыть',
         system: [
             'Это площадка проверки, не исполнение и не план.',
             'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
@@ -716,6 +749,7 @@ const PIPE = {
         ].join('\n'),
         container: true,
         next: ['thinking', 'work', 'web', 'report'],
+        prompt: STAGE_PROMPT,
         recalc(params = {}) {
             params.block.mode = 'do';
             params.block.state = childRollup(params.block, ['work', 'web', 'site']);
@@ -725,16 +759,7 @@ const PIPE = {
         label: 'Отчёт',
         icon: 'icons:assignment-turned-in',
         close: true,
-        inject: 'если считаешь, что на данный этап готов к закрытию',
-        prompt: [
-            'Подробный отчёт этапа в markdown: факты, цифры, таблицы по теме.',
-            ON_TOPIC,
-            MERMAID,
-            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
-            'Общие фразы без названий — не отчёт.',
-            'Не пиши имена шагов и не пиши одно слово.',
-            'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.',
-        ].join('\n'),
+        inject: 'этап закрыт: есть факты для сводки',
         recalc(params = {}) {
             const text = String(params.block.content || '').trim();
             if (!text)
@@ -758,16 +783,12 @@ const PIPE = {
     web: {
         label: 'Интернет',
         icon: 'icons:language',
-        service: '/SERVICES/SearXNG',
+        service: '/SERVICES/DuckDuckGo',
         container: true,
-        next: ['site', 'report'],
-        close_prompt: [
-            'Подробный отчёт по посещённым страницам в markdown: факты, цифры, таблицы по теме.',
-            ON_TOPIC,
-            MERMAID,
+        next: ['site'],
+        prompt: [
+            'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
-            'Общие фразы без названий — не отчёт.',
-            'Не пиши имена шагов и не пиши одно слово.',
         ].join('\n'),
         async run(params = {}) {
             const b = params.block;
@@ -775,6 +796,9 @@ const PIPE = {
             const query = webQuery(b, await params.task.body);
             if (!query) {
                 b.sites = [];
+                b.state = 'error';
+                b.content = 'нет поискового запроса';
+                await close_up(await params.task.body, b, params);
                 return true;
             }
             const service = await WORK.get_item(PIPE.web.service);
@@ -783,19 +807,22 @@ const PIPE = {
                 session: params.session,
             });
             b.sites ??= [];
-            await webPushNext(b, params);
+            if (!b.content && b.state !== 'error')
+                await webPushNext(b, params);
             await PIPE.web.recalc?.(params);
+            if (b.content || b.state === 'error')
+                await close_up(await params.task.body, b, params);
             return true;
         },
         plan: {
-            inject: 'если необходимо найти информацию в интернете',
+            inject: 'факты только из интернета, в контексте их нет',
             system: [
                 'Найди ссылки по текущей задаче.',
                 'Не читай страницы — заход сделают блоки site.',
             ].join('\n'),
         },
         do: {
-            inject: 'если необходимо выполнить конкретные действия в интернете',
+            inject: 'действие в интернете, без которого нельзя',
             system: [
                 'Найди рабочие ссылки по тому, что нужно сделать сейчас.',
                 'Не читай страницы — заход сделают блоки site.',
@@ -803,6 +830,8 @@ const PIPE = {
         },
         recalc(params = {}) {
             const b = params.block;
+            if (b.state === 'error')
+                return;
             const sites = (b.items || []).filter(x => x.type === 'site');
             const ok = sites.filter(siteOk).length;
             b.state = sites.length ? `Сайты ${ok}/${sites.length}` : '';
@@ -812,12 +841,16 @@ const PIPE = {
         label: 'Сайт',
         icon: 'icons:language',
         prompt: [
-            'Вытащи с страницы только то, что относится к задаче: факты, таблицы, ссылки, картинки, видео.',
-            ON_TOPIC,
-            'Картинки — ![подпись](url) только из [images] в дампе. Видео — [подпись](url) только из [video]. Не выдумывай url.',
-            'Только то, что есть в [site: …]. Не выдумывай цифры.',
-            'Не пересказывай меню, футер, навигацию и рекламу.',
+            'Вытащи со страницы только то, что относится к задаче: факты, таблицы, ссылки, картинки, видео, аудио.',
+            'Не дублируй.',
+            'Картинки — ![подпись](url) только из [images] в дампе.',
+            'Видео — [подпись](url) только из [video].',
+            'Аудио — [подпись](url) только из [audio].',
+            'Не выдумывай url.',
+            'Только то, что есть в дампе [site N: url]. Метку [site N: url] не пиши — её ставит система. Не выдумывай цифры.',
+            'Не пересказывай меню, футер, навигацию и рекламу, и все, что не относится к задаче.',
         ].join('\n'),
+        next: ['thought'],
         async run(params = {}) {
             const b = params.block;
             if (b.content || b.page)
@@ -826,10 +859,12 @@ const PIPE = {
             if (!b.url) {
                 const taken = new Set((web.items || []).filter(x => x !== b && x.url).map(x => x.url));
                 const next = (web.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
-                if (!next)
-                    return false;
+                if (!next) {
+                    await siteFail(params, shortError('нет url'));
+                    return true;
+                }
                 b.url = next.url;
-                b.label = siteTitle(next);
+                b.label = siteHost(next);
                 b.icon = siteFavicon(next.url);
             }
             const service = await WORK.get_item(PIPE.web.service);
@@ -837,12 +872,10 @@ const PIPE = {
                 block: b,
                 session: params.session,
             });
-            const head = '[site: ' + b.url + ']\n\n';
+            const head = siteMark(web, b) + '\n\n';
             const page = !result?.error && b.state !== 'error' ? clipPage(result?.content) : '';
             if (b.state === 'error' || !page || page.replace(/\s+/g, ' ').trim().length < 40) {
-                b.state = 'error';
-                b.content = head + shortError(result?.error || 'пусто');
-                await close_up(await params.task.body, b, params);
+                await siteFail(params, shortError(result?.error || 'пусто'));
                 return true;
             }
             b.page = head + page;
@@ -850,15 +883,29 @@ const PIPE = {
             return false;
         },
         recalc(params = {}) {
-            if (params.block.state !== 'error')
-                delete params.block.state;
+            const b = params.block;
+            if (b.state !== 'error')
+                delete b.state;
+            if (b.content)
+                stampSiteContent(params.container, b);
         },
+    },
+    thought:{
+        label: 'Мысли',
+        icon: 'carbon:idea',
+        prompt: [
+            'Подробно, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
+            'или сделанного уже достаточно для успешного завершения задачи.',
+            'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
+            'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
+        ].join('\n'),
+        next: ['report'],
     },
 
     form: {
         label: 'Форма',
         icon: 'icons:view-list',
-        inject: 'если нужно выяснить у пользователя сразу несколько вопросов (два и больше) — не текстом',
+        inject: 'без нескольких полей пользователя нельзя идти',
         prompt: [
             'Сначала один fenced-блок html (внутри form и fieldset). После блока — пояснение (1–10 слов).',
             'Пояснение — только текст после html, не legend и не fieldset. Не пересказывай эту инструкцию.',
@@ -904,7 +951,7 @@ const PIPE = {
     html: {
         label: 'HTML',
         icon: 'editor:code',
-        inject: 'если нужно сделать одностраничное HTML-приложение (схема, игра, виджет, интерактив)',
+        inject: 'нужно одностраничное HTML в ленте',
         prompt: [
             'Собери одностраничное HTML-приложение для запуска внутри ленты чата в iframe.',
             '[instruction]',
@@ -920,7 +967,7 @@ const PIPE = {
     },
     complete: {
         label: 'Завершение',
-        inject: 'если считаешь, что текущая задача (шаг) завершена',
+        inject: 'текущий запрос уже выполнен, нужен итог',
         prompt: [
             'Отдай пользователю итог задачи.',
             'Не пересказывай процесс. Включи результат из ленты: факты, списки, таблицы.',
@@ -983,6 +1030,31 @@ function includePlan(box) {
     if (box?.files?.length)
         return box.files;
     return includeReal(box).map(x => ({ path: x.path, label: x.label, icon: x.icon }));
+}
+
+async function attachFiles(task, post, session) {
+    const incoming = post?.files;
+    if (!incoming?.length)
+        return [];
+    const logs = await task.$owner.save_files({
+        post: { files: incoming },
+        ignore_save_logs: true,
+        session,
+    });
+    const out = [];
+    for (const log of logs || []) {
+        const path = log?.logFullPath || log?.path;
+        if (!path)
+            continue;
+        const full = path.startsWith('/') ? path : '/' + path;
+        const file = await WORK.get_item(full);
+        out.push({
+            path: full,
+            label: file?.id || full.split('/').pop(),
+            icon: file?.icon || PIPE.file.icon,
+        });
+    }
+    return out;
 }
 
 function includeReal(box) {
@@ -1060,11 +1132,32 @@ function siteRef(item) {
     return { url: String(item.url || ''), title: String(item.title || '') };
 }
 
+function siteHost(item) {
+    const url = siteRef(item).url;
+    try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+function siteIndex(web, block) {
+    const sites = (web?.items || []).filter(x => x.type === 'site');
+    const i = sites.indexOf(block);
+    return (i >= 0 ? i : 0) + 1;
+}
+
+function siteMark(web, block) {
+    return '[site ' + siteIndex(web, block) + ': ' + (block?.url || '') + ']';
+}
+
+function stampSiteContent(web, block) {
+    const mark = siteMark(web, block);
+    const text = String(block.content || '').replace(/^\[site(?:\s+\d+)?:[^\]]*\]\s*/i, '').trim();
+    block.content = mark + (text ? '\n\n' + text : '');
+}
+
 function siteTitle(item) {
     const { url, title } = siteRef(item);
     const t = String(title || '').replace(/\s+/g, ' ').trim();
     if (t && t !== url) return t.slice(0, 80);
-    try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+    return siteHost(item);
 }
 
 function formatSites(sites) {
@@ -1171,6 +1264,18 @@ function clipPage(text) {
     return (body.length <= SITE_PAGE ? body : body.slice(0, SITE_PAGE)) + s.slice(i);
 }
 
+/** ошибка site: снять весь кеш окна и взять следующий url из выдачи */
+async function siteFail(params, text) {
+    const b = params.block;
+    const web = params.container;
+    b.state = 'error';
+    b.content = text;
+    stampSiteContent(web, b);
+    delete web.using_blocks;
+    await webPushNext(web, params);
+    await close_up(await params.task.body, b, params);
+}
+
 async function webPushNext(web, params) {
     if (!web || web.content || web.sites == null)
         return false;
@@ -1182,7 +1287,7 @@ async function webPushNext(web, params) {
     if (!next || !params.task)
         return false;
     await params.task._push_block({
-        block: { type: 'site', url: next.url, label: siteTitle(next), icon: siteFavicon(next.url) },
+        block: { type: 'site', url: next.url, label: siteHost(next), icon: siteFavicon(next.url) },
         container: web,
         session: params.session,
     });
@@ -1281,27 +1386,32 @@ function filePath(block, body) {
     return hit ? hit[0] : '';
 }
 
-function keepHere(session, raw) {
-    if (!session) return;
+function keepHere(session, raw, body) {
     let here = raw;
     if (typeof here === 'string') {
-        try { here = JSON.parse(here); } catch { return; }
+        try { here = JSON.parse(here); } catch { here = null; }
     }
-    if (!here || typeof here !== 'object') return;
-    const next = { ...session.here };
-    if (here.tz) next.tz = String(here.tz);
-    const lat = +here.lat;
-    const lon = +here.lon;
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        next.lat = lat;
-        next.lon = lon;
+    if (!here || typeof here !== 'object') here = null;
+    const next = { ...body?.here, ...session?.here };
+    if (here) {
+        if (here.tz) next.tz = String(here.tz);
+        const lat = +here.lat;
+        const lon = +here.lon;
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+            if (next.lat != null && (Math.abs(next.lat - lat) > 0.01 || Math.abs(next.lon - lon) > 0.01))
+                delete next.place;
+            next.lat = lat;
+            next.lon = lon;
+        }
     }
-    if (next.tz || (next.lat != null && next.lon != null))
-        session.here = next;
+    if (!(next.tz || (next.lat != null && next.lon != null)))
+        return;
+    if (session) session.here = next;
+    if (body) body.here = next;
 }
 
-function hereNow(session) {
-    const here = session?.here;
+function hereNow(session, body) {
+    const here = session?.here || body?.here;
     const tz = here?.tz;
     const now = new Date();
     const dayOpts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
@@ -1319,9 +1429,33 @@ function hereNow(session) {
         clock = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     }
     const parts = [`Сейчас: ${day}, время ${clock}${tz ? ` (${tz})` : ''}.`];
-    if (here?.lat != null && here?.lon != null)
-        parts.push(`Место: ${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}. Если в запросе другое место — оно важнее.`);
+    if (here?.lat != null && here?.lon != null) {
+        const point = `${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}`;
+        const city = here.place ? ` (${here.place})` : '';
+        parts.push(`Пользователь сейчас в точке ${point}${city}. Это его город и место, пока он сам не назвал другое.`);
+    }
     return parts.join(' ');
+}
+
+async function fillHerePlace(here) {
+    if (!here || here.place || here.lat == null || here.lon == null)
+        return;
+    const q = new URL('https://nominatim.openstreetmap.org/reverse');
+    q.searchParams.set('lat', String(here.lat));
+    q.searchParams.set('lon', String(here.lon));
+    q.searchParams.set('format', 'json');
+    q.searchParams.set('accept-language', 'ru');
+    try {
+        const res = await fetch(q, { headers: { 'User-Agent': 'WORK-task/1.0' } });
+        if (!res.ok)
+            return;
+        const data = await res.json();
+        const a = data?.address || {};
+        const city = a.city || a.town || a.village || a.municipality || a.county;
+        const place = [city, a.country].filter(Boolean).join(', ');
+        if (place)
+            here.place = place;
+    } catch { /* реверс недоступен — в hereNow останутся координаты */ }
 }
 
 function parentOf(root, node) {

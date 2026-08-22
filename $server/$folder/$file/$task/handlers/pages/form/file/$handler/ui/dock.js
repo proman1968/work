@@ -7,7 +7,7 @@ ODA({ is: 'microchat-dock',
                 @apply --vertical;
                 overflow: hidden;
             }
-            .bar { gap: 4px; padding: 2px 6px; align-items: center; }
+            .bar { gap: 4px; padding: 2px 4px; align-items: center; }
             .pos { font-size: small; }
             .name {
                 font-size: small;
@@ -24,7 +24,7 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="icons:save" title="Сохранить" :disabled="saved" :success-invert="!saved" @tap="save"></oda-button>
             <oda-button no-flex icon="icons:content-copy" title="Копировать" @tap="copy"></oda-button>
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
-            <oda-button no-flex icon="icons:chevron-right" title="Скрыть" @tap="hide"></oda-button>
+            <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
         <oda-markdown-viewer content flex ~if="current?.content" :value="current.content" style="overflow-y: auto;"></oda-markdown-viewer>
     `,

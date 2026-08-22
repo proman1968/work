@@ -522,8 +522,9 @@ export class $file extends $folder{
         else if (Array.isArray(params.receivers))
             log.receivers = params.receivers.slice();
 
-        if (params.includes?.length)
-            log.includes = params.includes;
+        const includes = LOGS.normalizeIncludes(params.includes);
+        if (includes.length)
+            log.includes = includes;
         if (params.mainContext)
             log.mainContext = params.mainContext;
         if (params.ignore_save_logs) {

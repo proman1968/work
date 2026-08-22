@@ -157,6 +157,9 @@ export class $folder extends $item {
     create(p = {}, post) {
         return this.fetch('create', p, post);
     }
+    ensure_folder(p = {}) {
+        return this.fetch('ensure_folder', p);
+    }
     load(params = {}) {
         return this.body ??= new AsyncPromise(async _ => {
             return this.fetch('load', {...params, version: this.__version});
