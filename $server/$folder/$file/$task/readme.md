@@ -19,7 +19,7 @@
    - default (USER/…) — снять `container.content` (открыть снова); ждущий блок со строкой `stop` — `rejected` и снять `stop`; текст есть — `{ type:'prompt', content }`; `post.files` — `save_files` у `$owner` и новый `{ type:'includes', files }` (старый закрытый `includes` не дополнять); пустой ввод без файлов — блок не создавать;
    - `APPROVE` — флаг `accept` (`true` / `'true'` = принять, иначе отказ). `prompt` — только нагрузка (поля формы). При accept: `approve(params)`, `_save`, пересчёт `_active_*` и обычный ход автомата;
    - `AI` — без нового user-блока (auto-loop / «Продолжить»); сбрасывает `_stopped`.
-3. **`PIPE`** — константа в [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) (не отдельный `pipe.js`). Узел = метаописание типа блока. Корень файла — контейнер `task` (`body.type ??= 'task'`). Метод `prompt()` не ветвится по `type`, кроме входа `prompt`.
+3. **`PIPE`** — таблица типов в [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) (`const PIPE`, грузится в `class.js` через `importScript`). Узел = метаописание типа блока. Хелперы узла (`run` / `recalc` / `parse` / `approve`) живут в том же файле. Общие для харнесса висят на объекте: `PIPE.parentOf`, `close_up`, `includePlan` / `includeReal`, `formatFileHits`, `siteFavicon`, `shortError`, `usedSiteUrls`. Корень файла — контейнер `task` (`body.type ??= 'task'`). Метод `prompt()` не ветвится по `type`, кроме входа `prompt`.
    - `plan` / `do` → `{ next: [...] }` — маршруты контейнера по `container.mode || 'plan'`; свой `next` блока важнее `content` (после `prompt` всегда `thinking`); нет своего — меню контейнера;
    - `prompt` — текст для модели. Лист — стрим сразу. Контейнер — не стримить (даже если слот есть); текст идёт в `report` (+ `CONTINUE`). `system` / `plan.system` / `do.system` в JSON не копируется;
    - `inject` — одна фраза «когда брать» в меню выбора; заголовок меню: один тип из списка; шаг только если без него нельзя; факт в контексте — `TEXT`; лишний шаг хуже, чем сразу ответить;
@@ -67,16 +67,17 @@
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — `PIPE` + харнесс: `prompt`, `context`, `_pipe_stream`, `_streamChat`, `_fc_exec`, `_push_block`, `_active_*`, `stop`, `change_model`, `_save`, `_continue`; `ON_TOPIC` / `MERMAID` / `CONTINUE` / `STAGE_PROMPT`; хелперы `next_options`, `useBlock` / `dropUsed`, `attachFiles`, `workQuery` / `filePath`, `webPushNext`, `close_up`, `locationNow`, `parentOf`, `parsePlanMarkdown` / `parseFormHtml`
+- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — харнесс: `prompt`, `context`, `_pipe_stream`, `_streamChat`, `_fc_exec`, `_push_block`, `_active_*`, `stop`, `change_model`, `_save`, `_continue`; `CONTINUE`; цикл: `next_options`, `useBlock`, `can_close`, `attachFiles`, `stageOpen`, `containerMode`, `locationNow`
+- [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) — `PIPE`: типы, `next` / `inject` / `prompt`, `run` / `recalc` / `parse` / `approve` и хелперы узлов
 - [`triggers/on_save/$trigger/`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — system prompt + первый вход в цикл
 - [`handlers/preview/$handler/`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (лента + док + panel)
 - [`readme.md`](/$server/$folder/$file/$task/readme.md/~/handlers/pages/form/) / [`progress.md`](/$server/$folder/$file/$task/progress.md/~/handlers/pages/form/) — знания модуля
 
 ## 5. В каком это состоянии
 
-**В активной доработке.** FSM в одном `class.js`. Сервис — только из `run` (`_fc_exec`). Стрим без tools.
+**В активной доработке.** FSM в `pipe.js`, цикл в `class.js`. Сервис — только из `run` (`_fc_exec`). Стрим без tools.
 
-- ✅ `PIPE` в `class.js`; корень `type: 'task'`; маршруты у контейнера (`plan`/`do` + `mode`)
+- ✅ `PIPE` в `pipe.js`; корень `type: 'task'`; маршруты у контейнера (`plan`/`do` + `mode`)
 - ✅ `content` = закрыто: спуск, `next_options`, `todo`/`step`, `complete` (таск) / `report` (площадка)
 - ✅ `prompt()`: `run` / меню → push → stream → `parse?` → `recalc` → `close_up` → auto-loop / wait по `stop`
 - ✅ кеш типов — `using_blocks` на контейнере; `report` при drop удаляет массив; закрытый `step` снимает себя; новый `prompt` сбрасывает массив
