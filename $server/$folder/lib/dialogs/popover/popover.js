@@ -129,35 +129,8 @@ export default {
         }
     },
     $listeners: {
-        resize(e) {
-            this.async(() => {
-                if (this.position) {
-                    if (this.position.tagName) {
-                        this.position = this.position.getBoundingClientRect();
-                        this.position.y += this.position.height;
-                        this.width = this.position.width;
-                        this.height = window.innerHeight - this.position.y;
-                    }
-
-                    let left = this.position.x;
-                    if (left < 0)
-                        left = 0;
-                    else if (left + this.offsetWidth > window.innerWidth)
-                        left = window.innerWidth - this.offsetWidth;
-                    this.left = left;
-                    let top = this.position.y;
-                    if (top < 0)
-                        top = 0;
-                    else if (top + this.offsetHeight > window.innerHeight)
-                        top = window.innerHeight - this.offsetHeight;
-                    this.top = top;
-
-                }
-                this.debounce('resize', () => {
-                    this.visible = true;
-                    this.style.maxWidth = this.getBoundingClientRect().width + 'px';
-                }, 250)
-            });
+        resize() {
+            this.async(() => this._show());
         }
     },
     visible: {
@@ -169,6 +142,59 @@ export default {
     top: -1,
     width: undefined,
     height: undefined,
+    layout() {
+        const pos = this.position;
+        if (!pos)
+            return;
+        let left, top, width, height;
+        if (pos.tagName) {
+            const r = pos.getBoundingClientRect();
+            left = r.left;
+            top = r.bottom;
+            width = r.width;
+            height = window.innerHeight - r.bottom;
+        }
+        else if (typeof pos.clientX === 'number') {
+            left = pos.clientX;
+            top = pos.clientY;
+        }
+        else {
+            left = pos.x ?? pos.left ?? 0;
+            top = pos.y ?? pos.top ?? 0;
+        }
+        if (left + this.offsetWidth > window.innerWidth)
+            left = window.innerWidth - this.offsetWidth;
+        if (top + this.offsetHeight > window.innerHeight)
+            top = window.innerHeight - this.offsetHeight;
+        if (left < 0)
+            left = 0;
+        if (top < 0)
+            top = 0;
+        if (width !== undefined)
+            this.width = width;
+        if (height !== undefined)
+            this.height = height;
+        this.left = left;
+        this.top = top;
+    },
+    _show() {
+        this.layout();
+        this._armVisible();
+    },
+    _armVisible() {
+        clearTimeout(this._visibleTimer);
+        this._visibleTimer = setTimeout(() => this._reveal(), 250);
+        if (!this._safetyTimer)
+            this._safetyTimer = setTimeout(() => this._reveal(), 1500);
+    },
+    _reveal() {
+        if (this.visible)
+            return;
+        clearTimeout(this._visibleTimer);
+        clearTimeout(this._safetyTimer);
+        this.visible = true;
+        this.style.maxWidth = this.getBoundingClientRect().width + 'px';
+    },
     async ok(result) {
         this.close(result ?? this.OK?.result ?? 'ok');
     },
@@ -178,6 +204,8 @@ export default {
         }
     },
     close(result = '') {
+        clearTimeout(this._visibleTimer);
+        clearTimeout(this._safetyTimer);
         this.fire('close', result);
     },
     get enable() {

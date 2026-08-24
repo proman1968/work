@@ -442,7 +442,7 @@ ODA({is: 'oda-chat',
             return;
         }
         this.$('#ribbon').scrollDown = true;
-        if(!(this.value || this.files.length || this.$pdp.replyTarget)) {
+        if(!(this.value || this.files.length)) {
             this.chatAudioController.record(e);
             return;
         }
@@ -453,109 +453,54 @@ ODA({is: 'oda-chat',
         else if(this.$pdp.receivers.length)
             params.receivers = this.$pdp.receivers.map(u => u.id);
 
-        const isForeign = this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid;
-        const hasReceivers = !!(params.receivers?.length);
-        const isAI = !isForeign && !hasReceivers;
         const onFail = err => console.warn('[chat] send', err);
+        const text = String(this.value ?? '').trim();
+        const list = [...this.files];
 
-        if (isAI) {
-            this.awaitTask = true;
-            params.location = await this.location();
-            const text = String(this.value ?? '').trim();
-            try {
-                const items = [];
-                if (text) {
-                    items.push({
-                        type: 'prompt',
-                        content: text,
-                        time: Date.now(),
-                        sender: WORK.uid,
-                    });
-                }
-                const list = [...this.files];
-                const saved = await Promise.all(list.map(f =>
-                    this.$pdp.$item.save_file(f, { ignore_save_logs: true })
-                ));
-                const files = [];
-                for (let i = 0; i < saved.length; i++) {
-                    const res = saved[i];
-                    const f = list[i];
-                    const path = res?.logFullPath || res?.path || res?.logPath;
-                    if (path) {
-                        const full = path.startsWith('/') ? path : '/' + path;
-                        let icon = 'icons:description';
-                        try {
-                            const item = await WORK.get_item(full);
-                            if (item?.icon)
-                                icon = item.icon;
-                        } catch {}
-                        files.push({
-                            type: 'file',
-                            path: full,
-                            label: f?.name || full.split('/').pop(),
-                            icon,
-                            time: Date.now(),
+        try {
+            if (this.isAIMode) {
+                this.awaitTask = true;
+                params.location = await this.location();
+                params.prompt = text;
+                if (list.length) {
+                    const paths = [];
+                    for (const file of list) {
+                        const log = await this.$pdp.$item.save_file(file, {
+                            encoding: params.encoding,
+                            ignore_save_logs: true,
                         });
+                        const path = log?.logFullPath || log?.path;
+                        if (path)
+                            paths.push(path.startsWith('/') ? path : '/' + path);
                     }
+                    if (paths.length)
+                        params.includes = JSON.stringify(paths);
                 }
-                if (files.length) {
-                    items.push({
-                        type: 'includes',
-                        icon: 'icons:attachment',
-                        label: 'Вложения',
-                        files: files.map(f => ({ path: f.path, label: f.label, icon: f.icon })),
-                        items: [],
-                    });
-                }
-                const names = files.map(f => f.label);
                 const body = {
-                    title: text || names.map(n => `"${n}"`).join(', ') || 'task',
+                    title: text,
                     created: Date.now(),
-                    items,
+                    items: [],
                 };
                 if (this.model) body.model = this.model;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
-                if (text)
-                    params.message = text;
-                if (files.length)
-                    params.includes = JSON.stringify(files.map(f => f.path));
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
-            } catch (err) {
-                onFail(err);
-                this.awaitTask = false;
-            }
-            this.async(() => { this.awaitTask = false; }, 4000);
-            this.$('#ribbon').scrollDown = true;
-            return;
-        }
-
-        const msgText = String(this.value ?? '');
-        params.message = msgText;
-
-        if(!this.files.length && !this.$pdp.replyTarget) {
-            this.clear();
-            this.$pdp.$item.fetch('save_message', params).catch(onFail);
-        } else {
-            const formData = new FormData();
-            this.files.forEach((file) => {
-                formData.append('file', file, file.name);
-            });
-            formData.append('message', msgText);
-            const upload = () => {
-                this.clear();
-                this.$pdp.$item.save_files(formData, params).catch(onFail);
-            };
-            if(this.$pdp.replyTarget){
-                Promise.resolve(this.$pdp.replyTarget).then(replyTarget => {
-                    let metadata = replyTarget.toJSON();
-                    metadata.reply = true;
-                    formData.append('metadata', JSON.stringify(metadata));
-                    upload();
-                }).catch(onFail);
             } else {
-                upload();
+                if (list.length) {
+                    const formData = new FormData();
+                    for (const file of list)
+                        formData.append('file', file, file.name);
+                    await this.$pdp.$item.save_files(formData, params);
+                }
+                if (text) {
+                    params.message = text;
+                    await this.$pdp.$item.fetch('save_message', params);
+                }
+                this.clear();
             }
+        } catch (err) {
+            onFail(err);
+            this.awaitTask = false;
         }
         this.$('#ribbon').scrollDown = true;
     },
@@ -568,7 +513,7 @@ ODA({is: 'oda-chat',
     async location() {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const pos = await this._geo();
-        return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
+        return JSON.stringify(pos ? { lat: pos.lat, lon: pos.lon, tz } : { tz });
     },
     _geo() {
         if (this._geoFix) return this._geoFix;
@@ -866,6 +811,37 @@ ODA({is: 'chat-day',
         files = await Promise.all(files.map(f => Promise.resolve(f)));
         return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'))));
     },
+    async _expandCreatedTask(file) {
+        const chat = this.$pdp.$pdp;
+        if (!chat?.awaitTask)
+            return;
+        file ??= this.logItems.last;
+        if (!file)
+            return;
+        let row;
+        try {
+            const raw = await file.load();
+            row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch {
+            return;
+        }
+        if (!(row?.ext === 'task' || String(row?.path || '').endsWith('.task')))
+            return;
+        this.render();
+        this.async(() => {
+            let card;
+            for (const el of this.$$('chat-item')) {
+                if (el.$item?.id === file.id) {
+                    card = el;
+                    break;
+                }
+            }
+            if (card) {
+                card.expanded = true;
+                chat.awaitTask = false;
+            }
+        });
+    },
     async _onLogsChangedRun(e){
         await this._bindLogsFolder();
         const folder = this._logsFolder;
@@ -877,25 +853,12 @@ ODA({is: 'chat-day',
         if (initiator && initiator !== '.RAG' && (String(initiator).endsWith('.logs') || String(initiator).endsWith('.task'))) {
             try {
                 let file = await folder.get_item('/' + initiator, 'info');
-                if ((file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) && !this.logItems.some(i => i.id === file.id)) {
-                    this.logItems.push(file);
-                    this._scrollRibbonDown();
-                    const chat = this.$pdp.$pdp;
-                    if (file?.id?.endsWith?.('.task') && chat?.awaitTask) {
-                        this.async(()=>{
-                            let last = this.$$('chat-item').last;
-                            if(last) {
-                                last.expanded = true;
-                                chat.awaitTask = false;
-                            }
-                        }, 1000)
-                    } else if(file?.id?.endsWith?.('.logs') && initiator.split('.')[1] === WORK.uid){
-                        this.async(()=>{
-                            let last = this.$$('chat-item').last;
-                            if(last)
-                                last.expanded = true;
-                        }, 1000)
+                if (file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) {
+                    if (!this.logItems.some(i => i.id === file.id)) {
+                        this.logItems.push(file);
+                        this._scrollRibbonDown();
                     }
+                    await this._expandCreatedTask(file);
                     return;
                 }
             }
@@ -930,18 +893,7 @@ ODA({is: 'chat-day',
             this.logItems = await this._fetchLogFiles();
             this.render();
             this._scrollRibbonDown();
-            // Раскрыть последний .task только если ожидается новая задача
-            const chat = this.$pdp.$pdp;
-            if (chat?.awaitTask && this.last) {
-                this.async(() => {
-                    const items = this.$$('chat-item');
-                    const lastItem = items.last;
-                    if (lastItem && lastItem.$file?.id?.endsWith('.task')) {
-                        lastItem.expanded = true;
-                        chat.awaitTask = false;
-                    }
-                }, 500);
-            }
+            await this._expandCreatedTask();
         }).catch(e => {
             console.warn('[chat-day] logs', e.message);
             this._logsInit = false;

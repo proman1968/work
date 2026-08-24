@@ -42,13 +42,13 @@ const PIPE = {
 
         stop: 'Перейти к действиям',
         next: ['thinking'],
-        approve(params = {}) {
-            params.container.mode = 'do';
+        async approve(params = {}) {
+            (await params.task.body).mode = 'do';
         }
     },
     comment:{
         icon: 'icons:chat',
-        fallback: true,
+        prompt: `Прокомментируй, почему ты не выбрал следующий шаг.`
     },
     text:{
         icon: 'icons:chat',
@@ -87,7 +87,7 @@ const PIPE = {
                 return `${i + 1}. ${s.description} [${s.state}]`;
             });
             todo.content = (todo.label || '') + (lines.length ? '\n' + lines.join('\n') : '');
-            owner.mode = 'do';
+            body.mode = 'do';
             const cur = real.find(s => !s.content) || real.last;
             if (cur)
                 cur.system = [
@@ -126,7 +126,7 @@ const PIPE = {
             };
             const n = (container.todo.steps || []).length;
             container.todo.state = n ? `0/${n} ${PIPE.step.label}` : '';
-            container.mode = 'do';
+            (await params.task.body).mode = 'do';
         }
     },
 
@@ -160,8 +160,8 @@ const PIPE = {
 `,
         prompt: `Проведи анализ текущего этапа и сформируй подробный отчёт о его результатах.`,
 
-        recalc(params = {}) {
-            params.block.mode = 'do';
+        async recalc(params = {}) {
+            (await params.task.body).mode = 'do';
             params.block.state = childRollup(params.block, ['web', 'site', 'form', 'work']);
         },
     },
@@ -180,7 +180,6 @@ const PIPE = {
         что там полезного ты узнал для выполнения задачи.`,
 
         recalc(params = {}) {
-            params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'form', 'work']);
         },
     },
@@ -223,7 +222,7 @@ const PIPE = {
     file: {
         label: 'Файл',
         icon: 'icons:description',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -247,7 +246,7 @@ const PIPE = {
         label: 'Поиск',
         icon: 'icons:search',
         inject: 'нужен поиск файлов в области, путь неизвестен',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -268,7 +267,7 @@ const PIPE = {
         label: 'Файл',
         icon: 'icons:description',
         inject: 'нужен текст конкретного файла по пути',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -297,7 +296,7 @@ const PIPE = {
             block.path = head.replace(/^#+\s*/, '').trim();
             block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
         },
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.done)
                 return false;
@@ -326,8 +325,8 @@ const PIPE = {
         container: true,
         next: ['thinking', 'work', 'web', 'report'],
         prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
-        recalc(params = {}) {
-            params.block.mode = 'do';
+        async recalc(params = {}) {
+            (await params.task.body).mode = 'do';
             params.block.state = childRollup(params.block, ['work', 'web', 'site']);
         },
     },
@@ -366,29 +365,33 @@ const PIPE = {
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
         ].join('\n'),
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
-            if (b.content || b.sites != null) return false;
-            const query = webQuery(b, await params.task.body);
+            const { session, task } = params;
+            const messages = await task.context({
+                prompt: 'Сформулируй один поисковый запрос по задаче. Ответь одной строкой, без кавычек и пояснений.',
+                session,
+            });
+            const asked = await task._streamChat({ messages, silent: true, session });
+            const query = asked.content.trim();
             if (!query) {
                 b.sites = [];
                 b.state = 'error';
                 b.content = 'нет поискового запроса';
-                await close_up(await params.task.body, b, params);
-                return true;
+                return;
             }
+            b.label = query;
             const service = await WORK.get_item(PIPE.web.service);
-            await params.task._fc_exec(service, { method: 'search', args: { query } }, {
-                block: b,
-                session: params.session,
-            });
-            b.sites ??= [];
-            if (!b.content && b.state !== 'error')
-                await webPushNext(b, params);
-            await PIPE.web.recalc?.(params);
-            if (b.content || b.state === 'error')
-                await close_up(await params.task.body, b, params);
-            return true;
+            const result = await service.search({ query });
+            b.sites = [];
+            for (const r of result?.results || []) {
+                if (r.url)
+                    b.sites.push({ url: r.url, title: r.title || '' });
+            }
+            if (result?.error || !b.sites.length) {
+                b.state = 'error';
+                b.content = result?.error || 'пусто';
+            }
         },
         plan: {
             inject: 'факты только из интернета, в контексте их нет',
@@ -404,14 +407,6 @@ const PIPE = {
                 'Не читай страницы — заход сделают блоки site.',
             ].join('\n'),
         },
-        recalc(params = {}) {
-            const b = params.block;
-            if (b.state === 'error')
-                return;
-            const sites = (b.items || []).filter(x => x.type === 'site');
-            const ok = sites.filter(siteOk).length;
-            b.state = sites.length ? `Сайты ${ok}/${sites.length}` : '';
-        },
     },
     site: {
         label: 'Сайт',
@@ -426,9 +421,11 @@ const PIPE = {
             'Только то, что есть в дампе [site N: url]. Метку [site N: url] не пиши — её ставит система. Не выдумывай цифры.',
             'Не пересказывай меню, футер, навигацию и рекламу, и все, что не относится к задаче.',
         ].join('\n'),
+        inject: 'нужен текст конкретной страницы по url',
         next: ['thought'],
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
+            const { session, task } = params;
             if (b.content || b.page)
                 return false;
             const web = params.container;
@@ -443,20 +440,35 @@ const PIPE = {
                 b.label = siteHost(next);
                 b.icon = siteFavicon(next.url);
             }
-            const service = await WORK.get_item(PIPE.web.service);
-            const result = await params.task._fc_exec(service, { method: 'fetch_url', args: { url: b.url } }, {
-                block: b,
-                session: params.session,
-            });
-            const head = siteMark(web, b) + '\n\n';
-            const page = !result?.error && b.state !== 'error' ? clipPage(result?.content) : '';
-            if (b.state === 'error' || !page || page.replace(/\s+/g, ' ').trim().length < 40) {
-                await siteFail(params, shortError(result?.error || 'пусто'));
+            let raw = '';
+            try {
+                const response = await fetch(b.url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+                    },
+                    redirect: 'follow',
+                    signal: AbortSignal.timeout(12000),
+                });
+                if (!response.ok)
+                    throw new Error('HTTP ' + response.status);
+                raw = await response.text();
+            } catch (e) {
+                await siteFail(params, shortError(e));
                 return true;
             }
-            b.page = head + page;
-            await params.task._save(params.session);
-            return false;
+            const page = clipPage(htmlToText(raw));
+            if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
+                await siteFail(params, 'пусто');
+                return true;
+            }
+            b.page = siteMark(web, b) + '\n\n' + page;
+            if (!task || task._stopped)
+                return;
+            const messages = await task.context({ prompt: PIPE.site.prompt, session });
+            const extracted = await task._streamChat({ messages, session });
+            if (!task._stopped)
+                b.content = extracted.content;
         },
         recalc(params = {}) {
             const b = params.block;
@@ -765,6 +777,26 @@ function usedSiteUrls(parent, web) {
     return used;
 }
 
+function htmlToText(html = '') {
+    return String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<(?:head|nav|footer|noscript|svg|iframe)[\s\S]*?<\/(?:head|nav|footer|noscript|svg|iframe)>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\s*\n\s*/g, '\n')
+        .trim();
+}
+
 function clipPage(text) {
     const s = String(text || '').trim();
     if (!s) return '';
@@ -782,27 +814,7 @@ async function siteFail(params, text) {
     b.state = 'error';
     b.content = text;
     stampSiteContent(web, b);
-    delete web.using_blocks;
-    await webPushNext(web, params);
     await close_up(await params.task.body, b, params);
-}
-
-async function webPushNext(web, params) {
-    if (!web || web.content || web.sites == null)
-        return false;
-    web.items ??= [];
-    if ((web.using_blocks || []).includes('site'))
-        return false;
-    const taken = new Set((web.items || []).filter(x => x.type === 'site').map(x => x.url));
-    const next = web.sites.map(siteRef).find(s => s.url && !taken.has(s.url));
-    if (!next || !params.task)
-        return false;
-    await params.task._push_block({
-        block: { type: 'site', url: next.url, label: siteHost(next), icon: siteFavicon(next.url) },
-        container: web,
-        session: params.session,
-    });
-    return true;
 }
 
 function shortError(e) {
@@ -837,20 +849,6 @@ function formatFileHits(result) {
         const snip = r.text ? ' — ' + String(r.text).trim().slice(0, 200) : '';
         return '- ' + path + extra + snip;
     }).join('\n');
-}
-
-function webAsk(s) {
-    const t = String(s || '').trim();
-    return t && t !== PIPE.web.label && !/^(есть вложения|task)$/i.test(t);
-}
-
-function webQuery(web, body) {
-    if (webAsk(web?.label) && web.label !== PIPE.web.label)
-        return web.label;
-    const asked = String((body.items || []).find(b => b.type === 'prompt')?.content || '').trim();
-    if (webAsk(asked))
-        return asked;
-    return '';
 }
 
 function workQuery(block, body) {

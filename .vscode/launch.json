@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/run.mjs",
             "cwd": "${workspaceFolder}",
             "env": {
-                "WORK_DEV": "false"
+                "WORK_DEV": "false",
             }
         },
         {
@@ -21,10 +21,11 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
+            
             "program": "${workspaceFolder}/run.mjs",
             "cwd": "${workspaceFolder}",
             "env": {
-                "WORK_DEV": "true"
+                "WORK_DEV": "true",
             }
         }
     ]

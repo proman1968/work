@@ -248,13 +248,9 @@ WORK.showModal = function (el, params = {}) {
     params.popoverType = 'modal';
     return WORK.showPopover(el, params);
 }
-WORK.showDialog = async function (el, params = {}) {
-    // params.allowClose = true;
+WORK.showDialog = function (el, params = {}) {
     params.popoverType = 'dialog';
-    let result = await WORK.showPopover(el, params);
-    if (!result)
-        throw new Error('cancel');
-    return result;
+    return WORK.showPopover(el, params);
 }
 WORK.showMenu = function (params = {}, e) {
     params.popoverType = 'menu';
@@ -267,42 +263,120 @@ WORK.showDropdown = function (el, params = {}, e) {
     return WORK.showPopover(el, params, e);
 }
 
+/** Типизированная ошибка отмены popover (отличается от реальной ошибки через instanceof). */
+WORK.CancelError = class WORK_CancelError extends Error {}
+
+/** Стек открытых pop в порядке открытия. */
+WORK.popovers = [];
+/** WeakMap pop -> {resolve, reject} — резолверы промисов showPopover. */
+WORK.popoverResolvers = new WeakMap();
+
+/** Единый путь закрытия pop: результат -> resolve, отмена -> reject(CancelError). */
+WORK.closePopup = function (pop, result) {
+    const idx = WORK.popovers.indexOf(pop);
+    if (idx === -1)
+        return;
+    for (let i = WORK.popovers.length - 1; i > idx; i--) {
+        if (WORK.popovers[i].popoverType === 'modal')
+            break;
+        WORK.closePopup(WORK.popovers[i]);
+    }
+    WORK.popovers.splice(idx, 1);
+    const resolver = WORK.popoverResolvers.get(pop);
+    WORK.popoverResolvers.delete(pop);
+    pop.remove();
+    if (!resolver)
+        return;
+    if (result)
+        resolver.resolve(result);
+    else
+        resolver.reject(new WORK.CancelError());
+}
+
+/** Закрывает с отменой pop сверху стека до stopIdx (не включая его); модалы не трогает. */
+WORK.dismissTo = function (stopIdx) {
+    for (let i = WORK.popovers.length - 1; i > stopIdx; i--) {
+        if (WORK.popovers[i].popoverType === 'modal')
+            break;
+        WORK.closePopup(WORK.popovers[i]);
+    }
+}
+
+/** Закрывает с отменой все не-модальные pop сверху стека. */
+WORK.dismissToModal = function () {
+    WORK.dismissTo(-1);
+}
+
+/** Закрывает с отменой все pop поверх заданного; сам pop и контекст модала не трогает. */
+WORK.dismissAbove = function (pop) {
+    const idx = WORK.popovers.indexOf(pop);
+    if (idx !== -1)
+        WORK.dismissTo(idx);
+}
+
+/** Возвращает pop (элемент с атрибутом popover), внутри которого находится target, или null. */
+WORK.findPopover = function (target) {
+    let h = target;
+    while (h && h.nodeType === 1 && !h.hasAttribute?.('popover'))
+        h = h.host || h.parentElement;
+    return h;
+}
+
+WORK._closeFrames ??= new WeakSet();
+WORK._bindCloseFrames = function () {
+    for (let i = 0; i < window.frames.length; i++) {
+        const frame = window.frames[i];
+        if (WORK._closeFrames.has(frame))
+            continue;
+        WORK._closeFrames.add(frame);
+        frame.addEventListener('pointerdown', () => WORK.dismissToModal());
+    }
+}
+
+/** Не-top окна слушают клики во всех предках до window.top, чтобы закрывать свои pop. */
+WORK._bindParentClose = function () {
+    if (WORK._parentCloseBound)
+        return;
+    WORK._parentCloseBound = true;
+    const targets = [];
+    let t = window.parent;
+    while (t && t !== window) {
+        targets.push(t);
+        if (t === window.top)
+            break;
+        try { t = t.parent; }
+        catch { break; }
+    }
+    for (let t of targets) {
+        try {
+            t.document.addEventListener('pointerdown', () => WORK.dismissToModal());
+        } catch {}
+    }
+}
 
 WORK.showPopover = function (el, params = {}, e) {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve, reject) => {
         const pop = ODA.createComponent('item-popover', params);
+        if (params.popoverType === 'menu' || params.popoverType === 'dropdown') {
+            const src = e?.target ?? (e?.nodeType === 1 ? e : null);
+            if (!WORK.findPopover(src))
+                WORK.dismissToModal();
+        }
         pop.setAttribute('popover', 'manual');
         pop.position = e;
-        pop.listen('close', e => {
-            const popovers = window.document.querySelectorAll('[popover]');
-            let removeFrom = Array.prototype.indexOf.call(popovers, pop);
-            if (popovers[removeFrom]?.popoverType === 'menu') {
-                while ((removeFrom > 0) && (popovers[removeFrom - 1].popoverType === 'menu')) {
-                    removeFrom--;
-                }
-            }
-            if ((popovers[removeFrom]?.popoverType === 'modal') && (popovers.length - 1 > removeFrom)) {
-                removeFrom++
-            }
-            for (let i = removeFrom; i < popovers.length; i++) {
-                popovers[i]?.remove();
-            }
-            resolve(e.detail?.value);
-        });
-
-        for (let i = 0; i < window.frames.length; i++) {
-            let frame = window.frames[i];
-            frame.addEventListener('pointerdown', e => {
-                const popovers = Array.prototype.reverse.call(top.document.querySelectorAll('[popover]'));
-                for (let pop of popovers) {
-                    pop.remove();
-                }
-            })
-        }
-
         pop.control = el;
+        WORK.popovers.push(pop);
+        WORK.popoverResolvers.set(pop, { resolve, reject });
+        pop.listen('close', ev => WORK.closePopup(pop, ev.detail?.value), { once: true });
+        pop.listen('beforetoggle', ev => {
+            if (ev.newState === 'closed')
+                WORK.closePopup(pop);
+        });
+        WORK._bindCloseFrames();
         window.document.body.appendChild(pop);
-        pop.showPopover();
+        try { pop.showPopover(); }
+        catch (e) { WORK.closePopup(pop); }
+        pop.async?.(() => pop._show?.());
     })
 }
 WORK.clearSessionCache = function () {
@@ -439,32 +513,20 @@ WORK.arrayBufferToBase64 = function(buffer) {
     return window.btoa(binary);
 }
 window.addEventListener('pointerdown', e => {
-    let h = e.target;
-    while (h && !h.hasAttribute?.('popover')) {
-        h = h.host || h.parentElement;
+    if (!WORK.popovers?.length)
+        return;
+    const pop = WORK.findPopover(e.target);
+    if (pop) {
+        WORK.dismissAbove(pop);
+        return;
     }
+    WORK.dismissToModal();
+})
 
-    const removePopovers = window => {
-        const popovers = window.document.querySelectorAll('[popover]');
-        for (let p of popovers) {
-            if (h) {
-                if (h === p) {
-                    h = undefined;
-                }
-                continue;
-            }
-            if (p.allowClose) {
-                p.close();
-            }
-            else {
-                p.remove();
-            }
-        }
-    }
-    removePopovers(window);
-    for (let i = 0; i < window?.length; i++) {
-        removePopovers(window[i]);
-    }
+/** Отмены popover не считаются ошибками приложения — не шумим в консоль. */
+window.addEventListener('unhandledrejection', e => {
+    if (e.reason instanceof WORK.CancelError)
+        e.preventDefault();
 })
 
 
@@ -494,7 +556,7 @@ class WebSocketEvents {
         WORK.connected = false;
         WORK.wsid = '';
         delete this;
-        setTimeout(() => {
+setTimeout(() => {
             new WebSocketEvents();
         }, 3000);
         // console.log('Close webSocket connection');
@@ -785,3 +847,4 @@ Object.defineProperty(WORK, 'users', {
 
 
 new WebSocketEvents();
+WORK._bindParentClose();
