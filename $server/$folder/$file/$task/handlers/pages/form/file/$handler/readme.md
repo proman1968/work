@@ -12,20 +12,20 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 
 ## 3. Как это работает
 
-- Shell: `streamTarget` = focused без `content`/`html`; `streamingText` на delta; `streaming` true на `streamTarget` / delta, false на done; `changed`/`chat.done` → `load()`.
+- Shell: `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`, не с `streamTarget` на `changed`; `changed`/`chat.done` → `load()`.
 - Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Список — кто закрылся раньше (дети, потом родители). `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Вьюер `content`. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`. Тот же `content` в ленте и в доке.
-- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. С `prompt` уходит `here` (JSON: пояс + координаты из `geolocation`, если браузер дал).
+- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — `body.location` ставит `on_save`.
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
 - Sticky: `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo). Контейнер — `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
-- Action-bar: `role:'APPROVE'`; скрыт при `$pdp.streamTarget`; зелёная — `accept: true` (+ для form `prompt` = JSON `$pdp.result`); крестик — `accept: false` (в query не уходит, сервер считает отказом).
+- Action-bar: строковый `stop` — зелёная APPROVE + крестик (нет при `streamTarget`). Иначе открытый корень (`!content` + `items`) и не `pending` / не `streaming` / не `stop: true` — синяя «Продолжить» без крестика, `role:'AI'`.
 - Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
-- Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`.
+- Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. `todo` и `step` — `header`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`. Лента для `step`/`prompt`/`form`/`todo` всегда `microchat-view-*`. Шапка `step`: `N. название` (`todo.recalc` / fallback из `todo.steps` по `Reactor.equal`); фаза в шапке не показывается.
 - Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`. Поле ввода у «Другое» скрыто, пока пункт не выбран.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
-- `site` — обычный блок: `label` = url, тело = `content` (обзор страницы). `data.url` есть у слота.
+- `site` — обычный блок: `label` = hostname, тело = `content` (метка `[site N: url]` + обзор). `data.url` есть у слота.
 
 ## 4. Из чего это состоит
 
@@ -67,9 +67,9 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 ## Контракты (как в коде)
 
 - **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model', { model: path })`.
-- **Action:** `actionButton` = строка `focusedBlock.stop`, но `null` пока `$pdp.streamTarget`; `sendAction(accept)` шлёт `accept` и для form — JSON `$pdp.result`.
+- **Action:** строковый `stop` — APPROVE + крестик (`null` при `streamTarget`). Иначе «Продолжить» (`role:'AI'`, без крестика) при открытом корне и не `pending`/`streaming`/`stop: true`. Form: `prompt` = JSON `$pdp.result`.
 - **Form:** слот только при `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
 - **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
-- **Stream:** `streamTarget` = focused без тела. `typeIcon`: `spinners:3-dots-scale` на нём и на контейнерах над ним; в JSON не пишется. `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
+- **Stream:** `streamTarget` = focused без тела (слот). `streaming` — только delta/done. `typeIcon` крутит, только если оба; в JSON не пишется. `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

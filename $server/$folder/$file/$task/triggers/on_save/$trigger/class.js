@@ -14,6 +14,8 @@
             placeContext(user_info, class_info),
             (SYSTEM_PROMPT[role] || '')
         ].join('\n');
+        body.location = await readLocation(params.location);
+        delete body.here;
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
         const seeded = (body.items || []).length > 0;
@@ -24,6 +26,49 @@
         });
     },
 };
+
+async function readLocation(raw) {
+    let loc = raw;
+    if (typeof loc === 'string') {
+        try { loc = JSON.parse(loc); } catch { loc = null; }
+    }
+    if (!loc || typeof loc !== 'object')
+        return;
+    const out = {};
+    if (loc.tz)
+        out.tz = String(loc.tz);
+    const lat = +loc.lat;
+    const lon = +loc.lon;
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        out.lat = lat;
+        out.lon = lon;
+        await fillLocationPlace(out);
+    }
+    if (!(out.tz || (out.lat != null && out.lon != null)))
+        return;
+    return out;
+}
+
+async function fillLocationPlace(loc) {
+    if (!loc || loc.place || loc.lat == null || loc.lon == null)
+        return;
+    const q = new URL('https://nominatim.openstreetmap.org/reverse');
+    q.searchParams.set('lat', String(loc.lat));
+    q.searchParams.set('lon', String(loc.lon));
+    q.searchParams.set('format', 'json');
+    q.searchParams.set('accept-language', 'ru');
+    try {
+        const res = await fetch(q, { headers: { 'User-Agent': 'WORK-task/1.0' } });
+        if (!res.ok)
+            return;
+        const data = await res.json();
+        const a = data?.address || {};
+        const city = a.city || a.town || a.village || a.municipality || a.county;
+        const place = [city, a.country].filter(Boolean).join(', ');
+        if (place)
+            loc.place = place;
+    } catch { /* реверс недоступен — в location останутся координаты */ }
+}
 
 function samePlace(a, b) {
     if (!a || !b) return false;
@@ -58,13 +103,22 @@ const SYSTEM_PROMPT = {
 - Не указывай пользователю, что делать, все делаешь сам;
 - Несколько вопросов пользователю — только формой; в чате — один вопрос за ход;
 
+## Выбор шага
+
+Один шаг — только если без него нельзя выполнить текущий запрос.
+Факт или ответ уже в контексте (лента, место, время, todo, отчёт) — text, не explore и не planning.
+Дыра в данных у пользователя — question (один) или form (несколько).
+Внешних фактов нет — explore.
+Несколько ещё не сделанных действий — planning.
+Лишний шаг хуже, чем сразу ответить.
+
 ## Режимы
 
 Задача идёт в одном из двух режимов контейнера (mode). По умолчанию — plan.
 
-**plan** — планирование. Уточняй задачу формой, собирай факты (explore), предлагай план. Не меняй файлы, не вызывай сервисы и навыки. Чтобы начать исполнение — активация: пользователь нажимает «Перейти к действиям».
+**plan** — тот же выбор шага. Не меняй файлы, сервисы и навыки. Исполнение — activation (кнопка пользователя).
 
-**do** — исполнение. Делай конкретные шаги по плану и запросу: файлы, сервисы, навыки, формы, результат. Факты по ходу работы — снова explore, без смены режима. Не планируй заново и не проси активацию.
+**do** — тот же выбор плюс конкретные действия: файлы, сервисы, навыки, результат. Факты по ходу — снова explore, без смены режима. Не планируй заново и не проси activation.
 `,
     USER: `Твоя задача управлять рабочими процессами и задачами.
 `,

@@ -426,6 +426,7 @@ ODA({is: 'oda-chat',
             this.focusInput();
         }, 100);
         this.$pdp?._hydrateModel?.();
+        this._geo();
     },
     focusInput(){
         this.async(()=>{
@@ -459,6 +460,7 @@ ODA({is: 'oda-chat',
 
         if (isAI) {
             this.awaitTask = true;
+            params.location = await this.location();
             const text = String(this.value ?? '').trim();
             try {
                 const items = [];
@@ -562,7 +564,26 @@ ODA({is: 'oda-chat',
     timer: '',
     get chatAudioController() {
         return this._audioController ??= new chatAudioController(this);
-    }
+    },
+    async location() {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const pos = await this._geo();
+        return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
+    },
+    _geo() {
+        if (this._geoFix) return this._geoFix;
+        if (!navigator.geolocation) return null;
+        return this._geoWait ??= new Promise(resolve => {
+            navigator.geolocation.getCurrentPosition(
+                p => {
+                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
+                    resolve(this._geoFix);
+                },
+                () => resolve(null),
+                { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
+            );
+        });
+    },
 });
 ODA({is: 'chat-ribbon',
     template:/* html */`

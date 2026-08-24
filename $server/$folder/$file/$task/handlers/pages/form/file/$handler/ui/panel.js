@@ -90,11 +90,11 @@ ODA({ is: 'microchat-panel',
         <div class="action-bar" ~if="actionButton?.label" horizontal>
             <oda-button border hide-icon flex style="border-radius: 16px;"
                 :success-invert="(actionButton.color || 'success') === 'success'"
+                :info-invert="actionButton.color === 'info'"
                 :warning="actionButton.color === 'warning'"
-                icon="icons:check" :icon-size="iconSize * .8"
                 :label="actionButton.label"
                 @tap="sendAction(true)"></oda-button>
-            <oda-button border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
+            <oda-button ~if="actionButton.cancel !== false" border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
         <div class="composer" border>
@@ -168,11 +168,21 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    /** approve только после стрима; читаем streaming в геттере — иначе кэш ODA не сбросится */
+    /** approve после стрима; «Продолжить» — простой контейнер и не pending (не streamTarget: после стопа хвост пустой) */
     get actionButton() {
-        if (this.$pdp.streamTarget) return null;
+        if (this.pending) return null;
         const stop = this.$pdp.focusedBlock?.stop;
-        return typeof stop === 'string' ? { label: stop } : null;
+        if (typeof stop === 'string') {
+            if (this.$pdp.streamTarget) return null;
+            return { label: stop };
+        }
+        if (this.$pdp.streaming || this.$pdp.focusedBlock?.stop === true) return null;
+        if (!this.liveOpen) return null;
+        return { label: 'Продолжить', color: 'info', cancel: false, role: 'AI' };
+    },
+    get liveOpen() {
+        const root = this.data;
+        return !!(root && !root.content && root.items?.length);
     },
     /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
@@ -206,7 +216,16 @@ ODA({ is: 'microchat-panel',
         return this._ttsController ??= new TtsController(this);
     },
     async sendAction(accept) {
+        const next = this.actionButton;
         this.pending = true;
+        if (next?.role === 'AI') {
+            await this.$item.fetch('prompt', {
+                model: this.data.model,
+                role: 'AI',
+            });
+            this._focus();
+            return;
+        }
         let prompt;
         if (accept && this.isFormAction)
             prompt = JSON.stringify(this.$pdp.result || {});
@@ -215,7 +234,6 @@ ODA({ is: 'microchat-panel',
             prompt,
             model: this.data.model,
             role: 'APPROVE',
-            here: await this.here(),
         });
         this._focus();
     },
@@ -265,7 +283,6 @@ ODA({ is: 'microchat-panel',
             prompt: text,
             model: this.data.model,
             role: String(this.role || this.$item.role || 'USER').toUpperCase(),
-            here: await this.here(),
         }, post);
         this._focus();
     },
@@ -314,24 +331,5 @@ ODA({ is: 'microchat-panel',
     cycleTts() {
         this._tts().cycle();
         this._focus();
-    },
-    async here() {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const pos = await this._geo();
-        return pos ? JSON.stringify({ lat: pos.lat, lon: pos.lon, tz }) : JSON.stringify({ tz });
-    },
-    _geo() {
-        if (this._geoFix) return this._geoFix;
-        if (!navigator.geolocation) return null;
-        return this._geoWait ??= new Promise(resolve => {
-            navigator.geolocation.getCurrentPosition(
-                p => {
-                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
-                    resolve(this._geoFix);
-                },
-                () => resolve(null),
-                { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
-            );
-        });
     },
 });

@@ -15,6 +15,7 @@ export default {
                 overflow: hidden;
                 position: relative;
                 @apply --horizontal;
+                @apply --info-invert;
             }
             .dock-over {
                 position: absolute;
@@ -36,7 +37,7 @@ export default {
             }
         </style>
    
-        <div flex vertical shadow class="feed" ~if="showFeed">
+        <div flex vertical class="feed" ~if="showFeed">
             <div flex vertical style="overflow: hidden;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
@@ -62,7 +63,6 @@ export default {
             n?.listen('changed', async () => {
                 this.streamingText = '';
                 this.data = await n.load();
-                this.streaming = !!this.streamTarget;
             });
             n?.listen('chat.delta', e => {
                 this.streaming = true;
@@ -140,7 +140,7 @@ export default {
         }
         return undefined;
     },
-    /** focused без тела — стрим уже идёт или ещё ждём первый токен */
+    /** focused без тела — слот стрима, не факт что стрим идёт (`streaming` — только delta/done) */
     get streamTarget() {
         const b = this.focusedBlock;
         return (b && !b.content && !b.html) ? b : undefined;
