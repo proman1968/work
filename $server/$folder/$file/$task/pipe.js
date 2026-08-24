@@ -42,13 +42,15 @@ const PIPE = {
 
         stop: 'Перейти к действиям',
         next: ['thinking'],
-        approve(params = {}) {
-            params.container.mode = 'do';
+        async approve(params = {}) {
+            (await params.task.body).mode = 'do';
         }
     },
     comment:{
+        label: 'Комментарий',
         icon: 'icons:chat',
-        fallback: true,
+        prompt: `Очень кратко прокомментируй, все, что хочешь сказать пользователю по текущей ситуации, без остановки процесса.`,
+        inject: 'если провесс продолжается и есть комментации',
     },
     text:{
         icon: 'icons:chat',
@@ -87,7 +89,7 @@ const PIPE = {
                 return `${i + 1}. ${s.description} [${s.state}]`;
             });
             todo.content = (todo.label || '') + (lines.length ? '\n' + lines.join('\n') : '');
-            owner.mode = 'do';
+            body.mode = 'do';
             const cur = real.find(s => !s.content) || real.last;
             if (cur)
                 cur.system = [
@@ -126,7 +128,7 @@ const PIPE = {
             };
             const n = (container.todo.steps || []).length;
             container.todo.state = n ? `0/${n} ${PIPE.step.label}` : '';
-            container.mode = 'do';
+            (await params.task.body).mode = 'do';
         }
     },
 
@@ -160,8 +162,8 @@ const PIPE = {
 `,
         prompt: `Проведи анализ текущего этапа и сформируй подробный отчёт о его результатах.`,
 
-        recalc(params = {}) {
-            params.block.mode = 'do';
+        async recalc(params = {}) {
+            (await params.task.body).mode = 'do';
             params.block.state = childRollup(params.block, ['web', 'site', 'form', 'work']);
         },
     },
@@ -174,13 +176,12 @@ const PIPE = {
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web', 'thought'],
+        next: ['thinking', /* 'work', */ 'web', 'report'],
 
         prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
         что там полезного ты узнал для выполнения задачи.`,
 
         recalc(params = {}) {
-            params.block.mode = params.container.mode || params.block.mode || 'plan';
             params.block.state = childRollup(params.block, ['web', 'form', 'work']);
         },
     },
@@ -223,7 +224,7 @@ const PIPE = {
     file: {
         label: 'Файл',
         icon: 'icons:description',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -247,7 +248,7 @@ const PIPE = {
         label: 'Поиск',
         icon: 'icons:search',
         inject: 'нужен поиск файлов в области, путь неизвестен',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -268,7 +269,7 @@ const PIPE = {
         label: 'Файл',
         icon: 'icons:description',
         inject: 'нужен текст конкретного файла по пути',
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.content)
                 return false;
@@ -297,7 +298,7 @@ const PIPE = {
             block.path = head.replace(/^#+\s*/, '').trim();
             block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
         },
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
             if (b.done)
                 return false;
@@ -326,8 +327,8 @@ const PIPE = {
         container: true,
         next: ['thinking', 'work', 'web', 'report'],
         prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
-        recalc(params = {}) {
-            params.block.mode = 'do';
+        async recalc(params = {}) {
+            (await params.task.body).mode = 'do';
             params.block.state = childRollup(params.block, ['work', 'web', 'site']);
         },
     },
@@ -361,34 +362,39 @@ const PIPE = {
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
         container: true,
-        next: ['site'],
+        next: ['site', 'report'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
         ].join('\n'),
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
-            if (b.content || b.sites != null) return false;
-            const query = webQuery(b, await params.task.body);
+            const { session, task } = params;
+            const messages = await task.context({
+                prompt: 'Сформулируй один поисковый запрос для поиска информации по задаче. Ответь одной строкой, без кавычек и пояснений.',
+                session,
+            });
+            const asked = await task._streamChat({ messages, silent: true, session });
+            const query = asked.content.trim();
             if (!query) {
                 b.sites = [];
                 b.state = 'error';
                 b.content = 'нет поискового запроса';
-                await close_up(await params.task.body, b, params);
-                return true;
+                return;
             }
+            b.label = 'Web: ' + query;
             const service = await WORK.get_item(PIPE.web.service);
-            await params.task._fc_exec(service, { method: 'search', args: { query } }, {
-                block: b,
-                session: params.session,
-            });
-            b.sites ??= [];
-            if (!b.content && b.state !== 'error')
-                await webPushNext(b, params);
-            await PIPE.web.recalc?.(params);
-            if (b.content || b.state === 'error')
-                await close_up(await params.task.body, b, params);
-            return true;
+            const result = await service.search({ query });
+            b.sites = [];
+            for (const r of result?.results || []) {
+                if (r.url)
+                    b.sites.push({ url: r.url, title: r.title || '' });
+            }
+            if (!b.sites.length) {
+                b.state = 'error';
+                b.content = 'По запросу ' + query + ' ничего не найдено';
+                dropUsed(params.container, 'web');
+            }
         },
         plan: {
             inject: 'факты только из интернета, в контексте их нет',
@@ -404,14 +410,6 @@ const PIPE = {
                 'Не читай страницы — заход сделают блоки site.',
             ].join('\n'),
         },
-        recalc(params = {}) {
-            const b = params.block;
-            if (b.state === 'error')
-                return;
-            const sites = (b.items || []).filter(x => x.type === 'site');
-            const ok = sites.filter(siteOk).length;
-            b.state = sites.length ? `Сайты ${ok}/${sites.length}` : '';
-        },
     },
     site: {
         label: 'Сайт',
@@ -426,9 +424,11 @@ const PIPE = {
             'Только то, что есть в дампе [site N: url]. Метку [site N: url] не пиши — её ставит система. Не выдумывай цифры.',
             'Не пересказывай меню, футер, навигацию и рекламу, и все, что не относится к задаче.',
         ].join('\n'),
+        inject: 'нужен текст конкретной страницы по url',
         next: ['thought'],
-        async run(params = {}) {
+        async init(params = {}) {
             const b = params.block;
+            const { session, task } = params;
             if (b.content || b.page)
                 return false;
             const web = params.container;
@@ -444,19 +444,25 @@ const PIPE = {
                 b.icon = siteFavicon(next.url);
             }
             const service = await WORK.get_item(PIPE.web.service);
-            const result = await params.task._fc_exec(service, { method: 'fetch_url', args: { url: b.url } }, {
-                block: b,
-                session: params.session,
-            });
-            const head = siteMark(web, b) + '\n\n';
-            const page = !result?.error && b.state !== 'error' ? clipPage(result?.content) : '';
-            if (b.state === 'error' || !page || page.replace(/\s+/g, ' ').trim().length < 40) {
-                await siteFail(params, shortError(result?.error || 'пусто'));
+            const result = await service.fetch_url({ url: b.url });
+            if (result?.error) {
+                await siteFail(params, shortError(result.error));
                 return true;
             }
-            b.page = head + page;
-            await params.task._save(params.session);
-            return false;
+            if (result.url)
+                b.url = result.url;
+            const page = clipPage(result.content);
+            if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
+                await siteFail(params, 'пусто');
+                return true;
+            }
+            b.page = siteMark(web, b) + '\n\n' + page;
+            if (!task || task._stopped)
+                return;
+            const messages = await task.context({ prompt: PIPE.site.prompt, session });
+            const extracted = await task._streamChat({ messages, session });
+            if (!task._stopped)
+                b.content = extracted.content;
         },
         recalc(params = {}) {
             const b = params.block;
@@ -469,13 +475,17 @@ const PIPE = {
     thought:{
         label: 'Мысли',
         icon: 'carbon:idea',
+        inject: 'после действия обдумать: хватит или ещё ход',
+        next: ['report', 'comment'],
         prompt: [
-            'Подробно, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
+            'Кратко, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
             'или сделанного уже достаточно для успешного завершения задачи.',
             'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
-            'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
+            'Ответь в виде размышлений от своего лица (5-10 строк, или если надо, больше).',
         ].join('\n'),
-        next: ['report'],
+        init(params = {}) {
+            delete params.container.using_blocks;
+        },
     },
 
     form: {
@@ -782,27 +792,7 @@ async function siteFail(params, text) {
     b.state = 'error';
     b.content = text;
     stampSiteContent(web, b);
-    delete web.using_blocks;
-    await webPushNext(web, params);
     await close_up(await params.task.body, b, params);
-}
-
-async function webPushNext(web, params) {
-    if (!web || web.content || web.sites == null)
-        return false;
-    web.items ??= [];
-    if ((web.using_blocks || []).includes('site'))
-        return false;
-    const taken = new Set((web.items || []).filter(x => x.type === 'site').map(x => x.url));
-    const next = web.sites.map(siteRef).find(s => s.url && !taken.has(s.url));
-    if (!next || !params.task)
-        return false;
-    await params.task._push_block({
-        block: { type: 'site', url: next.url, label: siteHost(next), icon: siteFavicon(next.url) },
-        container: web,
-        session: params.session,
-    });
-    return true;
 }
 
 function shortError(e) {
@@ -837,20 +827,6 @@ function formatFileHits(result) {
         const snip = r.text ? ' — ' + String(r.text).trim().slice(0, 200) : '';
         return '- ' + path + extra + snip;
     }).join('\n');
-}
-
-function webAsk(s) {
-    const t = String(s || '').trim();
-    return t && t !== PIPE.web.label && !/^(есть вложения|task)$/i.test(t);
-}
-
-function webQuery(web, body) {
-    if (webAsk(web?.label) && web.label !== PIPE.web.label)
-        return web.label;
-    const asked = String((body.items || []).find(b => b.type === 'prompt')?.content || '').trim();
-    if (webAsk(asked))
-        return asked;
-    return '';
 }
 
 function workQuery(block, body) {

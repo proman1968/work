@@ -1,74 +1,33 @@
 ﻿export default {
-    label: 'on_save (.task)',
-    icon: 'carbon:ai',
     async execute(params = {}) {
         const file = this.$context;
         const raw = await file.load({ encoding: 'utf-8' });
         const body = JSON.parse(raw);
-        body.type ??= 'task';
-        let role = params.role;
         let user_info = await params.session?.$user.info()
         let class_info = await this.$owner.info()
+        let location = params.location;
+        if (location){
+            try { 
+                location = JSON.parse(location);
+                location = Object.keys(location).map(key => key + ':' +  location[key]).join(', ');
+                if(location)
+                    location = 'Расположение: ' + location + '.';
+            } catch { location = null; }
+        }
+
         body.system = [
             SYSTEM_PROMPT.SYSTEM,
             placeContext(user_info, class_info),
-            (SYSTEM_PROMPT[role] || '')
-        ].join('\n');
-        body.location = await readLocation(params.location);
-        delete body.here;
+            (SYSTEM_PROMPT[params.role] || ''),
+            location
+        ].filter(Boolean).join('\n');
+        
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
-        const seeded = (body.items || []).length > 0;
-        return file.prompt({
-            session: params.session,
-            role: seeded ? 'AI' : role,
-            prompt: seeded ? '' : body.title,
-        });
+        params.prompt = body.title;
+        return file.prompt(params);
     },
 };
-
-async function readLocation(raw) {
-    let loc = raw;
-    if (typeof loc === 'string') {
-        try { loc = JSON.parse(loc); } catch { loc = null; }
-    }
-    if (!loc || typeof loc !== 'object')
-        return;
-    const out = {};
-    if (loc.tz)
-        out.tz = String(loc.tz);
-    const lat = +loc.lat;
-    const lon = +loc.lon;
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        out.lat = lat;
-        out.lon = lon;
-        await fillLocationPlace(out);
-    }
-    if (!(out.tz || (out.lat != null && out.lon != null)))
-        return;
-    return out;
-}
-
-async function fillLocationPlace(loc) {
-    if (!loc || loc.place || loc.lat == null || loc.lon == null)
-        return;
-    const q = new URL('https://nominatim.openstreetmap.org/reverse');
-    q.searchParams.set('lat', String(loc.lat));
-    q.searchParams.set('lon', String(loc.lon));
-    q.searchParams.set('format', 'json');
-    q.searchParams.set('accept-language', 'ru');
-    try {
-        const res = await fetch(q, { headers: { 'User-Agent': 'WORK-task/1.0' } });
-        if (!res.ok)
-            return;
-        const data = await res.json();
-        const a = data?.address || {};
-        const city = a.city || a.town || a.village || a.municipality || a.county;
-        const place = [city, a.country].filter(Boolean).join(', ');
-        if (place)
-            loc.place = place;
-    } catch { /* реверс недоступен — в location останутся координаты */ }
-}
 
 function samePlace(a, b) {
     if (!a || !b) return false;

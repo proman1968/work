@@ -7,7 +7,6 @@ ODA({ is: 'microchat-panel',
         <style>
             :host {
                 @apply --vertical;
-                padding: 8px;
             }
             .composer {
                 @apply --vertical; @apply --raised; @apply --content;

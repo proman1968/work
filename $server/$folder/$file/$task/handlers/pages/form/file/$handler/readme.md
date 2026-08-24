@@ -14,7 +14,7 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 
 - Shell: `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`, не с `streamTarget` на `changed`; `changed`/`chat.done` → `load()`.
 - Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Список — кто закрылся раньше (дети, потом родители). `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Вьюер `content`. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`. Тот же `content` в ленте и в доке.
-- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — `body.location` ставит `on_save`.
+- Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.

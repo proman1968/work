@@ -117,7 +117,6 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
-                margin-bottom: 8px;
                 border-radius: 8px;
             }
             summary {
