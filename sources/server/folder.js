@@ -34,7 +34,7 @@ export class $folder extends $item{
     static importScript(script) {
         script = this.stripAbsoluteImports(script);
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
-        return import('data:text/javascript;base64,' + b64).then(module => module.default).catch(err => {
+        return import('data:text/javascript;base64,' + b64).then(module => module.default || module).catch(err => {
             console.error(err, script);
         });
     }

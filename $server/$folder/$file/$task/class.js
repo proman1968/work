@@ -1,5 +1,4 @@
-﻿// Линейный реестр PIPE (по id = type блока);
-export default {
+﻿export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
     async prompt(params = {}) {
@@ -46,13 +45,14 @@ export default {
             }
 
             await this._init(params);
-            await PIPE[params.container.type]?.recalc?.(params);
+            const pipe = await this.pipe;
+            await pipe[params.container.type]?.recalc?.(params);
 
  
             // Находим список следующих шагов
             let mode = (await this.body).mode || 'plan';
-            const node = PIPE[params.block.type];
-            const place = PIPE[params.container.type];
+            const node = pipe[params.block.type];
+            const place = pipe[params.container.type];
             let next = (params.block.container && params.block.content)
                 ? (place?.[mode]?.next || place?.next || [])
                 : (node?.[mode]?.next || node?.next || place?.[mode]?.next || place?.next || []);
@@ -70,7 +70,7 @@ export default {
             if (next.length === 1)
                 choice = next[0];
             else {
-                let menu = next.map(id => id.toUpperCase() + ' - ' + (PIPE[id]?.[mode]?.inject || PIPE[id]?.inject) + ';');
+                let menu = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
                 menu.unshift('Выбери строго один вариант из списка. Ответь одним словом, без знаков и пояснений. Выберай шаг или действие, которое необходимо сделать дальше:');
                 menu = menu.join('\n');
                 let messages = await this.context({prompt: menu, session});
@@ -82,7 +82,7 @@ export default {
                 }
             }
             if (choice) {
-                let next_pipe = PIPE[choice];
+                let next_pipe = pipe[choice];
                 
                 params.block = this._build_block(choice);
                 if(await this._push_block(params)){
@@ -113,7 +113,8 @@ export default {
     async _init(params = {}) {
         params.block = await this._active_block();
         params.container = await this._active_container();
-        params.pipe_step = PIPE[params.block.type] || PIPE.thinking;
+        const pipe = await this.pipe;
+        params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
     async context(params = {}) {
@@ -154,16 +155,16 @@ export default {
         return messages;
     },
     _container_context(container) {
-        const node = PIPE[container.type];
+        const node = this.pipe[container.type];
         const mode = this.body.mode || 'plan';
         let system = node?.[mode]?.system || node?.system || container.system || '';
         if (container.todo)
             system += '\n\n[todo]\n' + (container.todo.content || '');
         const messages = [];
         for (const b of (container.items || [])) {
-            if (PIPE[b.type]?.close)
+            if (this.pipe[b.type]?.close)
                 continue;
-            messages.push({ role: PIPE[b.type]?.role || 'assistant', content: b.content || stageOpen(b) });
+            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content || stageOpen(b, this.pipe[b.type]) });
             if (b.page && !b.content)
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
@@ -191,14 +192,16 @@ export default {
         }
         return { content, usage };
     },
-    get pipe(){    ;
-        return globalThis.PIPE ??= new AsyncPromise(async () =>{
-            let files = await this.tilde;
-            let pipe = files.find(f => f.id === 'pipe.js');
-            let raw = await pipe.load();
-            globalThis.PIPE = await this.constructor.importScript(raw);
-            return globalThis.PIPE;
-        })
+    get pipe() {
+        return this._pipe ??= new AsyncPromise(async () => {
+            const files = await this.tilde;
+            const file = files.find(f => f.id === 'pipe.js');
+            const raw = await file.load();
+            const script = this.constructor.stripAbsoluteImports(raw);
+            const b64 = Buffer.from(script, 'utf-8').toString('base64');
+            this._pipe = await import('data:text/javascript;base64,' + b64);
+            return this._pipe;
+        });
     },
     get body(){
         return new AsyncPromise(async () =>{
@@ -221,15 +224,15 @@ export default {
         return { ok: true, stopped: true };
     },
     _build_block(type) {
-        let block = PIPE[type];
-        block = {
+        const node = this.pipe[type];
+        const block = {
             type,
-            container: block.container,
-            icon: block.icon,
-            stop: block.stop,
-            label: block.label,            
+            container: node.container,
+            icon: node.icon,
+            stop: node.stop,
+            label: node.label,
         };
-        if(block.container)
+        if (block.container)
             block.items = [];
         return block;
     },    
@@ -238,7 +241,7 @@ export default {
         container.items ??= [];
         container.using_blocks ??= [];
         container.using_blocks.push(block.type);
-        let init = PIPE[block.type]?.init;
+        let init = this.pipe[block.type]?.init;
         if(init && !await init(params)){
             return false;
         }
@@ -256,8 +259,9 @@ export default {
         if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
             return container.todo;
         if (container.type === 'includes') {
-            const list = PIPE.includePlan(container);
-            const files = PIPE.includeReal(container);
+            const pipe = await this.pipe;
+            const list = pipe.includePlan(container);
+            const files = pipe.includeReal(container);
             const open = files.find(f => !f.content);
             if (open)
                 return open;
@@ -291,9 +295,9 @@ export default {
     },
 };
 
-function stageOpen(block) {
-    if (!PIPE[block?.type]?.container) return '';
-    const label = PIPE[block.type].label || block.label || block.type;
+function stageOpen(block, node) {
+    if (!node?.container) return '';
+    const label = node.label || block.label || block.type;
     return 'Текущий этап далее (' + label + ').';
 }
 
