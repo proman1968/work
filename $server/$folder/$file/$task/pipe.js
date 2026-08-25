@@ -218,7 +218,10 @@ export const includes = {
 export const file = {
         label: 'Файл',
         icon: 'files:file',
-
+        prompt: [
+            'Вытащи из содержимое последнего файла, всю полезную информацию.',
+            'Сделай суммаризацию, без комментариев, без пересказа.',
+        ].join('\n'),
         async init(params = {}) {
             const {container, block} = params;
             try{
@@ -234,17 +237,16 @@ export const file = {
                 // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
-                block.content = `file ${length + 1}: ['${file.label}'](${file.path})\n\n`;
-                block.content += await file.read_text();
+                block.title = `file ${length + 1}: ['${file.label}'](${file.path})\n\n`;
+                block.content = await file.read_text() + '\n---------------------\n';
                 block.icon = file.icon;
                 block.label = file.label;
                 block.path = file.path;
                 block.state = 'done';
             } catch(e){
                 block.state = 'error';
-                block.content += e.message;
+                block.content = e.message + '\n\n';
             }
-            
             return true;
         },
     }
@@ -342,9 +344,11 @@ export const report = {
         icon: 'icons:assignment-turned-in',
         inject: 'этап закрыт: есть факты для сводки',
         async init(params = {}) {
+            debugger
             let {block, container, session, task} = params;
+            let prompt = task.pipe[container.type].prompt;
             const messages = await task.context({
-                prompt: container.prompt,
+                prompt,
                 session,
             });
             const asked = await task._streamChat({ messages, session });

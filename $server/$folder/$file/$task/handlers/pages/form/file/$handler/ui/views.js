@@ -126,6 +126,7 @@ ODA({ is: 'microchat-view',
                 box-sizing: border-box;
                 overflow: hidden;
                 position: sticky;
+                min-height: 36px;
             }
             .title {
                 @apply --horizontal;
@@ -208,13 +209,8 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        if(!this.content)
+        if(!this.content && this.pending)
             return 'spinners:3-dots-scale';
-        // const live = this.$pdp?.streaming && this.$pdp?.streamTarget;
-        // if (live && Reactor.equal(this.data, live))
-        //     return 'spinners:3-dots-scale';
-        // if (live && containsBlock(this.data, live))
-        //     return 'spinners:3-dots-scale';
         return this.data?.icon || '';
     },
     get items() { return this.data?.items || []; },

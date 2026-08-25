@@ -87,9 +87,12 @@
                 params.block = this._build_block(choice);
                 if(await this._push_block(params)){
                     prompt = next_pipe.prompt;
-                    if(!params.block.container && !params.block.content && prompt){
+                    if(!params.block.container /* && !params.block.content */ && prompt){
+                        // debugger;
                         let messages = await this.context({prompt, session});
                         let response = await this._streamChat({ messages, session });
+                        if(params.block.title)
+                            response.content = params.block.title + '\n\n' + response.content;
                         Object.assign(params.block, response);
                     }
                 }
@@ -240,7 +243,7 @@
         const {block, container, session} = params;
         container.items ??= [];
         container.using_blocks ??= [];
-        container.using_blocks.push(block.type);
+        container.using_blocks.add(block.type);
         let init = this.pipe[block.type]?.init;
         if(init && !await init(params)){
             return false;

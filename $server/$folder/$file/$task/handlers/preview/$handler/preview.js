@@ -5,7 +5,7 @@ export default {
                 @apply --vertical;
             }
         </style>
-        <div ~if="src" content flex ~html="src" style="font-size: small; padding: 4px 8px; white-space: pre;"></div>
+        <div ~if="src" bold flex ~html="src" style="font-size: small; padding: 4px 8px; white-space: pre;"></div>
     `,
     get src(){
         return this.$item?.load().then(res=>{
