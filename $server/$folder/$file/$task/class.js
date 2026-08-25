@@ -71,8 +71,8 @@
                 let menu = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
                 menu.unshift('Выбери строго один вариант из списка. Ответь одним словом, без знаков и пояснений. Выберай шаг или действие, которое необходимо сделать дальше:');
                 menu = menu.join('\n');
-                console.warn('choice', choice);
-                console.log(menu);
+                // console.warn('choice', choice);
+                // console.log(menu);
                 let messages = await this.context({prompt: menu, session});
                 let response = await this._streamChat({ messages, silent: true, session });
                 if (!this._stopped) {
@@ -243,16 +243,18 @@
     async _push_block(params = {}){
         const {block, container, session} = params;
         container.items ??= [];
-        container.using_blocks ??= [];
-        container.using_blocks.add(block.type);
-        let init = this.pipe[block.type]?.init;
-        if(init && !await init(params)){
+        const init = this.pipe[block.type]?.init;
+        if (init && !await init(params))
             return false;
-        }
+        if (Array.isArray(container.using_blocks)) {
+            if (!container.using_blocks.includes(block.type))
+                container.using_blocks.push(block.type);
+        } else if (!init)
+            container.using_blocks = [block.type];
         block.time ??= Date.now();
         if (block.container)
             block.items ??= [];
-        container.items.push(block);   
+        container.items.push(block);
         await this._save(session);
         return true;
     },

@@ -59,15 +59,6 @@ ODA({ is: 'microchat-ribbon',
             return name;
         return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
     },
-    stickyGen: 0,
-    get topRibbon() {
-        return this.top ? this : (this.host?.host?.topRibbon || this);
-    },
-    bumpSticky() {
-        const r = this.topRibbon;
-        if (r !== this) return r.bumpSticky();
-        this.stickyGen++;
-    },
     attached() {
         if (!this.top) return;
         this.addEventListener('scroll', () => {
@@ -302,27 +293,21 @@ ODA({ is: 'microchat-view',
         return this.showTitle ? 'light' : 'content';
     },
     height: 0,
-    attached() {
-        this.async(() => this.syncHeaderHeight());
-    },
-    onResize(e) { this.syncHeaderHeight(e.target); },
-    syncHeaderHeight(el) {
-        const s = el || this.$('summary');
-        const h = this.showTitle && s ? s.clientHeight : 0;
-        if (h === this.height) return;
-        this.height = h;
-        this.host?.bumpSticky?.();
-    },
+    onResize(e) { this.height = e.target.clientHeight; },
     get headerHeight() { return this.showTitle ? (this.height || 0) : 0; },
     get parentView() {
         const el = this.host?.host;
         return el?.localName?.startsWith('microchat-view') ? el : null;
     },
-    get topRibbon() {
-        return this.host?.topRibbon || this.host;
-    },
     get todoView() {
-        return this.topRibbon?.$?.('microchat-view-todo') || null;
+        let n = this;
+        while (n) {
+            const r = n.host;
+            if (r?.top)
+                return r.$?.('microchat-view-todo') || null;
+            n = r?.host;
+        }
+        return null;
     },
     get prevPrompt() {
         let el = this.previousElementSibling;
@@ -334,7 +319,6 @@ ODA({ is: 'microchat-view',
         return null;
     },
     get top() {
-        void this.topRibbon?.stickyGen;
         if (this.localName === 'microchat-view-todo' || this.data?.type === 'todo')
             return 0;
         const parent = this.parentView;
@@ -688,7 +672,6 @@ ODA({ is: 'microchat-view-todo',
         this.icon = undefined;
         this.content = undefined;
         this.colorMode = 'header';
-        this.async(() => this.syncHeaderHeight());
     },
     
     get showContent() { return !!this.streamTail; },

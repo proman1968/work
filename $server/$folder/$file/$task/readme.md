@@ -25,7 +25,7 @@
    - `inject` — одна фраза «когда брать» в меню выбора; заголовок меню: один тип из списка; шаг только если без него нельзя; факт в контексте — `TEXT`; лишний шаг хуже, чем сразу ответить;
    - `stop` — `true` (конец ветки) или лейбл кнопки (wait + APPROVE); копируется в `block.stop`;
    - `container: true` → у блока `items: []`;
-   - кеш типов — `container.using_blocks` (в JSON, для возобновления). Тип пишется при push. `step` снимает себя в `todo`, когда текущий шаг закрыт. Новый `prompt` — `delete using_blocks`. Тип в окне один раз; меню пустое и нет `content` — узел с `close` (`total`);
+   - кеш типов — `container.using_blocks` (в JSON, для возобновления). Тип пишется при успешном push (`push`, после `init === true`). `init` сбросил массив (`file`, `thought`) — не писать тип снова. `step` снимает себя в `todo`, когда текущий шаг закрыт. Новый `prompt` — `delete using_blocks`. Тип в окне один раз; меню пустое и нет `content` — узел с `close` (`total`);
    - `recalc` после стрима: `form` / `html` кладут разметку в `block.html`;
    - `approve(params)` — обработка `APPROVE` (`planning`, `form`, `report`);
    - `recalc(params)` — пересчёт узла: подпись `state` по типу, иконка, `mode` где нужно; `step.recalc` зовёт `todo.recalc` (label шага = `N. название`, иначе при push остаётся ярлык «Шаг»);
@@ -44,13 +44,13 @@
    - пушит блок (без `system` на блоке). Нет стрима и это контейнер — внутрь (`prompt({ role: 'AI' })`). Иначе `_streamChat`;
    - `parse?`, `recalc`. У `total` (`close`): `prompt` родителя → `container.content`, лист не пушится. Auto-loop: `!block.stop` → `prompt({ role: 'AI' })`. `chat.done` — когда автомат остановился.
 6. **Атомы `web` / `site`** (как `todo` / `step`):
-   - `web` — поиск: сервис `/SERVICES/DuckDuckGo` (`search` + `fetch_url`). `system` от `plan`/`do`, `next` = `site`. Запрос — `webQuery`: свой `label` (не ярлык «Интернет»), иначе текст `prompt`. Без запроса / пустая выдача / ошибка сервиса — `state: 'error'` + `content` на `web`, `site` не создаётся. `label` остаётся «Интернет». `web.sites` — `{ url, title }` из выдачи. В окне один `site`. `state` — `Сайты` успешные/всего (ошибка не затирается). В сводку — **Источники**;
-   - `site` — один живой на окно. `run`: url из `web.sites`, `fetch_url` → `block.page` с меткой `[site N: url]`; нет url / 403/пусто → `error` + `content`, `delete using_blocks`, следующий url из выдачи. Разбор — `_pipe_stream`; метку в `content` ставит `site.recalc` / `stampSiteContent`, не модель. `label` — hostname.
+   - `web` — поиск: сервис `/SERVICES/DuckDuckGo` (`search` + `fetch_url`). Путь сервиса — на узле (`web.service`), в JSON блока не копируется. `system` от `plan`/`do`, `next` = `site`. Запрос — `webQuery`: свой `label` (не ярлык «Интернет»), иначе текст `prompt`. Без запроса / пустая выдача / ошибка сервиса — `state: 'error'` + `content` на `web`, `site` не создаётся. `label` остаётся «Интернет». `web.sites` — `{ url, title }` из выдачи. В окне один `site`. `state` — `Сайты` успешные/всего (ошибка не затирается). В сводку — **Источники**;
+   - `site` — один живой на окно. `init`: url из `sites` контейнера, `WORK.get_item(web.service).fetch_url` → `block.page` с меткой `[site N: url]`; нет url / ошибка/пусто → `error` + `content`. Разбор — `_streamChat`; метку в `content` ставит `stampSiteContent`. `label` — hostname.
 7. **Атомы `work` / `search` / `read` / `write`:**
    - `work` — контейнер. Меню `plan`: `search`, `read`, `total`; `do`: + `write`. Закрытие — `total`;
    - `search` — `run`: `semantic_search` по запросу (`workQuery`). `content` — список путей. `label` = запрос;
    - `read` — `run`: путь из блока / последнего search, `read_text`. `content` = текст (или короткая ошибка);
-   - `write` — сначала стрим (путь + текст), `parse`, затем `run` пишет `save` / `edit`. `content` — факт записи.
+   - `write` — `init` пушит блок (`true`); стрим; `recalc` разбирает путь/текст и пишет `save` / `edit`.
 8. **Атомы `includes` / `file`:**
    - как `todo` / `step`: чат и `prompt()` пишут список `includes.files` (`path`, `label`, `icon`), `items` пустой. Корневого `body.includes` нет;
    - пока список не прочитан — `next` = `file` (один в ленту). Файл закрыт (`content` или ошибка) — снять `file` с кеша, следующий. Все готовы — `total`;
@@ -63,7 +63,7 @@
 13. **Report / total:** `report` — шаг корня / шага, `stop: 'Принять'`. `accept` без `prompt` → approved, `container.content = block.content`; иначе `rejected`. `total` — `close`, без своего `prompt`; `init` стримит `prompt` контейнера → `container.content`, возвращает `false`, лист не пушится. Новый блок `prompt` снимает `using_blocks` у контейнера.
 14. **Контекст:** `_container_context(container)` — один слой: `system` из `pipe[container.type]` + `[todo]` + `items` как листья (узлы `close` не входят). У открытого `site` — `block.page` (уже с `[site N: url]`). Открытый контейнер без `content` — слот «Текущий этап далее (label).». `context()` — путь от корня + текущие дата/время (`timeNow` по `body.tz`) + режим. Место — в `body.system` с `on_save`, не каждый ход.
 15. **Служебное:** `stop` — флаг `_stopped` (обрывает стрим и auto-loop); `change_model` — `body.model`; `remove_block` — вырезать блок из `items` родителя, снять тип с `using_blocks`, `_save` (не `on_save`); `_save` — JSON на диск + `session.send({ path })`; `_continue` — `_save` + auto-loop, если не `_stopped`.
-16. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). `streamTarget` — focused без `content`/`html` (слот). `streaming` — только `chat.delta` / `chat.done`. `typeIcon`: вертушка на слоте и предках, только пока `streaming`; в JSON не пишется. Слот form только при `html`. `pinned` — `focusedBlock` и предки на пути; закрытая площадка не на пути сворачивается свободно. Sticky: одна поверхность. `todo`/`prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке; контейнер — только `summary` (todo + соседний prompt + шапка родителя). `stickyGen` на топ-ленте — пересчёт `top` при появлении блоков. Удаление блока — кнопка в шапке (ховер), `confirm()`, `fetch('remove_block')`; `todo` и живой слот стрима не удаляются. Wide (`≥720px`, есть отчёты): справа док (`oda-splitter`, ширина в localStorage); тот же `content` в ленте и в доке; инпут слева под лентой; copy/share в тулбаре дока.
+16. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). `streamTarget` — focused без `content`/`html` (слот). `streaming` — только `chat.delta` / `chat.done`. `typeIcon`: вертушка на слоте и предках, только пока `streaming`; в JSON не пишется. Слот form только при `html`. `pinned` — `focusedBlock` и предки на пути; закрытая площадка не на пути сворачивается свободно. Sticky: одна поверхность. `todo`/`prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке; контейнер — только `summary` (todo + соседний prompt + шапка родителя). Удаление блока — кнопка в шапке (ховер), `confirm()`, `fetch('remove_block')`; `todo` и живой слот стрима не удаляются. Wide (`≥720px`, есть отчёты): справа док (`oda-splitter`, ширина в localStorage); тот же `content` в ленте и в доке; инпут слева под лентой; copy/share в тулбаре дока.
 
 ## 4. Из чего это состоит
 
@@ -75,7 +75,7 @@
 
 ## 5. В каком это состоянии
 
-**В активной доработке.** FSM в `pipe.js`, цикл в `class.js`. Сервис — только из `run` (`_fc_exec`). Стрим без tools.
+**В активной доработке.** FSM в `pipe.js`, цикл в `class.js`. Сервис (`search` / `read` / `file` / `write` / `web` / `site`) — свой `init`. Стрим без tools.
 
 - ✅ узлы — `export const` в `pipe.js`; корень `type: 'task'`; маршруты у контейнера (`plan`/`do` + `mode`)
 - ✅ `content` = закрыто: спуск, меню `next`, `todo`/`step`, `report` (таск) / `total` (площадка)
@@ -86,7 +86,7 @@
 - ✅ `report.approve` → `state` / `container.content`; якорь после APPROVE через `_active_*`
 - ✅ `html`: SPA в iframe, `recalc` → `block.html`, `stop` без approve/auto-loop
 - ✅ `explore` / `work` / `web` / `includes` закрывает `total` (`close` + falsy `init` → `container.content`, лист не пушится)
-- ✅ нет `fc` на узлах; `search` / `read` / `write` / `web` / `site` / `file` — свой `run`
+- ✅ нет `fc` на узлах; `search` / `read` / `write` / `web` / `site` / `file` — свой `init`
 - ✅ `site.content` — разбор страницы в md (факты по теме, без рекламы; ссылки, `![ ]` / видео из хвостов дампа), не дамп `fetch_url`
 - ✅ тип в окне один раз; исчерпание → узел с `close` (`total`); `web.sites` — `{ url, title }`
 - ✅ `work` — контейнер; атомы `search` / `read` / `write` со своим `run`

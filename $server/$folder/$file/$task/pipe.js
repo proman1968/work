@@ -298,26 +298,25 @@ export const write = {
             'Дальше полный текст или блоки SEARCH/REPLACE.',
             'Не выдумывай путь.',
         ].join('\n'),
-        recalc(params = {}) {
+        async recalc(params = {}) {
             const { block } = params;
             const raw = String(block.content || '').replace(/\r\n/g, '\n');
             const fence = raw.match(/```(?:\w+)?\s*([\s\S]*?)```/);
             const head = (fence ? raw.slice(0, fence.index) : raw).trim().split('\n').find(Boolean) || '';
             block.path = head.replace(/^#+\s*/, '').trim();
             block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
-        },
-        async init(params = {}) {
-            const b = params.block;
-            if (b.done)
-                return false;
-            if (!b.path || b.post == null)
-                return false;
-            const method = /SEARCH|REPLACE/.test(b.post) ? 'edit' : 'save';
-            await params.task._fc_exec(WORK, { method, args: { path: b.path, post: b.post } }, {
-                block: b,
+            if (block.done || !block.path || block.post == null)
+                return;
+            const method = /SEARCH|REPLACE/.test(block.post) ? 'edit' : 'save';
+            await params.task._fc_exec(WORK, { method, args: { path: block.path, post: block.post } }, {
+                block,
                 session: params.session,
             });
-            b.done = true;
+            block.done = true;
+        },
+        async init(params = {}) {
+            if (params.block.done)
+                return false;
             return true;
         },
     }
@@ -366,7 +365,6 @@ export const web = {
         next: ['site'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
-            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
         ].join('\n'),
         async init(params = {}) {
             const b = params.block;
@@ -381,7 +379,7 @@ export const web = {
                 b.sites = [];
                 b.state = 'error';
                 b.content = 'нет поискового запроса';
-                return;
+                return true;
             }
             b.label = 'Web: ' + query;
             const service = await WORK.get_item(web.service);
@@ -396,6 +394,7 @@ export const web = {
                 b.content = 'По запросу ' + query + ' ничего не найдено';
                 dropUsed(params.container, 'web');
             }
+            return true;
         },
         inject: 'если необходимо что-то найти в интернете, для решения задачи',
         system: [
@@ -424,10 +423,10 @@ export const site = {
             const { session, task } = params;
             if (b.content || b.page)
                 return false;
-            const web = params.container;
+            const box = params.container;
             if (!b.url) {
-                const taken = new Set((web.items || []).filter(x => x !== b && x.url).map(x => x.url));
-                const next = (web.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
+                const taken = new Set((box.items || []).filter(x => x !== b && x.url).map(x => x.url));
+                const next = (box.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
                 if (!next) {
                     await siteFail(params, shortError('нет url'));
                     return true;
@@ -449,9 +448,9 @@ export const site = {
                 await siteFail(params, 'пусто');
                 return true;
             }
-            b.page = siteMark(web, b) + '\n\n' + page;
+            b.page = siteMark(box, b) + '\n\n' + page;
             if (!task || task._stopped)
-                return;
+                return true;
             const messages = await task.context({ prompt: site.prompt, session });
             const extracted = await task._streamChat({ messages, session });
             if (!task._stopped)
@@ -473,6 +472,7 @@ export const thought = {
         ].join('\n'),
         init(params = {}) {
             delete params.container.using_blocks;
+            return true;
         },
     }
 

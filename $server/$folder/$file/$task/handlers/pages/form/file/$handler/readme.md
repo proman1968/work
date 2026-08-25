@@ -18,7 +18,7 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
-- Sticky: одна поверхность на блок. `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке. Контейнер — только `summary`: todo + ближайший `previousSibling` prompt + шапка родителя. Высота шапки — `syncHeaderHeight` (attached + resize); `stickyGen` на топ-ленте инвалидирует `top` у всех шапок (дыры при появлении блоков).
+- Sticky: одна поверхность на блок. `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке. Контейнер — только `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
 - Удаление: в шапке справа `oda-button` (`error`, ховер). `fetch('remove_block')`. Нет у `todo` и у блока, на котором сейчас стрим.
 - Action-bar: строковый `stop` — зелёная APPROVE + крестик (нет при `streamTarget`). Иначе открытый корень (`!content` + `items`) и не `pending` / не `streaming` / не `stop: true` — синяя «Продолжить» без крестика: `prompt:'продолжай'` и роль пользователя. `role:'AI'` панель не шлёт — это только самовызов харнесса.
 - Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/report) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
