@@ -707,8 +707,8 @@ ODA({is: 'chat-day',
                 opacity: .5;
             }
             .day-ribbon{
-                gap: 4px;
-                padding: 4px;
+                gap: 8px;
+                padding: 8px;
                 opacity: 0;
             }
         </style>

@@ -112,7 +112,7 @@ ODA({ is: 'microchat-ribbon',
 });
 
 ODA({ is: 'microchat-view',
-    imports: 'oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
+    imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
     template: /*html*/`
         <style>
             :host {
@@ -152,6 +152,12 @@ ODA({ is: 'microchat-view',
                 opacity: .5;
                 flex-shrink: 0;
             }
+            .title > .del {
+                opacity: 0;
+            }
+            summary:hover .del, .title > .del:focus {
+                opacity: 1;
+            }
             .body {
                 font-size: small;
                 word-break: break-word;
@@ -161,6 +167,9 @@ ODA({ is: 'microchat-view',
             }
             :host([container]) details > .body {
                 border-left: 4px solid var(--info-color);
+            }
+            .del {
+                border-radius: 50%;
             }
         </style>
 
@@ -174,6 +183,8 @@ ODA({ is: 'microchat-view',
                     <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
+                    <oda-button class="del" no-flex icon="icons:delete" :icon-size="iconSize / 1.5"
+                            ~if="canRemove" title="Удалить" @tap.stop="removeBlock"></oda-button>
                     <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
@@ -222,6 +233,20 @@ ODA({ is: 'microchat-view',
     get timeText() {
         if (!this.data?.time) return '';
         return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+    get canRemove() {
+        if (this.data?.type === 'todo' || this.localName === 'microchat-view-todo')
+            return false;
+        if (this.$pdp?.streaming && Reactor.equal(this.data, this.$pdp.focusedBlock))
+            return false;
+        const list = this.host?.items || this.host?.data?.items;
+        return !!list?.some(b => Reactor.equal(b, this.data));
+    },
+    async removeBlock(e) {
+        e.stopPropagation();
+        if (!confirm('Удалить «' + (this.label || this.data?.type || 'блок') + '»?'))
+            return;
+        await this.$pdp.$item.fetch('remove_block', { time: this.data.time, type: this.data.type });
     },
 
     // --- open ---

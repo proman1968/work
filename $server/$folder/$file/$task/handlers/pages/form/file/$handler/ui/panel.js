@@ -206,7 +206,6 @@ ODA({ is: 'microchat-panel',
     get usageStats() { return buildUsageStats(this.data); },
     attached() {
         this._focus();
-        this._geo();
     },
     fmtTok(n) { return fmtTokens(n); },
     _focus() {

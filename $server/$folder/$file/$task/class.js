@@ -290,11 +290,51 @@
         await this._save(session);
         return { ok: true, model};
     },
+    async remove_block(params = {}) {
+        const block = params.block || params.post?.block || {
+            time: params.time ?? params.post?.time,
+            type: params.type ?? params.post?.type,
+        };
+        const body = await this.body;
+        const box = parentOfBlock(body, block);
+        if (!box) return { ok: false, error: 'block not found' };
+        const i = box.items.findIndex(b => sameBlock(b, block));
+        if (i < 0) return { ok: false, error: 'block not found' };
+        const type = box.items[i].type;
+        box.items.splice(i, 1);
+        const used = box.using_blocks;
+        if (used) {
+            const j = used.indexOf(type);
+            if (j >= 0) used.splice(j, 1);
+            if (!used.length)
+                delete box.using_blocks;
+        }
+        await this._save(params.session);
+        return { ok: true };
+    },
     async _save(session){
         await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
         session?.send?.({ path: this.short });
     },
 };
+
+function sameBlock(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.time && b.time)
+        return Number(a.time) === Number(b.time) && a.type === b.type;
+    return a.type === b.type && a.label === b.label && a.content === b.content;
+}
+
+function parentOfBlock(root, block) {
+    if (!root || !block) return null;
+    for (const b of (root.items || [])) {
+        if (sameBlock(b, block)) return root;
+        const p = parentOfBlock(b, block);
+        if (p) return p;
+    }
+    return null;
+}
 
 function stageOpen(block, node) {
     if (!node?.container) return '';

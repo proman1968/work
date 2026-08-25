@@ -15,13 +15,18 @@ ODA({ is: 'microchat-dock',
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            .save {    
+                border-radius: 4px;
+                margin: 2px;
+                padding: 2px;
+            }
         </style>
         <div class="bar" header no-flex horizontal>
             <oda-button no-flex icon="icons:chevron-left" :disabled="!hasPrev" @tap="step(-1)"></oda-button>
             <span class="pos" no-flex>{{pos}}</span>
             <oda-button no-flex icon="icons:chevron-right" :disabled="!hasNext" @tap="step(1)"></oda-button>
             <span class="name" flex>{{cap(current)}}</span>
-            <oda-button no-flex icon="icons:save" title="Сохранить" :disabled="saved" :success-invert="!saved" @tap="save"></oda-button>
+            <oda-button class="save" no-flex icon="icons:save" title="Сохранить" :disabled="saved" :success-invert="!saved" @tap="save"></oda-button>
             <oda-button no-flex icon="icons:content-copy" title="Копировать" @tap="copy"></oda-button>
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
