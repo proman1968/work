@@ -4,7 +4,7 @@ const PIPE = {
     task: {
         container: true,
         plan: {
-            next: ['thinking', 'explore', /* 'question', 'form', 'text', 'planning', 'activation',  */'complete'],
+            next: ['thinking', 'explore', 'comment', /* 'question', 'form', 'text', 'planning', 'activation',  */'complete'],
         },
         do: {
             next: ['thinking', 'explore', 'question', 'form', 'text', 'execute',  'complete'],
@@ -24,9 +24,6 @@ const PIPE = {
 Не фантазируй, не выдумывай, ничего не делай, не планируй, не обращайся к пользователю, просто абстрактно поразмышляй.
 Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше).
 `,
-        recalc(params = {}) {
-            delete params.block.state;
-        },
     },
     activation: {
         label: 'Активация',
@@ -47,8 +44,10 @@ const PIPE = {
         }
     },
     comment:{
+        label: 'Комментарий',
         icon: 'icons:chat',
-        prompt: `Прокомментируй, почему ты не выбрал следующий шаг.`
+        prompt: `Очень кратко прокомментируй, все, что хочешь сказать пользователю по текущей ситуации, без остановки процесса.`,
+        inject: 'если провесс продолжается и есть комментации',
     },
     text:{
         icon: 'icons:chat',
@@ -174,7 +173,7 @@ const PIPE = {
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web', 'thought'],
+        next: ['thinking', /* 'work', */ 'web', 'report'],
 
         prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
         что там полезного ты узнал для выполнения задачи.`,
@@ -207,7 +206,7 @@ const PIPE = {
         label: 'Вложения',
         icon: 'icons:attachment',
         container: true,
-        next: ['file', 'report'],
+        next: ['file'],
         prompt: [
             'Кратко изложи только вложенные файлы: имя и суть содержимого.',
             'Бери факты из детей file. Не выдумывай тему, не спрашивай, не пиши отчёт по задаче.',
@@ -221,24 +220,34 @@ const PIPE = {
     },
     file: {
         label: 'Файл',
-        icon: 'icons:description',
+        icon: 'files:file',
+
         async init(params = {}) {
-            const b = params.block;
-            if (b.content)
-                return false;
-            if (!b.path) {
-                const box = params.container;
-                const taken = new Set(includeReal(box).filter(x => x !== b && x.path).map(x => x.path));
-                const next = includePlan(box).find(f => f.path && !taken.has(f.path));
-                if (!next)
+            const {container, block} = params;
+            try{
+                let files = container.files;
+                let length = container.items.filter(b=>b.type === 'file').length;
+                if(length >= files.length){
                     return false;
-                b.path = next.path;
-                b.label = next.label || next.path;
-                b.icon = next.icon || b.icon;
+                }
+                delete container.using_blocks;
+                container.state = 'Files: ' + (length + 1) + '/' + files.length;
+                block.state = 'reading';
+                await params.task._save(params.session);
+                // debugger
+                let file = files[length];             
+                file = await WORK.get_item(file);
+                block.content = `file ${length + 1}: ['${file.label}'](${file.path})\n\n`;
+                block.content += await file.read_text();
+                block.icon = file.icon;
+                block.label = file.label;
+                block.path = file.path;
+                block.state = 'done';
+            } catch(e){
+                block.state = 'error';
+                block.content += e.message;
             }
-            await fillFileContent(b);
-            dropUsed(params.container, 'file');
-            await close_up(await params.task.body, b, params);
+            
             return true;
         },
     },
@@ -333,26 +342,35 @@ const PIPE = {
     report: {
         label: 'Отчёт',
         icon: 'icons:assignment-turned-in',
-        close: true,
         inject: 'этап закрыт: есть факты для сводки',
-        recalc(params = {}) {
-            const text = String(params.block.content || '').trim();
-            if (!text)
-                return;
-            const container = params.container;
-            const word = text.toLowerCase();
-            const rejected = word === 'continue' || !!PIPE[word];
-            if (!rejected) {
-                container.content = params.block.content;
-                const gallery = formatGallery(container, container.content);
-                if (gallery)
-                    container.content += gallery;
-                const list = formatSites(container.sites);
-                if (list)
-                    container.content += list;
-            }
-            dropReport(container, params.block);
+        async init(params = {}) {
+            let {block, container, session, task} = params;
+            const messages = await task.context({
+                prompt: container.prompt,
+                session,
+            });
+            const asked = await task._streamChat({ messages, session });
+            container.content = asked.content;
         },
+
+        // recalc(params = {}) {
+        //     const text = String(params.block.content || '').trim();
+        //     if (!text)
+        //         return;
+        //     const container = params.container;
+        //     const word = text.toLowerCase();
+        //     const rejected = word === 'continue' || !!PIPE[word];
+        //     if (!rejected) {
+        //         container.content = params.block.content;
+        //         const gallery = formatGallery(container, container.content);
+        //         if (gallery)
+        //             container.content += gallery;
+        //         const list = formatSites(container.sites);
+        //         if (list)
+        //             container.content += list;
+        //     }
+        //     dropReport(container, params.block);
+        // },
     },
 
     web: {
@@ -360,7 +378,7 @@ const PIPE = {
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
         container: true,
-        next: ['site'],
+        next: ['site', 'report'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
@@ -369,7 +387,7 @@ const PIPE = {
             const b = params.block;
             const { session, task } = params;
             const messages = await task.context({
-                prompt: 'Сформулируй один поисковый запрос по задаче. Ответь одной строкой, без кавычек и пояснений.',
+                prompt: 'Сформулируй один поисковый запрос для поиска информации по задаче. Ответь одной строкой, без кавычек и пояснений.',
                 session,
             });
             const asked = await task._streamChat({ messages, silent: true, session });
@@ -380,7 +398,7 @@ const PIPE = {
                 b.content = 'нет поискового запроса';
                 return;
             }
-            b.label = query;
+            b.label = 'Web: ' + query;
             const service = await WORK.get_item(PIPE.web.service);
             const result = await service.search({ query });
             b.sites = [];
@@ -388,9 +406,10 @@ const PIPE = {
                 if (r.url)
                     b.sites.push({ url: r.url, title: r.title || '' });
             }
-            if (result?.error || !b.sites.length) {
+            if (!b.sites.length) {
                 b.state = 'error';
-                b.content = result?.error || 'пусто';
+                b.content = 'По запросу ' + query + ' ничего не найдено';
+                dropUsed(params.container, 'web');
             }
         },
         plan: {
@@ -410,7 +429,7 @@ const PIPE = {
     },
     site: {
         label: 'Сайт',
-        icon: 'icons:language',
+        icon: 'bootstrap:filetype-html',
         prompt: [
             'Вытащи со страницы только то, что относится к задаче: факты, таблицы, ссылки, картинки, видео, аудио.',
             'Не дублируй.',
@@ -440,24 +459,15 @@ const PIPE = {
                 b.label = siteHost(next);
                 b.icon = siteFavicon(next.url);
             }
-            let raw = '';
-            try {
-                const response = await fetch(b.url, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
-                    },
-                    redirect: 'follow',
-                    signal: AbortSignal.timeout(12000),
-                });
-                if (!response.ok)
-                    throw new Error('HTTP ' + response.status);
-                raw = await response.text();
-            } catch (e) {
-                await siteFail(params, shortError(e));
+            const service = await WORK.get_item(PIPE.web.service);
+            const result = await service.fetch_url({ url: b.url });
+            if (result?.error) {
+                await siteFail(params, shortError(result.error));
                 return true;
             }
-            const page = clipPage(htmlToText(raw));
+            if (result.url)
+                b.url = result.url;
+            const page = clipPage(result.content);
             if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
                 await siteFail(params, 'пусто');
                 return true;
@@ -469,25 +479,23 @@ const PIPE = {
             const extracted = await task._streamChat({ messages, session });
             if (!task._stopped)
                 b.content = extracted.content;
-        },
-        recalc(params = {}) {
-            const b = params.block;
-            if (b.state !== 'error')
-                delete b.state;
-            if (b.content)
-                stampSiteContent(params.container, b);
-        },
+            return true;
+        }
     },
     thought:{
         label: 'Мысли',
         icon: 'carbon:idea',
+        inject: 'после действия обдумать: хватит или ещё ход',
+        next: ['report', 'comment'],
         prompt: [
-            'Подробно, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
+            'Кратко, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
             'или сделанного уже достаточно для успешного завершения задачи.',
             'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
-            'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше)',
+            'Ответь в виде размышлений от своего лица (5-10 строк, или если надо, больше).',
         ].join('\n'),
-        next: ['report'],
+        init(params = {}) {
+            delete params.container.using_blocks;
+        },
     },
 
     form: {
@@ -775,26 +783,6 @@ function usedSiteUrls(parent, web) {
                 used.add(s.url);
     }
     return used;
-}
-
-function htmlToText(html = '') {
-    return String(html)
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<(?:head|nav|footer|noscript|svg|iframe)[\s\S]*?<\/(?:head|nav|footer|noscript|svg|iframe)>/gi, ' ')
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&amp;/gi, '&')
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;|&apos;/gi, "'")
-        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\s*\n\s*/g, '\n')
-        .trim();
 }
 
 function clipPage(text) {

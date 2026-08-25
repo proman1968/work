@@ -208,11 +208,13 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        const live = this.$pdp?.streaming && this.$pdp?.streamTarget;
-        if (live && Reactor.equal(this.data, live))
+        if(!this.content)
             return 'spinners:3-dots-scale';
-        if (live && containsBlock(this.data, live))
-            return 'spinners:3-dots-scale';
+        // const live = this.$pdp?.streaming && this.$pdp?.streamTarget;
+        // if (live && Reactor.equal(this.data, live))
+        //     return 'spinners:3-dots-scale';
+        // if (live && containsBlock(this.data, live))
+        //     return 'spinners:3-dots-scale';
         return this.data?.icon || '';
     },
     get items() { return this.data?.items || []; },

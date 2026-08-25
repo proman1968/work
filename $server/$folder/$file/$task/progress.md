@@ -1,6 +1,8 @@
 # Прогресс: $task
 
 ## Последние изменения
+- [00:50] закрытый контейнер (`content`) — `next` площадки, не свой: иначе после `web` в `explore` падал `site` без url.
+- [00:36] `site.init` — `fetch_url` сервиса (`PIPE.web.service`): дамп с хвостами `[images]` / `[video]`. Свой `fetch`+`htmlToText` их не собирал.
 - [12:46] `on_save`: `params.prompt = body.title`, роль не подменять.
 
 ## В работе
