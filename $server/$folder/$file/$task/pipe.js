@@ -153,7 +153,7 @@ export const execute = {
         icon: 'enterprise:wrench',
         inject: 'нужны действия над объектами, файлами, навыками',
         container: true,
-        next: ['work', 'web', 'form', 'html', 'check', 'report'],
+        next: ['work', 'web', 'form', 'html', 'check', 'total'],
 
         system: `       
 Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.
@@ -174,7 +174,7 @@ export const explore = {
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web', 'report'],
+        next: ['thinking', /* 'work', */ 'web', 'total'],
 
         prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
         что там полезного ты узнал для выполнения задачи.`,
@@ -186,11 +186,11 @@ export const work = {
         container: true,
         plan: {
             inject: 'факты в рабочей области, в контексте их нет',
-            next: ['search', 'read', 'report'],
+            next: ['search', 'read', 'total'],
         },
         do: {
             inject: 'без действий над файлами области нельзя',
-            next: ['search', 'read', 'write', 'report'],
+            next: ['search', 'read', 'write', 'total'],
         },
         system: [
             'Подумай, какие именно действия над файлами необходимо выполнить.',
@@ -237,7 +237,7 @@ export const file = {
                 // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
-                block.title = `file ${length + 1}: ['${file.label}'](${file.path})\n\n`;
+                block.title = `file ${length + 1}: ['${file.label}'](<${file.path}>)\n\n`;
                 block.content = await file.read_text() + '\n---------------------\n';
                 block.icon = file.icon;
                 block.label = file.label;
@@ -332,27 +332,28 @@ export const check = {
             'Когда доказательств достаточно — сверни факты отчётом. Если фактов мало — отклони отчёт: continue.',
         ].join('\n'),
         container: true,
-        next: ['thinking', 'work', 'web', 'report'],
+        next: ['thinking', 'work', 'web', 'total'],
         prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
         async recalc(params = {}) {
             (await params.task.body).mode = 'do';
         },
     }
 
-export const report = {
-        label: 'Отчёт',
+export const total = {
+        label: 'Итог',
         icon: 'icons:assignment-turned-in',
         inject: 'этап закрыт: есть факты для сводки',
+        close: true,
         async init(params = {}) {
-            debugger
-            let {block, container, session, task} = params;
-            let prompt = task.pipe[container.type].prompt;
+            const { container, session, task } = params;
+            const prompt = task.pipe[container.type].prompt;
             const messages = await task.context({
                 prompt,
                 session,
             });
             const asked = await task._streamChat({ messages, session });
             container.content = asked.content;
+            return false;
         },
     }
 
@@ -361,7 +362,7 @@ export const web = {
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
         container: true,
-        next: ['site', 'report'],
+        next: ['site', 'total'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
@@ -471,7 +472,7 @@ export const thought = {
         label: 'Мысли',
         icon: 'carbon:idea',
         inject: 'после действия обдумать: хватит или ещё ход',
-        next: ['report', 'comment'],
+        next: ['total', 'comment'],
         prompt: [
             'Кратко, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
             'или сделанного уже достаточно для успешного завершения задачи.',

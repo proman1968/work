@@ -63,10 +63,8 @@
             next = next.filter(id => !using_blocks.includes(id));
 
             let choice;
-            if(!next.length){
-                if(!params.container.content)
-                    choice = 'report';
-            } 
+            if (!next.length && !params.container.content)
+                choice = Object.keys(pipe).find(id => pipe[id]?.close); 
             if (next.length === 1)
                 choice = next[0];
             else {

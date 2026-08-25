@@ -165,7 +165,7 @@ ODA({ is: 'microchat-view',
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
-                    <oda-icon ~if="!sender && typeIcon" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <oda-icon ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <span class="label"  @click.stop>{{label}}</span>
                     <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
