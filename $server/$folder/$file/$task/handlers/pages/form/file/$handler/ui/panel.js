@@ -7,6 +7,7 @@ ODA({ is: 'microchat-panel',
         <style>
             :host {
                 @apply --vertical;
+                padding: 8px 0px;
             }
             .composer {
                 @apply --vertical; @apply --raised; @apply --content;
@@ -177,7 +178,10 @@ ODA({ is: 'microchat-panel',
         }
         if (this.$pdp.streaming || this.$pdp.focusedBlock?.stop === true) return null;
         if (!this.liveOpen) return null;
-        return { label: 'Продолжить', color: 'info', cancel: false, role: 'AI' };
+        return { label: 'Продолжить', color: 'info', cancel: false };
+    },
+    get userRole() {
+        return String(this.role || this.$item.role || 'USER').toUpperCase();
     },
     get liveOpen() {
         const root = this.data;
@@ -202,7 +206,6 @@ ODA({ is: 'microchat-panel',
     get usageStats() { return buildUsageStats(this.data); },
     attached() {
         this._focus();
-        this._geo();
     },
     fmtTok(n) { return fmtTokens(n); },
     _focus() {
@@ -215,25 +218,15 @@ ODA({ is: 'microchat-panel',
         return this._ttsController ??= new TtsController(this);
     },
     async sendAction(accept) {
-        const next = this.actionButton;
         this.pending = true;
-        if (next?.role === 'AI') {
-            await this.$item.fetch('prompt', {
-                model: this.data.model,
-                role: 'AI',
-            });
-            this._focus();
-            return;
+        if (typeof this.$pdp.focusedBlock?.stop === 'string') {
+            let prompt;
+            if (accept && this.isFormAction)
+                prompt = JSON.stringify(this.$pdp.result || {});
+            await this.$item.fetch('prompt', { accept, prompt, role: 'APPROVE' });
+        } else {
+            await this.$item.fetch('prompt', { prompt: 'продолжай', role: this.userRole });
         }
-        let prompt;
-        if (accept && this.isFormAction)
-            prompt = JSON.stringify(this.$pdp.result || {});
-        await this.$item.fetch('prompt', {
-            accept,
-            prompt,
-            model: this.data.model,
-            role: 'APPROVE',
-        });
         this._focus();
     },
 
@@ -278,10 +271,9 @@ ODA({ is: 'microchat-panel',
             for (const f of external) post.append('file', f, f.name);
         }
         this.pending = true;
-        const result = await this.$item.fetch('prompt', {
+        await this.$item.fetch('prompt', {
             prompt: text,
-            model: this.data.model,
-            role: String(this.role || this.$item.role || 'USER').toUpperCase(),
+            role: this.userRole,
         }, post);
         this._focus();
     },

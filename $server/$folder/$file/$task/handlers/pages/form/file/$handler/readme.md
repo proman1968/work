@@ -18,10 +18,11 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
-- Sticky: `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo). Контейнер — `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
-- Action-bar: строковый `stop` — зелёная APPROVE + крестик (нет при `streamTarget`). Иначе открытый корень (`!content` + `items`) и не `pending` / не `streaming` / не `stop: true` — синяя «Продолжить» без крестика, `role:'AI'`.
-- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
-- Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. `todo` и `step` — `header`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`. Лента для `step`/`prompt`/`form`/`todo` всегда `microchat-view-*`. Шапка `step`: `N. название` (`todo.recalc` / fallback из `todo.steps` по `Reactor.equal`); фаза в шапке не показывается.
+- Sticky: одна поверхность на блок. `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке. Контейнер — только `summary`: todo + ближайший `previousSibling` prompt + шапка родителя. Высота шапки — `syncHeaderHeight` (attached + resize); `stickyGen` на топ-ленте инвалидирует `top` у всех шапок (дыры при появлении блоков).
+- Удаление: в шапке справа `oda-button` (`error`, ховер). `fetch('remove_block')`. Нет у `todo` и у блока, на котором сейчас стрим.
+- Action-bar: строковый `stop` — зелёная APPROVE + крестик (нет при `streamTarget`). Иначе открытый корень (`!content` + `items`) и не `pending` / не `streaming` / не `stop: true` — синяя «Продолжить» без крестика: `prompt:'продолжай'` и роль пользователя. `role:'AI'` панель не шлёт — это только самовызов харнесса.
+- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/report) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
+- Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. `todo` и `step` — `header`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`. Лента для `step`/`prompt`/`form`/`todo`/`html` всегда `microchat-view-*`. Шапка `step`: `N. название` (`todo.recalc` / fallback из `todo.steps` по `Reactor.equal`); фаза в шапке не показывается.
 - Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`. Поле ввода у «Другое» скрыто, пока пункт не выбран.
 - Html-слот: `microchat-html` — `iframe[srcdoc]` + sandbox (`allow-scripts`); высота по `postMessage`.
@@ -48,7 +49,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 | [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + markdown `content`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
-| [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при `streamTarget`). APPROVE: `accept` + для form `prompt` = JSON `$pdp.result`. |
+| [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при `streamTarget`) → `APPROVE` + `accept`; form: `prompt` = JSON `$pdp.result`. «Продолжить» / send — роль пользователя, без `model`. |
 | [`ui/mic.js`](ui/mic.js) | SpeechRecognition → `panel.value` / `recording` / `timer`. |
 | [`ui/tts.js`](ui/tts.js) | `off` / `local` / `browser`; delta → speak на done. |
 | [`ui/usage.js`](ui/usage.js) | Usage из `data.usage` + walk `data.items`. |
@@ -67,9 +68,10 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 ## Контракты (как в коде)
 
 - **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model', { model: path })`.
-- **Action:** строковый `stop` — APPROVE + крестик (`null` при `streamTarget`). Иначе «Продолжить» (`role:'AI'`, без крестика) при открытом корне и не `pending`/`streaming`/`stop: true`. Form: `prompt` = JSON `$pdp.result`.
+- **Удаление:** шапка, ховер, `confirm()`, затем `fetch('remove_block', { time, type })`. Не `todo`, не слот текущего стрима. Запись — `_save`, не `on_save`.
+- **Action:** строковый `stop` — `APPROVE` + `accept` + крестик (`null` при `streamTarget`); form: `prompt` = JSON `$pdp.result`. Иначе «Продолжить» (`prompt:'продолжай'`, роль пользователя, без крестика) при открытом корне и не `pending`/`streaming`/`stop: true`. Модель в `prompt` не передаётся — она в `body.model`, смена только `change_model`.
 - **Form:** слот только при `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
-- **Html:** `block.html` → SPA в `iframe srcdoc` (sandbox); без APPROVE, конец ветки (`stop`).
+- **Html:** `block.html` (или целый document в `content`) → `microchat-html` `iframe srcdoc` (`allow-scripts`); высота `postMessage`; без APPROVE, конец ветки (`stop`).
 - **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
 - **Stream:** `streamTarget` = focused без тела (слот). `streaming` — только delta/done. `typeIcon` крутит, только если оба; в JSON не пишется. `streamingText` на delta. Панель: `pending` на send/`chat.delta`, гашение на `chat.done`; `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

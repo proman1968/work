@@ -1,5 +1,4 @@
-﻿// Линейный реестр PIPE (по id = type блока);
-export default {
+﻿export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
     async prompt(params = {}) {
@@ -24,6 +23,7 @@ export default {
                     delete params.block.stop;
                     delete params.container.using_blocks;
                     await this._save(session);
+                    this._stopped = false;
                 } break;
                 default:{
                     const text = String(prompt ?? '').trim();
@@ -35,25 +35,24 @@ export default {
                         await this._push_block(params);
                     }
                     if (params.includes) {
-                        const paths = JSON.parse(params.includes);
-                        params.block = {
-                            type: 'includes',
-                            files: paths.map(path => ({ path, label: path.split('/').pop() })),
-                            items: [],
-                        };
+                        params.block = this._build_block('includes');
+                        params.block.files = JSON.parse(params.includes);
                         await this._push_block(params);
                     }
                     delete params.container.using_blocks;
+                    this._stopped = false;
                 }
             }
 
             await this._init(params);
-            await PIPE[params.container.type]?.recalc?.({ ...params, block: params.container });
+            const pipe = await this.pipe;
+            await pipe[params.container.type]?.recalc?.(params);
 
+ 
             // Находим список следующих шагов
             let mode = (await this.body).mode || 'plan';
-            const node = PIPE[params.block.type];
-            const place = PIPE[params.container.type];
+            const node = pipe[params.block.type];
+            const place = pipe[params.container.type];
             let next = (params.block.container && params.block.content)
                 ? (place?.[mode]?.next || place?.next || [])
                 : (node?.[mode]?.next || node?.next || place?.[mode]?.next || place?.next || []);
@@ -63,50 +62,48 @@ export default {
             let using_blocks = params.container.using_blocks ??= [];
             next = next.filter(id => !using_blocks.includes(id));
 
-            if (next.length) {
-                let choice;
-                if (next.length === 1)
-                    choice = next[0];
-                else {
-                    let menu = next.map(id => id.toUpperCase() + ' - ' + (PIPE[id]?.[mode]?.inject || PIPE[id]?.inject) + ';');
-                    menu.unshift('Выбери строго один вариант из списка. Ответь одним словом, без знаков и пояснений. Выберай шаг или действие, которое необходимо сделать дальше:');
-                    menu = menu.join('\n');
-                    console.log(params.block.type, menu);
-                    let messages = await this.context({prompt: menu, session});
-                    let response = await this._streamChat({ messages, silent: true, session });
-                    if (!this._stopped) {
-                        const word = response.content.trim().toLowerCase();
-                        if (next.includes(word))
-                            choice = word;
-                    }
-                }
-                if (choice) {
-                    let next_pipe = PIPE[choice];
-                    using_blocks.push(choice);
-                    params.block = {
-                        type: choice,
-                        icon: next_pipe.icon,
-                        stop: next_pipe.stop,
-                        label: next_pipe.label,
-                        container: next_pipe.container
-                    }
-                    await this._push_block(params);
-                    const text = next_pipe.prompt || PIPE[params.container.type]?.prompt;
-                    if(!params.block.container && !params.block.content && text){
-                        let messages = await this.context({prompt: text, session});
-                        let response = await this._streamChat({ messages, session });
-                        if(!this._stopped){
-                            params.block.content = response.content;
-                            await next_pipe.recalc?.(params);
-                            await this._save(session);
-                        }
-                    }
-                    if (params.block.container || !params.block.stop) {
-                        this.async(() => this.prompt({ role: 'AI', session }));
-                        return { ok: true };
-                    }
+            let choice;
+            if (!next.length && !params.container.content)
+                choice = Object.keys(pipe).find(id => pipe[id]?.close); 
+            if (next.length === 1)
+                choice = next[0];
+            else {
+                let menu = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
+                menu.unshift('Выбери строго один вариант из списка. Ответь одним словом, без знаков и пояснений. Выберай шаг или действие, которое необходимо сделать дальше:');
+                menu = menu.join('\n');
+                console.warn('choice', choice);
+                console.log(menu);
+                let messages = await this.context({prompt: menu, session});
+                let response = await this._streamChat({ messages, silent: true, session });
+                if (!this._stopped) {
+                    const word = response.content.trim().toLowerCase();
+                    if (next.includes(word))
+                        choice = word;
                 }
             }
+            if (choice) {
+                let next_pipe = pipe[choice];
+                
+                params.block = this._build_block(choice);
+                if(await this._push_block(params)){
+                    prompt = next_pipe.prompt;
+                    if(!params.block.container /* && !params.block.content */ && prompt){
+                        // debugger;
+                        let messages = await this.context({prompt, session});
+                        let response = await this._streamChat({ messages, session });
+                        if(params.block.title)
+                            response.content = params.block.title + '\n\n' + response.content;
+                        Object.assign(params.block, response);
+                    }
+                }
+                await pipe[params.block.type]?.recalc?.(params);
+                await this._save(session);
+                if (!this._stopped && (params.block.container || !params.block.stop)) {
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                    return { ok: true };
+                }
+            }
+
         }
         catch (e) {
             params.block = { type: 'error', content: e.message };
@@ -116,10 +113,12 @@ export default {
         session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
+
     async _init(params = {}) {
         params.block = await this._active_block();
         params.container = await this._active_container();
-        params.pipe_step = PIPE[params.block.type] || PIPE.thinking;
+        const pipe = await this.pipe;
+        params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
     async context(params = {}) {
@@ -159,42 +158,17 @@ export default {
         }
         return messages;
     },
-    // async _pipe_stream(params = {}) {
-    //     const { session, block } = params;
-    //     const pipe = params.pipe_step || PIPE[block?.type];
-    //     if (pipe?.container)
-    //         return false;
-    //     const mode = containerMode(await this.body, params.container);
-    //     const place = PIPE[params.container?.type];
-    //     const text = pipe.close
-    //         ? [place?.prompt, CONTINUE].filter(Boolean).join('\n')
-    //         : (pipe[mode]?.prompt || pipe.prompt);
-    //     if (!text)
-    //         return false;
-    //     const messages = await this.context({ prompt: text, session });
-    //     const response = await this._streamChat({ messages, session });
-    //     if (!this._stopped) {
-    //         Object.assign(block, response);
-    //         pipe.parse?.(block);
-    //         await pipe.recalc?.(params);
-    //         await PIPE.close_up(await this.body, block, params);
-    //         await this._save(session);
-    //         if (!block.stop)
-    //             this.async(() => this.prompt({ role: 'AI', session }));
-    //     }
-    //     return true;
-    // },
     _container_context(container) {
-        const node = PIPE[container.type];
+        const node = this.pipe[container.type];
         const mode = this.body.mode || 'plan';
         let system = node?.[mode]?.system || node?.system || container.system || '';
         if (container.todo)
             system += '\n\n[todo]\n' + (container.todo.content || '');
         const messages = [];
         for (const b of (container.items || [])) {
-            if (PIPE[b.type]?.close)
+            if (this.pipe[b.type]?.close)
                 continue;
-            messages.push({ role: PIPE[b.type]?.role || 'assistant', content: b.content || stageOpen(b) });
+            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content || stageOpen(b, this.pipe[b.type]) });
             if (b.page && !b.content)
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
@@ -222,97 +196,16 @@ export default {
         }
         return { content, usage };
     },
-    // async _fc_exec(service, call, { block, session } = {}) {
-    //     const args = call.args || {};
-    //     if (call.method === 'search' && block?.type === 'web') {
-    //         const result = typeof service?.search === 'function'
-    //             ? await service.search(args)
-    //             : { error: 'сервис поиска недоступен' };
-    //         const seen = PIPE.usedSiteUrls(PIPE.parentOf(await this.body, block), block);
-    //         block.sites = [];
-    //         for (const r of result?.results || []) {
-    //             const url = r.url;
-    //             if (!url || seen.has(url))
-    //                 continue;
-    //             seen.add(url);
-    //             block.sites.push({ url, title: r.title || '' });
-    //         }
-    //         if (result?.error || !block.sites.length) {
-    //             block.state = 'error';
-    //             block.content = PIPE.shortError(result?.error || 'пусто');
-    //         }
-    //         await this._save(session);
-    //         return result ?? {};
-    //     }
-    //     if (call.method === 'fetch_url' && block?.type === 'site') {
-    //         const url = String(block.url || args.url || '').trim();
-    //         const result = await service.fetch_url?.({ url });
-    //         block.icon = PIPE.siteFavicon(url);
-    //         if (result?.error)
-    //             block.state = 'error';
-    //         await this._save(session);
-    //         return result ?? {};
-    //     }
-    //     if ((call.method === 'semantic_search' || call.method === 'find_text') && block?.type === 'search') {
-    //         const query = String(args.prompt || args.text || '').trim();
-    //         if (query)
-    //             block.label = query;
-    //         const result = await service[call.method]?.(args);
-    //         block.content = PIPE.formatFileHits(result);
-    //         await this._save(session);
-    //         return result ?? {};
-    //     }
-    //     if ((call.method === 'read_text' || call.method === 'load') && block?.type === 'read') {
-    //         const path = String(args.path || block.path || '').trim();
-    //         block.path = path;
-    //         block.label = path || PIPE.read.label;
-    //         try {
-    //             const file = await WORK.get_item(path);
-    //             if (!file)
-    //                 throw new Error('файл не найден: ' + path);
-    //             const text = await file.read_text();
-    //             block.content = typeof text === 'string' && text.trim() ? text : '—';
-    //         } catch (e) {
-    //             block.state = 'error';
-    //         block.content = PIPE.shortError(e);
-    //         }
-    //         await this._save(session);
-    //         return { path, content: block.content, error: block.state === 'error' ? block.content : undefined };
-    //     }
-    //     if (['save_file', 'save', 'edit'].includes(call.method) && block?.type === 'write') {
-    //         const path = String(args.path || block.path || '').trim();
-    //         try {
-    //             if (call.method === 'save_file') {
-    //                 const folder = path ? await WORK.get_item(path) : service;
-    //                 const dest = [(folder.path || folder.short || path || '').replace(/\/$/, ''), args.filename].filter(Boolean).join('/');
-    //                 await folder.save_file({ filename: args.filename, post: args.post, message: args.message });
-    //                 block.path = dest;
-    //                 block.label = dest;
-    //                 block.content = 'записано: ' + dest;
-    //             } else {
-    //                 const file = await WORK.get_item(path);
-    //                 await file[call.method]({ post: args.post });
-    //                 block.path = path;
-    //                 block.label = path;
-    //                 block.content = (call.method === 'edit' ? 'правка: ' : 'записано: ') + path;
-    //             }
-    //         } catch (e) {
-    //             block.state = 'error';
-    //             block.content = e.message || '—';
-    //         }
-    //         await this._save(session);
-    //         return { path: block.path, content: block.content, error: block.state === 'error' ? block.content : undefined };
-    //     }
-    //     return await service[call.method]?.(args);
-    // },
-    get pipe(){    ;
-        return globalThis.PIPE ??= new AsyncPromise(async () =>{
-            let files = await this.tilde;
-            let pipe = files.find(f => f.id === 'pipe.js');
-            let raw = await pipe.load();
-            globalThis.PIPE = await this.constructor.importScript(raw);
-            return globalThis.PIPE;
-        })
+    get pipe() {
+        return this._pipe ??= new AsyncPromise(async () => {
+            const files = await this.tilde;
+            const file = files.find(f => f.id === 'pipe.js');
+            const raw = await file.load();
+            const script = this.constructor.stripAbsoluteImports(raw);
+            const b64 = Buffer.from(script, 'utf-8').toString('base64');
+            this._pipe = await import('data:text/javascript;base64,' + b64);
+            return this._pipe;
+        });
     },
     get body(){
         return new AsyncPromise(async () =>{
@@ -334,16 +227,34 @@ export default {
         this._stopped = true;
         return { ok: true, stopped: true };
     },
+    _build_block(type) {
+        const node = this.pipe[type];
+        const block = {
+            type,
+            container: node.container,
+            icon: node.icon,
+            stop: node.stop,
+            label: node.label,
+        };
+        if (block.container)
+            block.items = [];
+        return block;
+    },    
     async _push_block(params = {}){
-        // debugger;
         const {block, container, session} = params;
+        container.items ??= [];
+        container.using_blocks ??= [];
+        container.using_blocks.add(block.type);
+        let init = this.pipe[block.type]?.init;
+        if(init && !await init(params)){
+            return false;
+        }
         block.time ??= Date.now();
         if (block.container)
             block.items ??= [];
-        container.items ??= [];
-        container.items.push(block);
-        await PIPE[block.type]?.init?.(params);
+        container.items.push(block);   
         await this._save(session);
+        return true;
     },
     async _active_block() {
         let container = await this._active_container();
@@ -352,8 +263,9 @@ export default {
         if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
             return container.todo;
         if (container.type === 'includes') {
-            const list = PIPE.includePlan(container);
-            const files = PIPE.includeReal(container);
+            const pipe = await this.pipe;
+            const list = pipe.includePlan(container);
+            const files = pipe.includeReal(container);
             const open = files.find(f => !f.content);
             if (open)
                 return open;
@@ -381,107 +293,55 @@ export default {
         await this._save(session);
         return { ok: true, model};
     },
+    async remove_block(params = {}) {
+        const block = params.block || params.post?.block || {
+            time: params.time ?? params.post?.time,
+            type: params.type ?? params.post?.type,
+        };
+        const body = await this.body;
+        const box = parentOfBlock(body, block);
+        if (!box) return { ok: false, error: 'block not found' };
+        const i = box.items.findIndex(b => sameBlock(b, block));
+        if (i < 0) return { ok: false, error: 'block not found' };
+        const type = box.items[i].type;
+        box.items.splice(i, 1);
+        const used = box.using_blocks;
+        if (used) {
+            const j = used.indexOf(type);
+            if (j >= 0) used.splice(j, 1);
+            if (!used.length)
+                delete box.using_blocks;
+        }
+        await this._save(params.session);
+        return { ok: true };
+    },
     async _save(session){
         await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
         session?.send?.({ path: this.short });
     },
-    // async _continue(params = {}) {
-    //     const session = params.session;
-    //     await this._save(session);
-    //     if (!this._stopped)
-    //         this.async(() => this.prompt({ role: 'AI', session }));
-    //     return { ok: true };
-    // }
 };
 
+function sameBlock(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.time && b.time)
+        return Number(a.time) === Number(b.time) && a.type === b.type;
+    return a.type === b.type && a.label === b.label && a.content === b.content;
+}
 
-// //-----------------------------------------------------------------------------
+function parentOfBlock(root, block) {
+    if (!root || !block) return null;
+    for (const b of (root.items || [])) {
+        if (sameBlock(b, block)) return root;
+        const p = parentOfBlock(b, block);
+        if (p) return p;
+    }
+    return null;
+}
 
-
-// const CONTINUE = 'continue — только если в этом этапе ещё нужен поиск или работа, не потому что пользователь не уточнил тему.';
-
-
-
-// function next_options(container, block, mode) {
-//     if (container?.content)
-//         return [];
-//     const node = PIPE[block?.type];
-//     const own = node?.[mode]?.next || node?.next;
-//     const place = PIPE[container?.type];
-//     const parentNext = place?.[mode]?.next || place?.next || [];
-//     let options;
-//     if (block?.content && node?.container)
-//         options = node.done?.next?.length ? node.done.next : parentNext;
-//     else if (own?.length)
-//         options = own;
-//     else
-//         options = parentNext;
-//     const used = new Set(container?.using_blocks || []);
-//     const list = options.filter(id => {
-//         if (container?.type === 'includes') {
-//             const list = PIPE.includePlan(container);
-//             const files = PIPE.includeReal(container);
-//             const more = list.length && files.length < list.length;
-//             const all = list.length && files.length >= list.length && files.every(f => f.content);
-//             if (id === 'file')
-//                 return more && !used.has(id);
-//             if (id === 'report')
-//                 return all && !used.has(id);
-//         }
-//         if (PIPE[id]?.close && !can_close(container))
-//             return false;
-//         return !used.has(id);
-//     });
-//     if (container?.type === 'task' && !taskAsked(container) && list.includes('question'))
-//         return ['question'];
-//     return list;
-// }
-
-// function taskAsked(container) {
-//     return (container?.items || []).some(b => b.type === 'prompt' && String(b.content || '').trim());
-// }
-
-// async function attachFiles(task, params) {
-//     const incoming = params.post?.files;
-//     if (!incoming?.length)
-//         return [];
-//     const logs = await task.$owner.save_files({
-//         post: { files: incoming },
-//         ignore_save_logs: true,
-//         session: params.session,
-//     });
-//     const out = [];
-//     for (const log of logs || []) {
-//         const path = log?.logFullPath || log?.path;
-//         if (!path)
-//             continue;
-//         const full = path.startsWith('/') ? path : '/' + path;
-//         const file = await WORK.get_item(full);
-//         out.push({
-//             path: full,
-//             label: file?.id || full.split('/').pop(),
-//             icon: file?.icon || PIPE.file.icon,
-//         });
-//     }
-//     return out;
-// }
-
-// function useBlock(container, type) {
-//     if (!container || !type) return;
-//     container.using_blocks ??= [];
-//     if (!container.using_blocks.includes(type))
-//         container.using_blocks.push(type);
-// }
-
-
-// function can_close(container) {
-//     return (container?.items || []).some(b =>
-//         b.content && b.state !== 'error' && !PIPE[b.type]?.close && b.type !== 'thinking' && b.type !== 'prompt');
-// }
-
-function stageOpen(block) {
-    if (!PIPE[block?.type]?.container) return '';
-    const label = PIPE[block.type].label || block.label || block.type;
+function stageOpen(block, node) {
+    if (!node?.container) return '';
+    const label = node.label || block.label || block.type;
     return 'Текущий этап далее (' + label + ').';
 }
 
