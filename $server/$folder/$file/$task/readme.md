@@ -12,7 +12,7 @@
 
 ## 3. Как это работает
 
-Инвариант: нет `content` — блок живой (в него спускаемся); есть `content` — завершён. Листья получают `content` из `init` (сервис) или стрима (`_streamChat`). Внутренний контейнер закрывает `total` (`close`): `init` пишет итог в `container.content` и возвращает `false` — лист не пушится. `complete` — шаг корня (кнопка). Тот же признак у `step` (`todo.recalc` смотрит `st.content`). `state` — подпись сути в шапке (не фаза), сначала текст, потом число: `web` — `Сайты 2/2` (успешные / все `site` в ленте), `explore` — `Интернет 1, Форма 2`, `todo` — `2/5 Шаг`, мыслей нет (справа `time`). APPROVE — тоже `state`.
+Инвариант: нет `content` — блок живой (в него спускаемся); есть `content` — завершён. Листья получают `content` из `init` (сервис) или стрима (`_streamChat`). Внутренний контейнер закрывает `total` (`close`): `init` пишет итог в `container.content` и возвращает `false` — лист не пушится. `report` — шаг корня (кнопка). Тот же признак у `step` (`todo.recalc` смотрит `st.content`). `state` — подпись сути в шапке (не фаза), сначала текст, потом число: `web` — `Сайты 2/2` (успешные / все `site` в ленте), `explore` — `Интернет 1, Форма 2`, `todo` — `2/5 Шаг`, мыслей нет (справа `time`). APPROVE — тоже `state`.
 
 1. **`on_save`** пишет `body.system` (SYSTEM + **выбор шага** + режимы `plan`/`do` + профиль / рабочая группа; если `path` совпал — один блок «личная зона»; место из `params.location` — точка и город, Nominatim). `body.tz` — пояс для часов. Поля `location` / `here` нет. Потом `file.prompt(params)` с `prompt: body.title`, роль как пришла. Старый таск держит старый `body.system`, пока снова не сработает `on_save`.
 2. **Роли входа `prompt()`:**
@@ -27,7 +27,7 @@
    - `container: true` → у блока `items: []`;
    - кеш типов — `container.using_blocks` (в JSON, для возобновления). Тип пишется при push. `step` снимает себя в `todo`, когда текущий шаг закрыт. Новый `prompt` — `delete using_blocks`. Тип в окне один раз; меню пустое и нет `content` — узел с `close` (`total`);
    - `parse(block)` — пост-обработка ответа модели (`form`, `html`);
-   - `approve(params)` — обработка `APPROVE` (`planning`, `form`, `complete`);
+   - `approve(params)` — обработка `APPROVE` (`planning`, `form`, `report`);
    - `recalc(params)` — пересчёт узла: подпись `state` по типу, иконка, `mode` где нужно; `step.recalc` зовёт `todo.recalc` (label шага = `N. название`, иначе при push остаётся ярлык «Шаг»);
    - `init(params)` — ход узла до push. `true` — блок в ленту; не `true` — не пушить. Сервис (`search` / `read` / `file` / `write` / `web` / `site`) и `total` — свои `init`;
    - `close` — лист закрывает родителя (`total`): `init` пишет `container.content` и возвращает `false`, блок не пушится. В `_container_context` узлы `close` не идут в messages. Пустое меню + нет `content` — харнесс берёт `pipe[id].close`, не имя типа;
@@ -57,13 +57,13 @@
    - `prompt` — краткое изложение файлов, не отчёт по теме и не вопрос. Стрим только через `total`. `recalc` — `N/M Файл`;
    - `file` — лист: `run` берёт следующий из `files`, `icon` с `$file.icon`, `read_text()` → `content` с шапкой `[file: путь]`. Ошибка — `state: 'error'`, в `content` та же шапка и текст ошибки.
 9. **Wait:** `block.stop` — `true` без кнопки (шапка скрыта) или строка-лейбл (action-bar + шапка, `role:'APPROVE'`, `accept`). После решения — `delete block.stop`. Лейбл кнопки с `stop` не сравнивают.
-10. **Режимы и выбор:** шаг только если без него нельзя выполнить текущий запрос. Факт уже в контексте (лента, `location`, todo, итог) — `text`, не `explore`/`planning`. Дыра у пользователя — `question` / `form`. Внешних фактов нет — `explore`. Несколько несделанных действий — `planning`. Меню корня — `task.plan` / `task.do` (в обоих `complete` — закрытие таска человеком). В `task` и `step` (`plan`/`do`) есть `question`. Внутренние площадки (`explore`, `work`, `web`, `includes`, `step`, `check`) — `total`. `explore` не меняет `mode`. `check` — площадка после `execute`, не выход. `execute` есть в `task.do`. Один `todo` на контейнер.
+10. **Режимы и выбор:** шаг только если без него нельзя выполнить текущий запрос. Факт уже в контексте (лента, `location`, todo, итог) — `text`, не `explore`/`planning`. Дыра у пользователя — `question` / `form`. Внешних фактов нет — `explore`. Несколько несделанных действий — `planning`. Меню корня — `task.plan` / `task.do` (в обоих `report` — закрытие таска человеком). В `task` и `step` (`plan`/`do`) есть `question`. Внутренние площадки (`explore`, `work`, `web`, `includes`, `step`, `check`) — `total`. `explore` не меняет `mode`. `check` — площадка после `execute`, не выход. `execute` есть в `task.do`. Один `todo` на контейнер.
 11. **Question / form / text:** один вопрос — `question` (`stop: true`, без кнопки). Ответ — следующий `prompt` в ленте, не `answer`. Нет цели — спросить, не искать в интернете. Два и больше вопроса — `form`. Только поля, без которых нельзя идти дальше. Ответ: один fenced-блок html (`form`+`fieldset`), после него пояснение 1–10 слов (в ленте `content` над формой). Выбор — только `select` + «Другое» + `input` (не radio/checkbox). Слот прячет ввод, пока «Другое» не выбрано. Скаляр — number/date. `parse` — fence / `<form>` / `fieldset`, хвост в `content`; срезает script, `oda-icon`, button/submit. Раскладка: один `legend` (имя поля, не путь); один select — без `label`; input «Другое» — свой name. `legend`/`label` могут начинаться с эмодзи. Никаких customElements. `text` — дрифт меню. `stop: true`.
 12. **Html:** SPA в sandbox-`iframe` (`srcdoc`). `parse` → `block.html`; без `plan`/`do` → `stop` (конец ветки, без approve и auto-loop). Высота через `postMessage`.
-13. **Complete / total:** `complete` — шаг корня, `stop: 'Принять'`. `accept` без `prompt` → approved, `task.content = block.content`; иначе `rejected`. `total` — `close`, без своего `prompt`; `init` стримит `prompt` контейнера → `container.content`, возвращает `false`, лист не пушится. Новый блок `prompt` снимает `using_blocks` у контейнера.
+13. **Report / total:** `report` — шаг корня / шага, `stop: 'Принять'`. `accept` без `prompt` → approved, `container.content = block.content`; иначе `rejected`. `total` — `close`, без своего `prompt`; `init` стримит `prompt` контейнера → `container.content`, возвращает `false`, лист не пушится. Новый блок `prompt` снимает `using_blocks` у контейнера.
 14. **Контекст:** `_container_context(container)` — один слой: `system` из `pipe[container.type]` + `[todo]` + `items` как листья (узлы `close` не входят). У открытого `site` — `block.page` (уже с `[site N: url]`). Открытый контейнер без `content` — слот «Текущий этап далее (label).». `context()` — путь от корня + текущие дата/время (`timeNow` по `body.tz`) + режим. Место — в `body.system` с `on_save`, не каждый ход.
 15. **Служебное:** `stop` — флаг `_stopped` (обрывает стрим и auto-loop); `change_model` — `body.model`; `_save` — JSON на диск + `session.send({ path })`; `_continue` — `_save` + auto-loop, если не `_stopped`.
-16. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). `streamTarget` — focused без `content`/`html` (слот). `streaming` — только `chat.delta` / `chat.done`. `typeIcon`: вертушка на слоте и предках, только пока `streaming`; в JSON не пишется. Слот form только при `html`. `pinned` — `focusedBlock` и предки на пути; закрытая площадка не на пути сворачивается свободно. Sticky: `todo`/`prompt` — host (`todo` = 0, `prompt` = высота todo); контейнер — `summary` (todo + соседний prompt + шапка родителя). Wide (`≥720px`, есть отчёты): справа док (`oda-splitter`, ширина в localStorage); тот же `content` в ленте и в доке; инпут слева под лентой; copy/share в тулбаре дока.
+16. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). `streamTarget` — focused без `content`/`html` (слот). `streaming` — только `chat.delta` / `chat.done`. `typeIcon`: вертушка на слоте и предках, только пока `streaming`; в JSON не пишется. Слот form только при `html`. `pinned` — `focusedBlock` и предки на пути; закрытая площадка не на пути сворачивается свободно. Sticky: одна поверхность. `todo`/`prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке; контейнер — только `summary` (todo + соседний prompt + шапка родителя). Wide (`≥720px`, есть отчёты): справа док (`oda-splitter`, ширина в localStorage); тот же `content` в ленте и в доке; инпут слева под лентой; copy/share в тулбаре дока.
 
 ## 4. Из чего это состоит
 
@@ -78,12 +78,12 @@
 **В активной доработке.** FSM в `pipe.js`, цикл в `class.js`. Сервис — только из `run` (`_fc_exec`). Стрим без tools.
 
 - ✅ узлы — `export const` в `pipe.js`; корень `type: 'task'`; маршруты у контейнера (`plan`/`do` + `mode`)
-- ✅ `content` = закрыто: спуск, меню `next`, `todo`/`step`, `complete` (таск) / `total` (площадка)
+- ✅ `content` = закрыто: спуск, меню `next`, `todo`/`step`, `report` (таск) / `total` (площадка)
 - ✅ `prompt()`: `init` / меню → push → stream → `parse?` → `recalc` → auto-loop / wait по `stop`
 - ✅ кеш типов — `using_blocks` на контейнере; закрытый `step` снимает себя; новый `prompt` сбрасывает массив
 - ✅ стрим: лист — свой `prompt`; контейнер не стримится; `total` — `prompt` родителя. `system` площадки в JSON не пишется
 - ✅ `planning.approve` → todo + `mode:'do'`
-- ✅ `complete.approve` → `state` / `container.content`; якорь после APPROVE через `_active_*`
+- ✅ `report.approve` → `state` / `container.content`; якорь после APPROVE через `_active_*`
 - ✅ `html`: SPA в iframe, `parse` → `html`, `stop` без approve/auto-loop
 - ✅ `explore` / `work` / `web` / `includes` закрывает `total` (`close` + falsy `init` → `container.content`, лист не пушится)
 - ✅ нет `fc` на узлах; `search` / `read` / `write` / `web` / `site` / `file` — свой `run`

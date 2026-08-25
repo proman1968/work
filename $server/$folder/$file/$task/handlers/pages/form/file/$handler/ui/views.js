@@ -119,13 +119,17 @@ ODA({ is: 'microchat-view',
                 @apply --vertical;
                 border-radius: 8px;
             }
+            :host([host-sticky]) {
+                position: sticky;
+                top: var(--chat-sticky-top, 0px);
+                z-index: var(--chat-sticky-z, 115);
+            }
             summary {
                 cursor: pointer;
                 user-select: none;
                 list-style: none;
                 box-sizing: border-box;
                 overflow: hidden;
-                position: sticky;
                 min-height: 36px;
             }
             .title {
@@ -209,9 +213,9 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        if(!this.content && this.pending)
+        if(!this.content)
             return 'spinners:3-dots-scale';
-        return this.data?.icon || '';
+        return this.data?.icon;
     },
     get items() { return this.data?.items || []; },
     sender: null,
@@ -300,19 +304,25 @@ ODA({ is: 'microchat-view',
             return above;
         return above + (this.prevPrompt?.headerHeight || 0);
     },
-    get hostSticky() {
-        return this.data?.type === 'prompt' || this.data?.type === 'todo'
-            || this.localName === 'microchat-view-prompt'
-            || this.localName === 'microchat-view-todo';
+    hostSticky: {
+        $attr: true,
+        get() {
+            return this.data?.type === 'prompt' || this.data?.type === 'todo'
+                || this.localName === 'microchat-view-prompt'
+                || this.localName === 'microchat-view-todo';
+        },
     },
     get headerStyle() {
+        const top = (this.top || 0) + 'px';
         if (this.hostSticky) {
-            this.style.position = 'sticky';
-            this.style.top = this.top + 'px';
-            this.style.zIndex = (this.data?.type === 'todo' || this.localName === 'microchat-view-todo') ? 120 : 115;
-            return { top: '0px', zIndex: 100 - this.depth };
+            const todo = this.data?.type === 'todo' || this.localName === 'microchat-view-todo';
+            this.style.setProperty('--chat-sticky-top', top);
+            this.style.setProperty('--chat-sticky-z', todo ? '120' : '115');
+            return { position: 'static' };
         }
-        return { top: this.top + 'px', zIndex: 100 - this.depth };
+        this.style.removeProperty('--chat-sticky-top');
+        this.style.removeProperty('--chat-sticky-z');
+        return { position: 'sticky', top, zIndex: 100 - this.depth };
     },
 
     // --- slots ---

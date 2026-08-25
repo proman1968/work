@@ -18,9 +18,9 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
-- Sticky: `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo). Контейнер — `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
+- Sticky: одна поверхность на блок. `todo` / `prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке. Контейнер — только `summary`: todo + ближайший `previousSibling` prompt + шапка родителя.
 - Action-bar: строковый `stop` — зелёная APPROVE + крестик (нет при `streamTarget`). Иначе открытый корень (`!content` + `items`) и не `pending` / не `streaming` / не `stop: true` — синяя «Продолжить» без крестика: `prompt:'продолжай'` и роль пользователя. `role:'AI'` панель не шлёт — это только самовызов харнесса.
-- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/complete) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
+- Шапка блока: скрыта только при `stop === true` (конец ветки); строка-`stop` (planning/form/report) шапку не прячет. В шапке `data.state` — суть своей зоны (`2/2 Сайт` у web, `1 Интернет` у обзора), не фаза.
 - Вид блока: `showTitle` — `color-mode: light`, тело `xx-small`; иначе (`stop: true`) — `content`, шрифт `small`. `todo` и `step` — `header`. Пока стрим на блоке — `oda-markdown-viewer` тоже `xx-small`. `prompt` по-прежнему `info-invert`. Лента для `step`/`prompt`/`form`/`todo` всегда `microchat-view-*`. Шапка `step`: `N. название` (`todo.recalc` / fallback из `todo.steps` по `Reactor.equal`); фаза в шапке не показывается.
 - Полоска слева у тела — только контейнер (`:host([container])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует `data.html`. Поле ввода у «Другое» скрыто, пока пункт не выбран.

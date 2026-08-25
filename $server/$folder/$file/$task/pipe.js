@@ -2,10 +2,10 @@
 export const task = {
     container: true,
     plan: {
-        next: ['thinking', 'explore', 'comment', /* 'question', 'form', 'text', 'planning', 'activation',  */'complete'],
+        next: ['thinking', 'explore', 'comment',  'question', 'form', 'text', 'planning', 'activation', 'report'],
     },
     do: {
-        next: ['thinking', 'explore', 'question', 'form', 'text', 'execute',  'complete'],
+        next: ['thinking', 'explore', 'question', 'form', 'text', 'execute',  'report'],
     }
 }
 
@@ -141,10 +141,10 @@ export const step = {
             return todo.recalc(params);
         },
         plan: {
-            next: ['thinking', 'question', 'explore', 'planning', 'activation', 'complete'],
+            next: ['thinking', 'question', 'explore', 'planning', 'activation'],
         },
         do: {
-            next: ['thinking', 'question', 'explore', 'execute', 'complete'],
+            next: ['thinking', 'question', 'explore', 'execute'],
         },
     }
 
@@ -153,7 +153,7 @@ export const execute = {
         icon: 'enterprise:wrench',
         inject: 'нужны действия над объектами, файлами, навыками',
         container: true,
-        next: ['work', 'web', 'form', 'html', 'check', 'total'],
+        next: ['work', 'web', 'form', 'html', 'check'],
 
         system: `       
 Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.
@@ -167,14 +167,14 @@ export const execute = {
     }
 
 export const explore = {
-        label: 'Обзор',
+        label: 'Исследование',
         icon: 'icons:search',
         inject: 'если нужны внешние факты, которых нет в контексте',
         system: [
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
         container: true,
-        next: ['thinking', /* 'work', */ 'web', 'total'],
+        next: ['thinking', /* 'work', */ 'web'],
 
         prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
         что там полезного ты узнал для выполнения задачи.`,
@@ -186,11 +186,11 @@ export const work = {
         container: true,
         plan: {
             inject: 'факты в рабочей области, в контексте их нет',
-            next: ['search', 'read', 'total'],
+            next: ['search', 'read'],
         },
         do: {
             inject: 'без действий над файлами области нельзя',
-            next: ['search', 'read', 'write', 'total'],
+            next: ['search', 'read', 'write'],
         },
         system: [
             'Подумай, какие именно действия над файлами необходимо выполнить.',
@@ -204,8 +204,8 @@ export const includes = {
         container: true,
         next: ['file'],
         prompt: [
-            'Кратко изложи только вложенные файлы: имя и суть содержимого.',
-            'Бери факты из детей file. Не выдумывай тему, не спрашивай, не пиши отчёт по задаче.',
+            'Сделай сводный отчёт по всем вложенным файлам.'
+            ,
         ].join('\n'),
         recalc(params = {}) {
             const list = includePlan(params.block);
@@ -238,14 +238,14 @@ export const file = {
                 let file = files[length];             
                 file = await WORK.get_item(file);
                 block.title = `file ${length + 1}: ['${file.label}'](<${file.path}>)\n\n`;
-                block.content = await file.read_text() + '\n---------------------\n';
+                block.content = block.title + '\n\n' + await file.read_text() + '\n\n';
                 block.icon = file.icon;
                 block.label = file.label;
                 block.path = file.path;
                 block.state = 'done';
             } catch(e){
                 block.state = 'error';
-                block.content = e.message + '\n\n';
+                block.content = block.title + '\n\n' + e.message + '\n\n';
             }
             return true;
         },
@@ -332,7 +332,7 @@ export const check = {
             'Когда доказательств достаточно — сверни факты отчётом. Если фактов мало — отклони отчёт: continue.',
         ].join('\n'),
         container: true,
-        next: ['thinking', 'work', 'web', 'total'],
+        next: ['thinking', 'work', 'web'],
         prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
         async recalc(params = {}) {
             (await params.task.body).mode = 'do';
@@ -362,7 +362,7 @@ export const web = {
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
         container: true,
-        next: ['site', 'total'],
+        next: ['site'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
             'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
@@ -548,9 +548,9 @@ export const html = {
         stop: true,
     }
 
-export const complete = {
-        label: 'Завершение',
-        inject: 'текущий запрос уже выполнен, нужен итог',
+export const report = {
+        label: 'Отчёт',
+        inject: 'текущий запрос уже выполнен, нужен отчёт',
         prompt: [
             'Отдай пользователю итог задачи.',
             'Не пересказывай процесс. Включи результат из ленты: факты, списки, таблицы.',
