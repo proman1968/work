@@ -13,7 +13,7 @@ Shell + `ui/`: лента, док закрытых контейнеров (wide)
 ## 3. Как это работает
 
 - Shell: `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`, не с `streamTarget` на `changed`; `changed`/`chat.done` → `load()`.
-- Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Список — кто закрылся раньше (дети, потом родители). `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Вьюер `content`. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`. Тот же `content` в ленте и в доке.
+- Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `max-width: 50%` + сплиттер. Отчёт — `container && content` (не «есть `items`»). Обход — `items`, дети раньше родителя; корень с `content` — в конец. Тело — тот же `microchat-view-*` (`viewTag`), `onlyDoc`: без шапки и без детей. `dockOpen` / ширина сплиттера — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Кнопка: нет флага — `success-invert`, есть — `disabled`.
 - Панель: `pending` (вертушка/стоп) — send и `chat.delta`; `chat.done` гасит сразу. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
@@ -46,7 +46,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 |--------|------|
 | [`class.js`](class.js) | Мета. Без ESM. |
 | [`file.js`](file.js) | Шелл: `streamTarget` / `streaming` / `streamingText` / `dockReports`; delta/done. |
-| [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + markdown `content`. |
+| [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + `viewTag` / `onlyDoc`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
 | [`ui/panel.js`](ui/panel.js) | `actionButton` = строка `focusedBlock.stop` (нет при `streamTarget`) → `APPROVE` + `accept`; form: `prompt` = JSON `$pdp.result`. «Продолжить» / send — роль пользователя, без `model`. |

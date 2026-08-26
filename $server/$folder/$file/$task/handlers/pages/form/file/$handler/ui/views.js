@@ -1,3 +1,11 @@
+export function viewTag(item) {
+    if (!item?.type) return 'microchat-view';
+    const name = 'microchat-view-' + item.type;
+    if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo' || item.type === 'html')
+        return name;
+    return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
+}
+
 ODA({ is: 'microchat-ribbon',
     template: /*html*/`
         <style>
@@ -54,10 +62,7 @@ ODA({ is: 'microchat-ribbon',
     },
     /** specialty этого файла — сразу; остальные — если CE/telemetry уже есть */
     tag(item) {
-        const name = 'microchat-view-' + item.type;
-        if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo' || item.type === 'html')
-            return name;
-        return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
+        return viewTag(item);
     },
     attached() {
         if (!this.top) return;
@@ -165,7 +170,7 @@ ODA({ is: 'microchat-view',
             oda-markdown-viewer.stream {
                 font-size: xx-small;
             }
-            :host([container]) details > .body {
+            :host([container]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
             }
             .del {
@@ -190,13 +195,17 @@ ODA({ is: 'microchat-view',
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
-                <microchat-ribbon ~if="items.length" :data></microchat-ribbon>
+                <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
     `,
     data: null,
+    onlyDoc: {
+        $def: false,
+        $attr: true,
+    },
     container: {
         $def: false,
         $attr: true,
@@ -206,9 +215,9 @@ ODA({ is: 'microchat-view',
         return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
     },
 
-    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл */
+    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл; в доке — `onlyDoc` */
     get showTitle() {
-        return this.data && this.data.stop !== true;
+        return this.data && this.data.stop !== true && !this.onlyDoc;
     },
 
     // --- data ---

@@ -1,6 +1,8 @@
-/** Док закрытых контейнеров: content + стрелки + copy/share/save. */
+/** Док закрытых контейнеров: view блока + стрелки + copy/share/save. */
+import { viewTag } from './views.js';
+
 ODA({ is: 'microchat-dock',
-    imports: 'oda//button, oda//markdown//markdown-viewer',
+    imports: 'oda//button',
     template: /* html */`
         <style>
             :host {
@@ -31,9 +33,10 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
-        <oda-markdown-viewer content flex ~if="current?.content" :value="current.content" style="overflow-y: auto;"></oda-markdown-viewer>
+        <div flex ~is="viewTag" ~if="current" :data="current" only-doc style="overflow-y: auto;"></div>
     `,
     $item: null,
+    get viewTag() { return viewTag(this.current); },
     get reports() { return this.$pdp?.dockReports || []; },
     get index() { return this.$pdp?.dockIndex ?? -1; },
     get current() { return this.$pdp?.dockCurrent; },

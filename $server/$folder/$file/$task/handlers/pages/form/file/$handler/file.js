@@ -104,7 +104,7 @@ export default {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if (Array.isArray(b.items) && b.content)
+                if (b.container && b.content)
                     out.push(b);
             }
         };

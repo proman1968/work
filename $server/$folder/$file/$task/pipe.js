@@ -526,6 +526,7 @@ export const form = {
 export const html = {
         label: 'HTML',
         icon: 'editor:code',
+        container: true,
         inject: 'если нужно создать одностраничное HTML приложение в ленте чата',
         prompt: [
             'Собери одностраничное HTML/JS/CSS-приложение.',
