@@ -32,9 +32,6 @@ export default {
                 margin: 0px auto;
                 transition: width, max-width 0.3s ease-in-out;
             }
-            microchat-dock: {
-                min-width: 30%;
-            }
         </style>
    
         <div flex vertical class="feed" ~if="showFeed">
@@ -51,6 +48,8 @@ export default {
     colorMode: 'content',
     data: null,
     streamingText: '',
+    /** send → done/stop; typeIcon и стоп панели */
+    pending: false,
     /** wait-кнопки прячем, пока идёт стрим (реактивный флаг для кэша геттеров) */
     streaming: false,
     dockOpen: { $def: true, $save: true },
@@ -63,12 +62,15 @@ export default {
             n?.listen('changed', async () => {
                 this.streamingText = '';
                 this.data = await n.load();
+                if (this.streamTarget) this.pending = true;
             });
             n?.listen('chat.delta', e => {
+                this.pending = true;
                 this.streaming = true;
                 this.streamingText += e.detail?.value?.token || '';
             });
             n?.listen('chat.done', async () => {
+                this.pending = false;
                 this.streaming = false;
                 this.streamingText = '';
                 this.data = await n.load();
@@ -96,7 +98,7 @@ export default {
         return !(this.showDock && this.mobile);
     },
     get dockStyle() {
-        return this.mobile ? { width: '100%' } : { maxWidth: '50%' };
+        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '70%' };
     },
     get dockReports() {
         const out = [];
@@ -104,7 +106,7 @@ export default {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if (b.container && b.content)
+                if (b.box && b.content)
                     out.push(b);
             }
         };

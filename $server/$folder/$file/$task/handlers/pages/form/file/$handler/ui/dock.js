@@ -1,5 +1,5 @@
-/** Док закрытых контейнеров: view блока + стрелки + copy/share/save. */
-import { viewTag } from './views.js';
+/** Док закрытых box: view блока + стрелки + copy/share/save. */
+import { viewTag, pageHtml } from './views.js';
 
 ODA({ is: 'microchat-dock',
     imports: 'oda//button',
@@ -54,10 +54,14 @@ ODA({ is: 'microchat-dock',
     },
     hide() { if (this.$pdp) this.$pdp.dockOpen = false; },
     get saved() { return !!this.current?.saved; },
-    get text() { return String(this.current?.content || ''); },
+    get isHtml() { return this.current?.type === 'html' || !!pageHtml(this.current); },
+    get text() {
+        return pageHtml(this.current) || String(this.current?.content || '');
+    },
     fileName() {
         const raw = this.cap(this.current).replace(/[\\/]/g, ' ').trim() || 'отчёт';
-        return raw.toLowerCase().endsWith('.md') ? raw : raw + '.md';
+        const base = raw.replace(/\.(md|html|htm)$/i, '');
+        return base + (this.isHtml ? '.html' : '.md');
     },
     async copy() {
         const t = this.text;
@@ -81,7 +85,7 @@ ODA({ is: 'microchat-dock',
         this.current.saved = true;
         const json = JSON.stringify(this.$pdp.data, null, 4);
         const owner = await this.$item.$owner;
-        await owner.save_file(new File([this.text], this.fileName(), { type: 'text/markdown' }));
+        await owner.save_file(new File([this.text], this.fileName(), { type: this.isHtml ? 'text/html' : 'text/markdown' }));
         await this.$item.fetch('save', { skip_file_handler: true }, json);
     },
 });

@@ -117,7 +117,7 @@ ODA({ is: 'microchat-ribbon',
 });
 
 ODA({ is: 'microchat-view',
-    imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
+    imports: 'oda//icon, oda//markdown//markdown-viewer, ~/lib//icon',
     template: /*html*/`
         <style>
             :host {
@@ -152,17 +152,6 @@ ODA({ is: 'microchat-view',
                 font-size: small;
                 min-width: 0;
             }
-            .title > .time {
-                font-size: xx-small;
-                opacity: .5;
-                flex-shrink: 0;
-            }
-            .title > .del {
-                opacity: 0;
-            }
-            summary:hover .del, .title > .del:focus {
-                opacity: 1;
-            }
             .body {
                 font-size: small;
                 word-break: break-word;
@@ -170,15 +159,12 @@ ODA({ is: 'microchat-view',
             oda-markdown-viewer.stream {
                 font-size: xx-small;
             }
-            :host([container]:not([only-doc])) details > .body {
+            :host([box]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
-            }
-            .del {
-                border-radius: 50%;
             }
         </style>
 
-        <details :open="open" @toggle="onToggle">
+        <details :open="open" :title="data?.menu || data.type" @toggle="onToggle">
             <summary ~show="showTitle" shadow vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
@@ -188,15 +174,12 @@ ODA({ is: 'microchat-view',
                     <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
                     <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
-                    <oda-button class="del" no-flex icon="icons:delete" :icon-size="iconSize / 1.5"
-                            ~if="canRemove" title="Удалить" @tap.stop="removeBlock"></oda-button>
-                    <span class="time" ~if="timeText">{{timeText}}</span>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div class="body" content>
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned && !container" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
@@ -206,7 +189,7 @@ ODA({ is: 'microchat-view',
         $def: false,
         $attr: true,
     },
-    container: {
+    box: {
         $def: false,
         $attr: true,
         get() { return Array.isArray(this.data?.items); },
@@ -233,30 +216,12 @@ ODA({ is: 'microchat-view',
         return this.data.state;
     },
     get typeIcon() {
-        if(!this.content)
+        if (!this.content && this.$pdp.pending)
             return 'spinners:3-dots-scale';
         return this.data?.icon;
     },
     get items() { return this.data?.items || []; },
     sender: null,
-    get timeText() {
-        if (!this.data?.time) return '';
-        return new Date(this.data.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    },
-    get canRemove() {
-        if (this.data?.type === 'todo' || this.localName === 'microchat-view-todo')
-            return false;
-        if (this.$pdp?.streaming && Reactor.equal(this.data, this.$pdp.focusedBlock))
-            return false;
-        const list = this.host?.items || this.host?.data?.items;
-        return !!list?.some(b => Reactor.equal(b, this.data));
-    },
-    async removeBlock(e) {
-        e.stopPropagation();
-        if (!confirm('Удалить «' + (this.label || this.data?.type || 'блок') + '»?'))
-            return;
-        await this.$pdp.$item.fetch('remove_block', { time: this.data.time, type: this.data.type });
-    },
 
     // --- open ---
     userOpen: false,
@@ -423,10 +388,17 @@ const HEIGHT_PING = `<script>
 })();
 <\/script>`;
 
-function pageHtml(data) {
+function unwrapHtmlFence(s) {
+    let t = String(s || '').trim();
+    if (!t.startsWith('```')) return t;
+    t = t.replace(/^```(?:html|htm)?\s*\r?\n/i, '');
+    return t.replace(/\r?\n```\s*$/, '').trim();
+}
+
+export function pageHtml(data) {
     if (data?.html) return data.html;
-    const c = String(data?.content || '').trim();
-    if (/^<!DOCTYPE|^<html[\s>]|<body[\s>]/i.test(c)) return c;
+    const c = unwrapHtmlFence(data?.content);
+    if (/^<!DOCTYPE|^<html[\s>]|^<body[\s>]/i.test(c)) return c;
 }
 
 /** html — слот в ленте: страница из data.html (или целый document в content). */

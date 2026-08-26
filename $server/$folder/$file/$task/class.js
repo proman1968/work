@@ -6,8 +6,7 @@
         // debugger;
         let { prompt, role, session } = params;
         await this._init(params);
-        
-
+    
         try {
             switch (role) {
                 case 'AI':{
@@ -21,7 +20,7 @@
                         params.block.state = 'rejected';
                     }
                     delete params.block.stop;
-                    delete params.container.using_blocks;
+                    delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
                 } break;
@@ -39,66 +38,82 @@
                         params.block.files = JSON.parse(params.includes);
                         await this._push_block(params);
                     }
-                    delete params.container.using_blocks;
+                    delete params.box.using_blocks;
                     this._stopped = false;
                 }
             }
 
             await this._init(params);
             const pipe = await this.pipe;
-            await pipe[params.container.type]?.recalc?.(params);
-
- 
-            // Находим список следующих шагов
-            let mode = (await this.body).mode || 'plan';
-            const node = pipe[params.block.type];
-            const place = pipe[params.container.type];
-            let next = (params.block.container && params.block.content)
-                ? (place?.[mode]?.next || place?.next || [])
-                : (node?.[mode]?.next || node?.next || place?.[mode]?.next || place?.next || []);
-
-            
-            // Убираем использованные блоки из списка next
-            let using_blocks = params.container.using_blocks ??= [];
-            next = next.filter(id => !using_blocks.includes(id));
+            await pipe[params.box.type]?.recalc?.(params);
 
             let choice;
-            if (!next.length && !params.container.content)
-                choice = Object.keys(pipe).find(id => pipe[id]?.close); 
-            if (next.length === 1)
-                choice = next[0];
-            else {
-                let menu = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
-                menu.unshift('Выбери строго один вариант из списка. Ответь одним словом, без знаков и пояснений. Выберай шаг или действие, которое необходимо сделать дальше:');
-                menu = menu.join('\n');
-                // console.warn('choice', choice);
-                // console.log(menu);
-                let messages = await this.context({prompt: menu, session});
-                let response = await this._streamChat({ messages, silent: true, session });
-                if (!this._stopped) {
-                    const word = response.content.trim().toLowerCase();
-                    if (next.includes(word))
-                        choice = word;
+            let menu = '';
+            if (!params.box.content) {
+                let mode = (await this.body).mode || 'plan';
+                const node = pipe[params.block.type];
+                const place = pipe[params.box.type];
+                let next = (params.block.box && params.block.content)
+                    ? (place?.[mode]?.next || place?.next || [])
+                    : (node?.[mode]?.next || node?.next || place?.[mode]?.next || place?.next || []);
+                let using_blocks = params.box.using_blocks ??= [];
+                next = next.filter(id => !using_blocks.includes(id));
+                const lines = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
+                if (!next.length) {
+                    choice = 'total';
+                    menu = 'TOTAL - ' + (pipe.total?.[mode]?.inject || pipe.total?.inject || '') + ';';
+                }
+                else if (next.length === 1) {
+                    choice = next[0];
+                    menu = lines.join('\n');
+                }
+                else {
+                    menu = [
+                        '\n\n[instruction]',
+                        'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
+                        'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
+                        '\n\n[menu]\n', ...lines].join('\n');
+                    let messages = await this.context({session, prompt: menu});
+
+                    let response = await this._streamChat({ messages, silent: true, session });
+                    if (!this._stopped) {
+                        const word = response.content.trim().toLowerCase();
+                        if (next.includes(word))
+                            choice = word;
+                    }
                 }
             }
             if (choice) {
                 let next_pipe = pipe[choice];
                 
                 params.block = this._build_block(choice);
-                if(await this._push_block(params)){
+                params.block.menu = menu;
+                if (await this._push_block(params)) {
                     prompt = next_pipe.prompt;
-                    if(!params.block.container /* && !params.block.content */ && prompt){
-                        // debugger;
+                    if (!params.block.box && prompt) {
                         let messages = await this.context({prompt, session});
                         let response = await this._streamChat({ messages, session });
-                        if(params.block.title)
+                        if (params.block.title)
                             response.content = params.block.title + '\n\n' + response.content;
                         Object.assign(params.block, response);
                     }
+                    await pipe[params.block.type]?.recalc?.(params);
+                    const kind = pipe[params.block.type];
+                    const src = String(params.block.html || params.block.content || '').trim();
+                    if (!this._stopped && src && kind?.label && params.block.label === kind.label) {
+                        const cap = await this._streamChat({
+                            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
+                            silent: true,
+                            session,
+                        });
+                        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+                        if (words)
+                            params.block.label = words;
+                    }
+                    await this._save(session);
                 }
-                await pipe[params.block.type]?.recalc?.(params);
-                await this._save(session);
-                if (!this._stopped && (params.block.container || !params.block.stop)) {
+
+                if (!this._stopped && !params.box.content && (params.block.box || !params.block.stop)) {
                     this.async(() => this.prompt({ role: 'AI', session }));
                     return { ok: true };
                 }
@@ -116,7 +131,7 @@
 
     async _init(params = {}) {
         params.block = await this._active_block();
-        params.container = await this._active_container();
+        params.box = await this._active_box();
         const pipe = await this.pipe;
         params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
@@ -125,11 +140,11 @@
         const {prompt} = params;
         const layers = [];
         const body = await this.body;
-        let container = body;
+        let box = body;
         for (;;) {
-            layers.push(this._container_context(container));
-            const next = container.items?.last;
-            if (next?.container && !next.content) container = next;
+            layers.push(this._box_context(box));
+            const next = box.items?.last;
+            if (next?.box && !next.content) box = next;
             else break;
         }
         const mode = body.mode || 'plan';
@@ -158,14 +173,14 @@
         }
         return messages;
     },
-    _container_context(container) {
-        const node = this.pipe[container.type];
+    _box_context(box) {
+        const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
-        let system = node?.[mode]?.system || node?.system || container.system || '';
-        if (container.todo)
-            system += '\n\n[todo]\n' + (container.todo.content || '');
+        let system = node?.[mode]?.system || node?.system || box.system || '';
+        if (box.todo)
+            system += '\n\n[todo]\n' + (box.todo.content || '');
         const messages = [];
-        for (const b of (container.items || [])) {
+        for (const b of (box.items || [])) {
             if (this.pipe[b.type]?.close)
                 continue;
             messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content || stageOpen(b, this.pipe[b.type]) });
@@ -231,61 +246,59 @@
         const node = this.pipe[type];
         const block = {
             type,
-            container: node.container,
+            box: node.box,
             icon: node.icon,
             stop: node.stop,
             label: node.label,
         };
-        if (block.container)
+        if (block.box)
             block.items = [];
         return block;
     },    
     async _push_block(params = {}){
-        const {block, container, session} = params;
-        container.items ??= [];
+        const {block, box, session} = params;
+        box.items ??= [];
+        box.using_blocks ??= [];
+        box.using_blocks.add(block.type);
         const init = this.pipe[block.type]?.init;
         if (init && !await init(params))
             return false;
-        if (Array.isArray(container.using_blocks)) {
-            if (!container.using_blocks.includes(block.type))
-                container.using_blocks.push(block.type);
-        } else if (!init)
-            container.using_blocks = [block.type];
+
         block.time ??= Date.now();
-        if (block.container)
+        if (block.box)
             block.items ??= [];
-        container.items.push(block);
+        box.items.push(block);
         await this._save(session);
         return true;
     },
     async _active_block() {
-        let container = await this._active_container();
-        const planned = container.todo?.steps || [];
-        const real = (container.items || []).filter(b => b.type === 'step');
+        let box = await this._active_box();
+        const planned = box.todo?.steps || [];
+        const real = (box.items || []).filter(b => b.type === 'step');
         if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
-            return container.todo;
-        if (container.type === 'includes') {
+            return box.todo;
+        if (box.type === 'includes') {
             const pipe = await this.pipe;
-            const list = pipe.includePlan(container);
-            const files = pipe.includeReal(container);
+            const list = pipe.includePlan(box);
+            const files = pipe.includeReal(box);
             const open = files.find(f => !f.content);
             if (open)
                 return open;
             if (list.length && files.length < list.length)
-                return container;
+                return box;
         }
-        const items = container.items || [];
-        return items.last || container;
+        const items = box.items || [];
+        return items.last || box;
     },
-    async _active_container() {
-        let next,container = await this.body;
-        while (next = container.items?.last){
-            if(next.container && !next.content)
-                container = next;
+    async _active_box() {
+        let next, box = await this.body;
+        while (next = box.items?.last){
+            if(next.box && !next.content)
+                box = next;
             else
                 break;
         }
-        return container;
+        return box;
     },
     async change_model(params = {}) {
         const model = params.model || params.post?.model;
@@ -342,7 +355,7 @@ function parentOfBlock(root, block) {
 }
 
 function stageOpen(block, node) {
-    if (!node?.container) return '';
+    if (!node?.box) return '';
     const label = node.label || block.label || block.type;
     return 'Текущий этап далее (' + label + ').';
 }

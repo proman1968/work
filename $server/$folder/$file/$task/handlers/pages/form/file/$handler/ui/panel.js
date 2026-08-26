@@ -7,14 +7,14 @@ ODA({ is: 'microchat-panel',
         <style>
             :host {
                 @apply --vertical;
-                padding: 8px 0px;
+                padding: 8px;
             }
             .composer {
                 @apply --vertical; @apply --raised; @apply --content;
                 border-radius: 16px; padding: 6px 8px; gap: 4px;
                 border: 1px solid var(--border-color);
             }
-            .composer:focus-within { border-color: var(--info-color); }
+            .composer:focus-within:not([error]) { border-color: var(--info-color); }
             .prompt {
                 border: none; outline: none; resize: none; min-width: 0; padding: 6px 4px;
                 max-height: 10em; overflow-y: auto; font-family: inherit; background: transparent;
@@ -87,7 +87,7 @@ ODA({ is: 'microchat-panel',
                 flex-shrink: 0;
             }
         </style>
-        <div class="action-bar" ~if="actionButton?.label" horizontal>
+        <div class="action-bar" ~if="!pending && actionButton?.label" horizontal>
             <oda-button border hide-icon flex style="border-radius: 16px;"
                 :success-invert="(actionButton.color || 'success') === 'success'"
                 :info-invert="actionButton.color === 'info'"
@@ -97,7 +97,7 @@ ODA({ is: 'microchat-panel',
             <oda-button ~if="actionButton.cancel !== false" border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
-        <div class="composer" border>
+        <div class="composer" border :error="isDo">
             <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0;">
                 <div class="attach-chip" ~for="files">
                     <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
@@ -150,7 +150,10 @@ ODA({ is: 'microchat-panel',
     `,
     imports: 'oda//button, oda//icon, ~/lib//tree',
     data: null,
-    pending: false,
+    pending: {
+        get() { return !!this.$pdp.pending; },
+        set(n) { this.$pdp.pending = n; },
+    },
     recording: false,
     timer: '',
     files: [],
@@ -168,17 +171,18 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    /** approve после стрима; «Продолжить» — простой контейнер и не pending (не streamTarget: после стопа хвост пустой) */
+    /** approve после стрима; «Продолжить» — хвост агента без stop, не пользовательский prompt */
     get actionButton() {
         if (this.pending) return null;
-        const stop = this.$pdp.focusedBlock?.stop;
+        const focus = this.$pdp.focusedBlock;
+        const stop = focus?.stop;
         if (typeof stop === 'string') {
             if (this.$pdp.streamTarget) return null;
-            return { label: stop };
+            return { label: stop, role: 'APPROVE' };
         }
-        if (this.$pdp.streaming || this.$pdp.focusedBlock?.stop === true) return null;
+        if (this.$pdp.streaming || stop === true || focus?.type === 'prompt') return null;
         if (!this.liveOpen) return null;
-        return { label: 'Продолжить', color: 'info', cancel: false };
+        return { label: 'Продолжить', color: 'info', cancel: false, role: 'AI' };
     },
     get userRole() {
         return String(this.role || this.$item.role || 'USER').toUpperCase();
@@ -186,6 +190,9 @@ ODA({ is: 'microchat-panel',
     get liveOpen() {
         const root = this.data;
         return !!(root && !root.content && root.items?.length);
+    },
+    get isDo() {
+        return this.data?.mode === 'do';
     },
     /** form — сдача данных в ленту; иначе vote yes/no */
     get isFormAction() {
@@ -218,15 +225,12 @@ ODA({ is: 'microchat-panel',
         return this._ttsController ??= new TtsController(this);
     },
     async sendAction(accept) {
+        const { role } = this.actionButton;
         this.pending = true;
-        if (typeof this.$pdp.focusedBlock?.stop === 'string') {
-            let prompt;
-            if (accept && this.isFormAction)
-                prompt = JSON.stringify(this.$pdp.result || {});
-            await this.$item.fetch('prompt', { accept, prompt, role: 'APPROVE' });
-        } else {
-            await this.$item.fetch('prompt', { prompt: 'продолжай', role: this.userRole });
-        }
+        let prompt;
+        if (role === 'APPROVE' && accept && this.isFormAction)
+            prompt = JSON.stringify(this.$pdp.result || {});
+        await this.$item.fetch('prompt', { accept, prompt, role });
         this._focus();
     },
 
