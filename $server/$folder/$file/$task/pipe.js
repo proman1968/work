@@ -1,23 +1,23 @@
-/** корень файла = контейнер task; меню plan/do — здесь, не у thinking */
+/** корень файла = box task; меню plan/do — здесь, не у thinking */
 export const task = {
-    container: true,
+    box: true,
     plan: {
-        next: ['thinking', 'explore', 'comment',  'question', 'form', 'text', 'planning', 'activation', 'report'],
+        next: ['activation', 'thinking', 'explore', 'question', 'form', 'answer', 'planning', 'report'],
     },
     do: {
-        next: ['thinking', 'explore', 'question', 'form', 'text', 'execute',  'report'],
+        next: ['thinking', 'explore', 'question', 'form', 'answer', 'execute',  'report'],
     }
 }
 
 export const prompt = {
     role: 'user',
-    next: ['thinking'],
+    next: ['thinking', 'answer'],
 }
 
 export const thinking = {
-    label: 'Размышления',
+    label: 'Думаю',
     icon: 'carbon:idea',
-    inject: 'необходимо разобрать, какой шаг или действие необходимо сделать дальше; не ответ пользователю',
+    inject: 'если не все ясно, необходимо подумать над задачей, исходя из текущего контекста, без ответа пользователю',
     prompt: [
         'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',
         'Не фантазируй, не выдумывай, ничего не делай, не планируй, не обращайся к пользователю, просто абстрактно поразмышляй.',
@@ -26,42 +26,42 @@ export const thinking = {
 }
 
 export const activation = {
-        label: 'Активация',
-        icon: 'icons:check-box-outline-blank',
-        inject: 'без режима исполнения нельзя (файлы, сервисы, навыки)',
-        prompt: `
-После активации ты перестанешь планировать и перейдешь к конкретным действиям над системой.
-Ты получишь доступ к файлам, сервисам, навыкам, функциям системы и к интернету для исполнения поставленной задачи.
+        label: 'Требуется режим исполнения',
+        icon:  'icons:check-box-outline-blank',
+        inject: 'если без режима исполнения не обойтись (файлы, сервисы, навыки, приложения) и надо перйти из plan в do',
+        prompt: `После активации ты перестанешь планировать и перейдешь к конкретным действиям над системой.
+Ты получишь доступ к файлам, сервисам, навыкам, программированию, функциям системы и к интернету для исполнения поставленной задачи.
 [instruction]
-СТРОГО в формате markdown:
-Расскажи пользователю, что ты собираешься делать, и убеди его в необходимости перехода в режим исполнения, нажатием кнопки "Перейти к действиям"
+Расскажи пользователю, что ты собираешься делать. Но ничего не делай, пока пользователь не перейдет в режим исполнения.
 `,
 
         stop: 'Перейти к действиям',
-        next: ['thinking'],
         async approve(params = {}) {
             (await params.task.body).mode = 'do';
+            params.block.report = true;  
+            params.block.icon = 'icons:check-circle';
         }
     }
 
-export const comment = {
+export const repeat = {
         label: 'Комментарий',
         icon: 'icons:chat',
-        prompt: `Очень кратко прокомментируй, все, что хочешь сказать пользователю по текущей ситуации, без остановки процесса.`,
-        inject: 'если провесс продолжается и есть комментации',
+        prompt: `Очень кратко прокомментируй, все, что хочешь сказать пользователю по текущей ситуации, и почему ты решил продолжить этот этап.`,
+        inject: 'если процесс необходимо повторить еще раз на этом этапе.',
     }
 
-export const text = {
+export const answer = {
+        label: 'Отвечаю',
         icon: 'icons:chat',
         stop: true,
-        inject: 'ответить или сообщить; факт уже в контексте',
-        prompt: `Ответь пользователю по фактам из контекста. Не обещай поиск и не придумывай этапы.`,
+        inject: 'если хочешь что-то ответить пользователю (без действий)',
+        prompt: `Ответь пользователю то, что ты хочешь сообщить по фактам из контекста.`,
     }
 
 export const question = {
-        label: 'Вопрос',
+        label: 'Задаю вопрос',
         icon: 'icons:help',
-        inject: 'без одного ответа пользователя нельзя идти',
+        inject: 'если надо что-то спросить или уточнить у пользователя, без одного ответа пользователя нельзя идти',
         stop: true,
         prompt: 'Задай один вопрос, без ответа на который нельзя идти дальше.',
     }
@@ -69,9 +69,9 @@ export const question = {
 export const todo = {
         next: ['step'],
         async recalc(params = {}) {
-            const { container, task } = params;
+            const { box, task } = params;
             const body = await task.body;
-            let owner = container;
+            let owner = box;
             while (owner && !owner.todo)
                 owner = parentOf(body, owner);
             if (!owner?.todo && body.todo)
@@ -113,22 +113,22 @@ export const planning = {
         prompt: `
 Предложи план:
 [instruction]
-СТРОГО в формате markdown:
 Краткое название плана работ.
 Пронумерованый список пунктов плана работ.
 `,
         stop: 'Принять план',
         async approve(params = {}){
-            let {container, block, prompt} = params;
+            let {box, block, prompt} = params;
             block.type = 'plan';
+            block.report = true;  
             let plan = parsePlanMarkdown(block.content);
-            container.todo = {
+            box.todo = {
                 type: 'todo',
                 icon: 'icons:list',
                 ...plan,
             };
-            const n = (container.todo.steps || []).length;
-            container.todo.state = n ? `0/${n} ${step.label}` : '';
+            const n = (box.todo.steps || []).length;
+            box.todo.state = n ? `0/${n} ${step.label}` : '';
             (await params.task.body).mode = 'do';
         }
     }
@@ -136,7 +136,7 @@ export const planning = {
 export const step = {
         label: 'Шаг',
         inject: 'без очередного пункта плана нельзя идти',
-        container: true,
+        box: true,
         recalc(params = {}) {
             return todo.recalc(params);
         },
@@ -152,7 +152,7 @@ export const execute = {
         label: 'Выполнение',
         icon: 'enterprise:wrench',
         inject: 'нужны действия над объектами, файлами, навыками',
-        container: true,
+        box: true,
         next: ['work', 'web', 'form', 'html', 'check'],
 
         system: `       
@@ -167,13 +167,13 @@ export const execute = {
     }
 
 export const explore = {
-        label: 'Исследование',
+        label: 'Исследую',
         icon: 'icons:search',
         inject: 'если нужны внешние факты, которых нет в контексте',
         system: [
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
-        container: true,
+        box: true,
         next: ['thinking', /* 'work', */ 'web'],
 
         prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
@@ -181,9 +181,9 @@ export const explore = {
     }
 
 export const work = {
-        label: 'Работа c системой',
+        label: 'Работаю c системой',
         icon: 'icons:folder',
-        container: true,
+        box: true,
         plan: {
             inject: 'факты в рабочей области, в контексте их нет',
             next: ['search', 'read'],
@@ -201,50 +201,46 @@ export const work = {
 export const includes = {
         label: 'Вложения',
         icon: 'icons:attachment',
-        container: true,
+        box: true,
         next: ['file'],
         prompt: [
-            'Сделай сводный отчёт по всем вложенным файлам.'
+            'Обобщи инфрмацию по всем вложенным файлам.',
+            'Выведи сводный отчёт в формате markdown.',
             ,
         ].join('\n'),
-        recalc(params = {}) {
-            const list = includePlan(params.block);
-            const files = includeReal(params.block);
-            const seen = files.filter(x => x.content).length;
-            params.block.state = list.length ? `${seen}/${list.length} ${file.label}` : '';
-        },
     }
 
 export const file = {
         label: 'Файл',
         icon: 'files:file',
         prompt: [
-            'Вытащи из содержимое последнего файла, всю полезную информацию.',
-            'Сделай суммаризацию, без комментариев, без пересказа.',
+            'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
+            'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
+            'Выведи обзор/отчёт о содержимом файла в формате markdown.',
         ].join('\n'),
         async init(params = {}) {
-            const {container, block} = params;
+            const {box, block} = params;
             try{
-                let files = container.files;
-                let length = container.items.filter(b=>b.type === 'file').length;
+                let files = box.files;
+                let length = box.items.filter(b=>b.type === 'file').length;
                 if(length >= files.length){
                     return false;
                 }
-                delete container.using_blocks;
-                container.state = 'Files: ' + (length + 1) + '/' + files.length;
+                delete box.using_blocks;
+                box.state = 'файлы: ' + (length + 1) + '/' + files.length;
                 block.state = 'reading';
                 await params.task._save(params.session);
                 // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
                 block.title = `file ${length + 1}: ['${file.label}'](<${file.path}>)\n\n`;
-                block.content = block.title + '\n\n' + await file.read_text() + '\n\n';
+                block.draft = await file.read_text();
                 block.icon = file.icon;
                 block.label = file.label;
                 block.path = file.path;
-                block.state = 'done';
+                block.state = 'прочитан';
             } catch(e){
-                block.state = 'error';
+                block.state = 'ошибка';
                 block.content = block.title + '\n\n' + e.message + '\n\n';
             }
             return true;
@@ -252,7 +248,7 @@ export const file = {
     }
 
 export const search = {
-        label: 'Поиск',
+        label: 'Ищу',
         icon: 'icons:search',
         inject: 'нужен поиск файлов в области, путь неизвестен',
         async init(params = {}) {
@@ -273,7 +269,7 @@ export const search = {
     }
 
 export const read = {
-        label: 'Файл',
+        label: 'Читаю файл',
         icon: 'icons:description',
         inject: 'нужен текст конкретного файла по пути',
         async init(params = {}) {
@@ -290,7 +286,7 @@ export const read = {
     }
 
 export const write = {
-        label: 'Запись',
+        label: 'Записываю файл',
         icon: 'editor:mode-edit',
         inject: 'без записи или правки файла нельзя',
         prompt: [
@@ -298,31 +294,31 @@ export const write = {
             'Дальше полный текст или блоки SEARCH/REPLACE.',
             'Не выдумывай путь.',
         ].join('\n'),
-        parse(block) {
+        async recalc(params = {}) {
+            const { block } = params;
             const raw = String(block.content || '').replace(/\r\n/g, '\n');
             const fence = raw.match(/```(?:\w+)?\s*([\s\S]*?)```/);
             const head = (fence ? raw.slice(0, fence.index) : raw).trim().split('\n').find(Boolean) || '';
             block.path = head.replace(/^#+\s*/, '').trim();
             block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
-        },
-        async init(params = {}) {
-            const b = params.block;
-            if (b.done)
-                return false;
-            if (!b.path || b.post == null)
-                return false;
-            const method = /SEARCH|REPLACE/.test(b.post) ? 'edit' : 'save';
-            await params.task._fc_exec(WORK, { method, args: { path: b.path, post: b.post } }, {
-                block: b,
+            if (block.done || !block.path || block.post == null)
+                return;
+            const method = /SEARCH|REPLACE/.test(block.post) ? 'edit' : 'save';
+            await params.task._fc_exec(WORK, { method, args: { path: block.path, post: block.post } }, {
+                block,
                 session: params.session,
             });
-            b.done = true;
+            block.done = true;
+        },
+        async init(params = {}) {
+            if (params.block.done)
+                return false;
             return true;
         },
     }
 
 export const check = {
-        label: 'Проверка',
+        label: 'Проверяю результат',
         icon: 'icons:check-circle',
         inject: 'сверить результат с целью, прежде чем закрыть',
         system: [
@@ -331,7 +327,7 @@ export const check = {
             'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
             'Когда доказательств достаточно — сверни факты отчётом. Если фактов мало — отклони отчёт: continue.',
         ].join('\n'),
-        container: true,
+        box: true,
         next: ['thinking', 'work', 'web'],
         prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
         async recalc(params = {}) {
@@ -340,32 +336,49 @@ export const check = {
     }
 
 export const total = {
-        label: 'Итог',
+        label: 'Подвожу итог',
         icon: 'icons:assignment-turned-in',
         inject: 'этап закрыт: есть факты для сводки',
-        close: true,
-        async init(params = {}) {
-            const { container, session, task } = params;
-            const prompt = task.pipe[container.type].prompt;
-            const messages = await task.context({
-                prompt,
-                session,
-            });
-            const asked = await task._streamChat({ messages, session });
-            container.content = asked.content;
-            return false;
+        async recalc(params = {}) {
+            const { block, box } = params;
+            box.content = block.content.trim();
+            box.items.remove(block);
         },
+        // async init(params = {}) {
+        //     debugger;
+        //     const { box, session, task } = params;
+        //     const prompt = task.pipe[box.type].prompt;
+        //     const messages = await task.context({
+        //         prompt,
+        //         session,
+        //     });
+        //     const asked = await task._streamChat({ messages, session });
+        //     box.content = asked.content;
+        //     await task.pipe[box.type]?.recalc?.({ ...params, block: box });
+        //     const kind = task.pipe[box.type];
+        //     const src = String(box.html || box.content || '').trim();
+        //     if (!task._stopped && src && kind?.label && box.label === kind.label) {
+        //         const cap = await task._streamChat({
+        //             messages: [{ role: 'user', content: 'Два-три слова — заголовок этого текста. Без кавычек, точки и пояснений.\n\n' + src }],
+        //             silent: true,
+        //             session,
+        //         });
+        //         const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        //         if (words)
+        //             box.label = words;
+        //     }
+        //     return false;
+        // },
     }
 
 export const web = {
-        label: 'Интернет',
+        label: 'Ищу в интернете',
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
-        container: true,
+        box: true,
         next: ['site'],
         prompt: [
             'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
-            'Картинки и видео в текст не копируй — сводка допишет сама. Url не выдумывай.',
         ].join('\n'),
         async init(params = {}) {
             const b = params.block;
@@ -380,7 +393,7 @@ export const web = {
                 b.sites = [];
                 b.state = 'error';
                 b.content = 'нет поискового запроса';
-                return;
+                return true;
             }
             b.label = 'Web: ' + query;
             const service = await WORK.get_item(web.service);
@@ -393,99 +406,122 @@ export const web = {
             if (!b.sites.length) {
                 b.state = 'error';
                 b.content = 'По запросу ' + query + ' ничего не найдено';
-                dropUsed(params.container, 'web');
+                dropUsed(params.box, 'web');
             }
+            return true;
         },
-        plan: {
-            inject: 'факты только из интернета, в контексте их нет',
-            system: [
-                'Найди ссылки по текущей задаче.',
-                'Не читай страницы — заход сделают блоки site.',
-            ].join('\n'),
-        },
-        do: {
-            inject: 'действие в интернете, без которого нельзя',
-            system: [
-                'Найди рабочие ссылки по тому, что нужно сделать сейчас.',
-                'Не читай страницы — заход сделают блоки site.',
-            ].join('\n'),
-        },
+        inject: 'если необходимо что-то найти в интернете, для решения задачи',
+        system: [
+            'Найди ссылки по текущей задаче.',
+            'Не читай страницы — заход сделают блоки site.',
+        ].join('\n'),
     }
 
 export const site = {
-        label: 'Сайт',
+        label: 'Изучаю сайт',
         icon: 'bootstrap:filetype-html',
         prompt: [
-            'Вытащи со страницы только то, что относится к задаче: факты, таблицы, ссылки, картинки, видео, аудио.',
-            'Не дублируй.',
-            'Картинки — ![подпись](url) только из [images] в дампе.',
-            'Видео — [подпись](url) только из [video].',
-            'Аудио — [подпись](url) только из [audio].',
-            'Не выдумывай url.',
-            'Только то, что есть в дампе [site N: url]. Метку [site N: url] не пиши — её ставит система. Не выдумывай цифры.',
-            'Не пересказывай меню, футер, навигацию и рекламу, и все, что не относится к задаче.',
+            'Проанализируй этот сайт, и вытащи из него всю полезную информацию.',
+            'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого сайт.',
+            'Выведи обзор/отчёт о содержимом сайт в формате markdown.',
         ].join('\n'),
-        inject: 'нужен текст конкретной страницы по url',
+        inject: 'если нужно получить содержимое конкретной страницы по url',
         next: ['thought'],
+
         async init(params = {}) {
-            const b = params.block;
-            const { session, task } = params;
-            if (b.content || b.page)
-                return false;
-            const web = params.container;
-            if (!b.url) {
-                const taken = new Set((web.items || []).filter(x => x !== b && x.url).map(x => x.url));
-                const next = (web.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
-                if (!next) {
-                    await siteFail(params, shortError('нет url'));
-                    return true;
+            const {box, block, session} = params;
+            debugger
+            try{
+                let sites = box.sites;
+                let length = box.items.filter(b => b.type === 'site').length;
+                if(length >= sites.length){
+                    return false;
                 }
-                b.url = next.url;
-                b.label = siteHost(next);
-                b.icon = siteFavicon(next.url);
+                delete box.using_blocks;
+                box.state = 'сайты: ' + (length + 1) + '/' + sites.length;
+                block.state = 'идет загрузка';
+                await params.task._save(session);
+
+                let site = sites[length];  
+                let url = new URL(site.url);
+
+                block.icon = siteFavicon(site.url);                      
+                block.title = `site ${length + 1}: ['${site.title}'](<${site.url}>)\n\n`;
+                block.label = url.host;
+                block.url = site.url;
+                block.state = 'загружен';
+                const service = await WORK.get_item(web.service);  
+                let result = await service.fetch_url({ url: site.url });    
+                if(result?.error){
+                    throw new Error(result.error);
+                }  
+                block.draft = result.content;              
+            } catch(e){
+                block.state = 'ошибка';
+                block.content = block.title + '\n\n' + e.message + '\n\n';
             }
-            const service = await WORK.get_item(web.service);
-            const result = await service.fetch_url({ url: b.url });
-            if (result?.error) {
-                await siteFail(params, shortError(result.error));
-                return true;
-            }
-            if (result.url)
-                b.url = result.url;
-            const page = clipPage(result.content);
-            if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
-                await siteFail(params, 'пусто');
-                return true;
-            }
-            b.page = siteMark(web, b) + '\n\n' + page;
-            if (!task || task._stopped)
-                return;
-            const messages = await task.context({ prompt: site.prompt, session });
-            const extracted = await task._streamChat({ messages, session });
-            if (!task._stopped)
-                b.content = extracted.content;
             return true;
-        }
+        }      
+        // async init(params = {}) {
+        //     const b = params.block;
+        //     const { session, task } = params;
+        //     if (b.content || b.page)
+        //         return false;
+        //     const box = params.box;
+        //     if (!b.url) {
+        //         const taken = new Set((box.items || []).filter(x => x !== b && x.url).map(x => x.url));
+        //         const next = (box.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
+        //         if (!next) {
+        //             await siteFail(params, shortError('нет url'));
+        //             return true;
+        //         }
+        //         b.url = next.url;
+        //         b.label = siteHost(next);
+        //         b.icon = siteFavicon(next.url);
+        //     }
+        //     const service = await WORK.get_item(web.service);
+        //     const result = await service.fetch_url({ url: b.url });
+        //     if (result?.error) {
+        //         await siteFail(params, shortError(result.error));
+        //         return true;
+        //     }
+        //     if (result.url)
+        //         b.url = result.url;
+        //     const page = clipPage(result.content);
+        //     if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
+        //         await siteFail(params, 'пусто');
+        //         return true;
+        //     }
+        //     b.page = siteMark(box, b) + '\n\n' + page;
+        //     if (!task || task._stopped)
+        //         return true;
+        //     const messages = await task.context({ prompt: site.prompt, session });
+        //     const extracted = await task._streamChat({ messages, session });
+        //     if (!task._stopped)
+        //         b.content = extracted.content;
+        //     return true;
+        // }
     }
 
 export const thought = {
-        label: 'Мысли',
+        label: 'Подвожу итог действия',
         icon: 'carbon:idea',
         inject: 'после действия обдумать: хватит или ещё ход',
-        next: ['total', 'comment'],
+        next: ['total', 'repeat'],
         prompt: [
             'Кратко, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
             'или сделанного уже достаточно для успешного завершения задачи.',
             'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
-            'Ответь в виде размышлений от своего лица (5-10 строк, или если надо, больше).',
+            'Ответь в виде размышлений от своего лица 10-50 слов.',
         ].join('\n'),
         init(params = {}) {
-            delete params.container.using_blocks;
+            delete params.box.using_blocks;
+            return true;
         },
     }
 
 export const form = {
-        label: 'Форма',
+        label: 'Готовлю форму',
         icon: 'icons:view-list',
         inject: 'без нескольких полей пользователя нельзя идти',
         prompt: [
@@ -515,7 +551,8 @@ export const form = {
             'Без script, html/body, кнопки отправки.',
         ].join('\n'),
         /** после стрима: разметка в html, хвост — пояснение в content */
-        parse(block) {
+        recalc(params = {}) {
+            const { block } = params;
             const { content, html } = parseFormHtml(block.content);
             block.content = content;
             block.html = html;
@@ -531,25 +568,32 @@ export const form = {
     }
 
 export const html = {
-        label: 'HTML',
+        label: 'Делаю HTML приложение',
         icon: 'editor:code',
-        inject: 'нужно одностраничное HTML в ленте',
+        inject: 'если нужно создать одностраничное HTML приложение',
         prompt: [
-            'Собери одностраничное HTML-приложение для запуска внутри ленты чата в iframe.',
-            '[instruction]',
+            'Собери одностраничное HTML/JS/CSS-приложение.',
+            'Не пример кода, а полноценное рабочее приложение.',
             'Только один fensed-блок с полным html-кодом, без дополнительных пояснений.',
+            'Приложение будет работать прямо в ленте чата в iframe.',
         ].join('\n'),
-        parse(block) {
-            const fence = block.content.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
+        recalc(params = {}) {
+            const { block } = params;
+            if(block.box) return;
+            const raw = String(block.content || '').trim();
+            const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
             if (fence) {
-                block.content = fence[1].trim();
+                raw = fence[1].trim();
             }
-        },
-        stop: true,
+            if (/^<!DOCTYPE|^<html[\s>]|<body[\s>]/i.test(raw)) {
+                block.html = raw;
+                block.report = true;
+            }
+        }
     }
 
 export const report = {
-        label: 'Отчёт',
+        label: 'Готовлю отчёт',
         inject: 'текущий запрос уже выполнен, нужен отчёт',
         prompt: [
             'Отдай пользователю итог задачи.',
@@ -558,15 +602,10 @@ export const report = {
         ].join('\n'),
         stop: 'Принять',
         async approve(params = {}) {
-            const { container, block, prompt } = params;
-            if (prompt) {
-                block.state = 'rejected';
-                block.icon = 'icons:close';
-                block.content = (block.content || '') + '\n\nИТОГ ОТКЛОНЕН, ' + prompt;
-                return;
-            }
-            block.state = 'approved';
-            container.content = block.content;
+            const { box, block, task } = params;
+            block.report = true;  
+            box.content = block.content;
+            task.body.mode = 'plan';
         }
     }
 
@@ -580,14 +619,14 @@ export function includeReal(box) {
     return (box?.items || []).filter(x => x.type === 'file');
 }
 
-function dropUsed(container, type) {
-    const list = container?.using_blocks;
+function dropUsed(box, type) {
+    const list = box?.using_blocks;
     if (!list) return;
     const i = list.indexOf(type);
     if (i >= 0)
         list.splice(i, 1);
     if (!list.length)
-        delete container.using_blocks;
+        delete box.using_blocks;
 }
 
 function parentOf(root, node) {
@@ -652,7 +691,7 @@ function clipPage(text) {
 
 async function siteFail(params, text) {
     const b = params.block;
-    const web = params.container;
+    const web = params.box;
     b.state = 'error';
     b.content = text;
     stampSiteContent(web, b);

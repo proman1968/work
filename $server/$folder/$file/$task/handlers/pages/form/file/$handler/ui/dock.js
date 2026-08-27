@@ -1,6 +1,8 @@
-/** Док закрытых контейнеров: content + стрелки + copy/share/save. */
+/** Док закрытых box: view блока + стрелки + copy/share/save. */
+import { viewTag, pageHtml } from './views.js';
+
 ODA({ is: 'microchat-dock',
-    imports: 'oda//button, oda//markdown//markdown-viewer',
+    imports: 'oda//button',
     template: /* html */`
         <style>
             :host {
@@ -31,9 +33,10 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
-        <oda-markdown-viewer content flex ~if="current?.content" :value="current.content" style="overflow-y: auto;"></oda-markdown-viewer>
+        <div flex ~is="viewTag" ~if="current" :data="current" only-doc style="overflow-y: auto;"></div>
     `,
     $item: null,
+    get viewTag() { return viewTag(this.current); },
     get reports() { return this.$pdp?.dockReports || []; },
     get index() { return this.$pdp?.dockIndex ?? -1; },
     get current() { return this.$pdp?.dockCurrent; },
@@ -51,10 +54,14 @@ ODA({ is: 'microchat-dock',
     },
     hide() { if (this.$pdp) this.$pdp.dockOpen = false; },
     get saved() { return !!this.current?.saved; },
-    get text() { return String(this.current?.content || ''); },
+    get isHtml() { return this.current?.type === 'html' || !!pageHtml(this.current); },
+    get text() {
+        return pageHtml(this.current) || String(this.current?.content || '');
+    },
     fileName() {
         const raw = this.cap(this.current).replace(/[\\/]/g, ' ').trim() || 'отчёт';
-        return raw.toLowerCase().endsWith('.md') ? raw : raw + '.md';
+        const base = raw.replace(/\.(md|html|htm)$/i, '');
+        return base + (this.isHtml ? '.html' : '.md');
     },
     async copy() {
         const t = this.text;
@@ -78,7 +85,7 @@ ODA({ is: 'microchat-dock',
         this.current.saved = true;
         const json = JSON.stringify(this.$pdp.data, null, 4);
         const owner = await this.$item.$owner;
-        await owner.save_file(new File([this.text], this.fileName(), { type: 'text/markdown' }));
+        await owner.save_file(new File([this.text], this.fileName(), { type: this.isHtml ? 'text/html' : 'text/markdown' }));
         await this.$item.fetch('save', { skip_file_handler: true }, json);
     },
 });
