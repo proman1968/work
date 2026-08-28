@@ -14,7 +14,7 @@ Shell + `ui/`: лента, док закрытых box (wide), промптба�
 
 - Shell: `pending` — send / `chat.delta` / `changed` при пустом слоте; гашение на `chat.done` / stop. На set слот не включает `pending` (повторный вход в остановленную задачу — «Продолжить», не вертушка). `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`; `changed`/`chat.done` → `load()`.
 - Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `dockStyle` = `dockWidth` px + `max-width: 50%` + сплиттер (`::width`). Отчёт — `(box || report) && content` (не «есть `items`»). Обход — `items`, дети раньше родителя; корень с `content` — в конец. Тело — тот же `microchat-view-*` (`viewTag`), `onlyDoc`: без шапки и без детей. `dockOpen` / `dockWidth` — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Имя: `html` / страница → `.html` и `block.html` (как iframe); иначе `.md` и `content`. Кнопка: нет флага — `success-invert`, есть — `disabled`.
-- Панель: стоп/вертушка — `$pdp.pending` (владелец — шелл). Composer — attr `error` при `data.mode === 'do'`. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
+- Панель: стоп/вертушка — `$pdp.pending` (владелец — шелл). `work-prompt-bar` — attr `error` при `data.mode === 'do'`; action-bar снаружи. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
@@ -35,7 +35,7 @@ file.js        ← визуалка-шелл: data, pending, focusedBlock, strea
 ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form
 ui/dock.js     ← док: селектор + content закрытых
 ui/ribbon.js   ← дубль ribbon (scroll-контракт; шелл не импортирует)
-ui/panel.js    ← microchat-panel (+ mic/tts/usage)
+ui/panel.js    ← microchat-panel (action-bar + work-prompt-bar; mic/tts/usage)
 ui/mic.js      ← MicAudioController
 ui/tts.js      ← TtsController
 ui/usage.js    ← buildUsageStats / fmtTokens
@@ -48,7 +48,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 | [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + `viewTag` / `onlyDoc`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
-| [`ui/panel.js`](ui/panel.js) | `actionButton.role`: строка `stop` → `APPROVE` + `accept` (form: `prompt` = JSON `$pdp.result`); «Продолжить» → `AI`. Send из инпута — `userRole`. Без `model`. |
+| [`ui/panel.js`](ui/panel.js) | Action-bar + `work-prompt-bar` (`~/lib//prompt-bar`). `actionButton.role`: строка `stop` → `APPROVE` + `accept` (form: `prompt` = JSON `$pdp.result`); «Продолжить» → `AI`. Send из инпута — `userRole`. |
 | [`ui/mic.js`](ui/mic.js) | SpeechRecognition → `panel.value` / `recording` / `timer`. |
 | [`ui/tts.js`](ui/tts.js) | `off` / `local` / `browser`; delta → speak на done. |
 | [`ui/usage.js`](ui/usage.js) | Usage из `data.usage` + walk `data.items`. |

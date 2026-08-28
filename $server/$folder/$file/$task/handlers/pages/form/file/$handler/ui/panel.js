@@ -1,4 +1,4 @@
-import { buildUsageStats, fmtTokens } from './usage.js';
+import { buildUsageStats } from './usage.js';
 import { MicAudioController } from './mic.js';
 import { TtsController } from './tts.js';
 
@@ -9,92 +9,7 @@ ODA({ is: 'microchat-panel',
                 @apply --vertical;
                 padding: 8px;
             }
-            .composer {
-                @apply --vertical; @apply --raised; @apply --content;
-                border-radius: 16px; padding: 6px 8px; gap: 4px;
-                border: 1px solid var(--border-color);
-            }
-            .composer:focus-within:not([error]) { border-color: var(--info-color); }
-            .prompt {
-                border: none; outline: none; resize: none; min-width: 0; padding: 6px 4px;
-                max-height: 10em; overflow-y: auto; font-family: inherit; background: transparent;
-            }
             .action-bar { @apply --horizontal; gap: 6px; align-items: stretch; padding: 0 2px 6px; }
-            .attach-chip {
-                @apply --horizontal; @apply --accent-invert; max-width: 150px;
-                padding: 4px 8px; align-items: center; gap: 4px; border-radius: 8px;
-            }
-            .attach-chip label {
-                overflow: hidden; text-overflow: ellipsis; font-size: xx-small; white-space: nowrap;
-            }
-            .tools { @apply --horizontal; align-items: center; font-size: small; }
-            .ctx-wrap { position: relative; flex-shrink: 0; }
-            .ctx-btn {
-                width: 20px;
-                height: 20px;
-                border-radius: 50%;
-                border: none;
-                padding: 0;
-                cursor: pointer;
-                flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                background:
-                    radial-gradient(circle at center, var(--content-background) 46%, transparent 47%),
-                    conic-gradient(
-                        var(--accent-color) calc(var(--pct, 0) * 1%),
-                        var(--dark-color) 0
-                    );
-            }
-            .ctx-btn span {
-                font-size: 7px;
-                line-height: 1;
-                font-weight: 600;
-                opacity: .9;
-                pointer-events: none;
-            }
-            .effort-btn {
-                min-width: 36px;
-                height: 20px;
-                border-radius: 10px;
-                font-size: x-small;
-                font-weight: 600;
-                padding: 0 6px;
-                opacity: .85;
-            }
-            .ctx-panel {
-                position: absolute;
-                right: 0;
-                bottom: calc(100% + 8px);
-                min-width: 220px;
-                max-width: 280px;
-                padding: 10px;
-                border-radius: 12px;
-                gap: 8px;
-                z-index: 3;
-                @apply --vertical;
-                @apply --content;
-                @apply --raised;
-                border: 1px solid var(--border-color);
-            }
-            .ctx-panel .head { font-size: small; }
-            .ctx-panel .muted { font-size: x-small; opacity: .7; }
-            .ctx-bar {
-                height: 8px;
-                border-radius: 4px;
-                overflow: hidden;
-                @apply --horizontal;
-                @apply --dark;
-            }
-            .ctx-bar i { display: block; height: 100%; }
-            .ctx-row { font-size: x-small; gap: 8px; align-items: center; }
-            .ctx-dot {
-                width: 8px;
-                height: 8px;
-                border-radius: 2px;
-                flex-shrink: 0;
-            }
         </style>
         <div class="action-bar" ~if="!pending && actionButton?.label" horizontal>
             <oda-button border hide-icon flex style="border-radius: 16px;"
@@ -106,60 +21,14 @@ ODA({ is: 'microchat-panel',
             <oda-button ~if="actionButton.cancel !== false" border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
-        <div class="composer" border :error="isDo">
-            <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0;">
-                <div class="attach-chip" ~for="files">
-                    <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + ($for.item.ext || 'file')"></oda-icon>
-                    <label flex>{{$for.item.name}}</label>
-                    <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
-                </div>
-            </div>
-            <div horizontal style="align-items: flex-end;">
-                <textarea flex class="prompt" ~if="!recording" :rows ::value placeholder="Сообщение…"
-                    @keydown="_onKeydown"></textarea>
-                <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
-            </div>
-            <div class="tools" horizontal>
-                <item-node no-flex :icon-size="iconSize * .8" :$item="selectedModelItem"
-                    @pointerdown.stop="selectModel($event)"></item-node>
-                <oda-button ~if="hasEffort" class="effort-btn" hide-icon :label="effortLabel"
-                    title="Effort" @tap.stop="cycleEffort"></oda-button>
-                <div flex></div>
-                <div class="ctx-wrap">
-                    <button class="ctx-btn" ~style="'--pct:' + (usageStats?.pct || 0)"
-                        title="Контекст" @tap.stop="statsOpen = !statsOpen">
-                        <span>{{usageStats?.pct || 0}}%</span>
-                    </button>
-                    <div class="ctx-panel" ~if="statsOpen" @tap.stop>
-                        <div class="head" horizontal>
-                            <span bold>{{usageStats?.pct || 0}}% занято</span>
-                            <span flex></span>
-                            <span class="muted">~{{usageStats?.usedText}} / {{usageStats?.limitText}}</span>
-                        </div>
-                        <div class="ctx-bar" ~if="usageStats?.segments?.length">
-                            <i ~for="usageStats.segments"
-                                ~style="'flex:' + ($for.item.pct || 1) + ';background:' + $for.item.color"></i>
-                        </div>
-                        <div class="ctx-row" horizontal ~for="usageStats?.segments || []">
-                            <div class="ctx-dot" ~style="'background:' + $for.item.color"></div>
-                            <span flex>{{$for.item.label}}</span>
-                            <span class="muted">{{fmtTok($for.item.tokens)}}</span>
-                        </div>
-                        <div class="muted" ~if="!(usageStats?.segments?.length)">Нет данных usage</div>
-                    </div>
-                </div>
-                <oda-button icon="icons:attachment" :icon-size @tap="getFile"
-                    style="border-radius: 50%;" title="Прикрепить файл"></oda-button>
-                <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsMode !== 'off'"
-                    style="border-radius: 50%;" :title="ttsTitle"></oda-button>
-                <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size
-                    :rainbow="pending || recording" 
-                    :title="pending ? 'Стоп' : ''" @tap="onSendTap"
-                    style="border-radius: 50%;"></oda-button>
-            </div>
-        </div>
+        <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
+            ::value ::files :pending :recording :timer :error="isDo"
+            :model-item="selectedModelItem" :has-effort="hasEffort" :effort-label="effortLabel"
+            :usage-stats="usageStats" :tts-icon="ttsIcon" :tts-title="ttsTitle" :tts-on="ttsMode !== 'off'"
+            ready-icon="eva:f-arrow-upward"
+            @send="send" @stop="stop" @select-model="selectModel" @cycle-effort="cycleEffort" @cycle-tts="cycleTts"></work-prompt-bar>
     `,
-    imports: 'oda//button, oda//icon, ~/lib//tree',
+    imports: 'oda//button, ~/lib//prompt-bar',
     data: null,
     pending: {
         get() { return !!this.$pdp.pending; },
@@ -171,7 +40,6 @@ ODA({ is: 'microchat-panel',
     value: '',
     iconSize: 24,
     ttsMode: { $def: 'off' },
-    statsOpen: false,
     $item: {
         $def: null,
         set(n) {
@@ -209,13 +77,6 @@ ODA({ is: 'microchat-panel',
     get isFormAction() {
         return this.$pdp.focusedBlock?.type === 'form';
     },
-    get rows() {
-        return Math.min(Math.max(1, String(this.value ?? '').split('\n').length), 6);
-    },
-    get sendIcon() {
-        if (this.pending || this.recording) return 'av:stop';
-        return (this.value?.trim() || this.files.length) ? 'eva:f-arrow-upward' : 'av:mic';
-    },
     get selectedModelItem() {
         return this.data?.model ? WORK.get_item(this.data.model) : null;
     },
@@ -237,9 +98,8 @@ ODA({ is: 'microchat-panel',
     attached() {
         this._focus();
     },
-    fmtTok(n) { return fmtTokens(n); },
     _focus() {
-        this.async(() => this.$('.prompt')?.focus(), 50);
+        this.$('work-prompt-bar')?.focusInput();
     },
     _mic() {
         return this._audioController ??= new MicAudioController(this);
@@ -257,22 +117,10 @@ ODA({ is: 'microchat-panel',
         this._focus();
     },
 
-    onSendTap() {
-        if (this.pending) {
-            this.stop();
-            return;
-        }
-        this.send();
-    },
-    _onKeydown(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            this.send();
-        }
-    },
     async send() {
         if (this.pending) return;
-        if (!this.value?.trim() && !this.files.length && !this.recording) {
+        const files = this.$('work-prompt-bar')?.files ?? this.files;
+        if (!this.value?.trim() && !files.length && !this.recording) {
             this._mic()?.toggle();
             return;
         }
@@ -282,26 +130,34 @@ ODA({ is: 'microchat-panel',
             return;
         }
         
-        let text = String(this.value ?? '').trim();
-        const external = this.files.filter(f => f instanceof File);
-        const internal = this.files.filter(f => f.internalPath);
-        if (internal.length && text)
-            text += '\n\nПрикреплённые файлы из системы:\n' + internal.map(f => f.internalPath).join('\n');
+        const text = String(this.value ?? '').trim();
+        const owner = await Promise.resolve(this.$item.$owner);
+        const save = (typeof owner?.save_file === 'function' ? owner : this.$item);
+        const paths = [];
+        for (const file of files) {
+            if (file.internalPath) {
+                const p = file.internalPath;
+                paths.push(p.startsWith('/') ? p : '/' + p);
+                continue;
+            }
+            if (!(file instanceof File))
+                continue;
+            const log = await save.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
+            const path = log?.logFullPath || log?.path;
+            if (path)
+                paths.push(path.startsWith('/') ? path : '/' + path);
+        }
 
         this.value = '';
         this.files = [];
         this._tts().cancel();
 
-        let post = null;
-        if (external.length) {
-            post = new FormData();
-            for (const f of external) post.append('file', f, f.name);
-        }
         this.pending = true;
         await this.$item.fetch('prompt', {
             prompt: text,
             role: this.userRole,
-        }, post);
+            includes: paths.length ? JSON.stringify(paths) : undefined,
+        });
         this._focus();
     },
     stop() {
@@ -313,25 +169,6 @@ ODA({ is: 'microchat-panel',
         this.pending = false;
         this._tts().onDone();
     },
-    removeFile(index) {
-        this.files.splice(index, 1);
-        this._focus();
-    },
-    async getFile() {
-        const list = await ODA.showFileDialog({ multiple: true });
-        if (!list?.length) return;
-        for (const f of list) {
-            const i = f.name.lastIndexOf('.');
-            if (i > 0) { f.label = f.name.slice(0, i); f.ext = f.name.slice(i + 1); }
-            if (f.type?.includes('image')) {
-                const fr = new FileReader();
-                fr.onload = () => { f.dataURL = fr.result; this.render(); };
-                fr.readAsDataURL(f);
-            }
-            if (!this.files.find(x => x.name === f.name)) this.files.push(f);
-        }
-        this._focus();
-    },
     async cycleEffort() {
         const levels = ['off', 'low', 'medium', 'high'];
         const next = levels[(levels.indexOf(this.effort) + 1) % levels.length];
@@ -340,8 +177,9 @@ ODA({ is: 'microchat-panel',
         this._focus();
     },
     async selectModel(e) {
-        e.stopPropagation();
-        e.preventDefault();
+        e = e?.detail instanceof Event ? e.detail : e;
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
         const tree = ODA.createElement('item-tree', {
             $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
         });

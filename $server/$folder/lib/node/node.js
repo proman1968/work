@@ -91,7 +91,10 @@ export default {
     showSize: false,
     showUsers: false,
     hideLabel: false,
+    hideHistoryTime: false,
     get historyTime() {
+        if (this.hideHistoryTime)
+            return '';
         const path = this.$item?.path;
         if (!path || !String(path).includes('/history/'))
             return '';

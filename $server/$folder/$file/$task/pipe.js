@@ -160,10 +160,6 @@ export const execute = {
 Не делай их и не обращайся к пользователю.
 `,
         prompt: `Проведи анализ текущего этапа и сформируй подробный отчёт о его результатах.`,
-
-        async recalc(params = {}) {
-            (await params.task.body).mode = 'do';
-        },
     }
 
 export const explore = {
@@ -233,8 +229,21 @@ export const file = {
                 // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
+                await file.init;
                 block.title = `file ${length + 1}: ['${file.label}'](<${file.path}>)\n\n`;
-                block.draft = await file.read_text();
+                const chain = await file.type_chain;
+                const image = chain.includes('$image') || String(file.contentType).startsWith('image/');
+                if (image) {
+                    const buf = await file.load({ encoding: null });
+                    const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+                    const mime = file.contentType || 'image/jpeg';
+                    block.draft = {
+                        type: 'image_url',
+                        image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
+                    };
+                } else {
+                    block.draft = { type: 'text', text: await file.read_text() };
+                }
                 block.icon = file.icon;
                 block.label = file.label;
                 block.path = file.path;
@@ -426,11 +435,11 @@ export const site = {
             'Выведи обзор/отчёт о содержимом сайт в формате markdown.',
         ].join('\n'),
         inject: 'если нужно получить содержимое конкретной страницы по url',
-        next: ['thought'],
+        // next: ['thought'],
 
         async init(params = {}) {
             const {box, block, session} = params;
-            debugger
+            // debugger
             try{
                 let sites = box.sites;
                 let length = box.items.filter(b => b.type === 'site').length;
@@ -579,8 +588,8 @@ export const html = {
         ].join('\n'),
         recalc(params = {}) {
             const { block } = params;
-            if(block.box) return;
-            const raw = String(block.content || '').trim();
+            if(block.report) return;
+            let raw = String(block.content || '').trim();
             const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
             if (fence) {
                 raw = fence[1].trim();

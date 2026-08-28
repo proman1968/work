@@ -35,7 +35,7 @@ ODA({is: 'form-chat',
             <item-users ~if="!isPrivate" flex :$item @selected_users-changed="_onSelectionChanged"></item-users>
             <oda-button shadow :icon="callIcon" @tap="call" title="Call..." :icon-size="iconSize * 1.5" style="border-radius: 50%;"></oda-button>
         </div>
-        <oda-chat id="chat" :$item ::model></oda-chat>
+        <oda-chat id="chat" :$item ::model ::efforts></oda-chat>
     `,
     get callIcon(){
         return this.receivers.length?'communication:call':'av:videocam'
@@ -64,6 +64,8 @@ ODA({is: 'form-chat',
         $save: true
     },
     model: { $def: '', $save: true },
+    efforts: { $def: {}, $save: true },
+    effort: { $def: '', $save: true },
     get $saveKey(){
         return this.$item?.short;
     },
@@ -73,6 +75,21 @@ ODA({is: 'form-chat',
             try {
                 const saved = ODA.LocalStorage.create(this._savePath).getItem('model');
                 if (saved) this.model = saved;
+            } catch {}
+        }
+        if (!Object.keys(this.efforts || {}).length) {
+            try {
+                const saved = ODA.LocalStorage.create(this._savePath).getItem('efforts');
+                if (saved && typeof saved === 'object') this.efforts = saved;
+            } catch {}
+        }
+        if (this.effort && this.model && !this.efforts?.[this.model]) {
+            this.efforts = { ...this.efforts, [this.model]: this.effort };
+        } else if (!this.effort) {
+            try {
+                const saved = ODA.LocalStorage.create(this._savePath).getItem('effort');
+                if (saved && this.model)
+                    this.efforts = { ...this.efforts, [this.model]: saved };
             } catch {}
         }
         if (!this.model) {
@@ -115,7 +132,7 @@ ODA({is: 'form-chat',
     }
 })
 ODA({is: 'oda-chat',
-    imports: 'oda//button, oda//icon, ~/lib//pack, ~/lib//tree, ~/lib//user',
+    imports: 'oda//button, oda//icon, ~/lib//pack, ~/lib//tree, ~/lib//user, ~/lib//prompt-bar',
     template:/* html */`
         <style>
             :host{
@@ -136,38 +153,6 @@ ODA({is: 'oda-chat',
                 pointer-events: none;
                 opacity: .1;
             }
-            .prompt-bar{
-                @apply --vertical;
-                margin: 8px;
-                border-radius: 16px;
-                padding: 4px 8px;
-                gap: 2px;
-            }
-            .prompt-tools{
-                align-items: center;
-                font-size: small;
-            }
-            .prompt-tools > oda-button{
-                border-radius: 50%;
-            }
-            #text{
-                min-height: 1.5em;
-                @apply --flex;
-                border: none;
-                outline: none;
-                font-size: medium;
-                font-family: system-ui;
-                outline-color: var(--header-background);
-                overflow: hidden;
-                resize: none;
-                background: transparent;
-            }
-            label{
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                padding: 2px;
-                font-size: xx-small;
-            }
             .mover{
                 gap: 4px;
                 position: absolute;
@@ -177,13 +162,6 @@ ODA({is: 'oda-chat',
             }
             .mover>oda-button{
                 border-radius: 50%;
-            }
-            a{
-                padding: 4px;
-                font-size: small;
-            }
-            .urls-bar{
-                padding: 8px;
             }
         </style>
 
@@ -209,51 +187,20 @@ ODA({is: 'oda-chat',
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
         </div>
         <div  vertical shadow content style="z-index: 1; max-height: 50%;">
-            <div ~if="replyTarget || files.length" horizontal accent-invert style="padding: 4px;">
+            <div ~if="replyTarget" horizontal accent-invert style="padding: 4px;">
                 <div horizontal flex style="overflow: auto; align-self: center;"></div>
                 <oda-button icon="icons:close" @tap="clear" style="padding: 0"></oda-button>
             </div>
             <div ~if="replyTarget" light vertical style="overflow-y: auto;" disabled>
                 <chat-item reply :$file="replyTarget"></chat-item>
             </div>
-            <div ~if="files.length" vertical light style="overflow: auto; padding: 8px;">
-                <div horizontal style="overflow: visible; background: transparent; gap: 4px; flex-wrap: wrap; max-height: 30vh; align-self: baseline;">
-                    <div ~for="files" vertical style="background: transparent;">
-                        <div horizontal accent-invert style="max-width: 150px; padding: 4px 8px; align-items: center; border-radius: 16px;">
-                            <oda-icon icon-size="16" :icon="$for.item?.dataURL || 'files-color:s-' + $for.item.ext"></oda-icon>
-                            <label flex style="overflow: hidden; text-overflow: ellipsis;">{{$for.item.name}}</label>
-                            <oda-button icon-size="16" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
-                        </div>
-                        <!--<div ~if="$for.item?.dataURL" style="margin: auto; background-size: cover; width: 100px; height: 100px;" ~style="{background: 'url(' + $for.item.dataURL + ')'}"></div>-->
-                    </div>
-                </div>
-            </div>
-            <div ~if="meta_urls?.length" vertical flex light class="urls-bar">
-                <div ~for="meta_urls" horizontal flex>
-                    <oda-icon :icon="'icons:' + $for.item.type"></oda-icon>
-                    <div vertical>
-                        <a :href="$for.item.url" target="_blank">{{$for.item.url}}</a>
-                        <div ~if="$for.item.type === 'link'">
-
-                        </div>
-                    </div>
-                </div>
-            </div>
             <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
-            <div class="prompt-bar" raised content @tap="focusedItem = null">
-                <textarea id="text" ~if="!recording" @keydown type="text" autofocus :rows ::value :placeholder></textarea>
-                <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
-                <div class="prompt-tools" horizontal>
-                    <item-node ~if="isAIMode && modelItem" no-flex :icon-size="20" :$item="modelItem"
-                        @pointerdown.stop="selectModel($event)"></item-node>
-                    <oda-button ~if="isAIMode && !modelItem" icon="carbon:ai" :icon-size="20"
-                        @tap="selectModel($event)" title="Выбрать модель"></oda-button>
-                    <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="20"></item-user>
-                    <div flex></div>
-                    <oda-button icon="icons:attachment" :icon-size="24" @tap="getFile" title="Прикрепить файл"></oda-button>
-                    <oda-button :icon="sendIcon" :icon-size="24" :rainbow="recording" @tap="send"></oda-button>
-                </div>
-            </div>
+            <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
+                ::value ::files :ai="isAIMode" :placeholder :recording :timer
+                :model-item="modelItem" :has-effort="hasEffort" :effort-label="effortLabel"
+                :receivers
+                @send="onBarSend" @clear="clear" @prompt-key="_onPromptKey"
+                @select-model="selectModel" @cycle-effort="cycleEffort"></work-prompt-bar>
         </div>
     `,
     get skillFolder(){
@@ -268,36 +215,6 @@ ODA({is: 'oda-chat',
     get url(){
         if(this.$pdp.$handler)
             return this.$pdp.$handler.short + '/~/background.jpg';
-    },
-    removeFile(index){
-        this.files.splice(index, 1);
-    },
-    async getFile(){
-        const fileDialog = await ODA.showFileDialog({ multiple: true });
-        let files = Array.from(fileDialog).map(f => {
-            let n = f.name;
-            let i = n.lastIndexOf('/');
-            if (i > 0)
-                n = n.substring(i + 1);
-            i = n.lastIndexOf('.');
-            if (i > 0) {
-                f.label = n.substring(0, i);
-                f.ext = n.substring(i + 1, 100);
-            }
-            if(f.type?.includes('image')) {
-                const fr = new FileReader();
-                fr.onload = () => {
-                    f.dataURL = fr.result;
-                }
-                fr.readAsDataURL(f);
-            }
-            return f;
-        });
-        for(let file of files){
-            if(this.files.find(f=>f.name === file.name)) continue;
-            this.files.push(file);
-        }
-        this.focusInput();
     },
     files: [],
     get placeholder(){
@@ -314,15 +231,38 @@ ODA({is: 'oda-chat',
         return this.$pdp.receivers;
     },
     model: '',
+    efforts: {},
     get $saveKey(){
         return this.$item?.short;
     },
     get modelItem(){
         return this.model ? WORK.get_item(this.model) : null;
     },
+    get hasEffort() {
+        return !!this.model;
+    },
+    get effortLevel() {
+        return this.efforts?.[this.model] || 'low';
+    },
+    get effortLabel() {
+        return ({ off: 'Off', low: 'Low', medium: 'Med', high: 'High' })[this.effortLevel] || 'Low';
+    },
+    cycleEffort() {
+        if (!this.model) return;
+        const levels = ['off', 'low', 'medium', 'high'];
+        const next = levels[(levels.indexOf(this.effortLevel) + 1) % levels.length];
+        this.efforts = { ...this.efforts, [this.model]: next };
+        try {
+            const host = this.host || this.$pdp;
+            if (host?._savePath)
+                ODA.LocalStorage.create(host._savePath).setItem('efforts', this.efforts);
+        } catch {}
+        this.focusInput();
+    },
     async selectModel(e){
-        e.stopPropagation();
-        e.preventDefault();
+        e = e?.detail instanceof Event ? e.detail : e;
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
         const tree = ODA.createElement('item-tree', {
             $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
         });
@@ -340,6 +280,7 @@ ODA({is: 'oda-chat',
     },
     clear(e){
         this.value = '';
+        this.files = [];
         this.$pdp.replyTarget = null;
         this.$pdp.files = [];
         this.$('#ribbon').lastIdxHistory = -1;
@@ -351,66 +292,32 @@ ODA({is: 'oda-chat',
             $save: true
         }
     },
-    get rows(){
-        return Math.min(this.value.split('\n').length, 10);
+    onBarSend(e){
+        if (this.skillSelectMode) {
+            this.value = '@' + this.$('skill-tree').focusedItem.name;
+            this.$('skill-tree').executed = true;
+            return;
+        }
+        this.send(e?.detail instanceof Event ? e.detail : e);
     },
-    async _onKeydown(e){
-        if(e.keyCode === 13 || e.keyCode === 10){
-            if(e.ctrlKey){
-                this.$pdp.getFile();
-            }
-            else if(!e.altKey && !e.shiftKey){
-                e.preventDefault();
-                if(this.skillSelectMode) {
-                    this.value = '@' + this.$('skill-tree').focusedItem.name;
-                    this.$('skill-tree').executed = true;
-                } else
-                    this.send(e);
-            }
-        }
-        else if(e.keyCode === 27){
-            e.preventDefault();
-            this.clear();
-        }
-        else if(e.keyCode === 38 || e.code === 'ArrowUp') {
-            if(this.skillSelectMode) {
+    async _onPromptKey(e){
+        e = e?.detail instanceof Event ? e.detail : e;
+        if (e.keyCode === 38 || e.code === 'ArrowUp') {
+            if (this.skillSelectMode) {
                 e.preventDefault();
                 this.$('skill-tree').up(e);
             }
             this.value = await this.$('chat-ribbon').getFromHistory(this.value, -1);
-            this.async(()=>{
-                this.$('#text').select();
-            }, 17)
-
+            this.$('work-prompt-bar')?.selectInput();
         }
-        else if(e.keyCode === 40 || e.code === 'ArrowDown'){
-            if(this.skillSelectMode) {
+        else if (e.keyCode === 40 || e.code === 'ArrowDown') {
+            if (this.skillSelectMode) {
                 e.preventDefault();
                 this.$('skill-tree').down(e);
             }
             this.value = await this.$('chat-ribbon').getFromHistory(this.value, 1);
-            this.async(()=>{
-                this.$('#text').select();
-            }, 17)
+            this.$('work-prompt-bar')?.selectInput();
         }
-        else if(e.code === 'Space' && e.ctrlKey){
-            this.value = this.value.fixKeyboardLayout();
-        }
-    },
-    get sendIcon(){
-        if (this.recording) return 'av:stop';
-        return (this.value?.length || this.files.length) ? 'icons:send' : 'av:mic';
-    },
-    get meta_urls(){
-        if(this.value){
-            let urls = this.value.match(/https?:\/\/[^\s]+/gi);
-            urls = urls?.map(url=>({url, type: 'link'})) || [];
-
-            let mails = this.value.match(/([a-zA-Z0-9._+-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi);
-            mails = mails?.map(url=>({url, type: 'mail'})) || [];
-            return [urls,mails].flat();
-        }
-        return []
     },
     value: {
         $def: ''
@@ -429,9 +336,7 @@ ODA({is: 'oda-chat',
         this._geo();
     },
     focusInput(){
-        this.async(()=>{
-           this.$("#text")?.focus();
-        }, 30)
+        this.$('work-prompt-bar')?.focusInput();
     },
     focusedItem: null,
     $item: null,
@@ -442,7 +347,8 @@ ODA({is: 'oda-chat',
             return;
         }
         this.$('#ribbon').scrollDown = true;
-        if(!(this.value || this.files.length)) {
+        const files = this.$('work-prompt-bar')?.files ?? this.files;
+        if(!(this.value || files.length)) {
             this.chatAudioController.record(e);
             return;
         }
@@ -455,7 +361,7 @@ ODA({is: 'oda-chat',
 
         const onFail = err => console.warn('[chat] send', err);
         const text = String(this.value ?? '').trim();
-        const list = [...this.files];
+        const list = [...files];
 
         try {
             if (this.isAIMode) {
@@ -482,6 +388,7 @@ ODA({is: 'oda-chat',
                     items: [],
                 };
                 if (this.model) body.model = this.model;
+                if (this.hasEffort) body.effort = this.effortLevel;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);

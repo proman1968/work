@@ -33,9 +33,10 @@ export default {
                 transition: width, max-width 0.3s ease-in-out;
             }
         </style>
-   
+        
         <div flex vertical class="feed" ~if="showFeed">
-            <div flex vertical style="overflow: hidden;">
+            <div flex></div>
+            <div vertical style="overflow: hidden; padding-left: 4px;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
