@@ -35,7 +35,7 @@ ODA({is: 'form-chat',
             <item-users ~if="!isPrivate" flex :$item @selected_users-changed="_onSelectionChanged"></item-users>
             <oda-button shadow :icon="callIcon" @tap="call" title="Call..." :icon-size="iconSize * 1.5" style="border-radius: 50%;"></oda-button>
         </div>
-        <oda-chat id="chat" :$item ::model></oda-chat>
+        <oda-chat id="chat" :$item ::model ::effort></oda-chat>
     `,
     get callIcon(){
         return this.receivers.length?'communication:call':'av:videocam'
@@ -64,6 +64,7 @@ ODA({is: 'form-chat',
         $save: true
     },
     model: { $def: '', $save: true },
+    effort: { $def: '', $save: true },
     get $saveKey(){
         return this.$item?.short;
     },
@@ -73,6 +74,12 @@ ODA({is: 'form-chat',
             try {
                 const saved = ODA.LocalStorage.create(this._savePath).getItem('model');
                 if (saved) this.model = saved;
+            } catch {}
+        }
+        if (!this.effort) {
+            try {
+                const saved = ODA.LocalStorage.create(this._savePath).getItem('effort');
+                if (saved) this.effort = saved;
             } catch {}
         }
         if (!this.model) {
@@ -149,6 +156,14 @@ ODA({is: 'oda-chat',
             }
             .prompt-tools > oda-button{
                 border-radius: 50%;
+            }
+            .prompt-tools > oda-button.effort-btn {
+                height: 20px;
+                border-radius: 10px;
+                font-size: x-small;
+                font-weight: 600;
+                padding: 0 6px;
+                opacity: .85;
             }
             #text{
                 min-height: 1.5em;
@@ -248,6 +263,8 @@ ODA({is: 'oda-chat',
                         @pointerdown.stop="selectModel($event)"></item-node>
                     <oda-button ~if="isAIMode && !modelItem" icon="carbon:ai" :icon-size="20"
                         @tap="selectModel($event)" title="Выбрать модель"></oda-button>
+                    <oda-button ~if="isAIMode && hasEffort" class="effort-btn" hide-icon :label="effortLabel"
+                        title="Effort" @tap.stop="cycleEffort"></oda-button>
                     <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="20"></item-user>
                     <div flex></div>
                     <oda-button icon="icons:attachment" :icon-size="24" @tap="getFile" title="Прикрепить файл"></oda-button>
@@ -314,11 +331,35 @@ ODA({is: 'oda-chat',
         return this.$pdp.receivers;
     },
     model: '',
+    effort: '',
     get $saveKey(){
         return this.$item?.short;
     },
     get modelItem(){
         return this.model ? WORK.get_item(this.model) : null;
+    },
+    get hasEffort() {
+        const c = this.modelItem?.capabilities;
+        if (Array.isArray(c))
+            return c.includes('effort');
+        return String(c || '').split(/[\s,]+/).includes('effort');
+    },
+    get effortLevel() {
+        return this.effort || this.modelItem?.effort || 'low';
+    },
+    get effortLabel() {
+        return ({ off: 'Off', low: 'Low', medium: 'Med', high: 'High' })[this.effortLevel] || 'Low';
+    },
+    cycleEffort() {
+        const levels = ['off', 'low', 'medium', 'high'];
+        const next = levels[(levels.indexOf(this.effortLevel) + 1) % levels.length];
+        this.effort = next;
+        try {
+            const host = this.host || this.$pdp;
+            if (host?._savePath)
+                ODA.LocalStorage.create(host._savePath).setItem('effort', next);
+        } catch {}
+        this.focusInput();
     },
     async selectModel(e){
         e.stopPropagation();
@@ -482,6 +523,7 @@ ODA({is: 'oda-chat',
                     items: [],
                 };
                 if (this.model) body.model = this.model;
+                if (this.hasEffort) body.effort = this.effortLevel;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);

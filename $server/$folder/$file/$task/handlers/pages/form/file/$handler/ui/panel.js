@@ -54,9 +54,17 @@ ODA({ is: 'microchat-panel',
                 opacity: .9;
                 pointer-events: none;
             }
+            .effort-btn {
+                height: 20px;
+                border-radius: 10px;
+                font-size: x-small;
+                font-weight: 600;
+                padding: 0 6px;
+                opacity: .85;
+            }
             .ctx-panel {
                 position: absolute;
-                left: 0;
+                right: 0;
                 bottom: calc(100% + 8px);
                 min-width: 220px;
                 max-width: 280px;
@@ -113,8 +121,11 @@ ODA({ is: 'microchat-panel',
             <div class="tools" horizontal>
                 <item-node no-flex :icon-size="iconSize * .8" :$item="selectedModelItem"
                     @pointerdown.stop="selectModel($event)"></item-node>
+                <oda-button ~if="hasEffort" class="effort-btn" hide-icon :label="effortLabel"
+                    title="Effort" @tap.stop="cycleEffort"></oda-button>
+                <div flex></div>
                 <div class="ctx-wrap">
-                    <button class="ctx-btn" ~style="'--pct:' + (usageStats?.pct || 0)"
+                    <button class="ctx-btn" style="margin: 4px 8px;" ~style="'--pct:' + (usageStats?.pct || 0)"
                         title="Контекст" @tap.stop="statsOpen = !statsOpen">
                         <span>{{usageStats?.pct || 0}}%</span>
                     </button>
@@ -136,7 +147,6 @@ ODA({ is: 'microchat-panel',
                         <div class="muted" ~if="!(usageStats?.segments?.length)">Нет данных usage</div>
                     </div>
                 </div>
-                <div flex></div>
                 <oda-button icon="icons:attachment" :icon-size @tap="getFile"
                     style="border-radius: 50%;" title="Прикрепить файл"></oda-button>
                 <oda-button :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsMode !== 'off'"
@@ -207,6 +217,18 @@ ODA({ is: 'microchat-panel',
     },
     get selectedModelItem() {
         return this.data?.model ? WORK.get_item(this.data.model) : null;
+    },
+    get hasEffort() {
+        const c = this.selectedModelItem?.capabilities;
+        if (Array.isArray(c))
+            return c.includes('effort');
+        return String(c || '').split(/[\s,]+/).includes('effort');
+    },
+    get effort() {
+        return this.data?.effort || this.selectedModelItem?.effort || 'low';
+    },
+    get effortLabel() {
+        return ({ off: 'Off', low: 'Low', medium: 'Med', high: 'High' })[this.effort] || 'Low';
     },
     get ttsIcon() { return this._tts().icon; },
     get ttsTitle() { return this._tts().title; },
@@ -307,6 +329,13 @@ ODA({ is: 'microchat-panel',
             }
             if (!this.files.find(x => x.name === f.name)) this.files.push(f);
         }
+        this._focus();
+    },
+    async cycleEffort() {
+        const levels = ['off', 'low', 'medium', 'high'];
+        const next = levels[(levels.indexOf(this.effort) + 1) % levels.length];
+        if (this.data) this.data.effort = next;
+        await this.$item.fetch('change_effort', { effort: next });
         this._focus();
     },
     async selectModel(e) {

@@ -122,7 +122,6 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
-                border-radius: 8px;
             }
             :host([host-sticky]) {
                 position: sticky;
@@ -164,7 +163,7 @@ ODA({ is: 'microchat-view',
             }
         </style>
 
-        <details :open="open" :title="data?.menu || data.type" @toggle="onToggle">
+        <details vertical :open="open" :title="data?.menu || data.type" @toggle="onToggle">
             <summary ~show="showTitle" shadow vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
@@ -177,7 +176,7 @@ ODA({ is: 'microchat-view',
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
-            <div class="body" content>
+            <div flex class="body" content>
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            

@@ -12,13 +12,14 @@
                 case 'AI':{
                 } break;
                 case 'APPROVE':{
-                    params.block.answer = prompt;
+                    params.block.answer = prompt; //todo убрать
                     if (params.accept === true || params.accept === 'true') {
-                        params.block.state = 'approved';
                         await params.pipe_step.approve?.(params);
+                        params.block.state = 'принято';                      
                     } else {
-                        params.block.state = 'rejected';
+                        params.block.state = 'отклонено';
                     }
+                    
                     delete params.block.stop;
                     delete params.box.using_blocks;
                     await this._save(session);
@@ -44,76 +45,78 @@
             }
 
             await this._init(params);
-            const pipe = await this.pipe;
-            await pipe[params.box.type]?.recalc?.(params);
+            await this.pipe[params.box.type]?.recalc?.(params);
+            let mode = this.body.mode || 'plan';
+
+            let node = this.pipe[params.block.type];
+            let next = node?.[mode]?.next || node?.next;
+            if(!next || node.box){
+                node = this.pipe[params.box.type];
+                next = node?.[mode]?.next || node?.next;
+            }
+                
+
+            let using_blocks = params.box.using_blocks ??= [];
+            next = next.filter(id => !using_blocks.includes(id));  
 
             let choice;
-            let menu = '';
-            if (!params.box.content) {
-                let mode = (await this.body).mode || 'plan';
-                const node = pipe[params.block.type];
-                const place = pipe[params.box.type];
-                let next = (params.block.box && params.block.content)
-                    ? (place?.[mode]?.next || place?.next || [])
-                    : (node?.[mode]?.next || node?.next || place?.[mode]?.next || place?.next || []);
-                let using_blocks = params.box.using_blocks ??= [];
-                next = next.filter(id => !using_blocks.includes(id));
-                const lines = next.map(id => id.toUpperCase() + ' - ' + (pipe[id]?.[mode]?.inject || pipe[id]?.inject) + ';');
-                if (!next.length) {
-                    choice = 'total';
-                    menu = 'TOTAL - ' + (pipe.total?.[mode]?.inject || pipe.total?.inject || '') + ';';
-                }
-                else if (next.length === 1) {
-                    choice = next[0];
-                    menu = lines.join('\n');
-                }
-                else {
-                    menu = [
-                        '\n\n[instruction]',
-                        'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
-                        'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
-                        '\n\n[menu]\n', ...lines].join('\n');
-                    let messages = await this.context({session, prompt: menu});
+            if (!next.length) {
+                choice = 'total';
+            }
+            else if (next.length === 1) {
+                choice = next[0];
+            }
+            else {
+                const lines = next.map(id => id.toUpperCase() + ' - ' + (this.pipe[id]?.[mode]?.inject || this.pipe[id]?.inject) + ';');
+                let menu = [
+                    '\n\n[instruction]',
+                    'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
+                    'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
+                    '\n\n[menu]\n', ...lines].join('\n');
+                let messages = await this.context({session, prompt: menu});
 
-                    let response = await this._streamChat({ messages, silent: true, session });
-                    if (!this._stopped) {
-                        const word = response.content.trim().toLowerCase();
-                        if (next.includes(word))
-                            choice = word;
-                    }
-                }
+                let response = await this._streamChat({ messages, silent: true, session });
+                const word = response.content.trim().toLowerCase();
+                if (next.includes(word))
+                    choice = word;
             }
             if (choice) {
-                let next_pipe = pipe[choice];
-                
+                let next_pipe = this.pipe[choice];
+            
                 params.block = this._build_block(choice);
-                params.block.menu = menu;
                 if (await this._push_block(params)) {
-                    prompt = next_pipe.prompt;
-                    if (!params.block.box && prompt) {
+                    if (!params.block.box && !params.block.content) {
+                        prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
                         let messages = await this.context({prompt, session});
+                        if(params.block.draft){
+                            prompt += `\n\n[${params.block.type}: ${params.block.label}]\n` + params.block.draft;
+                            messages = [{role: 'system', content: this.body.system}, { role: 'user', content: prompt }];
+                            delete params.block.draft;
+                        }
+                      
                         let response = await this._streamChat({ messages, session });
                         if (params.block.title)
                             response.content = params.block.title + '\n\n' + response.content;
                         Object.assign(params.block, response);
                     }
-                    await pipe[params.block.type]?.recalc?.(params);
-                    const kind = pipe[params.block.type];
-                    const src = String(params.block.html || params.block.content || '').trim();
-                    if (!this._stopped && src && kind?.label && params.block.label === kind.label) {
-                        const cap = await this._streamChat({
-                            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
-                            silent: true,
-                            session,
-                        });
-                        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-                        if (words)
-                            params.block.label = words;
-                    }
+                    await this.pipe[params.block.type]?.recalc?.(params);
+
+                    // const kind = this.pipe[params.block.type];
+                    // const src = String(params.block.html || params.block.content || '').trim();
+                    // if (!this._stopped && src && kind?.label && params.block.label === kind.label) {
+                    //     const cap = await this._streamChat({
+                    //         messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
+                    //         silent: true,
+                    //         session,
+                    //     });
+                    //     const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+                    //     if (words)
+                    //         params.block.label = words;
+                    // }
                     await this._save(session);
                 }
 
-                if (!this._stopped && !params.box.content && (params.block.box || !params.block.stop)) {
+                if (!this._stopped && /* !params.box.content && */ (params.block.box || !params.block.stop)) {
                     this.async(() => this.prompt({ role: 'AI', session }));
                     return { ok: true };
                 }
@@ -124,7 +127,6 @@
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
         }
-
         session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
@@ -147,24 +149,23 @@
             if (next?.box && !next.content) box = next;
             else break;
         }
+        const focus = box;
         const mode = body.mode || 'plan';
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
         const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), timeNow(body.tz), modeLine].filter(Boolean).join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
-                if (nextRole === 'assistant')
-                    messages.push({ role: 'user', content: 'продолжай' });
-                else {
-                    messages.last.content += '\n\n' + content;
-                    return;
-                }
+                messages.last.content += '\n\n' + content;
+                return;
             }
             messages.push({ role: nextRole, content });
         };
         for (const layer of layers)
             for (const m of layer.messages)
                 push(m.role, m.content);
+        if (focus !== body)
+            push('user', stageOpen(focus, this.pipe[focus.type]));
         if (prompt) {
             if (messages.last?.role === 'user')
                 messages.last.content += '\n\n[instruction]\n' + prompt;
@@ -181,9 +182,9 @@
             system += '\n\n[todo]\n' + (box.todo.content || '');
         const messages = [];
         for (const b of (box.items || [])) {
-            if (this.pipe[b.type]?.close)
+            if (this.pipe[b.type]?.close || (b.box && !b.content))
                 continue;
-            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content || stageOpen(b, this.pipe[b.type]) });
+            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
             if (b.page && !b.content)
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
@@ -194,10 +195,14 @@
     async _streamChat(params = {}) {
         const {messages, silent, session} = params;
         const model = await this.model;
+        const effort = (await this.body).effort;
         let content = '', usage = 0;
-        for await (const chunk of model.streamChat({ messages })) {
-            if (this._stopped)
+        for await (const chunk of model.streamChat({ messages, effort })) {
+            if (this._stopped){
+                content = '';
                 break;
+            }
+                
             if (chunk?.type === 'usage')
                 usage = chunk;
             else {
@@ -307,6 +312,14 @@
         (await this.body).model = model;
         await this._save(session);
         return { ok: true, model};
+    },
+    async change_effort(params = {}) {
+        const effort = params.effort ?? params.post?.effort;
+        const session = params.session;
+        if (!effort) return { ok: false, error: 'effort required' };
+        (await this.body).effort = effort;
+        await this._save(session);
+        return { ok: true, effort };
     },
     async remove_block(params = {}) {
         const block = params.block || params.post?.block || {

@@ -76,6 +76,27 @@ export function parseFunctionArgs(acc) {
     }
 }
 
+function hasCap(ai, name) {
+    const c = ai?.capabilities;
+    if (Array.isArray(c))
+        return c.includes(name);
+    return String(c || '').split(/[\s,]+/).filter(Boolean).includes(name);
+}
+
+function applyEffort(body, ai, options = {}) {
+    if (!hasCap(ai, 'effort'))
+        return;
+    const effort = options.effort ?? ai.effort;
+    if (effort == null || effort === '')
+        return;
+    const off = effort === 'off' || effort === false;
+    const ollama = ai.protocol === 'ollama' || String(ai.baseUrl || '').includes('ollama');
+    if (ollama)
+        body.think = off ? false : effort;
+    else if (!off)
+        body.reasoning_effort = effort;
+}
+
 function sanitizeParsedArgs(parsed) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         return {};
@@ -291,6 +312,7 @@ export default {
         };
         if (options.stop)
             body.stop = options.stop;
+        applyEffort(body, ai, options);
         // OpenAI/z.ai: usage в финальном chunk стрима
         if (!isGigachat)
             body.stream_options = { include_usage: true };

@@ -60,7 +60,11 @@ export default {
             }, {
                 id: 'capabilities',
                 type: 'String',
-                placeholder: 'chat, stream',
+                placeholder: 'chat, stream, effort',
+            }, {
+                id: 'effort',
+                type: 'String',
+                placeholder: 'off | low | medium | high',
             }, {
                 id: 'functionCalling',
                 type: 'Boolean',
@@ -108,6 +112,7 @@ export default {
         };
         if (options.stop)
             body.stop = options.stop;
+        applyEffort(body, ai, options);
         if (!isGigachat)
             body.stream_options = { include_usage: true };
 
@@ -267,6 +272,26 @@ export default {
     },
 };
 
+function hasCap(ai, name) {
+    const c = ai?.capabilities;
+    if (Array.isArray(c))
+        return c.includes(name);
+    return String(c || '').split(/[\s,]+/).filter(Boolean).includes(name);
+}
+
+function applyEffort(body, ai, options = {}) {
+    if (!hasCap(ai, 'effort'))
+        return;
+    const effort = options.effort ?? ai.effort;
+    if (effort == null || effort === '')
+        return;
+    const off = effort === 'off' || effort === false;
+    const ollama = ai.protocol === 'ollama' || String(ai.baseUrl || '').includes('ollama');
+    if (ollama)
+        body.think = off ? false : effort;
+    else if (!off)
+        body.reasoning_effort = effort;
+}
 
 /**
  * Накопить arguments FC: string-чанки склеиваются, object → JSON (GigaChat).

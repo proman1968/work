@@ -41,7 +41,7 @@ export default {
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
         </div>
         <oda-splitter ~if="showDock && !mobile" left ::width="dockWidth"></oda-splitter>
-        <microchat-dock no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
+        <microchat-dock content no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
         <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="dockOpen = true"></oda-button>                
 
     `,
@@ -106,7 +106,7 @@ export default {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if (b.box && b.content)
+                if ((b.box || b.report) && b.content)
                     out.push(b);
             }
         };

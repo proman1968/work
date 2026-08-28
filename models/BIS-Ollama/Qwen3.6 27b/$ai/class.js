@@ -11,5 +11,6 @@ export default {
     model: 'qwen3.6:27b',
 
     maxTokens: 131072,
-    capabilities: ['chat', 'stream', 'functions', 'vision'],
+    capabilities: ['chat', 'stream', 'functions', 'vision', 'effort'],
+    effort: 'low',
 }
