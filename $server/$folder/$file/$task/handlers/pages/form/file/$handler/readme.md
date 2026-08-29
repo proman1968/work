@@ -12,9 +12,9 @@ Shell + `ui/`: лента, док закрытых box (wide), промптба�
 
 ## 3. Как это работает
 
-- Shell: `pending` — send / `chat.delta` / `changed` при пустом слоте; гашение на `chat.done` / stop. На set слот не включает `pending` (повторный вход в остановленную задачу — «Продолжить», не вертушка). `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`; `changed`/`chat.done` → `load()`.
+- Shell: `pending` — вход в `prompt` (`chat.start`) до выхода (`chat.done`). На set — если item уже `chatPending`. `streamTarget` = focused без `content`/`html` (слот, не факт стрима); `streamingText` на delta; `streaming` только `chat.delta` / `chat.done`; `changed`/`chat.done` → `load()`.
 - Док (есть отчёты + `dockOpen`): `mobileMode` — ширина `100%`, лента скрыта (`showFeed`); иначе `dockStyle` = `dockWidth` px + `max-width: 50%` + сплиттер (`::width`). Отчёт — `(box || report) && content` (не «есть `items`»). Обход — `items`, дети раньше родителя; корень с `content` — в конец. Тело — тот же `microchat-view-*` (`viewTag`), `onlyDoc`: без шапки и без детей. `dockOpen` / `dockWidth` — `$save`. Кружок `.dock-over`. Бар `header`: `←` `n/N` `→` имя save copy share скрыть. Save — флаг и JSON задачи до `save_file`, иначе `changed`/`load` стирает `saved`. Имя: `html` / страница → `.html` и `block.html` (как iframe); иначе `.md` и `content`. Кнопка: нет флага — `success-invert`, есть — `disabled`.
-- Панель: стоп/вертушка — `$pdp.pending` (владелец — шелл). Composer — attr `error` при `data.mode === 'do'`. Между шагами auto-loop `chat.done` нет. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
+- Панель: стоп/вертушка — `$pdp.pending` (владелец — шелл), в бар `:pending`. `work-prompt-bar` — attr `error` при `data.mode === 'do'`; action-bar снаружи. Auto-loop без `chat.done` (ранний `return`); `done` — только выход из `prompt`. Локацию панель не шлёт — место в `body.system` пишет `on_save`.
 - `focusedBlock` — последний не-`hidden` в живой ветке (`content` / без `items` — стоп спуска).
 - `pinned` — авто-open у `focusedBlock` и предков на пути к нему. Сосед / закрытая площадка не на пути — сворачивается свободно.
 - Топ-лента (`microchat-ribbon` + `$item`): scroll follow только при `stickBottom`; уход вверх отменяет pending `pinBottom`.
@@ -35,8 +35,7 @@ file.js        ← визуалка-шелл: data, pending, focusedBlock, strea
 ui/views.js    ← microchat-ribbon + microchat-view-* + microchat-form
 ui/dock.js     ← док: селектор + content закрытых
 ui/ribbon.js   ← дубль ribbon (scroll-контракт; шелл не импортирует)
-ui/panel.js    ← microchat-panel (+ mic/tts/usage)
-ui/mic.js      ← MicAudioController
+ui/panel.js    ← microchat-panel (action-bar + work-prompt-bar; tts/usage)
 ui/tts.js      ← TtsController
 ui/usage.js    ← buildUsageStats / fmtTokens
 ```
@@ -48,8 +47,7 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 | [`ui/dock.js`](ui/dock.js) | Стрелки `n/N` + имя + copy/share/save + `viewTag` / `onlyDoc`. |
 | [`ui/views.js`](ui/views.js) | Ribbon + views. Form-слот / html-iframe. Scroll: `stickBottom`. |
 | [`ui/ribbon.js`](ui/ribbon.js) | Черновик/дубль ленты. |
-| [`ui/panel.js`](ui/panel.js) | `actionButton.role`: строка `stop` → `APPROVE` + `accept` (form: `prompt` = JSON `$pdp.result`); «Продолжить» → `AI`. Send из инпута — `userRole`. Без `model`. |
-| [`ui/mic.js`](ui/mic.js) | SpeechRecognition → `panel.value` / `recording` / `timer`. |
+| [`ui/panel.js`](ui/panel.js) | Action-bar + `work-prompt-bar`. `::model` / `::effort` / `::tts-mode`; `:pending` с шелла. Mic в баре. `actionButton.role`: строка `stop` → `APPROVE` + `accept` (form: `prompt` = JSON `$pdp.result`); «Продолжить» → `AI`. Send из инпута — `userRole`. |
 | [`ui/tts.js`](ui/tts.js) | `off` / `local` / `browser`; delta → speak на done. |
 | [`ui/usage.js`](ui/usage.js) | Usage из `data.usage` + walk `data.items`. |
 
@@ -66,11 +64,11 @@ ui/usage.js    ← buildUsageStats / fmtTokens
 
 ## Контракты (как в коде)
 
-- **Модель:** `data.model` → `WORK.get_item`; смена — picker `/MODELS` + `fetch('change_model', { model: path })`.
+- **Модель / effort:** picker и цикл — `work-prompt-bar`; панель биндит `::model` / `::effort`, setter пишет `data` и `fetch('change_model'|'change_effort')`.
 - **Меню блока:** `data.menu` — текст выбора (`TYPE - inject`, при нескольких вариантах — с инструкцией модели). При `stop: true` — `title` на `details`. Времени и удаления в шапке нет.
 - **Action:** роль с кнопки. Строковый `stop` — `APPROVE` + `accept` + крестик (`null` при `streamTarget`); form: `prompt` = JSON `$pdp.result`. Иначе «Продолжить» (`role: 'AI'`) при открытом корне, не `pending`/`streaming`/`stop: true`, хвост не `prompt`. Модель в `prompt` не передаётся — она в `body.model`, смена только `change_model`.
 - **Form:** слот только при `html`; `result` — снимок контролов; оболочка пробрасывает `view.result` → `$pdp.result`.
 - **Html:** `block.html` или document в `content` (забор ```` ```html ```` снимает `pageHtml`) → `microchat-html` `iframe srcdoc` (`allow-scripts`); высота `postMessage`; без APPROVE.
 - **Pinned:** авто-open у `focusedBlock` и предков на спуске. Не на пути — стрелка свободная.
-- **Stream:** `streamTarget` = focused без тела (слот). `streaming` — только delta/done. `typeIcon` — вертушка при `$pdp.pending` и пустом `content`; в JSON не пишется. `streamingText` на delta. `pending` на шелле: send / `chat.delta` / `changed` при слоте; гашение на `chat.done` / stop. set из слота `pending` не ставит. `fetch('stop')` → `_stopped`.
+- **Stream:** `streamTarget` = focused без тела (слот). `streaming` — только delta/done. `typeIcon` — вертушка при `$pdp.pending` и пустом `content`; в JSON не пишется. `streamingText` на delta. `pending`: `chat.start` (вход `prompt`) … `chat.done` (выход). set — флаг `chatPending` на item. `fetch('stop')` → `_stopped`.
 - **Load:** `$item.load()` в shell на set / changed / chat.done.

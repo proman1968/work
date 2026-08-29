@@ -37,6 +37,9 @@ ODA({is: 'chat-item',
                 overflow: hidden;
                 border-radius: 8px;
             }
+            :host([compact]) .card {
+                border-radius: 0;
+            }
             .card[raised] {
                 border-radius: 0px !important;
             }
@@ -71,8 +74,8 @@ ODA({is: 'chat-item',
         </div>
         <div class="card"  shadow :flex="expanded || compact" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
             <div class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText"></item-node>
-                <oda-button :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
+                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" :hide-history-time="compact"></item-node>
+                <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
             <div ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
             <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">

@@ -5,6 +5,7 @@
         
         // debugger;
         let { prompt, role, session } = params;
+        session?.send?.({ type: 'chat.start', path: this.short });
         await this._init(params);
     
         try {
@@ -69,16 +70,23 @@
             else {
                 const lines = next.map(id => id.toUpperCase() + ' - ' + (this.pipe[id]?.[mode]?.inject || this.pipe[id]?.inject) + ';');
                 let menu = [
-                    '\n\n[instruction]',
                     'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
                     'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
-                    '\n\n[menu]\n', ...lines].join('\n');
+                    '\n\n[menu]\n',
+                    ...lines,
+                    'Если ни один вариант не подходит, просто отвечай или уточняй.',
+                ].join('\n');
                 let messages = await this.context({session, prompt: menu});
 
                 let response = await this._streamChat({ messages, silent: true, session });
                 const word = response.content.trim().toLowerCase();
                 if (next.includes(word))
                     choice = word;
+                else{
+                    params.block = this._build_block('answer');
+                    params.block.content = word;
+                    await this._push_block(params);
+                }
             }
             if (choice) {
                 let next_pipe = this.pipe[choice];
@@ -89,8 +97,12 @@
                         prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
                         let messages = await this.context({prompt, session});
                         if(params.block.draft){
-                            prompt += `\n\n[${params.block.type}: ${params.block.label}]\n` + params.block.draft;
-                            messages = [{role: 'system', content: this.body.system}, { role: 'user', content: prompt }];
+                            const draft = params.block.draft;
+                            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
+                            const content = draft.type === 'image_url'
+                                ? [{ type: 'text', text: head }, draft]
+                                : head + (draft.type === 'text' ? draft.text : draft);
+                            messages = [{ role: 'system', content: this.body.system }, { role: 'user', content }];
                             delete params.block.draft;
                         }
                       
@@ -101,21 +113,21 @@
                     }
                     await this.pipe[params.block.type]?.recalc?.(params);
 
-                    // const kind = this.pipe[params.block.type];
-                    // const src = String(params.block.html || params.block.content || '').trim();
-                    // if (!this._stopped && src && kind?.label && params.block.label === kind.label) {
-                    //     const cap = await this._streamChat({
-                    //         messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
-                    //         silent: true,
-                    //         session,
-                    //     });
-                    //     const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-                    //     if (words)
-                    //         params.block.label = words;
-                    // }
-                    await this._save(session);
+                    const kind = this.pipe[params.block.type];
+                    const src = String(params.block.html || params.block.content || '').trim();
+                    if (params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label) {
+                        const cap = await this._streamChat({
+                            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
+                            silent: true,
+                            session,
+                        });
+                        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+                        if (words)
+                            params.block.label = words;
+                    }
+                    
                 }
-
+                await this._save(session);
                 if (!this._stopped && /* !params.box.content && */ (params.block.box || !params.block.stop)) {
                     this.async(() => this.prompt({ role: 'AI', session }));
                     return { ok: true };
@@ -127,6 +139,7 @@
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
         }
+
         session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },

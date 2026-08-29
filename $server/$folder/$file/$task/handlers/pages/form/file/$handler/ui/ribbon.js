@@ -15,7 +15,6 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
-
             }
             :host([top]) {
                 overflow-y: auto;

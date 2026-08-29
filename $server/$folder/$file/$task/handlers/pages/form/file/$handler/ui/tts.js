@@ -1,6 +1,6 @@
 /**
  * TTS for microchat-panel (browser / local piper).
- * Владеет буфером стрима и воспроизведением; pending/mic — у panel.
+ * Владеет буфером стрима и воспроизведением; mic — у work-prompt-bar.
  */
 
 const MODES = ['off', 'local', 'browser'];
@@ -92,9 +92,10 @@ export class TtsController {
     }
     _onSpeakEnd() {
         const c = this.component;
-        if (this.mode !== 'off' && !c.recording && !c.pending) {
+        const bar = c.$('work-prompt-bar');
+        if (this.mode !== 'off' && !bar?.recording && !c.pending) {
             c.async(() => {
-                if (!c.value?.trim() && !c.pending) c._mic()?.toggle();
+                if (!c.value?.trim() && !c.pending) bar?.toggleMic();
             }, 500);
         }
     }

@@ -587,6 +587,7 @@ setTimeout(() => {
             case 'push':{
                 ODA.showMessage(data.message);
             } break;
+            case 'chat.start':
             case 'chat.delta':
             case 'chat.done':
             case 'chat.error':
@@ -596,6 +597,12 @@ setTimeout(() => {
                 let item = CORE.$item.ITEMS[data.path];
                 if(!item)
                     item = Object.values(CORE.$item.ITEMS).find(i=>i.short === data.path);
+                const busy = data.type === 'chat.start' ? true : data.type === 'chat.done' ? false : undefined;
+                if (busy !== undefined) {
+                    WORK.chatPending ??= {};
+                    WORK.chatPending[data.path] = busy;
+                    if (item) item.chatPending = busy;
+                }
                 if(item)
                     item.fire(data.type, data);
             } break;

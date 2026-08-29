@@ -16,6 +16,7 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
+                gap: 4px;
             }
             :host([top]) {
                 overflow-y: auto;
@@ -24,7 +25,7 @@ ODA({ is: 'microchat-ribbon',
             }
         </style>
         <microchat-view-todo ~if="todo" :data="todo"></microchat-view-todo>
-        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items"></div>
+        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items" ></div>
     `,
     top: {
         $def: false,
@@ -122,11 +123,13 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
+
             }
             :host([host-sticky]) {
                 position: sticky;
                 top: var(--chat-sticky-top, 0px);
                 z-index: var(--chat-sticky-z, 115);
+                
             }
             summary {
                 cursor: pointer;

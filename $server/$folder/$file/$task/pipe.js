@@ -229,8 +229,21 @@ export const file = {
                 // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
+                await file.init;
                 block.title = `file ${length + 1}: ['${file.label}'](<${file.path}>)\n\n`;
-                block.draft = await file.read_text();
+                const chain = await file.type_chain;
+                const image = chain.includes('$image') || String(file.contentType).startsWith('image/');
+                if (image) {
+                    const buf = await file.load({ encoding: null });
+                    const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+                    const mime = file.contentType || 'image/jpeg';
+                    block.draft = {
+                        type: 'image_url',
+                        image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
+                    };
+                } else {
+                    block.draft = { type: 'text', text: await file.read_text() };
+                }
                 block.icon = file.icon;
                 block.label = file.label;
                 block.path = file.path;

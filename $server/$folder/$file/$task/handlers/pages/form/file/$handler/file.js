@@ -33,9 +33,10 @@ export default {
                 transition: width, max-width 0.3s ease-in-out;
             }
         </style>
-   
+        
         <div flex vertical class="feed" ~if="showFeed">
-            <div flex vertical style="overflow: hidden;">
+            <div flex></div>
+            <div vertical style="overflow: hidden; padding: 0px 4px;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
@@ -48,7 +49,7 @@ export default {
     colorMode: 'content',
     data: null,
     streamingText: '',
-    /** send → done/stop; typeIcon и стоп панели */
+    /** prompt: start → done; typeIcon и стоп панели */
     pending: false,
     /** wait-кнопки прячем, пока идёт стрим (реактивный флаг для кэша геттеров) */
     streaming: false,
@@ -62,7 +63,9 @@ export default {
             n?.listen('changed', async () => {
                 this.streamingText = '';
                 this.data = await n.load();
-                if (this.streamTarget) this.pending = true;
+            });
+            n?.listen('chat.start', () => {
+                this.pending = true;
             });
             n?.listen('chat.delta', e => {
                 this.pending = true;
@@ -77,6 +80,7 @@ export default {
             });
             this.data = await n?.load();
             this.streaming = false;
+            this.pending = !!(n?.chatPending || WORK.chatPending?.[n?.short] || WORK.chatPending?.[n?.path]);
         },
     },
     $listeners: {

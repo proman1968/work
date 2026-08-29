@@ -1,9 +1,12 @@
-/** «?» у контейнера (папка, класс, handler), не у файла: только если readme.md уже в items. */
+/** «?» только у строки дерева (`oda-tree-node`): контейнер с readme.md в items, не файл. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
     if ($item.constructor === CORE.$file || $item.type === '$file') return false;
     return true;
+}
+function inTreeNode(node) {
+    return (node?.host || node?.parentElement)?.localName === 'oda-tree-node';
 }
 
 export default {
@@ -91,7 +94,10 @@ export default {
     showSize: false,
     showUsers: false,
     hideLabel: false,
+    hideHistoryTime: false,
     get historyTime() {
+        if (this.hideHistoryTime)
+            return '';
         const path = this.$item?.path;
         if (!path || !String(path).includes('/history/'))
             return '';
@@ -101,12 +107,13 @@ export default {
         return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
     },
     get readmeItem() {
-        if (!mayShowReadme(this.$item)) return undefined;
+        if (!inTreeNode(this) || !mayShowReadme(this.$item)) return undefined;
         return Promise.resolve(this.$item.items).then(items =>
             Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined
         );
     },
     get hasReadme() {
+        if (!inTreeNode(this)) return false;
         Promise.resolve(this.readmeItem).then(r => {
             this.hasReadme = !!r || null;
         });
