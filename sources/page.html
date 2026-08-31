@@ -33,10 +33,10 @@
             console.log(e.message)
         }
 
-        if (!WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
-            const base = (!item_path || item_path === '/') ? '' : item_path.replace(/\/$/, '');
-            location.replace(location.origin + base + '/~/handlers//site/index.html');
-        } else {
+        // if (!WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
+        //     const base = (!item_path || item_path === '/') ? '' : item_path.replace(/\/$/, '');
+        //     location.replace(location.origin + base + '/~/handlers//site/index.html');
+        // } else {
             const $item = await WORK.get_item(item_path, 'info');
             window.$context ??= $item;
 
@@ -72,7 +72,7 @@
                 devPanel.$item = await WORK.get_item('/');
                 devPanel.style = '';
             }
-        }
+        // }
         ODA({
             is: 'dev-mode-panel',
             template: `

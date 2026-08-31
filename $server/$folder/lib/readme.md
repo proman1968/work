@@ -5,9 +5,9 @@
 ## Структура
 
 - `chat-item/` — карточка файла/сообщения в чате
-- `prompt-bar/` — `work-prompt-bar`: чипы, textarea, URL, модель/effort, контекст/TTS (флаги)
+- `prompt-bar/` — `work-prompt-bar`: composer; модель/effort/TTS/mic — в баре; хост `send` / `stop` и `::model` / `::effort`
 - `tree/` — дерево элементов (item-tree); опциональный `hideFiles`
-- `node/` — узел дерева (item-node); «?» открывает контекстный `readme.md` уровня
+- `node/` — узел дерева (item-node); «?» в дереве открывает контекстный `readme.md` уровня
 - `node-explorer/` — навигатор по системе
 - `explorer/` — главная страница-исследователь
 - `file-viewer/` — просмотрщик файлов

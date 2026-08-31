@@ -196,11 +196,9 @@ ODA({is: 'oda-chat',
             </div>
             <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
             <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
-                ::value ::files :ai="isAIMode" :placeholder :recording :timer
-                :model-item="modelItem" :has-effort="hasEffort" :effort-label="effortLabel"
-                :receivers
-                @send="onBarSend" @clear="clear" @prompt-key="_onPromptKey"
-                @select-model="selectModel" @cycle-effort="cycleEffort"></work-prompt-bar>
+                ::value ::files :ai="isAIMode" :placeholder :pending="awaitTask"
+                ::model ::effort ::tts-mode :receivers :show-tts="true"
+                @send="onBarSend" @stop="onBarStop" @clear="clear" @prompt-key="_onPromptKey"></work-prompt-bar>
         </div>
     `,
     get skillFolder(){
@@ -230,7 +228,17 @@ ODA({is: 'oda-chat',
     get receivers(){
         return this.$pdp.receivers;
     },
-    model: '',
+    model: {
+        $def: '',
+        set(n) {
+            if (!n) return;
+            try {
+                const host = this.host || this.$pdp;
+                if (host?._savePath)
+                    ODA.LocalStorage.create(host._savePath).setItem('model', n);
+            } catch {}
+        },
+    },
     efforts: {},
     get $saveKey(){
         return this.$item?.short;
@@ -238,45 +246,17 @@ ODA({is: 'oda-chat',
     get modelItem(){
         return this.model ? WORK.get_item(this.model) : null;
     },
-    get hasEffort() {
-        return !!this.model;
-    },
-    get effortLevel() {
+    get effort() {
         return this.efforts?.[this.model] || 'low';
     },
-    get effortLabel() {
-        return ({ off: 'Off', low: 'Low', medium: 'Med', high: 'High' })[this.effortLevel] || 'Low';
-    },
-    cycleEffort() {
-        if (!this.model) return;
-        const levels = ['off', 'low', 'medium', 'high'];
-        const next = levels[(levels.indexOf(this.effortLevel) + 1) % levels.length];
-        this.efforts = { ...this.efforts, [this.model]: next };
+    set effort(n) {
+        if (!this.model || !n) return;
+        this.efforts = { ...this.efforts, [this.model]: n };
         try {
             const host = this.host || this.$pdp;
             if (host?._savePath)
                 ODA.LocalStorage.create(host._savePath).setItem('efforts', this.efforts);
         } catch {}
-        this.focusInput();
-    },
-    async selectModel(e){
-        e = e?.detail instanceof Event ? e.detail : e;
-        e?.stopPropagation?.();
-        e?.preventDefault?.();
-        const tree = ODA.createElement('item-tree', {
-            $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
-        });
-        tree.execute = async (item) => {
-            this.model = item.path;
-            try {
-                const host = this.host || this.$pdp;
-                if (host?._savePath)
-                    ODA.LocalStorage.create(host._savePath).setItem('model', item.path);
-            } catch {}
-            for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
-            this.focusInput();
-        };
-        await WORK.showDropdown(tree, { TITLE: { label: 'Select model' } }, e);
     },
     clear(e){
         this.value = '';
@@ -298,7 +278,10 @@ ODA({is: 'oda-chat',
             this.$('skill-tree').executed = true;
             return;
         }
-        this.send(e?.detail instanceof Event ? e.detail : e);
+        this.send();
+    },
+    onBarStop() {
+        this.awaitTask = false;
     },
     async _onPromptKey(e){
         e = e?.detail instanceof Event ? e.detail : e;
@@ -341,17 +324,14 @@ ODA({is: 'oda-chat',
     focusedItem: null,
     $item: null,
     awaitTask: false,
-    async send(e){
-        if (this.recording) {
-            this.chatAudioController.record(e);
-            return;
-        }
+    ttsMode: {
+        $def: 'off',
+        $save: true,
+    },
+    async send(){
         this.$('#ribbon').scrollDown = true;
         const files = this.$('work-prompt-bar')?.files ?? this.files;
-        if(!(this.value || files.length)) {
-            this.chatAudioController.record(e);
-            return;
-        }
+        if (!(this.value || files.length)) return;
 
         let params = {encoding: 'utf-8'}
         if(this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
@@ -388,7 +368,7 @@ ODA({is: 'oda-chat',
                     items: [],
                 };
                 if (this.model) body.model = this.model;
-                if (this.hasEffort) body.effort = this.effortLevel;
+                if (this.$('work-prompt-bar')?.hasEffort) body.effort = this.effort;
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
@@ -410,12 +390,6 @@ ODA({is: 'oda-chat',
             this.awaitTask = false;
         }
         this.$('#ribbon').scrollDown = true;
-    },
-    recording: false,
-    recognizing: false,
-    timer: '',
-    get chatAudioController() {
-        return this._audioController ??= new chatAudioController(this);
     },
     async location() {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -836,200 +810,3 @@ ODA({is: 'skill-tree', imports: '~/lib//tree.js', extends: 'item-tree',
         this.executed = true;
     },
 })
-class chatAudioController {
-    constructor(chatComponent, audioCtx = new AudioContext()) {
-        this.chatComponent = chatComponent;
-        this.audioCtx = audioCtx;
-    }
-    #audioBuffers = Object.create(null);
-    #RECOGNITION_DICTIONARY = {
-        точка: '.',
-        запятая: ',',
-        вопрос: '?',
-        восклицание: '!',
-        двоеточие: ':',
-        тире: '-',
-        абзац: '\n',
-        отступ: '\t'
-    };
-    async getAudioBuffer(path) {
-        if (this.#audioBuffers[path]) {
-            return this.#audioBuffers[path];
-        }
-        const response = await fetch(path);
-        const arrayBuffer = await response.arrayBuffer();
-        return this.#audioBuffers[path] = this.audioCtx.decodeAudioData(arrayBuffer);
-    }
-    currentAudioSource = null;
-    async playSound(soundPath, loop = false) {
-        try {
-            if (this.currentAudioSource) {
-                await this.stopSound();
-            }
-            this.currentAudioSource = new Promise(async (resolve, reject) => {
-                const source = this.audioCtx.createBufferSource();
-                source.buffer = await this.getAudioBuffer(soundPath);
-                source.connect(this.audioCtx.destination);
-                source.loop = loop;
-                if (!loop) {
-                    source.onended = () => {
-                        this.stopSound();
-                    }
-                }
-                source.start();
-                resolve(source);
-            });
-            await this.currentAudioSource;
-        }
-        catch (err) {
-            console.warn(`error on play sound "${soundPath}"\n`, err);
-        }
-    }
-    async stopSound() {
-        if (!this.currentAudioSource) return;
-        const source = await this.currentAudioSource;
-        source.stop();
-        source.disconnect();
-        this.currentAudioSource = null;
-    }
-    makeFile(chunks) {
-        const blob = (new Blob(chunks, { type: 'audio/mpeg' }));
-        return new File([blob], `record.mp3`, { type: blob.type, lastModified: Date.now() });
-    }
-    pad(val) {
-        const valString = val + '';
-        return valString.length < 2 ? '0' + valString : valString;
-    }
-    editInterim(s) {
-        return s.split(' ').map((word) => {
-            word = word.trim();
-            return this.#RECOGNITION_DICTIONARY[word] ? this.#RECOGNITION_DICTIONARY[word] : word;
-        }).join(' ');
-    }
-    editFinal(s) {
-        return s.replace(/\s([\.+,?!:-])/g, '$1');
-    }
-    get isAIMode() {
-        return !!this.chatComponent.isAIMode;
-    }
-    _setupRecognition() {
-        const speechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!speechRecognition) {
-            this.chatComponent.value = 'Распознавание речи не поддерживается браузером';
-            return null;
-        }
-        this.final_transcript = '';
-        this.interim_text = '';
-        this.recognition = new speechRecognition();
-        this.recognition.continuous = true;
-        this.recognition.interimResults = true;
-        this.recognition.maxAlternatives = 3;
-        this.recognition.lang = 'ru-RU';
-        this.recognition.onerror = ({ error }) => { console.error(error); };
-        this.recognition.onend = () => {
-            if (!this.chatComponent.recognizing) return;
-            try { this.recognition.start(); } catch {}
-        };
-        this.recognition.onresult = (e) => {
-            let interim_transcript = '';
-            for (let i = e.resultIndex; i < e.results.length; i++) {
-                if (e.results[i].isFinal) {
-                    const result = this.editInterim(e.results[i][0].transcript);
-                    this.final_transcript += result;
-                } else {
-                    interim_transcript += e.results[i][0].transcript;
-                }
-            }
-            this.final_transcript = this.editFinal(this.final_transcript);
-            this.interim_text = interim_transcript;
-            this.chatComponent.value = (this.final_transcript + ' ' + interim_transcript).trim();
-        };
-        return this.recognition;
-    }
-    _startTimer() {
-        this.chatComponent.timer = '00:00';
-        let totalSeconds = 0;
-        this.timerInterval = setInterval(() => {
-            ++totalSeconds;
-            this.chatComponent.timer = this.pad(parseInt(totalSeconds / 60)) + ':' + this.pad(totalSeconds % 60);
-            if (totalSeconds > 60) this.stopSpeach();
-        }, 1000);
-    }
-    record(e) {
-        if (this.chatComponent.recording) {
-            this.stopSpeach();
-            return;
-        }
-        if (this.isAIMode)
-            this._startAI();
-        else
-            this._startHuman();
-    }
-    _startAI() {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-            if (!this._setupRecognition()) {
-                stream.getTracks().forEach(t => t.stop());
-                return;
-            }
-            this.recognition.start();
-            this.chatComponent.recognizing = true;
-            this.chatComponent.recording = true;
-            this.chatComponent.value = '';
-            this.playSound('.//beep-start.mp3');
-            this._startTimer();
-            stream.getTracks().forEach(t => t.stop());
-        }).catch((err) => {
-            console.error(`The following getUserMedia error occurred: ${err}`);
-        });
-    }
-    _startHuman() {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-            if (!this._setupRecognition()) {
-                stream.getTracks().forEach(t => t.stop());
-                return;
-            }
-            this.recognition.start();
-            this.chatComponent.recognizing = true;
-            this.chatComponent.value = '';
-
-            this.mediaStream = stream;
-            this.mediaRecorder = new MediaRecorder(stream);
-            this.mediaRecorder.start();
-            this.chatComponent.recording = true;
-            this.playSound('.//beep-start.mp3');
-            this._startTimer();
-
-            const chunks = [];
-            this.mediaRecorder.ondataavailable = e => {
-                chunks.push(e.data);
-                if (this.mediaRecorder.state !== 'inactive') return;
-                this.chatComponent.files.add(this.makeFile(chunks));
-                this.playSound('.//beep-end.mp3');
-                this.chatComponent.value = (this.final_transcript || '').trim();
-                if (this.chatComponent.value || this.chatComponent.files.length)
-                    this.chatComponent.send();
-            };
-        }).catch((err) => {
-            console.error(`The following getUserMedia error occurred: ${err}`);
-        });
-    }
-    stopSpeach() {
-        this.chatComponent.recognizing = false;
-        try { this.recognition?.stop(); } catch {}
-        clearInterval(this.timerInterval);
-        this.chatComponent.recording = false;
-
-        if (this.isAIMode) {
-            this.chatComponent.value = (this.final_transcript || '').trim();
-            this.playSound('.//beep-end.mp3');
-            this.chatComponent.focusInput();
-            if (this.chatComponent.value)
-                this.chatComponent.send();
-            return;
-        }
-
-        try { this.mediaRecorder?.stop(); } catch {}
-        this.mediaStream?.getTracks().forEach(track => track.stop());
-        this.chatComponent.focusInput();
-    }
-}

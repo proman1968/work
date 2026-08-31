@@ -11,13 +11,12 @@ export const task = {
 
 export const prompt = {
     role: 'user',
-    next: ['thinking', 'answer'],
 }
 
 export const thinking = {
     label: 'Думаю',
     icon: 'carbon:idea',
-    inject: 'если не все ясно, необходимо подумать над задачей, исходя из текущего контекста, без ответа пользователю',
+    inject: 'только если в запросе есть задача или проблема, требующая разбора перед действиями; не для приветствий, реплик и простых вопросов',
     prompt: [
         'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',
         'Не фантазируй, не выдумывай, ничего не делай, не планируй, не обращайся к пользователю, просто абстрактно поразмышляй.',
@@ -38,7 +37,6 @@ export const activation = {
         stop: 'Перейти к действиям',
         async approve(params = {}) {
             (await params.task.body).mode = 'do';
-            params.block.report = true;  
             params.block.icon = 'icons:check-circle';
         }
     }
@@ -54,7 +52,7 @@ export const answer = {
         label: 'Отвечаю',
         icon: 'icons:chat',
         stop: true,
-        inject: 'если хочешь что-то ответить пользователю (без действий)',
+        inject: 'приветствие, вопрос, реплика, обсуждение — просто ответь пользователю и остановись; выбор по умолчанию, когда действия не нужны; не выбирай, если пользователь просит что-то сделать, собрать форму или выполнить действие',
         prompt: `Ответь пользователю то, что ты хочешь сообщить по фактам из контекста.`,
     }
 
@@ -63,7 +61,7 @@ export const question = {
         icon: 'icons:help',
         inject: 'если надо что-то спросить или уточнить у пользователя, без одного ответа пользователя нельзя идти',
         stop: true,
-        prompt: 'Задай один вопрос, без ответа на который нельзя идти дальше.',
+        prompt: 'Задай один вопрос, без ответа на который нельзя идти дальше. В ответе только текст вопроса — без пояснений, комментариев и пересказа этой инструкции.',
     }
 
 export const todo = {
@@ -109,7 +107,8 @@ export const todo = {
 export const planning = {
         label: 'План',
         icon: 'icons:assignment',
-        inject: 'несколько ещё не сделанных действий',
+        doc: true,
+        inject: 'только если пользователь поставил задачу из нескольких ещё не сделанных действий; не для приветствий и обсуждений',
         prompt: `
 Предложи план:
 [instruction]
@@ -120,7 +119,6 @@ export const planning = {
         async approve(params = {}){
             let {box, block, prompt} = params;
             block.type = 'plan';
-            block.report = true;  
             let plan = parsePlanMarkdown(block.content);
             box.todo = {
                 type: 'todo',
@@ -152,6 +150,7 @@ export const execute = {
         label: 'Выполнение',
         icon: 'enterprise:wrench',
         inject: 'нужны действия над объектами, файлами, навыками',
+        doc: true,
         box: true,
         next: ['work', 'web', 'form', 'html', 'check'],
 
@@ -169,6 +168,7 @@ export const explore = {
         system: [
             'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
         ].join('\n'),
+        doc: true,
         box: true,
         next: ['thinking', /* 'work', */ 'web'],
 
@@ -198,20 +198,30 @@ export const includes = {
         label: 'Вложения',
         icon: 'icons:attachment',
         box: true,
+        role: 'user',
+        expand: true,
         next: ['file'],
-        prompt: [
-            'Обобщи инфрмацию по всем вложенным файлам.',
-            'Выведи сводный отчёт в формате markdown.',
-            ,
-        ].join('\n'),
+        /** все файлы прочитаны — закрыть бокс маркером, без LLM-итога; контекст берёт листья через expand */
+        recalc(params = {}) {
+            const { box } = params;
+            if (box.content)
+                return;
+            const files = includeReal(box);
+            if (!files.length || files.length < includePlan(box).length || files.some(f => !f.content))
+                return;
+            box.content = '[attachments] файлы: ' + files.map(f => f.label).join(', ');
+        },
     }
 
 export const file = {
         label: 'Файл',
         icon: 'files:file',
+        role: 'user',
+        doc: true,
         prompt: [
             'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
+            'Числа, таблицы, идентификаторы и названия сохраняй дословно, без округлений.',
             'Выведи обзор/отчёт о содержимом файла в формате markdown.',
         ].join('\n'),
         async init(params = {}) {
@@ -249,6 +259,7 @@ export const file = {
                 block.path = file.path;
                 block.state = 'прочитан';
             } catch(e){
+                block.error = true;
                 block.state = 'ошибка';
                 block.content = block.title + '\n\n' + e.message + '\n\n';
             }
@@ -259,6 +270,7 @@ export const file = {
 export const search = {
         label: 'Ищу',
         icon: 'icons:search',
+        role: 'user',
         inject: 'нужен поиск файлов в области, путь неизвестен',
         async init(params = {}) {
             const b = params.block;
@@ -280,6 +292,7 @@ export const search = {
 export const read = {
         label: 'Читаю файл',
         icon: 'icons:description',
+        role: 'user',
         inject: 'нужен текст конкретного файла по пути',
         async init(params = {}) {
             const b = params.block;
@@ -329,6 +342,7 @@ export const write = {
 export const check = {
         label: 'Проверяю результат',
         icon: 'icons:check-circle',
+        doc: true,
         inject: 'сверить результат с целью, прежде чем закрыть',
         system: [
             'Это площадка проверки, не исполнение и не план.',
@@ -384,6 +398,10 @@ export const web = {
         label: 'Ищу в интернете',
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
+        /** каскад поисковиков: race по всем, первый с результатами побеждает; ненастроенные отдают error и проигрывают */
+        services: ['/SERVICES/DuckDuckGo', '/SERVICES/Yandex', '/SERVICES/SearXNG'],
+        role: 'user',
+        doc: true,
         box: true,
         next: ['site'],
         prompt: [
@@ -393,29 +411,40 @@ export const web = {
             const b = params.block;
             const { session, task } = params;
             const messages = await task.context({
-                prompt: 'Сформулируй один поисковый запрос для поиска информации по задаче. Ответь одной строкой, без кавычек и пояснений.',
+                prompt: 'Предложи до 3 вариантов поискового запроса по задаче: по одному на строке, от конкретного к общему. Без кавычек, нумерации и пояснений.',
                 session,
             });
             const asked = await task._streamChat({ messages, silent: true, session });
-            const query = asked.content.trim();
-            if (!query) {
+            const queries = searchQueries(asked.content);
+            if (!queries.length) {
                 b.sites = [];
+                b.error = true;
                 b.state = 'error';
                 b.content = 'нет поискового запроса';
                 return true;
             }
-            b.label = 'Web: ' + query;
-            const service = await WORK.get_item(web.service);
-            const result = await service.search({ query });
             b.sites = [];
-            for (const r of result?.results || []) {
-                if (r.url)
-                    b.sites.push({ url: r.url, title: r.title || '' });
+            for (const query of queries) {
+                const hit = await searchRace(web.services, query);
+                if (!hit) continue;
+                b.label = 'Web: ' + query;
+                b.state = 'найдено: ' + hit.source;
+                for (const r of hit.results || []) {
+                    if (r.url)
+                        b.sites.push({ url: r.url, title: r.title || '' });
+                }
+                break;
             }
             if (!b.sites.length) {
+                b.label = 'Web: ' + queries[0];
+                b.error = true;
                 b.state = 'error';
-                b.content = 'По запросу ' + query + ' ничего не найдено';
-                dropUsed(params.box, 'web');
+                b.content = 'Ничего не найдено по запросам: ' + queries.join(' | ');
+                // потолок повторов: 3 неудачи в боксе — web из меню не возвращается, этап закрывается через thinking/total
+                // (текущий блок ещё не в items — считаем его довеском к прошлым)
+                const fails = (params.box.items || []).filter(x => x.type === 'web' && x.error).length + 1;
+                if (fails < 3)
+                    dropUsed(params.box, 'web');
             }
             return true;
         },
@@ -429,6 +458,7 @@ export const web = {
 export const site = {
         label: 'Изучаю сайт',
         icon: 'bootstrap:filetype-html',
+        role: 'user',
         prompt: [
             'Проанализируй этот сайт, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого сайт.',
@@ -466,6 +496,7 @@ export const site = {
                 }  
                 block.draft = result.content;              
             } catch(e){
+                block.error = true;
                 block.state = 'ошибка';
                 block.content = block.title + '\n\n' + e.message + '\n\n';
             }
@@ -532,7 +563,7 @@ export const thought = {
 export const form = {
         label: 'Готовлю форму',
         icon: 'icons:view-list',
-        inject: 'без нескольких полей пользователя нельзя идти',
+        inject: 'пользователь просит форму, или без нескольких полей от пользователя нельзя идти дальше',
         prompt: [
             'Сначала один fenced-блок html (внутри form и fieldset). После блока — пояснение (1–10 слов).',
             'Пояснение — только текст после html, не legend и не fieldset. Не пересказывай эту инструкцию.',
@@ -571,7 +602,7 @@ export const form = {
             const answers = typeof prompt === 'string' ? JSON.parse(prompt) : (prompt || {});
             block.answer = answers;
             block.state = 'submitted';
-            block.approved = formatFormAnswers(answers);
+            block.approved = formatFormAnswers(answers, block.html);
         },
         stop: 'Отправить форму',
     }
@@ -579,6 +610,7 @@ export const form = {
 export const html = {
         label: 'Делаю HTML приложение',
         icon: 'editor:code',
+        doc: true,
         inject: 'если нужно создать одностраничное HTML приложение',
         prompt: [
             'Собери одностраничное HTML/JS/CSS-приложение.',
@@ -588,7 +620,7 @@ export const html = {
         ].join('\n'),
         recalc(params = {}) {
             const { block } = params;
-            if(block.report) return;
+            if (block.html) return;
             let raw = String(block.content || '').trim();
             const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
             if (fence) {
@@ -596,13 +628,13 @@ export const html = {
             }
             if (/^<!DOCTYPE|^<html[\s>]|<body[\s>]/i.test(raw)) {
                 block.html = raw;
-                block.report = true;
             }
         }
     }
 
 export const report = {
         label: 'Готовлю отчёт',
+        doc: true,
         inject: 'текущий запрос уже выполнен, нужен отчёт',
         prompt: [
             'Отдай пользователю итог задачи.',
@@ -612,7 +644,6 @@ export const report = {
         stop: 'Принять',
         async approve(params = {}) {
             const { box, block, task } = params;
-            block.report = true;  
             box.content = block.content;
             task.body.mode = 'plan';
         }
@@ -701,6 +732,7 @@ function clipPage(text) {
 async function siteFail(params, text) {
     const b = params.block;
     const web = params.box;
+    b.error = true;
     b.state = 'error';
     b.content = text;
     stampSiteContent(web, b);
@@ -720,6 +752,41 @@ function formatFileHits(result) {
         const snip = r.text ? ' — ' + String(r.text).trim().slice(0, 200) : '';
         return '- ' + path + extra + snip;
     }).join('\n');
+}
+
+/** Санитайзер строки поискового запроса: без нумерации, маркеров, внешних кавычек, не длиннее 120 символов. */
+function searchQuery(line) {
+    return String(line || '')
+        .trim()
+        .replace(/^(?:\d+[.)]\s*|[-*•]\s*)/, '')
+        .replace(/^(?:поисковый запрос|запрос|query)\s*[:—-]\s*/i, '')
+        .replace(/^["«'`]+|["»'`]+$/g, '')
+        .trim()
+        .slice(0, 120);
+}
+
+/** Варианты запроса из ответа модели: «по одному на строке» — пожелание, парсер — гарантия. До 3 уникальных строк. */
+function searchQueries(text) {
+    const out = [];
+    for (const raw of String(text || '').split('\n')) {
+        const q = searchQuery(raw);
+        if (q && !out.includes(q))
+            out.push(q);
+        if (out.length >= 3)
+            break;
+    }
+    return out;
+}
+
+/** Race поисковиков: успех = непустые results; error и пустота проигрывают. Все мимо — null. */
+function searchRace(paths, query) {
+    return Promise.any(paths.map(async path => {
+        const service = await WORK.get_item(path);
+        const res = await service.search({ query });
+        if (res?.error || !res?.results?.length)
+            throw new Error(res?.error || 'пусто');
+        return res;
+    })).catch(() => null);
 }
 
 function workQuery(block, body) {
@@ -825,11 +892,48 @@ function parseFormHtml(text = '') {
     return { content, html };
 }
 
-function formatFormAnswers(answers = {}) {
+/** Метаданные полей из разметки формы: name -> { label (legend/label/placeholder), options (value -> текст option) }. */
+function formFieldMeta(html) {
+    const meta = {};
+    const src = String(html || '');
+    if (!src) return meta;
+    const clean = s => String(s || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    const labelFor = {};
+    for (const m of src.matchAll(/<label[^>]*\bfor\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/label>/gi))
+        labelFor[m[1]] = clean(m[2]);
+    const fieldsets = [...src.matchAll(/<fieldset[^>]*>([\s\S]*?)<\/fieldset>/gi)].map(m => m[1]);
+    if (!fieldsets.length) fieldsets.push(src);
+    for (const fs of fieldsets) {
+        const legend = clean(fs.match(/<legend[^>]*>([\s\S]*?)<\/legend>/i)?.[1]);
+        for (const sm of fs.matchAll(/<select[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/select>/gi)) {
+            const options = {};
+            for (const om of sm[2].matchAll(/<option[^>]*\bvalue\s*=\s*["']([^"']*)["'][^>]*>([\s\S]*?)<\/option>/gi))
+                options[om[1]] = clean(om[2]);
+            meta[sm[1]] ??= { label: legend, options };
+        }
+        for (const im of fs.matchAll(/<(?:input|textarea)\b[^>]*>/gi)) {
+            const tag = im[0];
+            const name = tag.match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1];
+            if (!name || meta[name]) continue;
+            const id = tag.match(/\bid\s*=\s*["']([^"']+)["']/i)?.[1];
+            const placeholder = tag.match(/\bplaceholder\s*=\s*["']([^"']+)["']/i)?.[1];
+            meta[name] = { label: (id && labelFor[id]) || legend || placeholder };
+        }
+    }
+    return meta;
+}
+
+/** Читаемая сдача формы для контекста: подписи полей и тексты option вместо name/value; пустые поля не пишем. */
+function formatFormAnswers(answers = {}, html = '') {
+    const meta = formFieldMeta(html);
     const lines = ['[form answers]'];
     for (const id of Object.keys(answers || {})) {
         const v = answers[id];
-        lines.push(`${id}: ${v == null || v === '' ? '—' : String(v)}`);
+        if (v == null || v === '' || v === false) continue;
+        const m = meta[id];
+        const label = m?.label || id;
+        const text = m?.options?.[String(v)] ?? (v === true ? 'да' : String(v));
+        lines.push(`${label}: ${text}`);
     }
     return lines.join('\n');
 }

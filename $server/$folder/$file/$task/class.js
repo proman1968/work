@@ -1,10 +1,12 @@
 ﻿export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
+    GET: 'context',
     async prompt(params = {}) {
         
         // debugger;
         let { prompt, role, session } = params;
+        session?.send?.({ type: 'chat.start', path: this.short });
         await this._init(params);
     
         try {
@@ -12,7 +14,6 @@
                 case 'AI':{
                 } break;
                 case 'APPROVE':{
-                    params.block.answer = prompt; //todo убрать
                     if (params.accept === true || params.accept === 'true') {
                         await params.pipe_step.approve?.(params);
                         params.block.state = 'принято';                      
@@ -94,7 +95,7 @@
                 if (await this._push_block(params)) {
                     if (!params.block.box && !params.block.content) {
                         prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
-                        let messages = await this.context({prompt, session});
+                        let messages = await this.context({ prompt, session, evidence: params.block.type !== 'total' });
                         if(params.block.draft){
                             const draft = params.block.draft;
                             const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
@@ -114,7 +115,8 @@
 
                     const kind = this.pipe[params.block.type];
                     const src = String(params.block.html || params.block.content || '').trim();
-                    if (!this._stopped && src && kind?.label && params.block.label === kind.label) {
+                    // генерённый заголовок нужен только докам (имя в доке отчётов); в ленте хватает статичного ярлыка типа
+                    if (params.block.doc && params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label) {
                         const cap = await this._streamChat({
                             messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
                             silent: true,
@@ -138,6 +140,7 @@
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
         }
+
         session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true };
     },
@@ -150,17 +153,18 @@
         params.task = this;
     },
     async context(params = {}) {
-        const {prompt} = params;
-        const layers = [];
+        const { prompt, evidence = true } = params;
         const body = await this.body;
+        const chain = [];
         let box = body;
         for (;;) {
-            layers.push(this._box_context(box));
+            chain.push(box);
             const next = box.items?.last;
             if (next?.box && !next.content) box = next;
             else break;
         }
         const focus = box;
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence));
         const mode = body.mode || 'plan';
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
         const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), timeNow(body.tz), modeLine].filter(Boolean).join('\n\n') }];
@@ -185,7 +189,10 @@
         }
         return messages;
     },
-    _box_context(box) {
+    /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
+     *  evidence: false (генерация total) — предки без уликов-боксов.
+     *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
+    _box_context(box, focus = true, evidence = true) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
         let system = node?.[mode]?.system || node?.system || box.system || '';
@@ -195,11 +202,20 @@
         for (const b of (box.items || [])) {
             if (this.pipe[b.type]?.close || (b.box && !b.content))
                 continue;
-            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
+            const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
+            if (!focus && !frame)
+                continue;
+            if (b.box && this.pipe[b.type]?.expand) {
+                for (const leaf of (b.items || []))
+                    if (leaf.content)
+                        messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
+            }
+            else if (focus || b.type === 'prompt' || b.box)
+                messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
             if (b.page && !b.content)
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
-                messages.push({ role: 'user', content: typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer) });
+                messages.push({ role: 'user', content: b.approved || (typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer)) });
         }
         return { system, messages };
     },
@@ -208,7 +224,8 @@
         const model = await this.model;
         const effort = (await this.body).effort;
         let content = '', usage = 0;
-        for await (const chunk of model.streamChat({ messages, effort })) {
+        // silent (выбор по меню, заголовки) — temperature 0: маршрут пайпа не должен зависеть от сэмплинга
+        for await (const chunk of model.streamChat({ messages, effort, temperature: silent ? 0 : .5 })) {
             if (this._stopped){
                 content = '';
                 break;
@@ -263,9 +280,11 @@
         const block = {
             type,
             box: node.box,
+            doc: node.doc,
             icon: node.icon,
             stop: node.stop,
-            label: node.label,
+            // шапка блока скрыта при stop === true — label там мёртвый вес (строковый stop шапку не прячет)
+            label: node.stop === true ? undefined : node.label,
         };
         if (block.box)
             block.items = [];

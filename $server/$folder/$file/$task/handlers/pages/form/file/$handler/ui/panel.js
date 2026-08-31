@@ -1,5 +1,4 @@
 import { buildUsageStats } from './usage.js';
-import { MicAudioController } from './mic.js';
 import { TtsController } from './tts.js';
 
 ODA({ is: 'microchat-panel',
@@ -13,20 +12,19 @@ ODA({ is: 'microchat-panel',
         </style>
         <div class="action-bar" ~if="!pending && actionButton?.label" horizontal>
             <oda-button border hide-icon flex style="border-radius: 16px;"
-                :success-invert="(actionButton.color || 'success') === 'success'"
-                :info-invert="actionButton.color === 'info'"
-                :warning="actionButton.color === 'warning'"
+                :color-mode="actionButton.colorMode"
                 :label="actionButton.label"
                 @tap="sendAction(true)"></oda-button>
             <oda-button ~if="actionButton.cancel !== false" border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
                 @tap="sendAction(false)"></oda-button>
         </div>
         <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
-            ::value ::files :pending :recording :timer :error="isDo"
-            :model-item="selectedModelItem" :has-effort="hasEffort" :effort-label="effortLabel"
-            :usage-stats="usageStats" :tts-icon="ttsIcon" :tts-title="ttsTitle" :tts-on="ttsMode !== 'off'"
+            ::value ::files :pending :error="isDo"
+            :model="data?.model" :effort="data?.effort" ::tts-mode
+            :usage-stats="usageStats"
             ready-icon="eva:f-arrow-upward"
-            @send="send" @stop="stop" @select-model="selectModel" @cycle-effort="cycleEffort" @cycle-tts="cycleTts"></work-prompt-bar>
+            @model-changed.stop="onModelChanged" @effort-changed.stop="onEffortChanged"
+            @send="send" @stop="stop"></work-prompt-bar>
     `,
     imports: 'oda//button, ~/lib//prompt-bar',
     data: null,
@@ -34,12 +32,15 @@ ODA({ is: 'microchat-panel',
         get() { return !!this.$pdp.pending; },
         set(n) { this.$pdp.pending = n; },
     },
-    recording: false,
-    timer: '',
     files: [],
     value: '',
     iconSize: 24,
-    ttsMode: { $def: 'off' },
+    ttsMode: {
+        $def: 'off',
+        set(n) {
+            if (n === 'off') this._tts()?.cancel();
+        },
+    },
     $item: {
         $def: null,
         set(n) {
@@ -57,11 +58,11 @@ ODA({ is: 'microchat-panel',
         const stop = focus?.stop;
         if (typeof stop === 'string') {
             if (this.$pdp.streamTarget) return null;
-            return { label: stop, role: 'APPROVE' };
+            return { label: stop, role: 'APPROVE', colorMode: 'success-invert' };
         }
         if (this.$pdp.streaming || stop === true || focus?.type === 'prompt') return null;
         if (!this.liveOpen) return null;
-        return { label: 'Продолжить', color: 'info', cancel: false, role: 'AI' };
+        return { label: 'Продолжить', colorMode: 'info-invert', cancel: false, role: 'AI' };
     },
     get userRole() {
         return String(this.role || this.$item.role || 'USER').toUpperCase();
@@ -77,32 +78,25 @@ ODA({ is: 'microchat-panel',
     get isFormAction() {
         return this.$pdp.focusedBlock?.type === 'form';
     },
-    get selectedModelItem() {
-        return this.data?.model ? WORK.get_item(this.data.model) : null;
+    /** Источник модели/effort — файл (data), не двусторонний биндинг: эхо пустого значения от бара игнорируется */
+    onModelChanged(e) {
+        const n = e.detail?.value;
+        if (!n || !this.data || this.data.model === n) return;
+        this.data.model = n;
+        this.$item?.fetch('change_model', { model: n });
     },
-    get hasEffort() {
-        const c = this.selectedModelItem?.capabilities;
-        if (Array.isArray(c))
-            return c.includes('effort');
-        return String(c || '').split(/[\s,]+/).includes('effort');
+    onEffortChanged(e) {
+        const n = e.detail?.value;
+        if (!n || !this.data || this.data.effort === n) return;
+        this.data.effort = n;
+        this.$item?.fetch('change_effort', { effort: n });
     },
-    get effort() {
-        return this.data?.effort || this.selectedModelItem?.effort || 'low';
-    },
-    get effortLabel() {
-        return ({ off: 'Off', low: 'Low', medium: 'Med', high: 'High' })[this.effort] || 'Low';
-    },
-    get ttsIcon() { return this._tts().icon; },
-    get ttsTitle() { return this._tts().title; },
-    get usageStats() { return buildUsageStats(this.data); },
+    get usageStats() { return buildUsageStats(this.data, () => this.usageStats = undefined); },
     attached() {
         this._focus();
     },
     _focus() {
         this.$('work-prompt-bar')?.focusInput();
-    },
-    _mic() {
-        return this._audioController ??= new MicAudioController(this);
     },
     _tts() {
         return this._ttsController ??= new TtsController(this);
@@ -120,17 +114,8 @@ ODA({ is: 'microchat-panel',
     async send() {
         if (this.pending) return;
         const files = this.$('work-prompt-bar')?.files ?? this.files;
-        if (!this.value?.trim() && !files.length && !this.recording) {
-            this._mic()?.toggle();
-            return;
-        }
-        if (this.recording) {
-            this._mic()?.toggle();
-            this.async(() => { if (this.value?.trim()) this.send(); }, 300);
-            return;
-        }
-        
         const text = String(this.value ?? '').trim();
+        if (!text && !files.length) return;
         const owner = await Promise.resolve(this.$item.$owner);
         const save = (typeof owner?.save_file === 'function' ? owner : this.$item);
         const paths = [];
@@ -168,31 +153,5 @@ ODA({ is: 'microchat-panel',
     _onDone() {
         this.pending = false;
         this._tts().onDone();
-    },
-    async cycleEffort() {
-        const levels = ['off', 'low', 'medium', 'high'];
-        const next = levels[(levels.indexOf(this.effort) + 1) % levels.length];
-        if (this.data) this.data.effort = next;
-        await this.$item.fetch('change_effort', { effort: next });
-        this._focus();
-    },
-    async selectModel(e) {
-        e = e?.detail instanceof Event ? e.detail : e;
-        e?.stopPropagation?.();
-        e?.preventDefault?.();
-        const tree = ODA.createElement('item-tree', {
-            $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
-        });
-        tree.execute = async (item) => {
-            if (this.data) this.data.model = item.path;
-            await this.$item.fetch('change_model', { model: item.path });
-            for (const p of window.document.querySelectorAll('[popover]')) { p.fire?.('close'); p.remove(); }
-            this._focus();
-        };
-        await WORK.showDropdown(tree, { TITLE: { label: 'Select model' } }, e);
-    },
-    cycleTts() {
-        this._tts().cycle();
-        this._focus();
     },
 });

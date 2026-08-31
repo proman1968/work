@@ -35,8 +35,8 @@ export default {
         </style>
         
         <div flex vertical class="feed" ~if="showFeed">
-            <div flex></div>
-            <div vertical style="overflow: hidden; padding-left: 4px;">
+            <div ~if="mobile" flex></div>
+            <div vertical :flex="!mobile" style="overflow: hidden; padding: 4px;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
@@ -49,7 +49,7 @@ export default {
     colorMode: 'content',
     data: null,
     streamingText: '',
-    /** send → done/stop; typeIcon и стоп панели */
+    /** prompt: start → done; typeIcon и стоп панели */
     pending: false,
     /** wait-кнопки прячем, пока идёт стрим (реактивный флаг для кэша геттеров) */
     streaming: false,
@@ -60,25 +60,69 @@ export default {
     $item: {
         $def: null,
         async set(n) {
-            n?.listen('changed', async () => {
+            n?.listen('changed', () => {
                 this.streamingText = '';
-                this.data = await n.load();
-                if (this.streamTarget) this.pending = true;
+                this._reload();
+            });
+            n?.listen('chat.start', () => {
+                this.pending = true;
             });
             n?.listen('chat.delta', e => {
                 this.pending = true;
                 this.streaming = true;
                 this.streamingText += e.detail?.value?.token || '';
             });
-            n?.listen('chat.done', async () => {
+            n?.listen('chat.done', () => {
                 this.pending = false;
                 this.streaming = false;
                 this.streamingText = '';
-                this.data = await n.load();
+                this._reload();
             });
-            this.data = await n?.load();
+            this._reload();
             this.streaming = false;
+            // только карта WORK.chatPending: чтение n.chatPending с item без флага уходит в _onEmpty и возвращает truthy Promise
+            this.pending = WORK.chatPending?.[n?.short] === true || WORK.chatPending?.[n?.path] === true;
         },
+    },
+    /** Сериализация перезагрузок: не больше одного load в полёте; события во время загрузки схлопываются
+     *  в одну повторную после её завершения. Параллельных запросов нет — ответы не приходят вразнобой,
+     *  финальная загрузка всегда стартует после последнего события и читает финальный файл. */
+    _reload() {
+        if (this._loading) {
+            this._reloadAgain = true;
+            return;
+        }
+        this._loading = (async () => {
+            let retries = 0;
+            try {
+                do {
+                    this._reloadAgain = false;
+                    try {
+                        this.data = await this.$item?.load();
+                        this._autoDock();
+                        retries = 0;
+                    } catch (e) {
+                        // реджект не должен убивать цикл: сгоревший _reloadAgain = застывшая лента без последнего блока
+                        if (++retries > 5) {
+                            console.warn('microchat reload: сдаюсь после 5 попыток', e);
+                            break;
+                        }
+                        console.warn('microchat reload: ошибка, повтор', e);
+                        this._reloadAgain = true;
+                        await new Promise(r => setTimeout(r, 300 * retries));
+                    }
+                } while (this._reloadAgain);
+            } finally {
+                this._loading = null;
+            }
+        })();
+    },
+    /** Новый отчёт — открыть док: «Скрыть» ($save) не должно прятать свежие исследования. Первый reload только запоминает базу. */
+    _autoDock() {
+        const n = this.dockReports.length;
+        if (this._dockSeen != null && n > this._dockSeen)
+            this.dockOpen = true;
+        this._dockSeen = n;
     },
     $listeners: {
         resize() { this.mobile = undefined; },
@@ -99,7 +143,7 @@ export default {
         return !(this.showDock && this.mobile);
     },
     get dockStyle() {
-        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '70%' };
+        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '80%', minWidth: '30%' };
     },
     get dockReports() {
         const out = [];
@@ -107,7 +151,7 @@ export default {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if ((b.box || b.report) && b.content)
+                if (b.doc && b.content && !b.error)
                     out.push(b);
             }
         };

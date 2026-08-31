@@ -587,6 +587,7 @@ setTimeout(() => {
             case 'push':{
                 ODA.showMessage(data.message);
             } break;
+            case 'chat.start':
             case 'chat.delta':
             case 'chat.done':
             case 'chat.error':
@@ -596,6 +597,12 @@ setTimeout(() => {
                 let item = CORE.$item.ITEMS[data.path];
                 if(!item)
                     item = Object.values(CORE.$item.ITEMS).find(i=>i.short === data.path);
+                const busy = data.type === 'chat.start' ? true : data.type === 'chat.done' ? false : undefined;
+                if (busy !== undefined) {
+                    WORK.chatPending ??= {};
+                    WORK.chatPending[data.path] = busy;
+                    if (item) item.chatPending = busy;
+                }
                 if(item)
                     item.fire(data.type, data);
             } break;
@@ -616,8 +623,10 @@ setTimeout(() => {
                             item[R].cache[key] = undefined;
                         Reactor.reset_deps(item, key);
                     }
-                    item.fire('changed', data);
+                    // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
+                    // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON
                     item.increaseVersion();
+                    item.fire('changed', data);
                 }
             }
         }

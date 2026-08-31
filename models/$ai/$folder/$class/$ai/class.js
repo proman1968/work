@@ -17,6 +17,12 @@ export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
     label: 'ИИ Модель',
+    /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
+    $public: {
+        maxTokens: 4096,
+        capabilities: ['chat', 'stream'],
+        effort: '',
+    },
     METADATA: {
         FIELDS: {
             id: 'FIELDS',

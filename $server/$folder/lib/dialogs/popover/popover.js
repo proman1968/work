@@ -150,9 +150,17 @@ export default {
         if (pos.tagName) {
             const r = pos.getBoundingClientRect();
             left = r.left;
-            top = r.bottom;
             width = r.width;
-            height = window.innerHeight - r.bottom;
+            const below = window.innerHeight - r.bottom;
+            // не влезает под якорем и сверху места больше — открыться над ним, не поверх
+            if (this.offsetHeight > below && r.top > below) {
+                top = Math.max(0, r.top - this.offsetHeight);
+                height = r.top;
+            }
+            else {
+                top = r.bottom;
+                height = below;
+            }
         }
         else if (typeof pos.clientX === 'number') {
             left = pos.clientX;
