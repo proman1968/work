@@ -344,6 +344,7 @@ class MicAudioController {
             this.recognizing = true;
             this.bar.recording = true;
             this.bar.value = '';
+            this._beep('start');
             this._startTimer();
             if (this.bar.ai) {
                 stream.getTracks().forEach(t => t.stop());
@@ -369,6 +370,7 @@ class MicAudioController {
         clearInterval(this.timerInterval);
         this.bar.recording = false;
         this.bar.timer = '';
+        this._beep('end');
         if (!this.bar.ai) {
             try { this.mediaRecorder?.stop(); } catch {}
             this.mediaStream?.getTracks().forEach(t => t.stop());
@@ -409,6 +411,19 @@ class MicAudioController {
             this.bar.value = (this.final_transcript + ' ' + interim).trim();
         };
         return this.recognition;
+    }
+    async _beep(which) {
+        const file = which === 'end' ? 'beep-end.mp3' : 'beep-start.mp3';
+        this._beeps ??= {};
+        if (!this._beeps[file]) {
+            let src = '/~/lib/prompt-bar/' + file;
+            if (window.$context?.short)
+                src = window.$context.short + src;
+            const res = await fetch(src);
+            if (!res.ok) return;
+            this._beeps[file] = URL.createObjectURL(await res.blob());
+        }
+        new Audio(this._beeps[file]).play().catch(() => {});
     }
     _startTimer() {
         this.bar.timer = '00:00';

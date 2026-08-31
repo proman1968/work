@@ -13,12 +13,13 @@ ODA-компонент строки ввода: текст, вложения, м
 - Модель: `selectModel($event)` → `WORK.showDropdown(item-tree, TITLE, e)` на нативном pointerdown; `this.model = item.path`.
 - Effort: кнопка при выбранной модели; скрыта только если `capabilities` уже есть и в них нет `effort`. Цикл `off/low/medium/high` → `this.effort`.
 - TTS: цикл `off/local/browser` в `this.ttsMode`.
-- Mic: пустая кнопка / Enter — запись на баре; стоп записи → `fire('send')` если есть текст (или файл в не-ai).
+- Mic: пустая кнопка / Enter — запись на баре; старт/стоп — `beep-start.mp3` / `beep-end.mp3`; стоп → `fire('send')` если есть текст (или файл в не-ai).
 - Хост: `::model` `::effort` `::tts-mode`; `:pending` — хост; `fire` только send / stop / clear / prompt-key.
 
 ## Из чего это состоит
 
 - [`prompt-bar.js`](/$server/$folder/lib/prompt-bar/prompt-bar.js/~/handlers/pages/form/) — `work-prompt-bar`
+- `beep-start.mp3` / `beep-end.mp3` — сигнал включения и выключения записи
 
 ## В каком это состоянии
 

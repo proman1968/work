@@ -95,7 +95,7 @@
                 if (await this._push_block(params)) {
                     if (!params.block.box && !params.block.content) {
                         prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
-                        let messages = await this.context({prompt, session});
+                        let messages = await this.context({ prompt, session, evidence: params.block.type !== 'total' });
                         if(params.block.draft){
                             const draft = params.block.draft;
                             const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
@@ -152,17 +152,18 @@
         params.task = this;
     },
     async context(params = {}) {
-        const {prompt} = params;
-        const layers = [];
+        const { prompt, evidence = true } = params;
         const body = await this.body;
+        const chain = [];
         let box = body;
         for (;;) {
-            layers.push(this._box_context(box));
+            chain.push(box);
             const next = box.items?.last;
             if (next?.box && !next.content) box = next;
             else break;
         }
         const focus = box;
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence));
         const mode = body.mode || 'plan';
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
         const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), timeNow(body.tz), modeLine].filter(Boolean).join('\n\n') }];
@@ -187,7 +188,10 @@
         }
         return messages;
     },
-    _box_context(box) {
+    /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
+     *  evidence: false (генерация total) — предки без уликов-боксов.
+     *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
+    _box_context(box, focus = true, evidence = true) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
         let system = node?.[mode]?.system || node?.system || box.system || '';
@@ -197,7 +201,16 @@
         for (const b of (box.items || [])) {
             if (this.pipe[b.type]?.close || (b.box && !b.content))
                 continue;
-            messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
+            const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
+            if (!focus && !frame)
+                continue;
+            if (b.box && this.pipe[b.type]?.expand) {
+                for (const leaf of (b.items || []))
+                    if (leaf.content)
+                        messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
+            }
+            else if (focus || b.type === 'prompt' || b.box)
+                messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
             if (b.page && !b.content)
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)

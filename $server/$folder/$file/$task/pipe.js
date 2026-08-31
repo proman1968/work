@@ -198,20 +198,29 @@ export const includes = {
         label: 'Вложения',
         icon: 'icons:attachment',
         box: true,
+        role: 'user',
+        expand: true,
         next: ['file'],
-        prompt: [
-            'Обобщи инфрмацию по всем вложенным файлам.',
-            'Выведи сводный отчёт в формате markdown.',
-            ,
-        ].join('\n'),
+        /** все файлы прочитаны — закрыть бокс маркером, без LLM-итога; контекст берёт листья через expand */
+        recalc(params = {}) {
+            const { box } = params;
+            if (box.content)
+                return;
+            const files = includeReal(box);
+            if (!files.length || files.length < includePlan(box).length || files.some(f => !f.content))
+                return;
+            box.content = '[attachments] файлы: ' + files.length;
+        },
     }
 
 export const file = {
         label: 'Файл',
         icon: 'files:file',
+        role: 'user',
         prompt: [
             'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
+            'Числа, таблицы, идентификаторы и названия сохраняй дословно, без округлений.',
             'Выведи обзор/отчёт о содержимом файла в формате markdown.',
         ].join('\n'),
         async init(params = {}) {
@@ -259,6 +268,7 @@ export const file = {
 export const search = {
         label: 'Ищу',
         icon: 'icons:search',
+        role: 'user',
         inject: 'нужен поиск файлов в области, путь неизвестен',
         async init(params = {}) {
             const b = params.block;
@@ -280,6 +290,7 @@ export const search = {
 export const read = {
         label: 'Читаю файл',
         icon: 'icons:description',
+        role: 'user',
         inject: 'нужен текст конкретного файла по пути',
         async init(params = {}) {
             const b = params.block;
@@ -384,6 +395,7 @@ export const web = {
         label: 'Ищу в интернете',
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
+        role: 'user',
         box: true,
         next: ['site'],
         prompt: [
@@ -429,6 +441,7 @@ export const web = {
 export const site = {
         label: 'Изучаю сайт',
         icon: 'bootstrap:filetype-html',
+        role: 'user',
         prompt: [
             'Проанализируй этот сайт, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого сайт.',
