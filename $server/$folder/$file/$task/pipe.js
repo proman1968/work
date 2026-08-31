@@ -38,7 +38,6 @@ export const activation = {
         stop: 'Перейти к действиям',
         async approve(params = {}) {
             (await params.task.body).mode = 'do';
-            params.block.report = true;  
             params.block.icon = 'icons:check-circle';
         }
     }
@@ -109,6 +108,7 @@ export const todo = {
 export const planning = {
         label: 'План',
         icon: 'icons:assignment',
+        doc: true,
         inject: 'несколько ещё не сделанных действий',
         prompt: `
 Предложи план:
@@ -120,7 +120,6 @@ export const planning = {
         async approve(params = {}){
             let {box, block, prompt} = params;
             block.type = 'plan';
-            block.report = true;  
             let plan = parsePlanMarkdown(block.content);
             box.todo = {
                 type: 'todo',
@@ -152,6 +151,7 @@ export const execute = {
         label: 'Выполнение',
         icon: 'enterprise:wrench',
         inject: 'нужны действия над объектами, файлами, навыками',
+        doc: true,
         box: true,
         next: ['work', 'web', 'form', 'html', 'check'],
 
@@ -209,7 +209,7 @@ export const includes = {
             const files = includeReal(box);
             if (!files.length || files.length < includePlan(box).length || files.some(f => !f.content))
                 return;
-            box.content = '[attachments] файлы: ' + files.length;
+            box.content = '[attachments] файлы: ' + files.map(f => f.label).join(', ');
         },
     }
 
@@ -217,6 +217,7 @@ export const file = {
         label: 'Файл',
         icon: 'files:file',
         role: 'user',
+        doc: true,
         prompt: [
             'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
@@ -340,6 +341,7 @@ export const write = {
 export const check = {
         label: 'Проверяю результат',
         icon: 'icons:check-circle',
+        doc: true,
         inject: 'сверить результат с целью, прежде чем закрыть',
         system: [
             'Это площадка проверки, не исполнение и не план.',
@@ -396,6 +398,7 @@ export const web = {
         icon: 'icons:language',
         service: '/SERVICES/DuckDuckGo',
         role: 'user',
+        doc: true,
         box: true,
         next: ['site'],
         prompt: [
@@ -592,6 +595,7 @@ export const form = {
 export const html = {
         label: 'Делаю HTML приложение',
         icon: 'editor:code',
+        doc: true,
         inject: 'если нужно создать одностраничное HTML приложение',
         prompt: [
             'Собери одностраничное HTML/JS/CSS-приложение.',
@@ -601,7 +605,7 @@ export const html = {
         ].join('\n'),
         recalc(params = {}) {
             const { block } = params;
-            if(block.report) return;
+            if (block.html) return;
             let raw = String(block.content || '').trim();
             const fence = raw.match(/```(?:html|htm)?\s*([\s\S]*?)```/i);
             if (fence) {
@@ -609,13 +613,13 @@ export const html = {
             }
             if (/^<!DOCTYPE|^<html[\s>]|<body[\s>]/i.test(raw)) {
                 block.html = raw;
-                block.report = true;
             }
         }
     }
 
 export const report = {
         label: 'Готовлю отчёт',
+        doc: true,
         inject: 'текущий запрос уже выполнен, нужен отчёт',
         prompt: [
             'Отдай пользователю итог задачи.',
@@ -625,7 +629,6 @@ export const report = {
         stop: 'Принять',
         async approve(params = {}) {
             const { box, block, task } = params;
-            block.report = true;  
             box.content = block.content;
             task.body.mode = 'plan';
         }

@@ -278,6 +278,7 @@
         const block = {
             type,
             box: node.box,
+            doc: node.doc,
             icon: node.icon,
             stop: node.stop,
             label: node.label,

@@ -33,7 +33,7 @@
    - `init(params)` — ход узла до push. `true` — блок в ленту; не `true` — не пушить. Сервис (`search` / `read` / `file` / `write` / `web` / `site`) и `total` — свои `init`;
    - `close` — лист закрывает родителя (`total`): `init` пишет `box.content`, `recalc` коробки, шапка 2–3 слова, `false`, блок не пушится. Пустое меню + нет `content` — `total`; есть `box.content` — общий `chat.done`, без меню;
    - `fallback` — узел дрифта, если выбор модели не из меню (`text`);
-   - `icon` — спокойная иконка в JSON; живая — только UI (`typeIcon` / `streamTarget`); `service` — путь сервиса у `web`; `role` — роль блока в контексте (данные — `user`, речь — `assistant` по умолчанию); `expand` — закрытый box отдаёт в контекст листья, не `content`; `build` — где задан;
+   - `icon` — спокойная иконка в JSON; живая — только UI (`typeIcon` / `streamTarget`); `service` — путь сервиса у `web`; `role` — роль блока в контексте (данные — `user`, речь — `assistant` по умолчанию); `expand` — закрытый box отдаёт в контекст листья, не `content`; `doc` — врождённый признак дока отчётов (`file`, `web`, `execute`, `check`, `planning`, `report`, `html`), копируется в блок из `_build_block`; динамически флаг не ставится; `build` — где задан;
    - `done.next` — куда идти, когда box уже с `content`. Нет `done.next` — меню родителя. Лист без своего `next` (`site`) — тоже родитель.
 4. **Позиция автомата:**
    - `_active_box()` — спуск в `items.last`, пока у узла есть `items` и нет `content`;
@@ -54,7 +54,7 @@
    - `write` — `init` пушит блок (`true`); стрим; `recalc` разбирает путь/текст и пишет `save` / `edit`.
 8. **Атомы `includes` / `file`:**
    - как `todo` / `step`: чат и `prompt()` пишут список `includes.files` (`path`, `label`, `icon`), `items` пустой. Корневого `body.includes` нет;
-   - пока список не прочитан — `next` = `file` (один в ленту). Файл закрыт (`content` или ошибка) — снять `file` с кеша, следующий. Все готовы — `includes.recalc` закрывает бокс маркером `[attachments] файлы: N` без LLM-итога (`total` не участвует);
+   - пока список не прочитан — `next` = `file` (один в ленту). Файл закрыт (`content` или ошибка) — снять `file` с кеша, следующий. Все готовы — `includes.recalc` закрывает бокс маркером `[attachments] файлы: <имена через запятую>` без LLM-итога (`total` не участвует);
    - `expand: true` на узле: контекст берёт листья-отчёты `file` (каждый отдельным сообщением с ролью своего узла), не `box.content`; маркер в контекст не попадает. `state` вешает `file.init`: на `includes` — `файлы: N/M`, на лист — `reading` / `прочитан` / `ошибка`;
    - `file` — лист: `init` берёт следующий из `files`, `icon` / `label` / `path` с файла, тело в `draft` (текст или `image_url`) → стрим-отчёт с шапкой `file N: [label](path)`; промпт требует числа / таблицы / идентификаторы дословно. Ошибка — `state: 'ошибка'`, в `content` шапка и текст ошибки.
 9. **Wait:** `block.stop` — `true` без кнопки (шапка скрыта) или строка-лейбл (action-bar + шапка, `role:'APPROVE'`, `accept`). После решения — `delete block.stop`. Лейбл кнопки с `stop` не сравнивают.

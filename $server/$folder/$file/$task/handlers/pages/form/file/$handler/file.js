@@ -110,7 +110,7 @@ export default {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if ((b.box || b.report) && b.content)
+                if (b.doc && b.content)
                     out.push(b);
             }
         };
