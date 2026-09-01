@@ -36,7 +36,7 @@ export default {
         
         <div flex vertical class="feed" ~if="showFeed">
             <div ~if="mobile" flex></div>
-            <div vertical :flex="!mobile" style="overflow: hidden; padding: 4px;">
+            <div vertical :flex="!mobile" style="overflow: hidden; padding: 8px;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
@@ -147,16 +147,19 @@ export default {
     },
     get dockReports() {
         const out = [];
+        const seen = new Set(); // проталкивание total даёт боксу content ребёнка — дубль в доке не нужен
         const walk = (items) => {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if (b.doc && b.content && !b.error)
+                if (b.doc && b.content && !b.error && !seen.has(b.content)) {
+                    seen.add(b.content);
                     out.push(b);
+                }
             }
         };
         walk(this.data?.items);
-        if (this.data?.content)
+        if (this.data?.content && !seen.has(this.data.content))
             out.push(this.data);
         return out;
     },

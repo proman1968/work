@@ -8,10 +8,11 @@
         let location = params.location;
         if (location){
             try { 
-                location = JSON.parse(location);
-                location = Object.keys(location).map(key => key + ':' +  location[key]).join(', ');
-                if(location)
-                    location = 'Расположение: ' + location + '.';
+                const loc = JSON.parse(location);
+                // город по координатам: без него модели ищут «Москва» вместо реального места
+                const place = (loc.lat != null && loc.lon != null) ? await resolvePlace(loc.lat, loc.lon) : null;
+                const coords = Object.keys(loc).map(key => key + ':' + loc[key]).join(', ');
+                location = coords ? 'Расположение: ' + (place ? place + ' (' + coords + ')' : coords) + '.' : null;
             } catch { location = null; }
         }
 
@@ -28,6 +29,30 @@
         return file.prompt(params);
     },
 };
+
+/** Кэш мест: только успешный город. Промах не кэшируем — иначе один 403/таймаут залипает на весь процесс, и снова «Москва». */
+const PLACES = {};
+
+/** Обратное геокодирование через Nominatim (OSM). Ошибка/таймаут — null, промпт остаётся с голыми координатами. */
+async function resolvePlace(lat, lon) {
+    const key = (+lat).toFixed(2) + ',' + (+lon).toFixed(2);
+    if (PLACES[key]) return PLACES[key];
+    try {
+        const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&accept-language=ru&zoom=10`,
+            {
+                headers: { 'User-Agent': 'ODANT-WORK/1.0 (https://odant.org; work@odant.org)' },
+                signal: AbortSignal.timeout(8000),
+            },
+        );
+        if (!res.ok) return null;
+        const a = (await res.json())?.address || {};
+        const place = [a.city || a.town || a.village || a.municipality, a.state, a.country]
+            .filter(Boolean).join(', ');
+        if (place) PLACES[key] = place;
+        return place || null;
+    } catch { return null; }
+}
 
 function samePlace(a, b) {
     if (!a || !b) return false;

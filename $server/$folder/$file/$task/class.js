@@ -200,14 +200,15 @@
             system += '\n\n[todo]\n' + (box.todo.content || '');
         const messages = [];
         for (const b of (box.items || [])) {
-            if (this.pipe[b.type]?.close || (b.box && !b.content))
+            // error — в ленте и в счётчике повторов, не в контексте: заголовок+ошибка даёт ложный провенанс
+            if (b.error || this.pipe[b.type]?.close || (b.box && !b.content))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
                 continue;
             if (b.box && this.pipe[b.type]?.expand) {
                 for (const leaf of (b.items || []))
-                    if (leaf.content)
+                    if (leaf.content && !leaf.error)
                         messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
             }
             else if (focus || b.type === 'prompt' || b.box)

@@ -16,7 +16,6 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
-                gap: 8px;
             }
             :host([top]) {
                 overflow-y: auto;
@@ -135,8 +134,6 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
-                @apply --raised;
-
             }
             :host([host-sticky]) {
                 position: sticky;
@@ -177,9 +174,15 @@ ODA({ is: 'microchat-view',
             :host([box]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
             }
+            :host:has(> details.untitled) {
+                border-radius: 8px;
+                overflow: hidden;
+                margin-bottom: 8px;
+                @apply --shadow;
+            }
         </style>
 
-        <details vertical :open="open" :title="data?.menu || data.type" @toggle="onToggle">
+        <details vertical :open="open" :title="data?.menu || data.type" ~class="{ untitled: !showTitle }" @toggle="onToggle">
             <summary ~show="showTitle" vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
@@ -194,7 +197,7 @@ ODA({ is: 'microchat-view',
             </summary>
             <div flex class="body" content>
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :info-invert="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
             </div>
         </details>
@@ -386,6 +389,9 @@ ODA({ is: 'microchat-view-prompt',
             summary{
                 min-height: 36px;
                 border-radius: 8px;
+                overflow: hidden;
+                margin-bottom: 8px;
+                @apply --shadow;                
             }
             details > .body {
                 margin-left: 0;

@@ -172,8 +172,13 @@ export const explore = {
         box: true,
         next: ['thinking', /* 'work', */ 'web'],
 
-        prompt: `Проведи анализ текущего этапа исследований и сформируй подробный отчёт о том, 
-        что там полезного ты узнал для выполнения задачи.`,
+        /** только факты с источниками: мета-отчёт («источников не потребовалось») на этом месте
+         *  заставлял answer отрекаться от честно добытых данных как от выдуманных */
+        prompt: [
+            'Сведи факты, добытые на этом этапе, с указанием источников.',
+            'Только факты по теме задачи. Процесс, режимы, этапы и то, потребовались ли источники, не описывай.',
+            'Не обращайся к пользователю и не предлагай следующих шагов.',
+        ].join('\n'),
     }
 
 export const work = {
@@ -362,6 +367,23 @@ export const total = {
         label: 'Подвожу итог',
         icon: 'icons:assignment-turned-in',
         inject: 'этап закрыт: есть факты для сводки',
+        /** Один источник — проталкиваем его наверх без LLM-пересказа: каждый пересказ — токены и потеря
+         *  провенанса (сводка без ссылок читается следующим слоем как «данные из ниоткуда»).
+         *  Кандидаты — блоки-данные (role: 'user' у узла: site/search/read/file/web/includes), не error.
+         *  Несколько источников — как раньше, стрим-сводка. */
+        async init(params = {}) {
+            const { box, task } = params;
+            const results = (box.items || []).filter(b =>
+                b.content && !b.error && b.type !== 'prompt' && task.pipe[b.type]?.role === 'user');
+            if (results.length !== 1)
+                return true;
+            const one = results[0];
+            box.content = one.content;
+            // говорящее имя в доке — только если у бокса ещё ярлык типа
+            if (box.label === task.pipe[box.type]?.label && one.label)
+                box.label = one.label;
+            return false;
+        },
         async recalc(params = {}) {
             const { block, box } = params;
             box.content = block.content.trim();
@@ -403,9 +425,11 @@ export const web = {
         role: 'user',
         doc: true,
         box: true,
-        next: ['site'],
+        next: ['site', 'total'],
         prompt: [
-            'Подробный сводный отчёт по посещённым страницам, только по теме задачи.',
+            'Сводный отчёт по посещённым страницам: только факты по теме задачи.',
+            'В конце — раздел «Источники» со ссылками на использованные страницы.',
+            'Процесс поиска не описывай.',
         ].join('\n'),
         async init(params = {}) {
             const b = params.block;
@@ -460,9 +484,10 @@ export const site = {
         icon: 'bootstrap:filetype-html',
         role: 'user',
         prompt: [
-            'Проанализируй этот сайт, и вытащи из него всю полезную информацию.',
-            'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого сайт.',
-            'Выведи обзор/отчёт о содержимом сайт в формате markdown.',
+            'Вытащи со страницы только данные по теме задачи: числа, факты, таблицы — дословно.',
+            'Не выдумывай, не используй другие источники, кроме этой страницы.',
+            'Устройство сайта не описывай: навигация, футер, темы, виджеты, реклама, SEO-текст, структура разделов — не по теме.',
+            'Формат — markdown, компактно.',
         ].join('\n'),
         inject: 'если нужно получить содержимое конкретной страницы по url',
         // next: ['thought'],
@@ -488,13 +513,17 @@ export const site = {
                 block.title = `site ${length + 1}: ['${site.title}'](<${site.url}>)\n\n`;
                 block.label = url.host;
                 block.url = site.url;
-                block.state = 'загружен';
                 const service = await WORK.get_item(web.service);  
                 let result = await service.fetch_url({ url: site.url });    
                 if(result?.error){
                     throw new Error(result.error);
                 }  
-                block.draft = result.content;              
+                // пустая выжимка (JS-рендер, антибот) — неудача, а не «загружен»: без error блок шёл в док и в контекст
+                const page = String(result.content || '').trim();
+                if (page.replace(/\s+/g, ' ').length < 40)
+                    throw new Error('пустая страница: контент не извлечён');
+                block.draft = page;
+                block.state = 'загружен';
             } catch(e){
                 block.error = true;
                 block.state = 'ошибка';
