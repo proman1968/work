@@ -70,23 +70,18 @@
             else {
                 const lines = next.map(id => id.toUpperCase() + ' - ' + (this.pipe[id]?.[mode]?.inject || this.pipe[id]?.inject) + ';');
                 let menu = [
-                    'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
-                    'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
+                    'Выбери в menu пункт, который быстрее всего закрывает запрос пользователя. Выбирай не по порядку, а по смыслу.',
+                    'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
+                    'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
+                    'Ответь одним словом строго из списка, без знаков и пояснений.',
                     '\n\n[menu]\n',
                     ...lines,
-                    'Если ни один вариант не подходит, просто отвечай или уточняй.',
                 ].join('\n');
                 let messages = await this.context({session, prompt: menu});
-
                 let response = await this._streamChat({ messages, silent: true, session });
-                const word = response.content.trim().toLowerCase();
-                if (next.includes(word))
-                    choice = word;
-                else{
-                    params.block = this._build_block('answer');
-                    params.block.content = word;
-                    await this._push_block(params);
-                }
+                // пустой content: thinking если ещё в оставшихся, иначе первый из оставшихся (не «первый в pipe»)
+                choice = menuPick(response.content, next)
+                    || (next.includes('thinking') ? 'thinking' : next[0]);
             }
             if (choice) {
                 let next_pipe = this.pipe[choice];
@@ -109,12 +104,14 @@
                         let response = await this._streamChat({ messages, session });
                         if (params.block.title)
                             response.content = params.block.title + '\n\n' + response.content;
-                        Object.assign(params.block, response);
+                        params.block.content = response.content;
+                        if (response.usage)
+                            params.block.usage = response.usage;
                     }
                     await this.pipe[params.block.type]?.recalc?.(params);
 
                     const kind = this.pipe[params.block.type];
-                    const src = String(params.block.html || params.block.content || '').trim();
+                    const src = String(params.block.content || '').trim();
                     // генерённый заголовок нужен только докам (имя в доке отчётов); в ленте хватает статичного ярлыка типа
                     if (params.block.doc && params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label) {
                         const cap = await this._streamChat({
@@ -167,7 +164,13 @@
         const layers = chain.map(b => this._box_context(b, b === focus, evidence));
         const mode = body.mode || 'plan';
         const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), timeNow(body.tz), modeLine].filter(Boolean).join('\n\n') }];
+        const pipe = await this.pipe;
+        const messages = [{ role: 'system', content: [
+            ...layers.map(l => l.system).filter(Boolean),
+            timeNow(body.tz),
+            modeLine,
+            topicsMap(pipe, focus, mode),
+        ].filter(Boolean).join('\n\n') }];
         const push = (nextRole, content) => {
             if (!content) return;
             if (messages.last?.role === nextRole) {
@@ -200,15 +203,16 @@
             system += '\n\n[todo]\n' + (box.todo.content || '');
         const messages = [];
         for (const b of (box.items || [])) {
-            // error — в ленте и в счётчике повторов, не в контексте: заголовок+ошибка даёт ложный провенанс
-            if (b.error || this.pipe[b.type]?.close || (b.box && !b.content))
+            // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
+            // иначе после «страница недоступна» модель не видит провал и лезет в planning
+            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !b.content))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
                 continue;
             if (b.box && this.pipe[b.type]?.expand) {
                 for (const leaf of (b.items || []))
-                    if (leaf.content && !leaf.error)
+                    if (leaf.content && !(leaf.error && !evidence) && !this.pipe[leaf.type]?.ignore)
                         messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
             }
             else if (focus || b.type === 'prompt' || b.box)
@@ -223,10 +227,26 @@
     async _streamChat(params = {}) {
         const {messages, silent, session} = params;
         const model = await this.model;
-        const effort = (await this.body).effort;
+        // silent (меню / шапка) — effort off: think:false у Ollama, иначе CoT съедает ответ и слово меню пустое
+        const effort = silent ? 'off' : (await this.body).effort;
         let content = '', usage = 0;
-        // silent (выбор по меню, заголовки) — temperature 0: маршрут пайпа не должен зависеть от сэмплинга
-        for await (const chunk of model.streamChat({ messages, effort, temperature: silent ? 0 : .5 })) {
+        let reasonBlock, reasonBox, reasonClosed;
+        const closeReason = async () => {
+            if (!reasonBlock || reasonClosed)
+                return;
+            reasonClosed = true;
+            const items = reasonBox?.items;
+            const i = items?.indexOf(reasonBlock) ?? -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            await this._save(session);
+        };
+        for await (const chunk of model.streamChat({
+            messages,
+            effort,
+            temperature: silent ? 0 : .5,
+            maxOutput: silent ? 64 : undefined,
+        })) {
             if (this._stopped){
                 content = '';
                 break;
@@ -234,15 +254,30 @@
                 
             if (chunk?.type === 'usage')
                 usage = chunk;
+            else if (chunk?.type === 'reasoning') {
+                // silent — CoT отбрасываем (даже если бэкенд всё же шлёт); иначе слот + пустой content меню
+                if (silent)
+                    continue;
+                const token = chunk.content || '';
+                if (!token) continue;
+                if (!reasonBlock) {
+                    reasonBox = await this._active_box();
+                    reasonBlock = this._build_block('reasoning');
+                    await this._push_block({ block: reasonBlock, box: reasonBox, session });
+                }
+                session?.send?.({ type: 'chat.delta', path: this.short, token });
+            }
             else {
                 let token = chunk?.content ? chunk?.content : chunk;
                 if (typeof token !== 'string')
                     continue;
+                await closeReason();
                 content += token;
                 if (!silent)
                     session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
+        await closeReason();
         return { content, usage };
     },
     get pipe() {
@@ -287,6 +322,8 @@
             // шапка блока скрыта при stop === true — label там мёртвый вес (строковый stop шапку не прячет)
             label: node.stop === true ? undefined : node.label,
         };
+        if (node.ignore)
+            block.ignore = true;
         if (block.box)
             block.items = [];
         return block;
@@ -294,8 +331,10 @@
     async _push_block(params = {}){
         const {block, box, session} = params;
         box.items ??= [];
-        box.using_blocks ??= [];
-        box.using_blocks.add(block.type);
+        if (!this.pipe[block.type]?.ignore) {
+            box.using_blocks ??= [];
+            box.using_blocks.add(block.type);
+        }
         const init = this.pipe[block.type]?.init;
         if (init && !await init(params))
             return false;
@@ -324,7 +363,10 @@
                 return box;
         }
         const items = box.items || [];
-        return items.last || box;
+        for (let i = items.length - 1; i >= 0; i--)
+            if (!this.pipe[items[i].type]?.ignore)
+                return items[i];
+        return box;
     },
     async _active_box() {
         let next, box = await this.body;
@@ -396,6 +438,42 @@ function parentOfBlock(root, block) {
         if (p) return p;
     }
     return null;
+}
+
+/** Карта узлов из pipe, без хардкода имён: inject / label текущего mode. */
+function topics(pipe, ids, mode) {
+    return (ids || []).map(id => {
+        const n = pipe[id];
+        const inj = n?.[mode]?.inject || n?.inject || n?.label || '';
+        return inj ? id + ' — ' + inj : id;
+    }).join('\n');
+}
+
+/** [задача] — корень mode; [далее] — next текущего бокса минус used. Совпадают — один блок. */
+function topicsMap(pipe, focus, mode) {
+    const root = pipe.task?.[mode]?.next || pipe.task?.next || [];
+    const node = pipe[focus?.type];
+    const used = focus?.using_blocks || [];
+    const local = (node?.[mode]?.next || node?.next || []).filter(id => !used.includes(id));
+    const rootText = topics(pipe, root, mode);
+    const localText = topics(pipe, local, mode);
+    const same = root.join() === local.join();
+    const parts = [];
+    if (rootText)
+        parts.push('[задача]\n' + rootText);
+    if (localText && !same)
+        parts.push('[далее]\n' + localText);
+    return parts.join('\n\n');
+}
+
+/** Слово меню: точное / первое слово / id из списка внутри текста. */
+function menuPick(text, next) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t || !next?.length) return;
+    if (next.includes(t)) return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_]+/g, '');
+    if (first && next.includes(first)) return first;
+    return next.find(id => new RegExp('\\b' + id + '\\b', 'i').test(t));
 }
 
 function stageOpen(block, node) {

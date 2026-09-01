@@ -19,7 +19,8 @@ export default {
     label: 'ИИ Модель',
     /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
     $public: {
-        maxTokens: 4096,
+        maxTokens: 4096,   // лимит контекста (usage / info)
+        maxOutput: 4096,   // лимит ответа: не путать с maxTokens — иначе Qwen 262k уезжает в max_tokens и думает минутами
         capabilities: ['chat', 'stream'],
         effort: '',
     },
@@ -112,7 +113,7 @@ export default {
         const body = {
             model: options.model || ai.model || '',
             messages,
-            max_tokens: Math.min(options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096, 131072),
+            max_tokens: Math.min(Number(options.maxOutput ?? ai.maxOutput) || 4096, 8192),
             temperature: options.temperature ?? 0.7,
             stream: true,
         };
@@ -211,9 +212,11 @@ export default {
                     const json = JSON.parse(jsonStr);
                     const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
 
-                    const reasoning = delta.reasoning;
-                    if (reasoning)
+                    const reasoning = delta.reasoning ?? delta.reasoning_content;
+                    if (reasoning) {
                         reasoningAcc += String(reasoning);
+                        yield { type: 'reasoning', content: String(reasoning) };
+                    }
 
                     const content = delta.content || delta.text;
                     if (content) {
@@ -265,12 +268,7 @@ export default {
             }
         }
 
-        if (!contentSeen && reasoningAcc) {
-            if (useFunctions)
-                yield { type: 'content', content: reasoningAcc };
-            else
-                yield reasoningAcc;
-        }
+        // reasoning не подменяем content: silent-меню иначе получает абзац «think» вместо EXPLORE
 
         if (useFunctions && funcCallName)
             yield* flushFunctionCall();

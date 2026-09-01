@@ -39,7 +39,6 @@ ODA({ is: 'microchat-ribbon',
     /** follow только в хвосте; user-scroll вверх — стоп до возврата вниз */
     stickBottom: true,
     _pinGen: 0,
-    _ignoreScroll: 0,
     $item: {
         $def: null,
         set(n) {
@@ -58,11 +57,33 @@ ODA({ is: 'microchat-ribbon',
         return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
     },
     attached() {
+        /** Follow on/off — только намерение пользователя (wheel/touch/drag).
+         *  Не включать follow по scroll+nearBottom: докрутка стрима сама даёт scroll у низа
+         *  и гоняет stickBottom обратно true на первом же wheel вверх. */
         if (!this.top) return;
+        const stop = () => {
+            this.stickBottom = false;
+            this._pinGen++;
+        };
+        const resume = () => {
+            if (!this.nearBottom) return;
+            this.stickBottom = true;
+        };
+        this.addEventListener('wheel', e => {
+            if (e.deltaY < 0) stop();
+            else if (e.deltaY > 0) resume();
+        }, { passive: true });
+        this.addEventListener('touchmove', stop, { passive: true });
+        this.addEventListener('touchend', resume, { passive: true });
+        this.addEventListener('mousedown', () => {
+            this._scrollDrag = true;
+            document.addEventListener('mouseup', () => {
+                this._scrollDrag = false;
+                resume();
+            }, { once: true });
+        });
         this.addEventListener('scroll', () => {
-            if (this._ignoreScroll) return;
-            this.stickBottom = this.nearBottom;
-            if (!this.stickBottom) this._pinGen++; // отменить pending pin
+            if (this._scrollDrag && !this.nearBottom) stop();
         }, { passive: true });
         if (this.items?.length) this.pinBottom(true);
     },
@@ -92,9 +113,7 @@ ODA({ is: 'microchat-ribbon',
     },
     scrollToBottom() {
         if (!this.top || !this.stickBottom) return this.nearBottom;
-        this._ignoreScroll++;
         this.scrollTop = this.scrollHeight;
-        this.async(() => { this._ignoreScroll = Math.max(0, this._ignoreScroll - 1); });
         return this.nearBottom;
     },
 });

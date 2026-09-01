@@ -1,3 +1,5 @@
+import { parseFormHtml, unwrapFence } from '../../../../../../pipe.js';
+
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
     const name = 'microchat-view-' + item.type;
@@ -47,7 +49,7 @@ ODA({ is: 'microchat-ribbon',
     get items(){
         return this.data?.items
     },
-    /** follow только в хвосте; user-scroll вверх — стоп до возврата вниз */
+    /** follow в хвосте; stop/resume — только wheel/touch/drag, не scroll+nearBottom */
     stickBottom: true,
     _pinGen: 0,
     $item: {
@@ -67,23 +69,34 @@ ODA({ is: 'microchat-ribbon',
         return viewTag(item);
     },
     attached() {
-        /** Намерение пользователя — только из событий ввода (wheel/touch/drag скроллбара):
-         *  scroll генерирует и сама докрутка, при плотном стриме события пользователя тонули в её потоке. */
+        /** Follow on/off — только намерение пользователя (wheel/touch/drag).
+         *  Не включать follow по scroll+nearBottom: докрутка стрима сама даёт scroll у низа
+         *  и гоняет stickBottom обратно true на первом же wheel вверх. */
         const stop = () => {
             if (!this.top) return;
             this.stickBottom = false;
             this._pinGen++; // отменить pending pin
         };
-        this.addEventListener('wheel', e => { if (e.deltaY < 0) stop(); }, { passive: true });
+        const resume = () => {
+            if (!this.top || !this.nearBottom) return;
+            this.stickBottom = true;
+        };
+        this.addEventListener('wheel', e => {
+            if (e.deltaY < 0) stop();
+            else if (e.deltaY > 0) resume();
+        }, { passive: true });
         this.addEventListener('touchmove', stop, { passive: true });
-        // drag скроллбара: скроллы между mousedown и mouseup — от пользователя
+        this.addEventListener('touchend', resume, { passive: true });
+        // drag скроллбара: уход вверх — stop; отпускание у низа — resume
         this.addEventListener('mousedown', () => {
             this._scrollDrag = true;
-            document.addEventListener('mouseup', () => this._scrollDrag = false, { once: true });
+            document.addEventListener('mouseup', () => {
+                this._scrollDrag = false;
+                resume();
+            }, { once: true });
         });
         this.addEventListener('scroll', () => {
-            if (this.nearBottom) this.stickBottom = true; // вернулся в хвост — follow снова
-            else if (this._scrollDrag) stop();
+            if (this._scrollDrag && !this.nearBottom) stop();
         }, { passive: true });
         if (this.items?.length) this.pinBottom(true);
     },
@@ -174,9 +187,8 @@ ODA({ is: 'microchat-view',
             :host([box]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
             }
-            :host:has(> details.untitled) {
+            :host:has(> details.untitled) .body {
                 border-radius: 8px;
-                overflow: hidden;
                 margin-bottom: 8px;
                 @apply --shadow;
             }
@@ -195,7 +207,7 @@ ODA({ is: 'microchat-view',
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
-            <div flex class="body" content>
+            <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
                 <div ~is="extendTag" ~if="extendTag" :data></div>            
@@ -283,6 +295,7 @@ ODA({ is: 'microchat-view',
     // --- title chrome ---
     get colorMode() {
         if (this.data?.error) return 'error';
+        if (this.data?.ignore && this.streamTail) return 'info-invert';
         return this.showTitle ? 'info-invert' : 'content';
     },
     height: 0,
@@ -426,20 +439,22 @@ const HEIGHT_PING = `<script>
 })();
 <\/script>`;
 
-function unwrapHtmlFence(s) {
-    let t = String(s || '').trim();
-    if (!t.startsWith('```')) return t;
-    t = t.replace(/^```(?:html|htm)?\s*\r?\n/i, '');
-    return t.replace(/\r?\n```\s*$/, '').trim();
-}
-
+/** Страница для iframe: type html → content (fence снимает unwrapFence). Старый block.html — фолбэк. */
 export function pageHtml(data) {
-    if (data?.html) return data.html;
-    const c = unwrapHtmlFence(data?.content);
-    if (/^<!DOCTYPE|^<html[\s>]|^<body[\s>]/i.test(c)) return c;
+    if (data?.type !== 'html' && !data?.html) return;
+    const raw = unwrapFence(data.html || data.content);
+    return raw || undefined;
 }
 
-/** html — слот в ленте: страница из data.html (или целый document в content). */
+function formParts(data) {
+    const parsed = parseFormHtml(data?.content);
+    return {
+        caption: parsed.content,
+        markup: data?.html || parsed.html,
+    };
+}
+
+/** html — слот в ленте: страница из content, вид по type. */
 ODA({ is: 'microchat-view-html',
     extends: 'microchat-view',
     get extendTag() { return pageHtml(this.data) ? 'microchat-html' : ''; },
@@ -492,24 +507,27 @@ ODA({ is: 'microchat-html',
     },
 });
 
-/** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */
+/** form — слот: разметка из content (fence); ui по data.ui или default microchat-form. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     get extendTag() {
-        if (!this.data?.html) return '';
+        if (!formParts(this.data).markup) return '';
         const ui = this.data.ui;
         if (!ui) return 'microchat-form';
         const name = String(ui);
         if (name.includes('-')) return name;
         return 'microchat-form-' + name;
     },
+    get viewContent() {
+        return (formParts(this.data).caption || '') + this.streamTail;
+    },
     get showContent() {
-        return !!(this.content || this.streamTail || this.data?.html);
+        return !!(formParts(this.data).caption || this.streamTail);
     },
 });
 
 /**
- * Форма в слоте ленты: HTML модели (data.html), values с name-контролов → APPROVE.
+ * Форма в слоте ленты: разметка из content (fence), values с name-контролов → APPROVE.
  */
 ODA({ is: 'microchat-form',
     template: /*html*/`
@@ -577,7 +595,7 @@ ODA({ is: 'microchat-form',
         set() { this.async(() => this.restore()); },
     },
     get html() {
-        return this.data?.html || '';
+        return formParts(this.data).markup || '';
     },
     attached() {
         this.addEventListener('submit', e => { e.preventDefault(); this.sync(); }, true);

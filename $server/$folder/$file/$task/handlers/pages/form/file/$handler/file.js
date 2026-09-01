@@ -183,7 +183,9 @@ export default {
         while (items?.length) {
             let last;
             for (let i = items.length - 1; i >= 0; i--) {
-                if (!items[i]?.hidden) { last = items[i]; break; }
+                const b = items[i];
+                // закрытый ignore (reasoning) — не слот; пустой — слот стрима CoT
+                if (b && !b.hidden && !(b.ignore && b.content)) { last = b; break; }
             }
             if (!last || last.content || !last.items?.length) return last;
             items = last.items;
@@ -193,6 +195,6 @@ export default {
     /** focused без тела — слот стрима, не факт что стрим идёт (`streaming` — только delta/done) */
     get streamTarget() {
         const b = this.focusedBlock;
-        return (b && !b.content && !b.html) ? b : undefined;
+        return (b && !b.content) ? b : undefined;
     },
 };

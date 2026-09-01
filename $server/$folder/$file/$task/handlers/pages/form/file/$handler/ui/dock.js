@@ -54,7 +54,7 @@ ODA({ is: 'microchat-dock',
     },
     hide() { if (this.$pdp) this.$pdp.dockOpen = false; },
     get saved() { return !!this.current?.saved; },
-    get isHtml() { return this.current?.type === 'html' || !!pageHtml(this.current); },
+    get isHtml() { return this.current?.type === 'html'; },
     get text() {
         return pageHtml(this.current) || String(this.current?.content || '');
     },
