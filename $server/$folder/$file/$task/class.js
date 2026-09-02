@@ -47,6 +47,19 @@
 
             await this._init(params);
             await this.pipe[params.box.type]?.recalc?.(params);
+
+            // лист без тела — только достримить; меню нельзя
+            const live = params.block;
+            if (live && live !== params.box && !live.box && !hasBody(live)) {
+                this._stopped = false;
+                await this._fillLeaf(params, session);
+                await this._save(session);
+                if (this._canLoop(params.block)) {
+                    this.async(() => this.prompt({ role: 'AI', session }));
+                    return { ok: true };
+                }
+            }
+            else {
             let mode = this.body.mode || 'plan';
 
             let node = this.pipe[params.block.type];
@@ -87,28 +100,13 @@
                 let next_pipe = this.pipe[choice];
             
                 params.block = this._build_block(choice);
-                if (await this._push_block(params)) {
-                    if (!params.block.box && !params.block.content) {
-                        prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
-                        let messages = await this.context({ prompt, session, evidence: params.block.type !== 'total' });
-                        if(params.block.draft){
-                            const draft = params.block.draft;
-                            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
-                            const content = draft.type === 'image_url'
-                                ? [{ type: 'text', text: head }, draft]
-                                : head + (draft.type === 'text' ? draft.text : draft);
-                            messages = [{ role: 'system', content: this.body.system }, { role: 'user', content }];
-                            delete params.block.draft;
-                        }
-                      
-                        let response = await this._streamChat({ messages, session });
-                        if (params.block.title)
-                            response.content = params.block.title + '\n\n' + response.content;
-                        params.block.content = response.content;
-                        if (response.usage)
-                            params.block.usage = response.usage;
-                    }
-                    await this.pipe[params.block.type]?.recalc?.(params);
+                const boxBefore = params.box;
+                const pushed = await this._push_block(params);
+                if (pushed) {
+                    if (!params.block.box && !hasBody(params.block))
+                        await this._fillLeaf(params, session);
+                    if (hasBody(params.block))
+                        await this.pipe[params.block.type]?.recalc?.(params);
 
                     const kind = this.pipe[params.block.type];
                     const src = String(params.block.content || '').trim();
@@ -126,14 +124,17 @@
                     
                 }
                 await this._save(session);
-                if (!this._stopped && /* !params.box.content && */ (params.block.box || !params.block.stop)) {
+                // silent close (total init false): смотреть закрытый box, не ghost-лист — иначе chat.done и нет answer на task
+                if (this._canLoop(pushed ? params.block : boxBefore)) {
                     this.async(() => this.prompt({ role: 'AI', session }));
                     return { ok: true };
                 }
             }
+            }
 
         }
         catch (e) {
+            params.box ??= await this.body;
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
         }
@@ -142,6 +143,57 @@
         return { ok: true };
     },
 
+    /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
+    async _fillLeaf(params = {}, session) {
+        const next_pipe = this.pipe[params.block.type];
+        let prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
+        let messages;
+        if (params.block.draft) {
+            const draft = params.block.draft;
+            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
+            const content = draft.type === 'image_url'
+                ? [{ type: 'text', text: head }, draft]
+                : head + (draft.type === 'text' ? draft.text : draft);
+            messages = await this.context({ session, leaf: params.block });
+            messages.push({ role: 'user', content });
+            delete params.block.draft;
+        }
+        else {
+            messages = await this.context({
+                prompt, session,
+                evidence: params.block.type !== 'total',
+                leaf: params.block,
+            });
+        }
+        const response = await this._streamChat({
+            messages, session,
+            maxOutput: next_pipe.maxOutput,
+            allowReasoning: next_pipe.allowReasoning,
+        });
+        this._applyStream(params, response);
+    },
+    _applyStream(params, response) {
+        let text = String(response.content || '').trim();
+        if (params.block.title && text)
+            text = String(params.block.title).trim() + '\n\n' + text;
+        // внешний ```…``` → code-block в ленте; хвост после fence (подпись form) сохраняется
+        if (text && typeof this.pipe?.unwrapFence === 'function')
+            text = this.pipe.unwrapFence(text);
+        if (text)
+            params.block.content = text;
+        else
+            delete params.block.content;
+        if (response.usage)
+            params.block.usage = response.usage;
+        if (!hasBody(params.block) && !this.pipe[params.block.type]?.ignore)
+            dropUsedType(params.box, params.block.type);
+    },
+    _canLoop(block) {
+        if (this._stopped || !block) return false;
+        if (!hasBody(block))
+            return !!block.box;
+        return !block.stop;
+    },
     async _init(params = {}) {
         params.block = await this._active_block();
         params.box = await this._active_box();
@@ -150,33 +202,38 @@
         params.task = this;
     },
     async context(params = {}) {
-        const { prompt, evidence = true } = params;
+        const { prompt, evidence = true, leaf } = params;
         const body = await this.body;
         const chain = [];
         let box = body;
         for (;;) {
             chain.push(box);
             const next = box.items?.last;
-            if (next?.box && !next.content) box = next;
+            if (next?.box && !hasBody(next)) box = next;
             else break;
         }
         const focus = box;
         const layers = chain.map(b => this._box_context(b, b === focus, evidence));
         const mode = body.mode || 'plan';
-        const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
         const pipe = await this.pipe;
+        const leafNode = leaf?.type ? pipe[leaf.type] : null;
+        const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
         const messages = [{ role: 'system', content: [
             ...layers.map(l => l.system).filter(Boolean),
             timeNow(body.tz),
-            modeLine,
             topicsMap(pipe, focus, mode),
+            leafSystem,
         ].filter(Boolean).join('\n\n') }];
+        /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
         const push = (nextRole, content) => {
             if (!content) return;
-            if (messages.last?.role === nextRole) {
-                messages.last.content += '\n\n' + content;
+            const last = messages.last;
+            if (last?.role === nextRole && nextRole === 'user') {
+                last.content += '\n\n' + content;
                 return;
             }
+            if (last?.role === 'assistant' && nextRole === 'assistant')
+                messages.push({ role: 'user', content: 'ok' });
             messages.push({ role: nextRole, content });
         };
         for (const layer of layers)
@@ -205,7 +262,7 @@
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
             // иначе после «страница недоступна» модель не видит провал и лезет в planning
-            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !b.content))
+            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !hasBody(b)))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
@@ -217,7 +274,7 @@
             }
             else if (focus || b.type === 'prompt' || b.box)
                 messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
-            if (b.page && !b.content)
+            if (b.page && !hasBody(b))
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
                 messages.push({ role: 'user', content: b.approved || (typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer)) });
@@ -227,8 +284,9 @@
     async _streamChat(params = {}) {
         const {messages, silent, session} = params;
         const model = await this.model;
-        // silent (меню / шапка) — effort off: think:false у Ollama, иначе CoT съедает ответ и слово меню пустое
-        const effort = silent ? 'off' : (await this.body).effort;
+        const bar = (await this.body).effort;
+        const effort = (bar && bar !== 'off' && params.allowReasoning === true) ? bar : 'off';
+        const cap = silent ? 64 : Number(params.maxOutput);
         let content = '', usage = 0;
         let reasonBlock, reasonBox, reasonClosed;
         const closeReason = async () => {
@@ -241,12 +299,15 @@
                 items.splice(i, 1);
             await this._save(session);
         };
-        for await (const chunk of model.streamChat({
+        const chat = {
             messages,
-            effort,
             temperature: silent ? 0 : .5,
-            maxOutput: silent ? 64 : undefined,
-        })) {
+        };
+        if (effort !== undefined)
+            chat.effort = effort;
+        if (Number.isFinite(cap) && cap > 0)
+            chat.maxOutput = cap;
+        for await (const chunk of model.streamChat(chat)) {
             if (this._stopped){
                 content = '';
                 break;
@@ -255,8 +316,7 @@
             if (chunk?.type === 'usage')
                 usage = chunk;
             else if (chunk?.type === 'reasoning') {
-                // silent — CoT отбрасываем (даже если бэкенд всё же шлёт); иначе слот + пустой content меню
-                if (silent)
+                if (effort === 'off')
                     continue;
                 const token = chunk.content || '';
                 if (!token) continue;
@@ -312,7 +372,7 @@
         return { ok: true, stopped: true };
     },
     _build_block(type) {
-        const node = this.pipe[type];
+        const node = this.pipe[type] || {};
         const block = {
             type,
             box: node.box,
@@ -324,16 +384,21 @@
         };
         if (node.ignore)
             block.ignore = true;
+        if (node.expand)
+            block.expand = true;
         if (block.box)
             block.items = [];
         return block;
     },    
     async _push_block(params = {}){
-        const {block, box, session} = params;
+        const {block, session} = params;
+        const box = params.box ??= await this.body;
+        if (!block || !box) return false;
         box.items ??= [];
         if (!this.pipe[block.type]?.ignore) {
-            box.using_blocks ??= [];
-            box.using_blocks.add(block.type);
+            const used = box.using_blocks ??= [];
+            if (!used.includes(block.type))
+                used.push(block.type);
         }
         const init = this.pipe[block.type]?.init;
         if (init && !await init(params))
@@ -350,13 +415,13 @@
         let box = await this._active_box();
         const planned = box.todo?.steps || [];
         const real = (box.items || []).filter(b => b.type === 'step');
-        if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
+        if (planned.length && (real.some(s => !hasBody(s)) || real.length < planned.length))
             return box.todo;
         if (box.type === 'includes') {
             const pipe = await this.pipe;
             const list = pipe.includePlan(box);
             const files = pipe.includeReal(box);
-            const open = files.find(f => !f.content);
+            const open = files.find(f => !hasBody(f));
             if (open)
                 return open;
             if (list.length && files.length < list.length)
@@ -371,7 +436,7 @@
     async _active_box() {
         let next, box = await this.body;
         while (next = box.items?.last){
-            if(next.box && !next.content)
+            if(next.box && !hasBody(next))
                 box = next;
             else
                 break;
@@ -449,21 +514,13 @@ function topics(pipe, ids, mode) {
     }).join('\n');
 }
 
-/** [задача] — корень mode; [далее] — next текущего бокса минус used. Совпадают — один блок. */
+/** next текущего фокуса минус using_blocks — что реально можно выбрать сейчас. */
 function topicsMap(pipe, focus, mode) {
-    const root = pipe.task?.[mode]?.next || pipe.task?.next || [];
     const node = pipe[focus?.type];
     const used = focus?.using_blocks || [];
-    const local = (node?.[mode]?.next || node?.next || []).filter(id => !used.includes(id));
-    const rootText = topics(pipe, root, mode);
-    const localText = topics(pipe, local, mode);
-    const same = root.join() === local.join();
-    const parts = [];
-    if (rootText)
-        parts.push('[задача]\n' + rootText);
-    if (localText && !same)
-        parts.push('[далее]\n' + localText);
-    return parts.join('\n\n');
+    const ids = (node?.[mode]?.next || node?.next || []).filter(id => !used.includes(id));
+    const text = topics(pipe, ids, mode);
+    return text ? '[доступные инструменты]\n' + text : '';
 }
 
 /** Слово меню: точное / первое слово / id из списка внутри текста. */
@@ -480,6 +537,19 @@ function stageOpen(block, node) {
     if (!node?.box) return '';
     const label = node.label || block.label || block.type;
     return 'Текущий этап далее (' + label + ').';
+}
+
+function hasBody(b) {
+    return !!String(b?.content ?? '').trim();
+}
+
+function dropUsedType(box, type) {
+    const used = box?.using_blocks;
+    if (!used) return;
+    const j = used.indexOf(type);
+    if (j >= 0) used.splice(j, 1);
+    if (!used.length)
+        delete box.using_blocks;
 }
 
 function timeNow(tz) {

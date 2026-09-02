@@ -1,5 +1,5 @@
 /** Док закрытых box: view блока + стрелки + copy/share/save. */
-import { viewTag, pageHtml } from './views.js';
+import { pageHtml } from './views.js';
 
 ODA({ is: 'microchat-dock',
     imports: 'oda//button',
@@ -33,10 +33,12 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
-        <div flex ~is="viewTag" ~if="current" :data="current" only-doc style="overflow-y: auto;"></div>
+        <div flex ~if="isHtml" ~is="htmlView" :data="current" only-doc style="overflow-y: auto;"></div>
+        <div flex ~if="current && !isHtml" ~is="mdView" :data="current" only-doc style="overflow-y: auto;"></div>
     `,
     $item: null,
-    get viewTag() { return viewTag(this.current); },
+    htmlView: 'microchat-view-html',
+    mdView: 'microchat-view',
     get reports() { return this.$pdp?.dockReports || []; },
     get index() { return this.$pdp?.dockIndex ?? -1; },
     get current() { return this.$pdp?.dockCurrent; },

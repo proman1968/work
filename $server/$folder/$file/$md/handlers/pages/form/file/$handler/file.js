@@ -13,6 +13,13 @@ ODA({
                 @apply --vertical;
                 overflow: auto;
             }
+            @media print {
+                :host {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
         </style>
         <oda-button slot="top-panel" :icon="editMode ? 'carbon:view' : 'carbon:edit'" :title="editMode ? 'view' : 'edit'" @tap="changeMode"></oda-button>
         <oda-markdown :value :edit-mode flex @change="_onChanged"></oda-markdown>

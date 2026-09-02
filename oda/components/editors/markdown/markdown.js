@@ -15,6 +15,13 @@ ODA({is: 'oda-markdown', imports: 'oda//splitter',
             oda-markdown-viewer {
                 overflow: auto;
             }
+            @media print {
+                :host, oda-markdown-viewer {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
         </style>
         <div horizontal style="width: 100%; display: flex;">
             <oda-markdown-editor ~if="editMode && !readOnly" @editor-change="editorChange"></oda-markdown-editor>

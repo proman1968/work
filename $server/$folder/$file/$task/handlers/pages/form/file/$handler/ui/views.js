@@ -147,6 +147,8 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
+                @apply --info-invert;
+                min-width: 0;
             }
             :host([host-sticky]) {
                 position: sticky;
@@ -180,6 +182,13 @@ ODA({ is: 'microchat-view',
             .body {
                 font-size: small;
                 word-break: break-word;
+                max-width: 100%;
+                min-width: 0;
+            }
+            .body oda-markdown-viewer {
+                max-width: 100%;
+                min-width: 0;
+                overflow-x: auto;
             }
             oda-markdown-viewer.stream {
                 font-size: xx-small;
@@ -187,32 +196,38 @@ ODA({ is: 'microchat-view',
             :host([box]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
             }
-            :host:has(> details.untitled) .body {
+            :host > .untitled > .body {
                 border-radius: 8px;
-                margin-bottom: 8px;
-                @apply --shadow;
+                margin: 8px 0px;
             }
         </style>
 
-        <details vertical :open="open" :title="data?.menu || data.type" ~class="{ untitled: !showTitle }" @toggle="onToggle">
-            <summary ~show="showTitle" vertical flex :color-mode
+        <details ~if="showTitle" :open="open" :title="data?.menu || data.type" @toggle="onToggle">
+            <summary vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <span class="label"  @click.stop>{{label}}</span>
                     <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
-                    <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <oda-icon ~if="showContent && !pinned" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>            
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
             </div>
         </details>
+        <div ~if="!showTitle" vertical class="untitled">
+            <div flex class="body" :content="!data?.ignore">
+                <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
+                <oda-markdown-viewer vertical :light="false" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
+            </div>
+        </div>
     `,
     data: null,
     onlyDoc: {
@@ -228,7 +243,7 @@ ODA({ is: 'microchat-view',
         return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
     },
 
-    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл; в доке — `onlyDoc` */
+    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл */
     get showTitle() {
         return this.data && this.data.stop !== true && !this.onlyDoc;
     },
@@ -291,6 +306,12 @@ ODA({ is: 'microchat-view',
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
     },
+    /** expand-box: в ленте дети, не маркер box.content ([attachments] …) */
+    get showMarkdown() {
+        if (this.items.length && (this.data?.expand || this.data?.type === 'includes'))
+            return false;
+        return this.showContent;
+    },
 
     // --- title chrome ---
     get colorMode() {
@@ -299,7 +320,11 @@ ODA({ is: 'microchat-view',
         return this.showTitle ? 'info-invert' : 'content';
     },
     height: 0,
-    onResize(e) { this.height = e.target.clientHeight; },
+    onResize(e) {
+        const el = e.target;
+        const s = getComputedStyle(el);
+        this.height = el.offsetHeight + (parseFloat(s.marginTop) || 0) + (parseFloat(s.marginBottom) || 0);
+    },
     get headerHeight() { return this.showTitle ? (this.height || 0) : 0; },
     get parentView() {
         const el = this.host?.host;
@@ -403,8 +428,7 @@ ODA({ is: 'microchat-view-prompt',
                 min-height: 36px;
                 border-radius: 8px;
                 overflow: hidden;
-                margin-bottom: 8px;
-                @apply --shadow;                
+                margin-bottom: 8px;             
             }
             details > .body {
                 margin-left: 0;

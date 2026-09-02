@@ -42,33 +42,48 @@ ODA({ is: 'phone-call', imports: '~/lib//icon.js', template: /* html */`
         return this.$item?.load().then(text => JSON.parse(text))
     },
     get user() {
-        return this.message?.then(message=>{
-            return WORK.get_$user(message.user);
-        }) 
+        if (this.message instanceof Promise)
+            return this.message.then(message => {
+                return WORK.get_$user(message.user);
+            })
+        if (this.message?.user)
+            return WORK.get_$user(this.message.user);
+        return null;
     },
     get receivers() {
-        return WORK.$users().then(async users=>{
-            let message = await this.message;
+        return WORK.$users().then(async users => {
+            const message = await this.message;
             return message.receivers.map(id => users.find(u => u.id === id)).filter(Boolean);
         })
     },
     attached() {
         this.async(() => {
-            this.message?.then(message => {
-                this.$pdp.colorMode = COLORS[message.type] || '';
-            });
+            if (this.message instanceof Promise) {
+                this.message?.then(message => {
+                    this.$pdp.colorMode = COLORS[message.type] || '';
+                });
+            }
+            else {
+                this.$pdp.colorMode = COLORS[this.message?.type] || '';
+            }
         });
     },
     get type() {
-        return this.message?.then(message => message.type);
+        if (this.message instanceof Promise)
+            return this.message?.then(message => message.type);
+        return this.message?.type;
     },
-    get theme(){
-        return this.message?.then(message=>{
-            return message.theme || THEMES[message.type];
-        });
+    get theme() {
+        if (this.message instanceof Promise)
+            return this.message?.then(message => {
+                return message.theme || THEMES[message.type];
+            });
+        return this.message.theme || THEMES[this.message?.type];
     },
-    get icon(){
-        return this.type?.then(type=>(ICONS[type] || ('@:'+type)));
+    get icon() {
+        if (this.type instanceof Promise)
+            return this.type?.then(type => (ICONS[type] || ('@:' + type)));
+        return ICONS[this.type] || ('@:' + this.type);
     }
 })
 const ICONS = {

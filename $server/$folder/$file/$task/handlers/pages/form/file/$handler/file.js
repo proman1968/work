@@ -43,7 +43,7 @@ export default {
         </div>
         <oda-splitter ~if="showDock && !mobile" left ::width="dockWidth"></oda-splitter>
         <microchat-dock content no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
-        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="dockOpen = true"></oda-button>                
+        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="openDock"></oda-button>                
 
     `,
     colorMode: 'content',
@@ -56,6 +56,24 @@ export default {
     dockOpen: { $def: true, $save: true },
     dockPick: -1,
     dockWidth: { $def: 280, $save: true },
+
+    /** После disconnect cleanupDeps рвёт deps, кэш геттеров остаётся — tap на dockOpen не будит showDock. */
+    _dockKeys: ['canDock', 'showDock', 'showDockBtn', 'showFeed', 'dockReports', 'dockIndex', 'dockCurrent', 'dockStyle'],
+    _invalidateDock() {
+        const cache = this[R]?.cache;
+        if (!cache) return;
+        for (const k of this._dockKeys)
+            cache[k] = undefined;
+    },
+    attached() {
+        this._invalidateDock();
+        this.render?.(true);
+    },
+    openDock() {
+        this.dockOpen = true;
+        this._invalidateDock();
+        this.render?.(true);
+    },
 
     $item: {
         $def: null,
@@ -187,7 +205,8 @@ export default {
                 // закрытый ignore (reasoning) — не слот; пустой — слот стрима CoT
                 if (b && !b.hidden && !(b.ignore && b.content)) { last = b; break; }
             }
-            if (!last || last.content || !last.items?.length) return last;
+            // box с content-маркером (includes/expand) — не лист: спускаемся в детей
+            if (!last || !last.items?.length) return last;
             items = last.items;
         }
         return undefined;

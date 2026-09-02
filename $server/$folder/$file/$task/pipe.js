@@ -1,25 +1,32 @@
-/** корень файла = box task; меню plan/do — здесь, не у thinking */
+/** корень файла = box task; один next plan/do — Деминг; write только work.do */
+const TASK_NEXT = ['web', 'work', 'question', 'form', 'html', 'planning', 'report'];
+/** step — только исполнение пункта; диалог с человеком — на todo / корне */
+const STEP_NEXT = ['thinking', 'web', 'work', 'html'];
+/** между шагами: уточнить / форма / отчёт или следующий step */
+const TODO_NEXT = ['question', 'form', 'step', 'report'];
+
 export const task = {
     box: true,
-    plan: {
-        // activation раньше explore: артефакт/код → do, не поиск «на всякий случай»
-        next: ['activation', 'planning', 'explore', 'thinking', 'question', 'form', 'answer', , 'report'],
-    },
-    do: {
-        next: ['execute', 'explore', 'thinking', 'question', 'form', 'answer',  'report'],
-    }
+    next: TASK_NEXT,
 }
 
 export const prompt = {
     role: 'user',
+    next: ['thinking', 'answer'],
 }
 
 export const thinking = {
     label: 'Думаю',
     icon: 'carbon:idea',
-    inject: 'только если в запросе есть задача или проблема, требующая разбора перед действиями; не для приветствий, реплик и простых вопросов',
+    inject: 'разобрать задачу перед действиями; не для приветствий и простых реплик',
+    system: [
+        '# Режим: размышление',
+        'Разбери запрос и контекст. Не обращайся к пользователю, не планируй списком шагов, ничего не делай.',
+        'Не утверждай, что нет интернета или метеоданных — поиск в сети доступен через web.',
+        'Не предлагай «спросить разрешение» на инструмент — выбор сделает меню после тебя.',
+    ].join('\n'),
     prompt: [
-        'Как следует подумай над тем, что необходимо сделать, исходя из текущего контекста.',
+        'Как следует подумай над тем, что необходимо сделать, исходя из текущего запроса и контекста.',
         'Не фантазируй, не выдумывай, ничего не делай, не планируй, не обращайся к пользователю, просто абстрактно поразмышляй.',
         'Ответь в виде размышлений  от своего лица (5-10 строк, или если надо, больше).'
         ].join('\n'),
@@ -35,11 +42,11 @@ export const reasoning = {
 export const activation = {
         label: 'Требуется режим исполнения',
         icon:  'icons:check-box-outline-blank',
-        inject: 'нужен do: сделать артефакт (код, html, файлы) или изменить систему; в размышлениях уже решено делать артефакт — этот пункт, не уточнение; не для поиска фактов и болтовни (explore/answer)',
-        prompt: `После активации ты перестанешь планировать и перейдешь к конкретным действиям над системой.
-Ты получишь доступ к файлам, сервисам, навыкам, программированию, функциям системы и к интернету для исполнения поставленной задачи.
+        inject: 'нужен write файлов области; html в ленте и обзор — без этого',
+        prompt: `После активации появится право менять файлы рабочей области (write).
+Обзор, html в ленте и чтение файлов доступны и без активации.
 [instruction]
-Расскажи пользователю, что ты собираешься делать. Но ничего не делай, пока пользователь не перейдет в режим исполнения.
+Расскажи, какие файлы собираешься изменить. Ничего не пиши, пока пользователь не подтвердит.
 `,
 
         stop: 'Перейти к действиям',
@@ -49,19 +56,22 @@ export const activation = {
         }
     }
 
-export const repeat = {
-        label: 'Комментарий',
-        icon: 'icons:chat',
-        prompt: `Очень кратко прокомментируй, все, что хочешь сказать пользователю по текущей ситуации, и почему ты решил продолжить этот этап.`,
-        inject: 'если процесс необходимо повторить еще раз на этом этапе.',
-    }
-
 export const answer = {
         label: 'Отвечаю',
         icon: 'icons:chat',
         stop: true,
-        inject: 'факты уже в контексте — ответь пользователю и остановись; приветствие, реплика, простой вопрос; не выбирай, если нужно действие, форма или ещё факты извне',
-        prompt: `Ответь пользователю то, что ты хочешь сообщить по фактам из контекста.`,
+        inject: 'реплика пользователю; факты уже в контексте (в т.ч. закрытый web)',
+        system: [
+            '# Режим: ответ',
+            'Реплика пользователю по фактам уже в контексте.',
+            'Закрытый web/work с content — укажи суть и откуда; не копируй таблицы и списки заново.',
+            'Не спрашивай разрешения вызвать инструмент и не рекламируй web/work — этот ход только ответ.',
+            'Нет фактов — скажи прямо, без выдумок и без анкеты.',
+        ].join('\n'),
+        prompt: [
+            'Ответь пользователю по фактам из контекста.',
+            'Если сводка уже в закрытом боксе — коротко, без повторной простыни.',
+        ].join('\n'),
         /** сводка сразу после закрытого бокса — в док; ignore (reasoning) не сосед */
         init(params = {}) {
             const prev = lastReal(params.box.items, params.task.pipe);
@@ -74,13 +84,19 @@ export const answer = {
 export const question = {
         label: 'Задаю вопрос',
         icon: 'icons:help',
-        inject: 'у системы нет данных или доступа, без которых шаг невозможен; параметры со стандартным default (размер, стиль, пресет) — не дыра; в размышлениях default уже выбран — не сюда; до поиска и плана, не «нужно ли ещё»',
+        inject: 'нужен ответ человека; web/work это не закрывают',
         stop: true,
+        system: [
+            '# Режим: вопрос',
+            'Один вопрос человеку — только то, без чего нельзя идти дальше.',
+            'То, что даёт поиск в интернете или файлы области — не вопрос.',
+            'Не устраивай анкету: один вопрос, без списка полей и без «нужно ли поискать».',
+        ].join('\n'),
         prompt: 'Задай один вопрос, без ответа на который нельзя идти дальше. В ответе только текст вопроса — без пояснений, комментариев и пересказа этой инструкции.',
     }
 
 export const todo = {
-        next: ['step'],
+        next: TODO_NEXT,
         async recalc(params = {}) {
             const { box, task } = params;
             const body = await task.body;
@@ -103,15 +119,14 @@ export const todo = {
                 return `${i + 1}. ${s.description} [${s.state}]`;
             });
             todo.content = (todo.label || '') + (lines.length ? '\n' + lines.join('\n') : '');
-            body.mode = 'do';
             const cur = real.find(s => !s.content) || real.last;
             if (cur)
                 cur.system = [
                     todo.content,
                     '\n[instruction]',
                     `Сейчас только пункт "${cur.label}". Остальные уже в плане — не делай их и не спрашивай про них.`,
-                    'Нужен ответ человека — question или form, не explore.',
-                    'Сводка по теме уже в контексте — не повторяй explore/web.',
+                    'Не спрашивай пользователя — исполнение пункта.',
+                    'Сводка по теме уже в контексте — не повторяй web.',
                 ].join('\n');
             const total = (todo.steps || []).length;
             const done = (todo.steps || []).filter(s => s.state === 'done').length;
@@ -125,7 +140,12 @@ export const planning = {
         label: 'План',
         icon: 'icons:assignment',
         doc: true,
-        inject: 'несколько ещё не сделанных действий; не для приветствий; факты уже в контексте — answer, не план; уточнение требований — пункты question, не explore',
+        inject: 'несколько ещё не сделанных действий',
+        system: [
+            '# Режим: план',
+            'Несколько ещё не сделанных действий — краткое название и нумерованный список.',
+            'Не для приветствий и не вместо ответа по уже известным фактам.',
+        ].join('\n'),
         prompt: `
 Предложи план:
 [instruction]
@@ -144,58 +164,18 @@ export const planning = {
             };
             const n = (box.todo.steps || []).length;
             box.todo.state = n ? `0/${n} ${step.label}` : '';
-            (await params.task.body).mode = 'do';
         }
     }
 
 export const step = {
         label: 'Шаг',
-        inject: 'без очередного пункта плана нельзя идти',
+        inject: 'следующий пункт todo',
         box: true,
         recalc(params = {}) {
             return todo.recalc(params);
         },
-        plan: {
-            next: ['thinking', 'question', 'explore', 'planning', 'activation'],
-        },
-        do: {
-            next: ['thinking', 'question', 'execute', 'explore'],
-        },
-    }
-
-export const execute = {
-        label: 'Выполнение',
-        icon: 'enterprise:wrench',
-        inject: 'нужны действия: html/код, файлы, объекты, навыки',
-        doc: true,
-        box: true,
-        next: ['work', 'html', 'web', 'form', 'check'],
-
-        system: `       
-Подумай, как выполнить текущую задачу: какие объекты, какие действия, в каком порядке.
-Не делай их и не обращайся к пользователю.
-`,
-        prompt: `Проведи анализ текущего этапа и сформируй подробный отчёт о его результатах.`,
-    }
-
-export const explore = {
-        label: 'Исследую',
-        icon: 'icons:search',
-        inject: 'нужны внешние факты, которых ещё нет в контексте; не для написания известного кода/приложения (это activation); тот же поиск не повторяй',
-        system: [
-            'Подумай, что именно выяснить и откуда взять факты. Если они уже в контексте — не ищи.',
-        ].join('\n'),
-        doc: true,
-        box: true,
-        next: ['thinking', /* 'work', */ 'web'],
-
-        /** только факты с источниками: мета-отчёт («источников не потребовалось») на этом месте
-         *  заставлял answer отрекаться от честно добытых данных как от выдуманных */
-        prompt: [
-            'Сведи факты, добытые на этом этапе, с указанием источников.',
-            'Только факты по теме задачи. Процесс, режимы, этапы и то, потребовались ли источники, не описывай.',
-            'Не обращайся к пользователю и не предлагай следующих шагов.',
-        ].join('\n'),
+        plan: { next: STEP_NEXT },
+        do: { next: STEP_NEXT },
     }
 
 export const work = {
@@ -203,16 +183,23 @@ export const work = {
         icon: 'icons:folder',
         box: true,
         plan: {
-            inject: 'факты в рабочей области, в контексте их нет',
-            next: ['search', 'read'],
+            inject: 'факты или файлы рабочей области, в контексте их нет',
+            next: ['activation', 'search', 'read', 'total'],
+            system: [
+                'Площадка work: файлы рабочей области только читать (search, read).',
+                'Чтобы писать или менять файлы — ACTIVATION (после подтверждения появится write).',
+                'Подумай, какие именно действия над файлами необходимы.',
+            ].join('\n'),
         },
         do: {
-            inject: 'без действий над файлами области нельзя',
-            next: ['search', 'read', 'write'],
+            inject: 'действия над файлами области',
+            next: ['search', 'read', 'write', 'total'],
+            system: [
+                'Площадка work: можно менять файлы рабочей области (write).',
+                'Подумай, какие именно действия над файлами необходимы.',
+            ].join('\n'),
         },
-        system: [
-            'Подумай, какие именно действия над файлами необходимо выполнить.',
-        ].join('\n'),
+        system: 'Подумай, какие именно действия над файлами необходимо выполнить.',
         prompt: `Проведи анализ текущего этапа работы с файлами и сформируй подробный отчёт о его результатах.`,
     }
 
@@ -243,7 +230,8 @@ export const file = {
         prompt: [
             'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
             'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
-            'Числа, таблицы, идентификаторы и названия сохраняй дословно, без округлений.',
+            'Числа, идентификаторы и названия — дословно, без округлений.',
+            'Таблица markdown — не больше 5 колонок, ячейка коротко. Длинный текст — список или секции, не колонка. Широкий исходник не копируй одной простынёй: короткий реестр, детали ниже.',
             'Выведи обзор/отчёт о содержимом файла в формате markdown.',
         ].join('\n'),
         async init(params = {}) {
@@ -258,7 +246,6 @@ export const file = {
                 box.state = 'файлы: ' + (length + 1) + '/' + files.length;
                 block.state = 'reading';
                 await params.task._save(params.session);
-                // debugger
                 let file = files[length];             
                 file = await WORK.get_item(file);
                 await file.init;
@@ -293,7 +280,7 @@ export const search = {
         label: 'Ищу',
         icon: 'icons:search',
         role: 'user',
-        inject: 'нужен поиск файлов в области, путь неизвестен',
+        inject: 'поиск файлов в области, путь неизвестен',
         async init(params = {}) {
             const b = params.block;
             if (b.content)
@@ -315,7 +302,7 @@ export const read = {
         label: 'Читаю файл',
         icon: 'icons:description',
         role: 'user',
-        inject: 'нужен текст конкретного файла по пути',
+        inject: 'текст файла по известному пути',
         async init(params = {}) {
             const b = params.block;
             if (b.content)
@@ -332,7 +319,11 @@ export const read = {
 export const write = {
         label: 'Записываю файл',
         icon: 'editor:mode-edit',
-        inject: 'без записи или правки файла нельзя',
+        inject: 'записать или править файл',
+        system: [
+            '# Режим: запись файла',
+            'Пиши только путь и содержимое. Не выдумывай путь. Не обращайся к пользователю.',
+        ].join('\n'),
         prompt: [
             'Первая строка — путь файла в WORK.',
             'Дальше полный текст или блоки SEARCH/REPLACE.',
@@ -361,29 +352,10 @@ export const write = {
         },
     }
 
-export const check = {
-        label: 'Проверяю результат',
-        icon: 'icons:check-circle',
-        doc: true,
-        inject: 'сверить результат с целью, прежде чем закрыть',
-        system: [
-            'Это площадка проверки, не исполнение и не план.',
-            'Сверь критерий готовности (запрос / текущий пункт todo / обещание ветки) с доказательствами.',
-            'Если фактов в ленте мало — смотри файлы и систему (work) или интернет (web). Не меняй систему.',
-            'Когда доказательств достаточно — сверни факты отчётом. Если фактов мало — отклони отчёт: continue.',
-        ].join('\n'),
-        box: true,
-        next: ['thinking', 'work', 'web'],
-        prompt: `Проведи анализ текущего этапа проверки и сформируй подробный отчёт о его результатах.`,
-        async recalc(params = {}) {
-            (await params.task.body).mode = 'do';
-        },
-    }
-
 export const total = {
         label: 'Подвожу итог',
         icon: 'icons:assignment-turned-in',
-        inject: 'этап закрыт: есть факты для сводки',
+        inject: 'сводка этапа по уже собранным фактам',
         /** Один источник — проталкиваем его наверх без LLM-пересказа: каждый пересказ — токены и потеря
          *  провенанса (сводка без ссылок читается следующим слоем как «данные из ниоткуда»).
          *  Кандидаты — блоки-данные (role: 'user' у узла: site/search/read/file/web/includes), не error.
@@ -399,6 +371,8 @@ export const total = {
                 // сводка есть — ошибка/state от частичных site не держат родителя
                 delete box.error;
                 delete box.state;
+                delete box.using_blocks;
+                leaveWork(box, task);
                 return false;
             }
             // одни ошибки — не звать LLM: пустой контекст рождает «инструментов нет»
@@ -410,6 +384,8 @@ export const total = {
                     box.state = 'ошибки: ' + fails.length;
                 else if (!box.state || /^сайты:/.test(box.state))
                     box.state = fails[0].state || 'ошибка';
+                delete box.using_blocks;
+                leaveWork(box, task);
                 return false;
             }
             // есть успехи (и возможно фейлы) — LLM-сводка; не красить бокс последним фейлом
@@ -419,7 +395,7 @@ export const total = {
             return true;
         },
         async recalc(params = {}) {
-            const { block, box } = params;
+            const { block, box, task } = params;
             box.content = block.content.trim();
             // web: LLM-сводка теряет картинки — дописать ![…](url) из успешных site
             if (box.type === 'web')
@@ -427,32 +403,8 @@ export const total = {
             box.items.remove(block);
             delete box.error;
             delete box.state;
+            leaveWork(box, task);
         },
-        // async init(params = {}) {
-        //     debugger;
-        //     const { box, session, task } = params;
-        //     const prompt = task.pipe[box.type].prompt;
-        //     const messages = await task.context({
-        //         prompt,
-        //         session,
-        //     });
-        //     const asked = await task._streamChat({ messages, session });
-        //     box.content = asked.content;
-        //     await task.pipe[box.type]?.recalc?.({ ...params, block: box });
-        //     const kind = task.pipe[box.type];
-        //     const src = String(box.html || box.content || '').trim();
-        //     if (!task._stopped && src && kind?.label && box.label === kind.label) {
-        //         const cap = await task._streamChat({
-        //             messages: [{ role: 'user', content: 'Два-три слова — заголовок этого текста. Без кавычек, точки и пояснений.\n\n' + src }],
-        //             silent: true,
-        //             session,
-        //         });
-        //         const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-        //         if (words)
-        //             box.label = words;
-        //     }
-        //     return false;
-        // },
     }
 
 export const web = {
@@ -479,6 +431,7 @@ export const web = {
                 b.sites = given.map(url => ({ url, title: url }));
                 b.label = 'Web: ' + given[0];
                 b.state = 'ссылка из запроса';
+                b.using_blocks = ['total'];
                 return true;
             }
             const theme = searchQuery(lastPromptContent(await task.body));
@@ -525,13 +478,11 @@ export const web = {
                 if (fails < 3)
                     dropUsed(params.box, 'web');
             }
+            else
+                b.using_blocks = ['total'];
             return true;
         },
-        inject: 'если необходимо что-то найти в интернете, для решения задачи',
-        system: [
-            'Найди ссылки по текущей задаче.',
-            'Не читай страницы — заход сделают блоки site.',
-        ].join('\n'),
+        inject: 'поискать информацию в интернете',
     }
 
 export const site = {
@@ -539,15 +490,14 @@ export const site = {
         icon: 'bootstrap:filetype-html',
         role: 'user',
         prompt: [
-            'Вытащи со страницы только данные по теме задачи: числа, факты, таблицы — дословно.',
+            'Вытащи со страницы только данные по теме задачи: числа, факты — дословно.',
+            'Таблица markdown — не больше 5 колонок, ячейка коротко; длинное — списком, не одной широкой простынёй.',
             'Из хвостов [images] и [video] возьми относящиеся к теме: картинки — `![подпись](url)`, видео — ссылкой. Логотипы, счётчики, рекламу — нет.',
             'Не выдумывай, не используй другие источники, кроме этой страницы.',
             'Устройство сайта не описывай: навигация, футер, темы, виджеты, реклама, SEO-текст, структура разделов — не по теме.',
             'Формат — markdown, компактно.',
         ].join('\n'),
-        inject: 'если нужно получить содержимое конкретной страницы по url',
-        // next: ['thought'],
-
+        inject: 'содержимое страницы по url',
         async init(params = {}) {
             const {box, block, session} = params;
             let n = 0;
@@ -606,69 +556,18 @@ export const site = {
             // хватит улик (SITE_OK_MAX) или очередь пуста — меню только total; иначе site снова
             siteUsingAfter(box, block);
             return true;
-        }      
-        // async init(params = {}) {
-        //     const b = params.block;
-        //     const { session, task } = params;
-        //     if (b.content || b.page)
-        //         return false;
-        //     const box = params.box;
-        //     if (!b.url) {
-        //         const taken = new Set((box.items || []).filter(x => x !== b && x.url).map(x => x.url));
-        //         const next = (box.sites || []).map(siteRef).find(s => s.url && !taken.has(s.url));
-        //         if (!next) {
-        //             await siteFail(params, shortError('нет url'));
-        //             return true;
-        //         }
-        //         b.url = next.url;
-        //         b.label = siteHost(next);
-        //         b.icon = siteFavicon(next.url);
-        //     }
-        //     const service = await WORK.get_item(web.service);
-        //     const result = await service.fetch_url({ url: b.url });
-        //     if (result?.error) {
-        //         await siteFail(params, shortError(result.error));
-        //         return true;
-        //     }
-        //     if (result.url)
-        //         b.url = result.url;
-        //     const page = clipPage(result.content);
-        //     if (!page || page.replace(/\s+/g, ' ').trim().length < 40) {
-        //         await siteFail(params, 'пусто');
-        //         return true;
-        //     }
-        //     b.page = siteMark(box, b) + '\n\n' + page;
-        //     if (!task || task._stopped)
-        //         return true;
-        //     const messages = await task.context({ prompt: site.prompt, session });
-        //     const extracted = await task._streamChat({ messages, session });
-        //     if (!task._stopped)
-        //         b.content = extracted.content;
-        //     return true;
-        // }
-    }
-
-export const thought = {
-        label: 'Подвожу итог действия',
-        icon: 'carbon:idea',
-        inject: 'после действия обдумать: хватит или ещё ход',
-        next: ['total', 'repeat'],
-        prompt: [
-            'Кратко, для себя опиши текущее состояние дел, и подумай, нужно ли продолжать дальше,',
-            'или сделанного уже достаточно для успешного завершения задачи.',
-            'Не фантазируй, не выдумывай, ничего не делай, не пиши, не обращайся к пользователю, просто анализируй.',
-            'Ответь в виде размышлений от своего лица 10-50 слов.',
-        ].join('\n'),
-        init(params = {}) {
-            delete params.box.using_blocks;
-            return true;
-        },
+        }
     }
 
 export const form = {
         label: 'Готовлю форму',
         icon: 'icons:view-list',
-        inject: 'пользователь просит форму, или без нескольких полей от пользователя нельзя идти дальше',
+        inject: 'несколько полей от пользователя',
+        system: [
+            '# Режим: форма',
+            'Несколько полей, без которых нельзя идти дальше. Лишнего не спрашивай.',
+            'Тема — запрос в ленте, не профиль и не рабочая группа.',
+        ].join('\n'),
         prompt: [
             'Сначала один fenced-блок html (внутри form и fieldset). После блока — пояснение (1–10 слов).',
             'Пояснение — только текст после html, не legend и не fieldset. Не пересказывай эту инструкцию.',
@@ -710,7 +609,11 @@ export const html = {
         label: 'Делаю HTML приложение',
         icon: 'editor:code',
         doc: true,
-        inject: 'если нужно создать одностраничное HTML приложение',
+        inject: 'одностраничное HTML-приложение в ленте',
+        system: [
+            '# Режим: HTML',
+            'Одно рабочее приложение в одном fence. Без пояснений снаружи блока.',
+        ].join('\n'),
         prompt: [
             'Собери одностраничное HTML/JS/CSS-приложение.',
             'Не пример кода, а полноценное рабочее приложение.',
@@ -729,19 +632,29 @@ export const html = {
 export const report = {
         label: 'Готовлю отчёт',
         doc: true,
-        inject: 'текущий запрос уже выполнен, нужен отчёт',
-        prompt: [
-            'Отдай пользователю итог задачи.',
-            'Не пересказывай процесс. Включи результат из ленты: факты, списки, таблицы.',
-            'Не выдумывай. Формат md.',
+        inject: 'сводка длинной работы из нескольких этапов; не пересказ одного закрытого web',
+        system: [
+            '# Режим: отчёт',
+            'Сводка длинной работы или плана из нескольких этапов.',
+            'Один уже закрытый web/work с полной сводкой — не сюда (это answer).',
+            'Не пересказывай процесс и не дублируй таблицы из единственного источника.',
         ].join('\n'),
-        stop: 'Принять',
+        prompt: [
+            'Краткий отчёт по проделанной работе из нескольких этапов.',
+            'Не пересказывай процесс. Не копируй целиком единственную уже закрытую сводку web.',
+            'Ничего не выдумывай, не предлагай, не фантазируй. Формат вывода красивый markdown.',
+        ].join('\n'),
+        stop: true,
         async approve(params = {}) {
-            const { box, block, task } = params;
+            const { box, block } = params;
             box.content = block.content;
-            task.body.mode = 'plan';
         }
     }
+
+function leaveWork(box, task) {
+    if (box?.type === 'work' && task?.body)
+        task.body.mode = 'plan';
+}
 
 export function includePlan(box) {
     if (box?.files?.length)
@@ -774,7 +687,12 @@ function dropUsed(box, type) {
 /** Хватит улик для сводки web: не вычитывать всю выдачу. */
 const SITE_OK_MAX = 3;
 
-/** После site: ещё URL и успехов < SITE_OK_MAX — site снова; иначе using = [site] → меню только total. */
+/**
+ * После site (using: занятые типы выкидываются из next):
+ * - очередь есть, успехов 0 → using=[total] → только site (не закрывать web ошибкой);
+ * - очередь есть, 1..SITE_OK_MAX-1 успехов → очистить using → site|total;
+ * - очередь пуста или успехов хватит → using=[site] → только total.
+ */
 function siteUsingAfter(box, block) {
     const items = box.items || [];
     let okCount = items.filter(b => b.type === 'site' && !b.error && (b.draft || b.content)).length;
@@ -784,8 +702,12 @@ function siteUsingAfter(box, block) {
     if (block.url)
         taken.add(block.url);
     const hasMore = (box.sites || []).map(siteRef).some(s => s.url && !taken.has(s.url));
-    if (hasMore && okCount < SITE_OK_MAX)
-        delete box.using_blocks;
+    if (hasMore && okCount < SITE_OK_MAX) {
+        if (okCount === 0)
+            box.using_blocks = ['total'];
+        else
+            delete box.using_blocks;
+    }
     else
         box.using_blocks = ['site'];
 }
@@ -865,55 +787,6 @@ function siteRef(item) {
     if (!item) return { url: '', title: '' };
     if (typeof item === 'string') return { url: item, title: '' };
     return { url: String(item.url || ''), title: String(item.title || '') };
-}
-
-function siteHost(item) {
-    const url = siteRef(item).url;
-    try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
-}
-
-function siteIndex(web, block) {
-    const sites = (web?.items || []).filter(x => x.type === 'site');
-    const i = sites.indexOf(block);
-    return (i >= 0 ? i : 0) + 1;
-}
-
-function siteMark(web, block) {
-    return '[site ' + siteIndex(web, block) + ': ' + (block?.url || '') + ']';
-}
-
-function stampSiteContent(web, block) {
-    const mark = siteMark(web, block);
-    const text = String(block.content || '').replace(/^\[site(?:\s+\d+)?:[^\]]*\]\s*/i, '').trim();
-    block.content = mark + (text ? '\n\n' + text : '');
-}
-
-const SITE_PAGE = 6000;
-const IMAGES_MARK = '\n\n[images]\n';
-const VIDEO_MARK = '\n\n[video]\n';
-
-function clipPage(text) {
-    const s = String(text || '').trim();
-    if (!s) return '';
-    const marks = [s.indexOf(IMAGES_MARK), s.indexOf(VIDEO_MARK)].filter(i => i >= 0);
-    const i = marks.length ? Math.min(...marks) : -1;
-    if (i < 0)
-        return s.length <= SITE_PAGE ? s : s.slice(0, SITE_PAGE);
-    const body = s.slice(0, i);
-    return (body.length <= SITE_PAGE ? body : body.slice(0, SITE_PAGE)) + s.slice(i);
-}
-
-async function siteFail(params, text) {
-    const b = params.block;
-    const web = params.box;
-    b.error = true;
-    b.state = 'error';
-    b.content = text;
-    stampSiteContent(web, b);
-}
-
-function shortError(e) {
-    return String(e?.message || e || '—').split('\n')[0].slice(0, 200);
 }
 
 function formatFileHits(result) {
@@ -1024,12 +897,17 @@ function parsePlanMarkdown(text = '') {
     };
 }
 
-/** Снять один markdown-fence: ``` / ```html / любой язык. Без fence — как есть. */
+/** Снять один внешний markdown-fence: ``` / ```html / любой язык.
+ *  Хвост после закрытия оставляем (form: html + подпись). Без fence — как есть. */
 export function unwrapFence(s) {
-    let t = String(s || '').trim();
+    const t = String(s || '').trim();
     if (!t.startsWith('```')) return t;
-    t = t.replace(/^```[a-z0-9]*[^\n]*\r?\n/i, '');
-    return t.replace(/\r?\n```\s*$/, '').trim();
+    const m = t.match(/^```[a-z0-9]*[^\n]*\r?\n([\s\S]*?)```/i);
+    if (!m)
+        return t.replace(/^```[a-z0-9]*[^\n]*\r?\n/i, '').trim();
+    const inner = m[1].trim();
+    const after = t.slice(m[0].length).trim();
+    return after ? inner + '\n\n' + after : inner;
 }
 
 /** Разметка формы и подпись из одного content (fence / form / fieldset). */

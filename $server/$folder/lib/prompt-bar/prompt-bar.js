@@ -71,7 +71,7 @@ ODA({ is: 'work-prompt-bar',
                     <oda-button icon-size="12" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
                 </div>
                 <oda-button no-flex icon="icons:close" :icon-size title="Очистить" @tap="clearFiles"
-                    style="border-radius: 50%; margin-left: auto;"></oda-button>
+                    style="border-radius: 50%; margin-left: auto; padding: 0px;"></oda-button>
             </div>
             <div ~if="meta_urls?.length" vertical class="urls-bar">
                 <div ~for="meta_urls" horizontal>
@@ -81,7 +81,7 @@ ODA({ is: 'work-prompt-bar',
             </div>
             <div horizontal style="align-items: flex-end;">
                 <textarea id="text" flex class="prompt" ~if="!recording" :rows ::value :placeholder
-                    @keydown="_onKeydown"></textarea>
+                    @keydown="_onKeydown" @paste="_onPaste"></textarea>
                 <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
             </div>
             <div class="tools" horizontal>
@@ -187,8 +187,7 @@ ODA({ is: 'work-prompt-bar',
         this.files.splice(index, 1);
         this.focusInput();
     },
-    async getFile() {
-        const list = await ODA.showFileDialog({ multiple: true });
+    _addFiles(list) {
         if (!list?.length) return;
         const files = [...this.files];
         for (const f of list) {
@@ -204,8 +203,34 @@ ODA({ is: 'work-prompt-bar',
                 files.push(f);
         }
         this.files = files;
-        window.focus();
         this.focusInput();
+    },
+    async getFile() {
+        const list = await ODA.showFileDialog({ multiple: true });
+        if (!list?.length) return;
+        this._addFiles(list);
+        window.focus();
+    },
+    /** Скриншот из буфера часто `image.png` — без уникального имени второй paste отсекается дедупом. */
+    _namePaste(f, i = 0) {
+        const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        const generic = !f.name || /^image\.\w+$/i.test(f.name);
+        const name = generic ? `paste-${Date.now()}${i ? '-' + i : ''}.${ext}` : f.name;
+        return f.name === name ? f : new File([f], name, { type: f.type, lastModified: Date.now() });
+    },
+    _onPaste(e) {
+        const items = e.clipboardData?.items;
+        if (!items?.length) return;
+        const images = [];
+        for (const it of items) {
+            if (it.kind === 'file' && it.type.startsWith('image/')) {
+                const f = it.getAsFile();
+                if (f) images.push(f);
+            }
+        }
+        if (!images.length) return;
+        e.preventDefault();
+        this._addFiles(images.map((f, i) => this._namePaste(f, i)));
     },
     _onKeydown(e) {
         if (e.code === 'Space' && e.ctrlKey) {

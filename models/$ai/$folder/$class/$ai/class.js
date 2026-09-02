@@ -113,10 +113,12 @@ export default {
         const body = {
             model: options.model || ai.model || '',
             messages,
-            max_tokens: Math.min(Number(options.maxOutput ?? ai.maxOutput) || 4096, 8192),
             temperature: options.temperature ?? 0.7,
             stream: true,
         };
+        const cap = Number(options.maxOutput);
+        if (Number.isFinite(cap) && cap > 0)
+            body.max_tokens = cap;
         if (options.stop)
             body.stop = options.stop;
         applyEffort(body, ai, options);
@@ -284,17 +286,17 @@ function hasCap(ai, name) {
 }
 
 function applyEffort(body, ai, options = {}) {
-    if (!hasCap(ai, 'effort'))
+    if (!hasCap(ai, 'effort') || !('effort' in options))
         return;
-    const effort = options.effort ?? ai.effort;
+    const effort = options.effort;
     if (effort == null || effort === '')
         return;
     const off = effort === 'off' || effort === false;
-    const ollama = ai.protocol === 'ollama' || String(ai.baseUrl || '').includes('ollama');
-    if (ollama)
-        body.think = off ? false : effort;
-    else if (!off)
-        body.reasoning_effort = effort;
+    const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
+    if (native)
+        body.think = off ? false : (effort === true ? true : effort);
+    else
+        body.reasoning_effort = off ? 'none' : (effort === true ? 'medium' : effort);
 }
 
 /**

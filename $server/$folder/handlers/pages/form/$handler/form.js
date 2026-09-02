@@ -8,6 +8,13 @@ export default {
                 @apply --vertical;
                 overflow: hidden;
             }
+            @media print {
+                :host {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
             .save-error-icon {
                 anchor-name: --error-icon;
             }
