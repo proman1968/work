@@ -138,8 +138,17 @@ ODA({ is: 'microchat-panel',
         this._tts().cancel();
 
         this.pending = true;
+        const pipe = await this.$item.pipe;
+        let prompt = text;
+        let agent;
+        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+        if (mention && pipe?.[mention[1]]?.agent) {
+            agent = mention[1];
+            prompt = text.slice(mention[0].length).trim();
+        }
         await this.$item.fetch('prompt', {
-            prompt: text,
+            prompt,
+            agent,
             role: this.userRole,
             includes: paths.length ? JSON.stringify(paths) : undefined,
         });

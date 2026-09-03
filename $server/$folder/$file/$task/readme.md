@@ -1,106 +1,32 @@
-# $task — тип файла ИИ-задачи (ai.task)
+# $task — хранитель длинной ИИ-сессии (ai.task)
 
 ## 1. Что это
 
-Тип `$task` — файловый носитель диалога и PDCA-цикла встроенного ИИ WORK (`ai.task`). Технически это JSON: корень `type: 'task'` + дерево `items` (+ опционально `todo`, `mode`, `system`, `model`); прикладно — панель управления задачей агента в зоне роли USER / BOSS / ADMIN.
+Тип `$task` — **JSON-носитель** длинного диалога/PDCA (`ai.task`): `type: 'task'` + `items` (+ `todo`, `mode`, `system`, `model`).  
+Способность ИИ (оркестратор, agents, `prompt`) живёт на **`$structure/ai/`**, не в этом типе файла.
 
-Расширение `.task` (не `.ai`): у `mime-types` `.ai` = PostScript/Illustrator; каноническое имя файла — `ai.task`. `contentType: 'application/json'`.
+Расширение `.task`. `contentType: 'application/json'`.
 
 ## 2. Зачем это нужно
 
-Даёт ИИ-управляющему единую точку: увидеть контекст пары user/class, спланировать работу, уточнить данные формой, выполнить шаги с подтверждением. Вход в цикл — через `triggers/on_save` (`file.prompt(params)`) или UI preview (`fetch('prompt'…)`).
+Сохранить ленту, todo, модель и history между заходами; UI preview. Короткий вызов между классами — без файла: `/BASE?prompt&agent=web&prompt=…`.
 
 ## 3. Как это работает
 
-Инвариант: нет `content` — блок живой (в него спускаемся); есть `content` — завершён. Листья получают `content` из `init` (сервис) или стрима (`_streamChat`). Внутренний box закрывает `total` (`close`): один блок-данные в боксе (`role: 'user'` у узла, `content`, не `error`) — `init` проталкивает только его `content` в box без LLM-пересказа и возвращает `false` (label родителя не трогать); несколько — стрим-сводка как раньше. Пересказ одиночного источника — токены и потеря провенанса (сводка без ссылок читается следующим слоем как «данные из ниоткуда»). Дубли проталкивания в доке снимает `dockReports` (skip по совпадению `content`). `report` — шаг корня. Тот же признак у `step` (`todo.recalc` смотрит `st.content`). `state` — подпись сути в шапке (не фаза), сначала текст, потом число: `web` — `Сайты 2/2` (успешные / все `site` в ленте), `todo` — `2/5 Шаг`. APPROVE — тоже `state`.
-
-1. **`on_save`** пишет `body.system` (SYSTEM + профиль / рабочая группа; если `path` совпал — один блок «личная зона»; место из `params.location` — точка и город, Nominatim). Режимы `plan`/`do` в глобальный system **не** пишутся — только `work.plan.system` / `work.do.system` при фокусе в `work`. `body.tz` — пояс для часов. Поля `location` / `here` нет. Потом `file.prompt(params)` с `prompt: body.title`, роль как пришла. Старый таск держит старый `body.system`, пока снова не сработает `on_save`.
-2. **Роли входа `prompt()`:**
-   - default (USER/…) — текст есть — `{ type:'prompt', content }`; `post.files` — `save_files` у `$owner` и новый `{ type:'includes', files }` (старый закрытый `includes` не дополнять); пустой ввод без файлов — блок не создавать;
-   - `APPROVE` — флаг `accept` (`true` / `'true'` = принять, иначе отказ). `prompt` — только нагрузка (поля формы). При accept: `approve(params)`, `_save`, пересчёт `_active_*` и обычный ход автомата;
-   - `AI` — без нового user-блока (auto-loop / «Продолжить»); сбрасывает `_stopped`.
-3. **Узлы** — именованные экспорты в [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) (`export const thinking`, `web`, …). Реестра `PIPE` нет. Харнесс грузит модуль целиком (`this.pipe`, не `importScript` / default) и берёт узел как `pipe[type]`. Хелперы якоря вложений — `export function includePlan` / `includeReal`. Корень файла — box `task` (`body.type ??= 'task'`). Метод `prompt()` не ветвится по `type`, кроме входа `prompt`.
-   - `plan` / `do` → `{ next: [...] }` — у `task` список `TASK_NEXT` (обзор / диалог / план / html); у `step` — `STEP_NEXT` только исполнение (`thinking|web|work|html`); у `todo` — `TODO_NEXT` (диалог между шагами + `step`). `mode` меняет только `work` (+`write` в do). Свой `next` блока важнее `content` (`prompt.next` — `thinking` / `answer`); нет своего — меню box;
-   - `prompt` — текст для модели. Лист — стрим сразу. Box — не стримить (даже если слот есть); текст идёт в `total` (`prompt` родителя). `system` / `plan.system` / `do.system` в JSON не копируется; у LLM-листа (`thinking` / `answer` / …) `system` — mode-brief хода, в `context({ leaf })` дописывается к system вместе с площадкой;
-   - `maxOutput` — потолок completion этого типа. Нет поля — в запрос не кладём `max_tokens`. Silent (меню / шапка) — всегда 64;
-   - `allowReasoning` — узел может принять слот CoT («Рассуждаю»). Селектор `off` или нет поля — `think: false` и чанки reasoning отбрасываются. Включён — уровень бара только этому узлу. Silent не блок;
-   - `inject` — короткий критерий входа в меню («когда брать»), без списков «не сюда»: `thinking` — разобрать задачу; `answer` — реплика (в т.ч. после закрытого web); `question` — нужен человек (не web/work); `web` — поискать в интернете; `work` — факты/файлы области; `form` — несколько полей; `planning` — несколько действий; `html` — SPA в ленте; `report` — сводка нескольких этапов (не пересказ одного web); `activation` — нужен write. Заголовок меню: быстрее закрыть запрос; stop только без человека; default/план в контексте — действуй. Silent — `temperature: 0`, одно слово из списка;
-   - `stop` — `true` (конец ветки) или лейбл кнопки (wait + APPROVE); копируется в `block.stop`;
-   - `box: true` → у блока `items: []`;
-   - кеш типов — `box.using_blocks` (в JSON, для возобновления). Тип пишется при успешном push (`push`, после `init === true`), кроме `ignore`. `init` сбросил массив (`file`) — не писать тип снова. `step` снимает себя в `todo`, когда текущий шаг закрыт. Новый `prompt` — `delete using_blocks`. Тип в окне один раз; меню пустое и нет `content` — узел с `close` (`total`);
-   - `block.menu` — тот же текст, что ушёл в выбор шага (`TYPE - inject`); в контекст модели как поле блока не входит;
-   - `recalc` после стрима (успешный push) и в `total.init` после `box.content` (узел коробки). Тело блока — только `content`; вид — по `type` (`html` — iframe, `form` — слот из fence/`<form>` в `content`, иначе md). `_applyStream` всегда `unwrapFence`: внешний \`\`\` снимается, хвост после закрытия сохраняется (подпись form). Шапка: если `label` ещё ярлык типа — silent `_streamChat` только на `content` + промпт «2–3 слова», без `context()`. Свой label (`web` / `site` / `step` / `file` / `search`) не трогать;
-   - `approve(params)` — обработка `APPROVE` (`planning`, `form`, `report`);
-   - `recalc(params)` — пересчёт узла: подпись `state` по типу, иконка, `mode` где нужно; `step.recalc` зовёт `todo.recalc` (label шага = `N. название`, иначе при push остаётся ярлык «Шаг»);
-   - `init(params)` — ход узла до push. `true` — блок в ленту; не `true` — не пушить. Сервис (`search` / `read` / `file` / `write` / `web` / `site`) и `total` — свои `init`;
-   - `close` — лист закрывает родителя (`total`): один успешный источник — проталкивание + снятие `error`/`state`/`using_blocks`; одни `error` — `box.error` + их `content`/`state` в шапку, без LLM (иначе «инструментов нет»); несколько успехов — стрим-сводка, у родителя снимаются `error`/`state` (частичные фейлы site не держат шапку). `false`, лист не пушится; auto-loop идёт на родителя закрытого box. Пустое меню + нет `content` — `total`;
-   - `fallback` — узел дрифта, если выбор модели не из меню (`text`);
-   - `ignore` — блок в ленте, автомат его не видит: не в `next`, не в `context()`, не в `using_blocks`, `_active_block` перешагивает. Узел `reasoning` — живой слот CoT: пуш на первый чанк только если бар не `off` и у стрима `allowReasoning`; иначе чанки режем. Вырез из бокса по концу стрима. Меню — только `content`; пусто — `thinking`, если он в оставшихся `next`, иначе `next[0]` (первый среди оставшихся после `using_blocks`). `thinking` — шаг из меню, текст в контексте;
-   - `icon` — спокойная иконка в JSON; живая — только UI (`typeIcon` / `streamTarget`); `service` — путь сервиса у `web`; `role` — роль блока в контексте (данные — `user`, речь — `assistant` по умолчанию); `expand` — закрытый box отдаёт в контекст листья, не `content`; `doc` — врождённый признак дока отчётов (`file`, `web`, `planning`, `report`, `html`), копируется в блок из `_build_block`; динамически флаг не ставится; `build` — где задан;
-   - `done.next` — куда идти, когда box уже с `content`. Нет `done.next` — меню родителя. Лист без своего `next` (`site`) — тоже родитель.
-4. **Позиция автомата:**
-   - `_active_box()` — спуск в `items.last`, пока box без непустого `content`;
-   - `_active_block()` — если у box незакрытый `todo` (шаг без тела или шагов меньше плана), то `todo`; у `includes` — непрочитанный `file` или сам box, пока список `files` не исчерпан; иначе последний не-`ignore` или box. Назад по ленте не ходим: только вперёд или вверх. Лист без тела — живой: «Продолжить» только дострим, меню нельзя. Стоп без текста — ключ `content` не писать, тип снять с `using_blocks`.
-5. **Один шаг `prompt()` после входа:**
-   - `pipe[block.type].init?` — если вернул не `true`, блок не пушится. Сервис зовёт `init`, не стрим. `search` / `read` / `file` / `write` / `web` / `site` — свои `init`. Узел с `init` после push не стримится — сначала `init`;
-   - иначе если не box и нет `content` — `_streamChat` (лист: свой `prompt`). Box не стримится; `total` закрывает родителя своим `init`;
-   - иначе меню `next`: свой `next` важнее `content`; закрытый box без `done.next` — меню родителя; лист без `next` — родитель; типы в `using_blocks` — нет; меню пустое и нет `content` — узел с `close` (`total`); у `task` без текста `prompt` — только `question`; пустое меню при уже закрытом box — `chat.done`;
-   - пушит блок (без `system` на блоке). Нет стрима и это box — внутрь (`prompt({ role: 'AI' })`). Иначе `_streamChat`;
-   - `parse?`, `recalc`, шапка 2–3 слова (silent, если label ещё ярлык типа). У `total` (`close`): `prompt` родителя → `box.content` → лист не пушится. Auto-loop: после успешного push — по `_canLoop(block)`; после falsy `init` (тихий close) — по `_canLoop(box)` закрытой площадки, чтобы выйти на меню родителя (`answer` на task), а не `chat.done` на ghost-`total`.
-6. **Атомы `web` / `site`** (как `todo` / `step`):
-   - `web` — если в последнем prompt есть `http(s)://` — `sites` из этих URL, поиск не зовётся (явная ссылка важнее выдачи). Иначе до 3 вариантов запроса от модели (`searchQueries`), race по `web.services`. `fetch_url` для `site` — `web.service` (DuckDuckGo). Пусто — `error: true`; потолок 3 error-`web`. В сводку — **Источники**; после LLM-`total` в `content` дописываются `![…](url)` из успешных `site` (раздел «Медиа»), чтобы картинки не терялись в пересказе;
-   - `site` — URL из последнего prompt (ещё не открытый) важнее очереди `box.sites`; иначе первый невзятый из `sites`. Нет url — `false` (в `using_blocks` остаётся `site` → меню только `total`). Ошибка/пусто — `error` на листе; `box.error`/`state` ошибки — только если ещё нет успешного site (иначе прогресс `сайты: N/M`). Успех снимает `box.error`. После захода (`siteUsingAfter`): очередь есть и успехов 0 → `using_blocks = ['total']` (только `site`, нельзя закрыть web ранним `total`); очередь есть и 1…2 успеха → очистить using (`site|total`); очередь пуста или успехов ≥3 → `using_blocks = ['site']` → только `total`. После поиска/`sites` из URL — сразу `using_blocks = ['total']`. `label` — hostname.
-7. **Атомы `work` / `search` / `read` / `write`:**
-   - `work` — box. Меню `plan`: `search`, `read`, `total`; `do`: + `write`. Закрытие — `total`;
-   - `search` — `run`: `semantic_search` по запросу (`workQuery`). `content` — список путей. `label` = запрос;
-   - `read` — `run`: путь из блока / последнего search, `read_text`. `content` = текст (или короткая ошибка);
-   - `write` — `init` пушит блок (`true`); стрим; `recalc` разбирает путь/текст и пишет `save` / `edit`.
-8. **Атомы `includes` / `file`:**
-   - как `todo` / `step`: чат и `prompt()` пишут список `includes.files` (`path`, `label`, `icon`), `items` пустой. Корневого `body.includes` нет;
-   - пока список не прочитан — `next` = `file` (один в ленту). Файл закрыт (`content` или ошибка) — снять `file` с кеша, следующий. Все готовы — `includes.recalc` закрывает бокс маркером `[attachments] файлы: <имена через запятую>` без LLM-итога (`total` не участвует);
-   - `expand: true` на узле: контекст берёт листья-отчёты `file` (каждый отдельным сообщением с ролью своего узла), не `box.content`; маркер в контекст не попадает. `state` вешает `file.init`: на `includes` — `файлы: N/M`, на лист — `reading` / `прочитан` / `ошибка`;
-   - `file` — лист: `init` берёт следующий из `files`, `icon` / `label` / `path` с файла, тело в `draft` (текст или `image_url`) → стрим-отчёт с шапкой `file N: [label](path)`; промпт: числа и имена дословно; таблица markdown ≤5 колонок, длинное — списком. Ошибка — `state: 'ошибка'`, в `content` шапка и текст ошибки.
-9. **Wait:** `block.stop` — `true` без кнопки (шапка скрыта) или строка-лейбл (action-bar + шапка, `role:'APPROVE'`, `accept`). После решения — `delete block.stop`. Лейбл кнопки с `stop` не сравнивают.
-10. **Режимы и выбор:** `mode === 'do'` — только право `write` в `work`. Спрашивает только `activation` внутри `work`. `plan` — сам при закрытии `work` (`total`). `report` mode не трогает. Текст про mode — только в `work.plan`/`work.do`.system (в общий `body.system` и `context()` modeLine не кладём — иначе модель отмазывается «я в plan» вместо html). Принять план и `todo.recalc` `mode` не трогают. Html в ленте и обзор — без do. После `prompt` — `thinking` / `answer`. **Диалог с человеком** (`question` / `form` / `report`) — на корне (`TASK_NEXT`) или между шагами (`todo.next` = question|form|step|report); **`step` — только исполнение** (`STEP_NEXT` = thinking|web|work|html), без planning/question/form внутри step (нет матрёшки планов). Факт уже в контексте — `answer`, не повтор `web`. Ответ человека — `question` / `form` (то, что web/work не закрывают). Несколько несделанных действий — `planning` на корне. В `step.system` (todo.recalc): только текущий пункт; не спрашивать пользователя — исполнение; сводка в контексте — не второй web. Внутренние площадки — `total`. Один `todo` на box. Принятый `report` → `box.content`. `mode` не трогает.
-11. **Question / form / text:** один вопрос — `question` (`stop: true`, без кнопки). Ответ — следующий `prompt` в ленте, не `answer`. Нет цели — спросить, не искать в интернете. Два и больше вопроса — `form`. Только поля, без которых нельзя идти дальше. Ответ в `content`: один fenced-блок html (`form`+`fieldset`), после него пояснение 1–10 слов (в ленте подпись над формой — хвост после fence, не отдельное поле). Выбор — только `select` + «Другое» + `input` (не radio/checkbox). Слот прячет ввод, пока «Другое» не выбрано. Скаляр — number/date. `parseFormHtml` — fence / `<form>` / `fieldset` из `content` (старый `block.html` — фолбэк); срезает script, `oda-icon`, button/submit. Раскладка: один `legend` (имя поля, не путь); один select — без `label`; input «Другое» — свой name. `legend`/`label` могут начинаться с эмодзи. Никаких customElements. Сдача: `approve` парсит values в `block.answer`, `block.approved` — читаемые пары «подпись: текст option» из разметки в `content` (`formFieldMeta`), пустые поля не пишутся; в контекст идёт `approved`, не сырой JSON. `text` — дрифт меню. `stop: true`.
-12. **Html:** лист. Стрим в `content`; общий `_applyStream` уже снимает fence (`unwrapFence`); `recalc` повторяет на всякий случай, поле `html` не пишется. Слот `microchat-html` (`srcdoc`, sandbox), высота через `postMessage`. Без approve; auto-loop дальше по меню корня / step.
-13. **Report / total:** `report` — сводка нескольких этапов на корне или в `todo` (`stop: true`); после одного закрытого web — `answer`, не пересказ. `approve` если вызвали — `box.content`, mode не меняет. `total` закрывает площадку: `box.content`; если это `work` — `mode: 'plan'`. Новый `prompt` снимает `using_blocks`.
-14. **Контекст:** `_box_context(box, focus, evidence)` — один слой: `system` из `pipe[box.type]` + `[todo]` + `items` (узлы `close` / `ignore` не входят; `error: true` — в обычный контекст входят, чтобы меню видело «страница недоступна»; в `total` с `evidence: false` — нет, чтобы не тащить заголовок-ошибку в сводку). CoT `reasoning` только на время стрима. В system каждый ход — `[доступные инструменты]`: `next` фокуса минус `using_blocks` + inject. При стриме листа — ещё `pipe[leaf].system` (mode-brief: роль хода, запреты). Меню выбора — только «одно слово из списка», без «просто отвечай». Роль сообщения — из узла (`role`): данные (`includes` / `file` / `web` / `site` / `search` / `read`) — `user`, речь — `assistant` (дефолт). Подряд идущие `assistant` **не** склеиваются: между ними user `продолжай` (иначе thinking+html+report — один ком и модель «уже всё сделала»). Подряд `user` по-прежнему склеиваются. Фокусный слой (последний открытый box) — все блоки с `content`; слои-предки — рамка: `prompt`-блоки, закрытые боксы (улики), сдача формы (`b.approved`, фолбэк `b.answer`); речь ассистента предков не входит. `expand`-box (`includes`) отдаёт листья вместо `box.content`. Генерация `total` — `evidence: false`: предки без уликов-боксов, чтобы итог этапа не пересказывал чужие сводки. У открытого `site` — `block.page` (уже с `[site N: url]`). Открытый box без `content` — слот «Текущий этап далее (label).». `context()` — путь от корня + текущие дата/время (`timeNow` по `body.tz`). Место — в `body.system` с `on_save`, не каждый ход.
-15. **Служебное:** `stop` — флаг `_stopped` (обрывает стрим и auto-loop); `change_model` — `body.model`; `remove_block` — вырезать блок из `items` родителя, снять тип с `using_blocks`, `_save` (не `on_save`); `_save` — JSON на диск + `session.send({ path })`; `_continue` — `_save` + auto-loop, если не `_stopped`.
-16. UI — [`handlers/preview`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/). `streamTarget` — focused без `content` (слот). `streaming` — только `chat.delta` / `chat.done`. `pending` — `chat.start` (вход `prompt`) … `chat.done` (выход); на set — `chatPending`. `typeIcon`: вертушка при `pending` и пустом `content`; в JSON не пишется. Слот form — разметка из `content` (fence). `pinned` — `focusedBlock` и предки на пути; закрытая площадка не на пути сворачивается свободно. Sticky: одна поверхность. `todo`/`prompt` — host (`todo` = 0, `prompt` = высота todo), `summary` в потоке; box — только `summary` (todo + соседний prompt + шапка родителя). При `stop: true` `title` на `details` = `data.menu`. Без времени и удаления в шапке. Есть отчёты: справа док (`oda-splitter`); тот же `microchat-view-*`, что в ленте; инпут слева под лентой; copy/share в тулбаре дока.
+1. **`class.js`** — тонкий фасад: `prompt` / `stop` / `change_*` / `pipe` / `body` → [`ai/harness.js`](/$server/$folder/$class/$structure/ai/harness.js/~/handlers/pages/form/) с `owner = $owner`, `file = this`.
+2. **`on_save`** пишет `body.system` (профиль/группа/роль/локация) и вызывает `file.prompt` (делегат в harness).
+3. **Pipe** грузится из `owner~/ai` (`task.js` + `agents/`), не из tilde файла.
+4. Контракт блоков/агентов — см. [`$structure/ai/readme.md`](/$server/$folder/$class/$structure/ai/readme.md/~/handlers/pages/form/).
+5. UI: `parseFormHtml` / `unwrapFence` из [`ai/task.js`](/$server/$folder/$class/$structure/ai/task.js/~/handlers/pages/form/).
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/$server/$folder/$file/$task/class.js/~/handlers/pages/form/) — харнесс: `prompt`, `context`, `_streamChat`, `_push_block`, `_build_block`, `_active_*`, `stop`, `change_model`, `remove_block`, `_save`; `this.pipe` = namespace `pipe.js`
-- [`pipe.js`](/$server/$folder/$file/$task/pipe.js/~/handlers/pages/form/) — узлы `export const`, `includePlan` / `includeReal`; без объекта `PIPE`
-- [`triggers/on_save/$trigger/`](/$server/$folder/$file/$task/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — system prompt + первый вход в цикл
-- [`handlers/preview/$handler/`](/$server/$folder/$file/$task/handlers/preview/$handler/class.js/~/handlers/pages/form/) — микрочат (лента + док + panel)
-- [`readme.md`](/$server/$folder/$file/$task/readme.md/~/handlers/pages/form/) / [`progress.md`](/$server/$folder/$file/$task/progress.md/~/handlers/pages/form/) — знания модуля
+- [`class.js`](class.js) — фасад хранителя
+- [`triggers/on_save/`](triggers/on_save/$trigger/class.js) — system + первый prompt
+- [`handlers/`](handlers/) — preview микрочата
+- [`readme.md`](readme.md) / [`progress.md`](progress.md)
 
-## 5. В каком это состоянии
+## 5. Состояние
 
-**В активной доработке.** FSM в `pipe.js`, цикл в `class.js`. Сервис (`search` / `read` / `file` / `write` / `web` / `site`) — свой `init`. Стрим без tools.
-
-- ✅ узлы — `export const` в `pipe.js`; корень `type: 'task'`; маршруты у box (`plan`/`do` + `mode`)
-- ✅ `content` = закрыто: спуск, меню `next`, `todo`/`step`, `report` (таск) / `total` (площадка)
-- ✅ `prompt()`: меню только если нет `box.content`; push → stream → `recalc` → шапка 2–3 слова (silent) → auto-loop / wait / общий `chat.done`
-- ✅ кеш типов — `using_blocks` на box; закрытый `step` снимает себя; новый `prompt` сбрасывает массив
-- ✅ стрим: лист — свой `prompt`; box не стримится; `total` — `prompt` родителя. `system` площадки в JSON не пишется
-- ✅ `planning.approve` → todo, `mode` не меняет; do только `activation`
-- ✅ `report.approve` → `box.content`, mode не трогает; do только `activation` в `work`; выход из `work` (`total`) → `plan`
-- ✅ `html`: SPA в iframe из `content` (`unwrapFence`), без поля `html`; `stop` без approve/auto-loop
-- ✅ `work` / `web` закрывает `total` (`close` + falsy `init` → `box.content`, лист не пушится); `includes` — `recalc`-маркер + `expand`, без LLM-итога
-- ✅ нет `fc` на узлах; `search` / `read` / `write` / `web` / `site` / `file` — свой `init`
-- ✅ `site.content` — разбор страницы в md (факты по теме, без рекламы; ссылки, `![ ]` / видео из хвостов дампа), не дамп `fetch_url`
-- ✅ тип в окне один раз; исчерпание → узел с `close` (`total`); `web.sites` — `{ url, title }`
-- ✅ `work` — box; атомы `search` / `read` / `write` со своим `run`
-- ✅ вложения в ленте: `includes` + `file` в `items` (чат), чтение; закрытие — маркер `includes.recalc`, в контекст идут отчёты `file` (роль `user`)
-- ✅ `question` в меню `task` / `step`; без текста `prompt` в корне только `question`; `web.label` не запрос
-- ✅ пустой search / нет url: `error` + `content` на блоке, не стрим и не пустой `site`
-- ❌ Harness tools, `pendingAction`, subplan / spawn_agent
-
-## 6. Дальнейшие планы
-
-- Replan слота todo с учётом закрытых шагов
-- Самоподтверждение модели (без `stop`)
-- Harness tools + ACL роли
+- ✅ Делегат в `$structure/ai/`; файл только persistence + UI
+- ✅ One-shot на структуре: `?prompt&agent=&prompt=`

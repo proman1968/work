@@ -80,9 +80,9 @@ ODA({ is: 'work-prompt-bar',
                 </div>
             </div>
             <div horizontal style="align-items: flex-end;">
-                <textarea id="text" flex class="prompt" ~if="!recording" :rows ::value :placeholder
-                    @keydown="_onKeydown" @paste="_onPaste"></textarea>
-                <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
+                <textarea id="text" flex class="prompt" :rows ::value :placeholder
+                    :readonly="recording" @keydown="_onKeydown" @paste="_onPaste"></textarea>
+                <div ~if="recording" no-flex style="color: var(--error-color); padding: 6px 4px; white-space: nowrap;">⏺ {{timer}}</div>
             </div>
             <div class="tools" horizontal>
                 <item-node ~if="ai && modelItem" no-flex :icon-size="iconSize * .8" :$item="modelItem"
@@ -248,6 +248,10 @@ ODA({ is: 'work-prompt-bar',
         }
         if (e.keyCode === 27) {
             e.preventDefault();
+            if (this.recording) {
+                this._mic().undoLastWord();
+                return;
+            }
             this.value = '';
             this.files = [];
             this.fire('clear');
@@ -268,7 +272,7 @@ ODA({ is: 'work-prompt-bar',
             return;
         }
         if (this.recording) {
-            this._mic().stop(true);
+            this._mic().stop();
             return;
         }
         if (!String(this.value ?? '').trim() && !this.files.length) {
@@ -363,7 +367,7 @@ class MicAudioController {
         if (!this.bar.recording)
             this.start();
         else
-            this.stop(true);
+            this.stop();
     }
     start() {
         navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
@@ -377,6 +381,7 @@ class MicAudioController {
             this.bar.value = '';
             this._beep('start');
             this._startTimer();
+            this.bar.focusInput();
             if (this.bar.ai) {
                 stream.getTracks().forEach(t => t.stop());
                 return;
@@ -389,13 +394,12 @@ class MicAudioController {
                 if (this.mediaRecorder.state !== 'inactive') return;
                 this.bar.files = [...this.bar.files, this._makeFile(chunks)];
                 this.bar.value = (this.final_transcript || '').trim();
-                if (this.bar.value || this.bar.files.length)
-                    this.bar.fire('send');
             };
             this.mediaRecorder.start();
         }).catch(e => console.warn('[mic]', e.message));
     }
-    stop(send) {
+    /** Только стоп записи — без send; текст остаётся в поле для правки. */
+    stop() {
         this.recognizing = false;
         try { this.recognition?.stop(); } catch {}
         clearInterval(this.timerInterval);
@@ -410,8 +414,16 @@ class MicAudioController {
         }
         this.bar.value = (this.final_transcript || '').trim();
         this.bar.focusInput();
-        if (send && this.bar.value)
-            this.bar.fire('send');
+    }
+    /** Esc при записи: последнее слово из value; final = value, interim сброс. */
+    undoLastWord() {
+        const parts = String(this.bar.value || '').trim().split(/\s+/).filter(Boolean);
+        parts.pop();
+        const next = parts.join(' ');
+        this.bar.value = next;
+        this.final_transcript = next;
+        this.ignoreInterim = true;
+        try { this.recognition?.stop(); } catch {}
     }
     _setupRecognition() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -420,6 +432,7 @@ class MicAudioController {
             return;
         }
         this.final_transcript = '';
+        this.ignoreInterim = false;
         this.recognition = new SR();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
@@ -432,14 +445,19 @@ class MicAudioController {
         };
         this.recognition.onresult = e => {
             let interim = '';
+            let gotFinal = false;
             for (let i = e.resultIndex; i < e.results.length; i++) {
-                if (e.results[i].isFinal)
+                if (e.results[i].isFinal) {
                     this.final_transcript += this._editInterim(e.results[i][0].transcript);
-                else
+                    gotFinal = true;
+                }
+                else if (!this.ignoreInterim)
                     interim += e.results[i][0].transcript;
             }
+            if (gotFinal)
+                this.ignoreInterim = false;
             this.final_transcript = this.final_transcript.replace(/\s([\.+,?!:-])/g, '$1');
-            this.bar.value = (this.final_transcript + ' ' + interim).trim();
+            this.bar.value = (this.final_transcript + (interim ? ' ' + interim : '')).trim();
         };
         return this.recognition;
     }
@@ -462,7 +480,7 @@ class MicAudioController {
         this.timerInterval = setInterval(() => {
             sec++;
             this.bar.timer = this.pad(Math.floor(sec / 60)) + ':' + this.pad(sec % 60);
-            if (sec > 60) this.stop(true);
+            if (sec > 60) this.stop();
         }, 1000);
     }
     _editInterim(s) {

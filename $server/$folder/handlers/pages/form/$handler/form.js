@@ -242,6 +242,12 @@ ODA({is: 'work-form',
             USER: 'fontawesome:s-user-pen',
         })[await role]
     },
+    get _savePath() {
+        return new Promise(async () => {
+            const $class = await this.$item?.$class;
+            return ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
+        });
+    },
     activeRole: {
         $save: true,
         async get (){

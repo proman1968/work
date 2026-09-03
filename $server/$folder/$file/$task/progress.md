@@ -1,6 +1,28 @@
 # Прогресс: $task
 
 ## Последние изменения
+- [15:59] `$task` = хранитель сессии: harness/agents/task.js перенесены в `$structure/ai/`; `class.js` делегирует; `_methods` видит `~/ai/*` ($method). Причина: ИИ — способность класса, файл — журнал длинных задач.
+
+- [15:06] `planning` / `report` → `agents/` (`step: false`); оркестратор `moves` = thinking|answer; `parsePlanMarkdown` — named export. Причина: план/отчёт — навыки, не ходы оркестратора.
+
+- [14:59] Канон агента: `export default { moves, tools }`. Оркестратор — ходы в `moves`, `tools: {}`; loader/`topicsMap` — ходы|инструменты|агенты. Причина: ходы жили в `tools`, ломая один смысл слота у всех агентов.
+
+- [14:33] `_box_context`: `box.system` + `pipe.system` склеиваются (не `||`). Причина: on_save писал Рязань в `body.system`, оркестраторский system его перекрывал → ложный question про город.
+
+- [14:16] `web`: убран tool `query` — поиск снова в `web.init`, меню только `site`(+total). Причина: total проталкивал текст запросов без site; лишний выбор модели.
+
+- [14:04] Scoped `prompt({ agent })`: не выходить по `box.error` (частичный fail site) — только по `content`. Причина: `@web` останавливался после первого fetch failed.
+
+- [13:58] `prompt({ agent })` / `@web …`: scoped-прогон субагента до `content`, возврат `{ ok, agent, content, waiting? }`; panel передаёт `agent`. Причина: навык как вызываемый результат (UI и мастер-агент).
+
+- [13:31] `form` / `question` → `agents/` (`step: false`); оркестратор tools: thinking|answer|planning|report. Причина: диалог — наследуемые агенты, не ходы.
+
+- [13:24] Оркестратор = `export default` + `tools` (ходы); субагенты только discover `agents/*` (без `dispatch`/`AGENTS`); меню корня = ходы ∪ агенты; `step` = thinking ∪ агенты. Причина: один паспорт агента и tilde без allowlist.
+
+- [12:49] Агенты как файлы: `task.js` + `agents/{web,work,html}.js` (`export default` + `tools:{}`); loader в `class.js` (next из keys tools + total); `dispatch` / `TASK_STEPS` / `answer` в корне; brief при push; поиск — `tools.query`. Удалён `pipe.js`. Причина: ход≠агент≠tool и tilde-переопределение навыков.
+
+- [10:26] Inject без жаргона узлов: `answer`/`report`/`question` — «факты в контексте», «сводка в ленте», не «закрытый web».
+
 - [18:32] `answer` vs `report`: после закрытого web — короткий answer; report не пересказывает один web. Причина: двойная писанина (web.content + отчёт с теми же ценами).
 
 - [18:21] Mode-brief: у LLM-листов `system` (роль хода); `context({ leaf })` дописывает его при стриме. Сначала thinking/answer/question (+ planning/form/html/report/write). Причина: open-code–style контракт режима без раздувания body.system.

@@ -935,15 +935,22 @@ export class $folder extends $item{
             }, {}) || {};
         });
     }
-    /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
+    /** Контекстные методы: ~/methods/* и ~/ai/* ($method), привязанные к владельцу */
     get _methods(){
         return new AsyncPromise(async ()=>{
-            const methods = (await this.get_item('~/methods/*')) || [];
-            return methods.reduce((res, item)=>{
+            const fromMethods = (await this.get_item('~/methods/*')) || [];
+            const fromAi = (await this.get_item('~/ai/*')) || [];
+            const aiMethods = fromAi.filter(item =>
+                item instanceof FS.$method
+                || item?.constructor?.name === '$method'
+                || item?.type === '$method'
+                || item?.meta_folder?.id === '$method');
+            const res = {};
+            for (const item of [...fromMethods, ...aiMethods]) {
                 res[item.id] = item;
                 item.$context = this;
-                return res;
-            },{});
+            }
+            return res;
         })
     }
     /**

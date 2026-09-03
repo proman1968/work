@@ -1,4 +1,4 @@
-import { parseFormHtml, unwrapFence } from '../../../../../../pipe.js';
+import { parseFormHtml, unwrapFence } from '/$server/$folder/$class/$structure/ai/task.js';
 
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
