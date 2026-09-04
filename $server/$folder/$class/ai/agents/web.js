@@ -27,8 +27,13 @@ export default {
     },
     async init(params = {}) {
         const b = params.block;
-        const { session, task } = params;
-        const themeRaw = String(b.brief || lastPromptContent(await task.body) || '').trim();
+        const { session, task, messages, streamChat } = params;
+        const themeRaw = String(
+            b.brief
+            || lastUserContent(messages)
+            || (task ? lastPromptContent(await task.body) : '')
+            || '',
+        ).trim();
         const given = urlsFrom(themeRaw);
         if (given.length) {
             b.sites = given.map(url => ({ url, title: url }));
@@ -38,15 +43,35 @@ export default {
             return true;
         }
         const theme = searchQuery(themeRaw);
-        const messages = await task.context({
-            prompt: [
-                'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
-                'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
-                'Без кавычек, нумерации и пояснений.',
-            ].join('\n'),
-            session,
-        });
-        const asked = await task._streamChat({ messages, silent: true, session });
+        let asked;
+        if (streamChat && messages) {
+            asked = await streamChat({
+                silent: true,
+                session,
+                messages: [
+                    ...messages,
+                    {
+                        role: 'user',
+                        content: [
+                            'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
+                            'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
+                            'Без кавычек, нумерации и пояснений.',
+                        ].join('\n'),
+                    },
+                ],
+            });
+        }
+        else {
+            const ctx = await task.context({
+                prompt: [
+                    'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
+                    'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
+                    'Без кавычек, нумерации и пояснений.',
+                ].join('\n'),
+                session,
+            });
+            asked = await task._streamChat({ messages: ctx, silent: true, session });
+        }
         const queries = searchQueries(asked.content);
         if (theme && !queries.includes(theme))
             queries.push(theme);
@@ -74,7 +99,7 @@ export default {
             b.error = true;
             b.state = 'error';
             b.content = 'Ничего не найдено по запросам: ' + queries.join(' | ');
-            const fails = (params.box.items || []).filter(x => x.type === 'web' && x.error).length + 1;
+            const fails = (params.box?.items || []).filter(x => x.type === 'web' && x.error).length + 1;
             if (fails < 3)
                 dropUsed(params.box, 'web');
         }
@@ -97,12 +122,17 @@ export default {
                 'Формат — markdown, компактно.',
             ].join('\n'),
             async init(params = {}) {
-                const { box, block, session, task } = params;
+                const { box, block, session, task, messages, agent } = params;
                 let n = 0;
                 try {
                     box.sites ??= [];
                     const taken = new Set((box.items || []).filter(b => b.type === 'site' && b.url).map(b => b.url));
-                    const theme = String(box.brief || lastPromptContent(await task.body) || '');
+                    const theme = String(
+                        box.brief
+                        || lastUserContent(messages)
+                        || (task ? lastPromptContent(await task.body) : '')
+                        || '',
+                    );
                     const given = urlsFrom(theme).find(u => !taken.has(u));
                     if (given && !box.sites.some(s => s.url === given))
                         box.sites.unshift({ url: given, title: given });
@@ -114,14 +144,15 @@ export default {
                     n = taken.size + 1;
                     box.state = 'сайты: ' + n + '/' + box.sites.length;
                     block.state = 'идет загрузка';
-                    await task._save(session);
+                    await task?._save?.(session);
 
                     let url = new URL(site.url);
                     block.icon = siteFavicon(site.url);
                     block.title = `site ${n}: ['${site.title}'](<${site.url}>)\n\n`;
                     block.label = url.host;
                     block.url = site.url;
-                    const service = await WORK.get_item(task.pipe.web.service || SERVICE);
+                    const servicePath = agent?.service || task?.pipe?.web?.service || SERVICE;
+                    const service = await WORK.get_item(servicePath);
                     let result = await service.fetch_url({ url: site.url });
                     if (result?.error)
                         throw new Error(result.error);
@@ -236,6 +267,16 @@ function lastPromptContent(body) {
     };
     walk(body?.items);
     return last;
+}
+
+function lastUserContent(messages) {
+    if (!messages?.length)
+        return '';
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === 'user' && messages[i].content)
+            return String(messages[i].content);
+    }
+    return '';
 }
 
 function siteFavicon(url) {

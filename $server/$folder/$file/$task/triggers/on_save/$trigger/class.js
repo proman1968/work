@@ -1,4 +1,4 @@
-const PROMPT_REL = '$server/$folder/$class/ai/prompt/$method/class.js';
+﻿const PROMPT_REL = '$server/$folder/$class/ai/prompt/$method/class.js';
 
 async function loadPromptMod() {
     const { pathToFileURL } = await import('node:url');
@@ -11,11 +11,11 @@ export default {
         const file = this.$context;
         const raw = await file.load({ encoding: 'utf-8' });
         const body = JSON.parse(raw);
-        const { buildSystemPrompt } = await loadPromptMod();
-        body.system = await buildSystemPrompt({
-            owner: this.$owner,
+        const mod = await loadPromptMod();
+        const prompt = Object.create(mod.default);
+        prompt.$context = this.$owner;
+        body.system = await prompt.buildSystemPrompt({
             session: params.session,
-            role: params.role,
             location: params.location,
         });
 
