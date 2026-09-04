@@ -332,16 +332,16 @@ export class $class extends $folder{
             return folder.path.split('/').slice(3);
         })
     }
-    async resolveDistributedFolder() {
-        let folder = this.$folder;
-        for (const step of await this.type_chain) {
-            folder = await folder._get_next_item(step, $folder);
-            if (!folder)
-                break;
-        }
-        if (!folder)
-            throw new Error('Указана несуществующая точка наследования');
-        return folder;
+    get $distr_folder(){
+        return new AsyncPromise(async ()=>{
+            let folder = await this.$folder;
+            for (const step of await this.type_chain) {
+                folder = await folder._get_next_item(step, $folder);
+                if (!folder)
+                    break;
+            }
+            return folder;
+        })
     }
 
     /** uid пользователя из params.session (сессия host). */
@@ -418,7 +418,7 @@ export class $class extends $folder{
             case $class.ROLES.ADMIN:
                 return this.$folder._get_next_item('work', FS.$folder);
             case $class.ROLES.BOSS:
-                const dist = await this.resolveDistributedFolder();
+                const dist = await this.$distr_folder;
                 return dist._get_next_item('work', FS.$folder);
             case $class.ROLES.USER:
                 return this.meta_folder._get_next_item('work', FS.$folder);
@@ -481,7 +481,7 @@ export class $class extends $folder{
         let { post } = params;
 
         const self_folder = this.meta_folder;
-        const distributed_folder = await this.resolveDistributedFolder();
+        const distributed_folder = await this.$distr_folder;
 
         const incoming = await this.constructor.importScript('export default ' + post);
         const [self_data, inherit_data] = this.constructor.separateInheritData(incoming);

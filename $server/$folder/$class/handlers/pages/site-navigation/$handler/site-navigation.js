@@ -1,6 +1,6 @@
 export default {
     icon: 'carbon:tree-view-alt',
-    label: 'Навигация',
+    label: 'Навигация по сайту',
     imports: 'oda//app-layout.js, ~/lib//tree.js',
     extends: 'oda-app-layout',
     template: /* html */`

@@ -1,11 +1,296 @@
-/**
- * $task — длинная ИИ-сессия (JSON).
- * prompt / pipe / body — на этом типе; one-shot между классами — $class/ai.
+﻿/**
+ * $method prompt — one-shot: агент (box + шаги) или answer.
+ * params: { session, agent, model, location, role, context, prompt }
+ * context — messages[]; нет/пусто — [{ role:'system', content: system.md… }].
+ * agent: строка → паспорт; нет/не найден → answer.
  */
+
 export default {
-    icon: 'bootstrap:robot',
-    contentType: 'application/json',
-    GET: 'context',
+    async execute(params = {}) {
+        debugger;
+        let { session, agent, model, location, role, context } = params;
+
+        agent = await this.loadAgent(agent);
+        model ??= agent.model;
+
+        if (typeof context === 'string')
+            context = JSON.parse(context);
+        if (!Array.isArray(context))
+            context = [];
+
+        if (!context.length) {
+            context.push({
+                role: 'system',
+                content: await buildSystemPrompt({
+                    owner: this.$context,
+                    session, role, location,
+                }),
+            });
+        }
+
+        const result = agent.name === 'answer'
+            ? await answerOnce({
+                context, model, agent, session,
+                prompt: params.prompt,
+                path: this.$context?.short,
+            })
+            : await runAgentOnMessages({
+                owner: this.$context,
+                context, model, agent, session, params,
+            });
+        result.context = context;
+        return result;
+    },
+
+    async loadAgent(agent = 'answer') {
+        let file = await this.$context.tilde;
+        
+        // get_item(`~/ai/agents/${agent}.js`);
+        if (Array.isArray(file))
+            file = file.find(x => x?.id === `${name}.js`) ?? file[0];
+        if (!file?.load) {
+            if (name !== 'answer')
+                return this.loadAgent('answer');
+            throw new Error('ai/prompt: нет agents/answer.js');
+        }
+        const raw = await file.load();
+        const script = this.$context.constructor.stripAbsoluteImports(raw);
+        const mod = await import('data:text/javascript;base64,' + Buffer.from(script, 'utf-8').toString('base64'));
+        agent = { ...mod.default, name };
+        return agent;
+    },
+};
+
+function createRuntime(opts = {}) {
+    const h = Object.assign(Object.create(runtimeProto), {
+        owner: opts.owner,
+        file: opts.file || null,
+        _body: opts.body || null,
+        _pipe: undefined,
+        _stopped: false,
+        _seedSystem: opts.system || '',
+        _seedModel: opts.model || '',
+        _seedEffort: opts.effort || '',
+        _seedTz: opts.tz || '',
+    });
+    return h;
+}
+
+/** ~/ai/system.md (tilde), иначе встроенный fallback. */
+export async function loadSystemMd(owner) {
+    if (!owner)
+        return SYSTEM_PROMPT.SYSTEM;
+    let f = await owner.get_item('~/ai/system.md');
+    if (Array.isArray(f))
+        f = f.find(x => x?.id === 'system.md') ?? f[0];
+    if (f?.load)
+        return String(await f.load({ encoding: 'utf-8' })).trim();
+    return SYSTEM_PROMPT.SYSTEM;
+}
+
+/** Сборка body.system (system.md + профиль / группа / роль / локация). */
+export async function buildSystemPrompt(params = {}) {
+    const owner = params.owner;
+    const session = params.session;
+    let user_info = await session?.$user?.info?.();
+    let class_info = await owner?.info?.();
+    let location = params.location;
+    if (location) {
+        try {
+            const loc = typeof location === 'string' ? JSON.parse(location) : location;
+            const place = (loc.lat != null && loc.lon != null) ? await resolvePlace(loc.lat, loc.lon) : null;
+            const coords = Object.keys(loc).map(key => key + ':' + loc[key]).join(', ');
+            location = coords ? 'Расположение: ' + (place ? place + ' (' + coords + ')' : coords) + '.' : null;
+        } catch { location = null; }
+    }
+    return [
+        await loadSystemMd(owner),
+        placeContext(user_info, class_info),
+        (SYSTEM_PROMPT[params.role] || SYSTEM_PROMPT.USER || ''),
+        location,
+    ].filter(Boolean).join('\n');
+}
+
+/** Блок для вставки в task.items: без runtime-состояния. */
+export function sanitizeBlock(block) {
+    if (!block || typeof block !== 'object')
+        return block;
+    const b = structuredClone(block);
+    const strip = (x) => {
+        delete x.using_blocks;
+        delete x.draft;
+        if (Array.isArray(x.items))
+            x.items = x.items.filter(c => c.type !== 'reasoning').map(strip);
+        return x;
+    };
+    return strip(b);
+}
+
+/** answer: дописать user + assistant в messages. */
+async function answerOnce({ context, model, agent, session, prompt, path }) {
+    const text = String(prompt ?? '').trim();
+    if (!text)
+        return { ok: false, error: 'prompt required', agent: agent.name };
+
+    session?.send?.({ type: 'chat.start', path });
+    try {
+        context.push({ role: 'user', content: text });
+        const modelItem = await WORK.get_item(model);
+        let content = '';
+        for await (const chunk of modelItem.streamChat({
+            messages: context,
+            temperature: .5,
+        })) {
+            if (chunk?.type === 'usage' || chunk?.type === 'reasoning')
+                continue;
+            const token = typeof chunk === 'string' ? chunk : chunk?.content;
+            if (typeof token !== 'string' || !token)
+                continue;
+            content += token;
+            session?.send?.({ type: 'chat.delta', path, token });
+        }
+        content = content.trim();
+        if (content)
+            context.push({ role: 'assistant', content });
+        session?.send?.({ type: 'chat.done', path });
+        return { ok: true, content, agent: agent.name };
+    }
+    catch (e) {
+        session?.send?.({ type: 'chat.done', path });
+        return { ok: false, error: e.message, content: e.message, agent: agent.name };
+    }
+}
+
+/** Агент-box: внутренний body для pipe; снаружи — messages. */
+async function runAgentOnMessages({ owner, context, model, agent, session, params }) {
+    const system = context.find(m => m.role === 'system')?.content || '';
+    const body = {
+        type: 'task',
+        items: [],
+        system,
+        model,
+    };
+    const runtime = createRuntime({ owner, body, model, system });
+    const result = await runAgent(runtime, { ...params, agent: agent.name, session });
+    const text = String(params.prompt ?? '').trim();
+    if (text)
+        context.push({ role: 'user', content: text });
+    if (result.content)
+        context.push({ role: 'assistant', content: result.content });
+    return result;
+}
+
+/** One-shot: агент как box со своими шагами. */
+async function runAgent(runtime, params = {}) {
+    let { prompt: rawPrompt, session, agent: agentParam } = params;
+    const pipe = await runtime.pipe;
+    let text = String(rawPrompt ?? '').trim();
+    let agent = agentParam;
+    const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+    if (mention) {
+        const id = mention[1];
+        if (pipe[id]?.agent) {
+            agent = id;
+            text = text.slice(mention[0].length).trim();
+        }
+    }
+    if (!agent)
+        return { ok: false, error: 'agent required' };
+    if (!pipe[agent]?.agent)
+        return { ok: false, error: 'unknown agent: ' + agent };
+
+    session?.send?.({ type: 'chat.start', path: runtime.short });
+    const items = [];
+
+    try {
+        if (text) {
+            const promptBlock = { type: 'prompt', content: text };
+            await runtime._push_block({ block: promptBlock, session });
+            items.push(sanitizeBlock(promptBlock));
+        }
+
+        params = { session, agent };
+        params.block = runtime._build_block(agent);
+        if (text)
+            params.block.brief = text;
+        const pushed = await runtime._push_block(params);
+        if (pushed) {
+            if (!params.block.box && !hasBody(params.block))
+                await runtime._fillLeaf(params, session);
+            if (hasBody(params.block))
+                await runtime.pipe[params.block.type]?.recalc?.(params);
+            await runtime._captionDoc(params, session);
+            if (pushed && !params.block.box && (hasBody(params.block) || params.block.error)) {
+                session?.send?.({ type: 'chat.done', path: runtime.short });
+                return promptAgentResult(agent, items, params.block);
+            }
+        }
+
+        for (;;) {
+            await runtime._init(params);
+            await runtime.pipe[params.box.type]?.recalc?.(params);
+
+            const turn = await runtime._promptTurn(params, session);
+            if (turn.waiting) {
+                session?.send?.({ type: 'chat.done', path: runtime.short });
+                const box = findAgentBlock(await runtime.body, agent) || turn.block;
+                return promptAgentResult(agent, items, box, { waiting: true });
+            }
+            if (!turn.loop) {
+                session?.send?.({ type: 'chat.done', path: runtime.short });
+                const box = findAgentBlock(await runtime.body, agent) || turn.block;
+                return promptAgentResult(agent, items, box);
+            }
+            const box = findAgentBlock(await runtime.body, agent);
+            if (box && hasBody(box)) {
+                session?.send?.({ type: 'chat.done', path: runtime.short });
+                return promptAgentResult(agent, items, box);
+            }
+            const live = await runtime._active_block();
+            if (live?.stop) {
+                session?.send?.({ type: 'chat.done', path: runtime.short });
+                return promptAgentResult(agent, items, live, { waiting: true });
+            }
+            params = { role: 'AI', session, agent };
+        }
+    }
+    catch (e) {
+        session?.send?.({ type: 'chat.done', path: runtime.short });
+        return { ok: false, agent, error: e.message, content: e.message };
+    }
+}
+
+function promptAgentResult(agent, items, block, extra = {}) {
+    const clean = sanitizeBlock(block);
+    const out = [...items];
+    if (clean && !out.some(b => b.type === clean.type && b.time === clean.time))
+        out.push(clean);
+    return {
+        ok: !block?.error,
+        agent,
+        items: out,
+        block: clean,
+        content: block?.content,
+        error: block?.error ? true : undefined,
+        state: block?.state,
+        ...extra,
+    };
+}
+
+const runtimeProto = {
+    get short() {
+        return this.file?.short || (this.owner?.short ? this.owner.short + '/ai' : '/ai');
+    },
+    get dir() {
+        return this.file?.dir;
+    },
+    async(fn) {
+        if (typeof this.file?.async === 'function')
+            return this.file.async(fn);
+        if (typeof this.owner?.async === 'function')
+            return this.owner.async(fn);
+        return Promise.resolve().then(fn);
+    },
     async _fc_exec(target, call = {}, ctx = {}) {
         const { method, args } = call;
         const block = ctx.block;
@@ -445,12 +730,20 @@ export default {
     },
     get pipe() {
         return this._pipe ??= new AsyncPromise(async () => {
-            const files = await this.tilde;
+            const owner = this.owner;
+            if (!owner)
+                throw new Error('ai/prompt: нет owner');
+            let ai = await owner.get_item('~/ai');
+            if (Array.isArray(ai))
+                ai = ai.find(f => f?.id === 'ai') ?? ai[0];
+            if (!ai)
+                throw new Error('ai/prompt: нет ~/ai у ' + (owner.path || owner.short));
+            const files = (await ai.inherit_children) || [];
             const ns = Object.create(null);
             const taskFile = [...files].reverse().find(f => f.id === 'task.js')
                 || files.find(f => f.id === 'task.js');
             if (!taskFile)
-                throw new Error('$task: нет task.js в tilde');
+                throw new Error('ai: нет task.js в ~/ai');
             const taskMod = await this._importPipeFile(taskFile);
             const taskDef = taskMod.default;
             for (const [k, v] of Object.entries(taskMod)) {
@@ -463,9 +756,9 @@ export default {
             const agentsDir = [...files].reverse().find(f => f.id === 'agents')
                 || files.find(f => f.id === 'agents');
             if (agentsDir) {
-                const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
+                const kids = await agentsDir.inherit_children;
                 const byId = new Map();
-                for (const f of kids) {
+                for (const f of kids || []) {
                     if (f?.id?.endsWith?.('.js'))
                         byId.set(f.id, f);
                 }
@@ -495,22 +788,57 @@ export default {
     },
     async _importPipeFile(file) {
         const raw = await file.load();
-        const script = this.constructor.stripAbsoluteImports(raw);
+        const script = (this.owner?.constructor || this.file?.constructor || globalThis.WORK?.constructor)
+            ?.stripAbsoluteImports?.(raw) ?? String(raw).replace(/^\s*import\s+(['"])(\/[^'"]+)\1\s*;?\s*$/gm, '');
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
         return import('data:text/javascript;base64,' + b64);
     },
     get body() {
         return new AsyncPromise(async () => {
             await this.pipe;
-            let raw = await this.load();
-            this.body = JSON.parse(raw);
-            this.body.type ??= 'task';
-            this.body.items ??= [];
-            return this.body;
+            if (this._body) {
+                this._body.type ??= 'task';
+                this._body.items ??= [];
+                this.body = this._body;
+                return this._body;
+            }
+            if (this.file) {
+                const raw = await this.file.load({ encoding: 'utf-8' });
+                this._body = JSON.parse(raw);
+                this._body.type ??= 'task';
+                this._body.items ??= [];
+                this.file.body = this._body;
+                this.body = this._body;
+                return this._body;
+            }
+            this._body = {
+                type: 'task',
+                items: [],
+                system: this._seedSystem || '',
+                model: this._seedModel || '',
+                effort: this._seedEffort || '',
+                tz: this._seedTz || '',
+            };
+            this.body = this._body;
+            return this._body;
         });
     },
     get model() {
-        return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
+        return Promise.resolve(this.body).then(async body => {
+            if (body.model)
+                return WORK.get_item(body.model);
+            // fallback: первая модель в /MODELS
+            try {
+                const models = await WORK.get_item('/MODELS');
+                const kids = await models?.children;
+                const first = (kids || []).find(k => k?.path?.includes?.('$ai') || k?.type === '$ai') || kids?.[0];
+                if (first) {
+                    body.model = first.path;
+                    return first;
+                }
+            } catch {}
+            throw new Error('ai: не задана model');
+        });
     },
     /** Stop: прервать текущий стрим и не планировать самовызовы. Ленту не трогает. */
     async stop(params = {}) {
@@ -633,7 +961,11 @@ export default {
         return { ok: true };
     },
     async _save(session) {
-        await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
+        const body = this._body || await this.body;
+        if (this.file?.dir) {
+            await WORK.fsp.writeFile(this.file.dir, JSON.stringify(body, null, 4), 'utf-8');
+            this.file.body = body;
+        }
         session?.send?.({ path: this.short });
     },
 };
@@ -859,4 +1191,67 @@ function timeNow(tz) {
         return `Сейчас: ${now.toLocaleDateString('ru-RU')}, время ${now.toLocaleTimeString('ru-RU')}.`;
     }
 }
+
+const PLACES = {};
+
+async function resolvePlace(lat, lon) {
+    const key = (+lat).toFixed(2) + ',' + (+lon).toFixed(2);
+    if (PLACES[key]) return PLACES[key];
+    try {
+        const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&accept-language=ru&zoom=10`,
+            {
+                headers: { 'User-Agent': 'ODANT-WORK/1.0 (https://odant.org; work@odant.org)' },
+                signal: AbortSignal.timeout(8000),
+            },
+        );
+        if (!res.ok) return null;
+        const a = (await res.json())?.address || {};
+        const place = [a.city || a.town || a.village || a.municipality, a.state, a.country]
+            .filter(Boolean).join(', ');
+        if (place) PLACES[key] = place;
+        return place || null;
+    } catch { return null; }
+}
+
+function samePlace(a, b) {
+    if (!a || !b) return false;
+    return (a.path && a.path === b.path) || (a.id && a.id === b.id);
+}
+
+function placeContext(user_info, class_info) {
+    if (samePlace(user_info, class_info))
+        return 'Профиль и рабочая группа совпадают (личная зона):\n' + JSON.stringify(user_info || class_info, null, 2);
+    return [
+        'Профиль (от чьего имени):\n' + JSON.stringify(user_info, null, 2),
+        'Рабочая группа (где задача):\n' + JSON.stringify(class_info, null, 2),
+    ].join('\n');
+}
+
+const SYSTEM_PROMPT = {
+    SYSTEM: `Ты — встроенный ИИ-агент системы WORK. Ты внутри рабочей группы (текущий $class).
+Задачи и файлы — этой группы. Не пытайся «перейти в другой класс».
+Отдельно дан профиль пользователя: от его имени и прав ты работаешь в группе.
+Группа и профиль могут совпадать (личная зона) — это не анкета и не тема задачи.
+Тема — запрос в ленте, не карточка группы и не профиль.
+
+## Поведение
+
+- Общайся делу на русском языке сдержанно и приветливо;
+- На «где ты» — опиши рабочую группу (путь, тип, назначение, локацию);
+- Не фантазируй, не придумывай, только факты и действия;
+- Если пользователь обращается с приветствием, вопросом, замечанием - просто отвечай;
+- Если пользователь попросил тебя что-то сделать, сначала обдумай, потом план или действуй;
+- Для всех ответов используй только markdown форматирование текста, для вывода прямо в чат;
+- Таблицы markdown: не больше 5 колонок, ячейка коротко; длинный текст — список или секции, не колонка;
+- Если нужно программировать, используй только html/css/js;
+
+`,
+    USER: `Твоя задача управлять рабочими процессами и задачами.
+`,
+    BOSS: `Твоя задача управлять пользователями и рабочими процессами и задачами.
+`,
+    ADMIN: `Твоя задача развивать и программировать систему.
+`,
+};
 

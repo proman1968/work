@@ -1,32 +1,36 @@
-# $task — хранитель длинной ИИ-сессии (ai.task)
+# $task — длинная ИИ-сессия (ai.task)
 
 ## 1. Что это
 
-Тип `$task` — **JSON-носитель** длинного диалога/PDCA (`ai.task`): `type: 'task'` + `items` (+ `todo`, `mode`, `system`, `model`).  
-Способность ИИ (оркестратор, agents, `prompt`) живёт на **`$structure/ai/`**, не в этом типе файла.
+Тип `$task` — JSON-носитель длинного диалога/PDCA (`ai.task`): `type: 'task'` + `items` (+ `todo`, `mode`, `system`, `model`) и **session-`prompt`** на самом типе файла.
 
 Расширение `.task`. `contentType: 'application/json'`.
 
 ## 2. Зачем это нужно
 
-Сохранить ленту, todo, модель и history между заходами; UI preview. Короткий вызов между классами — без файла: `/BASE?prompt&agent=web&prompt=…`.
+Сохранить ленту, todo, модель и history между заходами; UI preview. Короткий one-shot между классами без файла — [`$class/ai`](/$server/$folder/$class/ai/readme.md/~/handlers/pages/form/) (`?prompt`).
 
 ## 3. Как это работает
 
-1. **`class.js`** — тонкий фасад: `prompt` / `stop` / `change_*` / `pipe` / `body` → [`ai/harness.js`](/$server/$folder/$class/$structure/ai/harness.js/~/handlers/pages/form/) с `owner = $owner`, `file = this`.
-2. **`on_save`** пишет `body.system` (профиль/группа/роль/локация) и вызывает `file.prompt` (делегат в harness).
-3. **Pipe** грузится из `owner~/ai` (`task.js` + `agents/`), не из tilde файла.
-4. Контракт блоков/агентов — см. [`$structure/ai/readme.md`](/$server/$folder/$class/$structure/ai/readme.md/~/handlers/pages/form/).
-5. UI: `parseFormHtml` / `unwrapFence` из [`ai/task.js`](/$server/$folder/$class/$structure/ai/task.js/~/handlers/pages/form/).
+1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
+2. **`pipe`** грузится из tilde файла: `task.js` + `agents/*` (не из `~/ai`).
+3. **`on_save`** пишет `body.system` (`buildSystemPrompt` из [`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)) и вызывает `file.prompt`.
+4. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
 
 ## 4. Из чего это состоит
 
-- [`class.js`](class.js) — фасад хранителя
+- [`class.js`](class.js) — session prompt и оркестратор
+- [`task.js`](task.js) — оркестратор (`tools` / ходы) + хелперы UI
+- [`agents/`](agents/) — субагенты (web, work, html, form, question)
 - [`triggers/on_save/`](triggers/on_save/$trigger/class.js) — system + первый prompt
 - [`handlers/`](handlers/) — preview микрочата
 - [`readme.md`](readme.md) / [`progress.md`](progress.md)
 
 ## 5. Состояние
 
-- ✅ Делегат в `$structure/ai/`; файл только persistence + UI
-- ✅ One-shot на структуре: `?prompt&agent=&prompt=`
+- ✅ Session-`prompt` на `$task/class.js` (pipe из локального tilde)
+- ✅ One-shot на `$class/ai`: `/BASE?prompt&agent=&prompt=`
+
+## 6. Дальнейшие планы
+
+- Синхронизировать `task.js`/`agents` с `$class/ai` (moves vs tools, planning/report), если нужен один канон.

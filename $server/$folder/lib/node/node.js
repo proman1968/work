@@ -51,7 +51,6 @@ export default {
                 @apply --bold;
                 @apply --no-flex;
                 border-radius: 8px;
-                position: absolute;
                 right: 0px;
                 font-size: x-small;
                 font-family: monospace;

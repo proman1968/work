@@ -279,18 +279,28 @@ export class $folder extends $item{
     get inherit_ancestor(){
         return new AsyncPromise(async ()=>{
              //наследование всех папкок и фалов
+            let ancestor
+
+ 
+
             if(this.id === '$folder'){
-                let ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
+                ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
                 if(Reactor.equal(ancestor, this))
                     ancestor = null;
                 return ancestor;
             }
 
+            if(this.isMetaFolder && !this.parent.$owner){
+                ancestor = await this.parent.$distr_folder;
+                if(this.path === ancestor.path)
+                    console.log('ancestor', this.path, ancestor.path);
+                return ancestor;
+            }
 
             //тотальное наследование всех папкок и фалов
             let parentAncestor = await this.parent?.inherit_ancestor;
             let children = await parentAncestor?.children;
-            let ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
+            ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
             if(ancestor)
                 return ancestor;
 
@@ -1026,7 +1036,7 @@ export class $folder extends $item{
      *   типизирующих элементов прямого предка.
      * @returns {Promise<Array>} Массив элементов
      */
-    _children(recursive){
+    _children(recursive = true){
         return new AsyncPromise(async ()=>{
             let files = this._collect_own();
             let ids = new Set(files.map(f=>f.id));

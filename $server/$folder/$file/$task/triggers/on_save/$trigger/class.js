@@ -1,9 +1,9 @@
-﻿const HARNESS_REL = '$server/$folder/$class/$structure/ai/harness.js';
+const PROMPT_REL = '$server/$folder/$class/ai/prompt/$method/class.js';
 
-async function loadHarness() {
+async function loadPromptMod() {
     const { pathToFileURL } = await import('node:url');
     const path = await import('node:path');
-    return import(pathToFileURL(path.join(process.cwd(), HARNESS_REL)).href);
+    return import(pathToFileURL(path.join(process.cwd(), PROMPT_REL)).href);
 }
 
 export default {
@@ -11,7 +11,7 @@ export default {
         const file = this.$context;
         const raw = await file.load({ encoding: 'utf-8' });
         const body = JSON.parse(raw);
-        const { buildSystemPrompt } = await loadHarness();
+        const { buildSystemPrompt } = await loadPromptMod();
         body.system = await buildSystemPrompt({
             owner: this.$owner,
             session: params.session,
