@@ -21,7 +21,7 @@
     <script type="module">
         const item_path = "{item_path}";
         const page_handler = "{handler}";
-        
+
         await import(window.location.origin + '/sources/client.js');
 
         WORK.DEV_MODE = {dev_mode};
@@ -33,8 +33,8 @@
             console.log(e.message)
         }
 
-        if (!WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
-            const base = (!item_path || item_path === '/') ? '' : item_path.replace(/\/$/, '');
+        if (item_path === '/' && !WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
+            const base = item_path.replace(/\/$/, '');
             location.replace(location.origin + base + '/~/handlers//site/index.html');
         } else {
             const $item = await WORK.get_item(item_path, 'info');

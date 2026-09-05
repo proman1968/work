@@ -279,18 +279,28 @@ export class $folder extends $item{
     get inherit_ancestor(){
         return new AsyncPromise(async ()=>{
              //наследование всех папкок и фалов
+            let ancestor
+
+ 
+
             if(this.id === '$folder'){
-                let ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
+                ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
                 if(Reactor.equal(ancestor, this))
                     ancestor = null;
                 return ancestor;
             }
 
+            if(this.isMetaFolder && !this.parent.$owner){
+                ancestor = await this.parent.$distr_folder;
+                if(this.path === ancestor.path)
+                    console.log('ancestor', this.path, ancestor.path);
+                return ancestor;
+            }
 
             //тотальное наследование всех папкок и фалов
             let parentAncestor = await this.parent?.inherit_ancestor;
             let children = await parentAncestor?.children;
-            let ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
+            ancestor = children?.find(f=>f.id === this.id && f.type === this.type) || null;
             if(ancestor)
                 return ancestor;
 
@@ -935,15 +945,22 @@ export class $folder extends $item{
             }, {}) || {};
         });
     }
-    /** Контекстные методы (~methods/*), обогащённые class.js и привязанные к владельцу */
+    /** Контекстные методы: ~/methods/* и ~/ai/* ($method), привязанные к владельцу */
     get _methods(){
         return new AsyncPromise(async ()=>{
-            const methods = (await this.get_item('~/methods/*')) || [];
-            return methods.reduce((res, item)=>{
+            const fromMethods = (await this.get_item('~/methods/*')) || [];
+            const fromAi = (await this.get_item('~/ai/*')) || [];
+            const aiMethods = fromAi.filter(item =>
+                item instanceof FS.$method
+                || item?.constructor?.name === '$method'
+                || item?.type === '$method'
+                || item?.meta_folder?.id === '$method');
+            const res = {};
+            for (const item of [...fromMethods, ...aiMethods]) {
                 res[item.id] = item;
                 item.$context = this;
-                return res;
-            },{});
+            }
+            return res;
         })
     }
     /**
@@ -1019,7 +1036,7 @@ export class $folder extends $item{
      *   типизирующих элементов прямого предка.
      * @returns {Promise<Array>} Массив элементов
      */
-    _children(recursive){
+    _children(recursive = true){
         return new AsyncPromise(async ()=>{
             let files = this._collect_own();
             let ids = new Set(files.map(f=>f.id));

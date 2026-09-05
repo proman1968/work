@@ -90,11 +90,11 @@ function applyEffort(body, ai, options = {}) {
     if (effort == null || effort === '')
         return;
     const off = effort === 'off' || effort === false;
-    const ollama = ai.protocol === 'ollama' || String(ai.baseUrl || '').includes('ollama');
-    if (ollama)
+    const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
+    if (native)
         body.think = off ? false : effort;
-    else if (!off)
-        body.reasoning_effort = effort;
+    else
+        body.reasoning_effort = off ? 'none' : effort;
 }
 
 function sanitizeParsedArgs(parsed) {

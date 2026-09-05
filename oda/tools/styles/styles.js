@@ -237,6 +237,17 @@ html {
     --my-variable: 100px;
 }
 @media print {
+    html, body {
+        height: auto !important;
+        overflow: visible !important;
+    }
+    :host, * {
+        overflow: visible !important;
+        max-height: none !important;
+    }
+    html, body, :host {
+        height: auto !important;
+    }
     .pe-no-print {
         display: none !important;
     }

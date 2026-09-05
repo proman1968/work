@@ -233,6 +233,10 @@ async function runEmailSettingsDialog($item) {
             el.index = 0;
         }
     }
+    catch (e) {
+        ODA.showMessage(e.message)
+        return;
+    }
     finally {
         runEmailSettingsDialog.opening = false;
     }

@@ -9,17 +9,23 @@ export default {
     label: 'on_save (.call)',
     icon: 'carbon:phone',
     async execute(params = {}) {
-        if (!params.receivers?.length)
+        let receivers;
+        if (typeof params.receivers === 'string') {
+            receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        else if (Array.isArray(params.receivers)) {
+            receivers = params.receivers.map(r => r.id || r);
+        }
+        if (!receivers?.length)
             return;
-
-        const message = params.post;
-
+        const message_text = params.post.toString();
+        const message = JSON.stringify({ type: 'phone.call', message: message_text });
         // Переслать сигнал всем сокетам получателей
-        for (const user of params.receivers) {
-            const connect = Object.values($server.sessions).find(u => u.uid === user.id);
+        for (const id of receivers) {
+            const connect = Object.values($server.sessions).find(u => u.uid === id);
             if (!connect) continue;
             for (const socket of Object.values(connect.sockets)) {
-                socket.ws.send(JSON.stringify({ type: 'phone.call', message }));
+                socket.ws.send(message);
             }
         }
 

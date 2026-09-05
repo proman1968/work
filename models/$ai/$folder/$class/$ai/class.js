@@ -17,6 +17,13 @@ export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
     label: 'ИИ Модель',
+    /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
+    $public: {
+        maxTokens: 4096,   // лимит контекста (usage / info)
+        maxOutput: 4096,   // лимит ответа: не путать с maxTokens — иначе Qwen 262k уезжает в max_tokens и думает минутами
+        capabilities: ['chat', 'stream'],
+        effort: '',
+    },
     METADATA: {
         FIELDS: {
             id: 'FIELDS',
@@ -106,10 +113,12 @@ export default {
         const body = {
             model: options.model || ai.model || '',
             messages,
-            max_tokens: Math.min(options.maxTokens || (ai.maxTokens && Number(ai.maxTokens)) || 4096, 131072),
             temperature: options.temperature ?? 0.7,
             stream: true,
         };
+        const cap = Number(options.maxOutput);
+        if (Number.isFinite(cap) && cap > 0)
+            body.max_tokens = cap;
         if (options.stop)
             body.stop = options.stop;
         applyEffort(body, ai, options);
@@ -205,9 +214,11 @@ export default {
                     const json = JSON.parse(jsonStr);
                     const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
 
-                    const reasoning = delta.reasoning;
-                    if (reasoning)
+                    const reasoning = delta.reasoning ?? delta.reasoning_content;
+                    if (reasoning) {
                         reasoningAcc += String(reasoning);
+                        yield { type: 'reasoning', content: String(reasoning) };
+                    }
 
                     const content = delta.content || delta.text;
                     if (content) {
@@ -259,12 +270,7 @@ export default {
             }
         }
 
-        if (!contentSeen && reasoningAcc) {
-            if (useFunctions)
-                yield { type: 'content', content: reasoningAcc };
-            else
-                yield reasoningAcc;
-        }
+        // reasoning не подменяем content: silent-меню иначе получает абзац «think» вместо EXPLORE
 
         if (useFunctions && funcCallName)
             yield* flushFunctionCall();
@@ -280,17 +286,17 @@ function hasCap(ai, name) {
 }
 
 function applyEffort(body, ai, options = {}) {
-    if (!hasCap(ai, 'effort'))
+    if (!hasCap(ai, 'effort') || !('effort' in options))
         return;
-    const effort = options.effort ?? ai.effort;
+    const effort = options.effort;
     if (effort == null || effort === '')
         return;
     const off = effort === 'off' || effort === false;
-    const ollama = ai.protocol === 'ollama' || String(ai.baseUrl || '').includes('ollama');
-    if (ollama)
-        body.think = off ? false : effort;
-    else if (!off)
-        body.reasoning_effort = effort;
+    const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
+    if (native)
+        body.think = off ? false : (effort === true ? true : effort);
+    else
+        body.reasoning_effort = off ? 'none' : (effort === true ? 'medium' : effort);
 }
 
 /**

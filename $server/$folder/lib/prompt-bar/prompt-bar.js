@@ -54,7 +54,6 @@ ODA({ is: 'work-prompt-bar',
             }
             .urls-bar { padding: 4px 0; font-size: small; }
             .urls-bar a { padding: 2px 4px; font-size: small; }
-            .ctx-wrap { position: relative; flex-shrink: 0; }
             .ctx-btn {
                 width: 20px; height: 20px; border-radius: 50%; border: none; padding: 0;
                 cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
@@ -64,18 +63,6 @@ ODA({ is: 'work-prompt-bar',
                     conic-gradient(var(--accent-color) calc(var(--pct, 0) * 1%), var(--dark-color) 0);
             }
             .ctx-btn span { font-size: 7px; line-height: 1; font-weight: 600; opacity: .9; pointer-events: none; }
-            .ctx-panel {
-                position: absolute; right: 0; bottom: calc(100% + 8px);
-                min-width: 220px; max-width: 280px; padding: 10px; border-radius: 12px; gap: 8px; z-index: 3;
-                @apply --vertical; @apply --content; @apply --raised;
-                border: 1px solid var(--border-color);
-            }
-            .ctx-panel .head { font-size: small; }
-            .ctx-panel .muted { font-size: x-small; opacity: .7; }
-            .ctx-bar { height: 8px; border-radius: 4px; overflow: hidden; @apply --horizontal; @apply --dark; }
-            .ctx-bar i { display: block; height: 100%; }
-            .ctx-row { font-size: x-small; gap: 8px; align-items: center; }
-            .ctx-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
         </style>
         <div class="box" border :error>
             <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0; align-items: flex-start;">
@@ -84,7 +71,7 @@ ODA({ is: 'work-prompt-bar',
                     <oda-button icon-size="12" icon="icons:close" @tap="removeFile($for.index)"></oda-button>
                 </div>
                 <oda-button no-flex icon="icons:close" :icon-size title="Очистить" @tap="clearFiles"
-                    style="border-radius: 50%; margin-left: auto;"></oda-button>
+                    style="border-radius: 50%; margin-left: auto; padding: 0px;"></oda-button>
             </div>
             <div ~if="meta_urls?.length" vertical class="urls-bar">
                 <div ~for="meta_urls" horizontal>
@@ -93,9 +80,9 @@ ODA({ is: 'work-prompt-bar',
                 </div>
             </div>
             <div horizontal style="align-items: flex-end;">
-                <textarea id="text" flex class="prompt" ~if="!recording" :rows ::value :placeholder
-                    @keydown="_onKeydown"></textarea>
-                <div flex ~if="recording" style="text-align: center; color: var(--error-color); padding: 8px;">⏺ {{timer}}</div>
+                <textarea id="text" flex class="prompt" :rows ::value :placeholder
+                    :readonly="recording" @keydown="_onKeydown" @paste="_onPaste"></textarea>
+                <div ~if="recording" no-flex style="color: var(--error-color); padding: 6px 4px; white-space: nowrap;">⏺ {{timer}}</div>
             </div>
             <div class="tools" horizontal>
                 <item-node ~if="ai && modelItem" no-flex :icon-size="iconSize * .8" :$item="modelItem"
@@ -106,29 +93,10 @@ ODA({ is: 'work-prompt-bar',
                     title="Effort" @tap.stop="cycleEffort"></oda-button>
                 <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="20"></item-user>
                 <div flex></div>
-                <div ~if="showUsage" class="ctx-wrap">
-                    <button class="ctx-btn" ~style="'--pct:' + (usageStats?.pct || 0)"
-                        title="Контекст" @tap.stop="statsOpen = !statsOpen">
-                        <span>{{usageStats?.pct || 0}}%</span>
-                    </button>
-                    <div class="ctx-panel" ~if="statsOpen" @tap.stop>
-                        <div class="head" horizontal>
-                            <span bold>{{usageStats?.pct || 0}}% занято</span>
-                            <span flex></span>
-                            <span class="muted">~{{usageStats?.usedText}} / {{usageStats?.limitText}}</span>
-                        </div>
-                        <div class="ctx-bar" ~if="usageStats?.segments?.length">
-                            <i ~for="usageStats.segments"
-                                ~style="'flex:' + ($for.item.pct || 1) + ';background:' + $for.item.color"></i>
-                        </div>
-                        <div class="ctx-row" horizontal ~for="usageStats?.segments || []">
-                            <div class="ctx-dot" ~style="'background:' + $for.item.color"></div>
-                            <span flex>{{$for.item.label}}</span>
-                            <span class="muted">{{fmtTok($for.item.tokens)}}</span>
-                        </div>
-                        <div class="muted" ~if="!(usageStats?.segments?.length)">Нет данных usage</div>
-                    </div>
-                </div>
+                <button ~if="showUsage" class="ctx-btn" ~style="'--pct:' + (usageStats?.pct || 0)"
+                    title="Контекст" @pointerdown.stop="showStats($event)">
+                    <span>{{usageStats?.pct || 0}}%</span>
+                </button>
                 <oda-button icon="icons:attachment" :icon-size @tap="getFile" title="Прикрепить файл"></oda-button>
                 <oda-button ~if="showTts" :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsOn"
                     :title="ttsTitle"></oda-button>
@@ -153,24 +121,18 @@ ODA({ is: 'work-prompt-bar',
     ttsMode: 'off',
     receivers: [],
     usageStats: null,
-    statsOpen: false,
     readyIcon: 'eva:f-arrow-upward',
     get modelItem() {
         return this.model ? WORK.get_item(this.model) : null;
     },
+    /** Строго по capabilities: нет флага `effort` — нет кнопки. Пока список грузится — скрыта (без мигания). */
     get hasEffort() {
-        const item = this.modelItem;
-        if (!item) return false;
-        const list = capList(item);
+        const list = capList(this.modelItem);
         if (list && typeof list.then === 'function') {
             Promise.resolve(list).then(() => { this.hasEffort = undefined; });
-            return true;
+            return false;
         }
-        if (list == null)
-            return true;
-        if (list.includes('effort'))
-            return true;
-        return item.effort != null && item.effort !== '';
+        return !!list?.includes('effort');
     },
     get effortLevel() {
         return this.effort || this.modelItem?.effort || 'low';
@@ -202,11 +164,14 @@ ODA({ is: 'work-prompt-bar',
         const mails = (s.match(/([a-zA-Z0-9._+-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi) || []).map(url => ({ url, type: 'mail' }));
         return [...urls, ...mails];
     },
-    fmtTok(n) {
-        if (n == null) return '0';
-        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-        if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-        return String(n);
+    async showStats(e) {
+        const panel = ODA.createComponent('work-usage-panel', { host: this });
+        try {
+            await WORK.showDropdown(panel, {}, e.currentTarget || e);
+        } catch (err) {
+            if (err instanceof WORK.CancelError) return;
+            throw err;
+        }
     },
     focusInput() {
         this.async(() => this.$('#text')?.focus(), 30);
@@ -222,8 +187,7 @@ ODA({ is: 'work-prompt-bar',
         this.files.splice(index, 1);
         this.focusInput();
     },
-    async getFile() {
-        const list = await ODA.showFileDialog({ multiple: true });
+    _addFiles(list) {
         if (!list?.length) return;
         const files = [...this.files];
         for (const f of list) {
@@ -239,8 +203,34 @@ ODA({ is: 'work-prompt-bar',
                 files.push(f);
         }
         this.files = files;
-        window.focus();
         this.focusInput();
+    },
+    async getFile() {
+        const list = await ODA.showFileDialog({ multiple: true });
+        if (!list?.length) return;
+        this._addFiles(list);
+        window.focus();
+    },
+    /** Скриншот из буфера часто `image.png` — без уникального имени второй paste отсекается дедупом. */
+    _namePaste(f, i = 0) {
+        const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        const generic = !f.name || /^image\.\w+$/i.test(f.name);
+        const name = generic ? `paste-${Date.now()}${i ? '-' + i : ''}.${ext}` : f.name;
+        return f.name === name ? f : new File([f], name, { type: f.type, lastModified: Date.now() });
+    },
+    _onPaste(e) {
+        const items = e.clipboardData?.items;
+        if (!items?.length) return;
+        const images = [];
+        for (const it of items) {
+            if (it.kind === 'file' && it.type.startsWith('image/')) {
+                const f = it.getAsFile();
+                if (f) images.push(f);
+            }
+        }
+        if (!images.length) return;
+        e.preventDefault();
+        this._addFiles(images.map((f, i) => this._namePaste(f, i)));
     },
     _onKeydown(e) {
         if (e.code === 'Space' && e.ctrlKey) {
@@ -258,6 +248,10 @@ ODA({ is: 'work-prompt-bar',
         }
         if (e.keyCode === 27) {
             e.preventDefault();
+            if (this.recording) {
+                this._mic().undoLastWord();
+                return;
+            }
             this.value = '';
             this.files = [];
             this.fire('clear');
@@ -278,7 +272,7 @@ ODA({ is: 'work-prompt-bar',
             return;
         }
         if (this.recording) {
-            this._mic().stop(true);
+            this._mic().stop();
             return;
         }
         if (!String(this.value ?? '').trim() && !this.files.length) {
@@ -316,6 +310,47 @@ ODA({ is: 'work-prompt-bar',
     },
 })
 
+ODA({ is: 'work-usage-panel',
+    template: /* html */`
+        <style>
+            :host {
+                @apply --vertical;
+                min-width: 220px; max-width: 280px; padding: 10px; gap: 8px;
+            }
+            .head { font-size: small; }
+            .muted { font-size: x-small; opacity: .7; }
+            .ctx-bar { height: 8px; border-radius: 4px; overflow: hidden; @apply --horizontal; @apply --dark; }
+            .ctx-bar i { display: block; height: 100%; min-width: 2px; flex: none; }
+            .ctx-row { font-size: x-small; gap: 8px; align-items: center; }
+            .ctx-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+        </style>
+        <div class="head" horizontal>
+            <span bold>{{stats?.pct || 0}}% занято</span>
+            <span flex></span>
+            <span class="muted">~{{stats?.usedText}} / {{stats?.limitText}}</span>
+        </div>
+        <div class="ctx-bar" ~if="stats?.segments?.length">
+            <i ~for="stats.segments"
+                ~style="'width:' + ($for.item.pct || 0) + '%;background:' + $for.item.color"></i>
+        </div>
+        <div class="ctx-row" horizontal ~for="stats?.rows || stats?.segments || []">
+            <div class="ctx-dot" ~style="'background:' + $for.item.color"></div>
+            <span flex>{{$for.item.label}}</span>
+            <span class="muted">{{fmtTok($for.item.tokens)}}</span>
+        </div>
+        <div class="muted" ~if="!(stats?.segments?.length)">Нет данных usage</div>
+    `,
+    host: null,
+    /** живой стат хоста, не слепок на момент клика: доехавший maxTokens модели обновляет открытый попап */
+    get stats() { return this.host?.usageStats; },
+    fmtTok(n) {
+        if (n == null) return '0';
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+        if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+        return String(n);
+    },
+})
+
 const MIC_DICT = {
     точка: '.', запятая: ',', вопрос: '?', восклицание: '!',
     двоеточие: ':', тире: '-', абзац: '\n', отступ: '\t',
@@ -332,7 +367,7 @@ class MicAudioController {
         if (!this.bar.recording)
             this.start();
         else
-            this.stop(true);
+            this.stop();
     }
     start() {
         navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
@@ -346,6 +381,7 @@ class MicAudioController {
             this.bar.value = '';
             this._beep('start');
             this._startTimer();
+            this.bar.focusInput();
             if (this.bar.ai) {
                 stream.getTracks().forEach(t => t.stop());
                 return;
@@ -358,13 +394,12 @@ class MicAudioController {
                 if (this.mediaRecorder.state !== 'inactive') return;
                 this.bar.files = [...this.bar.files, this._makeFile(chunks)];
                 this.bar.value = (this.final_transcript || '').trim();
-                if (this.bar.value || this.bar.files.length)
-                    this.bar.fire('send');
             };
             this.mediaRecorder.start();
         }).catch(e => console.warn('[mic]', e.message));
     }
-    stop(send) {
+    /** Только стоп записи — без send; текст остаётся в поле для правки. */
+    stop() {
         this.recognizing = false;
         try { this.recognition?.stop(); } catch {}
         clearInterval(this.timerInterval);
@@ -379,8 +414,16 @@ class MicAudioController {
         }
         this.bar.value = (this.final_transcript || '').trim();
         this.bar.focusInput();
-        if (send && this.bar.value)
-            this.bar.fire('send');
+    }
+    /** Esc при записи: последнее слово из value; final = value, interim сброс. */
+    undoLastWord() {
+        const parts = String(this.bar.value || '').trim().split(/\s+/).filter(Boolean);
+        parts.pop();
+        const next = parts.join(' ');
+        this.bar.value = next;
+        this.final_transcript = next;
+        this.ignoreInterim = true;
+        try { this.recognition?.stop(); } catch {}
     }
     _setupRecognition() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -389,6 +432,7 @@ class MicAudioController {
             return;
         }
         this.final_transcript = '';
+        this.ignoreInterim = false;
         this.recognition = new SR();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
@@ -401,14 +445,19 @@ class MicAudioController {
         };
         this.recognition.onresult = e => {
             let interim = '';
+            let gotFinal = false;
             for (let i = e.resultIndex; i < e.results.length; i++) {
-                if (e.results[i].isFinal)
+                if (e.results[i].isFinal) {
                     this.final_transcript += this._editInterim(e.results[i][0].transcript);
-                else
+                    gotFinal = true;
+                }
+                else if (!this.ignoreInterim)
                     interim += e.results[i][0].transcript;
             }
+            if (gotFinal)
+                this.ignoreInterim = false;
             this.final_transcript = this.final_transcript.replace(/\s([\.+,?!:-])/g, '$1');
-            this.bar.value = (this.final_transcript + ' ' + interim).trim();
+            this.bar.value = (this.final_transcript + (interim ? ' ' + interim : '')).trim();
         };
         return this.recognition;
     }
@@ -431,7 +480,7 @@ class MicAudioController {
         this.timerInterval = setInterval(() => {
             sec++;
             this.bar.timer = this.pad(Math.floor(sec / 60)) + ':' + this.pad(sec % 60);
-            if (sec > 60) this.stop(true);
+            if (sec > 60) this.stop();
         }, 1000);
     }
     _editInterim(s) {

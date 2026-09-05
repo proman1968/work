@@ -623,8 +623,10 @@ setTimeout(() => {
                             item[R].cache[key] = undefined;
                         Reactor.reset_deps(item, key);
                     }
-                    item.fire('changed', data);
+                    // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
+                    // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON
                     item.increaseVersion();
+                    item.fire('changed', data);
                 }
             }
         }

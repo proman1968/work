@@ -235,6 +235,13 @@ ODA({ is: 'oda-markdown-viewer',
             
             @import url("/oda/components/editors/markdown/markdown-viewer/lib/preset.css");
             @apply --vertical;
+            @media print {
+                :host {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
         </style>
         <div ~html style="padding: 0px 16px;"></div>
     `,

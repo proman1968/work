@@ -56,7 +56,7 @@ export class $handler extends $class{
     async getModule() {
         const $item = Reactor.activate(this);
         $item.$context = await $item.$context;
-        const module = await import($item.short + '/~/class.js');
+        const module = await import(`${$item.short}/~/class.js`);
         return module.default;
     }
 }

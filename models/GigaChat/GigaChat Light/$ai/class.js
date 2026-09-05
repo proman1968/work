@@ -10,7 +10,7 @@ export default {
 
     model: 'GigaChat-2',
 
-    maxTokens: 4096,
+    maxTokens: 32768,
     capabilities: ['chat', 'stream', 'functions'],
     functionCalling: true,
 }

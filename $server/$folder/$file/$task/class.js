@@ -1,33 +1,73 @@
-﻿export default {
+/**
+ * $task — длинная ИИ-сессия (JSON).
+ * prompt / pipe / body — на этом типе; one-shot между классами — $class/ai.
+ */
+export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
+    GET: 'context',
+    async _fc_exec(target, call = {}, ctx = {}) {
+        const { method, args } = call;
+        const block = ctx.block;
+        try {
+            let result;
+            if (target && typeof target[method] === 'function')
+                result = await target[method](args || {});
+            else if (typeof WORK?.[method] === 'function')
+                result = await WORK[method](args || {});
+            else
+                throw new Error('unknown method: ' + method);
+            if (block && result != null && block.content == null)
+                block.content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+            return result;
+        } catch (e) {
+            if (block) {
+                block.error = true;
+                block.content = (block.content || '') + String(e.message || e);
+            }
+            throw e;
+        }
+    },
     async prompt(params = {}) {
-        
-        // debugger;
-        let { prompt, role, session } = params;
+        let { prompt: rawPrompt, role, session, agent: agentParam } = params;
+        const pipe = await this.pipe;
+
+        // @web текст… → agent + хвост (только субагент)
+        let text = String(rawPrompt ?? '').trim();
+        let agent = agentParam;
+        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+        if (mention) {
+            const id = mention[1];
+            if (pipe[id]?.agent) {
+                agent = id;
+                text = text.slice(mention[0].length).trim();
+                params.prompt = text;
+                params.agent = agent;
+            }
+        }
+        else if (agent && !pipe[agent]?.agent)
+            return { ok: false, error: 'unknown agent: ' + agent };
+
         session?.send?.({ type: 'chat.start', path: this.short });
         await this._init(params);
-    
+
         try {
             switch (role) {
                 case 'AI':{
                 } break;
                 case 'APPROVE':{
-                    params.block.answer = prompt; //todo убрать
                     if (params.accept === true || params.accept === 'true') {
                         await params.pipe_step.approve?.(params);
-                        params.block.state = 'принято';                      
+                        params.block.state = 'принято';
                     } else {
                         params.block.state = 'отклонено';
                     }
-                    
                     delete params.block.stop;
                     delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
                 } break;
                 default:{
-                    const text = String(prompt ?? '').trim();
                     if (text) {
                         params.block = {
                             type: 'prompt',
@@ -42,108 +82,218 @@
                     }
                     delete params.box.using_blocks;
                     this._stopped = false;
-                }
-            }
 
-            await this._init(params);
-            await this.pipe[params.box.type]?.recalc?.(params);
-            let mode = this.body.mode || 'plan';
-
-            let node = this.pipe[params.block.type];
-            let next = node?.[mode]?.next || node?.next;
-            if(!next || node.box){
-                node = this.pipe[params.box.type];
-                next = node?.[mode]?.next || node?.next;
-            }
-                
-
-            let using_blocks = params.box.using_blocks ??= [];
-            next = next.filter(id => !using_blocks.includes(id));  
-
-            let choice;
-            if (!next.length) {
-                choice = 'total';
-            }
-            else if (next.length === 1) {
-                choice = next[0];
-            }
-            else {
-                const lines = next.map(id => id.toUpperCase() + ' - ' + (this.pipe[id]?.[mode]?.inject || this.pipe[id]?.inject) + ';');
-                let menu = [
-                    'Найди и выбери в menu вариант, наиболее подходящий и логичный для твоего следующего шага или действия.',
-                    'Выбирай не по порядку, а по смыслу. Ответь одним словом строго из списка, без знаков и пояснений.',
-                    '\n\n[menu]\n',
-                    ...lines,
-                    'Если ни один вариант не подходит, просто отвечай или уточняй.',
-                ].join('\n');
-                let messages = await this.context({session, prompt: menu});
-
-                let response = await this._streamChat({ messages, silent: true, session });
-                const word = response.content.trim().toLowerCase();
-                if (next.includes(word))
-                    choice = word;
-                else{
-                    params.block = this._build_block('answer');
-                    params.block.content = word;
-                    await this._push_block(params);
-                }
-            }
-            if (choice) {
-                let next_pipe = this.pipe[choice];
-            
-                params.block = this._build_block(choice);
-                if (await this._push_block(params)) {
-                    if (!params.block.box && !params.block.content) {
-                        prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
-                        let messages = await this.context({ prompt, session, evidence: params.block.type !== 'total' });
-                        if(params.block.draft){
-                            const draft = params.block.draft;
-                            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
-                            const content = draft.type === 'image_url'
-                                ? [{ type: 'text', text: head }, draft]
-                                : head + (draft.type === 'text' ? draft.text : draft);
-                            messages = [{ role: 'system', content: this.body.system }, { role: 'user', content }];
-                            delete params.block.draft;
+                    // прямой вход в субагента (ещё не в его box)
+                    if (agent) {
+                        await this._init(params);
+                        if (params.box.type !== agent) {
+                            params.block = this._build_block(agent);
+                            if (text)
+                                params.block.brief = text;
+                            const pushed = await this._push_block(params);
+                            if (pushed) {
+                                if (!params.block.box && !hasBody(params.block))
+                                    await this._fillLeaf(params, session);
+                                if (hasBody(params.block))
+                                    await this.pipe[params.block.type]?.recalc?.(params);
+                                await this._captionDoc(params, session);
+                            }
+                            await this._save(session);
+                            // лист-агент уже закрыт / ждёт человека — без меню оркестратора
+                            if (pushed && !params.block.box && (hasBody(params.block) || params.block.error)) {
+                                session?.send?.({ type: 'chat.done', path: this.short });
+                                return agentResult(agent, params.block, { waiting: !!params.block.stop });
+                            }
                         }
-                      
-                        let response = await this._streamChat({ messages, session });
-                        if (params.block.title)
-                            response.content = params.block.title + '\n\n' + response.content;
-                        Object.assign(params.block, response);
                     }
-                    await this.pipe[params.block.type]?.recalc?.(params);
-
-                    const kind = this.pipe[params.block.type];
-                    const src = String(params.block.html || params.block.content || '').trim();
-                    if (params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label) {
-                        const cap = await this._streamChat({
-                            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
-                            silent: true,
-                            session,
-                        });
-                        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-                        if (words)
-                            params.block.label = words;
-                    }
-                    
                 }
-                await this._save(session);
-                if (!this._stopped && /* !params.box.content && */ (params.block.box || !params.block.stop)) {
-                    this.async(() => this.prompt({ role: 'AI', session }));
+            }
+
+            // цикл шагов: при agent — await до content агента; иначе один шаг + async
+            for (;;) {
+                await this._init(params);
+                await this.pipe[params.box.type]?.recalc?.(params);
+
+                const turn = await this._promptTurn(params, session);
+                if (turn.waiting) {
+                    session?.send?.({ type: 'chat.done', path: this.short });
+                    return agentResult(agent, turn.block, { waiting: true });
+                }
+                if (!turn.loop) {
+                    session?.send?.({ type: 'chat.done', path: this.short });
+                    if (agent) {
+                        const box = findAgentBlock(await this.body, agent) || turn.block;
+                        return agentResult(agent, box);
+                    }
                     return { ok: true };
                 }
+                if (agent) {
+                    const box = findAgentBlock(await this.body, agent);
+                    // конец агента — только content (сводка); error на боксе при частичных site — не стоп
+                    if (box && hasBody(box)) {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return agentResult(agent, box);
+                    }
+                    // ждём человека внутри агента
+                    const live = await this._active_block();
+                    if (live?.stop) {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return agentResult(agent, live, { waiting: true });
+                    }
+                    params = { role: 'AI', session, agent };
+                    continue;
+                }
+                this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
             }
-
         }
         catch (e) {
+            params.box ??= await this.body;
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
+            session?.send?.({ type: 'chat.done', path: this.short });
+            if (agent)
+                return { ok: false, agent, error: e.message, content: e.message };
+            return { ok: false, error: e.message };
         }
-
-        session?.send?.({ type: 'chat.done', path: this.short });
-        return { ok: true };
     },
 
+    /** Один ход автомата: fill leaf или меню → push. { loop, waiting, block }. */
+    async _promptTurn(params, session) {
+        const live = params.block;
+        if (live && live !== params.box && !live.box && !hasBody(live)) {
+            this._stopped = false;
+            await this._fillLeaf(params, session);
+            await this._save(session);
+            if (live.stop)
+                return { loop: false, waiting: true, block: live };
+            return { loop: this._canLoop(live), block: live };
+        }
+
+        let mode = this.body.mode || 'plan';
+        let node = this.pipe[params.block.type];
+        let next = node?.[mode]?.next || node?.next;
+        if (!next || node.box) {
+            node = this.pipe[params.box.type];
+            next = node?.[mode]?.next || node?.next;
+        }
+
+        let using_blocks = params.box.using_blocks ??= [];
+        next = (next || []).filter(id => !using_blocks.includes(id));
+
+        let choice;
+        if (!next.length)
+            choice = 'total';
+        else if (next.length === 1)
+            choice = next[0];
+        else {
+            const lines = next.map(id => {
+                const n = this.pipe[id];
+                const cap = n?.[mode]?.description || n?.[mode]?.inject
+                    || n?.description || n?.inject || '';
+                return id.toUpperCase() + ' - ' + cap + ';';
+            });
+            let menu = [
+                'Выбери в menu пункт, который быстрее всего закрывает запрос пользователя. Выбирай не по порядку, а по смыслу.',
+                'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
+                'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
+                'Ответь одним словом строго из списка, без знаков и пояснений.',
+                '\n\n[menu]\n',
+                ...lines,
+            ].join('\n');
+            let messages = await this.context({ session, prompt: menu });
+            let response = await this._streamChat({ messages, silent: true, session });
+            choice = menuPick(response.content, next)
+                || (next.includes('thinking') ? 'thinking' : next[0]);
+        }
+
+        if (!choice)
+            return { loop: false, block: params.block };
+
+        params.block = this._build_block(choice);
+        const boxBefore = params.box;
+        const pushed = await this._push_block(params);
+        if (pushed) {
+            if (!params.block.box && !hasBody(params.block))
+                await this._fillLeaf(params, session);
+            if (hasBody(params.block))
+                await this.pipe[params.block.type]?.recalc?.(params);
+            await this._captionDoc(params, session);
+        }
+        await this._save(session);
+
+        const focus = pushed ? params.block : boxBefore;
+        if (focus?.stop && hasBody(focus))
+            return { loop: false, waiting: true, block: focus };
+        return { loop: this._canLoop(focus), block: focus };
+    },
+
+    async _captionDoc(params, session) {
+        const kind = this.pipe[params.block.type];
+        const src = String(params.block.content || '').trim();
+        if (!(params.block.doc && params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label))
+            return;
+        const cap = await this._streamChat({
+            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
+            silent: true,
+            session,
+        });
+        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        if (words)
+            params.block.label = words;
+    },
+
+    /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
+    async _fillLeaf(params = {}, session) {
+        const next_pipe = this.pipe[params.block.type];
+        let prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
+        let messages;
+        if (params.block.draft) {
+            const draft = params.block.draft;
+            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
+            const content = draft.type === 'image_url'
+                ? [{ type: 'text', text: head }, draft]
+                : head + (draft.type === 'text' ? draft.text : draft);
+            messages = await this.context({ session, leaf: params.block });
+            messages.push({ role: 'user', content });
+            delete params.block.draft;
+        }
+        else {
+            messages = await this.context({
+                prompt, session,
+                evidence: params.block.type !== 'total',
+                leaf: params.block,
+            });
+        }
+        const response = await this._streamChat({
+            messages, session,
+            maxOutput: next_pipe.maxOutput,
+            allowReasoning: next_pipe.allowReasoning,
+        });
+        this._applyStream(params, response);
+    },
+    _applyStream(params, response) {
+        let text = String(response.content || '').trim();
+        if (params.block.title && text)
+            text = String(params.block.title).trim() + '\n\n' + text;
+        // внешний ```…``` → code-block в ленте; хвост после fence (подпись form) сохраняется
+        if (text && typeof this.pipe?.unwrapFence === 'function')
+            text = this.pipe.unwrapFence(text);
+        if (text)
+            params.block.content = text;
+        else
+            delete params.block.content;
+        if (response.usage)
+            params.block.usage = response.usage;
+        if (!hasBody(params.block) && !this.pipe[params.block.type]?.ignore)
+            dropUsedType(params.box, params.block.type);
+    },
+    _canLoop(block) {
+        if (this._stopped || !block) return false;
+        if (!hasBody(block))
+            return !!block.box;
+        return !block.stop;
+    },
     async _init(params = {}) {
         params.block = await this._active_block();
         params.box = await this._active_box();
@@ -152,27 +302,38 @@
         params.task = this;
     },
     async context(params = {}) {
-        const { prompt, evidence = true } = params;
+        const { prompt, evidence = true, leaf } = params;
         const body = await this.body;
         const chain = [];
         let box = body;
         for (;;) {
             chain.push(box);
             const next = box.items?.last;
-            if (next?.box && !next.content) box = next;
+            if (next?.box && !hasBody(next)) box = next;
             else break;
         }
         const focus = box;
         const layers = chain.map(b => this._box_context(b, b === focus, evidence));
         const mode = body.mode || 'plan';
-        const modeLine = mode === 'do' ? 'Сейчас ты в режиме исполнения.' : 'Сейчас ты в режиме планирования.';
-        const messages = [{ role: 'system', content: [...layers.map(l => l.system).filter(Boolean), timeNow(body.tz), modeLine].filter(Boolean).join('\n\n') }];
+        const pipe = await this.pipe;
+        const leafNode = leaf?.type ? pipe[leaf.type] : null;
+        const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
+        const messages = [{ role: 'system', content: [
+            ...layers.map(l => l.system).filter(Boolean),
+            timeNow(body.tz),
+            topicsMap(pipe, focus, mode),
+            leafSystem,
+        ].filter(Boolean).join('\n\n') }];
+        /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
         const push = (nextRole, content) => {
             if (!content) return;
-            if (messages.last?.role === nextRole) {
-                messages.last.content += '\n\n' + content;
+            const last = messages.last;
+            if (last?.role === nextRole && nextRole === 'user') {
+                last.content += '\n\n' + content;
                 return;
             }
+            if (last?.role === 'assistant' && nextRole === 'assistant')
+                messages.push({ role: 'user', content: 'ok' });
             messages.push({ role: nextRole, content });
         };
         for (const layer of layers)
@@ -194,36 +355,62 @@
     _box_context(box, focus = true, evidence = true) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
-        let system = node?.[mode]?.system || node?.system || box.system || '';
+        // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
+        const place = String(box.system || '').trim();
+        const role = String(node?.[mode]?.system || node?.system || '').trim();
+        let system = [place, role].filter(Boolean).join('\n\n');
         if (box.todo)
             system += '\n\n[todo]\n' + (box.todo.content || '');
         const messages = [];
         for (const b of (box.items || [])) {
-            if (this.pipe[b.type]?.close || (b.box && !b.content))
+            // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
+            // иначе после «страница недоступна» модель не видит провал и лезет в planning
+            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !hasBody(b)))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
                 continue;
             if (b.box && this.pipe[b.type]?.expand) {
                 for (const leaf of (b.items || []))
-                    if (leaf.content)
+                    if (leaf.content && !(leaf.error && !evidence) && !this.pipe[leaf.type]?.ignore)
                         messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
             }
             else if (focus || b.type === 'prompt' || b.box)
                 messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
-            if (b.page && !b.content)
+            if (b.page && !hasBody(b))
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
-                messages.push({ role: 'user', content: typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer) });
+                messages.push({ role: 'user', content: b.approved || (typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer)) });
         }
         return { system, messages };
     },
     async _streamChat(params = {}) {
         const {messages, silent, session} = params;
         const model = await this.model;
-        const effort = (await this.body).effort;
+        const bar = (await this.body).effort;
+        const effort = (bar && bar !== 'off' && params.allowReasoning === true) ? bar : 'off';
+        const cap = silent ? 64 : Number(params.maxOutput);
         let content = '', usage = 0;
-        for await (const chunk of model.streamChat({ messages, effort })) {
+        let reasonBlock, reasonBox, reasonClosed;
+        const closeReason = async () => {
+            if (!reasonBlock || reasonClosed)
+                return;
+            reasonClosed = true;
+            const items = reasonBox?.items;
+            const i = items?.indexOf(reasonBlock) ?? -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            await this._save(session);
+        };
+        const chat = {
+            messages,
+            temperature: silent ? 0 : .5,
+        };
+        if (effort !== undefined)
+            chat.effort = effort;
+        if (Number.isFinite(cap) && cap > 0)
+            chat.maxOutput = cap;
+        for await (const chunk of model.streamChat(chat)) {
             if (this._stopped){
                 content = '';
                 break;
@@ -231,42 +418,99 @@
                 
             if (chunk?.type === 'usage')
                 usage = chunk;
+            else if (chunk?.type === 'reasoning') {
+                if (effort === 'off')
+                    continue;
+                const token = chunk.content || '';
+                if (!token) continue;
+                if (!reasonBlock) {
+                    reasonBox = await this._active_box();
+                    reasonBlock = this._build_block('reasoning');
+                    await this._push_block({ block: reasonBlock, box: reasonBox, session });
+                }
+                session?.send?.({ type: 'chat.delta', path: this.short, token });
+            }
             else {
                 let token = chunk?.content ? chunk?.content : chunk;
                 if (typeof token !== 'string')
                     continue;
+                await closeReason();
                 content += token;
                 if (!silent)
                     session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
+        await closeReason();
         return { content, usage };
     },
     get pipe() {
         return this._pipe ??= new AsyncPromise(async () => {
             const files = await this.tilde;
-            const file = files.find(f => f.id === 'pipe.js');
-            const raw = await file.load();
-            const script = this.constructor.stripAbsoluteImports(raw);
-            const b64 = Buffer.from(script, 'utf-8').toString('base64');
-            this._pipe = await import('data:text/javascript;base64,' + b64);
-            return this._pipe;
+            const ns = Object.create(null);
+            const taskFile = [...files].reverse().find(f => f.id === 'task.js')
+                || files.find(f => f.id === 'task.js');
+            if (!taskFile)
+                throw new Error('$task: нет task.js в tilde');
+            const taskMod = await this._importPipeFile(taskFile);
+            const taskDef = taskMod.default;
+            for (const [k, v] of Object.entries(taskMod)) {
+                if (k === 'default') continue;
+                ns[k] = v;
+            }
+            registerOrchestrator(ns, taskDef);
+            const agentIds = [];
+            const stepAgents = [];
+            const agentsDir = [...files].reverse().find(f => f.id === 'agents')
+                || files.find(f => f.id === 'agents');
+            if (agentsDir) {
+                const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
+                const byId = new Map();
+                for (const f of kids) {
+                    if (f?.id?.endsWith?.('.js'))
+                        byId.set(f.id, f);
+                }
+                for (const [fileId, file] of byId) {
+                    const id = fileId.replace(/\.js$/, '');
+                    const mod = await this._importPipeFile(file);
+                    registerAgent(ns, id, mod.default);
+                    agentIds.push(id);
+                    if (mod.default?.step !== false)
+                        stepAgents.push(id);
+                }
+            }
+            const own = [
+                ...Object.keys(taskDef?.moves || {}),
+                ...Object.keys(taskDef?.tools || {}),
+            ];
+            if (ns.task)
+                ns.task.next = [...own, ...agentIds];
+            if (ns.step) {
+                const sn = ['thinking', ...stepAgents];
+                ns.step.plan = { ...(ns.step.plan || {}), next: sn };
+                ns.step.do = { ...(ns.step.do || {}), next: sn };
+            }
+            this._pipe = ns;
+            return ns;
         });
     },
-    get body(){
-        return new AsyncPromise(async () =>{
+    async _importPipeFile(file) {
+        const raw = await file.load();
+        const script = this.constructor.stripAbsoluteImports(raw);
+        const b64 = Buffer.from(script, 'utf-8').toString('base64');
+        return import('data:text/javascript;base64,' + b64);
+    },
+    get body() {
+        return new AsyncPromise(async () => {
             await this.pipe;
-            let raw = await  this.load();
+            let raw = await this.load();
             this.body = JSON.parse(raw);
             this.body.type ??= 'task';
             this.body.items ??= [];
             return this.body;
-        })
+        });
     },
-    get model(){
-        return Promise.resolve(this.body).then(body => {
-            return WORK.get_item(body.model)
-        })
+    get model() {
+        return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
     },
     /** Stop: прервать текущий стрим и не планировать самовызовы. Ленту не трогает. */
     async stop(params = {}) {
@@ -274,25 +518,40 @@
         return { ok: true, stopped: true };
     },
     _build_block(type) {
-        const node = this.pipe[type];
+        const node = this.pipe[type] || {};
         const block = {
             type,
             box: node.box,
             doc: node.doc,
             icon: node.icon,
             stop: node.stop,
-            label: node.label,
+            // шапка блока скрыта при stop === true — label там мёртвый вес (строковый stop шапку не прячет)
+            label: node.stop === true ? undefined : node.label,
         };
+        if (node.ignore)
+            block.ignore = true;
+        if (node.expand)
+            block.expand = true;
         if (block.box)
             block.items = [];
         return block;
     },    
     async _push_block(params = {}){
-        const {block, box, session} = params;
+        const {block, session} = params;
+        const box = params.box ??= await this.body;
+        if (!block || !box) return false;
         box.items ??= [];
-        box.using_blocks ??= [];
-        box.using_blocks.add(block.type);
-        const init = this.pipe[block.type]?.init;
+        const node = this.pipe[block.type];
+        if (node?.agent && block.brief == null) {
+            const body = await this.body;
+            block.brief = agentBrief(body, block);
+        }
+        if (!node?.ignore) {
+            const used = box.using_blocks ??= [];
+            if (!used.includes(block.type))
+                used.push(block.type);
+        }
+        const init = node?.init;
         if (init && !await init(params))
             return false;
 
@@ -307,25 +566,28 @@
         let box = await this._active_box();
         const planned = box.todo?.steps || [];
         const real = (box.items || []).filter(b => b.type === 'step');
-        if (planned.length && (real.some(s => !s.content) || real.length < planned.length))
+        if (planned.length && (real.some(s => !hasBody(s)) || real.length < planned.length))
             return box.todo;
         if (box.type === 'includes') {
             const pipe = await this.pipe;
             const list = pipe.includePlan(box);
             const files = pipe.includeReal(box);
-            const open = files.find(f => !f.content);
+            const open = files.find(f => !hasBody(f));
             if (open)
                 return open;
             if (list.length && files.length < list.length)
                 return box;
         }
         const items = box.items || [];
-        return items.last || box;
+        for (let i = items.length - 1; i >= 0; i--)
+            if (!this.pipe[items[i].type]?.ignore)
+                return items[i];
+        return box;
     },
     async _active_box() {
         let next, box = await this.body;
         while (next = box.items?.last){
-            if(next.box && !next.content)
+            if(next.box && !hasBody(next))
                 box = next;
             else
                 break;
@@ -370,7 +632,7 @@
         await this._save(params.session);
         return { ok: true };
     },
-    async _save(session){
+    async _save(session) {
         await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
         session?.send?.({ path: this.short });
     },
@@ -394,10 +656,193 @@ function parentOfBlock(root, block) {
     return null;
 }
 
+/** Карта узлов из pipe: description / inject / label текущего mode. */
+function topics(pipe, ids, mode) {
+    return (ids || []).map(id => {
+        const n = pipe[id];
+        const inj = n?.[mode]?.description || n?.[mode]?.inject
+            || n?.description || n?.inject || n?.label || '';
+        return inj ? id + ' — ' + inj : id;
+    }).join('\n');
+}
+
+/** next текущего фокуса минус using_blocks — что реально можно выбрать сейчас. */
+function topicsMap(pipe, focus, mode) {
+    const node = pipe[focus?.type];
+    const used = focus?.using_blocks || [];
+    const ids = (node?.[mode]?.next || node?.next || []).filter(id => !used.includes(id));
+    if (!ids.length) return '';
+    const moves = ids.filter(id => pipe[id]?.move);
+    const agents = ids.filter(id => pipe[id]?.agent);
+    const tools = ids.filter(id => pipe[id]?.tool);
+    const parts = [];
+    if (node?.agent) {
+        if (moves.length)
+            parts.push('[доступные ходы]\n' + topics(pipe, moves, mode));
+        const rest = ids.filter(id => !pipe[id]?.move);
+        if (rest.length)
+            parts.push('[доступные инструменты]\n' + topics(pipe, rest, mode));
+        return parts.join('\n\n');
+    }
+    if (moves.length)
+        parts.push('[доступные ходы]\n' + topics(pipe, moves, mode));
+    if (tools.length)
+        parts.push('[доступные инструменты]\n' + topics(pipe, tools, mode));
+    const other = ids.filter(id => !pipe[id]?.move && !pipe[id]?.tool && !pipe[id]?.agent);
+    if (other.length)
+        parts.push('[доступные ходы]\n' + topics(pipe, other, mode));
+    if (agents.length)
+        parts.push('[доступные агенты]\n' + topics(pipe, agents, mode));
+    return parts.join('\n\n');
+}
+
+/** Бриф агенту: URL/тема из последнего prompt, без копирования thinking. */
+function agentBrief(body, block) {
+    let last = '';
+    let t = -1;
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (b.type === 'prompt' && b.content && (b.time || 0) >= t) {
+                t = b.time || 0;
+                last = b.content;
+            }
+            walk(b.items);
+        }
+    };
+    walk(body?.items);
+    const text = String(last || body?.title || '').trim();
+    return text.slice(0, 500);
+}
+
+function liftBag(ns, bag, flag) {
+    for (const [tid, raw] of Object.entries(bag || {})) {
+        const t = { ...raw, ...flag };
+        if (t.description && !t.inject)
+            t.inject = t.description;
+        ns[tid] = t;
+    }
+    return Object.keys(bag || {});
+}
+
+/** Оркестратор: moves + tools → pipe; next = ключи обоих (агентов добавит loader). */
+function registerOrchestrator(ns, def) {
+    if (!def || typeof def !== 'object')
+        return;
+    const moveKeys = liftBag(ns, def.moves, { move: true });
+    const toolKeys = liftBag(ns, def.tools, { tool: true });
+    ns.task = {
+        ...def,
+        box: true,
+        orchestrator: true,
+        inject: def.description || def.inject,
+        next: [...moveKeys, ...toolKeys],
+    };
+}
+
+/** Агент: moves + tools (+ plan/do.tools); next = moves ∪ tools ∪ total. */
+function registerAgent(ns, id, def) {
+    if (!def || typeof def !== 'object')
+        return;
+    const moveKeys = liftBag(ns, def.moves, { move: true });
+    const toolBags = [];
+    if (def.tools)
+        toolBags.push(def.tools);
+    if (def.plan?.tools)
+        toolBags.push(def.plan.tools);
+    if (def.do?.tools)
+        toolBags.push(def.do.tools);
+    const allTools = Object.assign({}, ...toolBags);
+    const toolKeys = liftBag(ns, allTools, { tool: true });
+    const hasTools = toolKeys.length > 0;
+    const withTotal = (keys) => {
+        const list = [...keys];
+        if (hasTools && !list.includes('total'))
+            list.push('total');
+        return list;
+    };
+    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {})]);
+    const node = {
+        ...def,
+        agent: true,
+        box: hasTools,
+        inject: def.description || def.inject,
+        next: own(),
+    };
+    if (def.step === false)
+        node.step = false;
+    if (def.plan) {
+        node.plan = {
+            ...def.plan,
+            inject: def.plan.description || def.plan.inject,
+            next: withTotal([...moveKeys, ...Object.keys(def.plan.tools || {})]),
+        };
+    }
+    if (def.do) {
+        node.do = {
+            ...def.do,
+            inject: def.do.description || def.do.inject,
+            next: withTotal([...moveKeys, ...Object.keys(def.do.tools || {})]),
+        };
+    }
+    if (!def.tools && def.plan?.tools)
+        node.next = node.plan.next;
+    ns[id] = node;
+}
+
+/** Последний блок типа agentId в дереве (для результата scoped-prompt). */
+function findAgentBlock(root, agentId) {
+    let found;
+    const walk = (box) => {
+        for (const b of box?.items || []) {
+            if (b.type === agentId)
+                found = b;
+            if (b.box)
+                walk(b);
+        }
+    };
+    walk(root);
+    return found;
+}
+
+function agentResult(agent, block, extra = {}) {
+    return {
+        ok: true,
+        agent,
+        content: block?.content,
+        error: block?.error ? true : undefined,
+        state: block?.state,
+        block,
+        ...extra,
+    };
+}
+
+/** Слово меню: точное / первое слово / id из списка внутри текста. */
+function menuPick(text, next) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t || !next?.length) return;
+    if (next.includes(t)) return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_]+/g, '');
+    if (first && next.includes(first)) return first;
+    return next.find(id => new RegExp('\\b' + id + '\\b', 'i').test(t));
+}
+
 function stageOpen(block, node) {
     if (!node?.box) return '';
     const label = node.label || block.label || block.type;
     return 'Текущий этап далее (' + label + ').';
+}
+
+function hasBody(b) {
+    return !!String(b?.content ?? '').trim();
+}
+
+function dropUsedType(box, type) {
+    const used = box?.using_blocks;
+    if (!used) return;
+    const j = used.indexOf(type);
+    if (j >= 0) used.splice(j, 1);
+    if (!used.length)
+        delete box.using_blocks;
 }
 
 function timeNow(tz) {
@@ -414,3 +859,4 @@ function timeNow(tz) {
         return `Сейчас: ${now.toLocaleDateString('ru-RU')}, время ${now.toLocaleTimeString('ru-RU')}.`;
     }
 }
+

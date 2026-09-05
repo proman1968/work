@@ -20,9 +20,10 @@ ODA({ is: 'microchat-panel',
         </div>
         <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
             ::value ::files :pending :error="isDo"
-            ::model ::effort ::tts-mode
+            :model="data?.model" :effort="data?.effort" ::tts-mode
             :usage-stats="usageStats"
             ready-icon="eva:f-arrow-upward"
+            @model-changed.stop="onModelChanged" @effort-changed.stop="onEffortChanged"
             @send="send" @stop="stop"></work-prompt-bar>
     `,
     imports: 'oda//button, ~/lib//prompt-bar',
@@ -77,26 +78,20 @@ ODA({ is: 'microchat-panel',
     get isFormAction() {
         return this.$pdp.focusedBlock?.type === 'form';
     },
-    get selectedModelItem() {
-        return this.data?.model ? WORK.get_item(this.data.model) : null;
-    },
-    get model() {
-        return this.data?.model || '';
-    },
-    set model(n) {
-        if (!n || this.data?.model === n) return;
-        if (this.data) this.data.model = n;
+    /** Источник модели/effort — файл (data), не двусторонний биндинг: эхо пустого значения от бара игнорируется */
+    onModelChanged(e) {
+        const n = e.detail?.value;
+        if (!n || !this.data || this.data.model === n) return;
+        this.data.model = n;
         this.$item?.fetch('change_model', { model: n });
     },
-    get effort() {
-        return this.data?.effort || this.selectedModelItem?.effort || 'low';
-    },
-    set effort(n) {
-        if (!n || this.data?.effort === n) return;
-        if (this.data) this.data.effort = n;
+    onEffortChanged(e) {
+        const n = e.detail?.value;
+        if (!n || !this.data || this.data.effort === n) return;
+        this.data.effort = n;
         this.$item?.fetch('change_effort', { effort: n });
     },
-    get usageStats() { return buildUsageStats(this.data); },
+    get usageStats() { return buildUsageStats(this.data, () => this.usageStats = undefined); },
     attached() {
         this._focus();
     },
@@ -143,8 +138,17 @@ ODA({ is: 'microchat-panel',
         this._tts().cancel();
 
         this.pending = true;
+        const pipe = await this.$item.pipe;
+        let prompt = text;
+        let agent;
+        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+        if (mention && pipe?.[mention[1]]?.agent) {
+            agent = mention[1];
+            prompt = text.slice(mention[0].length).trim();
+        }
         await this.$item.fetch('prompt', {
-            prompt: text,
+            prompt,
+            agent,
             role: this.userRole,
             includes: paths.length ? JSON.stringify(paths) : undefined,
         });

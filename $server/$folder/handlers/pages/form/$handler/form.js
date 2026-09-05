@@ -8,6 +8,13 @@ export default {
                 @apply --vertical;
                 overflow: hidden;
             }
+            @media print {
+                :host {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
             .save-error-icon {
                 anchor-name: --error-icon;
             }
@@ -69,7 +76,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
                 <oda-button content  ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
-                    style="font-size: xx-small; border-radius: 4px;"
+                    style="font-size: xx-small; border-radius: 4px; margin: 4px 0px; padding: 0px 4px;"
                     center icon-pos="top"
                 ></oda-button>
                 <div flex></div>
@@ -234,6 +241,12 @@ ODA({is: 'work-form',
             BOSS: 'fontawesome:s-user-tie',
             USER: 'fontawesome:s-user-pen',
         })[await role]
+    },
+    get _savePath() {
+        return new Promise(async () => {
+            const $class = await this.$item?.$class;
+            return ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
+        });
     },
     activeRole: {
         $save: true,

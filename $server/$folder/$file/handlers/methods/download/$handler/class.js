@@ -1,6 +1,3 @@
-export  default{
-    execute(){
-        this.$context.download();
-    },
+export default {
     icon: 'icons:file-download'
 }

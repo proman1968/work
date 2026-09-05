@@ -17,20 +17,27 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
                 transition: margin-top 0.3s ease-in-out;
                 align-items: center;
             }
+            @media print {
+                :host, .main, .print-flow, ::slotted(*) {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
         </style>
         <div id="appHeader" class="pe-no-print top title">
             <slot name="header" class="vertical"></slot>
         </div>
-        <div vertical flex style="overflow: hidden;"  ~style="styleZoom">
+        <div class="print-flow" vertical flex style="overflow: hidden;"  ~style="styleZoom">
             <slot name="top" class="pe-no-print vertical no-flex"></slot>
-            <div horizontal flex style="overflow: hidden;">
+            <div class="print-flow" horizontal flex style="overflow: hidden;">
                 <app-layout-drawer id="left-drawer" class="pe-no-print" align="left"  :buttons="left_buttons">
                     <slot name="left-title" class="pe-no-print" slot="title"></slot>
                     <slot name="left-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
                 <div class="main vertical flex" @mousewheel>
                     
-                    <slot name="main" class="vertical flex" style="overflow: hidden; z-index: 0"></slot>
+                    <slot name="main" class="print-flow vertical flex" style="overflow: hidden; z-index: 0"></slot>
                     
                 </div>
                 <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :buttons="right_buttons">

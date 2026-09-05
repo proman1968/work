@@ -6,11 +6,13 @@
  *
  * SCHEMA — описание методов для ИИ (function calling).
  */
+const DEFAULT_BASE = 'https://search.odant.org';
 const MAX_RESULTS = 8;
 
 export default {
     icon: 'carbon:search',
-    description: 'Поиск через инстанс SearXNG (нужен baseUrl)',
+    description: 'Поиск через инстанс SearXNG',
+    baseUrl: DEFAULT_BASE,
 
     capabilities: ['search'],
 
@@ -32,7 +34,7 @@ export default {
         const query = String(params.query || params.text || '').trim();
         if (!query)
             return { error: 'Пустой поисковый запрос' };
-        const base = String(this.baseUrl || '').replace(/\/$/, '');
+        const base = String(this.baseUrl || DEFAULT_BASE).replace(/\/$/, '');
         if (!base)
             return { error: 'нужен baseUrl инстанса SearXNG', query };
 

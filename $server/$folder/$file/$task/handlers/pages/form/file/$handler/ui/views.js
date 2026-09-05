@@ -1,3 +1,5 @@
+import { parseFormHtml, unwrapFence } from '/$server/$folder/$file/$task/task.js';
+
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
     const name = 'microchat-view-' + item.type;
@@ -16,7 +18,6 @@ ODA({ is: 'microchat-ribbon',
                 min-height: auto;
                 overflow: visible;
                 box-sizing: border-box;
-                gap: 4px;
             }
             :host([top]) {
                 overflow-y: auto;
@@ -32,6 +33,9 @@ ODA({ is: 'microchat-ribbon',
         $attr: true,
         get() { return !!this.$item; },
     },
+    /** версия раскладки: attach/detach вложенных view бампает её; DOM-геттеры стиков (todoView, prevPrompt)
+     *  читают её и переобходят DOM — иначе Реактор кэширует обход навсегда, а DOM-мутации ему невидимы */
+    layoutTick: 0,
     get todo(){
         return this.data?.todo
     },
@@ -45,10 +49,9 @@ ODA({ is: 'microchat-ribbon',
     get items(){
         return this.data?.items
     },
-    /** follow только в хвосте; user-scroll вверх — стоп до возврата вниз */
+    /** follow в хвосте; stop/resume — только wheel/touch/drag, не scroll+nearBottom */
     stickBottom: true,
     _pinGen: 0,
-    _ignoreScroll: 0,
     $item: {
         $def: null,
         set(n) {
@@ -66,11 +69,34 @@ ODA({ is: 'microchat-ribbon',
         return viewTag(item);
     },
     attached() {
-        if (!this.top) return;
+        /** Follow on/off — только намерение пользователя (wheel/touch/drag).
+         *  Не включать follow по scroll+nearBottom: докрутка стрима сама даёт scroll у низа
+         *  и гоняет stickBottom обратно true на первом же wheel вверх. */
+        const stop = () => {
+            if (!this.top) return;
+            this.stickBottom = false;
+            this._pinGen++; // отменить pending pin
+        };
+        const resume = () => {
+            if (!this.top || !this.nearBottom) return;
+            this.stickBottom = true;
+        };
+        this.addEventListener('wheel', e => {
+            if (e.deltaY < 0) stop();
+            else if (e.deltaY > 0) resume();
+        }, { passive: true });
+        this.addEventListener('touchmove', stop, { passive: true });
+        this.addEventListener('touchend', resume, { passive: true });
+        // drag скроллбара: уход вверх — stop; отпускание у низа — resume
+        this.addEventListener('mousedown', () => {
+            this._scrollDrag = true;
+            document.addEventListener('mouseup', () => {
+                this._scrollDrag = false;
+                resume();
+            }, { once: true });
+        });
         this.addEventListener('scroll', () => {
-            if (this._ignoreScroll) return;
-            this.stickBottom = this.nearBottom;
-            if (!this.stickBottom) this._pinGen++; // отменить pending pin
+            if (this._scrollDrag && !this.nearBottom) stop();
         }, { passive: true });
         if (this.items?.length) this.pinBottom(true);
     },
@@ -100,9 +126,7 @@ ODA({ is: 'microchat-ribbon',
     },
     scrollToBottom() {
         if (!this.top || !this.stickBottom) return this.nearBottom;
-        this._ignoreScroll++;
         this.scrollTop = this.scrollHeight;
-        this.async(() => { this._ignoreScroll = Math.max(0, this._ignoreScroll - 1); });
         return this.nearBottom;
     },
     /** view текущего блока, в т.ч. во вложенной ленте */
@@ -123,7 +147,8 @@ ODA({ is: 'microchat-view',
         <style>
             :host {
                 @apply --vertical;
-
+                @apply --info-invert;
+                min-width: 0;
             }
             :host([host-sticky]) {
                 position: sticky;
@@ -137,7 +162,7 @@ ODA({ is: 'microchat-view',
                 list-style: none;
                 box-sizing: border-box;
                 overflow: hidden;
-                min-height: 36px;
+                min-height: 24px;
             }
             .title {
                 @apply --horizontal;
@@ -157,6 +182,13 @@ ODA({ is: 'microchat-view',
             .body {
                 font-size: small;
                 word-break: break-word;
+                max-width: 100%;
+                min-width: 0;
+            }
+            .body oda-markdown-viewer {
+                max-width: 100%;
+                min-width: 0;
+                overflow-x: auto;
             }
             oda-markdown-viewer.stream {
                 font-size: xx-small;
@@ -164,27 +196,38 @@ ODA({ is: 'microchat-view',
             :host([box]:not([only-doc])) details > .body {
                 border-left: 4px solid var(--info-color);
             }
+            :host > .untitled > .body {
+                border-radius: 8px;
+                margin: 8px 0px;
+            }
         </style>
 
-        <details vertical :open="open" :title="data?.menu || data.type" @toggle="onToggle">
-            <summary ~show="showTitle" shadow vertical flex :color-mode
+        <details ~if="showTitle" :open="open" :title="data?.menu || data.type" @toggle="onToggle">
+            <summary vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
                     <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <span class="label"  @click.stop>{{label}}</span>
                     <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
-                    <oda-icon ~if="showContent" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <oda-icon ~if="showContent && !pinned" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                     <div flex></div>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
-            <div flex class="body" content>
+            <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
-                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showContent" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>            
+                <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
             </div>
         </details>
+        <div ~if="!showTitle" vertical class="untitled">
+            <div flex class="body" :content="!data?.ignore">
+                <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
+                <oda-markdown-viewer vertical :light="false" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
+            </div>
+        </div>
     `,
     data: null,
     onlyDoc: {
@@ -200,7 +243,7 @@ ODA({ is: 'microchat-view',
         return (this.open ? 'icons:chevron-right:90' : 'icons:chevron-right');
     },
 
-    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл; в доке — `onlyDoc` */
+    /** шапка есть; прячем только конец ветки (`stop: true`), не wait-лейбл */
     get showTitle() {
         return this.data && this.data.stop !== true && !this.onlyDoc;
     },
@@ -263,29 +306,56 @@ ODA({ is: 'microchat-view',
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
     },
+    /** expand-box: в ленте дети, не маркер box.content ([attachments] …) */
+    get showMarkdown() {
+        if (this.items.length && (this.data?.expand || this.data?.type === 'includes'))
+            return false;
+        return this.showContent;
+    },
 
     // --- title chrome ---
     get colorMode() {
-        return this.showTitle ? 'light' : 'content';
+        if (this.data?.error) return 'error';
+        if (this.data?.ignore && this.streamTail) return 'info-invert';
+        return this.showTitle ? 'info-invert' : 'content';
     },
     height: 0,
-    onResize(e) { this.height = e.target.clientHeight; },
+    onResize(e) {
+        const el = e.target;
+        const s = getComputedStyle(el);
+        this.height = el.offsetHeight + (parseFloat(s.marginTop) || 0) + (parseFloat(s.marginBottom) || 0);
+    },
     get headerHeight() { return this.showTitle ? (this.height || 0) : 0; },
     get parentView() {
         const el = this.host?.host;
         return el?.localName?.startsWith('microchat-view') ? el : null;
     },
-    get todoView() {
+    /** верхняя лента: цепочка host стабильна, кэш безопасен */
+    get topRibbon() {
         let n = this;
         while (n) {
             const r = n.host;
-            if (r?.top)
-                return r.$?.('microchat-view-todo') || null;
+            if (r?.top) return r;
             n = r?.host;
         }
         return null;
     },
+    /** attach/detach любого view инвалидирует DOM-обходы: без этого план, появившийся
+     *  посреди сессии, не попадает в закэшированные todoView/prevPrompt до перезагрузки */
+    attached() { this._bumpLayout(); },
+    detached() { this._bumpLayout(); },
+    _bumpLayout() {
+        const r = this.topRibbon;
+        if (r) r.layoutTick++;
+    },
+    get todoView() {
+        const r = this.topRibbon;
+        if (!r) return null;
+        r.layoutTick; // подписка на версию раскладки
+        return r.$?.('microchat-view-todo') || null;
+    },
     get prevPrompt() {
+        this.topRibbon?.layoutTick; // подписка на версию раскладки
         let el = this.previousElementSibling;
         while (el) {
             if (el.localName === 'microchat-view-prompt' || el.data?.type === 'prompt')
@@ -356,6 +426,9 @@ ODA({ is: 'microchat-view-prompt',
             }
             summary{
                 min-height: 36px;
+                border-radius: 8px;
+                overflow: hidden;
+                margin-bottom: 8px;             
             }
             details > .body {
                 margin-left: 0;
@@ -366,7 +439,7 @@ ODA({ is: 'microchat-view-prompt',
     `,
     get label() { return this.content || this.data?.label || this.data?.type || 'prompt'; },
     get showContent() { return false; },
-    get colorMode() { return 'info-invert'; },
+    get colorMode() { return 'accent'; },
     get typeIcon() { return ''; },
     get sender() {
         const id = this.data?.sender;
@@ -390,20 +463,22 @@ const HEIGHT_PING = `<script>
 })();
 <\/script>`;
 
-function unwrapHtmlFence(s) {
-    let t = String(s || '').trim();
-    if (!t.startsWith('```')) return t;
-    t = t.replace(/^```(?:html|htm)?\s*\r?\n/i, '');
-    return t.replace(/\r?\n```\s*$/, '').trim();
-}
-
+/** Страница для iframe: type html → content (fence снимает unwrapFence). Старый block.html — фолбэк. */
 export function pageHtml(data) {
-    if (data?.html) return data.html;
-    const c = unwrapHtmlFence(data?.content);
-    if (/^<!DOCTYPE|^<html[\s>]|^<body[\s>]/i.test(c)) return c;
+    if (data?.type !== 'html' && !data?.html) return;
+    const raw = unwrapFence(data.html || data.content);
+    return raw || undefined;
 }
 
-/** html — слот в ленте: страница из data.html (или целый document в content). */
+function formParts(data) {
+    const parsed = parseFormHtml(data?.content);
+    return {
+        caption: parsed.content,
+        markup: data?.html || parsed.html,
+    };
+}
+
+/** html — слот в ленте: страница из content, вид по type. */
 ODA({ is: 'microchat-view-html',
     extends: 'microchat-view',
     get extendTag() { return pageHtml(this.data) ? 'microchat-html' : ''; },
@@ -456,24 +531,27 @@ ODA({ is: 'microchat-html',
     },
 });
 
-/** form — слот в ленте: разметка из data.html; ui по data.ui или default microchat-form. */
+/** form — слот: разметка из content (fence); ui по data.ui или default microchat-form. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     get extendTag() {
-        if (!this.data?.html) return '';
+        if (!formParts(this.data).markup) return '';
         const ui = this.data.ui;
         if (!ui) return 'microchat-form';
         const name = String(ui);
         if (name.includes('-')) return name;
         return 'microchat-form-' + name;
     },
+    get viewContent() {
+        return (formParts(this.data).caption || '') + this.streamTail;
+    },
     get showContent() {
-        return !!(this.content || this.streamTail || this.data?.html);
+        return !!(formParts(this.data).caption || this.streamTail);
     },
 });
 
 /**
- * Форма в слоте ленты: HTML модели (data.html), values с name-контролов → APPROVE.
+ * Форма в слоте ленты: разметка из content (fence), values с name-контролов → APPROVE.
  */
 ODA({ is: 'microchat-form',
     template: /*html*/`
@@ -484,8 +562,8 @@ ODA({ is: 'microchat-form',
                 min-width: 0;
                 box-sizing: border-box;
                 padding: 8px;
-                gap: 8px;
                 font-size: small;
+                @apply --info-invert;
             }
             .slot {
                 @apply --vertical;
@@ -501,14 +579,16 @@ ODA({ is: 'microchat-form',
                 border-radius: 8px;
                 @apply --light;
                 @apply --vertical;
+                margin-bottom: 8px;
                 gap: 4px;
             }
             .slot :where(legend) {
-                font-size: small;
-                @apply --header;
-                padding: 4px 8px;
-                border-radius: 2px;
+                font-size: x-small;
+                @apply --light;
                 @apply --raised;
+                padding: 4px 8px;
+                border-radius: 4px;
+                width: stretch;
             }
             .slot :where(label) {
                 @apply --horizontal;
@@ -532,15 +612,14 @@ ODA({ is: 'microchat-form',
             .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
             .slot :where([hidden]) { display: none !important; }
         </style>
-        <div class="slot" ~if="html" ~html="html" @input="onEdit" @change="onEdit"></div>
+        <div class="slot" ~if="html" ~html="html" @input="onInput" @change="onEdit"></div>
     `,
     data: {
         $def: null,
         set() { this.async(() => this.restore()); },
     },
     get html() {
-        this.async(() => this.restore());
-        return this.data?.html || '';
+        return formParts(this.data).markup || '';
     },
     attached() {
         this.addEventListener('submit', e => { e.preventDefault(); this.sync(); }, true);
@@ -560,6 +639,10 @@ ODA({ is: 'microchat-form',
         }
         return out;
     },
+    /** По input — только показ/скрытие «Другое», без записи в data: мутация data на каждый символ перерисовывает форму и теряет ввод. */
+    onInput() {
+        this.syncOther();
+    },
     onEdit() {
         this.syncOther();
         this.sync();
@@ -573,6 +656,7 @@ ODA({ is: 'microchat-form',
             for (const el of this.$$('input, select, textarea')) {
                 const key = el.name || el.id;
                 if (!key || values[key] == null) continue;
+                if (el.matches(':focus')) continue;
                 if (el.type === 'checkbox') el.checked = !!values[key];
                 else if (el.type === 'radio') el.checked = String(el.value) === String(values[key]);
                 else el.value = values[key];
@@ -649,6 +733,7 @@ function cssEscape(name) {
 ODA({ is: 'microchat-view-todo',
     extends: 'microchat-view',
     attached(){
+        this._bumpLayout(); // attached базового view переопределён — бамп раскладки повторяем тут
         this.subTitleTag = 'microchat-todo-steps';
         this.showContent = undefined;
         this.label = undefined;

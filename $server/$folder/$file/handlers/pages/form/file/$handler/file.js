@@ -6,6 +6,13 @@ export default {
                 @apply --vertical;
                 overflow: hidden;
             }
+            @media print {
+                :host {
+                    overflow: visible !important;
+                    height: auto !important;
+                    max-height: none !important;
+                }
+            }
             object{
                 border: none;
             }

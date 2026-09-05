@@ -53,7 +53,13 @@ export async function removePushSubscription(params) {
 }
 
 export async function sendPushNotification(params, removeFn) {
-    const receivers = params.receivers.map(r => r.id);
+    let receivers;
+    if (typeof params.receivers === 'string') {
+        receivers = params.receivers.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    else if (Array.isArray(params.receivers)) {
+        receivers = params.receivers.map(r => r.id || r);
+    }
     const toRemove = [];
     const message = params.message ? JSON.stringify(params.message) : params.post;
     await Promise.all(receivers.map(async uid => {

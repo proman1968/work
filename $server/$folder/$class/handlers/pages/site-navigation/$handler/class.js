@@ -1,5 +1,5 @@
 /** Мета страницы site-navigation. Визуалка — site-navigation.js. */
 export default {
     icon: 'carbon:tree-view-alt',
-    label: 'Навигация',
+    label: 'Навигация по сайту',
 }

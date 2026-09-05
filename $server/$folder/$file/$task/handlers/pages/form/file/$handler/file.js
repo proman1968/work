@@ -35,15 +35,15 @@ export default {
         </style>
         
         <div flex vertical class="feed" ~if="showFeed">
-            <div flex></div>
-            <div vertical style="overflow: hidden; padding: 0px 4px;">
+            <div ~if="mobile" flex></div>
+            <div vertical :flex="!mobile" style="overflow: hidden; padding: 8px;">
                 <microchat-ribbon flex :data :$item></microchat-ribbon>
             </div>
             <microchat-panel info-invert no-flex :data :$item></microchat-panel>
         </div>
         <oda-splitter ~if="showDock && !mobile" left ::width="dockWidth"></oda-splitter>
         <microchat-dock content no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
-        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="dockOpen = true"></oda-button>                
+        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="openDock"></oda-button>                
 
     `,
     colorMode: 'content',
@@ -57,12 +57,30 @@ export default {
     dockPick: -1,
     dockWidth: { $def: 280, $save: true },
 
+    /** После disconnect cleanupDeps рвёт deps, кэш геттеров остаётся — tap на dockOpen не будит showDock. */
+    _dockKeys: ['canDock', 'showDock', 'showDockBtn', 'showFeed', 'dockReports', 'dockIndex', 'dockCurrent', 'dockStyle'],
+    _invalidateDock() {
+        const cache = this[R]?.cache;
+        if (!cache) return;
+        for (const k of this._dockKeys)
+            cache[k] = undefined;
+    },
+    attached() {
+        this._invalidateDock();
+        this.render?.(true);
+    },
+    openDock() {
+        this.dockOpen = true;
+        this._invalidateDock();
+        this.render?.(true);
+    },
+
     $item: {
         $def: null,
         async set(n) {
-            n?.listen('changed', async () => {
+            n?.listen('changed', () => {
                 this.streamingText = '';
-                this.data = await n.load();
+                this._reload();
             });
             n?.listen('chat.start', () => {
                 this.pending = true;
@@ -72,16 +90,57 @@ export default {
                 this.streaming = true;
                 this.streamingText += e.detail?.value?.token || '';
             });
-            n?.listen('chat.done', async () => {
+            n?.listen('chat.done', () => {
                 this.pending = false;
                 this.streaming = false;
                 this.streamingText = '';
-                this.data = await n.load();
+                this._reload();
             });
-            this.data = await n?.load();
+            this._reload();
             this.streaming = false;
-            this.pending = !!(n?.chatPending || WORK.chatPending?.[n?.short] || WORK.chatPending?.[n?.path]);
+            // только карта WORK.chatPending: чтение n.chatPending с item без флага уходит в _onEmpty и возвращает truthy Promise
+            this.pending = WORK.chatPending?.[n?.short] === true || WORK.chatPending?.[n?.path] === true;
         },
+    },
+    /** Сериализация перезагрузок: не больше одного load в полёте; события во время загрузки схлопываются
+     *  в одну повторную после её завершения. Параллельных запросов нет — ответы не приходят вразнобой,
+     *  финальная загрузка всегда стартует после последнего события и читает финальный файл. */
+    _reload() {
+        if (this._loading) {
+            this._reloadAgain = true;
+            return;
+        }
+        this._loading = (async () => {
+            let retries = 0;
+            try {
+                do {
+                    this._reloadAgain = false;
+                    try {
+                        this.data = await this.$item?.load();
+                        this._autoDock();
+                        retries = 0;
+                    } catch (e) {
+                        // реджект не должен убивать цикл: сгоревший _reloadAgain = застывшая лента без последнего блока
+                        if (++retries > 5) {
+                            console.warn('microchat reload: сдаюсь после 5 попыток', e);
+                            break;
+                        }
+                        console.warn('microchat reload: ошибка, повтор', e);
+                        this._reloadAgain = true;
+                        await new Promise(r => setTimeout(r, 300 * retries));
+                    }
+                } while (this._reloadAgain);
+            } finally {
+                this._loading = null;
+            }
+        })();
+    },
+    /** Новый отчёт — открыть док: «Скрыть» ($save) не должно прятать свежие исследования. Первый reload только запоминает базу. */
+    _autoDock() {
+        const n = this.dockReports.length;
+        if (this._dockSeen != null && n > this._dockSeen)
+            this.dockOpen = true;
+        this._dockSeen = n;
     },
     $listeners: {
         resize() { this.mobile = undefined; },
@@ -102,20 +161,23 @@ export default {
         return !(this.showDock && this.mobile);
     },
     get dockStyle() {
-        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '70%' };
+        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '80%', minWidth: '30%' };
     },
     get dockReports() {
         const out = [];
+        const seen = new Set(); // проталкивание total даёт боксу content ребёнка — дубль в доке не нужен
         const walk = (items) => {
             for (const b of items || []) {
                 if (!b || b.hidden) continue;
                 walk(b.items);
-                if (b.doc && b.content)
+                if (b.doc && b.content && !b.error && !seen.has(b.content)) {
+                    seen.add(b.content);
                     out.push(b);
+                }
             }
         };
         walk(this.data?.items);
-        if (this.data?.content)
+        if (this.data?.content && !seen.has(this.data.content))
             out.push(this.data);
         return out;
     },
@@ -139,9 +201,12 @@ export default {
         while (items?.length) {
             let last;
             for (let i = items.length - 1; i >= 0; i--) {
-                if (!items[i]?.hidden) { last = items[i]; break; }
+                const b = items[i];
+                // закрытый ignore (reasoning) — не слот; пустой — слот стрима CoT
+                if (b && !b.hidden && !(b.ignore && b.content)) { last = b; break; }
             }
-            if (!last || last.content || !last.items?.length) return last;
+            // box с content-маркером (includes/expand) — не лист: спускаемся в детей
+            if (!last || !last.items?.length) return last;
             items = last.items;
         }
         return undefined;
@@ -149,6 +214,6 @@ export default {
     /** focused без тела — слот стрима, не факт что стрим идёт (`streaming` — только delta/done) */
     get streamTarget() {
         const b = this.focusedBlock;
-        return (b && !b.content && !b.html) ? b : undefined;
+        return (b && !b.content) ? b : undefined;
     },
 };

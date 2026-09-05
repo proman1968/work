@@ -553,9 +553,6 @@ ODA({
                 background: var(--border-color);
                 border: 1px solid var(--border-color);
             }
-            .week-row {
-                display: contents;
-            }
             .weekday-header {
                 @apply --header;
                 padding: 8px;
@@ -563,52 +560,11 @@ ODA({
                 font-weight: normal;
                 font-size: small;
             }
-            .week-label {
-                @apply --content;
-                writing-mode: vertical-rl;
-                transform: rotate(180deg);
-                text-align: center;
-                font-size: small;
-                white-space: nowrap;
-            }
-            .day-cell {
-                @apply --content;
-                min-height: 100px;
-                padding: 4px;
-                position: relative;
-                cursor: pointer;
-                overflow: hidden;
-            }
-            .day-cell:hover {
-                background: var(--light-background);
-            }
-            .day-cell[other-month] {
-                opacity: 0.9;
-            }
-            .day-cell[today] {
-                background: var(--info-background);
-            }
-            .day-cell[today]:hover {
-                background: var(--light-background);
-            }
-            .day-number {
-                font-weight: normal;
-                margin-bottom: 4px;
-            }
         </style>
         <div class="calendar-grid">
             <div class="weekday-header"></div>
             <div ~for="weekdays" class="weekday-header">{{$for.item}}</div>
-            <div ~for="weeks" class="week-row">
-                <div class="week-label">{{$for.item.label}}</div>
-                <div ~for="$for.item.days" class="day-cell"
-                     :other-month="$for.$for.item.otherMonth"
-                     :today="$for.$for.item.isToday"
-                     @tap="selectMonthDay($for.$for.item)">
-                    <div class="day-number">{{$for.$for.item.day}}</div>
-                    <oda-calendar-event badge ~for="$for.$for.item.events" :data="$for.$for.$for.item" :title="$for.$for.$for.item.title"></oda-calendar-event>
-                </div>
-            </div>
+            <oda-calendar-month-week ~for="weeks" :item="$for.item"></oda-calendar-month-week>
         </div>
     `,
     currentDate: new Date(),
@@ -654,7 +610,7 @@ ODA({
     },
     getEventsForDay(date) {
         const events = this.events;
-        if (!events || events.then)
+        if (!events?.length || events.then)
             return [];
         const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
         const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
@@ -673,25 +629,145 @@ ODA({
 })
 
 ODA({
-    is: 'oda-form-calendar-list-view',
+    is: 'oda-calendar-month-week',
     template: /*html*/`
         <style>
-            oda-log-view:hover {
-                @apply --info-invert;
+            :host {
+                display: contents;
+            }
+            .week-label {
+                @apply --content;
+                writing-mode: vertical-rl;
+                transform: rotate(180deg);
+                text-align: center;
+                font-size: small;
+                white-space: nowrap;
+            }
+            oda-calendar-month-day:hover {
+                background: var(--light-background);
+            }
+            oda-calendar-month-day[other-month] {
+                opacity: 0.9;
+            }
+            oda-calendar-month-day[today] {
+                background: var(--info-background);
+            }
+            oda-calendar-month-day[today]:hover {
+                background: var(--light-background);
             }
         </style>
-        <oda-log-view ~for="items" :data="$for.item" @tap.stop="open($for.item.$item)"></oda-log-view>
+        <div class="week-label">{{item?.label}}</div>
+        <oda-calendar-month-day ~for="item?.days" :item="$for.item" :other-month="$for.item.otherMonth" :today="$for.item.isToday"></oda-calendar-month-day>
+    `,
+    item: null,
+})
+
+ODA({
+    is: 'oda-calendar-month-day',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --content;
+                min-height: 100px;
+                padding: 4px;
+                position: relative;
+                cursor: pointer;
+                overflow: hidden;
+            }
+            .day-number {
+                font-weight: normal;
+                margin-bottom: 4px;
+            }
+        </style>
+        <div class="day-number">{{item?.day}}</div>
+        <oda-calendar-event badge ~for="item?.events" :data="$for.item" :title="$for.item.title"></oda-calendar-event>
+    `,
+    item: null,
+    $listeners: {
+        tap(e) {
+            this.$pdp.selectMonthDay(this.item)
+        }
+    }
+})
+
+ODA({
+    is: 'oda-form-calendar-list-view',
+    template: /*html*/`
+        <oda-log-group ~for="groups" :item="$for.item" vertical flex>
+        </oda-log-group>
     `,
     events: [],
-    get items() {
+    _collapsed: {},
+    _toggleGroup(dateKey) {
+        this._collapsed = { ...this._collapsed, [dateKey]: !this._collapsed[dateKey] };
+    },
+    get groups() {
         const events = this.events;
         if (!events || events.then)
             return [];
-        return events;
+        const map = new Map();
+        for (const ev of events) {
+            const key = _formatDate(_asDate(ev.start));
+            let group = map.get(key);
+            if (!group) {
+                group = { dateKey: key, label: _dateGroupLabel(ev.start), events: [] };
+                map.set(key, group);
+            }
+            group.events.push(ev);
+        }
+        const result = [...map.values()];
+        result.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+        const collapsed = this._collapsed;
+        for (const g of result)
+            g.collapsed = !!collapsed[g.dateKey];
+        return result;
     },
     open($item) {
         this.$pdp.showMeeting($item);
     },
+})
+
+ODA({is: 'oda-log-group',
+    template: /*html*/`
+        <style>
+            .group-header {
+                padding: 4px 8px;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+                user-select: none;
+                border-top: 1px solid var(--border-color);
+            }
+            .group-header:first-child {
+                border-top: none;
+            }
+            .group-header:hover {
+                background: var(--light-background);
+            }
+            .group-label {
+                @apply --bold;
+            }
+            .group-count {
+                opacity: .5;
+                font-size: small;
+            }
+            .group-items {
+                padding-left: 8px;
+            }
+            oda-log-view:hover {
+                @apply --info-invert;
+            }
+        </style>
+        <div horizontal class="group-header" @tap="$pdp._toggleGroup(item.dateKey)">
+            <oda-button :icon="item.collapsed ? 'icons:chevron-right' : 'icons:chevron-right:90'" icon-size="16" no-padding></oda-button>
+            <span class="group-label">{{item.label}}</span>
+            <span class="group-count">{{item.events.length}}</span>
+        </div>
+        <div ~if="!item.collapsed" class="group-items" vertical flex>
+            <oda-log-view ~for="item.events" :data="$for.item" @tap.stop="open($for.item.$item)"></oda-log-view>
+        </div>
+    `,
+    item: null,
 })
 
 ODA({
@@ -820,6 +896,9 @@ const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const monthsFullNames = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
+const monthsRu = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const daysRu = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
 function _weekRangeLabel(first, last) {
     const d1 = first.getDate();
@@ -944,6 +1023,15 @@ function _shiftDate(date, viewMode, dir) {
     else
         next.setMonth(next.getMonth() + dir);
     return next;
+}
+
+function _dateGroupLabel(iso) {
+    const d = _asDate(iso);
+    const dayOfWeek = daysRu[d.getDay()];
+    const dayNum = d.getDate();
+    const month = monthsRu[d.getMonth()];
+    const year = d.getFullYear();
+    return `${dayOfWeek}, ${dayNum} ${month} ${year} г.`;
 }
 
 function _allDayEvents(events, date) {
