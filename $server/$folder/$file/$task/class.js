@@ -1,4 +1,4 @@
-/**
+﻿/**
  * $task — длинная ИИ-сессия (JSON).
  * prompt / pipe / body — на этом типе; one-shot между классами — $class/ai.
  */
@@ -26,6 +26,70 @@ export default {
                 block.content = (block.content || '') + String(e.message || e);
             }
             throw e;
+        }
+    },
+    /** Контракт живой ленты для движка агентов: события, персист, стоп, режим, ожидание человека. */
+    _live(session) {
+        const task = this;
+        return {
+            path: this.short,
+            send: e => session?.send?.({ ...e, path: task.short }),
+            save: () => task._save(session),
+            get stopped() { return !!task._stopped; },
+            get mode() { return task.body.mode || 'plan'; },
+            set mode(v) { task.body.mode = v; },
+            wait: block => new Promise(resolve => {
+                (task._waiters ??= new Map()).set(block.time, resolve);
+            }),
+        };
+    },
+    /** Доставка ответа человека в ожидающий движок (стоп-блок по time). */
+    _resolveWait(block, payload) {
+        const resolve = block && this._waiters?.get(block.time);
+        if (!resolve)
+            return false;
+        this._waiters.delete(block.time);
+        resolve(payload || {});
+        return true;
+    },
+    /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
+    async _runAgent(params, session) {
+        const body = await this.body;
+        const engine = (await this.$class?._methods)?.prompt;
+        if (typeof engine?.execute !== 'function')
+            throw new Error('$task: метод prompt (ai) не найден у класса');
+        await engine.execute({
+            agent: params.block.type,
+            block: params.block,
+            box: params.box,
+            brief: params.block.brief,
+            messages: await this.context({ handoff: true, session }),
+            session,
+            live: this._live(session),
+            model: body.model,
+            effort: body.effort,
+            tz: body.tz,
+            location: params.location,
+        });
+        await this._save(session);
+        return params.block;
+    },
+    /** Незавершённый блок-агент в активной цепочке (обрыв, рестарт) — продолжает движок. */
+    async _activeAgentBlock() {
+        if (this._waiters?.size)
+            return null; // движок уже ждёт человека в этом блоке — не перезапускать
+        const body = await this.body;
+        let box = body;
+        for (;;) {
+            const next = box.items?.last;
+            if (!next)
+                return null;
+            if (this.pipe[next.type]?.agent && !hasBody(next) && !next.error)
+                return { block: next, box };
+            if (next.box && !hasBody(next))
+                box = next;
+            else
+                return null;
         }
     },
     async prompt(params = {}) {
@@ -56,7 +120,8 @@ export default {
                 case 'AI':{
                 } break;
                 case 'APPROVE':{
-                    if (params.accept === true || params.accept === 'true') {
+                    const accept = params.accept === true || params.accept === 'true';
+                    if (accept) {
                         await params.pipe_step.approve?.(params);
                         params.block.state = 'принято';
                     } else {
@@ -66,6 +131,14 @@ export default {
                     delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
+                    // движок ждёт этот блок — доставить факт и не гнать цикл параллельно
+                    if (this._resolveWait(params.block, {
+                        accept,
+                        content: params.block.approved || params.block.state,
+                    })) {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return { ok: true };
+                    }
                 } break;
                 default:{
                     if (text) {
@@ -83,7 +156,7 @@ export default {
                     delete params.box.using_blocks;
                     this._stopped = false;
 
-                    // прямой вход в субагента (ещё не в его box)
+                    // прямой вход в субагента — исполняет движок класса
                     if (agent) {
                         await this._init(params);
                         if (params.box.type !== agent) {
@@ -92,15 +165,12 @@ export default {
                                 params.block.brief = text;
                             const pushed = await this._push_block(params);
                             if (pushed) {
-                                if (!params.block.box && !hasBody(params.block))
-                                    await this._fillLeaf(params, session);
-                                if (hasBody(params.block))
-                                    await this.pipe[params.block.type]?.recalc?.(params);
+                                await this._runAgent(params, session);
                                 await this._captionDoc(params, session);
                             }
                             await this._save(session);
-                            // лист-агент уже закрыт / ждёт человека — без меню оркестратора
-                            if (pushed && !params.block.box && (hasBody(params.block) || params.block.error)) {
+                            // движок довёл агента до итога / стопа — без меню оркестратора
+                            if (pushed) {
                                 session?.send?.({ type: 'chat.done', path: this.short });
                                 return agentResult(agent, params.block, { waiting: !!params.block.stop });
                             }
@@ -160,15 +230,36 @@ export default {
 
     /** Один ход автомата: fill leaf или меню → push. { loop, waiting, block }. */
     async _promptTurn(params, session) {
-        const live = params.block;
-        if (live && live !== params.box && !live.box && !hasBody(live)) {
+        // незавершённый агент (обрыв, рестарт) — доигрывает движок класса, не меню таска
+        const broken = await this._activeAgentBlock();
+        if (broken) {
+            params.block = broken.block;
+            params.box = broken.box;
+            this._stopped = false;
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            await this._save(session);
+            const b = params.block;
+            if (b?.stop && hasBody(b))
+                return { loop: false, waiting: true, block: b };
+            // агент снова без итога и без стопа — не крутить цикл, ждать человека
+            if (!hasBody(b) && !b?.error)
+                return { loop: false, block: b };
+            return { loop: this._canLoop(b), block: b };
+        }
+        const leaf = params.block;
+        if (leaf && leaf !== params.box && !leaf.box && !hasBody(leaf)) {
             this._stopped = false;
             await this._fillLeaf(params, session);
             await this._save(session);
-            if (live.stop)
-                return { loop: false, waiting: true, block: live };
-            return { loop: this._canLoop(live), block: live };
+            if (leaf.stop)
+                return { loop: false, waiting: true, block: leaf };
+            return { loop: this._canLoop(leaf), block: leaf };
         }
+
+        // внутри бокса-агента таск не ходит — им владеет движок (live.wait / человек)
+        if (this.pipe[params.box.type]?.agent)
+            return { loop: false, block: params.box };
 
         let mode = this.body.mode || 'plan';
         let node = this.pipe[params.block.type];
@@ -213,6 +304,16 @@ export default {
         params.block = this._build_block(choice);
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
+        // выбранный агент исполняет движок класса (live-контракт), не цикл таска
+        if (pushed && this.pipe[choice]?.agent) {
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            await this._save(session);
+            const b = params.block;
+            if (b?.stop && hasBody(b))
+                return { loop: false, waiting: true, block: b };
+            return { loop: this._canLoop(b), block: b };
+        }
         if (pushed) {
             if (!params.block.box && !hasBody(params.block))
                 await this._fillLeaf(params, session);
@@ -301,8 +402,10 @@ export default {
         params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
+    /** handoff: передача агенту — только диалог-улики (без system/topicsMap/leafSystem),
+     *  «кто/где» — первым user-кадром; system всегда пересобирает исполнитель. */
     async context(params = {}) {
-        const { prompt, evidence = true, leaf } = params;
+        const { prompt, evidence = true, leaf, handoff } = params;
         const body = await this.body;
         const chain = [];
         let box = body;
@@ -313,17 +416,23 @@ export default {
             else break;
         }
         const focus = box;
-        const layers = chain.map(b => this._box_context(b, b === focus, evidence));
-        const mode = body.mode || 'plan';
-        const pipe = await this.pipe;
-        const leafNode = leaf?.type ? pipe[leaf.type] : null;
-        const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
-        const messages = [{ role: 'system', content: [
-            ...layers.map(l => l.system).filter(Boolean),
-            timeNow(body.tz),
-            topicsMap(pipe, focus, mode),
-            leafSystem,
-        ].filter(Boolean).join('\n\n') }];
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
+        let messages;
+        if (handoff) {
+            messages = [];
+        }
+        else {
+            const mode = body.mode || 'plan';
+            const pipe = await this.pipe;
+            const leafNode = leaf?.type ? pipe[leaf.type] : null;
+            const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
+            messages = [{ role: 'system', content: [
+                ...layers.map(l => l.system).filter(Boolean),
+                timeNow(body.tz),
+                topicsMap(pipe, focus, mode),
+                leafSystem,
+            ].filter(Boolean).join('\n\n') }];
+        }
         /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
         const push = (nextRole, content) => {
             if (!content) return;
@@ -336,10 +445,15 @@ export default {
                 messages.push({ role: 'user', content: 'ok' });
             messages.push({ role: nextRole, content });
         };
+        if (handoff) {
+            const place = layers.map(l => l.system).filter(Boolean).join('\n\n');
+            if (place)
+                push('user', place);
+        }
         for (const layer of layers)
             for (const m of layer.messages)
                 push(m.role, m.content);
-        if (focus !== body)
+        if (!handoff && focus !== body)
             push('user', stageOpen(focus, this.pipe[focus.type]));
         if (prompt) {
             if (messages.last?.role === 'user')
@@ -352,15 +466,22 @@ export default {
     /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
      *  evidence: false (генерация total) — предки без уликов-боксов.
      *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
-    _box_context(box, focus = true, evidence = true) {
+    _box_context(box, focus = true, evidence = true, handoff = false) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
         // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
         const place = String(box.system || '').trim();
-        const role = String(node?.[mode]?.system || node?.system || '').trim();
-        let system = [place, role].filter(Boolean).join('\n\n');
-        if (box.todo)
-            system += '\n\n[todo]\n' + (box.todo.content || '');
+        let system;
+        if (handoff) {
+            // передача агенту: только «кто/где», без ролей ходов таска и todo
+            system = place;
+        }
+        else {
+            const role = String(node?.[mode]?.system || node?.system || '').trim();
+            system = [place, role].filter(Boolean).join('\n\n');
+            if (box.todo)
+                system += '\n\n[todo]\n' + (box.todo.content || '');
+        }
         const messages = [];
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
@@ -458,10 +579,10 @@ export default {
                 ns[k] = v;
             }
             registerOrchestrator(ns, taskDef);
+            // агенты — декларации из меты класса (~/ai/agents, канон движка), не дубли $task
             const agentIds = [];
             const stepAgents = [];
-            const agentsDir = [...files].reverse().find(f => f.id === 'agents')
-                || files.find(f => f.id === 'agents');
+            const agentsDir = await this.$class?.meta_folder?.get_item('ai/agents');
             if (agentsDir) {
                 const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
                 const byId = new Map();
@@ -471,6 +592,8 @@ export default {
                 }
                 for (const [fileId, file] of byId) {
                     const id = fileId.replace(/\.js$/, '');
+                    if (ns[id])
+                        continue; // ходы оркестратора (thinking, answer, planning, report) выше агентов-тёзок
                     const mod = await this._importPipeFile(file);
                     registerAgent(ns, id, mod.default);
                     agentIds.push(id);
@@ -551,7 +674,8 @@ export default {
             if (!used.includes(block.type))
                 used.push(block.type);
         }
-        const init = node?.init;
+        // init агента — жизненный цикл движка класса, не пуш ленты
+        const init = node?.agent ? null : node?.init;
         if (init && !await init(params))
             return false;
 

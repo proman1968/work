@@ -13,24 +13,25 @@
 ## 3. Как это работает
 
 1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
-2. **`pipe`** грузится из tilde файла: `task.js` + `agents/*` (не из `~/ai`).
-3. **`on_save`** пишет `body.system` (`buildSystemPrompt` из [`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)) и вызывает `file.prompt`.
-4. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
+2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из меты класса (`$class.meta_folder` → `ai/agents`, канон движка). Тёзки ходов оркестратора выше агентов.
+3. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок в ленту и передаёт движку контракт `live` (события, `_save`, стоп, mode, ожидание человека) и `context({handoff})` — диалог-улики без system. Ответ человека доставляется через `_resolveWait` (APPROVE); незавершённый агент после обрыва доигрывает движок (`_activeAgentBlock`).
+4. **`on_save`** пишет `body.system` (`buildSystemPrompt` из `prompt/$method`) и вызывает `file.prompt`.
+5. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
 
 ## 4. Из чего это состоит
 
-- [`class.js`](class.js) — session prompt и оркестратор
+- [`class.js`](class.js) — session prompt, оркестратор ленты, контракт `live` для движка агентов
 - [`task.js`](task.js) — оркестратор (`tools` / ходы) + хелперы UI
-- [`agents/`](agents/) — субагенты (web, work, html, form, question)
 - [`triggers/on_save/`](triggers/on_save/$trigger/class.js) — system + первый prompt
 - [`handlers/`](handlers/) — preview микрочата
 - [`readme.md`](readme.md) / [`progress.md`](progress.md)
 
 ## 5. Состояние
 
-- ✅ Session-`prompt` на `$task/class.js` (pipe из локального tilde)
+- ✅ Session-`prompt` на `$task/class.js`; агенты — движок `$class/ai` через `live`
 - ✅ One-shot на `$class/ai`: `/BASE?prompt&agent=&prompt=`
 
 ## 6. Дальнейшие планы
 
-- Синхронизировать `task.js`/`agents` с `$class/ai` (moves vs tools, planning/report), если нужен один канон.
+- Свести собственные ходы таска (`_streamChat` / `_fillLeaf`) на движок `$class/ai`.
+- Кросс-классовый запуск агентов (адресация чужого класса из процесса).

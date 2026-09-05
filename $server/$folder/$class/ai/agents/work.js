@@ -1,4 +1,6 @@
-/** Агент work: файлы рабочей области. Меню = ключи tools (plan/do). */
+/** Агент work: файлы рабочей области. Меню = ключи tools (plan/do).
+ *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat }).
+ *  approve стоп-блока выполняет владелец ленты (task) — там доступен params.task. */
 const searchTool = {
     label: 'Ищу',
     icon: 'icons:search',
@@ -8,13 +10,10 @@ const searchTool = {
         const b = params.block;
         if (b.content)
             return false;
-        const query = workQuery(b, await params.task.body, searchTool.label);
+        const query = workQuery(b, params.box, params.messages, searchTool.label);
         if (query)
             b.label = query;
-        const result = await params.task._fc_exec(WORK, { method: 'semantic_search', args: { prompt: query } }, {
-            block: b,
-            session: params.session,
-        });
+        const result = await params.exec(WORK, { method: 'semantic_search', args: { prompt: query } }, { block: b });
         if (!b.content)
             b.content = formatFileHits(result);
         return true;
@@ -30,11 +29,8 @@ const readTool = {
         const b = params.block;
         if (b.content)
             return false;
-        const path = filePath(b, await params.task.body, readTool.label);
-        await params.task._fc_exec(WORK, { method: 'read_text', args: { path } }, {
-            block: b,
-            session: params.session,
-        });
+        const path = filePath(b, params.box, readTool.label);
+        await params.exec(WORK, { method: 'read_text', args: { path } }, { block: b });
         return true;
     },
 };
@@ -62,10 +58,7 @@ const writeTool = {
         if (block.done || !block.path || block.post == null)
             return;
         const method = /SEARCH|REPLACE/.test(block.post) ? 'edit' : 'save';
-        await params.task._fc_exec(WORK, { method, args: { path: block.path, post: block.post } }, {
-            block,
-            session: params.session,
-        });
+        await params.exec(WORK, { method, args: { path: block.path, post: block.post } }, { block });
         block.done = true;
     },
     async init(params = {}) {
@@ -98,6 +91,12 @@ export default {
     description: 'факты или файлы рабочей области',
     system: 'Подумай, какие именно действия над файлами необходимо выполнить.',
     prompt: `Проведи анализ текущего этапа работы с файлами и сформируй подробный отчёт о его результатах.`,
+    /** После итога — обратно в plan (право write разовое). */
+    finish(params = {}) {
+        const live = params.live;
+        if (live && live.mode === 'do')
+            live.mode = 'plan';
+    },
     plan: {
         description: 'факты или файлы рабочей области, в контексте их нет',
         system: [
@@ -137,28 +136,32 @@ function formatFileHits(result) {
     }).join('\n');
 }
 
-function workQuery(block, body, defaultLabel) {
+function workQuery(block, box, messages, defaultLabel) {
     const label = String(block?.label || '').trim();
     if (label && label !== defaultLabel)
         return label;
-    return String((body.items || []).find(b => b.type === 'prompt')?.content || body.title || '').trim();
+    return String(box?.brief || lastUserContent(messages) || '').trim();
 }
 
-function filePath(block, body, defaultLabel) {
+function filePath(block, box, defaultLabel) {
     const own = String(block?.path || '').trim();
     if (own)
         return own;
     const label = String(block?.label || '').trim();
     if (label && label !== defaultLabel && label.includes('/'))
         return label;
-    let found;
-    const walk = (n) => {
-        if (n?.type === 'search' && n.content)
-            found = n;
-        for (const c of n?.items || [])
-            walk(c);
-    };
-    walk(body);
+    const found = (box?.items || []).findLast?.(b => b.type === 'search' && b.content)
+        || [...(box?.items || [])].reverse().find(b => b.type === 'search' && b.content);
     const hit = String(found?.content || '').match(/[/][^\s:]+/);
     return hit ? hit[0] : '';
+}
+
+function lastUserContent(messages) {
+    if (!messages?.length)
+        return '';
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === 'user' && typeof messages[i].content === 'string' && messages[i].content)
+            return String(messages[i].content);
+    }
+    return '';
 }
