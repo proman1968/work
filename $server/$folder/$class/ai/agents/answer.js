@@ -4,7 +4,6 @@ export default {
     icon: 'icons:chat',
     stop: true,
     step: false,
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     description: 'реплика пользователю по фактам уже в контексте',
     system: [
         '# Режим: ответ',

@@ -1,6 +1,8 @@
 ﻿/**
  * $method prompt — движок агентов из ai/agents/* (one-shot REST и живая лента).
- * params: { session, agent, model, location, tz, mode, effort, messages, prompt, block, box, live }
+ * params: { session, agent, model, location, tz, mode, effort, messages, prompt, block, box, live, $context }
+ * $context — класс исполнения (владелец): ставит HTTP-диспетчер или таск; движок дочитывает this.$context.
+ * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js (дефолт класса).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
  *   Нет live — движок создаёт тихий standalone: события с path класса, без save/wait.
  * messages — только диалог (улики); system всегда пересобирает исполнитель
@@ -14,14 +16,20 @@
 export default {
     async execute(params = {}) {
         let { session, agent, model, location, tz, messages, prompt, block, live } = params;
+        // владелец (класс исполнения): явный из params (HTTP-диспетчер, таск) надёжнее
+        // разделяемой привязки this.$context — её может перебить параллельный _methods
+        const owner = params.$context ??= this.$context;
 
         const type = agent || 'answer';
-        agent = await this.loadAgent(type);
-        model = agent.model ?? model; // строгая модель агента побеждает приехавшую
+        agent = await this.loadAgent(type, owner);
+        // модель: строгая у агента → приехавшая (выбор пользователя/REST) → дефолт класса
+        model = agent.model ?? model ?? (await this.loadConfig(owner))?.model;
+        if (!model)
+            throw new Error('prompt: модель не задана (agent.model / params.model / ai/config.js)');
 
         const own = !live;
         if (own) {
-            const path = this.$context?.short;
+            const path = owner?.short;
             live = params.live = {
                 path,
                 mode: params.mode || 'plan',
@@ -33,7 +41,7 @@ export default {
         if (messages[0]?.role !== 'system')
             messages.unshift({
                 role: 'system',
-                content: await this.buildSystemPrompt({ session, location, tz }),
+                content: await this.buildSystemPrompt({ session, location, tz, owner }),
             });
 
         if (prompt)
@@ -100,7 +108,7 @@ export default {
             if (typeof agent.init === 'function') {
                 await agent.init({
                     block, box: params.box, messages, session, model, live, exec, agent,
-                    owner: this.$context,
+                    owner: params.$context,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -133,7 +141,7 @@ export default {
             if (typeof tool.init === 'function') {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
-                    owner: this.$context,
+                    owner: params.$context,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -395,16 +403,30 @@ export default {
         }
     },
 
-    async loadAgent(agent = 'answer') {
-        const file = await this.$context.meta_folder.get_item(`ai/agents/${agent}.js`);
+    async loadAgent(agent = 'answer', owner = this.$context) {
+        if (!owner)
+            throw new Error('prompt: не определён класс исполнения ($context)');
+        const file = await owner.meta_folder.get_item(`ai/agents/${agent}.js`);
         if (!file && agent !== 'answer')
-            return this.loadAgent('answer');
-        return this.$context.constructor.importScript(await file.load());
+            return this.loadAgent('answer', owner);
+        return owner.constructor.importScript(await file.load());
     },
 
-    async buildSystemPrompt({ session, location, tz } = {}) {
+    /** ai/config.js через ~ — дефолты класса (model и т.п.); нет файла — null. */
+    async loadConfig(owner = this.$context) {
+        try {
+            const file = await owner?.meta_folder?.get_item('ai/config.js');
+            if (!file)
+                return null;
+            return owner.constructor.importScript(await file.load());
+        }
+        catch { return null; }
+    },
+
+    async buildSystemPrompt({ session, location, tz, owner } = {}) {
+        owner ??= this.$context;
         const user_info = await session?.$user?.info?.();
-        const class_info = await this.$context?.info?.();
+        const class_info = await owner?.info?.();
         if (location) {
             try {
                 const loc = typeof location === 'string' ? JSON.parse(location) : location;
@@ -418,7 +440,7 @@ export default {
             }
             catch { location = null; }
         }
-        const file = await this.$context.meta_folder.get_item('ai/system.md');
+        const file = await owner.meta_folder.get_item('ai/system.md');
         const system = String(await file.load({ encoding: 'utf-8' })).trim();
         return [
             system,

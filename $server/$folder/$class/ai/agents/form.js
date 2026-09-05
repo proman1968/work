@@ -2,7 +2,6 @@
 export default {
     label: 'Готовлю форму',
     icon: 'icons:view-list',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     description: 'несколько полей от пользователя',
     /** не в меню step — диалог на корне / todo */
     step: false,

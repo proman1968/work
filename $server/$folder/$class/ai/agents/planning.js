@@ -2,7 +2,6 @@
 export default {
     label: 'План',
     icon: 'icons:assignment',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     doc: true,
     description: 'несколько ещё не сделанных действий',
     step: false,

@@ -87,7 +87,6 @@ const activationTool = {
 export default {
     label: 'Работаю c системой',
     icon: 'icons:folder',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     description: 'факты или файлы рабочей области',
     system: 'Подумай, какие именно действия над файлами необходимо выполнить.',
     prompt: `Проведи анализ текущего этапа работы с файлами и сформируй подробный отчёт о его результатах.`,

@@ -59,6 +59,7 @@ export default {
         if (typeof engine?.execute !== 'function')
             throw new Error('$task: метод prompt (ai) не найден у класса');
         await engine.execute({
+            $context: this.$class, // класс исполнения явно — привязка this.$context у метода разделяемая
             agent: params.block.type,
             block: params.block,
             box: params.box,
@@ -402,8 +403,9 @@ export default {
         params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
-    /** handoff: передача агенту — только диалог-улики (без system/topicsMap/leafSystem),
-     *  «кто/где» — первым user-кадром; system всегда пересобирает исполнитель. */
+    /** handoff: передача агенту — только диалог-улики (без system/topicsMap/leafSystem);
+     *  «кто/где» не передаётся: body.system — полный system-промпт (дубль),
+     *  как user-кадр он сбивает модель агента; исполнитель пересобирает system сам. */
     async context(params = {}) {
         const { prompt, evidence = true, leaf, handoff } = params;
         const body = await this.body;
@@ -445,11 +447,6 @@ export default {
                 messages.push({ role: 'user', content: 'ok' });
             messages.push({ role: nextRole, content });
         };
-        if (handoff) {
-            const place = layers.map(l => l.system).filter(Boolean).join('\n\n');
-            if (place)
-                push('user', place);
-        }
         for (const layer of layers)
             for (const m of layer.messages)
                 push(m.role, m.content);
@@ -473,8 +470,8 @@ export default {
         const place = String(box.system || '').trim();
         let system;
         if (handoff) {
-            // передача агенту: только «кто/где», без ролей ходов таска и todo
-            system = place;
+            // передача агенту: system не передаётся — исполнитель пересобирает свой
+            system = '';
         }
         else {
             const role = String(node?.[mode]?.system || node?.system || '').trim();

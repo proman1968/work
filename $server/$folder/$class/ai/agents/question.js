@@ -2,7 +2,6 @@
 export default {
     label: 'Задаю вопрос',
     icon: 'icons:help',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     description: 'нужен ответ человека; поиск и файлы области это не закрывают',
     /** не в меню step — диалог на корне / todo */
     step: false,

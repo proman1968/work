@@ -2,7 +2,6 @@
 export default {
     label: 'Делаю HTML приложение',
     icon: 'editor:code',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     doc: true,
     description: 'одностраничное HTML-приложение в ленте',
     system: [

@@ -7,7 +7,6 @@ const SERVICE = '/SERVICES/DuckDuckGo';
 export default {
     label: 'Ищу в интернете',
     icon: 'icons:language',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     service: SERVICE,
     services: SERVICES,
     role: 'user',
