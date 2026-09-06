@@ -316,14 +316,20 @@ export class $file extends $folder{
     async inherit() {
         return this[R].cache['_inherit'] ??= new AsyncPromise(async () => {
             const ancestor = await this.inherit_ancestor;
-            if (ancestor) {
+            if (ancestor && ancestor.real_dir !== this.real_dir) {
                 const selfData = await this.load();
                 const ancestorData = await ancestor.inherit();
                 return MERGE.mergeScripts(selfData, ancestorData);
             }
-            else {
-                return await this.load();
-            }
+            return this.load();
+        });
+    }
+
+
+    async importScript() {
+        return this[R].cache['_import_script'] ??= new AsyncPromise(async () => {
+            const script = await this.inherit();
+            return this.constructor.importScript(script);
         });
     }
     /**

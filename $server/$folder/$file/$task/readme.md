@@ -14,7 +14,7 @@
 
 1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
 2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из меты класса (`$class.meta_folder` → `ai/agents`, канон движка). Тёзки ходов оркестратора выше агентов.
-3. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок в ленту и передаёт движку контракт `live` (события, `_save`, стоп, mode, ожидание человека) и `context({handoff})` — диалог-улики без system. Ответ человека доставляется через `_resolveWait` (APPROVE); незавершённый агент после обрыва доигрывает движок (`_activeAgentBlock`).
+3. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок и передаёт `live` + `context({handoff})` — `body.system` + диалог-улики (без topicsMap). Движок дополняет system локально (место, агент). Ответ человека — `_resolveWait` (APPROVE); обрыв — `_activeAgentBlock`.
 4. **`on_save`** пишет `body.system` (`buildSystemPrompt` из `prompt/$method`) и вызывает `file.prompt`.
 5. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
 

@@ -30,7 +30,13 @@ const readTool = {
         if (b.content)
             return false;
         const path = filePath(b, params.box, readTool.label);
-        await params.exec(WORK, { method: 'read_text', args: { path } }, { block: b });
+        const file = await resolveFile(path);
+        if (!file)
+            throw new Error('read: файл не найден: ' + path);
+        await params.exec(file, {
+            method: 'read_text',
+            args: { session: params.session },
+        }, { block: b });
         return true;
     },
 };
@@ -57,9 +63,37 @@ const writeTool = {
         block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
         if (block.done || !block.path || block.post == null)
             return;
-        const method = /SEARCH|REPLACE/.test(block.post) ? 'edit' : 'save';
-        await params.exec(WORK, { method, args: { path: block.path, post: block.post } }, { block });
-        block.done = true;
+        try {
+            const edit = /SEARCH|REPLACE/.test(block.post);
+            const session = params.session;
+            const file = await resolveFile(block.path);
+            if (file) {
+                // существующий $file: save/edit на элементе (не WORK.save — это class.js)
+                await params.exec(file, {
+                    method: edit ? 'edit' : 'save',
+                    args: { post: block.post, session },
+                }, { block });
+            }
+            else if (edit) {
+                throw new Error('write/edit: файл не найден: ' + block.path);
+            }
+            else {
+                // новый файл: parent.save_file({ filename, post })
+                const { parent, filename } = await resolveParent(block.path);
+                await params.exec(parent, {
+                    method: 'save_file',
+                    args: { filename, post: block.post, session },
+                }, { block });
+            }
+            block.done = true;
+        }
+        catch (e) {
+            if (!block.error) {
+                block.error = true;
+                block.content = (block.content || '') + String(e.message || e);
+            }
+            throw e;
+        }
     },
     async init(params = {}) {
         if (params.block.done)
@@ -153,6 +187,29 @@ function filePath(block, box, defaultLabel) {
         || [...(box?.items || [])].reverse().find(b => b.type === 'search' && b.content);
     const hit = String(found?.content || '').match(/[/][^\s:]+/);
     return hit ? hit[0] : '';
+}
+
+/** $file по пути WORK; не файл / нет — null. */
+async function resolveFile(path) {
+    path = String(path || '').trim();
+    if (!path)
+        return null;
+    const item = await WORK.get_item(path);
+    return item && typeof item.read_text === 'function' ? item : null;
+}
+
+/** Родитель + имя файла для save_file (создание). */
+async function resolveParent(path) {
+    path = String(path || '').trim();
+    const i = path.lastIndexOf('/');
+    const filename = (i >= 0 ? path.slice(i + 1) : path).trim();
+    const parentPath = i > 0 ? path.slice(0, i) : '/';
+    if (!filename)
+        throw new Error('write: нет имени файла в пути: ' + path);
+    const parent = await WORK.get_item(parentPath);
+    if (!parent || typeof parent.save_file !== 'function')
+        throw new Error('write: нельзя создать файл в ' + parentPath);
+    return { parent, filename };
 }
 
 function lastUserContent(messages) {

@@ -59,7 +59,6 @@ export default {
         if (typeof engine?.execute !== 'function')
             throw new Error('$task: метод prompt (ai) не найден у класса');
         await engine.execute({
-            $context: this.$class, // класс исполнения явно — привязка this.$context у метода разделяемая
             agent: params.block.type,
             block: params.block,
             box: params.box,
@@ -403,9 +402,9 @@ export default {
         params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
-    /** handoff: передача агенту — только диалог-улики (без system/topicsMap/leafSystem);
-     *  «кто/где» не передаётся: body.system — полный system-промпт (дубль),
-     *  как user-кадр он сбивает модель агента; исполнитель пересобирает system сам. */
+    /** handoff: заказчик передаёт свой system (body.system: место, локация, время) + диалог-улики;
+     *  без topicsMap/leafSystem/ролей ходов таска — их допишет исполнитель (агент/tool).
+     *  system только role=system, не user-кадром. */
     async context(params = {}) {
         const { prompt, evidence = true, leaf, handoff } = params;
         const body = await this.body;
@@ -421,7 +420,9 @@ export default {
         const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
         let messages;
         if (handoff) {
-            messages = [];
+            // база system от заказчика (уже с расположением); исполнитель дополнит локально
+            const base = String(body.system || '').trim();
+            messages = base ? [{ role: 'system', content: base }] : [];
         }
         else {
             const mode = body.mode || 'plan';
@@ -470,7 +471,7 @@ export default {
         const place = String(box.system || '').trim();
         let system;
         if (handoff) {
-            // передача агенту: system не передаётся — исполнитель пересобирает свой
+            // system заказчика уже в messages[0] из body.system; слой роли хода таска не тащим
             system = '';
         }
         else {
