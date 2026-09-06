@@ -1,6 +1,8 @@
 # Прогресс: $task
 
 ## Последние изменения
+- [01:40] `_promptTurn`: `box.todo` не fill-лист; при незакрытых steps сразу `step` (не стоп после APPROVE плана). Причина: прогон — после «принято» fill todo → chat.done, «Продолжить» в том же тупике, steps не стартовали.
+- [00:05] `_runAgent`: перед `execute` снова `engine.$context = this.$class` (общий tilde-метод). Причина: после work → web падение `meta_folder` of undefined.
 - [22:05] goal v2: норма достижения в `[goal]` system; `resume.continue` после question без субагента (меню без answer); pursue до 3 ходов после терминального answer при open goal. Причина: прогон 1788718219280 — answer «сохранил» при живой goal и question до work.
 - [21:05] `body.goal` + resume: сессионная цель (text/status/resume); waiting на question/form → resume агента; меню и context видят `[goal]`; `live.goalDone` после write.done. Причина: модель отвечала на каждую реплику как на новую задачу вместо добивания постановки.
 - [19:35] `live.wait`: при ожидании человека шлём `chat.done` (кнопка APPROVE, pending гаснет); после APPROVE+`_resolveWait` не шлём done — исходный prompt ещё крутит движок (его start на APPROVE держит pending). Причина: дедлок activation — радуга и нет «Перейти к действиям».
@@ -14,6 +16,7 @@
 - Полное сведение `_streamChat`/`_fillLeaf` собственных ходов таска на движок (сейчас — только агенты).
 
 ## Ключевые решения
+- Решение: после approve плана — не fill `todo`, сразу `step`. Причина: иначе цикл стопорится на пустом стриме чеклиста, «Продолжить» бессмысленна.
 - Решение: goal v2 — system-норма + `resume.continue` + pursue (как у OpenCode: ориентация в system и внешний цикл, закрытие только evidence). Причина: одной записи goal.text недостаточно против терминального answer.
 - Решение: `body.goal` — объект цели сессии; последняя реплика при open/waiting — вход к цели, не новая постановка; `live.wait` (activation) не дублируется resume-слотом. Причина: связать вопрос человеку с продолжением агента после leaf-stop.
 - Решение: system в handoff — от заказчика (`body.system` role=system); исполнитель дополняет (place / agent.system), не пересобирает базу с нуля. Причина: иначе теряется расположение и прочий контекст заказа.

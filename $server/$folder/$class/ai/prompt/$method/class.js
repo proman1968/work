@@ -1,8 +1,8 @@
 ﻿/**
- * $method prompt — движок агентов из ai/agents/* (one-shot REST и живая лента).
+ * $method prompt — движок агентов из пакета ai/agents/* рядом с методом (не meta peer через ~).
  * params: { session, agent, model, mode, effort, messages, prompt, block, box, live }
- * this.$context — класс исполнения (геттер метода).
- * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js (дефолт класса).
+ * this.$context — класс исполнения (место/system/config домена).
+ * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js ($context или пакет движка).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
  *   Нет live — движок создаёт тихий standalone: события с path класса, без save/wait.
  * messages — диалог-улики; system от заказчика (если есть) сохраняется,
@@ -12,6 +12,7 @@
  * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
  * круг / вложенный агент — снова execute(params), не HTTP.
+ * tool/agent.init получают engine: this (для ask peer без ~/ai у цели).
  */
 
 export default {
@@ -113,6 +114,7 @@ export default {
             if (typeof agent.init === 'function') {
                 await agent.init({
                     block, box: params.box, messages, session, model, live, exec, agent,
+                    engine: this,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -145,13 +147,15 @@ export default {
             if (typeof tool.init === 'function') {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
+                    engine: this,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
                 if (ok === false) {
+                    // tool отказался (нет операнда) — не total, а снова pick без этого tool
                     block.items.pop();
                     await live.save?.();
-                    return this.total(ctx, tools);
+                    return this.turn(ctx);
                 }
             }
             if (!child.content && (child.draft || tool.prompt || tool.system)) {
@@ -406,18 +410,47 @@ export default {
         }
     },
 
+    /**
+     * Пакет ai рядом с этим $method (parent с agents/), не meta peer через ~.
+     * Код агентов — у движка; $context peer даёт место/system/config домена.
+     */
+    async _aiPackage() {
+        let cur = this.parent;
+        for (let i = 0; i < 5 && cur; i++) {
+            try {
+                if (typeof cur.get_item === 'function') {
+                    const agents = await cur.get_item('agents');
+                    if (agents)
+                        return cur;
+                }
+            }
+            catch { /* следующий parent */ }
+            if (cur.id === 'ai')
+                return cur;
+            cur = cur.parent;
+        }
+        return null;
+    },
+
     async loadAgent(agent = 'answer') {
-        const file = await this.$context.meta_folder.get_item(`ai/agents/${agent}.js`);
+        const ai = await this._aiPackage();
+        const file = ai ? await ai.get_item(`agents/${agent}.js`) : null;
         if (!file && agent !== 'answer')
             return this.loadAgent('answer');
+        if (!file)
+            throw new Error('prompt: agent not found: ' + agent);
         return file.importScript();
     },
 
-    /** ai/config.js через ~ — дефолты класса (model и т.п.); нет файла — null. */
+    /** config: сначала meta $context (свой/через ~), иначе пакет движка. */
     async loadConfig() {
         try {
-            const file = await this.$context.meta_folder.get_item('ai/config.js');
-            return file.importScript();
+            let file = await this.$context?.meta_folder?.get_item?.('ai/config.js');
+            if (!file) {
+                const ai = await this._aiPackage();
+                file = ai ? await ai.get_item('config.js') : null;
+            }
+            return file ? await file.importScript() : {};
         }
         catch { return {}; }
     },
@@ -440,8 +473,22 @@ export default {
             }
             catch { location = null; }
         }
-        const file = await ctx.meta_folder.get_item('ai/system.md');
-        const system = String(await file.load({ encoding: 'utf-8' })).trim();
+        let system = '';
+        try {
+            const file = await ctx?.meta_folder?.get_item?.('ai/system.md');
+            if (file)
+                system = String(await file.load({ encoding: 'utf-8' })).trim();
+        }
+        catch { /* peer без ai */ }
+        if (!system) {
+            try {
+                const ai = await this._aiPackage();
+                const file = ai ? await ai.get_item('system.md') : null;
+                if (file)
+                    system = String(await file.load({ encoding: 'utf-8' })).trim();
+            }
+            catch { /* нет пакета */ }
+        }
         return [
             system,
             placeContext(user_info, class_info),

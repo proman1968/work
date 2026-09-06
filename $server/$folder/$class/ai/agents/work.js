@@ -1,22 +1,63 @@
 /** Агент work: файлы рабочей области. Меню = ключи tools (plan/do).
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat }).
- *  approve стоп-блока выполняет владелец ленты (task) — там доступен params.task. */
+ *  Строение WORK — explore; интернет — web. approve стоп-блока — владелец ленты (task).
+ *  search — только внутри уже выбранного класса (не корень WORK). */
+
+const AGENT_TAG = 'Файлы';
+
 const searchTool = {
     label: 'Ищу',
     icon: 'icons:search',
     role: 'user',
-    description: 'поиск файлов в области, путь неизвестен',
+    allowReasoning: true,
+    description: 'semantic_search внутри уже выбранного класса; не корень WORK и не строение площадки',
+    system: [
+        '# Режим: поиск файлов в классе',
+        'Первая строка — путь класса WORK (не «/», не корень площадки).',
+        'Дальше текст запроса для поиска внутри этого класса.',
+        'Без выбранного класса не выдумывай корень WORK — строение площадки делает explore.',
+        'Не обращайся к пользователю.',
+    ].join('\n'),
+    prompt: [
+        'Путь класса и запрос.',
+        'Пример:',
+        '/USERS/CA4E097FF6C1D387',
+        'конфиг моделей в задаче',
+    ].join('\n'),
     async init(params = {}) {
         const b = params.block;
-        if (b.content)
+        if (b.done)
             return false;
-        const query = workQuery(b, params.box, params.messages, searchTool.label);
-        if (query)
-            b.label = query;
-        const result = await params.exec(WORK, { method: 'semantic_search', args: { prompt: query } }, { block: b });
-        if (!b.content)
-            b.content = formatFileHits(result);
+        tagAgent(params.box, AGENT_TAG, 'поиск…');
         return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        if (b.done)
+            return;
+        const { path, query } = parseSearch(b, params.box, params.messages, searchTool.label);
+        if (!path || !query || isWorkRootPath(path)) {
+            if (!String(b.content || '').trim())
+                return;
+            b.error = true;
+            b.content = 'search: нужен путь класса (не корень WORK) и запрос';
+            return;
+        }
+        const target = await WORK.get_item(path);
+        if (!target || typeof target.semantic_search !== 'function' || isWorkRootItem(target)) {
+            b.error = true;
+            b.content = 'search: класс не найден или это корень WORK: ' + path;
+            return;
+        }
+        b.path = path;
+        b.label = path + (query ? ': ' + clip(query, 40) : '');
+        tagAgent(params.box, AGENT_TAG, 'ищу в ' + path);
+        const result = await params.exec(target, {
+            method: 'semantic_search',
+            args: { prompt: query },
+        }, { block: b });
+        b.content = formatFileHits(result);
+        b.done = true;
     },
 };
 
@@ -24,15 +65,20 @@ const readTool = {
     label: 'Читаю файл',
     icon: 'icons:description',
     role: 'user',
-    description: 'текст файла по известному пути',
+    description: 'текст файла по пути из ленты',
     async init(params = {}) {
         const b = params.block;
         if (b.content)
             return false;
         const path = filePath(b, params.box, readTool.label);
+        if (!path)
+            return false;
         const file = await resolveFile(path);
         if (!file)
-            throw new Error('read: файл не найден: ' + path);
+            return false;
+        b.path = path;
+        b.label = path;
+        tagAgent(params.box, AGENT_TAG, 'читаю ' + path);
         await params.exec(file, {
             method: 'read_text',
             args: { session: params.session },
@@ -44,6 +90,7 @@ const readTool = {
 const writeTool = {
     label: 'Записываю файл',
     icon: 'editor:mode-edit',
+    allowReasoning: true,
     description: 'записать или править файл',
     system: [
         '# Режим: запись файла',
@@ -62,6 +109,8 @@ const writeTool = {
         const head = (fence ? raw.slice(0, fence.index) : raw).trim().split('\n').find(Boolean) || '';
         block.path = head.replace(/^#+\s*/, '').trim();
         block.post = fence ? fence[1].trim() : raw.split('\n').slice(1).join('\n').trim();
+        if (block.path)
+            tagAgent(params.box, AGENT_TAG, 'запись ' + block.path);
         if (block.done || !block.path || block.post == null)
             return;
         try {
@@ -69,7 +118,6 @@ const writeTool = {
             const session = params.session;
             const file = await resolveFile(block.path);
             if (file) {
-                // существующий $file: save/edit на элементе (не WORK.save — это class.js)
                 await params.exec(file, {
                     method: edit ? 'edit' : 'save',
                     args: { post: block.post, session },
@@ -79,7 +127,6 @@ const writeTool = {
                 throw new Error('write/edit: файл не найден: ' + block.path);
             }
             else {
-                // новый файл: parent.save_file({ filename, post })
                 const { parent, filename } = await resolveParent(block.path);
                 await params.exec(parent, {
                     method: 'save_file',
@@ -99,6 +146,7 @@ const writeTool = {
     async init(params = {}) {
         if (params.block.done)
             return false;
+        tagAgent(params.box, AGENT_TAG, 'запись…');
         return true;
     },
 };
@@ -113,6 +161,10 @@ const activationTool = {
 Расскажи, какие файлы собираешься изменить. Ничего не пиши, пока пользователь не подтвердит.
 `,
     stop: 'Перейти к действиям',
+    async init(params = {}) {
+        tagAgent(params.box, AGENT_TAG, 'нужен режим do');
+        return true;
+    },
     async approve(params = {}) {
         (await params.task.body).mode = 'do';
         params.block.icon = 'icons:check-circle';
@@ -120,11 +172,23 @@ const activationTool = {
 };
 
 export default {
-    label: 'Работаю c системой',
+    label: 'Работаю с файлами',
     icon: 'icons:folder',
-    description: 'факты или файлы рабочей области',
-    system: 'Подумай, какие именно действия над файлами необходимо выполнить.',
+    allowReasoning: true,
+    description: 'файлы по пути: read/write; search только внутри уже выбранного класса; не строение WORK, не журнал (history/.logs — агент logs), не список моделей/сервисов',
+    system: [
+        '# Агент: work',
+        'Файлы рабочей области. Строение площадки (модели, сервисы, классы) — explore; интернет — web; журнал класса — logs.',
+        'Не читай …/logs/.data.logs/history/… через read/search — это logs ($class.logs / read_log_entry).',
+        'search — только внутри выбранного класса (путь + запрос); не semantic_search по корню WORK.',
+        'Подумай, какие именно действия над файлами необходимы.',
+    ].join('\n'),
     prompt: `Проведи анализ текущего этапа работы с файлами и сформируй подробный отчёт о его результатах.`,
+    async init(params = {}) {
+        const brief = String(params.block?.brief || '').trim();
+        if (brief)
+            tagAgent(params.block, AGENT_TAG, clip(brief, 48));
+    },
     /** После итога — обратно в plan (право write разовое); успешный write закрывает goal сессии. */
     finish(params = {}) {
         const live = params.live;
@@ -135,12 +199,13 @@ export default {
             live?.goalDone?.();
     },
     plan: {
-        description: 'факты или файлы рабочей области, в контексте их нет',
+        description: 'чтение и поиск файлов внутри класса; write — после activation',
         system: [
-            'Площадка work: файлы рабочей области только читать (search, read).',
-            'Чтобы писать или менять файлы — ACTIVATION (после подтверждения появится write).',
-            'Нет операнда для действия (путь, содержимое) — не выдумывай и не собирай его репликой внутри work.',
-            'Недостающий факт у человека — зафиксируй в итоге; спросит оркестратор (question). Иначе действуй по данным из ленты.',
+            'Площадка work: search (путь класса + запрос) и read файлов.',
+            'search не по корню WORK — сначала класс (часто через explore).',
+            'Activation только если нужен write.',
+            'Нет операнда для действия (путь, содержимое) — не выдумывай.',
+            'Недостающий факт у человека — зафиксируй в итоге; спросит оркестратор (question).',
             'Подумай, какие именно действия над файлами необходимы.',
         ].join('\n'),
         tools: {
@@ -154,6 +219,7 @@ export default {
         system: [
             'Площадка work: можно менять файлы рабочей области (write).',
             'write только с путём и содержимым из контекста ленты — без заглушек и выдуманного текста.',
+            'search — внутри выбранного класса, не корень WORK.',
             'Нет операнда — не выдумывай; недостающее у человека выносится наружу (question оркестратора), не answer.',
             'Подумай, какие именно действия над файлами необходимы.',
         ].join('\n'),
@@ -164,6 +230,19 @@ export default {
         },
     },
 };
+
+/** Шапка бокса агента: «Файлы: /path» — чем и где. */
+function tagAgent(box, role, detail) {
+    if (!box)
+        return;
+    const d = String(detail || '').trim();
+    box.label = d ? role + ': ' + d : role;
+}
+
+function clip(s, n) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
 
 function formatFileHits(result) {
     const items = Array.isArray(result) ? result : [];
@@ -177,11 +256,61 @@ function formatFileHits(result) {
     }).join('\n');
 }
 
-function workQuery(block, box, messages, defaultLabel) {
-    const label = String(block?.label || '').trim();
-    if (label && label !== defaultLabel)
-        return label;
-    return String(box?.brief || lastUserContent(messages) || '').trim();
+/** Путь класса + запрос для search (не корень WORK). */
+function parseSearch(block, box, messages, defaultLabel) {
+    const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
+    let path = String(block?.path || '').trim();
+    let query = '';
+    if (raw) {
+        const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+        const head = (lines[0] || '').replace(/^#+\s*/, '').trim();
+        if (!path && head.startsWith('/')) {
+            path = head;
+            query = lines.slice(1).join('\n').trim();
+        }
+        else if (path)
+            query = raw;
+        else
+            query = raw;
+    }
+    if (!path) {
+        const label = String(block?.label || '').trim();
+        if (label && label !== defaultLabel && label.startsWith('/')) {
+            const cut = label.indexOf(':');
+            path = (cut > 0 ? label.slice(0, cut) : label).trim();
+            if (!query && cut > 0)
+                query = label.slice(cut + 1).trim();
+        }
+    }
+    const brief = String(box?.brief || lastUserContent(messages) || '').trim();
+    if (!query)
+        query = brief;
+    if ((!path || !query) && brief) {
+        const m = brief.match(/^(\/[^\s]+)\s+([\s\S]+)$/);
+        if (m) {
+            path = path || m[1];
+            query = query || m[2].trim();
+        }
+    }
+    return { path: String(path || '').trim(), query: String(query || '').trim() };
+}
+
+function isWorkRootPath(path) {
+    const p = String(path || '').trim().replace(/\/+$/, '') || '/';
+    return p === '/' || p === '' || p === String(WORK?.path || '').replace(/\/+$/, '');
+}
+
+function isWorkRootItem(item) {
+    if (!item || !WORK)
+        return false;
+    if (item === WORK)
+        return true;
+    try {
+        return typeof Reactor?.equal === 'function' && Reactor.equal(item, WORK);
+    }
+    catch {
+        return false;
+    }
 }
 
 function filePath(block, box, defaultLabel) {
@@ -190,14 +319,13 @@ function filePath(block, box, defaultLabel) {
         return own;
     const label = String(block?.label || '').trim();
     if (label && label !== defaultLabel && label.includes('/'))
-        return label;
+        return label.split(':')[0].trim();
     const found = (box?.items || []).findLast?.(b => b.type === 'search' && b.content)
         || [...(box?.items || [])].reverse().find(b => b.type === 'search' && b.content);
     const hit = String(found?.content || '').match(/[/][^\s:]+/);
     return hit ? hit[0] : '';
 }
 
-/** $file по пути WORK; не файл / нет — null. */
 async function resolveFile(path) {
     path = String(path || '').trim();
     if (!path)
@@ -206,7 +334,6 @@ async function resolveFile(path) {
     return item && typeof item.read_text === 'function' ? item : null;
 }
 
-/** Родитель + имя файла для save_file (создание). */
 async function resolveParent(path) {
     path = String(path || '').trim();
     const i = path.lastIndexOf('/');

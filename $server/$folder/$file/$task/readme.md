@@ -18,8 +18,9 @@
 4. **Resume / continue:** стоп `question`/`form` → `waiting` + `resume.agent` (если субагент уже был) или `resume.continue` (вопрос до агента). Следующий user-ход: форс агента либо меню **без `answer`**. `live.wait` (activation) не дублируется.
 5. **Pursue:** терминальный `answer` при `goal` open → до `GOAL_PURSUE_MAX` авто-ходов без `chat.done` (меню снова, `answer` исключён). `done` только через evidence (`live.goalDone` после `write.done` и т.п.).
 6. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок и передаёт `live` + `context({handoff})` — `body.system` + `[goal]` + диалог-улики (без topicsMap). Движок дополняет system локально (место, агент). Стоп инструмента (`live.wait`) → `chat.done` (кнопка APPROVE); ответ — `_resolveWait`, исходный prompt продолжает и сам закрывает сессию. Обрыв — `_activeAgentBlock`.
-7. **`on_save`** пишет `body.system` (`buildSystemPrompt` из `prompt/$method`) и вызывает `file.prompt`.
-8. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
+7. **План → todo → step:** `planning.approve` пишет `box.todo`; `_promptTurn` не стримит в todo — при незакрытых steps сразу пушит `step` (`pipe.todo.next`).
+8. **`on_save`** пишет `body.system` (`buildSystemPrompt` из `prompt/$method`) и вызывает `file.prompt`.
+9. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
 
 ## 4. Из чего это состоит
 

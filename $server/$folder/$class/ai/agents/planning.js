@@ -3,6 +3,7 @@ export default {
     label: 'План',
     icon: 'icons:assignment',
     doc: true,
+    allowReasoning: true,
     description: 'несколько ещё не сделанных действий',
     step: false,
     system: [

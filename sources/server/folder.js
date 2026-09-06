@@ -6,6 +6,21 @@ import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
+
+/** Атомарная запись RAG index: temp + rename (не обрезать index.json при краше). */
+async function writeRagIndexAtomic(path, text) {
+    const tmp = path + '.tmp';
+    await fsp.writeFile(tmp, text, { encoding: 'utf-8' });
+    try {
+        await fsp.rename(tmp, path);
+    }
+    catch (e) {
+        // Windows: rename поверх существующего часто падает
+        await fsp.unlink(path).catch(() => {});
+        await fsp.rename(tmp, path);
+    }
+}
+
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
     static PATH_STEP = {
@@ -455,24 +470,42 @@ export class $folder extends $item{
 
             let files = await rag_target_folder.children;
             files = files.filter(f=>{
-                return !WORK.exclude_for_rag.includes(f.id) && f.id !== '.RAG';
+                // exclude + .RAG + скрытые `.…` + isInherit (нет файла по проекции)
+                if (WORK.exclude_for_rag.includes(f.id) || f.id === '.RAG' || f.isInherit)
+                    return false;
+                if (f.id?.[0] === '.')
+                    return false;
+                return true;
             });
 
             const RAG = await rag_folder._get_next_item('index.json', FS.$file);
             let body;
             let need_save = false;
-            if(fs.existsSync(RAG.real_dir)){
-                body = fs.readFileSync(RAG.real_dir, {encoding: 'utf-8'});
-                body = JSON.parse(body );
-                for(let key in body){
-                    if(!files.find(f=>f.id === key) && key !== 'embedding'){
+            if (fs.existsSync(RAG.real_dir)) {
+                let raw = '';
+                try {
+                    raw = fs.readFileSync(RAG.real_dir, { encoding: 'utf-8' });
+                    body = raw.trim() ? JSON.parse(raw) : {};
+                }
+                catch (e) {
+                    // пустой/обрезанный index после краша embedding — пересобрать
+                    console.warn('[WORK] rag index.json:', RAG.real_dir, e.message);
+                    body = {};
+                    need_save = true;
+                }
+                if (!body || typeof body !== 'object' || Array.isArray(body)) {
+                    body = {};
+                    need_save = true;
+                }
+                for (let key in body) {
+                    if (!files.find(f => f.id === key) && key !== 'embedding') {
                         delete body[key];
                         need_save = true;
                     }
                 }
             }
-            else{
-                body  = {};
+            else {
+                body = {};
                 rag_folder.save();
                 need_save = true;
             }
@@ -485,6 +518,9 @@ export class $folder extends $item{
                             if(file.constructor !== FS.$file){
                                 return {path: file.real_dir};
                             }
+                            // нет физического файла (на всякий случай поверх фильтра isInherit)
+                            if (!fs.existsSync(file.real_dir) && !fs.existsSync(file.dir))
+                                return {time};
 
                             let chunks = await extractor.extract(file);
 
@@ -535,11 +571,16 @@ export class $folder extends $item{
                 }
 
                 if(item && file.constructor !== FS.$file){ // проваливаемся за дочерними
-                    let child = await file.rag;
-                    let embedding = child?.embedding;
-                    if(!Reactor.equal(item.embedding, embedding)){
-                        item.embedding = embedding;
-                        need_save = true;
+                    try {
+                        let child = await file.rag;
+                        let embedding = child?.embedding;
+                        if (!Reactor.equal(item.embedding, embedding)) {
+                            item.embedding = embedding;
+                            need_save = true;
+                        }
+                    }
+                    catch (e) {
+                        console.warn('[WORK] rag child:', file.path || file.id, e.message);
                     }
                 }
             }
@@ -555,8 +596,7 @@ export class $folder extends $item{
                 delete body.embedding;
                 body.embedding = embedding;
                 let text = JSON.stringify(body, null, 4);
-                await RAG.save({post: text});
-                // fs.writeFileSync(RAG.real_dir, text, {encoding: 'utf-8'});
+                await writeRagIndexAtomic(RAG.real_dir, text);
             }
             return body;
         })()

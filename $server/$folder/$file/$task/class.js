@@ -68,9 +68,12 @@ export default {
     /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
     async _runAgent(params, session) {
         const body = await this.body;
-        const engine = (await this.$class?._methods)?.prompt;
+        const owner = this.$class;
+        const engine = (await owner?._methods)?.prompt;
         if (typeof engine?.execute !== 'function')
             throw new Error('$task: метод prompt (ai) не найден у класса');
+        // tilde-метод общий: зафиксировать владельца до execute (иначе meta_folder = undefined)
+        engine.$context = owner;
         await engine.execute({
             agent: params.block.type,
             block: params.block,
@@ -293,7 +296,9 @@ export default {
             return { loop: this._canLoop(b), block: b };
         }
         const leaf = params.block;
-        if (leaf && leaf !== params.box && !leaf.box && !hasBody(leaf)) {
+        // box.todo — чеклист плана, не лист для стрима; иначе после APPROVE fill todo → стоп без step
+        const todoFocus = leaf && (leaf.type === 'todo' || leaf === params.box?.todo);
+        if (leaf && leaf !== params.box && !leaf.box && !hasBody(leaf) && !todoFocus) {
             this._stopped = false;
             await this._fillLeaf(params, session);
             await this._save(session);
@@ -324,7 +329,12 @@ export default {
             next = next.filter(id => id !== 'answer');
 
         let choice;
-        if (!next.length)
+        // незакрытый todo → сразу step (не fill и не меню report/question)
+        const planned = params.box?.todo?.steps || [];
+        const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
+        if (todoFocus && planned.length > realSteps.length && next.includes('step'))
+            choice = 'step';
+        else if (!next.length)
             choice = 'total';
         else if (next.length === 1)
             choice = next[0];

@@ -738,54 +738,72 @@ globalThis.AsyncPromise = class AsyncPromise {
 Array: {
     const push = Array.prototype.push;
     Array.prototype.push = function (...item) {
+        if (!this[R])
+            return push.call(this, ...item);
         const res = push.call(this, ...item);
         Reactor.reset_deps(this);
         return res;
     }
     const unshift = Array.prototype.unshift;
     Array.prototype.unshift = function (...item) {
+        if (!this[R])
+            return unshift.call(this, ...item);
         const res = unshift.call(this, ...item);
         Reactor.reset_deps(this);
         return res;
     }
     const splice = Array.prototype.splice;
     Array.prototype.splice = function (...item) {
+        if (!this[R])
+            return splice.call(this, ...item);
         const res = splice.call(this, ...item);
         Reactor.reset_deps(this);
         return res;
     }
     const pop = Array.prototype.pop;
     Array.prototype.pop = function () {
+        if (!this[R])
+            return pop.call(this);
         const res = pop.call(this);
         Reactor.reset_deps(this);
         return res;
     }
     const shift = Array.prototype.shift;
     Array.prototype.shift = function () {
+        if (!this[R])
+            return shift.call(this);
         const res = shift.call(this);
         Reactor.reset_deps(this);
         return res;
     }
     const sort = Array.prototype.sort;
     Array.prototype.sort = function (...args) {
+        if (!this[R])
+            return sort.call(this, ...args);
         const res = sort.call(this, ...args);
         Reactor.reset_deps(this);
         return res;
     }
     const reverse = Array.prototype.reverse;
     Array.prototype.reverse = function () {
+        if (!this[R])
+            return reverse.call(this);
         const res = reverse.call(this);
         Reactor.reset_deps(this);
         return res;
     }
     const fill = Array.prototype.fill;
     Array.prototype.fill = function (...args) {
+        if (!this[R])
+            return fill.call(this, ...args);
         const res = fill.call(this, ...args);
         Reactor.reset_deps(this);
         return res;
     }
     const copyWithin = Array.prototype.copyWithin;
     Array.prototype.copyWithin = function (...args) {
+        if (!this[R])
+            return copyWithin.call(this, ...args);
         const res = copyWithin.call(this, ...args);
         Reactor.reset_deps(this);
         return res;
