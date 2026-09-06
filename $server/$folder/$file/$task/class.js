@@ -38,9 +38,22 @@ export default {
             get stopped() { return !!task._stopped; },
             get mode() { return task.body.mode || 'plan'; },
             set mode(v) { task.body.mode = v; },
-            wait: block => new Promise(resolve => {
-                (task._waiters ??= new Map()).set(block.time, resolve);
-            }),
+            /** Side-effect агента закрыл цель сессии (например write.done). */
+            goalDone() {
+                const g = task.body?.goal;
+                if (!g || g.status === 'done')
+                    return;
+                g.status = 'done';
+                g.resume = null;
+                g.pursue = 0;
+            },
+            /** Стоп на человека: отпускаем UI (chat.done → кнопка APPROVE), ждём _resolveWait. */
+            wait: block => {
+                session?.send?.({ type: 'chat.done', path: task.short });
+                return new Promise(resolve => {
+                    (task._waiters ??= new Map()).set(block.time, resolve);
+                });
+            },
         };
     },
     /** Доставка ответа человека в ожидающий движок (стоп-блок по time). */
@@ -68,8 +81,6 @@ export default {
             live: this._live(session),
             model: body.model,
             effort: body.effort,
-            tz: body.tz,
-            location: params.location,
         });
         await this._save(session);
         return params.block;
@@ -131,12 +142,13 @@ export default {
                     delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
-                    // движок ждёт этот блок — доставить факт и не гнать цикл параллельно
+                    // движок ждёт этот блок — доставить факт; chat.done не шлём:
+                    // исходный prompt ещё в _runAgent и сам закроет сессию по завершении
+                    // (вход в APPROVE уже дал chat.start → pending на продолжение работы)
                     if (this._resolveWait(params.block, {
                         accept,
                         content: params.block.approved || params.block.state,
                     })) {
-                        session?.send?.({ type: 'chat.done', path: this.short });
                         return { ok: true };
                     }
                 } break;
@@ -156,6 +168,30 @@ export default {
                     delete params.box.using_blocks;
                     this._stopped = false;
 
+                    // durable goal: новая постановка или вход к открытой; waiting+resume → форс / continue
+                    if (text) {
+                        const body = await this.body;
+                        const g = body.goal;
+                        if (!g || g.status === 'done') {
+                            body.goal = { text, status: 'open', resume: null, pursue: 0 };
+                        }
+                        else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
+                            agent = g.resume.agent;
+                            params.agent = agent;
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        else if (g.status === 'waiting' && g.resume?.continue) {
+                            // ответ на question до субагента — меню без answer
+                            g.status = 'open';
+                        }
+                        else if (g.status === 'waiting') {
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        await this._save(session);
+                    }
+
                     // прямой вход в субагента — исполняет движок класса
                     if (agent) {
                         await this._init(params);
@@ -171,6 +207,8 @@ export default {
                             await this._save(session);
                             // движок довёл агента до итога / стопа — без меню оркестратора
                             if (pushed) {
+                                if (params.block.stop && hasBody(params.block))
+                                    await this._noteGoalWait(params.block, params.box, session);
                                 session?.send?.({ type: 'chat.done', path: this.short });
                                 return agentResult(agent, params.block, { waiting: !!params.block.stop });
                             }
@@ -186,6 +224,11 @@ export default {
 
                 const turn = await this._promptTurn(params, session);
                 if (turn.waiting) {
+                    // answer+stop тоже waiting (конец ветки) — при open goal pursue, не отдавать UI
+                    if (!agent && turn.block?.type === 'answer' && await this._pursueGoal(turn, session)) {
+                        params = { role: 'AI', session };
+                        continue;
+                    }
                     session?.send?.({ type: 'chat.done', path: this.short });
                     return agentResult(agent, turn.block, { waiting: true });
                 }
@@ -240,8 +283,10 @@ export default {
             await this._captionDoc(params, session);
             await this._save(session);
             const b = params.block;
-            if (b?.stop && hasBody(b))
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
                 return { loop: false, waiting: true, block: b };
+            }
             // агент снова без итога и без стопа — не крутить цикл, ждать человека
             if (!hasBody(b) && !b?.error)
                 return { loop: false, block: b };
@@ -252,8 +297,10 @@ export default {
             this._stopped = false;
             await this._fillLeaf(params, session);
             await this._save(session);
-            if (leaf.stop)
+            if (leaf.stop) {
+                await this._noteGoalWait(leaf, params.box, session);
                 return { loop: false, waiting: true, block: leaf };
+            }
             return { loop: this._canLoop(leaf), block: leaf };
         }
 
@@ -271,6 +318,10 @@ export default {
 
         let using_blocks = params.box.using_blocks ??= [];
         next = (next || []).filter(id => !using_blocks.includes(id));
+        // после question без субагента / pursue — answer не в меню, пока goal open
+        const goal = this.body.goal;
+        if (goal && goal.status !== 'done' && goal.resume?.continue)
+            next = next.filter(id => id !== 'answer');
 
         let choice;
         if (!next.length)
@@ -285,8 +336,10 @@ export default {
                 return id.toUpperCase() + ' - ' + cap + ';';
             });
             let menu = [
-                'Выбери в menu пункт, который быстрее всего закрывает запрос пользователя. Выбирай не по порядку, а по смыслу.',
+                'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
+                'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
                 'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
+                'answer не закрывает goal и не заменяет side-effect; при данных для действия выбирай агента (work/web/…).',
                 'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
                 '\n\n[menu]\n',
@@ -310,8 +363,13 @@ export default {
             await this._captionDoc(params, session);
             await this._save(session);
             const b = params.block;
-            if (b?.stop && hasBody(b))
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
                 return { loop: false, waiting: true, block: b };
+            }
+            // субагент действия отработал — слот continue больше не нужен
+            if (choice !== 'question' && choice !== 'form')
+                clearGoalContinue(this.body.goal);
             return { loop: this._canLoop(b), block: b };
         }
         if (pushed) {
@@ -324,9 +382,55 @@ export default {
         await this._save(session);
 
         const focus = pushed ? params.block : boxBefore;
-        if (focus?.stop && hasBody(focus))
+        if (focus?.stop && hasBody(focus)) {
+            await this._noteGoalWait(focus, params.box, session);
             return { loop: false, waiting: true, block: focus };
+        }
         return { loop: this._canLoop(focus), block: focus };
+    },
+
+    /** question/form stop (не live.wait): goal.waiting + resume.agent | resume.continue. */
+    async _noteGoalWait(block, box, session) {
+        const type = block?.type;
+        if (type !== 'question' && type !== 'form')
+            return;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done')
+            return;
+        g.status = 'waiting';
+        const pipe = await this.pipe;
+        let agent = null;
+        if (box && pipe[box.type]?.agent && box.type !== 'question' && box.type !== 'form')
+            agent = box.type;
+        else
+            agent = lastResumeAgent(body, pipe);
+        // до субагента — continue: следующий ход без answer в меню
+        g.resume = agent ? { agent } : { continue: true };
+        await this._save(session);
+    },
+
+    /**
+     * После терминального answer при незакрытой goal — ещё ход оркестратора (budget).
+     * chat.done не шлём: pending держит исходный prompt.
+     */
+    async _pursueGoal(turn, session) {
+        if (this._stopped)
+            return false;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done' || g.status === 'waiting')
+            return false;
+        const leaf = turn?.block;
+        if (!leaf || leaf.type !== 'answer' || !hasBody(leaf))
+            return false;
+        const n = Number(g.pursue) || 0;
+        if (n >= GOAL_PURSUE_MAX)
+            return false;
+        g.pursue = n + 1;
+        g.resume = { continue: true };
+        await this._save(session);
+        return true;
     },
 
     async _captionDoc(params, session) {
@@ -419,9 +523,10 @@ export default {
         const focus = box;
         const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
         let messages;
+        const goalBlock = formatGoalBlock(body.goal);
         if (handoff) {
             // база system от заказчика (уже с расположением); исполнитель дополнит локально
-            const base = String(body.system || '').trim();
+            const base = [String(body.system || '').trim(), goalBlock].filter(Boolean).join('\n\n');
             messages = base ? [{ role: 'system', content: base }] : [];
         }
         else {
@@ -431,6 +536,7 @@ export default {
             const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
             messages = [{ role: 'system', content: [
                 ...layers.map(l => l.system).filter(Boolean),
+                goalBlock,
                 timeNow(body.tz),
                 topicsMap(pipe, focus, mode),
                 leafSystem,
@@ -816,6 +922,52 @@ function topicsMap(pipe, focus, mode) {
     if (agents.length)
         parts.push('[доступные агенты]\n' + topics(pipe, agents, mode));
     return parts.join('\n\n');
+}
+
+/** Сессионная цель для system/меню: факт + норма достижения. */
+function formatGoalBlock(goal) {
+    if (!goal?.text)
+        return '';
+    const lines = [
+        '[goal]',
+        String(goal.text).trim(),
+        'status: ' + (goal.status || 'open'),
+    ];
+    if (goal.resume?.agent)
+        lines.push('resume: ' + goal.resume.agent);
+    if (goal.resume?.continue)
+        lines.push('resume: continue (данные получены — действуй, не болтай)');
+    if (goal.status !== 'done') {
+        lines.push(
+            'Пока status не done — цель не достигнута; сессия не считается выполненной.',
+            'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте (write/web/…).',
+            'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
+        );
+    }
+    return lines.join('\n');
+}
+
+function clearGoalContinue(goal) {
+    if (goal?.resume?.continue)
+        goal.resume = null;
+}
+
+const GOAL_PURSUE_MAX = 3;
+
+/** Последний незакрытый субагент в ленте (не question/form) — кому вернуть ответ человека. */
+function lastResumeAgent(body, pipe) {
+    const walk = (items) => {
+        for (let i = (items || []).length - 1; i >= 0; i--) {
+            const b = items[i];
+            const nested = walk(b.items);
+            if (nested)
+                return nested;
+            if (pipe[b.type]?.agent && b.type !== 'question' && b.type !== 'form')
+                return b.type;
+        }
+        return null;
+    };
+    return walk(body?.items);
 }
 
 /** Бриф агенту: URL/тема из последнего prompt, без копирования thinking. */

@@ -1,13 +1,13 @@
 ﻿/**
  * $method prompt — движок агентов из ai/agents/* (one-shot REST и живая лента).
- * params: { session, agent, model, location, tz, mode, effort, messages, prompt, block, box, live }
+ * params: { session, agent, model, mode, effort, messages, prompt, block, box, live }
  * this.$context — класс исполнения (геттер метода).
  * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js (дефолт класса).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
  *   Нет live — движок создаёт тихий standalone: события с path класса, без save/wait.
  * messages — диалог-улики; system от заказчика (если есть) сохраняется,
  *   исполнитель дописывает локальные слои (место, agent/tool.system в fill).
- *   Нет system — standalone: buildSystemPrompt(system.md ~ + место + локация + время).
+ *   Нет system — standalone: buildSystemPrompt({ session }) (без location/tz — их в execute не бывает).
  * block — собрать/продолжить (мутируется на месте — живая лента владельца).
  * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
@@ -16,7 +16,7 @@
 
 export default {
     async execute(params = {}) {
-        let { session, agent, model, location, tz, messages, prompt, block, live } = params;
+        let { session, agent, model, messages, prompt, block, live } = params;
 
         const type = agent || 'answer';
         agent = await this.loadAgent(type);
@@ -45,7 +45,7 @@ export default {
         else {
             messages.unshift({
                 role: 'system',
-                content: await this.buildSystemPrompt({ session, location, tz }),
+                content: await this.buildSystemPrompt({ session }),
             });
         }
 
@@ -422,6 +422,7 @@ export default {
         catch { return {}; }
     },
 
+    /** System для on_save / standalone. location+tz — только снаружи execute (on_save); в execute не приходят. */
     async buildSystemPrompt({ session, location, tz } = {}) {
         const ctx = this.$context;
         const user_info = await session?.$user?.info?.();

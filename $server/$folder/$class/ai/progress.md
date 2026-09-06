@@ -1,6 +1,7 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [19:16] `execute` не принимает `location`/`tz` (никогда); они только у `buildSystemPrompt` для `on_save`. Handoff несёт уже готовый `body.system`.
 - [11:25] Убрана передача `owner` / `params.$context`: класс исполнения только `this.$context`. Причина: отдельный owner был лишним слоем; `$context` не переписывается.
 - [15:20] Владелец исполнения — `params.$context` (ставит HTTP-диспетчер или таск), `this.$context` — фолбэк; `loadAgent`/`loadConfig`/`buildSystemPrompt` берут owner аргументом. Причина: прогон — падение `undefined (reading 'meta_folder')`: привязка `item.$context` разделяемая, её перебивает параллельный `_methods` другого элемента.
 - [14:35] `prompt/$method` — единый движок агентов: контракт `live` (send/save/stopped/wait/mode) от владельца ленты; standalone REST — тихий live c path класса. Причина: одна реализация для one-shot и живой ленты $task.
