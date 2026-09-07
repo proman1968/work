@@ -93,6 +93,45 @@ export default {
     },
 
     /**
+     * Модели на API провайдера (не дети /MODELS в WORK).
+     * Ollama: GET {origin}/api/tags; OpenAI-совместимый: GET {origin}/v1/models.
+     */
+    async list_remote(params = {}) {
+        const ai = params.$ai || this;
+        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        const where = ai.short || ai.path || ai.id || '?';
+        if (!base)
+            return { error: 'list_remote: нет baseUrl у ' + where };
+        let origin;
+        try {
+            origin = new URL(base).origin;
+        }
+        catch {
+            return { error: 'list_remote: некорректный baseUrl: ' + base };
+        }
+        const headers = await getAuthHeaders(ai);
+        const tried = [];
+        const urls = [origin + '/api/tags', origin + '/v1/models'];
+        for (const url of urls) {
+            tried.push(url);
+            try {
+                const data = await httpsGetJson(url, headers, ai);
+                const models = normalizeRemoteModelIds(data);
+                if (models.length)
+                    return { source: url, baseUrl: base, models };
+            }
+            catch (e) {
+                tried[tried.length - 1] = url + ' (' + String(e.message || e).slice(0, 80) + ')';
+            }
+        }
+        return {
+            error: 'list_remote: не удалось получить список у ' + where,
+            baseUrl: base,
+            tried,
+        };
+    },
+
+    /**
      * Стриминговый чат с поддержкой function calling.
      * Обычный method (не async*): Reactor/babel-merge ломают AsyncGenerator на DATA;
      * возвращаем async generator изнутри.
@@ -577,6 +616,58 @@ async function getAuthHeaders(ai) {
         }
     }
     return headers;
+}
+
+/** GET JSON по HTTPS (list_remote и т.п.). */
+function httpsGetJson(urlStr, headers, ai) {
+    const url = new URL(urlStr);
+    const insecure = ai?.protocol === 'gigachat';
+    return new Promise((resolve, reject) => {
+        const req = WORK.https.request({
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname + url.search,
+            method: 'GET',
+            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            headers: { Accept: 'application/json', ...headers },
+            timeout: 15000,
+        }, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                const body = Buffer.concat(chunks).toString('utf-8');
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error('HTTP ' + res.statusCode + ': ' + body.slice(0, 120)));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(body));
+                }
+                catch (e) {
+                    reject(new Error('JSON: ' + e.message));
+                }
+            });
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('timeout'));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+/** Ollama /api/tags → models[].name; OpenAI /v1/models → data[].id */
+function normalizeRemoteModelIds(data) {
+    if (!data || typeof data !== 'object')
+        return [];
+    if (Array.isArray(data.models))
+        return data.models.map(m => String(m?.name || m?.model || '').trim()).filter(Boolean);
+    if (Array.isArray(data.data))
+        return data.data.map(m => String(m?.id || m?.name || '').trim()).filter(Boolean);
+    if (Array.isArray(data))
+        return data.map(m => String(typeof m === 'string' ? m : (m?.id || m?.name || '')).trim()).filter(Boolean);
+    return [];
 }
 
 async function gigachatAuth(ai) {

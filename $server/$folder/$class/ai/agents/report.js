@@ -1,7 +1,6 @@
 /** Агент report: сводка длинной работы. Лист + stop, не в меню step. */
 export default {
     label: 'Готовлю отчёт',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     doc: true,
     description: 'сводка длинной работы из нескольких этапов; не дубль уже показанной сводки',
     step: false,

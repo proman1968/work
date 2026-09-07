@@ -84,7 +84,7 @@ export default {
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" icon-size="24" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
-                <item-users icon-size="16" ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
+                <item-users icon-size="16" ~if="showUsers && isClass" ~show="hasUsers" ::has-users role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
@@ -94,6 +94,9 @@ export default {
     showUsers: false,
     hideLabel: false,
     hideHistoryTime: false,
+    hasUsers: {
+        $type: Boolean
+    },
     get historyTime() {
         if (this.hideHistoryTime)
             return '';

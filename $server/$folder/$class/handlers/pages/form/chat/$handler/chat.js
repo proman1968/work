@@ -368,7 +368,8 @@ ODA({is: 'oda-chat',
                     items: [],
                 };
                 if (this.model) body.model = this.model;
-                if (this.$('work-prompt-bar')?.hasEffort) body.effort = this.effort;
+                // effort всегда в body: hasEffort ложен, пока capabilities ещё Promise — иначе task стартует без effort → off
+                body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
                 const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);

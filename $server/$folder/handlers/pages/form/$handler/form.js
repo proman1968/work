@@ -71,7 +71,7 @@ ODA({is: 'work-form',
                 to { opacity: 1; }
             }
         </style>
-        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
+        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
@@ -82,7 +82,7 @@ ODA({is: 'work-form',
                 <div flex></div>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
-                    <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
+                    <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
 
                         <div
                             ~if="view?.allowSave"
@@ -129,7 +129,8 @@ ODA({is: 'work-form',
                     </div>
                 </div>
             </div>
-            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button @tap="toggleFullscreen" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
+            <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
         </div>
         <div slot="footer" footer horizontal flex style="justify-items: space-between">
             <item-tools :$item filter="service"></item-tools>
@@ -287,6 +288,9 @@ ODA({is: 'work-form',
     dialog: false,
     get isTop(){
         return window === top;
+    },
+    toggleFullscreen(e) {
+        this.view_control?.requestFullscreen?.({keyboardLock: 'browser'}).catch(e => console.error(e));
     },
     async close(e) {
         if (this.$item?.isChanged) {

@@ -315,7 +315,7 @@ ODA({ is: 'microchat-view',
 
     // --- title chrome ---
     get colorMode() {
-        if (this.data?.error) return 'error';
+        if (this.data?.error) return 'error-invert';
         if (this.data?.ignore && this.streamTail) return 'info-invert';
         return this.showTitle ? 'info-invert' : 'content';
     },

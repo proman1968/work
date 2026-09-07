@@ -14,14 +14,14 @@ export default {
                 gap: 4px;
                 padding: 2px;
                 border-radius: 16px;
-                min-width: 24px;
+                min-width: 20px;
             }
         </style>
-        <div class="horizontal part" no-flex>
+        <div class="horizontal part no-flex">
             <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap="_tap" @contextmenu.capture="_userMenu"></item-user>
         </div>
-        <div flex></div>
-        <div ~if="selectMode && selectedUsers.length" class="horizontal part" success-invert no-flex>
+        <div flex ~if="selectMode && selectedUsers.length"></div>
+        <div ~if="selectMode && selectedUsers.length" class="horizontal part success-invert no-flex">
             <oda-icon icon="eva:f-arrow-ios-back" :icon-size @tap="_clear"></oda-icon>
             <item-user border ~for="selectedUsers" :$item="$for.item" :icon-size @tap="_tap"></item-user>
         </div>
@@ -54,14 +54,29 @@ export default {
             all?.filter(u => this.selected_users.includes(u.id)) || []
         );
     },
+    get hasUsers() {
+        if (this._sourceUsers instanceof Promise) {
+            this._sourceUsers.then((users) => {
+                this.hasUsers = users?.length > 0;
+            })
+            return true;
+        }
+
+        return this._sourceUsers?.length > 0;
+    },
+    get securityKey() {
+        switch (this.role) {
+            case 'BOSS':  return 'BOSSES';
+            case 'ADMIN': return 'ADMINS';
+            case 'GUEST': return 'GUESTS';
+            default:      return 'USERS';
+        }
+    },
     get _sourceUsers() {
-        if (this.role === 'BOSS')
-            return Promise.resolve(this.$item?.bosses).then(list => Array.isArray(list) ? list : []);
-        if (this.role === 'ADMIN')
-            return Promise.resolve(this.$item?.admins).then(list => Array.isArray(list) ? list : []);
-        if (this.role === 'GUEST')
-            return Promise.resolve(this.$item?.guests).then(list => Array.isArray(list) ? list : []);
-        return Promise.resolve(this.$item?.users).then(list => Array.isArray(list) ? list : []);
+        if (!this.$item)
+            return;
+        const attrName = this.securityKey.toLowerCase();
+        return Promise.resolve(this.$item?.[attrName]).then(list => Array.isArray(list) ? list : []);
     },
     _tap(e) {
         if (!this.selectMode)
@@ -90,7 +105,7 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : this.role === 'GUEST' ? 'GUESTS' : 'USERS';
+        const key = this.securityKey;
         security[key] ??= [];
         if (!security[key].includes(user.id))
             security[key].push(user.id);
@@ -98,7 +113,7 @@ export default {
     },
     async suspendUser(user) {
         const security = await this.getSecurity();
-        const key = this.role === 'BOSS' ? 'BOSSES' : this.role === 'ADMIN' ? 'ADMINS' : this.role === 'GUEST' ? 'GUESTS' : 'USERS';
+        const key = this.securityKey;
         if (security[key])
             security[key] = security[key].filter(id => id !== user.id);
         await this.saveSecurity(security);

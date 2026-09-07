@@ -86,7 +86,7 @@ export default {
                 this.pending = true;
             });
             n?.listen('chat.delta', e => {
-                this.pending = true;
+                // pending только start→done; delta не поднимает (иначе Стоп снова включает радугу/волны)
                 this.streaming = true;
                 this.streamingText += e.detail?.value?.token || '';
             });

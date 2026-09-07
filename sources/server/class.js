@@ -10,12 +10,15 @@ import { DEV_MODE } from "../host/config.js";
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
-/** id похож на имя файла (presentation.html), а не на класс (MARKET). */
+/** id похож на имя файла (readme.md), а не на класс (MARKET, Exaone3.5 7.8b). */
 export function looksLikeFileId(id) {
     const s = String(id ?? '').trim();
     if (!s || s[0] === '$')
         return false;
-    return /\.[A-Za-z0-9]{1,16}$/.test(s);
+    // пробел — имя узла/класса; .8b и т.п. — не расширение файла
+    if (/\s/.test(s))
+        return false;
+    return /\.[A-Za-z][A-Za-z0-9]{0,15}$/.test(s);
 }
 
 export class $class extends $folder{

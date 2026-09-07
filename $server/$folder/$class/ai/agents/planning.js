@@ -2,14 +2,15 @@
 export default {
     label: 'План',
     icon: 'icons:assignment',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     doc: true,
+    allowReasoning: true,
     description: 'несколько ещё не сделанных действий',
     step: false,
     system: [
         '# Режим: план',
         'Несколько ещё не сделанных действий — краткое название и нумерованный список.',
         'Не для приветствий и не вместо ответа по уже известным фактам.',
+        '«Не подключены у провайдера»: (1) ls детей /MODELS/<provider>; (2) meta устройства → baseUrl; (3) remote/list_remote; (4) diff. Не путать каталог WORK с API. Не web на публичный ollama.com.',
     ].join('\n'),
     prompt: `
 Предложи план:

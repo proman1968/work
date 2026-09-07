@@ -1,4 +1,4 @@
-/**
+﻿/**
  * $task — длинная ИИ-сессия (JSON).
  * prompt / pipe / body — на этом типе; one-shot между классами — $class/ai.
  */
@@ -28,6 +28,89 @@ export default {
             throw e;
         }
     },
+    /** Контракт живой ленты для движка агентов: события, персист, стоп, режим, ожидание человека. */
+    _live(session) {
+        const task = this;
+        return {
+            path: this.short,
+            send: e => {
+                // после Стоп — не поднимать pending (start/delta); done/прочее — ок
+                if (task._stopped && (e?.type === 'chat.delta' || e?.type === 'chat.start'))
+                    return;
+                session?.send?.({ ...e, path: task.short });
+            },
+            save: () => task._save(session),
+            get stopped() { return !!task._stopped; },
+            get mode() { return task.body.mode || 'plan'; },
+            set mode(v) { task.body.mode = v; },
+            /** Side-effect агента закрыл цель сессии (например write.done). */
+            goalDone() {
+                const g = task.body?.goal;
+                if (!g || g.status === 'done')
+                    return;
+                g.status = 'done';
+                g.resume = null;
+                g.pursue = 0;
+            },
+            /** Стоп на человека: отпускаем UI (chat.done → кнопка APPROVE), ждём _resolveWait. */
+            wait: block => {
+                session?.send?.({ type: 'chat.done', path: task.short });
+                return new Promise(resolve => {
+                    (task._waiters ??= new Map()).set(block.time, resolve);
+                });
+            },
+        };
+    },
+    /** Доставка ответа человека в ожидающий движок (стоп-блок по time). */
+    _resolveWait(block, payload) {
+        const resolve = block && this._waiters?.get(block.time);
+        if (!resolve)
+            return false;
+        this._waiters.delete(block.time);
+        resolve(payload || {});
+        return true;
+    },
+    /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
+    async _runAgent(params, session) {
+        const body = await this.body;
+        const owner = this.$class;
+        const engine = (await owner?._methods)?.prompt;
+        if (typeof engine?.execute !== 'function')
+            throw new Error('$task: метод prompt (ai) не найден у класса');
+        // tilde-метод общий: зафиксировать владельца до execute (иначе meta_folder = undefined)
+        engine.$context = owner;
+        await engine.execute({
+            agent: params.block.type,
+            block: params.block,
+            box: params.box,
+            brief: params.block.brief,
+            messages: await this.context({ handoff: true, session }),
+            session,
+            live: this._live(session),
+            model: body.model,
+            effort: body.effort,
+        });
+        await this._save(session);
+        return params.block;
+    },
+    /** Незавершённый блок-агент в активной цепочке (обрыв, рестарт) — продолжает движок. */
+    async _activeAgentBlock() {
+        if (this._waiters?.size)
+            return null; // движок уже ждёт человека в этом блоке — не перезапускать
+        const body = await this.body;
+        let box = body;
+        for (;;) {
+            const next = box.items?.last;
+            if (!next)
+                return null;
+            if (this.pipe[next.type]?.agent && !hasBody(next) && !next.error)
+                return { block: next, box };
+            if (next.box && !hasBody(next))
+                box = next;
+            else
+                return null;
+        }
+    },
     async prompt(params = {}) {
         let { prompt: rawPrompt, role, session, agent: agentParam } = params;
         const pipe = await this.pipe;
@@ -54,9 +137,16 @@ export default {
         try {
             switch (role) {
                 case 'AI':{
+                    // goal.done — не крутить меню по «Продолжить» (хвост без stop)
+                    const g = (await this.body)?.goal;
+                    if (g?.status === 'done') {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return { ok: true };
+                    }
                 } break;
                 case 'APPROVE':{
-                    if (params.accept === true || params.accept === 'true') {
+                    const accept = params.accept === true || params.accept === 'true';
+                    if (accept) {
                         await params.pipe_step.approve?.(params);
                         params.block.state = 'принято';
                     } else {
@@ -66,6 +156,15 @@ export default {
                     delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
+                    // движок ждёт этот блок — доставить факт; chat.done не шлём:
+                    // исходный prompt ещё в _runAgent и сам закроет сессию по завершении
+                    // (вход в APPROVE уже дал chat.start → pending на продолжение работы)
+                    if (this._resolveWait(params.block, {
+                        accept,
+                        content: params.block.approved || params.block.state,
+                    })) {
+                        return { ok: true };
+                    }
                 } break;
                 default:{
                     if (text) {
@@ -83,7 +182,37 @@ export default {
                     delete params.box.using_blocks;
                     this._stopped = false;
 
-                    // прямой вход в субагента (ещё не в его box)
+                    // durable goal: новая постановка или вход к открытой; waiting+resume → форс / continue
+                    if (text) {
+                        const body = await this.body;
+                        const g = body.goal;
+                        if (!g || g.status === 'done') {
+                            body.goal = {
+                                text,
+                                status: 'open',
+                                resume: null,
+                                pursue: 0,
+                                need: await this._classifyGoalNeed(text, session),
+                            };
+                        }
+                        else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
+                            agent = g.resume.agent;
+                            params.agent = agent;
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        else if (g.status === 'waiting' && g.resume?.continue) {
+                            // ответ на question до субагента — меню без answer
+                            g.status = 'open';
+                        }
+                        else if (g.status === 'waiting') {
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        await this._save(session);
+                    }
+
+                    // прямой вход в субагента — исполняет движок класса
                     if (agent) {
                         await this._init(params);
                         if (params.box.type !== agent) {
@@ -92,15 +221,14 @@ export default {
                                 params.block.brief = text;
                             const pushed = await this._push_block(params);
                             if (pushed) {
-                                if (!params.block.box && !hasBody(params.block))
-                                    await this._fillLeaf(params, session);
-                                if (hasBody(params.block))
-                                    await this.pipe[params.block.type]?.recalc?.(params);
+                                await this._runAgent(params, session);
                                 await this._captionDoc(params, session);
                             }
                             await this._save(session);
-                            // лист-агент уже закрыт / ждёт человека — без меню оркестратора
-                            if (pushed && !params.block.box && (hasBody(params.block) || params.block.error)) {
+                            // движок довёл агента до итога / стопа — без меню оркестратора
+                            if (pushed) {
+                                if (params.block.stop && hasBody(params.block))
+                                    await this._noteGoalWait(params.block, params.box, session);
                                 session?.send?.({ type: 'chat.done', path: this.short });
                                 return agentResult(agent, params.block, { waiting: !!params.block.stop });
                             }
@@ -116,6 +244,11 @@ export default {
 
                 const turn = await this._promptTurn(params, session);
                 if (turn.waiting) {
+                    // answer+stop тоже waiting (конец ветки) — при open goal pursue, не отдавать UI
+                    if (!agent && turn.block?.type === 'answer' && await this._pursueGoal(turn, session)) {
+                        params = { role: 'AI', session };
+                        continue;
+                    }
                     session?.send?.({ type: 'chat.done', path: this.short });
                     return agentResult(agent, turn.block, { waiting: true });
                 }
@@ -160,15 +293,54 @@ export default {
 
     /** Один ход автомата: fill leaf или меню → push. { loop, waiting, block }. */
     async _promptTurn(params, session) {
-        const live = params.block;
-        if (live && live !== params.box && !live.box && !hasBody(live)) {
+        // незавершённый агент (обрыв, рестарт) — доигрывает движок класса, не меню таска
+        const broken = await this._activeAgentBlock();
+        if (broken) {
+            params.block = broken.block;
+            params.box = broken.box;
+            this._stopped = false;
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            await this._save(session);
+            const b = params.block;
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
+                return { loop: false, waiting: true, block: b };
+            }
+            // агент снова без итога и без стопа — не крутить цикл, ждать человека
+            if (!hasBody(b) && !b?.error)
+                return { loop: false, block: b };
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
+            return { loop: this._canLoop(b), block: b };
+        }
+        const leaf = params.block;
+        // box.todo — чеклист плана, не лист для стрима; иначе после APPROVE fill todo → стоп без step
+        const todoFocus = leaf && (leaf.type === 'todo' || leaf === params.box?.todo);
+        if (leaf && leaf !== params.box && !leaf.box && !hasBody(leaf) && !todoFocus) {
             this._stopped = false;
             await this._fillLeaf(params, session);
             await this._save(session);
-            if (live.stop)
-                return { loop: false, waiting: true, block: live };
-            return { loop: this._canLoop(live), block: live };
+            if (leaf.stop) {
+                if (this._settleFactsGoal(leaf)) {
+                    await this._save(session);
+                    return { loop: false, block: leaf };
+                }
+                await this._noteGoalWait(leaf, params.box, session);
+                return { loop: false, waiting: true, block: leaf };
+            }
+            if (this._settleFactsGoal(leaf)) {
+                await this._save(session);
+                return { loop: false, block: leaf };
+            }
+            return { loop: this._canLoop(leaf), block: leaf };
         }
+
+        // внутри бокса-агента таск не ходит — им владеет движок (live.wait / человек)
+        if (this.pipe[params.box.type]?.agent)
+            return { loop: false, block: params.box };
 
         let mode = this.body.mode || 'plan';
         let node = this.pipe[params.block.type];
@@ -180,9 +352,18 @@ export default {
 
         let using_blocks = params.box.using_blocks ??= [];
         next = (next || []).filter(id => !using_blocks.includes(id));
+        // после question без субагента / pursue — answer не в меню, пока goal open
+        const goal = this.body.goal;
+        if (goal && goal.status !== 'done' && goal.resume?.continue)
+            next = next.filter(id => id !== 'answer');
 
         let choice;
-        if (!next.length)
+        // незакрытый todo → сразу step (не fill и не меню report/question)
+        const planned = params.box?.todo?.steps || [];
+        const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
+        if (todoFocus && planned.length > realSteps.length && next.includes('step'))
+            choice = 'step';
+        else if (!next.length)
             choice = 'total';
         else if (next.length === 1)
             choice = next[0];
@@ -193,9 +374,19 @@ export default {
                     || n?.description || n?.inject || '';
                 return id.toUpperCase() + ' - ' + cap + ';';
             });
+            const need = goal?.need || 'side';
             let menu = [
-                'Выбери в menu пункт, который быстрее всего закрывает запрос пользователя. Выбирай не по порядку, а по смыслу.',
+                'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
+                'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
                 'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
+                '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
+                '«подключи / добавь модель / создай класс» у провайдера — work (create $ai), затем check; не write файла с «:» в имени.',
+                'После work с create/write — check (exist/meta), не ещё create того же пути и не planning «с нуля».',
+                'report — только сводка в ленту; файл на диске он не создаёт.',
+                'Состав/инвентарь площадки или провайдера — explore (ls, meta, remote), не web «на всякий случай».',
+                need === 'facts'
+                    ? 'goal.need=facts: достаточно фактов в ленте (explore/web/logs) или answer — не work «на всякий случай».'
+                    : 'goal.need=side: write/create — work; закрытие цели — check (постусловие), не одна реплика answer.',
                 'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
                 '\n\n[menu]\n',
@@ -203,19 +394,44 @@ export default {
             ].join('\n');
             let messages = await this.context({ session, prompt: menu });
             let response = await this._streamChat({ messages, silent: true, session });
+            if (this._stopped)
+                return { loop: false, block: params.block };
             choice = menuPick(response.content, next)
                 || (next.includes('thinking') ? 'thinking' : next[0]);
         }
 
-        if (!choice)
+        if (!choice || this._stopped)
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
+        // выбранный агент исполняет движок класса (live-контракт), не цикл таска
+        if (pushed && this.pipe[choice]?.agent) {
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            await this._save(session);
+            const b = params.block;
+            if (this._stopped)
+                return { loop: false, block: b };
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
+                return { loop: false, waiting: true, block: b };
+            }
+            // субагент действия отработал — слот continue больше не нужен
+            if (choice !== 'question' && choice !== 'form')
+                clearGoalContinue(this.body.goal);
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
+            return { loop: this._canLoop(b), block: b };
+        }
         if (pushed) {
             if (!params.block.box && !hasBody(params.block))
                 await this._fillLeaf(params, session);
+            if (this._stopped)
+                return { loop: false, block: params.block };
             if (hasBody(params.block))
                 await this.pipe[params.block.type]?.recalc?.(params);
             await this._captionDoc(params, session);
@@ -223,15 +439,131 @@ export default {
         await this._save(session);
 
         const focus = pushed ? params.block : boxBefore;
-        if (focus?.stop && hasBody(focus))
+        if (focus?.stop && hasBody(focus)) {
+            if (this._settleFactsGoal(focus)) {
+                await this._save(session);
+                return { loop: false, block: focus };
+            }
+            await this._noteGoalWait(focus, params.box, session);
             return { loop: false, waiting: true, block: focus };
+        }
         return { loop: this._canLoop(focus), block: focus };
+    },
+
+    /** question/form stop (не live.wait): goal.waiting + resume.agent | resume.continue. */
+    async _noteGoalWait(block, box, session) {
+        const type = block?.type;
+        if (type !== 'question' && type !== 'form')
+            return;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done')
+            return;
+        g.status = 'waiting';
+        const pipe = await this.pipe;
+        let agent = null;
+        if (box && pipe[box.type]?.agent && box.type !== 'question' && box.type !== 'form')
+            agent = box.type;
+        else
+            agent = lastResumeAgent(body, pipe);
+        // до субагента — continue: следующий ход без answer в меню
+        g.resume = agent ? { agent } : { continue: true };
+        await this._save(session);
+    },
+
+    /**
+     * goal.need=facts: успешный сбор фактов или реплика — закрыть цель (без pursue).
+     * @returns {boolean} цель закрыта
+     */
+    _settleFactsGoal(block) {
+        const g = this.body?.goal;
+        if (!g || g.status === 'done' || goalNeed(g) !== 'facts')
+            return false;
+        if (!block || !hasBody(block) || block.error)
+            return false;
+        if (!FACTS_EVIDENCE.has(block.type))
+            return false;
+        g.status = 'done';
+        g.resume = null;
+        g.pursue = 0;
+        return true;
+    },
+
+    /**
+     * После терминального answer при незакрытой side-goal — ещё ход оркестратора (budget).
+     * facts уже закрыты в _settleFactsGoal. chat.done не шлём при pursue: pending держит prompt.
+     */
+    async _pursueGoal(turn, session) {
+        if (this._stopped)
+            return false;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done' || g.status === 'waiting')
+            return false;
+        if (goalNeed(g) === 'facts')
+            return false;
+        const leaf = turn?.block;
+        if (!leaf || leaf.type !== 'answer' || !hasBody(leaf))
+            return false;
+        const n = Number(g.pursue) || 0;
+        if (n >= GOAL_PURSUE_MAX)
+            return false;
+        g.pursue = n + 1;
+        g.resume = { continue: true };
+        await this._save(session);
+        return true;
+    },
+
+    /**
+     * need цели: silent menu facts|side (тот же контракт, что выбор хода).
+     * Не эвристика по языку постановки — универсально для любой формулировки.
+     */
+    async _classifyGoalNeed(text, session) {
+        const t = String(text || '').trim();
+        if (!t)
+            return 'side';
+        if (this._stopped)
+            return 'side';
+        try {
+            const response = await this._streamChat({
+                silent: true,
+                session,
+                messages: [{
+                    role: 'user',
+                    content: [
+                        'Классифицируй цель сессии.',
+                        'facts — узнать, сверить или перечислить по фактам (ответ, сводка, инвентарь).',
+                        'side — изменить систему или внешний ресурс (создать, записать, удалить, подключить, установить).',
+                        'Сначала узнать и сразу изменить → side. Сомнение → side.',
+                        '',
+                        'Цель:',
+                        t,
+                        '',
+                        'Ответь одним словом строго из списка, без знаков и пояснений.',
+                        '',
+                        '[menu]',
+                        'FACTS - ответ фактами;',
+                        'SIDE - действие в системе;',
+                    ].join('\n'),
+                }],
+            });
+            if (this._stopped)
+                return 'side';
+            return menuPick(response.content, ['facts', 'side']) || 'side';
+        }
+        catch {
+            return 'side';
+        }
     },
 
     async _captionDoc(params, session) {
         const kind = this.pipe[params.block.type];
         const src = String(params.block.content || '').trim();
-        if (!(params.block.doc && params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label))
+        const label = String(params.block.label || '').trim();
+        const def = String(kind?.label || '').trim();
+        // без своего имени: пусто (stop-doc вроде answer) / type / дефолт pipe
+        const untitled = !label || label === params.block.type || (def && label === def);
+        if (!(params.block.doc && !this._stopped && src && untitled))
             return;
         const cap = await this._streamChat({
             messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
@@ -301,8 +633,11 @@ export default {
         params.pipe_step = pipe[params.block.type] || pipe.thinking;
         params.task = this;
     },
+    /** handoff: заказчик передаёт свой system (body.system: место, локация, время) + диалог-улики;
+     *  без topicsMap/leafSystem/ролей ходов таска — их допишет исполнитель (агент/tool).
+     *  system только role=system, не user-кадром. */
     async context(params = {}) {
-        const { prompt, evidence = true, leaf } = params;
+        const { prompt, evidence = true, leaf, handoff } = params;
         const body = await this.body;
         const chain = [];
         let box = body;
@@ -313,17 +648,27 @@ export default {
             else break;
         }
         const focus = box;
-        const layers = chain.map(b => this._box_context(b, b === focus, evidence));
-        const mode = body.mode || 'plan';
-        const pipe = await this.pipe;
-        const leafNode = leaf?.type ? pipe[leaf.type] : null;
-        const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
-        const messages = [{ role: 'system', content: [
-            ...layers.map(l => l.system).filter(Boolean),
-            timeNow(body.tz),
-            topicsMap(pipe, focus, mode),
-            leafSystem,
-        ].filter(Boolean).join('\n\n') }];
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
+        let messages;
+        const goalBlock = formatGoalBlock(body.goal);
+        if (handoff) {
+            // база system от заказчика (уже с расположением); исполнитель дополнит локально
+            const base = [String(body.system || '').trim(), goalBlock].filter(Boolean).join('\n\n');
+            messages = base ? [{ role: 'system', content: base }] : [];
+        }
+        else {
+            const mode = body.mode || 'plan';
+            const pipe = await this.pipe;
+            const leafNode = leaf?.type ? pipe[leaf.type] : null;
+            const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
+            messages = [{ role: 'system', content: [
+                ...layers.map(l => l.system).filter(Boolean),
+                goalBlock,
+                timeNow(body.tz),
+                topicsMap(pipe, focus, mode),
+                leafSystem,
+            ].filter(Boolean).join('\n\n') }];
+        }
         /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
         const push = (nextRole, content) => {
             if (!content) return;
@@ -339,7 +684,7 @@ export default {
         for (const layer of layers)
             for (const m of layer.messages)
                 push(m.role, m.content);
-        if (focus !== body)
+        if (!handoff && focus !== body)
             push('user', stageOpen(focus, this.pipe[focus.type]));
         if (prompt) {
             if (messages.last?.role === 'user')
@@ -352,15 +697,22 @@ export default {
     /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
      *  evidence: false (генерация total) — предки без уликов-боксов.
      *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
-    _box_context(box, focus = true, evidence = true) {
+    _box_context(box, focus = true, evidence = true, handoff = false) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
         // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
         const place = String(box.system || '').trim();
-        const role = String(node?.[mode]?.system || node?.system || '').trim();
-        let system = [place, role].filter(Boolean).join('\n\n');
-        if (box.todo)
-            system += '\n\n[todo]\n' + (box.todo.content || '');
+        let system;
+        if (handoff) {
+            // system заказчика уже в messages[0] из body.system; слой роли хода таска не тащим
+            system = '';
+        }
+        else {
+            const role = String(node?.[mode]?.system || node?.system || '').trim();
+            system = [place, role].filter(Boolean).join('\n\n');
+            if (box.todo)
+                system += '\n\n[todo]\n' + (box.todo.content || '');
+        }
         const messages = [];
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
@@ -428,7 +780,8 @@ export default {
                     reasonBlock = this._build_block('reasoning');
                     await this._push_block({ block: reasonBlock, box: reasonBox, session });
                 }
-                session?.send?.({ type: 'chat.delta', path: this.short, token });
+                if (!this._stopped)
+                    session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
             else {
                 let token = chunk?.content ? chunk?.content : chunk;
@@ -436,7 +789,7 @@ export default {
                     continue;
                 await closeReason();
                 content += token;
-                if (!silent)
+                if (!silent && !this._stopped)
                     session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
@@ -458,10 +811,10 @@ export default {
                 ns[k] = v;
             }
             registerOrchestrator(ns, taskDef);
+            // агенты — декларации из меты класса (~/ai/agents, канон движка), не дубли $task
             const agentIds = [];
             const stepAgents = [];
-            const agentsDir = [...files].reverse().find(f => f.id === 'agents')
-                || files.find(f => f.id === 'agents');
+            const agentsDir = await this.$class?.meta_folder?.get_item('ai/agents');
             if (agentsDir) {
                 const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
                 const byId = new Map();
@@ -471,6 +824,8 @@ export default {
                 }
                 for (const [fileId, file] of byId) {
                     const id = fileId.replace(/\.js$/, '');
+                    if (ns[id])
+                        continue; // ходы оркестратора (thinking, answer, planning, report) выше агентов-тёзок
                     const mod = await this._importPipeFile(file);
                     registerAgent(ns, id, mod.default);
                     agentIds.push(id);
@@ -512,9 +867,17 @@ export default {
     get model() {
         return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
     },
-    /** Stop: прервать текущий стрим и не планировать самовызовы. Ленту не трогает. */
+    /** Stop: прервать стрим/агента; chat.done гасит pending; дальше start/delta не шлём. */
     async stop(params = {}) {
         this._stopped = true;
+        // отпустить live.wait — иначе движок висит на APPROVE после стопа
+        const waiters = this._waiters;
+        if (waiters?.size) {
+            for (const resolve of waiters.values())
+                resolve({ stopped: true });
+            waiters.clear();
+        }
+        params.session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true, stopped: true };
     },
     _build_block(type) {
@@ -551,7 +914,8 @@ export default {
             if (!used.includes(block.type))
                 used.push(block.type);
         }
-        const init = node?.init;
+        // init агента — жизненный цикл движка класса, не пуш ленты
+        const init = node?.agent ? null : node?.init;
         if (init && !await init(params))
             return false;
 
@@ -694,6 +1058,71 @@ function topicsMap(pipe, focus, mode) {
     if (agents.length)
         parts.push('[доступные агенты]\n' + topics(pipe, agents, mode));
     return parts.join('\n\n');
+}
+
+/** Сессионная цель для system/меню: факт + норма достижения. */
+function formatGoalBlock(goal) {
+    if (!goal?.text)
+        return '';
+    const need = goalNeed(goal);
+    const lines = [
+        '[goal]',
+        String(goal.text).trim(),
+        'status: ' + (goal.status || 'open'),
+        'need: ' + need,
+    ];
+    if (goal.resume?.agent)
+        lines.push('resume: ' + goal.resume.agent);
+    if (goal.resume?.continue)
+        lines.push('resume: continue (данные получены — действуй, не болтай)');
+    if (goal.status !== 'done') {
+        if (need === 'facts') {
+            lines.push(
+                'need=facts: цель — ответ фактами; закрывается успешным explore/web/logs или answer.',
+                'Пока status не done — собери факты; не уходи в write «на всякий случай».',
+            );
+        }
+        else {
+            lines.push(
+                'need=side: цель — действие в системе; закрывается check после work (или evidence), не репликой.',
+                'Пока status не done — цель не достигнута; сессия не считается выполненной.',
+                'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
+                'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
+            );
+        }
+    }
+    return lines.join('\n');
+}
+
+/** facts | side; без поля — side (старые сессии / сомнение). */
+function goalNeed(goal) {
+    return goal?.need === 'facts' ? 'facts' : 'side';
+}
+
+/** Типы блоков = evidence для need=facts (сбор или реплика). */
+const FACTS_EVIDENCE = new Set(['explore', 'web', 'logs', 'answer', 'report']);
+
+function clearGoalContinue(goal) {
+    if (goal?.resume?.continue)
+        goal.resume = null;
+}
+
+const GOAL_PURSUE_MAX = 3;
+
+/** Последний незакрытый субагент в ленте (не question/form) — кому вернуть ответ человека. */
+function lastResumeAgent(body, pipe) {
+    const walk = (items) => {
+        for (let i = (items || []).length - 1; i >= 0; i--) {
+            const b = items[i];
+            const nested = walk(b.items);
+            if (nested)
+                return nested;
+            if (pipe[b.type]?.agent && b.type !== 'question' && b.type !== 'form')
+                return b.type;
+        }
+        return null;
+    };
+    return walk(body?.items);
 }
 
 /** Бриф агенту: URL/тема из последнего prompt, без копирования thinking. */

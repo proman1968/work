@@ -1,4 +1,5 @@
-/** Агент web: поиск в init, затем site по очереди. Меню = site (+ total). */
+/** Агент web: поиск в init, затем site по очереди. Меню = site (+ total).
+ *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat }). */
 const SITE_OK_MAX = 3;
 const SERVICES = ['/SERVICES/DuckDuckGo', '/SERVICES/Yandex', '/SERVICES/SearXNG'];
 const SERVICE = '/SERVICES/DuckDuckGo';
@@ -6,16 +7,18 @@ const SERVICE = '/SERVICES/DuckDuckGo';
 export default {
     label: 'Ищу в интернете',
     icon: 'icons:language',
-    model: '/MODELS/BIS-Ollama/gemma3 4b',
     service: SERVICE,
     services: SERVICES,
     role: 'user',
     doc: true,
-    description: 'поискать информацию в интернете',
+    allowReasoning: true,
+    description: 'поиск во внешнем интернете; не для моделей WORK, API провайдера ($ai remote) и путей площадки',
     system: [
         '# Агент: интернет',
         'Поиск уже выполнен при входе. Открывай site по очереди URL. Итог — total.',
         'URL уже в брифе/промпте — сразу site, без поиска.',
+        'Локальная площадка WORK (модели, сервисы, строение классов) — не сюда, это explore; файлы области — work.',
+        'Список моделей у провайдера (baseUrl / api/tags) — explore meta+remote, не ollama.com и не library.',
     ].join('\n'),
     prompt: [
         'Сводный отчёт по посещённым страницам: только факты по теме задачи.',
@@ -27,13 +30,10 @@ export default {
     },
     async init(params = {}) {
         const b = params.block;
-        const { session, task, messages, streamChat } = params;
-        const themeRaw = String(
-            b.brief
-            || lastUserContent(messages)
-            || (task ? lastPromptContent(await task.body) : '')
-            || '',
-        ).trim();
+        const { messages, streamChat, live } = params;
+        if (live?.stopped)
+            return true;
+        const themeRaw = String(b.brief || lastUserContent(messages) || '').trim();
         const given = urlsFrom(themeRaw);
         if (given.length) {
             b.sites = given.map(url => ({ url, title: url }));
@@ -43,35 +43,22 @@ export default {
             return true;
         }
         const theme = searchQuery(themeRaw);
-        let asked;
-        if (streamChat && messages) {
-            asked = await streamChat({
-                silent: true,
-                session,
-                messages: [
-                    ...messages,
-                    {
-                        role: 'user',
-                        content: [
-                            'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
-                            'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
-                            'Без кавычек, нумерации и пояснений.',
-                        ].join('\n'),
-                    },
-                ],
-            });
-        }
-        else {
-            const ctx = await task.context({
-                prompt: [
-                    'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
-                    'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
-                    'Без кавычек, нумерации и пояснений.',
-                ].join('\n'),
-                session,
-            });
-            asked = await task._streamChat({ messages: ctx, silent: true, session });
-        }
+        const asked = await streamChat({
+            silent: true,
+            messages: [
+                ...messages,
+                {
+                    role: 'user',
+                    content: [
+                        'Запрос пользователя: «' + theme + '». Предложи до 3 вариантов поискового запроса ровно по этой теме: по одному на строке, от конкретного к общему.',
+                        'Новую тему не придумывай. Имя, фамилию, профиль пользователя и рабочую группу не включай.',
+                        'Без кавычек, нумерации и пояснений.',
+                    ].join('\n'),
+                },
+            ],
+        });
+        if (live?.stopped)
+            return true;
         const queries = searchQueries(asked.content);
         if (theme && !queries.includes(theme))
             queries.push(theme);
@@ -84,6 +71,8 @@ export default {
         }
         b.sites = [];
         for (const q of queries) {
+            if (live?.stopped)
+                return true;
             const hit = await searchRace(SERVICES, q);
             if (!hit) continue;
             b.label = 'Web: ' + q;
@@ -94,6 +83,8 @@ export default {
             }
             break;
         }
+        if (live?.stopped)
+            return true;
         if (!b.sites.length) {
             b.label = 'Web: ' + queries[0];
             b.error = true;
@@ -122,17 +113,14 @@ export default {
                 'Формат — markdown, компактно.',
             ].join('\n'),
             async init(params = {}) {
-                const { box, block, session, task, messages, agent } = params;
+                const { box, block, messages, agent, live } = params;
                 let n = 0;
                 try {
+                    if (live?.stopped)
+                        return false;
                     box.sites ??= [];
                     const taken = new Set((box.items || []).filter(b => b.type === 'site' && b.url).map(b => b.url));
-                    const theme = String(
-                        box.brief
-                        || lastUserContent(messages)
-                        || (task ? lastPromptContent(await task.body) : '')
-                        || '',
-                    );
+                    const theme = String(box.brief || lastUserContent(messages) || '');
                     const given = urlsFrom(theme).find(u => !taken.has(u));
                     if (given && !box.sites.some(s => s.url === given))
                         box.sites.unshift({ url: given, title: given });
@@ -144,16 +132,19 @@ export default {
                     n = taken.size + 1;
                     box.state = 'сайты: ' + n + '/' + box.sites.length;
                     block.state = 'идет загрузка';
-                    await task?._save?.(session);
+                    await live?.save?.();
 
                     let url = new URL(site.url);
                     block.icon = siteFavicon(site.url);
                     block.title = `site ${n}: ['${site.title}'](<${site.url}>)\n\n`;
                     block.label = url.host;
                     block.url = site.url;
-                    const servicePath = agent?.service || task?.pipe?.web?.service || SERVICE;
-                    const service = await WORK.get_item(servicePath);
+                    const service = await WORK.get_item(agent?.service || SERVICE);
                     let result = await service.fetch_url({ url: site.url });
+                    if (live?.stopped) {
+                        block.state = 'остановлено';
+                        return true;
+                    }
                     if (result?.error)
                         throw new Error(result.error);
                     const page = String(result.content || '').trim();
@@ -164,6 +155,10 @@ export default {
                     delete box.error;
                     box.state = 'сайты: ' + n + '/' + box.sites.length;
                 } catch (e) {
+                    if (live?.stopped) {
+                        block.state = 'остановлено';
+                        return true;
+                    }
                     block.error = true;
                     block.state = 'ошибка';
                     block.content = (block.title || '') + '\n\n' + e.message + '\n\n';
@@ -195,7 +190,7 @@ function dropUsed(box, type) {
 }
 
 /**
- * После site: next = site|total (total синтезирует loader).
+ * После site: next = site|total (total синтезирует движок).
  * - очередь есть, успехов 0 → using=[total] → только site;
  * - очередь есть, 1..SITE_OK_MAX-1 → очистить using → site|total;
  * - очередь пуста или хватит успехов → using=[site] → только total.
@@ -253,27 +248,11 @@ function urlsFrom(text) {
     return out;
 }
 
-function lastPromptContent(body) {
-    let last = '';
-    let t = -1;
-    const walk = (items) => {
-        for (const b of items || []) {
-            if (b.type === 'prompt' && b.content && (b.time || 0) >= t) {
-                t = b.time || 0;
-                last = b.content;
-            }
-            walk(b.items);
-        }
-    };
-    walk(body?.items);
-    return last;
-}
-
 function lastUserContent(messages) {
     if (!messages?.length)
         return '';
     for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i]?.role === 'user' && messages[i].content)
+        if (messages[i]?.role === 'user' && typeof messages[i].content === 'string' && messages[i].content)
             return String(messages[i].content);
     }
     return '';

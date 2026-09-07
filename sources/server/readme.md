@@ -44,8 +44,9 @@ API элементов — это «система команд» для ИИ-а
 
 ### Поиск
 
-- `get_item` — по пути; `find_text` — по содержимому (grep); `semantic_search` — RAG-поиск (deprecated-алиас: `search`)
+- `get_item` — по пути; `find_text` — по содержимому (grep); `semantic_search` — RAG-поиск **от текущего класса** (не вызывать с корня WORK из агентов; `work.search` передаёт выбранный класс)
 - `find_item({name, types_only})` — рекурсивный поиск элемента по имени (внутренняя позиционная форма: `find_item(name, filterFn)`)
+- RAG (`folder.rag`): не индексирует `exclude_for_rag`, скрытые `.…`, `.RAG`, `isInherit`; extract — text-ext (`task`/`md`/…) через load, kreuzberg только по whitelist (pdf/docx/png/…), иначе тихий skip; пустой/битый `.RAG/index.json` → `{}` и пересборка; запись index атомарно (`.tmp` + rename)
 
 ### Роли и доступ
 

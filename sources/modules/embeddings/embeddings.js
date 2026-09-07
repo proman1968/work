@@ -1,5 +1,6 @@
 import { pipeline } from "@xenova/transformers";
 import * as kreuzberg  from '@kreuzberg/node';
+import * as fs from 'node:fs';
 process.env.EMBEDDINGS_MODEL = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
 class XenovaService {
     extractor = null;
@@ -99,20 +100,26 @@ const ExtractionConfig = {
         preserveImportantWords: true
     }
   };
-const TEXT_EXTS = ['js', 'txt', 'html', 'mjs', 'css', 'chat', 'xml', 'svg', 'yaml', 'py', 'ts', 'mts', 'json', 'skill', 'logs'];
+/** Текстовые расширения — load + splitter (как $file.TEXT_EXTS + платформенные). */
+const TEXT_EXTS = [
+    'js', 'txt', 'html', 'md', 'mjs', 'css', 'chat', 'xml', 'svg', 'yaml', 'yml',
+    'py', 'ts', 'mts', 'json', 'skill', 'logs', 'task', 'ai', 'csv', 'tsv', 'eml', 'ics',
+];
+/** Только то, что kreuzberg реально разбирает — иначе тихий skip (без MIME-warn). */
+const KREUZBERG_EXTS = [
+    'pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'odt', 'ods', 'odp',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'tif', 'tiff', 'bmp',
+];
 class TextExtractor{
     async extract(file){
         let result;
         try{
-            if(TEXT_EXTS.includes(file.ext) || !file.ext){
+            if (file.isInherit && !file.inherit_source)
+                return;
+            const ext = String(file.ext || '').toLowerCase();
+            if (TEXT_EXTS.includes(ext) || !ext){
                 let text = await file.load({hasTilde: true, encoding: 'utf-8'});
-                // if(file.ext === 'js' && file.path.includes('/SKILLS/')){
-                //     let script = Buffer.from(text, 'utf-8').toString('base64');
-                //     let module = await import('data:text/javascript;base64,'+script);
-                //     script = (module?.default || null);
-                //     text = script?.keywords || text;
-                // }
-                result = advancedTextSplitter(text, ExtractionConfig) 
+                result = advancedTextSplitter(text, ExtractionConfig)
                 result = {
                     chunks: result.map(ch=>{
                         return {
@@ -125,8 +132,16 @@ class TextExtractor{
                     })
                 }
             }
-            else
-                result = await kreuzberg.extractFile(file.dir, ExtractionConfig);
+            else if (KREUZBERG_EXTS.includes(ext)) {
+                const disk = file.real_dir || file.dir;
+                if (!disk || !fs.existsSync(disk))
+                    return;
+                result = await kreuzberg.extractFile(disk, ExtractionConfig);
+            }
+            else {
+                // .task уже в TEXT; ico/unknown/example/clineignore — не в kreuzberg
+                return;
+            }
         }
         catch(e){
             console.warn(e.message);
