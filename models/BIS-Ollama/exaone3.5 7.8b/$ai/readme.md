@@ -11,8 +11,8 @@
 - **id:** `Exaone3.5 7.8b`
 
 - **model:** `exaone3.5:7.8b` (тег API / remote)
-- **icon:** `ai:exaone`
-- **maxTokens:** `131072`
+- **icon:** `carbon:ai-brain`
+- **maxTokens:** `32768`
 - **capabilities:** chat, stream, functions
 
 Источник истины полей — `class.js` в meta этой точки (readme не дублирует реализацию, только контракт).
