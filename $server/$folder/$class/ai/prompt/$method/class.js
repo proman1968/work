@@ -151,8 +151,7 @@ export default {
             const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now() };
             if (tool.stop != null)
                 child.stop = tool.stop;
-            if (tool.doc)
-                child.doc = tool.doc;
+            // doc — только после done (write/create evidence); не копировать с tool на пустой стрим
             if (!tool.ignore) {
                 const used = block.using_blocks ??= [];
                 if (!used.includes(next))
@@ -172,16 +171,12 @@ export default {
                     return;
                 }
                 if (ok === false) {
-                    // tool отказался (нет операнда) — снять с using, снова pick
+                    // init === false — «здесь этому tool нечего делать»: блок снимается,
+                    // тип остаётся в using_blocks — в этом боксе его больше не предлагаем (меню только сужается)
                     block.items.pop();
-                    const used = block.using_blocks;
-                    if (used) {
-                        const i = used.indexOf(next);
-                        if (i >= 0)
-                            used.splice(i, 1);
-                        if (!used.length)
-                            delete block.using_blocks;
-                    }
+                    const used = block.using_blocks ??= [];
+                    if (!used.includes(next))
+                        used.push(next);
                     await live.save?.();
                     return this.turn(ctx);
                 }
@@ -578,7 +573,6 @@ function nextIds(agent, block, toolIds) {
         ids.push('stop');
     return ids;
 }
-
 function samePlace(a, b) {
     if (!a || !b) return false;
     return (a.path && a.path === b.path) || (a.id && a.id === b.id);

@@ -9,16 +9,16 @@
 - [`system.md`](system.md) — базовый system (tilde)
 - [`config.js`](config.js) — дефолты ИИ класса (`model`), tilde-наследование, потомки переопределяют
 - [`task.js`](task.js) — оркестратор (`moves` + `tools`) для pipe
-- [`agents/`](agents/) — агенты: декларации (system/prompt/tools/init, опционально строгая `model`); контракт init — `{ block, box, messages, session, agent, live, exec, streamChat, engine }`; грузит движок из своего пакета ai (не meta peer через ~)
+- [`agents/`](agents/) — агенты: декларации (system/prompt/tools/init, опционально строгая `model`); контракт init — `{ block, box, messages, session, agent, live, exec, streamChat, engine }`; `init === false` — «здесь tool нечего делать»: блок снимается, тип остаётся в `using_blocks` бокса (меню только сужается, повторного pick нет); грузит движок из своего пакета ai (не meta peer через ~)
 - [`prompt/$method/`](prompt/$method/class.js) — **движок**: system от заказчика сохраняется и дополняется (место / agent.system в fill); без system — `buildSystemPrompt`; стрим, стопы через `live.wait`
 
 ### Роли агентов
 
 | Агент | Работа |
 |--------|--------|
-| [`explore`](agents/explore.js) | строение WORK: карта `/` (1 уровень); **ls ветки = `info({ deep: -1 })`** до листьев; readme, ask |
-| [`work`](agents/work.js) | файлы и классы области: read/write/**create** (`$class.create`); **search только внутри выбранного класса** (не корень WORK) |
-| [`check`](agents/check.js) | постусловие после work: **exist** / **meta**; успех → `goalDone`; не create/write |
+| [`explore`](agents/explore.js) | строение WORK: карта `/` (1 уровень); **ls ветки = `info({ deep: -1 })`** до листьев; readme, ask; итог — `doc` (в док) |
+| [`work`](agents/work.js) | файлы и классы: read/write/**create**; read — путь из ленты или fill; **create — все классы за один fill** (секции → блок на класс), прогресс = новый класс, иначе тип сожжён → total; созданное — блоки **`file`** (class.js, readme.md) с телом (`doc`); **search** только внутри класса |
+| [`check`](agents/check.js) | постусловие **операций** create/write: targets → блок `exist` + блоки **`file`** (класс: class.js читается, readme.md непустой; файл write: непустой/сниппет), тело файла в content, критерий — поле `crit`; без сверки предметных полей (`model`…); `goalDone` только полное соответствие |
 | [`web`](agents/web.js) | внешний интернет |
 | [`logs`](agents/logs.js) | журнал класса: `$class.logs` (даты, bodies+день+ext, entry); не work.read history |
 

@@ -63,6 +63,11 @@ ODA({is: 'skill-preview',
             textarea {
                 resize: vertical;
                 min-height: 3em;
+
+                -webkit-user-select: text; /* Для Safari и старых Chrome/Opera */
+                -moz-user-select: text;    /* Для старых версий Firefox */
+                -ms-user-select: text;     /* Для старых версий Internet Explorer */
+                user-select: text;         /* Стандартное свойство */
             }
             .actions {
                 @apply --horizontal;

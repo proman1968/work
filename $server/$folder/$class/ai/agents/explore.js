@@ -12,7 +12,7 @@ const ORIENTATION = [
     'Устройство item (baseUrl, protocol, …) — meta: class.js через meta_folder / tilde → importScript; не info/$public.',
     'Подключённые модели провайдера = дети /MODELS/<provider> (ls). Доступные у провайдера = remote (list_remote по baseUrl из meta), не ls и не публичный ollama.com.',
     '«Какие ещё не подключены» — ls детей + meta/remote того же провайдера, затем diff. ask «нет данных» — не итог.',
-    'ask вернул «нет данных в контексте» — не итог: ls, meta или remote для $ai-провайдера.',
+    'ask — вопрос классу (peer), не человеку; его «нет данных» ничего не решает — дальше ls + meta + remote провайдера и diff. «Недостающие модели <провайдер>» = есть в remote, нет среди детей (ls); это и есть критерий, человека не спрашивать.',
     'В отчёте (total) только то, что есть в items: не выдумывай ls/ask/readme/meta/remote, которых не было в ленте.',
 ].join('\n');
 
@@ -57,7 +57,6 @@ const askTool = {
         if (typeof engine?.execute !== 'function')
             return false;
         b.path = path;
-        b.label = path;
         tagAgent(params.box, AGENT_TAG, 'ask ' + path);
         try {
             const result = await askClassPeer({
@@ -92,11 +91,11 @@ const lsTool = {
             return false;
         const query = exploreQuery(b, params.box, params.messages, lsTool.label);
         const path = classPath(b, params.box, lsTool.label)
-            || pathFromMap(params.box, query);
+            || pathFromMap(params.box, query)
+            || await providerPathByName(query);
         if (!path)
             return false;
         b.path = path;
-        b.label = path;
         const isRoot = path === '/' || path === '';
         tagAgent(params.box, AGENT_TAG, isRoot ? 'ls /' : 'info ' + path);
         const text = isRoot
@@ -134,7 +133,6 @@ const readTool = {
         if (!file)
             return false;
         b.path = path;
-        b.label = path;
         tagAgent(params.box, AGENT_TAG, 'readme ' + path);
         await params.exec(file, {
             method: 'read_text',
@@ -168,12 +166,13 @@ const metaTool = {
         const query = exploreQuery(b, params.box, params.messages, metaTool.label);
         let path = itemPath(b, params.box, metaTool.label, query);
         if (!path || path === '/')
+            path = await providerPathByName(query);
+        if (!path)
             return false;
         const target = await WORK.get_item(path);
         if (!target)
             return false;
         b.path = path;
-        b.label = path;
         tagAgent(params.box, AGENT_TAG, 'meta ' + path);
         try {
             const device = await loadItemDevice(target);
@@ -210,7 +209,8 @@ const remoteTool = {
         const b = params.block;
         if (b.content)
             return false;
-        const path = resolveRemotePath(b, params.box, params.messages);
+        const path = resolveRemotePath(b, params.box, params.messages)
+            || await providerPathByName(exploreQuery(b, params.box, params.messages, remoteTool.label));
         if (!path)
             return false;
         const target = await WORK.get_item(path);
@@ -219,7 +219,6 @@ const remoteTool = {
         if (typeof target.list_remote !== 'function')
             return false;
         b.path = path;
-        b.label = path;
         tagAgent(params.box, AGENT_TAG, 'remote ' + path);
         try {
             let baseUrl = '';
@@ -250,6 +249,9 @@ const AGENT_TAG = 'Осмотр';
 export default {
     label: 'Осматриваю площадку',
     icon: 'icons:explore',
+    doc: true,
+    /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total — work.create проверяет model по ним */
+    expand: true,
     allowReasoning: true,
     description: 'строение WORK: ls, meta (устройство class.js), remote у $ai; карта, readme, ask; не файлы и не интернет',
     system: [
@@ -257,7 +259,7 @@ export default {
         'Осмотр площадки WORK. Карта корня уже в ленте.',
         ORIENTATION,
         'Не пиши файлы и не ходи в интернет — это work / web.',
-        'Нет операнда (путь) — не выдумывай; зафиксируй в итоге.',
+        'Нет операнда (путь) — не выдумывай; зафиксируй в итоге. Имя провайдера в реплике (напр. bis-ollama) — это путь /MODELS/<провайдер> с карты.',
         'Вопрос про состав ветки — ls этой ветки (info deep=-1), не ask контейнера и не plan из пяти одинаковых ls.',
         'Неподключённые модели провайдера — meta/remote того же пути + diff с ls; не SERVICES и не web.',
     ].join('\n'),
@@ -301,12 +303,13 @@ export default {
     },
 };
 
-/** Шапка бокса: «Осмотр: ls /MODELS». */
-function tagAgent(box, role, detail) {
+/** Шапка бокса: type в block.type; итог — state. */
+function tagAgent(box, _role, detail) {
     if (!box)
         return;
     const d = String(detail || '').trim();
-    box.label = d ? role + ': ' + d : role;
+    if (d)
+        box.state = d;
 }
 
 function clip(s, n) {
@@ -429,7 +432,7 @@ async function loadItemDevice(item) {
     if (!item)
         throw new Error('нет item');
     let data;
-    const metaFile = item.meta_file;
+    const metaFile = await item.meta_file;
     if (metaFile && typeof metaFile.importScript === 'function') {
         data = await metaFile.importScript();
     }
@@ -489,20 +492,20 @@ function itemPath(block, box, defaultLabel, query) {
     return classPath(block, box, defaultLabel);
 }
 
-/** Провайдер для remote: не голый /MODELS после ls. */
+/** Провайдер для remote: не голый /MODELS; после ls — матч по имени/токену (ollama → BIS-Ollama). */
 function resolveRemotePath(block, box, messages) {
     const query = exploreQuery(block, box, messages, remoteTool.label);
     const own = String(block?.path || '').trim();
-    if (isModelsProviderPath(own))
+    if (isModelsProviderPath(own) && providerRoot(own) !== '/MODELS')
         return providerRoot(own);
     const fromProvider = providerPathFromMap(box, query);
     if (fromProvider)
         return fromProvider;
     const fromClass = classPath(block, box, remoteTool.label);
-    if (isModelsProviderPath(fromClass))
+    if (isModelsProviderPath(fromClass) && providerRoot(fromClass) !== '/MODELS')
         return providerRoot(fromClass);
     const fromMap = pathFromMap(box, query);
-    if (isModelsProviderPath(fromMap))
+    if (isModelsProviderPath(fromMap) && providerRoot(fromMap) !== '/MODELS')
         return providerRoot(fromMap);
     return '';
 }
@@ -691,7 +694,61 @@ function pathFromMap(box, query) {
     return '';
 }
 
-/** Провайдер $ai: /MODELS/<Name> по имени из запроса (bis-ollama → /MODELS/BIS-Ollama). */
+/** Токены запроса (ollama, bis, …) — до склейки; короткие отброс. */
+function queryTokens(query) {
+    return String(query || '').toLowerCase()
+        .split(/[^a-z0-9а-яё]+/i)
+        .map(t => t.trim())
+        .filter(t => t.length >= 3);
+}
+
+/**
+ * Выбор /MODELS/<id> по brief.
+ * 1) полное имя провайдера ∈ query (bis-ollama → BIS-Ollama);
+ * 2) токен query ∈ имени (ollama → единственный *ollama*);
+ * несколько кандидатов — '' (не гадать).
+ */
+function pickProviderPath(providerPaths, query) {
+    const list = (providerPaths || []).filter(Boolean);
+    if (!list.length)
+        return '';
+    const qFlat = String(query || '').toLowerCase().replace(/[-\s_]/g, '');
+    const tokens = queryTokens(query).map(t => t.replace(/[-\s_]/g, '')).filter(t => t.length >= 3);
+    const strong = [];
+    const soft = [];
+    for (const p of list) {
+        const nameFlat = (String(p).split('/').pop() || '').toLowerCase().replace(/[-\s_]/g, '');
+        if (nameFlat.length < 3)
+            continue;
+        if (qFlat.includes(nameFlat)) {
+            strong.push(p);
+            continue;
+        }
+        if (tokens.some(t => nameFlat.includes(t)))
+            soft.push(p);
+    }
+    if (strong.length === 1)
+        return strong[0];
+    if (strong.length > 1)
+        return '';
+    if (soft.length === 1)
+        return soft[0];
+    if (!strong.length && !soft.length && list.length === 1)
+        return list[0];
+    return '';
+}
+
+/** Имя/токен в реплике → /MODELS/<id> по живым детям /MODELS. */
+async function providerPathByName(query) {
+    if (!String(query || '').trim())
+        return '';
+    const root = await WORK.get_item('/MODELS');
+    const kids = ((await root?.children) || []).filter(isWorkClass);
+    const paths = kids.map(k => String(k.path || ('/MODELS/' + k.id)));
+    return pickProviderPath(paths, query);
+}
+
+/** Провайдеры из map/ls: /MODELS/<Name> (bis-ollama | ollama → BIS-Ollama). */
 function providerPathFromMap(box, query) {
     const map = (box?.items || []).findLast?.(b => (b.type === 'map' || b.type === 'ls') && b.content)
         || [...(box?.items || [])].reverse().find(b => (b.type === 'map' || b.type === 'ls') && b.content);
@@ -702,15 +759,7 @@ function providerPathFromMap(box, query) {
         const parts = p.split('/').filter(Boolean);
         return parts.length === 2 && parts[0].toUpperCase() === 'MODELS';
     });
-    if (!providers.length)
-        return '';
-    const q = String(query || '').toLowerCase().replace(/[-\s]/g, '');
-    for (const p of providers) {
-        const name = (p.split('/').pop() || '').toLowerCase().replace(/[-\s]/g, '');
-        if (name.length >= 3 && q.includes(name))
-            return p;
-    }
-    return providers.length === 1 ? providers[0] : '';
+    return pickProviderPath(providers, query);
 }
 
 function classPath(block, box, defaultLabel) {

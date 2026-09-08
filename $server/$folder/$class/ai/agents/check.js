@@ -1,6 +1,13 @@
-/** Агент check: проверка постусловия после side (create/write). Read-only.
- *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat, engine }).
- *  Не create/write и не web. Успешная проверка → live.goalDone. */
+/** Агент check: постусловие после side (create/write). Read-only.
+ *  Контракт:
+ *    block.targets[] = { path, kind: class|file, expect? } из evidence операций;
+ *    create → exist (класс, type/id) → file class.js (устройство читается) → file readme.md (непустой);
+ *    write → exist → file (непустой / сниппет из секции write);
+ *    без доменных полей (model и т.п.) — только выполнение операции.
+ *  Блоки в ленте: `exist` (путь) и `file` (любой файл: path реальный, тело в content); критерий — `crit`.
+ *  goalDone только полное соответствие; enrichTotal — сводка.
+ *  Движок: init({ block, box, messages, session, agent, live, exec, streamChat, engine }).
+ */
 
 const AGENT_TAG = 'Проверка';
 
@@ -9,95 +16,30 @@ const existTool = {
     icon: 'icons:check-circle',
     role: 'user',
     ignore: true,
-    description: 'убедиться что WORK item по пути существует (класс или файл)',
+    description: 'WORK.get_item: путь из targets существует',
     system: [
         '# Режим: exist',
-        'Первая строка — абсолютный путь WORK.',
-        'Не создавай и не меняй. Не обращайся к пользователю.',
+        'Путь из targets. Пробелы в id сохраняй. Не меняй систему.',
     ].join('\n'),
-    prompt: [
-        'Путь.',
-        'Пример:',
-        '/MODELS/BIS-Ollama/exaone3.5 7.8b',
-    ].join('\n'),
+    prompt: 'Путь WORK из targets.',
     async init(params = {}) {
-        const b = params.block;
-        if (b.content)
-            return false;
-        const path = itemPath(b, params.box, existTool.label, params.messages);
-        if (!path || path === '/')
-            return false;
-        tagAgent(params.box, AGENT_TAG, 'exist ' + path);
-        const item = await WORK.get_item(path);
-        b.path = path;
-        b.label = path;
-        if (!item) {
-            b.error = true;
-            b.content = '[exist ' + path + ']\nнет';
-            return true;
-        }
-        const kind = isWorkClass(item) ? 'class' : (typeof item.read_text === 'function' ? 'file' : 'item');
-        const type = item.type || item.constructor?.name || '';
-        b.content = [
-            '[exist ' + path + ']',
-            'ok: ' + kind + (type ? ' (' + type + ')' : ''),
-            item.label && item.label !== item.id ? 'label: ' + item.label : '',
-        ].filter(Boolean).join('\n');
-        return true;
+        return toolStep(params, 'exist');
     },
 };
 
-const metaTool = {
-    label: 'Устройство item',
-    icon: 'icons:settings',
+const fileTool = {
+    label: 'Файл',
+    icon: 'icons:description',
     role: 'user',
     ignore: true,
-    description: 'class.js устройства (importScript): model, baseUrl, … — сверка с целью',
+    description: 'файл target (class.js / readme.md / файл write): есть, читается, непустой',
     system: [
-        '# Режим: meta / check',
-        'Путь класса или файла — устройство через importScript.',
-        'Сверь нужные поля с целью (model, path). Не меняй систему.',
+        '# Режим: file',
+        'Файл из targets. Только чтение. Не меняй систему.',
     ].join('\n'),
-    prompt: [
-        'Путь item.',
-        'Пример:',
-        '/MODELS/BIS-Ollama/exaone3.5 7.8b',
-    ].join('\n'),
+    prompt: 'Путь файла из targets.',
     async init(params = {}) {
-        const b = params.block;
-        if (b.content)
-            return false;
-        const path = itemPath(b, params.box, metaTool.label, params.messages);
-        if (!path || path === '/')
-            return false;
-        const target = await WORK.get_item(path);
-        if (!target) {
-            b.error = true;
-            b.path = path;
-            b.content = '[meta ' + path + ']\nнет item';
-            return true;
-        }
-        b.path = path;
-        b.label = path;
-        tagAgent(params.box, AGENT_TAG, 'meta ' + path);
-        try {
-            const device = await loadItemDevice(target);
-            const keys = ['model', 'baseUrl', 'protocol', 'label', 'icon', 'maxTokens'];
-            const lines = ['[meta ' + path + ']'];
-            for (const k of keys) {
-                if (device[k] != null && device[k] !== '')
-                    lines.push(k + ': ' + (typeof device[k] === 'string' ? device[k] : JSON.stringify(device[k])));
-            }
-            if (lines.length === 1)
-                lines.push(JSON.stringify(device, null, 2));
-            b.content = lines.join('\n');
-            return true;
-        }
-        catch (e) {
-            b.error = true;
-            b.content = 'meta ' + path + ': ' + String(e.message || e);
-            return true;
-        }
+        return toolStep(params, 'file');
     },
 };
 
@@ -105,90 +47,463 @@ export default {
     label: 'Проверяю результат',
     icon: 'icons:verified-user',
     allowReasoning: true,
-    description: 'проверка постусловия после work: путь есть, meta/поля совпадают с целью; не create и не write',
+    description: 'постусловие create/write: путь, class.js/readme или содержимое файла; не предметные поля',
     system: [
         '# Агент: check',
-        'Проверка, что side-effect из цели реально есть в WORK.',
-        'Пути — из goal, create/write в ленте. exist и при необходимости meta.',
-        'Не создавай и не правь. Не web. Не повторяй осмотр всей площадки (это explore).',
-        'Нет пути для проверки — зафиксируй в итоге.',
+        'Постусловие side-effect: операция create/write из ленты выполнена.',
+        'targets = [create …] (классы) и [write …] (файлы) из контекста.',
+        'Класс: exist (класс, type/id из секции create) → file class.js (читается) → file readme.md (непустой).',
+        'Файл: exist → file (непустой / согласован с секцией write).',
+        'Не сверяй предметные поля устройства (model и т.п.) — это не роль check.',
+        'goalDone только когда все критерии по всем targets ok.',
+        'Не создавай и не правь. Не web. Не осмотр площадки (explore).',
     ].join('\n'),
     prompt: [
-        'Краткий отчёт: что проверено, ok или gap.',
-        'Только факты из items (exist/meta).',
+        'Краткий отчёт: по каждому target — критерии ok или gap.',
+        'Только факты из items.',
     ].join('\n'),
     async init(params = {}) {
-        const brief = String(params.block?.brief || '').trim();
-        if (brief)
-            tagAgent(params.block, AGENT_TAG, clip(brief, 48));
-        else
-            tagAgent(params.block, AGENT_TAG, 'постусловие');
+        const box = params.block;
+        const messages = params.messages || [];
+        box.targets = collectTargets(messages);
+        const n = box.targets.length;
+        tagAgent(box, AGENT_TAG, n ? (n + ' target' + (n > 1 ? 's' : '')) : 'нет targets');
+        if (!n)
+            return;
+        box.items ??= [];
+        for (const t of box.targets) {
+            await verifyTarget(box, t, messages);
+        }
+        settleCheckTools(box);
+        await params.live?.save?.();
     },
     finish(params = {}) {
-        const items = params.block?.items || [];
-        const data = items.filter(b => b.content && (b.type === 'exist' || b.type === 'meta'));
-        if (!data.length)
+        const box = params.block;
+        if (!box)
             return;
-        if (data.some(b => b.error))
-            return;
-        params.live?.goalDone?.();
+        ensureTargets(box, params.messages);
+        if (allTargetsFullyOk(box))
+            params.live?.goalDone?.();
+    },
+    enrichTotal(_content, block) {
+        return formatCheckReport(block);
     },
     tools: {
         exist: existTool,
-        meta: metaTool,
+        file: fileTool,
     },
 };
 
-function tagAgent(box, role, detail) {
+/** Донабор, если init не закрыл всё (обрыв). */
+async function toolStep(params, kind) {
+    const b = params.block;
+    const box = params.box;
+    if (b.content)
+        return false;
+    ensureTargets(box, params.messages);
+    if (allTargetsFullyOk(box) || allTargetsSettled(box)) {
+        settleCheckTools(box);
+        return false;
+    }
+    const next = nextIncomplete(box);
+    if (!next)
+        return false;
+    const { t, crit } = next;
+    if (kind === 'exist') {
+        if (crit !== 'exist')
+            return false;
+        await fillExist(b, t);
+    }
+    else {
+        if (crit === 'exist')
+            return false;
+        await fillCriterion(b, t, crit);
+    }
+    tagAgent(box, AGENT_TAG, crit + ' ' + t.path);
+    pushMsg(params.messages, b);
+    settleIfDone(box);
+    return true;
+}
+
+async function verifyTarget(box, t, messages) {
+    for (const crit of criteriaFor(t)) {
+        const b = crit === 'exist'
+            ? { type: 'exist', label: existTool.label, icon: 'icons:check-circle', time: Date.now() }
+            : { type: 'file', label: fileTool.label, icon: 'icons:description', time: Date.now() };
+        if (crit === 'exist')
+            await fillExist(b, t);
+        else
+            await fillCriterion(b, t, crit);
+        box.items.push(b);
+        pushMsg(messages, b);
+        if (crit === 'exist' && b.error)
+            return;
+    }
+}
+
+function pushMsg(messages, b) {
+    if (b?.content && messages)
+        messages.push({ role: 'assistant', content: b.content });
+}
+
+async function fillExist(b, t) {
+    const path = t.path;
+    b.crit = 'exist';
+    b.target = path;
+    b.path = path;
+    const item = await WORK.get_item(path);
+    if (!item) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[exist ' + path + ']\nнет';
+        return;
+    }
+    const kind = isWorkClass(item) ? 'class' : (typeof item.read_text === 'function' ? 'file' : 'item');
+    const type = String(item.type || item.constructor?.name || '');
+    const lines = [
+        '[exist ' + path + ']',
+        'ok: ' + kind + (type ? ' (' + type + ')' : ''),
+    ];
+    const gaps = [];
+    if (t.kind === 'class' && !isWorkClass(item))
+        gaps.push('ожидался класс, got ' + kind);
+    if (t.expect?.type && type && type !== String(t.expect.type))
+        gaps.push('type: want «' + t.expect.type + '», got «' + type + '»');
+    if (t.expect?.id) {
+        const id = String(item.id || path.split('/').filter(Boolean).pop() || '');
+        if (id !== String(t.expect.id))
+            gaps.push('id: want «' + t.expect.id + '», got «' + id + '»');
+    }
+    if (gaps.length) {
+        b.error = true;
+        b.state = 'gap';
+        lines.push('gap:');
+        lines.push(...gaps.map(g => '- ' + g));
+    }
+    else {
+        b.state = 'ok · ' + kind + (type ? ' ' + type : '');
+    }
+    b.content = lines.join('\n');
+}
+
+/** Файловый критерий: meta (class.js читается) | readme (непустой) | content (файл write). Блок — `file`. */
+async function fillCriterion(b, t, crit) {
+    b.crit = crit;
+    b.target = t.path;
+    if (crit === 'meta')
+        return fillMeta(b, t);
+    if (crit === 'readme')
+        return fillClassFile(b, t, 'readme.md', { requireText: true });
+    return fillWriteFile(b, t);
+}
+
+async function fillMeta(b, t) {
+    const path = t.path;
+    const target = await WORK.get_item(path);
+    const meta = await resolveClassFile(target, 'class.js');
+    b.path = meta.path || (path + '/class.js');
+    if (!target) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\nнет класса ' + path;
+        return;
+    }
+    if (!isWorkClass(target)) {
+        b.state = 'skip';
+        b.content = '[file ' + b.path + ']\nskip: ' + path + ' не класс';
+        return;
+    }
+    try {
+        await loadItemDevice(target);
+    }
+    catch (e) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\ngap: class.js не читается — ' + String(e.message || e);
+        return;
+    }
+    b.state = linesState(meta.text, 'ok');
+    b.content = fileReport(b.path, meta.text, 'js');
+}
+
+async function fillClassFile(b, t, name, { requireText } = {}) {
+    const target = await WORK.get_item(t.path);
+    const f = await resolveClassFile(target, name);
+    b.path = f.path || (String(t.path).replace(/\/$/, '') + '/' + name);
+    if (!f.file) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\nнет';
+        return;
+    }
+    if (f.error) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\n' + f.error;
+        return;
+    }
+    if (requireText && !String(f.text || '').trim()) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\nпусто';
+        return;
+    }
+    b.state = linesState(f.text, 'ok');
+    b.content = fileReport(b.path, f.text, langOf(b.path));
+}
+
+async function fillWriteFile(b, t) {
+    const path = t.path;
+    b.path = path;
+    const file = await WORK.get_item(path);
+    if (!file || typeof file.read_text !== 'function') {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + path + ']\nнет файла';
+        return;
+    }
+    let text = '';
+    try {
+        text = String(await file.read_text() || '');
+    }
+    catch (e) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + path + ']\n' + String(e.message || e);
+        return;
+    }
+    if (!text.trim()) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + path + ']\nпусто';
+        return;
+    }
+    const snippet = t.expect?.snippet;
+    if (snippet && !text.includes(snippet)) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + path + ']\ngap: нет ожидаемого фрагмента из write';
+        return;
+    }
+    b.state = linesState(text, snippet ? 'ok · snippet' : 'ok');
+    b.content = fileReport(path, text, langOf(path), snippet ? 'snippet: ok' : '');
+}
+
+/** Файл в meta класса (get_item → meta_folder → WORK path). */
+async function resolveClassFile(cls, name) {
+    const out = { file: null, path: '', text: '', error: '' };
+    if (!cls)
+        return out;
+    try {
+        let file = null;
+        if (typeof cls.get_item === 'function')
+            file = await cls.get_item(name);
+        if (!file && cls.meta_folder) {
+            const meta = cls.meta_folder;
+            file = typeof meta.get_item === 'function'
+                ? await meta.get_item(name)
+                : ((await meta.files) || []).find(f => f.id === name || f.name === name);
+        }
+        if (!file && cls.path)
+            file = await WORK.get_item(String(cls.path).replace(/\/$/, '') + '/' + name);
+        if (!file || typeof file.read_text !== 'function')
+            return out;
+        out.file = file;
+        out.path = String(file.path || '');
+        try {
+            out.text = String(await file.read_text() || '');
+        }
+        catch (e) {
+            out.error = String(e.message || e);
+        }
+    }
+    catch { /* нет */ }
+    return out;
+}
+
+function fileReport(path, text, lang, note) {
+    const body = String(text || '').replace(/\r\n/g, '\n').trimEnd();
+    const lines = body ? body.split('\n').length : 0;
+    return [
+        '[file ' + path + ']',
+        'ok: ' + lines + ' lines',
+        note || '',
+        body ? '\n```' + (lang || '') + '\n' + body + '\n```' : '',
+    ].filter(Boolean).join('\n');
+}
+
+function linesState(text, prefix = 'ok') {
+    const body = String(text || '').replace(/\r\n/g, '\n').trimEnd();
+    const n = body ? body.split('\n').length : 0;
+    return prefix + (n ? ' · ' + n + ' lines' : '');
+}
+
+function langOf(path) {
+    const p = String(path || '');
+    if (/\.m?js$/i.test(p)) return 'js';
+    if (/\.md$/i.test(p)) return 'markdown';
+    if (/\.json$/i.test(p)) return 'json';
+    if (/\.html?$/i.test(p)) return 'html';
+    if (/\.css$/i.test(p)) return 'css';
+    return '';
+}
+
+/** targets из evidence операций; expect — только из своей секции [create|write path]… */
+function collectTargets(messages) {
+    const out = [];
+    const seen = new Set();
+    const add = (t) => {
+        const path = String(t.path || '').trim().replace(/\/$/, '');
+        if (!path || path === '/' || seen.has(path))
+            return;
+        seen.add(path);
+        out.push({ ...t, path });
+    };
+    const blob = (messages || []).map(m => String(m?.content || '')).join('\n\n');
+
+    for (const match of blob.matchAll(/\[create\s+(\/[^\]]+?)\]/g)) {
+        const path = match[1].trim();
+        const section = evidenceSection(blob, match.index);
+        const id = path.split('/').filter(Boolean).pop() || '';
+        const type = sectionField(section, 'type');
+        add({
+            path,
+            kind: 'class',
+            expect: {
+                id,
+                type: type && type.startsWith('$') ? type : '',
+            },
+        });
+    }
+    for (const match of blob.matchAll(/\[write\s+(\/[^\]]+?)\]/g)) {
+        const path = match[1].trim();
+        if (/\/readme\.md$/i.test(path)) {
+            const classPath = path.replace(/\/readme\.md$/i, '');
+            if (seen.has(classPath))
+                continue;
+        }
+        const section = evidenceSection(blob, match.index);
+        add({
+            path,
+            kind: 'file',
+            expect: { snippet: writeSnippetFromSection(section) },
+        });
+    }
+    return out;
+}
+
+/** Текст от маркера операции до следующего [create|write …] или конца. */
+function evidenceSection(blob, index) {
+    const from = index ?? 0;
+    const rest = blob.slice(from);
+    const next = rest.slice(1).search(/\n\[(?:create|write)\s+\//);
+    const end = next < 0 ? rest.length : next + 1;
+    return rest.slice(0, end);
+}
+
+function sectionField(section, name) {
+    const m = String(section || '').match(new RegExp('^' + name + ':\\s*(.+)$', 'mi'));
+    return m ? m[1].trim() : '';
+}
+
+function writeSnippetFromSection(section) {
+    const lines = String(section || '').split('\n').map(l => l.trim());
+    const line = lines.find(l =>
+        l && !/^\[write\s+\//i.test(l) && !/^ok\b/i.test(l) && !/^###?\s/.test(l)
+        && !/^```/.test(l) && l.length > 12 && !l.startsWith('_'));
+    return line ? line.slice(0, 80) : '';
+}
+
+function ensureTargets(box, messages) {
+    if (!box)
+        return;
+    if (!Array.isArray(box.targets) || !box.targets.length)
+        box.targets = collectTargets(messages);
+}
+
+function criteriaFor(t) {
+    if (t.kind === 'class')
+        return ['exist', 'meta', 'readme'];
+    return ['exist', 'content'];
+}
+
+function findCrit(box, crit, target) {
+    return (box?.items || []).find(b => b.crit === crit && b.target === target && b.content);
+}
+
+function hasOk(box, crit, target) {
+    const b = findCrit(box, crit, target);
+    return !!b && !b.error;
+}
+
+function hasSettled(box, crit, target) {
+    return !!findCrit(box, crit, target);
+}
+
+function allTargetsSettled(box) {
+    const targets = box?.targets || [];
+    if (!targets.length)
+        return false;
+    return targets.every(t => criteriaFor(t).every(c => hasSettled(box, c, t.path)));
+}
+
+function allTargetsFullyOk(box) {
+    const targets = box?.targets || [];
+    if (!targets.length)
+        return false;
+    return targets.every(t => criteriaFor(t).every(c => hasOk(box, c, t.path)));
+}
+
+function nextIncomplete(box) {
+    for (const t of box?.targets || []) {
+        for (const crit of criteriaFor(t)) {
+            if (!hasSettled(box, crit, t.path))
+                return { t, crit };
+        }
+    }
+    return null;
+}
+
+function settleIfDone(box) {
+    if (allTargetsSettled(box))
+        settleCheckTools(box);
+}
+
+function settleCheckTools(box) {
+    if (box)
+        box.using_blocks = ['exist', 'file'];
+}
+
+function formatCheckReport(block) {
+    const targets = block?.targets || [];
+    const lines = ['[check]'];
+    if (!targets.length)
+        return '[check]\ngap: нет targets (create/write в контексте)';
+    let nOk = 0;
+    for (const t of targets) {
+        const bits = criteriaFor(t).map(c => {
+            if (hasOk(block, c, t.path))
+                return c + ':ok';
+            if (hasSettled(block, c, t.path))
+                return c + ':gap';
+            return c + ':—';
+        });
+        const full = criteriaFor(t).every(c => hasOk(block, c, t.path));
+        if (full)
+            nOk++;
+        lines.push((full ? 'ok' : 'gap') + ': ' + t.path + ' (' + bits.join(', ') + ')');
+    }
+    lines.splice(1, 0, nOk + '/' + targets.length + ' targets ok');
+    return lines.join('\n');
+}
+
+/** Шапка агента: type в block.type; итог — state (не склеивать в label). */
+function tagAgent(box, _role, detail) {
     if (!box)
         return;
     const d = String(detail || '').trim();
-    box.label = d ? role + ': ' + d : role;
-}
-
-function clip(s, n) {
-    const t = String(s || '').replace(/\s+/g, ' ').trim();
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
-}
-
-function itemPath(block, box, defaultLabel, messages) {
-    const own = String(block?.path || '').trim();
-    if (own && own !== '/')
-        return own;
-    const label = String(block?.label || '').trim();
-    if (label && label !== defaultLabel && label.startsWith('/'))
-        return label.split('\n')[0].trim();
-    const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
-    const head = raw.split('\n').map(l => l.trim()).find(Boolean) || '';
-    if (head.startsWith('/'))
-        return head.replace(/^#+\s*/, '').trim();
-    const fromCreate = (box?.items || []).findLast?.(b => b.type === 'create' && b.path && b.done && !b.error)
-        || [...(box?.items || [])].reverse().find(b => b.type === 'create' && b.path && b.done && !b.error);
-    if (fromCreate?.path)
-        return String(fromCreate.path);
-    const fromMsg = pathFromMessages(messages);
-    if (fromMsg)
-        return fromMsg;
-    const brief = String(box?.brief || '').trim();
-    const m = brief.match(/(\/MODELS\/[^\s]+)/);
-    if (m)
-        return m[1].replace(/\/$/, '');
-    return '';
-}
-
-function pathFromMessages(messages) {
-    if (!messages?.length)
-        return '';
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const c = String(messages[i]?.content || '');
-        const create = c.match(/\[create\s+(\/[^\]]+?)\]/);
-        if (create)
-            return create[1].trim();
-        const path = c.match(/(\/MODELS\/[^\s\]|]+)/);
-        if (path)
-            return path[1].replace(/[.,;:]+$/, '');
-    }
-    return '';
+    if (d)
+        box.state = d;
 }
 
 function isWorkClass(item) {
@@ -206,7 +521,7 @@ async function loadItemDevice(item) {
     if (!item)
         throw new Error('нет item');
     let data;
-    const metaFile = item.meta_file;
+    const metaFile = await item.meta_file;
     if (metaFile && typeof metaFile.importScript === 'function')
         data = await metaFile.importScript();
     else if (typeof item.import === 'function' && isWorkClass(item))
@@ -224,7 +539,7 @@ async function loadItemDevice(item) {
         }
     }
     if (!data || typeof data !== 'object')
-        throw new Error('пустые метаданные');
+        throw new Error('пустые метаданные / class.js');
     return sanitizeDevice(data);
 }
 

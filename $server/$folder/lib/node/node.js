@@ -94,9 +94,7 @@ export default {
     showUsers: false,
     hideLabel: false,
     hideHistoryTime: false,
-    hasUsers: {
-        $type: Boolean
-    },
+    hasUsers: { $type: Boolean },
     get historyTime() {
         if (this.hideHistoryTime)
             return '';

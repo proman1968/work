@@ -296,7 +296,7 @@ export class $folder extends $item{
              //наследование всех папкок и фалов
             let ancestor
 
- 
+
 
             if(this.id === '$folder'){
                 ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
@@ -305,7 +305,7 @@ export class $folder extends $item{
                 return ancestor;
             }
 
-            if(this.isMetaFolder && !this.parent.$owner){
+            if(this.isMetaFolder && !this.parent.$owner && ['$file', '$folder'].every(t => this.type !== t )){
                 ancestor = await this.parent.$distr_folder;
                 if(this.path === ancestor.path)
                     console.log('ancestor', this.path, ancestor.path);

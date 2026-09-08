@@ -36,9 +36,9 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
                     <slot name="left-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
                 <div class="main vertical flex" @mousewheel>
-                    
+
                     <slot name="main" class="print-flow vertical flex" style="overflow: hidden; z-index: 0"></slot>
-                    
+
                 </div>
                 <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :buttons="right_buttons">
                     <slot name="right-title" class="pe-no-print" slot="title"></slot>
@@ -280,7 +280,7 @@ ODA({is: 'app-tabs',
             <oda-button :label="$for.item.label" :light="focusedIndex === $for.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px;" @tap="setIndex($for.index)"></oda-button>
         </div>
         <div flex></div>
-        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 8px;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
+        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 8px;overflow: hidden; text-overflow: ellipsis;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
     `,
     get mobile() {
         return this.host.mobile

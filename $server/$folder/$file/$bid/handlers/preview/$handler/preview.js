@@ -26,6 +26,12 @@ export default {
                 font-size: 12px;
                 line-height: 1.4;
             }
+            div, pre {
+                -webkit-user-select: text; /* Для Safari и старых Chrome/Opera */
+                -moz-user-select: text;    /* Для старых версий Firefox */
+                -ms-user-select: text;     /* Для старых версий Internet Explorer */
+                user-select: text;         /* Стандартное свойство */
+            }
             h3 { margin: 0; }
         </style>
         <div class="row">

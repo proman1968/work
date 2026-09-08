@@ -19,7 +19,7 @@ ODA({ is: 'microchat-panel',
                 @tap="sendAction(false)"></oda-button>
         </div>
         <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
-            ::value ::files :pending :error="isDo"
+            ::value ::files :pending :is-do
             :model="data?.model" :effort="data?.effort" ::tts-mode
             :usage-stats="usageStats"
             ready-icon="eva:f-arrow-upward"

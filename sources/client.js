@@ -257,6 +257,16 @@ WORK.showMenu = function (params = {}, e) {
     params.menu ??= ODA.createComponent('item-menu', params);
     return WORK.showPopover(params.menu, params, e);
 }
+WORK.showConfirm = function (textContent = 'Подтвердить?', params = {}) {
+    const el = ODA.createElement('p', {textContent, style: 'margin: 1em;'});
+    return WORK.showDialog(el, {
+        allowClose: true,
+        TITLE: { label: 'Подтверждение', allowClose: true },
+        OK: { label: 'Да', icon: 'icons:check' },
+        CANCEL: { label: 'Нет', icon: 'icons:close' },
+        ...params
+    });
+}
 
 WORK.showDropdown = function (el, params = {}, e) {
     params.popoverType = 'dropdown';

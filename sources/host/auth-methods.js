@@ -89,8 +89,10 @@ export const authMethods = {
             label: ((surname || '') + ' ' + (name || '') + ' ' + (patronymic || '')).trim() || email,
         };
 
-        let users = await this.$users;
-        let $user_item = await users._get_next_item(uid, CORE.$user);
+        const $users = await this.$users;
+        const users = await $users.items;
+        const isFirstUser = users.length === 0;
+        let $user_item = await $users._get_next_item(uid, CORE.$user);
         credentials.keys = $user_item.keys || {};
         credentials.keys[time] = publicKey;
 
@@ -116,9 +118,14 @@ export const authMethods = {
         session.id = uid;
         session.uid = uid;
 
-        await WORK.ensureBootstrapAdmin(uid, params);
+
+        if (isFirstUser) {
+            await ensureBootstrapAdmin(uid, params);
+        }
 
         $server.broadcastAuthChangedToSession(session, { uid, reason: 'register' });
+
+        await $users.reset();
 
         return res;
     },
@@ -194,3 +201,21 @@ export const authMethods = {
         return "Выход выполнен";
     },
 };
+
+/**
+ * Первый зарегистрированный пользователь добавляется в WORK.#security.
+ * @param {string} uid
+ * @param {{}} params
+ */
+async function ensureBootstrapAdmin(uid, params = {}) {
+    await WORK.init;
+    const data = await WORK.DATA;
+    data['#security'] ??= {};
+    for (const k of ['ADMINS', 'BOSSES', 'USERS']) {
+        data['#security'][k] ??= [];
+        data['#security'][k].add(uid);
+    }
+    await WORK.save({ post: WORK.constructor.toScript(data), session: { $user: WORK }, sockets: params.sockets });
+    WORK.reset();
+    return true;
+}

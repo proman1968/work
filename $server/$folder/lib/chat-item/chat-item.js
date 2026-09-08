@@ -77,7 +77,7 @@ ODA({is: 'chat-item',
                 <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" :hide-history-time="compact"></item-node>
                 <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
-            <div ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent"></div>
+            <div ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;"></div>
             <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>

@@ -351,7 +351,8 @@ export default {
         }
 
         let using_blocks = params.box.using_blocks ??= [];
-        next = (next || []).filter(id => !using_blocks.includes(id));
+        // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
+        next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
         // после question без субагента / pursue — answer не в меню, пока goal open
         const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
@@ -364,7 +365,7 @@ export default {
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
         else if (!next.length)
-            choice = 'total';
+            choice = this.pipe.total ? 'total' : null;
         else if (next.length === 1)
             choice = next[0];
         else {
@@ -375,19 +376,26 @@ export default {
                 return id.toUpperCase() + ' - ' + cap + ';';
             });
             const need = goal?.need || 'side';
+            const hasSideEvidence = (params.box?.items || []).some(b =>
+                (b.type === 'work' || b.type === 'create' || b.type === 'write')
+                && b.content && !b.error);
             let menu = [
                 'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
                 'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
                 'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
+                'Сначала факты площадки (explore), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
+                'Один агентный ход, если его достаточно — не planning «на всякий случай».',
                 '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
-                '«подключи / добавь модель / создай класс» у провайдера — work (create $ai), затем check; не write файла с «:» в имени.',
-                'После work с create/write — check (exist/meta), не ещё create того же пути и не planning «с нуля».',
+                '«подключи / добавь модель / создай класс» — explore (нет diff remote/ls) или work (есть diff → create $ai только по тегам из remote); не planning и не write файла с «:».',
+                hasSideEvidence
+                    ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
+                    : 'check — только после факта create/write в ленте; до действия не выбирай check.',
                 'report — только сводка в ленту; файл на диске он не создаёт.',
                 'Состав/инвентарь площадки или провайдера — explore (ls, meta, remote), не web «на всякий случай».',
                 need === 'facts'
                     ? 'goal.need=facts: достаточно фактов в ленте (explore/web/logs) или answer — не work «на всякий случай».'
-                    : 'goal.need=side: write/create — work; закрытие цели — check (постусловие), не одна реплика answer.',
-                'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
+                    : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
+                'Если разумный default уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
                 '\n\n[menu]\n',
                 ...lines,
@@ -578,7 +586,13 @@ export default {
     /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
     async _fillLeaf(params = {}, session) {
         const next_pipe = this.pipe[params.block.type];
-        let prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
+        const box_pipe = this.pipe[params.box?.type];
+        const prompt = next_pipe?.prompt || box_pipe?.prompt;
+        if (!prompt) {
+            params.block.error = true;
+            params.block.content = '$task: нет pipe/prompt для «' + params.block.type + '»';
+            return;
+        }
         let messages;
         if (params.block.draft) {
             const draft = params.block.draft;
@@ -599,8 +613,8 @@ export default {
         }
         const response = await this._streamChat({
             messages, session,
-            maxOutput: next_pipe.maxOutput,
-            allowReasoning: next_pipe.allowReasoning,
+            maxOutput: next_pipe?.maxOutput ?? box_pipe?.maxOutput,
+            allowReasoning: next_pipe?.allowReasoning ?? box_pipe?.allowReasoning,
         });
         this._applyStream(params, response);
     },
@@ -811,10 +825,10 @@ export default {
                 ns[k] = v;
             }
             registerOrchestrator(ns, taskDef);
-            // агенты — декларации из меты класса (~/ai/agents, канон движка), не дубли $task
+            // агенты — пакет движка (как prompt._aiPackage), иначе meta ~/ai/agents
             const agentIds = [];
             const stepAgents = [];
-            const agentsDir = await this.$class?.meta_folder?.get_item('ai/agents');
+            const agentsDir = await this._agentsDir();
             if (agentsDir) {
                 const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
                 const byId = new Map();
@@ -853,6 +867,28 @@ export default {
         const script = this.constructor.stripAbsoluteImports(raw);
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
         return import('data:text/javascript;base64,' + b64);
+    },
+    /**
+     * Каталог agents/: пакет движка prompt (как _aiPackage), иначе meta $class ~/ai/agents.
+     * Step/меню должны видеть тех же агентов, что execute.
+     */
+    async _agentsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('agents') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/agents');
+        }
+        catch {
+            return null;
+        }
     },
     get body() {
         return new AsyncPromise(async () => {
@@ -1084,7 +1120,7 @@ function formatGoalBlock(goal) {
         }
         else {
             lines.push(
-                'need=side: цель — действие в системе; закрывается check после work (или evidence), не репликой.',
+                'need=side: цель — действие в системе; закрывается evidence / check после факта в ленте, не репликой.',
                 'Пока status не done — цель не достигнута; сессия не считается выполненной.',
                 'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
                 'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',

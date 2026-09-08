@@ -1,6 +1,21 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [14:45] explore: `pickProviderPath` — токен brief ∈ имени провайдера (`ollama` → единственный `/MODELS/BIS-Ollama`); remote не жжётся на голом `/MODELS`. Причина: 1788867632272 — ls есть, remote в using без блока, ask/work без diff.
+- [14:35] Откат «сразу question»: меню — сначала explore, question только если после фактов критерий неоднозначен; explore — «недостающие <провайдер>» = remote − ls, имя провайдера в реплике = путь с карты. Гард `modelGrounded` и `expand` оставлены. `providerPathByName`: имя провайдера в реплике → `/MODELS/<id>` по живым детям (ls/meta/remote), карта корня их не показывает. Причина: 1788866899775 — question до осмотра; после «bis-ollama» ls/meta/remote сгорели с `init=false` (путь не резолвился) → снова question вместо remote/diff.
+- [14:25] Против invent-create. work.create: `model` не из не-assistant сообщений (remote/ls/реплика) → отказ «нет факта». explore: `expand` (листья-факты в контекст вместо total), ask = peer. Причина: 1788865825648 — «добавь недостающие модели ollama» → peer-ask, затем 12 create из головы (activation с выдуманным meta.models).
+- [13:05] Шапка: русский `label` (не id type); 2-й слот только ссылка — WORK form / http `_blank`. Причина: thinking+Думаю маслом.
+- [12:50] Шапка ленты: **type | path | state** (иконка остаётся); агенты не кладут path в label — detail в `state`. Причина: type читался только из иконки.
+- [12:35] Файл в ленте — один тип `file` (check и work); check: `exist` + `file` (class.js/readme.md/файл write), реальный path, тело в content, критерий в `crit`; убраны типы meta/readme/content/artifact. Причина: 1788859406397 — `type: readme` — тип блока по имени файла.
+- [12:25] check: только факт create/write (exist + meta читается + readme/content); убраны expect.model/label и expectModelNear. Причина: 1788858416648 — чужой model у второго create → ложный gap → planning/web.
+- [12:05] create: batch — все классы одним fill (секции), блок на класс; dropUsed только при новом классе, иначе тип сожжён → total; убраны `maybeAllowAnotherCreate`/`modelsStillNeeded`; `doc`/artifact только у созданного; устройство readme — `meta_file` созданной точки. explore `doc`. Причина: 1788857474018 — create того же path ×6 (условие цикла у нас, операнд у LLM).
+- [11:45] Движок: `init===false` = «tool здесь нечего делать» → тип остаётся в using_blocks (меню монотонно сужается, без счётчиков). work.read: fill→path→recalc; `doc` ставит tool после done. Причина: 1788856240964 — после activation петля pick(read)→init false→save.
+- [11:20] work create/write: evidence в ленту — `doc` + WORK-ссылки + тела class.js/readme (тип `artifact`); check без изменения роли. Причина: 1788854841637 — check ok, отчёт без содержимого.
+- [11:05] create: уникальный `model` среди детей (`$class.create` + work); без ignore — dropUsed только после нового create / если ещё needed tags; readme из устройства. Причина: 1788853754988 — 3 id на один model, петля.
+- [10:50] `meta_file`: await `meta_folder.files`; readme create → `meta_folder.save_file`; check читает readme из meta. Причина: 1788852757790 — `files.find is not a function`, readme «нет» после ok.
+- [10:25] check: exist + meta/match + readme (класс) / content (файл); work create → readme.md. Причина: постусловие ≠ «путь есть»; точка самодокументирована.
+- [10:10] check: контракт `targets` (все create/write) → exist по каждому; `goalDone` только полное покрытие; `enrichTotal` сводка. Убраны forceCheckDone / «любой ok». Причина: 1788850832971 — один exist, goal done, дубль строк.
+- [10:00] check: путь с пробелами; без ignore; после ok exist → using=[exist,meta] + goalDone по любому ok. Причина: 1788850024575 — ok exist, петля на урезанном `exaone3.5`.
 - [18:20] агент `check` (exist/meta → goalDone); work без goalDone; create skip если path уже в run или на диске. Причина: 1788793771061 — create ok×3, зависание без проверки.
 - [02:30] logs: «вчера/сегодня» → ISO; bodies + `ext` (ics/eml/task); `entry:` вместо `file:`; thinking/work — журнал не через work.read. Причина: зонд «чем занимались» брал сегодня и уходил читать .logs файлами.
 - [02:15] explore `ls` ветки: `info({ deep: -1 })` компактным деревом (path/type/label); корень `/` — по-прежнему один уровень. Причина: зонд моделей останавливался на провайдерах без листьев.
@@ -25,6 +40,10 @@
 - Parallel fan-out `ask` по нескольким классам (тот же Object.create `$context`).
 
 ## Ключевые решения
+- Решение: check — постусловие операции (путь, class.js читается, readme/content), не сверка предметных полей device. Expect — только из своей секции evidence. Причина: 1788858416648 — model одного create прилип к другому → ложный gap.
+- Решение: продолжение цикла tool — только по факту прогресса в его же результате (новый класс/файл), не по внешней оценке «ещё нужно». Операнды — пачкой за один fill. Причина: условие цикла у кода + операнд у LLM = незавершаемость.
+- Решение: `init===false` сжигает тип в боксе (не снимает с using). Операнды tools детерминированы из ленты — между двумя pick улик не прибавляется, повтор бессмыслен; сужающееся меню гарантирует завершение. Причина: 1788856240964 — зависание после activation.
+- Решение: evidence create/write — блок с `doc` + WORK-ссылки + тела (тип `artifact` в ленте); check остаётся постусловием ok/gap. Причина: человек читает результат в доке, не checklist.
 - Решение: журнал только `$class.logs` / `read_log_entry` (день, ext); не work по history. Причина: иначе модель читает .logs как файлы и путает день.
 - Решение: explore ls ветки — `info({ deep: -1 })` (не один уровень имён); карта `/` — компас. Причина: состав домена (модели под провайдерами) виден сразу, без серии ls/ask.
 - Решение: work.search — путь класса + запрос, запрет корня WORK; строение площадки — explore. Причина: глобальный semantic_search ломает слои и роняет xenova/RAG.

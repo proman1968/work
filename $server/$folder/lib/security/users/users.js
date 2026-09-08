@@ -11,17 +11,19 @@ export default {
                 min-height: {{iconSize + 6}}px; /* border (2 * 1px) + padding (2 * 2px) */
             }
             .part {
+                @apply --horizontal;
+                @apply --no-flex;
                 gap: 4px;
                 padding: 2px;
                 border-radius: 16px;
                 min-width: 20px;
             }
         </style>
-        <div class="horizontal part no-flex">
+        <div class="part">
             <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap="_tap" @contextmenu.capture="_userMenu"></item-user>
         </div>
         <div flex ~if="selectMode && selectedUsers.length"></div>
-        <div ~if="selectMode && selectedUsers.length" class="horizontal part success-invert no-flex">
+        <div ~if="selectMode && selectedUsers.length" class="part success-invert">
             <oda-icon icon="eva:f-arrow-ios-back" :icon-size @tap="_clear"></oda-icon>
             <item-user border ~for="selectedUsers" :$item="$for.item" :icon-size @tap="_tap"></item-user>
         </div>
@@ -41,6 +43,8 @@ export default {
         }
     },
     get availableUsers() {
+        if (!this.$item)
+            return;
         return Promise.resolve(this._sourceUsers).then(all => {
             if (!this.selectMode)
                 return all;
