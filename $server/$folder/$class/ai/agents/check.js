@@ -52,11 +52,12 @@ export default {
         '# Агент: check',
         'Постусловие side-effect: операция create/write из ленты выполнена.',
         'targets = [create …] (классы) и [write …] (файлы) из контекста.',
-        'Класс: exist (класс, type/id из секции create) → file class.js (читается) → file readme.md (непустой).',
+        'Класс: exist (класс, type/id из секции create) → file class.js (читается, есть icon) → file readme.md в storage_folder (непустой, актуален).',
         'Файл: exist → file (непустой / согласован с секцией write).',
-        'Не сверяй предметные поля устройства (model и т.п.) — это не роль check.',
+        'Write class.js без обновлённого readme того же класса — gap. class.js без icon из реального набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:) — gap. Набора register: нет.',
+        'Не сверяй предметные поля устройства (model и т.п.) — это не роль check; icon обязателен как поле UI.',
         'goalDone только когда все критерии по всем targets ok.',
-        'Не создавай и не правь. Не web. Не осмотр площадки (explore).',
+        'Не создавай и не правь. Не web. Не осмотр системы (explore).',
     ].join('\n'),
     prompt: [
         'Краткий отчёт: по каждому target — критерии ok или gap.',
@@ -222,6 +223,13 @@ async function fillMeta(b, t) {
         b.content = '[file ' + b.path + ']\ngap: class.js не читается — ' + String(e.message || e);
         return;
     }
+    const iconGap = iconSetGap(meta.text);
+    if (iconGap) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + b.path + ']\ngap: ' + iconGap;
+        return;
+    }
     b.state = linesState(meta.text, 'ok');
     b.content = fileReport(b.path, meta.text, 'js');
 }
@@ -298,11 +306,11 @@ async function resolveClassFile(cls, name) {
         let file = null;
         if (typeof cls.get_item === 'function')
             file = await cls.get_item(name);
-        if (!file && cls.meta_folder) {
-            const meta = cls.meta_folder;
-            file = typeof meta.get_item === 'function'
-                ? await meta.get_item(name)
-                : ((await meta.files) || []).find(f => f.id === name || f.name === name);
+        if (!file && (cls.storage_folder || cls.meta_folder)) {
+            const storage = cls.storage_folder || cls.meta_folder;
+            file = typeof storage.get_item === 'function'
+                ? await storage.get_item(name)
+                : ((await storage.files) || []).find(f => f.id === name || f.name === name);
         }
         if (!file && cls.path)
             file = await WORK.get_item(String(cls.path).replace(/\/$/, '') + '/' + name);
@@ -321,14 +329,30 @@ async function resolveClassFile(cls, name) {
     return out;
 }
 
+/** icon в class.js — только реальные наборы ODA (не выдуманный register:). */
+const ODA_ICON_SET = /^(carbon|icons|ai|lineawesome|bootstrap|iconoir|editor)$/;
+
+function iconSetGap(text) {
+    const m = String(text || '').match(/\bicon\s*:\s*['"`]([^'"`]+)['"`]/);
+    if (!m)
+        return 'нет icon в class.js';
+    const set = String(m[1]).split(':')[0];
+    if (!ODA_ICON_SET.test(set))
+        return 'icon «' + m[1] + '» не из набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:)';
+    return '';
+}
+
 function fileReport(path, text, lang, note) {
     const body = String(text || '').replace(/\r\n/g, '\n').trimEnd();
     const lines = body ? body.split('\n').length : 0;
+    const isMd = /\.md$/i.test(path) || lang === 'markdown' || lang === 'md';
+    const shown = !body ? ''
+        : (isMd ? '\n' + body : '\n```' + (lang || '') + '\n' + body + '\n```');
     return [
         '[file ' + path + ']',
         'ok: ' + lines + ' lines',
         note || '',
-        body ? '\n```' + (lang || '') + '\n' + body + '\n```' : '',
+        shown,
     ].filter(Boolean).join('\n');
 }
 
@@ -378,7 +402,7 @@ function collectTargets(messages) {
     for (const match of blob.matchAll(/\[write\s+(\/[^\]]+?)\]/g)) {
         const path = match[1].trim();
         if (/\/readme\.md$/i.test(path)) {
-            const classPath = path.replace(/\/readme\.md$/i, '');
+            const classPath = path.replace(/\/(?:\$[^/]+\/)?readme\.md$/i, '');
             if (seen.has(classPath))
                 continue;
         }
@@ -388,6 +412,12 @@ function collectTargets(messages) {
             kind: 'file',
             expect: { snippet: writeSnippetFromSection(section) },
         });
+        const classJs = path.match(/^(.*?)\/\$[^/]+\/class\.js$/i) || path.match(/^(.*)\/class\.js$/i);
+        if (classJs?.[1]) {
+            const classPath = classJs[1];
+            const id = classPath.split('/').filter(Boolean).pop() || '';
+            add({ path: classPath, kind: 'class', expect: { id } });
+        }
     }
     return out;
 }

@@ -10,12 +10,12 @@ const searchTool = {
     icon: 'icons:search',
     role: 'user',
     allowReasoning: true,
-    description: 'semantic_search внутри уже выбранного класса; не корень WORK и не строение площадки',
+    description: 'semantic_search внутри уже выбранного класса; не корень WORK и не строение системы',
     system: [
         '# Режим: поиск файлов в классе',
-        'Первая строка — путь класса WORK (не «/», не корень площадки).',
+        'Первая строка — путь класса WORK (не «/», не корень системы).',
         'Дальше текст запроса для поиска внутри этого класса.',
-        'Без выбранного класса не выдумывай корень WORK — строение площадки делает explore.',
+        'Без выбранного класса не выдумывай корень WORK — строение системы делает explore.',
         'Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -138,7 +138,7 @@ const writeTool = {
         '# Режим: запись файла',
         'Пиши только путь и содержимое из контекста ленты (сообщения пользователя, уже прочитанные файлы).',
         'Новый класс WORK (ребёнок провайдера $ai и т.п.) — tool create, не write и не save_file в несуществующий $ai/.',
-        'После create/правки класса обнови readme.md в meta_folder точки (назначение, устройство, контракт = class.js).',
+        'После create или правки class.js / устройства класса — обнови readme.md в storage_folder точки (у класса = meta: назначение, устройство, контракт = текущий class.js).',
         'Не выдумывай путь и не выдумывай тело файла. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -216,11 +216,14 @@ const createTool = {
         'id — имя узла WORK без «:» и без пути (тег API — поле model внутри class.js).',
         'Один model — один класс у провайдера; уже существующие классы не перечисляй.',
         'model — только из фактов ленты: список remote провайдера, ls, реплика человека. Тег, которого нет в ленте, не создавай — такой класс отклоняется.',
+        'type — из контракта родителя/readme (счета журнала — $account, не $register и не $class). Одна meta на узел = type.',
+        'В каждом class.js обязательно icon из реального набора ODA: carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor: (набора register: нет). Бери с предка типа / соседей или carbon: по смыслу; без существующего набора — icon предка. Без icon create неполный.',
+        'После успешного create движок пишет readme.md в storage_folder того же type; при ручной правке class.js — сам обнови readme write.',
         'Не выдумывай post — бери из образца в ленте. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
-        'Для каждого создаваемого класса — секция: путь родителя, тип, id, [label], class.js.',
-        'Пример (два класса):',
+        'Для каждого создаваемого класса — секция: путь родителя, тип, id, [label], class.js с icon и label.',
+        'Пример ($ai):',
         '/MODELS/BIS-Ollama',
         '$ai',
         'Llama3.2 3b',
@@ -234,14 +237,15 @@ const createTool = {
         "    capabilities: ['chat', 'stream', 'functions'],",
         '}',
         '```',
-        '/MODELS/BIS-Ollama',
-        '$ai',
-        'Gemma3 4b',
+        'Пример ($account — счёт журнала):',
+        '/REGISTER',
+        '$account',
+        '50',
+        '50.00 Касса',
         '```js',
         'export default {',
-        "    icon: 'ai:gemma',",
-        "    label: 'Gemma3 4b',",
-        "    model: 'gemma3:4b',",
+        "    icon: 'carbon:wallet',",
+        "    label: '50.00 Касса',",
         '}',
         '```',
     ].join('\n'),
@@ -296,6 +300,17 @@ function modelGrounded(model, messages) {
         m && m.role !== 'assistant' && String(m.content || '').includes(tag));
 }
 
+/** icon только из реальных наборов ODA (набора register: нет). */
+function createIconGap(post) {
+    const m = String(post || '').match(/\bicon\s*:\s*['"`]([^'"`]+)['"`]/);
+    if (!m)
+        return 'в class.js нужен icon из набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:)';
+    const set = String(m[1]).split(':')[0];
+    if (!/^(carbon|icons|ai|lineawesome|bootstrap|iconoir|editor)$/.test(set))
+        return 'icon «' + m[1] + '» — набора «' + set + ':» нет; возьми carbon: или icon предка';
+    return '';
+}
+
 /** Один класс: проверки → $class.create → readme → evidence. Возвращает { created, path }. */
 async function createOne(b, spec, params) {
     const { session, box } = params;
@@ -312,6 +327,12 @@ async function createOne(b, spec, params) {
     if (!spec.post) {
         b.error = true;
         b.content = 'create: нужен class.js (fence)';
+        return { created: false };
+    }
+    const iconGap = createIconGap(spec.post);
+    if (iconGap) {
+        b.error = true;
+        b.content = 'create: ' + iconGap;
         return { created: false };
     }
     const parent = await WORK.get_item(spec.parent);
@@ -379,7 +400,7 @@ const activationTool = {
     prompt: `После активации появится право менять область: write файлов и create дочерних классов.
 Обзор, html в ленте и чтение доступны и без активации.
 [instruction]
-Кратко: что изменишь (пути файлов и/или какие классы создашь; для классов — и readme.md). Ничего не пиши и не создавай, пока пользователь не подтвердит.
+Кратко: что изменишь (пути файлов и/или какие классы создашь; для классов — type, id, label, icon и readme.md). Не вставляй выдуманный ls/карту. Ничего не пиши и не создавай, пока пользователь не подтвердит.
 `,
     stop: 'Перейти к действиям',
     async init(params = {}) {
@@ -399,13 +420,14 @@ export default {
     description: 'файлы и классы области: read/write/create; search внутри выбранного класса; строение WORK — explore; журнал — logs',
     system: [
         '# Агент: work',
-        'Файлы и классы рабочей области. Строение площадки (модели, сервисы) — explore; интернет — web; журнал класса — logs.',
+        'Файлы и классы рабочей области. Строение системы (модели, сервисы) — explore; интернет — web; журнал класса — logs.',
         'Не читай …/logs/.data.logs/history/… через read/search — это logs ($class.logs / read_log_entry).',
         'search — только внутри выбранного класса (путь + запрос); не semantic_search по корню WORK.',
         'Список моделей у провайдера (API/baseUrl) — explore meta+remote, не search в /SERVICES и не web.',
         'Подключить модель / новый класс у провайдера — create ($ai + class.js по образцу), не write «файла модели».',
         'Один remote model — один дочерний класс; другой id с тем же model запрещён.',
-        'После create — readme.md в meta точки (назначение, устройство, контракт); в ленту — артефакты class.js/readme (doc) со ссылками.',
+        'Перед правкой класса — readme из storage_folder в ленте (или explore read). После create/write устройства — обнови тот же readme.md (назначение, устройство, контракт = class.js); в ленту — артефакты class.js/readme (doc).',
+        '«Добавь / создай» класс: примеры путей в readme — не доказательство наличия. Нет узла в ls/explore ленты — activation → create. Не закрывай цель отчётом «уже есть» без create/write в ленте.',
         'Проверка — агент check, не повторный create.',
         'Подумай, какие именно действия необходимы.',
     ].join('\n'),
@@ -424,8 +446,10 @@ export default {
     plan: {
         description: 'чтение и поиск; write/create — после activation',
         system: [
-            'Площадка work: search (путь класса + запрос) и read файлов.',
+            'Система WORK: search (путь класса + запрос) и read файлов.',
             'search не по корню WORK — сначала класс (часто через explore).',
+            'Класс ещё не читали — сначала readme.md из storage_folder (как explore read), потом class.js / прочие файлы.',
+            'Задача «добавь/создай»: если в ленте нет ls родителя с этим id — нужен create (activation → do), не итог «уже есть по readme».',
             'Activation если нужен write или create класса.',
             'Подключение модели к провайдеру — create, не «новый файл».',
             'Нет операнда для действия — не выдумывай.',
@@ -441,11 +465,12 @@ export default {
     do: {
         description: 'write файлов и create классов области',
         system: [
-            'Площадка work: write файлов и create дочерних классов.',
+            'Система WORK: write файлов и create дочерних классов.',
             'write — путь и содержимое из контекста; create — родитель + тип + id + class.js (не save_file вместо класса).',
             'Операнды (пути, тела, образцы) — только из evidence ленты; tool без операнда не выбирай.',
             'Подключение модели: create $ai (id как у соседей, model = тег API); один model — один класс.',
-            'После create — readme.md в meta + артефакты (class.js/readme) в ленту с телами; при правке класса обнови readme.',
+            'В class.js всегда icon из реального набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:; набора register: нет) и label; без существующего набора — icon предка. Без icon — неполный create.',
+            'После create или write class.js — обязательно обнови readme.md в storage_folder (meta) того же класса; артефакты class.js/readme в ленту. Правка без обновления readme — неполная.',
             'Несколько недостающих model — create каждого по разу; тот же model / path повторно — нельзя. «Недостающие» = есть в remote/списке человека, нет в ls; без такого списка в ленте create не выбирай.',
             'После create цель не закрывай «на глаз» — оркестратор вызовет check.',
             'search — внутри выбранного класса, не корень WORK.',
@@ -507,15 +532,29 @@ function fenceBody(lang, text) {
     return '```' + (lang || '') + '\n' + body + '\n```';
 }
 
+/** Тело для ленты: .md — как markdown (без fence); код — в fence. */
+function artifactBody(path, text) {
+    const body = String(text || '').replace(/\r\n/g, '\n').trimEnd();
+    if (!body)
+        return '_(пусто)_';
+    if (/\.md$/i.test(path))
+        return body;
+    const lang = /\.m?js$/i.test(path) ? 'js'
+        : /\.json$/i.test(path) ? 'json'
+        : /\.html?$/i.test(path) ? 'html'
+        : /\.css$/i.test(path) ? 'css'
+        : '';
+    return fenceBody(lang, body);
+}
+
 function formatWriteArtifact(path, post) {
     const p = String(path || '').replace(/\/$/, '');
-    const lang = /\.js$/i.test(p) ? 'js' : (/\.md$/i.test(p) ? 'markdown' : '');
     return [
         '[write ' + p + ']',
         '',
         '### Запись ' + workMdLink(p),
         '',
-        fenceBody(lang, post),
+        artifactBody(p, post),
     ].join('\n');
 }
 
@@ -541,7 +580,7 @@ async function attachCreateEvidence(box, block, spec, opts = {}) {
         content: [
             '### class.js — ' + workMdLink(classPath, classPath),
             '',
-            fenceBody('js', classJs),
+            artifactBody(classPath, classJs),
         ].join('\n'),
     });
     if (readmeText) {
@@ -551,7 +590,7 @@ async function attachCreateEvidence(box, block, spec, opts = {}) {
             content: [
                 '### readme.md — ' + workMdLink(readmePath, readmePath),
                 '',
-                fenceBody('markdown', readmeText),
+                artifactBody(readmePath, readmeText),
             ].join('\n'),
         });
     }
@@ -588,6 +627,12 @@ async function resolveMetaFile(classPath, name) {
         let file = null;
         if (cls && typeof cls.get_item === 'function')
             file = await cls.get_item(name);
+        if (!file && cls?.storage_folder) {
+            const storage = cls.storage_folder;
+            file = typeof storage.get_item === 'function'
+                ? await storage.get_item(name)
+                : ((await storage.files) || []).find(f => f.id === name || f.name === name);
+        }
         if (!file && cls?.meta_folder) {
             const meta = cls.meta_folder;
             file = typeof meta.get_item === 'function'
@@ -681,20 +726,30 @@ function formatCreateResult(parsed, opts = {}) {
     ].filter(Boolean).join('\n');
 }
 
-/** Readme точки в meta_folder: назначение, устройство (из class.js), контракт.
+/** Readme точки в storage_folder (класс = meta): назначение, устройство (из class.js), контракт.
  *  @returns {{ note: string, text: string, path: string }} */
 async function ensureClassReadme(classPath, parsed, session) {
     const path = String(classPath || '').replace(/\/$/, '');
-    const readmePath = path + '/readme.md';
+    const typeName = String(parsed?.type || '').trim();
+    const readmePath = path + (typeName ? '/' + typeName : '') + '/readme.md';
     if (!path)
         return { note: '', text: '', path: readmePath };
     try {
         const item = await WORK.get_item(path);
-        if (!item?.meta_folder)
-            return { note: 'readme.md: skip (нет meta_folder)', text: '', path: readmePath };
-        const meta = item.meta_folder;
-        let existing = typeof meta.get_item === 'function'
-            ? await meta.get_item('readme.md')
+        if (!item)
+            return { note: 'readme.md: skip (нет item)', text: '', path: readmePath };
+        // meta по type create (не первый $ из readdir — иначе dual $class+$register)
+        let storage = null;
+        if (typeName && typeof item.get_item === 'function')
+            storage = await item.get_item(typeName);
+        if (!storage)
+            return { note: 'readme.md: skip (нет meta «' + typeName + '»)', text: '', path: readmePath };
+        if (typeName && storage.id && storage.id !== typeName)
+            return { note: 'readme.md: skip (meta «' + storage.id + '» ≠ ' + typeName + ')', text: '', path: readmePath };
+        if (!storage)
+            return { note: 'readme.md: skip (нет storage_folder)', text: '', path: readmePath };
+        let existing = typeof storage.get_item === 'function'
+            ? await storage.get_item('readme.md')
             : null;
         if (!existing && typeof item.get_item === 'function')
             existing = await item.get_item('readme.md');
@@ -703,26 +758,29 @@ async function ensureClassReadme(classPath, parsed, session) {
                 ? String(await existing.read_text() || '')
                 : '';
             return {
-                note: '[write ' + readmePath + ']\nalready',
+                note: '[write ' + (existing.path || readmePath) + ']\nalready',
                 text,
                 path: existing.path || readmePath,
             };
         }
-        if (typeof meta.save_file !== 'function')
-            return { note: 'readme.md: skip (нет meta_folder.save_file)', text: '', path: readmePath };
+        if (typeof storage.save_file !== 'function')
+            return { note: 'readme.md: skip (нет storage_folder.save_file)', text: '', path: readmePath };
         const device = await deviceOfClass(item, parsed.post) || {};
         const post = buildClassReadme({
             path,
-            type: parsed.type || '$class',
+            type: typeName || item.type || '$class',
             id: parsed.id,
             label: parsed.label || device.label || parsed.id,
             device,
             parentPath: parsed.parent,
         });
-        await meta.save_file({ filename: 'readme.md', post, session, ignore_save_logs: true });
-        meta.reset?.();
+        await storage.save_file({ filename: 'readme.md', post, session, ignore_save_logs: true });
+        storage.reset?.();
         item.reset?.();
-        return { note: '[write ' + readmePath + ']\nok', text: post, path: readmePath };
+        const savedPath = storage.path
+            ? String(storage.path).replace(/\/$/, '') + '/readme.md'
+            : readmePath;
+        return { note: '[write ' + savedPath + ']\nok', text: post, path: savedPath };
     }
     catch (e) {
         return { note: 'readme.md: ' + String(e.message || e), text: '', path: readmePath };

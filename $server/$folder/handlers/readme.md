@@ -17,7 +17,7 @@
 - `pages/form/$handler/` — форма по умолчанию (выбор формы из class.js)
 - `pages/form/chat/$handler/` — чат-интерфейс
 - `pages/form/folder/$handler/` — форма папки
-- `pages/site/` — витрина класса (вкладки + iframe); см. [pages/site/readme.md](/$server/$folder/handlers/pages/site/readme.md/~/handlers/pages/form/)
+- `pages/site/` — витрина класса (вкладки + iframe); канон — [`$class/.../site/$handler/readme.md`](/$server/$folder/$class/handlers/pages/site/$handler/readme.md/~/handlers/pages/form/)
 
 ## Вызов
 

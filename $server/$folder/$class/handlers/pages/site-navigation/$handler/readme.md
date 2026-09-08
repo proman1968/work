@@ -22,7 +22,7 @@ Page-handler **site-navigation** — витрина с деревом `$class` �
 
 - [`$handler/class.js`](/$server/$folder/$class/handlers/pages/site-navigation/$handler/class.js/~/handlers/pages/form/) — shell + `site-nav-tree`
 
-Связанные page: [`site`](/$server/$folder/$class/handlers/pages/site/readme.md/~/handlers/pages/form/), `site-main`.
+Связанные page: [`site`](/$server/$folder/$class/handlers/pages/site/$handler/readme.md/~/handlers/pages/form/), `site-main`.
 
 ## В каком это состоянии
 

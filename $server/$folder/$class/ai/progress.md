@@ -1,6 +1,15 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [18:10] explore: без ROOT_HINTS и без прыжка в `/MODELS`/`/REGISTER`. Осмотр по слоям (карта `/` → путь только с карты/ls → один уровень детей + readme). ls не deep=-1. Причина: корневые классы — прикладное наполнение, не канон агента.
+- [18:05] explore: ROOT_HINTS журнал/счета/касса → `/REGISTER`; pathFromMap по label/типу карты; после map — seed readme+ls целевой ветки (не init=false). Причина: 1788879281146 — read/ls в using без листьев, path не резолвился.
+- [17:55] readme ≠ инвентарь: журнал без «фактов» 10/50 на диске; explore — readme+ls для «добавь», enrichTotal без ложного плана tools; work/оркестратор — не «уже есть» без ls/create. Причина: 1788878813069 — цель «добавь кассу» закрыта чтением readme без create.
+- [17:45] create: в class.js обязательно `icon` (предок/соседи/смысл); пример `$account` в prompt; check meta — gap без `icon`. Readme `$account` и журнала — icon обязателен. Причина: счета/классы без иконок в дереве.
+- [17:35] REGISTER: тип `$account` в `$register/$folder/$class/$account` + базовый readme; счета `10`/`50`/`5001`/`5002` — одна meta `$account`; readme журнала — create `$account`. work.ensureClassReadme пишет в meta по `type` create. Причина: dual `$class`+`$register` → meta_folder брал `$class`, labels не видны.
+- [16:50] «площадка» → «система» в UI/агентах (Карта системы, осмотр системы, …). Причина: «площадка» звучит чужеродно.
+- [16:30] Инвариант readme: explore — обращение к item → read `storage_folder/readme.md`; work — перед правкой readme, после create/write class.js обновить тот же readme; check — write class.js без актуального readme = gap; меню оркестратора — explore через readme. Причина: журнал/счета и др. классы без readme модель угадывала FIELDS.
+- [15:50] need=facts закрывает только `answer`/`report` (`FACTS_EVIDENCE`); explore/web/logs — сбор, после них меню ведёт в answer. explore `enrichTotal` = склейка items (без map), не LLM-пересказ; сравнение A/B — meta обоих. Причина: 1788868837392 — goal done после explore без ответа человеку; total выдумал meta Local/BIS (example.com).
+- [14:55] Evidence `.md` в ленте/доке без `` ```markdown `` (рендер как form); `.js` — fence. work `artifactBody` + check `fileReport`; viewContent снимает старый fence у path `.md`. Причина: readme в блоке/доке показывал сырой MD, по ссылке form — нормально.
 - [14:45] explore: `pickProviderPath` — токен brief ∈ имени провайдера (`ollama` → единственный `/MODELS/BIS-Ollama`); remote не жжётся на голом `/MODELS`. Причина: 1788867632272 — ls есть, remote в using без блока, ask/work без diff.
 - [14:35] Откат «сразу question»: меню — сначала explore, question только если после фактов критерий неоднозначен; explore — «недостающие <провайдер>» = remote − ls, имя провайдера в реплике = путь с карты. Гард `modelGrounded` и `expand` оставлены. `providerPathByName`: имя провайдера в реплике → `/MODELS/<id>` по живым детям (ls/meta/remote), карта корня их не показывает. Причина: 1788866899775 — question до осмотра; после «bis-ollama» ls/meta/remote сгорели с `init=false` (путь не резолвился) → снова question вместо remote/diff.
 - [14:25] Против invent-create. work.create: `model` не из не-assistant сообщений (remote/ls/реплика) → отказ «нет факта». explore: `expand` (листья-факты в контекст вместо total), ask = peer. Причина: 1788865825648 — «добавь недостающие модели ollama» → peer-ask, затем 12 create из головы (activation с выдуманным meta.models).
@@ -25,7 +34,7 @@
 - [01:25] RAG: skip скрытых `.…`; TEXT_EXTS +`task`/`ai`/…; kreuzberg только whitelist (не ico/unknown) — тихий skip. Причина: warn `.task`, `.clineignore`, `image/x-icon`.
 - [01:20] RAG: `exclude_for_rag` = `.git`/`node_modules`/`.cursor`/`.vscode`; `folder.rag` skip `isInherit`; extract — `real_dir` + `md` в TEXT_EXTS. Причина: warn embeddings на `.git` и призраках `$group/.../readme.md`.
 - [01:15] Агент `logs`: dates / bodies / entry поверх `$class.logs` и `read_log_entry`; класс из пути или place (`engine.$context`). Read-only. Причина: хронология процессов и взаимодействий — отдельная роль от explore/work.
-- [01:10] Агент `explore`: карта/ls/readme/ask + ORIENTATION вынесены из `work`. `work` — только файлы (search/read/write/activation). `web` → локальное WORK это explore. Причина: меню оркестратора стабильно отделяет осмотр площадки от записи файлов.
+- [01:10] Агент `explore`: карта/ls/readme/ask + ORIENTATION вынесены из `work`. `work` — только файлы (search/read/write/activation). `web` → локальное WORK это explore. Причина: меню оркестратора стабильно отделяет осмотр системы от записи файлов.
 - [00:50] `loadAgent` — агенты из пакета `_aiPackage()` (parent метода с `agents/`), не `$context.meta_folder` через ~. ask: `Object.create(engine)` + `$context = target`; peer без ~/ai. `loadConfig`/`system.md` — meta target, иначе пакет движка. init получает `engine`. Причина: ask /MODELS — `importScript` of undefined (у peer нет ai/agents).
 - [00:40] `work` tool `ask`: peer `$class` → `Object.create(prompt)` + свой `$context`; ответ в ленте; ORIENTATION — истина домена через ask. Parallel — следующий. Причина: класс сам отвечает за содержимое (зонд моделей), не имена папок.
 - [00:20] `work` карта/ls: только `$class` + type/label/note/readme; контракт «ls → read readme»; read пути класса → `readme.md`. Причина: ориентация по канону WORK, не по мусору репо (.git/node_modules).
@@ -46,7 +55,7 @@
 - Решение: evidence create/write — блок с `doc` + WORK-ссылки + тела (тип `artifact` в ленте); check остаётся постусловием ok/gap. Причина: человек читает результат в доке, не checklist.
 - Решение: журнал только `$class.logs` / `read_log_entry` (день, ext); не work по history. Причина: иначе модель читает .logs как файлы и путает день.
 - Решение: explore ls ветки — `info({ deep: -1 })` (не один уровень имён); карта `/` — компас. Причина: состав домена (модели под провайдерами) виден сразу, без серии ls/ask.
-- Решение: work.search — путь класса + запрос, запрет корня WORK; строение площадки — explore. Причина: глобальный semantic_search ломает слои и роняет xenova/RAG.
+- Решение: work.search — путь класса + запрос, запрет корня WORK; строение системы — explore. Причина: глобальный semantic_search ломает слои и роняет xenova/RAG.
 - Решение: `allowReasoning` у сложных агентов; CoT только при effort бара ≠ off. Причина: гейт был, флаг не стоял.
 - Решение: explore — глубина до фактов домена (ls/ask вниз); один уровень имён — компас; total без выдуманных шагов. Причина: любой доменный зонд (не только модели), иначе итог по контейнерам.
 - Решение: RAG — `exclude_for_rag` + skip `isInherit`; extract по `real_dir` / text `md`. Причина: semantic_search по корню сыпал warn на `.git` и tilde-призраки `$group/.../readme.md`.

@@ -12,12 +12,12 @@ export default {
     role: 'user',
     doc: true,
     allowReasoning: true,
-    description: 'поиск во внешнем интернете; не для моделей WORK, API провайдера ($ai remote) и путей площадки',
+    description: 'поиск во внешнем интернете; не для моделей WORK, API провайдера ($ai remote) и путей системы',
     system: [
         '# Агент: интернет',
         'Поиск уже выполнен при входе. Открывай site по очереди URL. Итог — total.',
         'URL уже в брифе/промпте — сразу site, без поиска.',
-        'Локальная площадка WORK (модели, сервисы, строение классов) — не сюда, это explore; файлы области — work.',
+        'Локальная система WORK (модели, сервисы, строение классов) — не сюда, это explore; файлы области — work.',
         'Список моделей у провайдера (baseUrl / api/tags) — explore meta+remote, не ollama.com и не library.',
     ].join('\n'),
     prompt: [

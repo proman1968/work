@@ -1052,6 +1052,13 @@ export class $class extends $folder{
 
         const ctor = FS[type] || FS.$class;
         const item = await this._get_next_item(id, ctor);
+        // meta = type, до обращения к meta_folder: иначе constructor.name ($class) mkdir лишнюю $
+        const typeDir = item.real_dir + '/' + type;
+        if (!fs.existsSync(typeDir))
+            fs.mkdirSync(typeDir, { recursive: true });
+        const strayClass = item.real_dir + '/$class';
+        if (type !== '$class' && fs.existsSync(strayClass) && fs.readdirSync(strayClass).length === 0)
+            fs.rmdirSync(strayClass);
         const meta = await item._get_next_item(type, FS.$folder);
         const log = await meta.save_file({
             ...p,

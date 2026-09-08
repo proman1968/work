@@ -16,9 +16,9 @@
 
 | Агент | Работа |
 |--------|--------|
-| [`explore`](agents/explore.js) | строение WORK: карта `/` (1 уровень); **ls ветки = `info({ deep: -1 })`** до листьев; readme, ask; итог — `doc` (в док) |
-| [`work`](agents/work.js) | файлы и классы: read/write/**create**; read — путь из ленты или fill; **create — все классы за один fill** (секции → блок на класс), прогресс = новый класс, иначе тип сожжён → total; созданное — блоки **`file`** (class.js, readme.md) с телом (`doc`); **search** только внутри класса |
-| [`check`](agents/check.js) | постусловие **операций** create/write: targets → блок `exist` + блоки **`file`** (класс: class.js читается, readme.md непустой; файл write: непустой/сниппет), тело файла в content, критерий — поле `crit`; без сверки предметных полей (`model`…); `goalDone` только полное соответствие |
+| [`explore`](agents/explore.js) | строение WORK **по слоям**: карта `/` → выбор узла с карты → ls одного уровня + readme; путь только с карты/ls; meta/remote; итог — `doc` |
+| [`work`](agents/work.js) | файлы/классы: перед правкой — readme; create/write устройства → обновить `storage_folder/readme.md`; create batch + артефакты `file`; search только в классе |
+| [`check`](agents/check.js) | постусловие create/write: exist + class.js + **readme в storage** (непустой); write без актуального readme — gap |
 | [`web`](agents/web.js) | внешний интернет |
 | [`logs`](agents/logs.js) | журнал класса: `$class.logs` (даты, bodies+день+ext, entry); не work.read history |
 

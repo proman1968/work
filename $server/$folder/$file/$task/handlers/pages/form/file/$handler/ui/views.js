@@ -349,7 +349,11 @@ ODA({ is: 'microchat-view',
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
     get viewContent() {
-        return (this.content || '') + this.streamTail;
+        let text = (this.content || '') + this.streamTail;
+        // .md в evidence раньше клали в ```markdown — показать как form, не как code
+        if (/\.md$/i.test(String(this.data?.path || '')))
+            text = String(text).replace(/\n```(?:markdown|md)?\r?\n([\s\S]*?)\n```/i, '\n$1');
+        return text;
     },
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.data?.url);

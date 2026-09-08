@@ -1,29 +1,20 @@
-/** Агент explore: осмотр площадки WORK (карта, ls/info, readme, ask, meta, remote). Без записи файлов.
+/** Агент explore: осмотр системы WORK по слоям (карта `/`, ls одного уровня, readme, ask, meta, remote). Без записи файлов.
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat, engine }). */
 const MAP_ROOT_LIMIT = 40;
-const INFO_NODE_LIMIT = 200;
 
 const ORIENTATION = [
-    'Ориентация: площадка WORK — дерево классов. Карта и ls показывают только классы (не .git, не node_modules, не обычные папки/файлы).',
-    'Факты о системе — только из блоков ленты (карта, ls, readme, ask, meta, remote); не из памяти и не через web.',
-    'Ориентиры корня (компас, не ответ): /MODELS, /SERVICES, /USERS, зона группы/профиль, ~/ — мета текущего класса.',
-    'Карта корня `/` — один уровень (компас веток).',
-    'ls ветки (не `/`) — `info({ deep: -1 })`: сразу всё дерево до листьев; не останавливайся на именах контейнеров, если листья уже в блоке.',
-    'Устройство item (baseUrl, protocol, …) — meta: class.js через meta_folder / tilde → importScript; не info/$public.',
-    'Подключённые модели провайдера = дети /MODELS/<provider> (ls). Доступные у провайдера = remote (list_remote по baseUrl из meta), не ls и не публичный ollama.com.',
-    '«Какие ещё не подключены» — ls детей + meta/remote того же провайдера, затем diff. ask «нет данных» — не итог.',
-    'ask — вопрос классу (peer), не человеку; его «нет данных» ничего не решает — дальше ls + meta + remote провайдера и diff. «Недостающие модели <провайдер>» = есть в remote, нет среди детей (ls); это и есть критерий, человека не спрашивать.',
-    'В отчёте (total) только то, что есть в items: не выдумывай ls/ask/readme/meta/remote, которых не было в ленте.',
+    'Ориентация: система WORK — дерево классов. Корневые классы — прикладное наполнение этой поставки: набор любой, их может не быть.',
+    'Осмотр только по слоям: карта `/` (дети корня) → выбрать узел с карты → ls одного уровня этого узла + readme → снова выбор → глубже. Не прыгай к «известному» пути из памяти.',
+    'Путь — только с карты/ls в ленте (path, type, label). Нет однозначного совпадения — не угадывай корень, выбери с карты или зафиксируй в итоге.',
+    'Факты — только из блоков ленты (карта, ls, readme, ask, meta, remote); не из памяти и не через web.',
+    'Карта и ls — только классы (не .git, не node_modules, не обычные папки/файлы). ls узла — один уровень детей, не дерево до листьев.',
+    'Устройство item — meta: class.js через meta_folder / tilde → importScript; не info/$public.',
+    'Провайдер $ai: подключённые модели = дети (ls); доступные на API = remote того же пути (baseUrl из meta). «Не подключены» = remote − ls. ask «нет данных» — не итог.',
+    'ask — вопрос классу (peer), не человеку.',
+    'Item — readme из storage_folder (у класса = meta). Раздел readme «из чего состоит» — контракт, не инвентарь диска.',
+    '«Добавь / создай» — нет узла в ls родителя = create (work), не «уже есть по readme».',
+    'В отчёте только то, что есть в items. Не пиши псевдовызовы tool в content — выбирай tools меню.',
 ].join('\n');
-
-/** Подсказки запроса → корень с карты (компас пути, не «ответ найден»). */
-const ROOT_HINTS = [
-    [/модел/i, '/MODELS'],
-    [/model/i, '/MODELS'],
-    [/сервис/i, '/SERVICES'],
-    [/service/i, '/SERVICES'],
-    [/пользовател|юзер|users?/i, '/USERS'],
-];
 
 const askTool = {
     label: 'Спрашиваю класс',
@@ -40,7 +31,7 @@ const askTool = {
     prompt: [
         'Путь класса и вопрос.',
         'Пример:',
-        '/SERVICES/DuckDuckGo',
+        '/<класс с карты>',
         'Что ты умеешь в этой системе?',
     ].join('\n'),
     async init(params = {}) {
@@ -84,27 +75,36 @@ const lsTool = {
     label: 'Смотрю каталог',
     icon: 'icons:folder-open',
     role: 'user',
-    description: 'ветка: info deep=-1 (всё дерево); корень `/` — один уровень компаса',
+    description: 'один уровень детей выбранного класса (как карта корня); путь с карты/ls в ленте',
+    system: [
+        '# Режим: ls',
+        'Первая строка — путь класса с карты или предыдущего ls в ленте.',
+        'Один уровень детей. Не выдумывай путь. Не обращайся к пользователю.',
+    ].join('\n'),
+    prompt: [
+        'Путь класса с карты / ls.',
+        'Пример: путь одной из строк карты.',
+    ].join('\n'),
     async init(params = {}) {
         const b = params.block;
         if (b.content)
             return false;
         const query = exploreQuery(b, params.box, params.messages, lsTool.label);
         const path = classPath(b, params.box, lsTool.label)
-            || pathFromMap(params.box, query)
-            || await providerPathByName(query);
-        if (!path)
-            return false;
-        b.path = path;
-        const isRoot = path === '/' || path === '';
-        tagAgent(params.box, AGENT_TAG, isRoot ? 'ls /' : 'info ' + path);
-        const text = isRoot
-            ? await listChildrenMap('/')
-            : await listInfoDeep(path);
-        if (!text)
-            return false;
-        b.content = text;
+            || pathFromMap(params.box, query);
+        if (path)
+            return fillLs(b, path, params.box);
         return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        if (b.content && b.path)
+            return;
+        const head = String(b.content || '').replace(/\r\n/g, '\n').trim().split('\n').find(Boolean) || '';
+        const path = String(b.path || head.replace(/^#+\s*/, '').trim());
+        if (!path)
+            return;
+        await fillLs(b, path, params.box);
     },
 };
 
@@ -112,7 +112,15 @@ const readTool = {
     label: 'Читаю readme',
     icon: 'icons:description',
     role: 'user',
-    description: 'readme.md класса по пути (компас узла)',
+    description: 'readme.md узла из storage_folder (путь с карты/ls)',
+    system: [
+        '# Режим: readme',
+        'Первая строка — путь класса с карты или ls в ленте.',
+        'Не выдумывай путь. Не обращайся к пользователю.',
+    ].join('\n'),
+    prompt: [
+        'Путь класса с карты / ls.',
+    ].join('\n'),
     async init(params = {}) {
         const b = params.block;
         if (b.content)
@@ -121,24 +129,19 @@ const readTool = {
         let path = classPath(b, params.box, readTool.label)
             || pathFromMap(params.box, query)
             || readmePathFromMap(params.box, query);
-        if (!path)
-            return false;
-        let file = await resolveFile(path);
-        if (!file) {
-            const readme = path.replace(/\/$/, '') + '/readme.md';
-            file = await resolveFile(readme);
-            if (file)
-                path = readme;
-        }
-        if (!file)
-            return false;
-        b.path = path;
-        tagAgent(params.box, AGENT_TAG, 'readme ' + path);
-        await params.exec(file, {
-            method: 'read_text',
-            args: { session: params.session },
-        }, { block: b });
+        if (path)
+            return fillReadme(b, path, params);
         return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        if (b.done || (b.content && b.path && !/^\/\S+$/.test(String(b.content).trim())))
+            return;
+        const head = String(b.content || '').replace(/\r\n/g, '\n').trim().split('\n').find(Boolean) || '';
+        const path = String(b.path || head.replace(/^#+\s*/, '').trim());
+        if (!path)
+            return;
+        await fillReadme(b, path, params);
     },
 };
 
@@ -156,8 +159,7 @@ const metaTool = {
     ].join('\n'),
     prompt: [
         'Путь item.',
-        'Пример:',
-        '/MODELS/BIS-Ollama',
+        'Пример: путь класса с карты.',
     ].join('\n'),
     async init(params = {}) {
         const b = params.block;
@@ -166,9 +168,7 @@ const metaTool = {
         const query = exploreQuery(b, params.box, params.messages, metaTool.label);
         let path = itemPath(b, params.box, metaTool.label, query);
         if (!path || path === '/')
-            path = await providerPathByName(query);
-        if (!path)
-            return false;
+            return true;
         const target = await WORK.get_item(path);
         if (!target)
             return false;
@@ -197,22 +197,19 @@ const remoteTool = {
     description: 'list_remote у $ai: модели на API провайдера по baseUrl (из meta/устройства); не ls детей WORK и не web',
     system: [
         '# Режим: remote провайдера',
-        'Первая строка — путь класса провайдера $ai (например /MODELS/BIS-Ollama), не лист модели и не /MODELS.',
-        'baseUrl берётся из устройства класса (meta), не из info. Не выдумывай URL. Не обращайся к пользователю.',
+        'Первая строка — путь класса провайдера $ai с карты или ls (узел, у которого есть list_remote).',
+        'baseUrl — из устройства класса (meta). Не выдумывай URL и не угадывай корень. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
-        'Путь провайдера $ai.',
-        'Пример:',
-        '/MODELS/BIS-Ollama',
+        'Путь провайдера $ai с карты / ls.',
     ].join('\n'),
     async init(params = {}) {
         const b = params.block;
         if (b.content)
             return false;
-        const path = resolveRemotePath(b, params.box, params.messages)
-            || await providerPathByName(exploreQuery(b, params.box, params.messages, remoteTool.label));
+        const path = resolveRemotePath(b, params.box, params.messages);
         if (!path)
-            return false;
+            return true;
         const target = await WORK.get_item(path);
         if (!isWorkClass(target))
             return false;
@@ -247,28 +244,36 @@ const remoteTool = {
 const AGENT_TAG = 'Осмотр';
 
 export default {
-    label: 'Осматриваю площадку',
+    label: 'Осматриваю систему',
     icon: 'icons:explore',
     doc: true,
     /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total — work.create проверяет model по ним */
     expand: true,
     allowReasoning: true,
-    description: 'строение WORK: ls, meta (устройство class.js), remote у $ai; карта, readme, ask; не файлы и не интернет',
+    description: 'строение WORK: ls, readme (storage_folder), meta, remote у $ai; карта, ask; не файлы и не интернет',
     system: [
         '# Агент: explore',
-        'Осмотр площадки WORK. Карта корня уже в ленте.',
+        'Осмотр системы WORK. Карта корня уже в ленте.',
         ORIENTATION,
         'Не пиши файлы и не ходи в интернет — это work / web.',
-        'Нет операнда (путь) — не выдумывай; зафиксируй в итоге. Имя провайдера в реплике (напр. bis-ollama) — это путь /MODELS/<провайдер> с карты.',
-        'Вопрос про состав ветки — ls этой ветки (info deep=-1), не ask контейнера и не plan из пяти одинаковых ls.',
-        'Неподключённые модели провайдера — meta/remote того же пути + diff с ls; не SERVICES и не web.',
+        'Нет пути с карты/ls — не выдумывай; выбери узел из уже показанного слоя.',
+        'Выбран узел — readme этого узла и ls его детей (один уровень). Сравнение A и B — readme и meta каждого.',
+        'Провайдер $ai: ls детей + remote того же пути, затем diff. Не web.',
     ].join('\n'),
     prompt: [
-        'Отчёт об осмотре только по фактам из items ленты (карта, ls, readme, ask, meta, remote).',
-        'Не описывай шаги, которых не было. Если в ls уже дерево deep=-1 — итог по листьям, не по одним контейнерам.',
-        'Есть remote и ls одного провайдера — в итоге явный diff (на API, но нет в WORK).',
+        'Отчёт только по фактам из items (карта, ls, readme, ask, meta, remote).',
+        'Не описывай шаги, которых не было. ls — один уровень: итог по этим детям, не по выдуманной глубине.',
+        'Есть remote и ls одного провайдера — явный diff (на API, нет в WORK).',
     ].join('\n'),
-    /** Карта корня `/` в ленту и messages — компас до выбора tool. */
+    /** Итог бокса = склейка фактов items (ls/meta/remote/readme/ask), не пересказ модели: LLM-total выдумывал meta. */
+    enrichTotal(_content, block) {
+        const facts = (block?.items || []).filter(b =>
+            b?.content && !b.error && b.type !== 'map');
+        if (!facts.length)
+            return 'Осмотр неполный: в items нет readme/ls/meta/remote/ask — только карта или пусто. Выбери tools, не пиши план в total.';
+        return facts.map(b => String(b.content).trim()).filter(Boolean).join('\n\n');
+    },
+    /** Карта корня `/`; если brief однозначно совпал с узлом карты — слой: readme + ls детей. */
     async init(params = {}) {
         const { block, messages } = params;
         block.items ??= [];
@@ -277,22 +282,25 @@ export default {
             tagAgent(block, AGENT_TAG, clip(brief, 48));
         else
             tagAgent(block, AGENT_TAG, 'карта /');
-        if (block.items.some(b => b.type === 'map'))
-            return;
-        const text = await listRootMap();
-        if (!text)
-            return;
-        const map = {
-            type: 'map',
-            label: 'Карта площадки',
-            icon: 'icons:map',
-            role: 'user',
-            time: Date.now(),
-            content: text,
-        };
-        block.items.push(map);
-        if (messages)
-            messages.push({ role: 'user', content: text });
+        if (!block.items.some(b => b.type === 'map')) {
+            const text = await listRootMap();
+            if (text) {
+                const map = {
+                    type: 'map',
+                    label: 'Карта системы',
+                    icon: 'icons:map',
+                    role: 'user',
+                    time: Date.now(),
+                    content: text,
+                };
+                block.items.push(map);
+                if (messages)
+                    messages.push({ role: 'user', content: text });
+            }
+        }
+        const target = pathFromMap(block, brief || lastUserContent(messages));
+        if (target && target !== '/')
+            await seedTargetFacts(block, target, params);
     },
     tools: {
         ask: askTool,
@@ -315,6 +323,95 @@ function tagAgent(box, _role, detail) {
 function clip(s, n) {
     const t = String(s || '').replace(/\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+async function fillLs(b, path, box) {
+    path = String(path || '').replace(/\/$/, '') || '/';
+    b.path = path;
+    tagAgent(box, AGENT_TAG, path === '/' ? 'ls /' : 'ls ' + path);
+    const text = await listChildrenMap(path);
+    if (!text)
+        return false;
+    b.content = text;
+    return true;
+}
+
+async function fillReadme(b, path, params) {
+    path = String(path || '').trim();
+    if (!path)
+        return false;
+    let file = await resolveFile(path);
+    if (!file) {
+        try {
+            const item = await WORK.get_item(path);
+            file = await resolveReadme(item);
+            if (file)
+                path = file.path || path;
+        }
+        catch { /* ignore */ }
+    }
+    if (!file) {
+        const readme = path.replace(/\/$/, '') + '/readme.md';
+        file = await resolveFile(readme);
+        if (file)
+            path = readme;
+    }
+    b.path = path;
+    tagAgent(params.box, AGENT_TAG, 'readme ' + path);
+    if (!file) {
+        b.content = 'readme: нет';
+        return true;
+    }
+    await params.exec(file, {
+        method: 'read_text',
+        args: { session: params.session },
+    }, { block: b });
+    b.done = true;
+    return true;
+}
+
+function markUsed(box, type) {
+    if (!box || !type)
+        return;
+    const used = box.using_blocks ??= [];
+    if (!used.includes(type))
+        used.push(type);
+}
+
+/** После карты: readme + ls целевой ветки без pick (иначе read/ls сгорают init=false). */
+async function seedTargetFacts(box, path, params = {}) {
+    path = String(path || '').replace(/\/$/, '');
+    if (!path || path === '/')
+        return;
+    box.items ??= [];
+    const messages = params.messages;
+    const run = async (type, tool) => {
+        if (box.items.some(b => b.type === type && b.content && !b.error))
+            return;
+        const child = {
+            type,
+            label: tool.label,
+            icon: tool.icon,
+            role: tool.role || 'user',
+            time: Date.now(),
+            path,
+        };
+        box.items.push(child);
+        markUsed(box, type);
+        const ok = await tool.init({
+            ...params,
+            block: child,
+            box,
+        });
+        if (ok === false) {
+            box.items.pop();
+            return;
+        }
+        if (child.content && messages)
+            messages.push({ role: 'user', content: String(child.content) });
+    };
+    await run('read', readTool);
+    await run('ls', lsTool);
 }
 
 /** Путь класса + вопрос для ask. */
@@ -475,7 +572,7 @@ function sanitizeDevice(data, depth = 0) {
     return out;
 }
 
-/** Путь для meta: свой / label / ls / карта / провайдер из запроса. */
+/** Путь для meta: свой / label / карта / последний ls. */
 function itemPath(block, box, defaultLabel, query) {
     const own = String(block?.path || '').trim();
     if (own && own !== '/')
@@ -483,43 +580,25 @@ function itemPath(block, box, defaultLabel, query) {
     const label = String(block?.label || '').trim();
     if (label && label !== defaultLabel && label.includes('/'))
         return label;
-    const fromProvider = providerPathFromMap(box, query);
-    if (fromProvider)
-        return fromProvider;
     const fromMap = pathFromMap(box, query);
     if (fromMap && fromMap !== '/')
         return fromMap;
     return classPath(block, box, defaultLabel);
 }
 
-/** Провайдер для remote: не голый /MODELS; после ls — матч по имени/токену (ollama → BIS-Ollama). */
+/** Путь для remote — только с карты/ls/блока, без прыжка к корню из памяти. */
 function resolveRemotePath(block, box, messages) {
     const query = exploreQuery(block, box, messages, remoteTool.label);
     const own = String(block?.path || '').trim();
-    if (isModelsProviderPath(own) && providerRoot(own) !== '/MODELS')
-        return providerRoot(own);
-    const fromProvider = providerPathFromMap(box, query);
-    if (fromProvider)
-        return fromProvider;
+    if (own && own !== '/')
+        return own;
     const fromClass = classPath(block, box, remoteTool.label);
-    if (isModelsProviderPath(fromClass) && providerRoot(fromClass) !== '/MODELS')
-        return providerRoot(fromClass);
+    if (fromClass && fromClass !== '/')
+        return fromClass;
     const fromMap = pathFromMap(box, query);
-    if (isModelsProviderPath(fromMap) && providerRoot(fromMap) !== '/MODELS')
-        return providerRoot(fromMap);
+    if (fromMap && fromMap !== '/')
+        return fromMap;
     return '';
-}
-
-function isModelsProviderPath(p) {
-    const parts = String(p || '').split('/').filter(Boolean);
-    return parts.length >= 2 && parts[0].toUpperCase() === 'MODELS';
-}
-
-function providerRoot(p) {
-    const parts = String(p || '').split('/').filter(Boolean);
-    if (parts.length < 2 || parts[0].toUpperCase() !== 'MODELS')
-        return '';
-    return '/' + parts[0] + '/' + parts[1];
 }
 
 async function listRootMap() {
@@ -552,11 +631,9 @@ async function formatClassEntry(child, childPath) {
         label = child.label;
     let readme = 'readme: нет';
     try {
-        const r = typeof child.get_item === 'function'
-            ? await child.get_item('readme.md')
-            : await WORK.get_item(childPath.replace(/\/$/, '') + '/readme.md');
-        if (r && typeof r.read_text === 'function')
-            readme = 'readme: ' + childPath.replace(/\/$/, '') + '/readme.md';
+        const r = await resolveReadme(child);
+        if (r && (typeof r.read_text === 'function' || r.path))
+            readme = 'readme: ' + (r.path || childPath.replace(/\/$/, '') + '/readme.md');
     }
     catch { /* ignore */ }
     const typeBit = type ? ' (' + type + ')' : '';
@@ -594,58 +671,6 @@ async function listChildrenMap(path) {
     }
 }
 
-/**
- * Ветка (не `/`): `info({ deep: -1 })` — компактное дерево path/type/label до листьев.
- * Не сырой json_model.
- */
-async function listInfoDeep(path) {
-    path = String(path || '').trim();
-    if (!path || path === '/')
-        return listChildrenMap('/');
-    try {
-        const root = await WORK.get_item(path);
-        if (!root || typeof root.info !== 'function')
-            return '';
-        const tree = await root.info({ deep: -1 });
-        const lines = ['[info ' + path + ' deep=-1]'];
-        const state = { count: 0, limit: INFO_NODE_LIMIT };
-        formatInfoTree(tree, lines, 0, state);
-        if (state.count >= state.limit)
-            lines.push('… обрезано (лимит ' + state.limit + ' узлов)');
-        const kids = Array.isArray(tree?.items) ? tree.items : [];
-        if (state.count <= 1 && !kids.length)
-            lines.push('(нет вложенных items)');
-        return lines.join('\n');
-    }
-    catch {
-        return '';
-    }
-}
-
-function formatInfoTree(node, lines, depth, state) {
-    if (!node || typeof node !== 'object' || state.count >= state.limit)
-        return;
-    const id = String(node.id || node.name || '').trim();
-    if (id?.[0] === '.')
-        return;
-    state.count++;
-    const pad = '  '.repeat(depth);
-    const p = String(node.path || node.short || '').trim();
-    const pathBit = p || id || '?';
-    const type = node.type ? ' (' + node.type + ')' : '';
-    const labelRaw = String(node.label || '').trim();
-    const labelBit = labelRaw && labelRaw !== id && labelRaw !== pathBit
-        ? ' — ' + labelRaw
-        : '';
-    lines.push(pad + '- ' + pathBit + type + labelBit);
-    const kids = Array.isArray(node.items) ? node.items : [];
-    for (const child of kids) {
-        if (state.count >= state.limit)
-            break;
-        formatInfoTree(child, lines, depth + 1, state);
-    }
-}
-
 function readmePathFromMap(box, query) {
     const path = pathFromMap(box, query);
     if (!path)
@@ -653,10 +678,13 @@ function readmePathFromMap(box, query) {
     const map = (box?.items || []).findLast?.(b => (b.type === 'map' || b.type === 'ls') && b.content)
         || [...(box?.items || [])].reverse().find(b => (b.type === 'map' || b.type === 'ls') && b.content);
     if (!map)
-        return path + '/readme.md';
-    const re = new RegExp('readme:\\s*(' + path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/readme\\.md)', 'i');
+        return path;
+    const re = new RegExp(
+        path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^\\n]*\\n\\s+readme:\\s*(\\S+)',
+        'i',
+    );
     const hit = String(map.content).match(re);
-    return hit ? hit[1] : path + '/readme.md';
+    return hit && hit[1] && !/^нет$/i.test(hit[1]) ? hit[1] : path;
 }
 
 function exploreQuery(block, box, messages, defaultLabel) {
@@ -672,94 +700,37 @@ function pathFromMap(box, query) {
         || [...(box?.items || [])].reverse().find(b => (b.type === 'map' || b.type === 'ls') && b.content);
     if (!map)
         return '';
-    // карта и info-дерево: строки вида «- /path» с отступом
-    const paths = [...String(map.content).matchAll(/^\s*\- (\/[^\s(]+)/gm)].map(m => m[1]);
-    if (!paths.length)
+    const rows = [...String(map.content).matchAll(/^\s*\- (\/[^\s(]+)([^\n]*)/gm)].map(m => ({
+        path: m[1],
+        rest: m[2] || '',
+    }));
+    if (!rows.length)
         return '';
+    const paths = rows.map(r => r.path);
     const q = String(query || '').toLowerCase();
-    // длинные пути раньше — точнее матч по токену
+    const hits = [];
     const ordered = [...paths].sort((a, b) => b.length - a.length);
     for (const p of ordered) {
         const token = p.replace(/^\//, '').toLowerCase();
         if (token.length >= 3 && q.includes(token))
-            return p;
-        const leaf = p.split('/').filter(Boolean).pop()?.toLowerCase() || '';
-        if (leaf.length >= 3 && q.includes(leaf))
-            return p;
-    }
-    for (const [re, root] of ROOT_HINTS) {
-        if (re.test(query) && paths.includes(root))
-            return root;
-    }
-    return '';
-}
-
-/** Токены запроса (ollama, bis, …) — до склейки; короткие отброс. */
-function queryTokens(query) {
-    return String(query || '').toLowerCase()
-        .split(/[^a-z0-9а-яё]+/i)
-        .map(t => t.trim())
-        .filter(t => t.length >= 3);
-}
-
-/**
- * Выбор /MODELS/<id> по brief.
- * 1) полное имя провайдера ∈ query (bis-ollama → BIS-Ollama);
- * 2) токен query ∈ имени (ollama → единственный *ollama*);
- * несколько кандидатов — '' (не гадать).
- */
-function pickProviderPath(providerPaths, query) {
-    const list = (providerPaths || []).filter(Boolean);
-    if (!list.length)
-        return '';
-    const qFlat = String(query || '').toLowerCase().replace(/[-\s_]/g, '');
-    const tokens = queryTokens(query).map(t => t.replace(/[-\s_]/g, '')).filter(t => t.length >= 3);
-    const strong = [];
-    const soft = [];
-    for (const p of list) {
-        const nameFlat = (String(p).split('/').pop() || '').toLowerCase().replace(/[-\s_]/g, '');
-        if (nameFlat.length < 3)
-            continue;
-        if (qFlat.includes(nameFlat)) {
-            strong.push(p);
-            continue;
+            hits.push(p);
+        else {
+            const leaf = p.split('/').filter(Boolean).pop()?.toLowerCase() || '';
+            if (leaf.length >= 3 && q.includes(leaf))
+                hits.push(p);
         }
-        if (tokens.some(t => nameFlat.includes(t)))
-            soft.push(p);
     }
-    if (strong.length === 1)
-        return strong[0];
-    if (strong.length > 1)
-        return '';
-    if (soft.length === 1)
-        return soft[0];
-    if (!strong.length && !soft.length && list.length === 1)
-        return list[0];
-    return '';
-}
-
-/** Имя/токен в реплике → /MODELS/<id> по живым детям /MODELS. */
-async function providerPathByName(query) {
-    if (!String(query || '').trim())
-        return '';
-    const root = await WORK.get_item('/MODELS');
-    const kids = ((await root?.children) || []).filter(isWorkClass);
-    const paths = kids.map(k => String(k.path || ('/MODELS/' + k.id)));
-    return pickProviderPath(paths, query);
-}
-
-/** Провайдеры из map/ls: /MODELS/<Name> (bis-ollama | ollama → BIS-Ollama). */
-function providerPathFromMap(box, query) {
-    const map = (box?.items || []).findLast?.(b => (b.type === 'map' || b.type === 'ls') && b.content)
-        || [...(box?.items || [])].reverse().find(b => (b.type === 'map' || b.type === 'ls') && b.content);
-    if (!map)
-        return '';
-    const paths = [...String(map.content).matchAll(/^\s*\- (\/[^\s(]+)/gm)].map(m => m[1]);
-    const providers = paths.filter(p => {
-        const parts = p.split('/').filter(Boolean);
-        return parts.length === 2 && parts[0].toUpperCase() === 'MODELS';
-    });
-    return pickProviderPath(providers, query);
+    for (const { path, rest } of rows) {
+        const type = (rest.match(/\(\$([^)]+)\)/) || [])[1];
+        if (type && q.includes(type.toLowerCase()))
+            hits.push(path);
+        const label = ((rest.match(/[—–-]\s*(.+)$/) || [])[1] || '').trim().toLowerCase();
+        const words = label.split(/[^a-z0-9а-яё]+/i).filter(w => w.length >= 4);
+        if (words.some(w => q.includes(w)))
+            hits.push(path);
+    }
+    const uniq = [...new Set(hits)];
+    return uniq.length === 1 ? uniq[0] : '';
 }
 
 function classPath(block, box, defaultLabel) {
@@ -780,6 +751,19 @@ async function resolveFile(path) {
         return null;
     const item = await WORK.get_item(path);
     return item && typeof item.read_text === 'function' ? item : null;
+}
+
+/** readme.md в storage_folder (класс = meta; папка = сама). */
+async function resolveReadme(item) {
+    if (!item)
+        return null;
+    const storage = item.storage_folder || item;
+    if (typeof storage.get_item === 'function') {
+        const file = await storage.get_item('readme.md');
+        if (file)
+            return file;
+    }
+    return null;
 }
 
 function lastUserContent(messages) {

@@ -383,17 +383,17 @@ export default {
                 'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
                 'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
                 'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
-                'Сначала факты площадки (explore), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
+                'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
                 'Один агентный ход, если его достаточно — не planning «на всякий случай».',
                 '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
-                '«подключи / добавь модель / создай класс» — explore (нет diff remote/ls) или work (есть diff → create $ai только по тегам из remote); не planning и не write файла с «:».',
+                '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
                 hasSideEvidence
                     ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
                     : 'check — только после факта create/write в ленте; до действия не выбирай check.',
-                'report — только сводка в ленту; файл на диске он не создаёт.',
-                'Состав/инвентарь площадки или провайдера — explore (ls, meta, remote), не web «на всякий случай».',
+                'report — только сводка в ленту; файл на диске он не создаёт. report не заменяет create и не закрывает side без evidence.',
+                'Состав/инвентарь системы или провайдера — explore (ls, meta, remote), не web «на всякий случай» и не перечень из readme.',
                 need === 'facts'
-                    ? 'goal.need=facts: достаточно фактов в ленте (explore/web/logs) или answer — не work «на всякий случай».'
+                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); факты есть — answer по ним. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
                     : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
                 'Если разумный default уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
@@ -1114,8 +1114,8 @@ function formatGoalBlock(goal) {
     if (goal.status !== 'done') {
         if (need === 'facts') {
             lines.push(
-                'need=facts: цель — ответ фактами; закрывается успешным explore/web/logs или answer.',
-                'Пока status не done — собери факты; не уходи в write «на всякий случай».',
+                'need=facts: цель — ответ человеку фактами. explore/web/logs — сбор, они цель не закрывают; закрывает answer (или report) по фактам из ленты.',
+                'Факты уже в ленте (ls/meta/remote/страница) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
             );
         }
         else {
@@ -1135,8 +1135,8 @@ function goalNeed(goal) {
     return goal?.need === 'facts' ? 'facts' : 'side';
 }
 
-/** Типы блоков = evidence для need=facts (сбор или реплика). */
-const FACTS_EVIDENCE = new Set(['explore', 'web', 'logs', 'answer', 'report']);
+/** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
+const FACTS_EVIDENCE = new Set(['answer', 'report']);
 
 function clearGoalContinue(goal) {
     if (goal?.resume?.continue)

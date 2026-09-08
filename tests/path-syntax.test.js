@@ -67,7 +67,7 @@ describe('path-syntax', () => {
 
     it('fixWorkMdLinks rewrites relative markdown href to WORK form', () => {
         const md = 'See [page](../../../../sources/page.html) please';
-        const base = '/$server/$folder/handlers/pages/site/readme.md';
+        const base = '/$server/$folder/$class/handlers/pages/site/$handler/readme.md';
         const fixed = fixWorkMdLinks(md, base);
         assert.match(fixed, /\[page\]\(\/\$server\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
     });

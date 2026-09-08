@@ -1,9 +1,12 @@
-/** «?» только у строки дерева (`oda-tree-node`): контейнер с readme.md в items, не файл. */
+/** «?» только у строки дерева (`oda-tree-node`): readme.md в storage_folder, не файл. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
     if ($item.constructor === CORE.$file || $item.type === '$file') return false;
     return true;
+}
+function findReadme(items) {
+    return Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined;
 }
 function inTreeNode(node) {
     return (node?.host || node?.parentElement)?.localName === 'oda-tree-node';
@@ -108,8 +111,9 @@ export default {
     },
     get readmeItem() {
         if (!inTreeNode(this) || !mayShowReadme(this.$item)) return undefined;
-        return Promise.resolve(this.$item.items).then(items =>
-            Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined
+        const item = this.$item;
+        return Promise.resolve(item.storage_folder).then(storage =>
+            Promise.resolve((storage || item).items).then(findReadme)
         );
     },
     get hasReadme() {

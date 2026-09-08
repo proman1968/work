@@ -16,7 +16,7 @@
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
-    label: 'ИИ Модель',
+    label: 'Модели ИИ',
     /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
     $public: {
         maxTokens: 4096,   // лимит контекста (usage / info)
