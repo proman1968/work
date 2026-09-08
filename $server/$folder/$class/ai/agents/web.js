@@ -12,12 +12,13 @@ export default {
     role: 'user',
     doc: true,
     allowReasoning: true,
-    description: 'поиск во внешнем интернете; не для моделей, сервисов и путей WORK',
+    description: 'поиск во внешнем интернете; не для моделей WORK, API провайдера ($ai remote) и путей системы',
     system: [
         '# Агент: интернет',
         'Поиск уже выполнен при входе. Открывай site по очереди URL. Итог — total.',
         'URL уже в брифе/промпте — сразу site, без поиска.',
-        'Локальная площадка WORK (модели, сервисы, строение классов) — не сюда, это explore; файлы области — work.',
+        'Локальная система WORK (модели, сервисы, строение классов) — не сюда, это explore; файлы области — work.',
+        'Список моделей у провайдера (baseUrl / api/tags) — explore meta+remote, не ollama.com и не library.',
     ].join('\n'),
     prompt: [
         'Сводный отчёт по посещённым страницам: только факты по теме задачи.',
@@ -29,7 +30,9 @@ export default {
     },
     async init(params = {}) {
         const b = params.block;
-        const { messages, streamChat } = params;
+        const { messages, streamChat, live } = params;
+        if (live?.stopped)
+            return true;
         const themeRaw = String(b.brief || lastUserContent(messages) || '').trim();
         const given = urlsFrom(themeRaw);
         if (given.length) {
@@ -54,6 +57,8 @@ export default {
                 },
             ],
         });
+        if (live?.stopped)
+            return true;
         const queries = searchQueries(asked.content);
         if (theme && !queries.includes(theme))
             queries.push(theme);
@@ -66,6 +71,8 @@ export default {
         }
         b.sites = [];
         for (const q of queries) {
+            if (live?.stopped)
+                return true;
             const hit = await searchRace(SERVICES, q);
             if (!hit) continue;
             b.label = 'Web: ' + q;
@@ -76,6 +83,8 @@ export default {
             }
             break;
         }
+        if (live?.stopped)
+            return true;
         if (!b.sites.length) {
             b.label = 'Web: ' + queries[0];
             b.error = true;
@@ -107,6 +116,8 @@ export default {
                 const { box, block, messages, agent, live } = params;
                 let n = 0;
                 try {
+                    if (live?.stopped)
+                        return false;
                     box.sites ??= [];
                     const taken = new Set((box.items || []).filter(b => b.type === 'site' && b.url).map(b => b.url));
                     const theme = String(box.brief || lastUserContent(messages) || '');
@@ -130,6 +141,10 @@ export default {
                     block.url = site.url;
                     const service = await WORK.get_item(agent?.service || SERVICE);
                     let result = await service.fetch_url({ url: site.url });
+                    if (live?.stopped) {
+                        block.state = 'остановлено';
+                        return true;
+                    }
                     if (result?.error)
                         throw new Error(result.error);
                     const page = String(result.content || '').trim();
@@ -140,6 +155,10 @@ export default {
                     delete box.error;
                     box.state = 'сайты: ' + n + '/' + box.sites.length;
                 } catch (e) {
+                    if (live?.stopped) {
+                        block.state = 'остановлено';
+                        return true;
+                    }
                     block.error = true;
                     block.state = 'ошибка';
                     block.content = (block.title || '') + '\n\n' + e.message + '\n\n';

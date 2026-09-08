@@ -1,6 +1,33 @@
 # Прогресс: $task
 
 ## Последние изменения
+- [14:05] Шапка: один слот `linkHtml` (path | url). Причина: два span никогда не активны вместе.
+- [13:50] Шапка: attrs ODA `no-flex`/`flex` (без своих flex/max-width/цвета ссылки); путь `~if`+`~html`. Причина: кастомный flex резал лейблы, `no-flex` не работал, ссылка выглядела чужим чипом.
+- [13:40] Ссылки в шапке: `~html` + `pathLinkHtml`/`urlLinkHtml` (не `:href` на `<a>` — пустой узел). Причина: DevTools `<a class="path"></a>` без href/текста.
+- [13:35] Шапка: `.path` не схлопывается (`flex: 1`, `min-width: 8ch`); type/state не забирают всю ширину. Причина: ссылки в DOM были, на экране — 0px.
+- [13:30] Шапка ссылок: `$this.host.blockPath` / `blockUrl` (не `data`/`pathText` в with($pdp) — ReferenceError). Причина: ODA has-trap.
+- [13:25] Шапка: ссылки только через `data.path` / `data.url` в шаблоне (без pathText/linkHref в ~if). Причина: ODA with($pdp) ReferenceError.
+- [13:20] Шапка: ссылки через `pathText`/`url` (два `<a>`), без `linkHref` в ~if — ODA ReferenceError. Причина: reactor throttle linkHref is not defined.
+- [13:05] Шапка блока: русский label + кликабельный path/url (form / `_blank`). Причина: дубль type+label.
+- [12:50] UI шапка блока: явный **type** + path + state (иконка остаётся). Причина: type читался только из иконки.
+- [12:25] check: без сверки model/label — только факт create/write. Причина: 1788858416648 — ложный gap → web.
+- [12:05] work.create batch (N за ход), dropUsed только при прогрессе; explore в док. Причина: 1788857474018 — create ×6 одного path.
+- [11:45] движок: `init===false` сжигает тип в боксе (меню сужается); work.read — путь через fill. Причина: 1788856240964 — петля pick(read) после activation.
+- [11:20] work: create/write → doc-артефакты (ссылки + тела) в ленте/доке. Причина: 1788854841637 — финал был только check checklist.
+- [11:05] create: unique model у родителя; work без ignore+dropUsed; readme полный. Причина: 1788853754988 — три id на один model.
+- [10:50] meta_file await files; readme → meta_folder.save_file. Причина: 1788852757790 — meta crash, readme не там.
+- [10:25] check: meta/match + readme; work create пишет readme.md. Причина: соответствие задаче + документ точки.
+- [10:10] check: `targets` → exist все; goalDone только полное покрытие; enrichTotal. Причина: 1788850832971 — один ok закрыл goal, дубль exist в UI.
+- [10:00] check: путь с пробелами; без ignore; после ok → total/goalDone. Причина: 1788850024575 — петля exist на урезанном path.
+- [09:40] меню: не «work затем check»→planning; next только id из pipe; `_agentsDir` = пакет движка; `_fillLeaf` без crash. Причина: 1788848860757 — plan вместо explore, step→total, question undefined.prompt.
+- [18:20] агент `check` (exist/meta → goalDone); work без goalDone; create skip если path уже в run или на диске. Причина: 1788793771061 — create ok×3, зависание без проверки.
+- [17:45] `looksLikeFileId`: пробел → не файл; расширение с буквы (не `.8b`). Причина: create `Exaone3.5 7.8b` ложно как save_file (1788791644492).
+- [17:30] work create/write: `ignore` (повтор в одном work); `total` — склейка однотипных успехов без LLM. Причина: 1788791085346 — первый create ok, create сожжён в using → search/зависание, второй класс не создан.
+- [17:20] work write/create: `role: 'user'` — evidence в `total` (один успех → без LLM-отчёта, finish/goalDone). Причина: 1788789434654 — create ok, зависание на fill total.
+- [16:35] work.`create`: `$class.create` (родитель/тип/id/class.js); activation+do; goalDone; меню «подключи модель». Причина: прогон 1788787437798 — «добавь llama3.2:3b» думал файлом и search.
+- [16:15] `goal.status=done`: нет «Продолжить» в панели; `role:AI` no-op. Причина: 1788786397438 — после facts-settle explore кнопка тянула лишний answer «нет фактов».
+- [15:50] `goal.need`: silent menu facts|side (`_classifyGoalNeed`), без языковых regex. Причина: прогоны с `need:side` на вопросе; эвристика по словам не универсальна.
+- [15:20] `goal.need` facts|side: классификация постановки; facts закрывается evidence сбора/реплики (`_settleFactsGoal`), без pursue; side — прежний pursue + `goalDone` от write. Причина: прогон 1788782057680 — верный explore, затем лишний work/search при open goal.
 - [01:40] `_promptTurn`: `box.todo` не fill-лист; при незакрытых steps сразу `step` (не стоп после APPROVE плана). Причина: прогон — после «принято» fill todo → chat.done, «Продолжить» в том же тупике, steps не стартовали.
 - [00:05] `_runAgent`: перед `execute` снова `engine.$context = this.$class` (общий tilde-метод). Причина: после work → web падение `meta_folder` of undefined.
 - [22:05] goal v2: норма достижения в `[goal]` system; `resume.continue` после question без субагента (меню без answer); pursue до 3 ходов после терминального answer при open goal. Причина: прогон 1788718219280 — answer «сохранил» при живой goal и question до work.
@@ -16,6 +43,10 @@
 - Полное сведение `_streamChat`/`_fillLeaf` собственных ходов таска на движок (сейчас — только агенты).
 
 ## Ключевые решения
+- Решение: `goal.done` терминален для AI-continue (панель + `prompt` role=AI). Причина: иначе «Продолжить» после evidence снова крутит меню и портит итог.
+- Решение: `goal.need` — слот facts|side; классификация тем же silent-menu, что выбор хода (не словарь языка). Закрытие — по типу evidence. Причина: информационные и side-effect цели нельзя закрывать одним правилом; regex по постановке ломает универсальность.
+- Решение: side закрывает `check`: targets → exist + meta (class.js) + readme (класс) / content (файл); без сверки device.model. Причина: «путь есть» недостаточно; предметные поля — не роль общего check.
+- Решение: подключение модели / новый класс — work.`create` → `$class.create`, не write/`save_file`. Причина: класс = тип + meta/class.js; файл с «:» в имени — ложный путь.
 - Решение: после approve плана — не fill `todo`, сразу `step`. Причина: иначе цикл стопорится на пустом стриме чеклиста, «Продолжить» бессмысленна.
 - Решение: goal v2 — system-норма + `resume.continue` + pursue (как у OpenCode: ориентация в system и внешний цикл, закрытие только evidence). Причина: одной записи goal.text недостаточно против терминального answer.
 - Решение: `body.goal` — объект цели сессии; последняя реплика при open/waiting — вход к цели, не новая постановка; `live.wait` (activation) не дублируется resume-слотом. Причина: связать вопрос человеку с продолжением агента после leaf-stop.

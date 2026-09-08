@@ -10,12 +10,15 @@ import { DEV_MODE } from "../host/config.js";
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
-/** id похож на имя файла (presentation.html), а не на класс (MARKET). */
+/** id похож на имя файла (readme.md), а не на класс (MARKET, Exaone3.5 7.8b). */
 export function looksLikeFileId(id) {
     const s = String(id ?? '').trim();
     if (!s || s[0] === '$')
         return false;
-    return /\.[A-Za-z0-9]{1,16}$/.test(s);
+    // пробел — имя узла/класса; .8b и т.п. — не расширение файла
+    if (/\s/.test(s))
+        return false;
+    return /\.[A-Za-z][A-Za-z0-9]{0,15}$/.test(s);
 }
 
 export class $class extends $folder{
@@ -362,26 +365,6 @@ export class $class extends $folder{
     }
 
     /**
-     * Первый зарегистрированный пользователь → #security.ADMINS.
-     * Не перезаписывает уже назначенных администраторов.
-     */
-    async ensureBootstrapAdmin(uid, params = {}) {
-        if (!uid)
-            return false;
-        this.reset();
-        await this.init;
-        const security = Object.assign({}, this.DATA?.['#security']);
-        security.ADMINS = Array.isArray(security.ADMINS) ? security.ADMINS.slice() : [];
-        if (security.ADMINS.length)
-            return false;
-        security.ADMINS.add(uid);
-        const post = this.constructor.toScript({ '#security': security });
-        await this.save({ post, session: WORK });
-        this.reset?.();
-        return true;
-    }
-
-    /**
      * Получить список ролей текущего пользователя в классе.
      * Проверяет allAdmins/allBosses (наследуемые) и users (локальные).
      * @param {object} [params]
@@ -558,7 +541,13 @@ export class $class extends $folder{
     }
 
     get meta_file(){
-        return this.meta_folder?.files.find(f => f.id === 'class.js');
+        return new AsyncPromise(async () => {
+            const folder = this.meta_folder;
+            if (!folder)
+                return null;
+            const files = await folder.files;
+            return (files || []).find(f => f.id === 'class.js') || null;
+        });
     }
     get storage_folder(){
         return this.meta_folder;
@@ -1047,12 +1036,30 @@ export class $class extends $folder{
         if (type === '$class')
             assertClassId(id);
 
-        const ctor = FS[type] || FS.$class;
-        const item = await this._get_next_item(id, ctor);
-        const meta = await item._get_next_item(type, FS.$folder);
         const post = p.post ?? `export default {
     label: '${p.label || id}'
 }`;
+        // Инвариант: поле model в class.js уникально среди детей родителя (один remote → один класс).
+        const device = await parseCreateDevice(post);
+        const modelKey = device?.model != null && device.model !== ''
+            ? String(device.model)
+            : '';
+        if (modelKey) {
+            const dup = await findChildWithModel(this, modelKey);
+            if (dup)
+                throw new Error('create: model «' + modelKey + '» уже у ' + (dup.path || dup.id));
+        }
+
+        const ctor = FS[type] || FS.$class;
+        const item = await this._get_next_item(id, ctor);
+        // meta = type, до обращения к meta_folder: иначе constructor.name ($class) mkdir лишнюю $
+        const typeDir = item.real_dir + '/' + type;
+        if (!fs.existsSync(typeDir))
+            fs.mkdirSync(typeDir, { recursive: true });
+        const strayClass = item.real_dir + '/$class';
+        if (type !== '$class' && fs.existsSync(strayClass) && fs.readdirSync(strayClass).length === 0)
+            fs.rmdirSync(strayClass);
+        const meta = await item._get_next_item(type, FS.$folder);
         const log = await meta.save_file({
             ...p,
             filename: 'class.js',
@@ -1085,3 +1092,39 @@ export class $class extends $folder{
     }
 }
 $class.type_chain = Object.create(null);
+
+/** class.js post → device object (или null). */
+async function parseCreateDevice(post) {
+    const raw = String(post || '').trim();
+    if (!raw)
+        return null;
+    try {
+        const script = /export\s+default/.test(raw) ? raw : ('export default ' + raw);
+        return await $class.importScript(script);
+    }
+    catch {
+        return null;
+    }
+}
+
+/** Ребёнок с тем же model в meta/class.js. */
+async function findChildWithModel(parent, modelKey) {
+    const key = String(modelKey || '');
+    if (!key || !parent)
+        return null;
+    const kids = (await parent.children) || [];
+    for (const child of kids) {
+        try {
+            const mf = await child.meta_file;
+            let data = null;
+            if (mf && typeof mf.importScript === 'function')
+                data = await mf.importScript();
+            else if (typeof child.import === 'function')
+                data = await child.import();
+            if (data && String(data.model || '') === key)
+                return child;
+        }
+        catch { /* следующий */ }
+    }
+    return null;
+}

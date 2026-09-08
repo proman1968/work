@@ -9,6 +9,12 @@ export default {
             label {
                 font-size: small;
             }
+            div {
+                -webkit-user-select: text; /* Для Safari и старых Chrome/Opera */
+                -moz-user-select: text;    /* Для старых версий Firefox */
+                -ms-user-select: text;     /* Для старых версий Internet Explorer */
+                user-select: text;         /* Стандартное свойство */
+            }
         </style>
         <div ~if="interval"><label>Date:</label> {{interval}}</div>
         <div ~if="value?.summary"><label>Summary:</label> {{value?.summary}}</div>

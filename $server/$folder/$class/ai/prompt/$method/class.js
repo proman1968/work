@@ -1,7 +1,7 @@
 ﻿/**
  * $method prompt — движок агентов из пакета ai/agents/* рядом с методом (не meta peer через ~).
  * params: { session, agent, model, mode, effort, messages, prompt, block, box, live }
- * this.$context — класс исполнения (место/system/config домена).
+ * this.$context — класс исполнения (место / system.md / readme / config домена).
  * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js ($context или пакет движка).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
  *   Нет live — движок создаёт тихий standalone: события с path класса, без save/wait.
@@ -88,6 +88,10 @@ export default {
     /** Ход агента: лист → fill; box → init / tool (стоп через live.wait) → снова execute. */
     async turn(ctx) {
         const { block, agent, type, model, messages, session, live, params } = ctx;
+        if (live?.stopped) {
+            delete block.inited;
+            return;
+        }
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
         const toolIds = Object.keys(tools);
@@ -99,6 +103,10 @@ export default {
                 agent: { ...agent, system },
                 model, messages, live, box: params.box, effort: params.effort,
             });
+            if (live?.stopped) {
+                delete block.inited;
+                return;
+            }
             if (typeof agent.recalc === 'function')
                 await agent.recalc({ block, live, exec, messages, session });
             if (block.content)
@@ -118,6 +126,10 @@ export default {
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
+                if (live?.stopped) {
+                    delete block.inited;
+                    return;
+                }
                 if (block.error && block.content) {
                     messages.push({ role: 'assistant', content: block.content });
                     delete block.inited;
@@ -127,6 +139,10 @@ export default {
         }
 
         const next = await this.pick(ctx, nextIds(agent, block, toolIds), tools, mode);
+        if (live?.stopped) {
+            delete block.inited;
+            return;
+        }
         if (!next || next === 'stop' || next === 'total')
             return this.total(ctx, tools);
 
@@ -135,8 +151,7 @@ export default {
             const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now() };
             if (tool.stop != null)
                 child.stop = tool.stop;
-            if (tool.doc)
-                child.doc = tool.doc;
+            // doc — только после done (write/create evidence); не копировать с tool на пустой стрим
             if (!tool.ignore) {
                 const used = block.using_blocks ??= [];
                 if (!used.includes(next))
@@ -151,9 +166,17 @@ export default {
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
+                if (live?.stopped) {
+                    delete block.inited;
+                    return;
+                }
                 if (ok === false) {
-                    // tool отказался (нет операнда) — не total, а снова pick без этого tool
+                    // init === false — «здесь этому tool нечего делать»: блок снимается,
+                    // тип остаётся в using_blocks — в этом боксе его больше не предлагаем (меню только сужается)
                     block.items.pop();
+                    const used = block.using_blocks ??= [];
+                    if (!used.includes(next))
+                        used.push(next);
                     await live.save?.();
                     return this.turn(ctx);
                 }
@@ -170,6 +193,10 @@ export default {
                 });
                 delete child.draft;
             }
+            if (live?.stopped) {
+                delete block.inited;
+                return;
+            }
             if (typeof tool.recalc === 'function')
                 await tool.recalc({ block: child, box: block, messages, session, live, exec });
             if (child.content)
@@ -183,6 +210,10 @@ export default {
                 }
                 // ждём человека; approve выполняет владелец ленты, сюда приходит факт
                 const res = await live.wait(child) || {};
+                if (live?.stopped) {
+                    delete block.inited;
+                    return;
+                }
                 if (res.content)
                     messages.push({ role: 'user', content: String(res.content) });
                 delete child.stop;
@@ -204,6 +235,10 @@ export default {
             block: undefined,
             box: block,
         });
+        if (live?.stopped) {
+            delete block.inited;
+            return;
+        }
         block.items.push(sub);
         await live.save?.();
         return this.execute({
@@ -217,6 +252,10 @@ export default {
     /** Итог бокса: один результат — без LLM; только ошибки — агрегат; иначе fill по agent.prompt. */
     async total(ctx, tools) {
         const { block, agent, model, messages, live, session, params } = ctx;
+        if (live?.stopped) {
+            delete block.inited;
+            return;
+        }
         const mode = live?.mode || 'plan';
         const data = (block.items || []).filter(b =>
             b.content && b.type !== 'prompt' && tools[b.type]?.role === 'user');
@@ -237,6 +276,16 @@ export default {
                 block.state = fails[0].state || 'ошибка';
             delete block.using_blocks;
         }
+        else if (results.length && results.every(b => b.type === results[0].type)) {
+            // однотипные успехи (N create / N write) — склейка без LLM
+            block.content = results.map(b => b.content).filter(Boolean).join('\n\n');
+            delete block.error;
+            if (fails.length)
+                block.state = 'ошибки: ' + fails.length;
+            else
+                delete block.state;
+            delete block.using_blocks;
+        }
         else {
             await this.fill(block, {
                 agent: {
@@ -247,6 +296,10 @@ export default {
                 },
                 model, messages, live, box: block, effort: params.effort,
             });
+            if (live?.stopped) {
+                delete block.inited;
+                return;
+            }
             if (block.content) {
                 delete block.error;
                 if (/^сайты:/.test(block.state || ''))
@@ -266,9 +319,11 @@ export default {
     async pick(ctx, ids, tools, mode) {
         if (!ids?.length)
             return;
+        const { agent, block, messages, model, live } = ctx;
+        if (live?.stopped)
+            return;
         if (ids.length === 1)
             return ids[0];
-        const { agent, block, messages, model, live } = ctx;
         const lines = ids.map(id => {
             const node = tools[id] || {};
             return `- ${id}: ${node.description || node.label || id}`;
@@ -289,6 +344,8 @@ export default {
                 },
             ],
         });
+        if (live?.stopped)
+            return;
         const word = String(response.content || '').trim().split(/\s+/)[0]
             ?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
         return ids.includes(word) ? word : ids[0];
@@ -489,8 +546,10 @@ export default {
             }
             catch { /* нет пакета */ }
         }
+        const readme = await loadPlaceReadme(ctx);
         return [
             system,
+            readme,
             placeContext(user_info, class_info),
             location,
             timeNow(tz),
@@ -516,7 +575,6 @@ function nextIds(agent, block, toolIds) {
         ids.push('stop');
     return ids;
 }
-
 function samePlace(a, b) {
     if (!a || !b) return false;
     return (a.path && a.path === b.path) || (a.id && a.id === b.id);
@@ -530,6 +588,25 @@ function placeContext(user_info, class_info) {
         'Профиль (от чьего имени):\n' + JSON.stringify(user_info, null, 2),
         'Рабочая группа (где задача):\n' + JSON.stringify(class_info, null, 2),
     ].join('\n');
+}
+
+/** Контракт места: storage_folder/readme.md ($context). Для peer-ask — закон домена цели. */
+async function loadPlaceReadme(ctx) {
+    if (!ctx)
+        return '';
+    try {
+        const storage = ctx.storage_folder || ctx;
+        const file = await storage?.get_item?.('readme.md');
+        if (!file)
+            return '';
+        const text = String(await file.load({ encoding: 'utf-8' })).trim();
+        if (!text)
+            return '';
+        return 'Контракт места (readme.md):\n' + text;
+    }
+    catch {
+        return '';
+    }
 }
 
 function timeNow(tz) {

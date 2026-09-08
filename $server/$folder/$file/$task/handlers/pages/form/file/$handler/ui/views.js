@@ -8,6 +8,20 @@ export function viewTag(item) {
     return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
 }
 
+function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, '&quot;');
+}
+
+/** ссылка в шапке: ~html (нативный <a> :href в ODA давал пустой узел) */
+function titleLinkHtml(href, text, blank) {
+    const blankAttrs = blank ? ' target="_blank" rel="noopener noreferrer"' : '';
+    return '<a href="' + escapeAttr(href) + '" title="' + escapeAttr(text) + '"' + blankAttrs
+        + ' onclick="event.stopPropagation()">' + escapeHtml(text) + '</a>';
+}
+
 ODA({ is: 'microchat-ribbon',
     template: /*html*/`
         <style>
@@ -171,13 +185,25 @@ ODA({ is: 'microchat-view',
                 min-width: 0;
                 padding: 4px 8px;
                 gap: 8px;
+                font-size: small;
             }
-            .title > .label {
+            .title > .type,
+            .title > .state,
+            .title a {
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                font-size: small;
-                min-width: 0;
+            }
+            .title > .type {
+                font-weight: 600;
+            }
+            .title > .state {
+                opacity: .55;
+            }
+            .title a {
+                color: inherit;
+                text-decoration: underline;
+                text-underline-offset: 2px;
             }
             .body {
                 font-size: small;
@@ -206,12 +232,12 @@ ODA({ is: 'microchat-view',
             <summary vertical flex :color-mode
                     @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
                 <div class="title" horizontal flex>
-                    <item-icon ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
-                    <oda-icon ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="label"  @click.stop>{{label}}</span>
-                    <span disabled class="label" style="opacity: .5;" ~if="state">{{state}}</span>
-                    <oda-icon ~if="showContent && !pinned" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <div flex></div>
+                    <item-icon no-flex ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
+                    <oda-icon no-flex ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
+                    <span class="type" no-flex ~if="$this.host.blockTitle" @click.stop>{{$this.host.blockTitle}}</span>
+                    <span ~if="$this.host.linkHtml" ~html="$this.host.linkHtml" @click.stop></span>
+                    <span class="state" no-flex ~if="$this.host.blockState">{{$this.host.blockState}}</span>
+                    <oda-icon no-flex ~if="showContent && !pinned" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>
                 </div>
                 <div ~is="subTitleTag" ~if="subTitleTag" :data></div>
             </summary>
@@ -248,17 +274,39 @@ ODA({ is: 'microchat-view',
         return this.data && this.data.stop !== true && !this.onlyDoc;
     },
 
-    // --- data ---
+    // --- шапка: одна ссылка (path | url, не оба) через ~html ---
     get content() { return this.data?.content; },
-    get label() { 
-        return this.data?.label || this.data?.type || '';
+    /** человеческая подпись; не дублирует path/url */
+    get label() {
+        const raw = String(this.data?.label || '').trim();
+        if (!raw)
+            return '';
+        const path = String(this.data?.path || '').trim();
+        if (path && raw === path)
+            return '';
+        const u = String(this.data?.url || '').trim();
+        if (u && raw === u)
+            return '';
+        return raw;
     },
-    get url() { 
-        return this.data?.url || '';
+    get blockTitle() {
+        return this.label || String(this.data?.type || '').trim();
     },
-    get labelTag() { return this.url ? 'a' : 'span'; },
-    get state(){
-        return this.data.state;
+    get blockState() {
+        return String(this.data?.state || '').trim();
+    },
+    /** path → form; иначе http(s) url → _blank */
+    get linkHtml() {
+        const p = String(this.data?.path || '').trim();
+        if (p.startsWith('/'))
+            return titleLinkHtml(p.replace(/\/$/, '') + '/~/handlers/pages/form/', p, false);
+        const u = String(this.data?.url || '').trim();
+        if (/^https?:\/\//i.test(u))
+            return titleLinkHtml(u, u, true);
+        return '';
+    },
+    get state() {
+        return this.data?.state;
     },
     get typeIcon() {
         if (!this.content && this.$pdp.pending)
@@ -301,10 +349,14 @@ ODA({ is: 'microchat-view',
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
     get viewContent() {
-        return (this.content || '') + this.streamTail;
+        let text = (this.content || '') + this.streamTail;
+        // .md в evidence раньше клали в ```markdown — показать как form, не как code
+        if (/\.md$/i.test(String(this.data?.path || '')))
+            text = String(text).replace(/\n```(?:markdown|md)?\r?\n([\s\S]*?)\n```/i, '\n$1');
+        return text;
     },
     get showContent() {
-         return !!(this.content || this.streamTail || this.items || !this.showTitle || this.url); 
+         return !!(this.content || this.streamTail || this.items || !this.showTitle || this.data?.url);
     },
     /** expand-box: в ленте дети, не маркер box.content ([attachments] …) */
     get showMarkdown() {
@@ -315,7 +367,7 @@ ODA({ is: 'microchat-view',
 
     // --- title chrome ---
     get colorMode() {
-        if (this.data?.error) return 'error';
+        if (this.data?.error) return 'error-invert';
         if (this.data?.ignore && this.streamTail) return 'info-invert';
         return this.showTitle ? 'info-invert' : 'content';
     },
@@ -421,7 +473,7 @@ ODA({ is: 'microchat-view-prompt',
     extends: 'microchat-view',
     template: /*html*/`
         <style>
-            summary .title > .label {
+            summary .title > .type {
                 opacity: 1;
             }
             summary{

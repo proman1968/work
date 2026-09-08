@@ -33,7 +33,12 @@ export default {
         const task = this;
         return {
             path: this.short,
-            send: e => session?.send?.({ ...e, path: task.short }),
+            send: e => {
+                // после Стоп — не поднимать pending (start/delta); done/прочее — ок
+                if (task._stopped && (e?.type === 'chat.delta' || e?.type === 'chat.start'))
+                    return;
+                session?.send?.({ ...e, path: task.short });
+            },
             save: () => task._save(session),
             get stopped() { return !!task._stopped; },
             get mode() { return task.body.mode || 'plan'; },
@@ -132,6 +137,12 @@ export default {
         try {
             switch (role) {
                 case 'AI':{
+                    // goal.done — не крутить меню по «Продолжить» (хвост без stop)
+                    const g = (await this.body)?.goal;
+                    if (g?.status === 'done') {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return { ok: true };
+                    }
                 } break;
                 case 'APPROVE':{
                     const accept = params.accept === true || params.accept === 'true';
@@ -176,7 +187,13 @@ export default {
                         const body = await this.body;
                         const g = body.goal;
                         if (!g || g.status === 'done') {
-                            body.goal = { text, status: 'open', resume: null, pursue: 0 };
+                            body.goal = {
+                                text,
+                                status: 'open',
+                                resume: null,
+                                pursue: 0,
+                                need: await this._classifyGoalNeed(text, session),
+                            };
                         }
                         else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
                             agent = g.resume.agent;
@@ -293,6 +310,10 @@ export default {
             // агент снова без итога и без стопа — не крутить цикл, ждать человека
             if (!hasBody(b) && !b?.error)
                 return { loop: false, block: b };
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
             return { loop: this._canLoop(b), block: b };
         }
         const leaf = params.block;
@@ -303,8 +324,16 @@ export default {
             await this._fillLeaf(params, session);
             await this._save(session);
             if (leaf.stop) {
+                if (this._settleFactsGoal(leaf)) {
+                    await this._save(session);
+                    return { loop: false, block: leaf };
+                }
                 await this._noteGoalWait(leaf, params.box, session);
                 return { loop: false, waiting: true, block: leaf };
+            }
+            if (this._settleFactsGoal(leaf)) {
+                await this._save(session);
+                return { loop: false, block: leaf };
             }
             return { loop: this._canLoop(leaf), block: leaf };
         }
@@ -322,7 +351,8 @@ export default {
         }
 
         let using_blocks = params.box.using_blocks ??= [];
-        next = (next || []).filter(id => !using_blocks.includes(id));
+        // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
+        next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
         // после question без субагента / pursue — answer не в меню, пока goal open
         const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
@@ -335,7 +365,7 @@ export default {
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
         else if (!next.length)
-            choice = 'total';
+            choice = this.pipe.total ? 'total' : null;
         else if (next.length === 1)
             choice = next[0];
         else {
@@ -345,23 +375,40 @@ export default {
                     || n?.description || n?.inject || '';
                 return id.toUpperCase() + ' - ' + cap + ';';
             });
+            const need = goal?.need || 'side';
+            const hasSideEvidence = (params.box?.items || []).some(b =>
+                (b.type === 'work' || b.type === 'create' || b.type === 'write')
+                && b.content && !b.error);
             let menu = [
                 'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
                 'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
                 'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
-                'answer не закрывает goal и не заменяет side-effect; при данных для действия выбирай агента (work/web/…).',
-                'Если разумный default или план действий уже есть в контексте — не спрашивай, действуй.',
+                'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
+                'Один агентный ход, если его достаточно — не planning «на всякий случай».',
+                '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
+                '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
+                hasSideEvidence
+                    ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
+                    : 'check — только после факта create/write в ленте; до действия не выбирай check.',
+                'report — только сводка в ленту; файл на диске он не создаёт. report не заменяет create и не закрывает side без evidence.',
+                'Состав/инвентарь системы или провайдера — explore (ls, meta, remote), не web «на всякий случай» и не перечень из readme.',
+                need === 'facts'
+                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); факты есть — answer по ним. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
+                    : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
+                'Если разумный default уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
                 '\n\n[menu]\n',
                 ...lines,
             ].join('\n');
             let messages = await this.context({ session, prompt: menu });
             let response = await this._streamChat({ messages, silent: true, session });
+            if (this._stopped)
+                return { loop: false, block: params.block };
             choice = menuPick(response.content, next)
                 || (next.includes('thinking') ? 'thinking' : next[0]);
         }
 
-        if (!choice)
+        if (!choice || this._stopped)
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
@@ -373,6 +420,8 @@ export default {
             await this._captionDoc(params, session);
             await this._save(session);
             const b = params.block;
+            if (this._stopped)
+                return { loop: false, block: b };
             if (b?.stop && hasBody(b)) {
                 await this._noteGoalWait(b, params.box, session);
                 return { loop: false, waiting: true, block: b };
@@ -380,11 +429,17 @@ export default {
             // субагент действия отработал — слот continue больше не нужен
             if (choice !== 'question' && choice !== 'form')
                 clearGoalContinue(this.body.goal);
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
             return { loop: this._canLoop(b), block: b };
         }
         if (pushed) {
             if (!params.block.box && !hasBody(params.block))
                 await this._fillLeaf(params, session);
+            if (this._stopped)
+                return { loop: false, block: params.block };
             if (hasBody(params.block))
                 await this.pipe[params.block.type]?.recalc?.(params);
             await this._captionDoc(params, session);
@@ -393,6 +448,10 @@ export default {
 
         const focus = pushed ? params.block : boxBefore;
         if (focus?.stop && hasBody(focus)) {
+            if (this._settleFactsGoal(focus)) {
+                await this._save(session);
+                return { loop: false, block: focus };
+            }
             await this._noteGoalWait(focus, params.box, session);
             return { loop: false, waiting: true, block: focus };
         }
@@ -421,8 +480,26 @@ export default {
     },
 
     /**
-     * После терминального answer при незакрытой goal — ещё ход оркестратора (budget).
-     * chat.done не шлём: pending держит исходный prompt.
+     * goal.need=facts: успешный сбор фактов или реплика — закрыть цель (без pursue).
+     * @returns {boolean} цель закрыта
+     */
+    _settleFactsGoal(block) {
+        const g = this.body?.goal;
+        if (!g || g.status === 'done' || goalNeed(g) !== 'facts')
+            return false;
+        if (!block || !hasBody(block) || block.error)
+            return false;
+        if (!FACTS_EVIDENCE.has(block.type))
+            return false;
+        g.status = 'done';
+        g.resume = null;
+        g.pursue = 0;
+        return true;
+    },
+
+    /**
+     * После терминального answer при незакрытой side-goal — ещё ход оркестратора (budget).
+     * facts уже закрыты в _settleFactsGoal. chat.done не шлём при pursue: pending держит prompt.
      */
     async _pursueGoal(turn, session) {
         if (this._stopped)
@@ -430,6 +507,8 @@ export default {
         const body = await this.body;
         const g = body.goal;
         if (!g || g.status === 'done' || g.status === 'waiting')
+            return false;
+        if (goalNeed(g) === 'facts')
             return false;
         const leaf = turn?.block;
         if (!leaf || leaf.type !== 'answer' || !hasBody(leaf))
@@ -443,10 +522,56 @@ export default {
         return true;
     },
 
+    /**
+     * need цели: silent menu facts|side (тот же контракт, что выбор хода).
+     * Не эвристика по языку постановки — универсально для любой формулировки.
+     */
+    async _classifyGoalNeed(text, session) {
+        const t = String(text || '').trim();
+        if (!t)
+            return 'side';
+        if (this._stopped)
+            return 'side';
+        try {
+            const response = await this._streamChat({
+                silent: true,
+                session,
+                messages: [{
+                    role: 'user',
+                    content: [
+                        'Классифицируй цель сессии.',
+                        'facts — узнать, сверить или перечислить по фактам (ответ, сводка, инвентарь).',
+                        'side — изменить систему или внешний ресурс (создать, записать, удалить, подключить, установить).',
+                        'Сначала узнать и сразу изменить → side. Сомнение → side.',
+                        '',
+                        'Цель:',
+                        t,
+                        '',
+                        'Ответь одним словом строго из списка, без знаков и пояснений.',
+                        '',
+                        '[menu]',
+                        'FACTS - ответ фактами;',
+                        'SIDE - действие в системе;',
+                    ].join('\n'),
+                }],
+            });
+            if (this._stopped)
+                return 'side';
+            return menuPick(response.content, ['facts', 'side']) || 'side';
+        }
+        catch {
+            return 'side';
+        }
+    },
+
     async _captionDoc(params, session) {
         const kind = this.pipe[params.block.type];
         const src = String(params.block.content || '').trim();
-        if (!(params.block.doc && params.block.stop !== true && !this._stopped && src && kind?.label && params.block.label === kind.label))
+        const label = String(params.block.label || '').trim();
+        const def = String(kind?.label || '').trim();
+        // без своего имени: пусто (stop-doc вроде answer) / type / дефолт pipe
+        const untitled = !label || label === params.block.type || (def && label === def);
+        if (!(params.block.doc && !this._stopped && src && untitled))
             return;
         const cap = await this._streamChat({
             messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
@@ -461,7 +586,13 @@ export default {
     /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
     async _fillLeaf(params = {}, session) {
         const next_pipe = this.pipe[params.block.type];
-        let prompt = next_pipe.prompt || this.pipe[params.box.type].prompt;
+        const box_pipe = this.pipe[params.box?.type];
+        const prompt = next_pipe?.prompt || box_pipe?.prompt;
+        if (!prompt) {
+            params.block.error = true;
+            params.block.content = '$task: нет pipe/prompt для «' + params.block.type + '»';
+            return;
+        }
         let messages;
         if (params.block.draft) {
             const draft = params.block.draft;
@@ -482,8 +613,8 @@ export default {
         }
         const response = await this._streamChat({
             messages, session,
-            maxOutput: next_pipe.maxOutput,
-            allowReasoning: next_pipe.allowReasoning,
+            maxOutput: next_pipe?.maxOutput ?? box_pipe?.maxOutput,
+            allowReasoning: next_pipe?.allowReasoning ?? box_pipe?.allowReasoning,
         });
         this._applyStream(params, response);
     },
@@ -663,7 +794,8 @@ export default {
                     reasonBlock = this._build_block('reasoning');
                     await this._push_block({ block: reasonBlock, box: reasonBox, session });
                 }
-                session?.send?.({ type: 'chat.delta', path: this.short, token });
+                if (!this._stopped)
+                    session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
             else {
                 let token = chunk?.content ? chunk?.content : chunk;
@@ -671,7 +803,7 @@ export default {
                     continue;
                 await closeReason();
                 content += token;
-                if (!silent)
+                if (!silent && !this._stopped)
                     session?.send?.({ type: 'chat.delta', path: this.short, token });
             }
         }
@@ -693,10 +825,10 @@ export default {
                 ns[k] = v;
             }
             registerOrchestrator(ns, taskDef);
-            // агенты — декларации из меты класса (~/ai/agents, канон движка), не дубли $task
+            // агенты — пакет движка (как prompt._aiPackage), иначе meta ~/ai/agents
             const agentIds = [];
             const stepAgents = [];
-            const agentsDir = await this.$class?.meta_folder?.get_item('ai/agents');
+            const agentsDir = await this._agentsDir();
             if (agentsDir) {
                 const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
                 const byId = new Map();
@@ -736,6 +868,28 @@ export default {
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
         return import('data:text/javascript;base64,' + b64);
     },
+    /**
+     * Каталог agents/: пакет движка prompt (как _aiPackage), иначе meta $class ~/ai/agents.
+     * Step/меню должны видеть тех же агентов, что execute.
+     */
+    async _agentsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('agents') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/agents');
+        }
+        catch {
+            return null;
+        }
+    },
     get body() {
         return new AsyncPromise(async () => {
             await this.pipe;
@@ -749,9 +903,17 @@ export default {
     get model() {
         return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
     },
-    /** Stop: прервать текущий стрим и не планировать самовызовы. Ленту не трогает. */
+    /** Stop: прервать стрим/агента; chat.done гасит pending; дальше start/delta не шлём. */
     async stop(params = {}) {
         this._stopped = true;
+        // отпустить live.wait — иначе движок висит на APPROVE после стопа
+        const waiters = this._waiters;
+        if (waiters?.size) {
+            for (const resolve of waiters.values())
+                resolve({ stopped: true });
+            waiters.clear();
+        }
+        params.session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true, stopped: true };
     },
     _build_block(type) {
@@ -938,24 +1100,43 @@ function topicsMap(pipe, focus, mode) {
 function formatGoalBlock(goal) {
     if (!goal?.text)
         return '';
+    const need = goalNeed(goal);
     const lines = [
         '[goal]',
         String(goal.text).trim(),
         'status: ' + (goal.status || 'open'),
+        'need: ' + need,
     ];
     if (goal.resume?.agent)
         lines.push('resume: ' + goal.resume.agent);
     if (goal.resume?.continue)
         lines.push('resume: continue (данные получены — действуй, не болтай)');
     if (goal.status !== 'done') {
-        lines.push(
-            'Пока status не done — цель не достигнута; сессия не считается выполненной.',
-            'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте (write/web/…).',
-            'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
-        );
+        if (need === 'facts') {
+            lines.push(
+                'need=facts: цель — ответ человеку фактами. explore/web/logs — сбор, они цель не закрывают; закрывает answer (или report) по фактам из ленты.',
+                'Факты уже в ленте (ls/meta/remote/страница) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+            );
+        }
+        else {
+            lines.push(
+                'need=side: цель — действие в системе; закрывается evidence / check после факта в ленте, не репликой.',
+                'Пока status не done — цель не достигнута; сессия не считается выполненной.',
+                'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
+                'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
+            );
+        }
     }
     return lines.join('\n');
 }
+
+/** facts | side; без поля — side (старые сессии / сомнение). */
+function goalNeed(goal) {
+    return goal?.need === 'facts' ? 'facts' : 'side';
+}
+
+/** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
+const FACTS_EVIDENCE = new Set(['answer', 'report']);
 
 function clearGoalContinue(goal) {
     if (goal?.resume?.continue)

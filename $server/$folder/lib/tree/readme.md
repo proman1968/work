@@ -14,7 +14,7 @@
 - `hideSystem` убирает `$…` типы.
 - `hideFiles` (по умолчанию выкл.) скрывает все `$file` из списка — включает только `item-menu` handlers; в explorer файлы видны.
 - Фильтры дерева (`hideSystem` / `hideFiles` / `onlyClasses`) сводятся в `applyTreeFilters`: `getItems` и `oda-tree-node.items` используют одну функцию.
-- Узлы с собственным `readme.md` показывают «?» на `item-node`. Дерево может скрыть файлы из списка (`hideFiles`) — «?» берётся из полного `$item.items`.
+- Узлы с `readme.md` в `storage_folder` показывают «?» на `item-node`. Дерево может скрыть файлы из списка (`hideFiles`) — «?» берётся из хранилища, не из детей узла.
 
 ## Из чего это состоит
 

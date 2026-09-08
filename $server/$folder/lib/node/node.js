@@ -1,9 +1,12 @@
-/** «?» только у строки дерева (`oda-tree-node`): контейнер с readme.md в items, не файл. */
+/** «?» только у строки дерева (`oda-tree-node`): readme.md в storage_folder, не файл. */
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
     if ($item.constructor === CORE.$file || $item.type === '$file') return false;
     return true;
+}
+function findReadme(items) {
+    return Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined;
 }
 function inTreeNode(node) {
     return (node?.host || node?.parentElement)?.localName === 'oda-tree-node';
@@ -84,7 +87,7 @@ export default {
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" icon-size="24" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
-                <item-users icon-size="16" ~if="showUsers && isClass" role="USER" :$item :select-mode="false"></item-users>
+                <item-users icon-size="16" ~if="showUsers && isClass" ~show="hasUsers" ::has-users role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
@@ -94,6 +97,7 @@ export default {
     showUsers: false,
     hideLabel: false,
     hideHistoryTime: false,
+    hasUsers: { $type: Boolean },
     get historyTime() {
         if (this.hideHistoryTime)
             return '';
@@ -107,8 +111,9 @@ export default {
     },
     get readmeItem() {
         if (!inTreeNode(this) || !mayShowReadme(this.$item)) return undefined;
-        return Promise.resolve(this.$item.items).then(items =>
-            Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined
+        const item = this.$item;
+        return Promise.resolve(item.storage_folder).then(storage =>
+            Promise.resolve((storage || item).items).then(findReadme)
         );
     },
     get hasReadme() {

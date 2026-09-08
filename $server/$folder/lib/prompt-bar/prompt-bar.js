@@ -79,7 +79,7 @@ ODA({ is: 'work-prompt-bar',
                     <a :href="$for.item.url" target="_blank">{{$for.item.url}}</a>
                 </div>
             </div>
-            <div horizontal style="align-items: flex-end;">
+            <div horizontal style="align-items: flex-end;" :success="isDo">
                 <textarea id="text" flex class="prompt" :rows ::value :placeholder
                     :readonly="recording" @keydown="_onKeydown" @paste="_onPaste"></textarea>
                 <div ~if="recording" no-flex style="color: var(--error-color); padding: 6px 4px; white-space: nowrap;">⏺ {{timer}}</div>
@@ -100,11 +100,15 @@ ODA({ is: 'work-prompt-bar',
                 <oda-button icon="icons:attachment" :icon-size @tap="getFile" title="Прикрепить файл"></oda-button>
                 <oda-button ~if="showTts" :icon="ttsIcon" :icon-size @tap="cycleTts" :success="ttsOn"
                     :title="ttsTitle"></oda-button>
-                <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size accent-invert
+                <oda-button :icon="pending ? 'av:stop' : sendIcon" :icon-size :color-mode
                     :rainbow="pending || recording" :title="pending ? 'Стоп' : ''" @tap="onSendTap"></oda-button>
             </div>
         </div>
     `,
+    get colorMode() {
+        return this.pending ? 'dark' : this.$pdp.colorMode || 'light';
+    },
+    isDo: false,
     value: '',
     files: [],
     ai: false,

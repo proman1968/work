@@ -24,7 +24,6 @@ const datesTool = {
         if (!target)
             return false;
         b.path = target.short || target.path;
-        b.label = b.path;
         tagAgent(params.box, 'Журнал', b.path);
         try {
             const dates = await target.logs({ mode: 'dates' });
@@ -79,8 +78,8 @@ const bodiesTool = {
         b.day = dayKey;
         if (ext)
             b.ext = ext;
-        b.label = b.path + ' @ ' + dayKey + (ext ? ' .' + ext : '');
         tagAgent(params.box, 'Журнал', b.path + ' @ ' + dayKey + (ext ? ' .' + ext : ''));
+        b.state = dayKey + (ext ? ' .' + ext : '');
         try {
             const args = { mode: 'bodies', day: dayKey };
             if (ext)
@@ -124,8 +123,8 @@ const entryTool = {
         if (!target || typeof target.read_log_entry !== 'function')
             return false;
         b.path = entryPath;
-        b.label = entryPath;
         tagAgent(params.box, 'Журнал', 'entry');
+        b.state = 'entry';
         try {
             const row = await target.read_log_entry({ path: entryPath });
             b.content = formatEntry(row, entryPath);
@@ -161,11 +160,13 @@ export default {
     },
 };
 
-function tagAgent(box, role, detail) {
+/** Шапка бокса: type в block.type; итог — state. */
+function tagAgent(box, _role, detail) {
     if (!box)
         return;
     const d = String(detail || '').trim();
-    box.label = d ? role + ': ' + d : role;
+    if (d)
+        box.state = d;
 }
 
 /** Как platform logs.today — YYYY-MM-DD (UTC date). */

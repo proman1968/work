@@ -73,7 +73,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
             }
         return {
             name: 'ok',
-            label: 'EXIT',
+            label: 'logout',
             legend: 'Ваш uid: ' + WORK.uid,
             class: 'info-invert',
             icon: 'games:exit-door'
@@ -192,6 +192,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
         this.params.uid = await this.uid;
         switch (this.state?.name) {
             case 'ok': {
+                await WORK.showConfirm('Выйти из учётной записи?');
                 await WORK.fetch("/", 'user_exit', {}, this.params);
                 this.params.uid = undefined;
                 WORK.uid = '';

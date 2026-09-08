@@ -296,7 +296,7 @@ export class $folder extends $item{
              //наследование всех папкок и фалов
             let ancestor
 
- 
+
 
             if(this.id === '$folder'){
                 ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
@@ -305,7 +305,7 @@ export class $folder extends $item{
                 return ancestor;
             }
 
-            if(this.isMetaFolder && !this.parent.$owner){
+            if(this.isMetaFolder && !this.parent.$owner && ['$file', '$folder'].every(t => this.type !== t )){
                 ancestor = await this.parent.$distr_folder;
                 if(this.path === ancestor.path)
                     console.log('ancestor', this.path, ancestor.path);
@@ -873,12 +873,23 @@ export class $folder extends $item{
         }
 
         if (!inherit && this.meta_folder) {
-            // Корень типа: meta верхнего $parent с тем же type.
-            // Тот же walk, что у meta: typeRoot/$folder + type_chain.
+            // Корень типа: meta предка того же type ИЛИ meta/$folder/$class/<type> у предка
+            // другого type (как $register → $account, $provider → $ai).
             let typeRoot = null;
+            const crossDomains = [];
             for (let p = this.$parent; p; p = p.$parent) {
-                if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
+                if (!(p instanceof FS.$class) || !p.meta_folder)
+                    continue;
+                if (p.type === this.type)
                     typeRoot = p.meta_folder;
+                else {
+                    try {
+                        const declared = await p.meta_folder.get_item('$folder/$class/' + this.type);
+                        if (declared)
+                            crossDomains.push(declared);
+                    }
+                    catch { /* нет объявления типа у предка */ }
+                }
             }
             if (typeRoot && typeRoot !== this.meta_folder) {
                 let domain = typeRoot.$folder;
@@ -891,7 +902,8 @@ export class $folder extends $item{
                     }
                 }
             }
-
+            for (const domain of crossDomains)
+                folders.add(domain);
 
             folders.push(...horizontal_folders);
 

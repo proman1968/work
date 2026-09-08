@@ -71,18 +71,18 @@ ODA({is: 'work-form',
                 to { opacity: 1; }
             }
         </style>
-        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px;">
+        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item></item-node-explorer>
-                <oda-button content  ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size  @tap="nextRole"
+                <oda-button content ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size @tap="nextRole"
                     style="font-size: xx-small; border-radius: 4px; margin: 4px 0px; padding: 0px 4px;"
                     center icon-pos="top"
                 ></oda-button>
                 <div flex></div>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
-                    <div  class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
+                    <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
 
                         <div
                             ~if="view?.allowSave"
@@ -129,7 +129,8 @@ ODA({is: 'work-form',
                     </div>
                 </div>
             </div>
-            <oda-button  @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button @tap="toggleFullscreen" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
+            <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
         </div>
         <div slot="footer" footer horizontal flex style="justify-items: space-between">
             <item-tools :$item filter="service"></item-tools>
@@ -142,11 +143,11 @@ ODA({is: 'work-form',
     `,
     allowZoom: true,
     iconSize: 24,
-    openView(e){
-        if(e.button === 0 && this.view)
+    openView(e) {
+        if (e.button === 0 && this.view)
             window.open(this.view.short + '/');
     },
-    back(e){
+    back(e) {
         alert('надо скрыть')
     },
     fullScreen: {
@@ -167,8 +168,8 @@ ODA({is: 'work-form',
     async ready() {
         window.execute ??= ($item) => {
             let url = $item.short + '/';
-            if($item.type !== '$handler')
-               url += '~/handlers/pages/' + $item.page + '/'
+            if ($item.type !== '$handler')
+                url += '~/handlers/pages/' + $item.page + '/'
             url = encodeURI(url);
             window.open(url, url)
         }
@@ -186,7 +187,7 @@ ODA({is: 'work-form',
             return;
         }
         try {
-            const root = await this.$item.fetch('handlers', {path: '//form'});
+            const root = await this.$item.fetch('handlers', { path: '//form' });
             let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.allowUse !== false
             );
@@ -224,8 +225,8 @@ ODA({is: 'work-form',
     get roleIcon() {
         return this.getRoleIcon(this.activeRole);
     },
-    get roles(){
-        return this.$item?.fetch('roles').then(roles=>{
+    get roles() {
+        return this.$item?.fetch('roles').then(roles => {
             roles.add('USER');
             return roles;
         });
@@ -235,8 +236,8 @@ ODA({is: 'work-form',
             Array.isArray(roles) && roles.length > 1
         );
     },
-    async getRoleIcon(role){
-        return  ({
+    async getRoleIcon(role) {
+        return ({
             ADMIN: 'fontawesome:s-user-shield',
             BOSS: 'fontawesome:s-user-tie',
             USER: 'fontawesome:s-user-pen',
@@ -250,7 +251,7 @@ ODA({is: 'work-form',
     },
     activeRole: {
         $save: true,
-        async get (){
+        async get() {
             const roles = await this.roles;
             return roles[0];
         },
@@ -277,7 +278,7 @@ ODA({is: 'work-form',
             }
         }
     },
-    async nextRole(){
+    async nextRole() {
         const roles = await this.roles;
         const act_role = await this.activeRole;
         let idx = roles.indexOf(act_role);
@@ -285,18 +286,29 @@ ODA({is: 'work-form',
     },
     modal: false,
     dialog: false,
-    get isTop(){
+    get isTop() {
         return window === top;
+    },
+    toggleFullscreen(e) {
+        if (document.fullscreenElement) {
+            document.exitFullscreen?.();
+        }
+        else {
+            this.view_control?.requestFullscreen?.({ keyboardLock: 'browser' }).catch(e => console.error(e));
+        }
     },
     async close(e) {
         if (this.$item?.isChanged) {
             const el = ODA.createElement('item-confirm', { $item: this.$item, message: 'Закрыть и ...' });
-            const result = await WORK.showDialog(el, { $item: this.$item,  allowClose: true, OK: null, BUTTONS: [{label: 'Сохранить', icon: 'icons:save', success: true}, {label: 'Не сохранять', icon: 'icons:delete', error: true}]});
-            switch(result){
-                case 1:{
-                    this.save();
-                } break;
+            const result = await WORK.showDialog(el, { $item: this.$item, allowClose: true, OK: null, BUTTONS: [{ label: 'Сохранить', icon: 'icons:save', success: true }, { label: 'Не сохранять', icon: 'icons:delete', error: true }] });
+            switch (result) {
+                case 1: { this.save(); } break;
+                case 2: break;
+                default: return;
             }
+        }
+        if (document.fullscreenElement) {
+            await document.exitFullscreen?.();
         }
         this.parentElement?.fire('close', true);
         if (!this.modal)
@@ -308,19 +320,19 @@ ODA({is: 'work-form',
         if (this.saving) return;
         this.saveError = null;
         this.saving = true;
-        this.async(async ()=>{
-            try{
+        this.async(async () => {
+            try {
                 if (this.view_control?.save) {
                     await this.view_control?.save();
                 } else {
-                    const saveParams = this.activeRole ? {role: this.activeRole} : {};
+                    const saveParams = this.activeRole ? { role: this.activeRole } : {};
                     await this.$item.save(this.view_control?.body, saveParams);
                 }
             }
             catch (err) {
                 this.saveError = err;
             }
-            finally{
+            finally {
                 this.saving = false;
             }
         }, 100)
@@ -350,7 +362,7 @@ ODA({is: 'work-form',
             }
             if (!el) {
                 await n.importView();
-                el =  ODA.createComponent('item-' + n.id, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
+                el = ODA.createComponent('item-' + n.id, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
                 this.controls[n.id] = el;
                 this.appendChild(el);
             }

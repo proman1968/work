@@ -1,12 +1,22 @@
 export default{
     template: /* html */`
         <style>
-            :host{
+            :host {
                 @apply --vertical;
                 padding: 4px 16px;
             }
-        </style>    
-        <div flex ~html="value" style="white-space: break-spaces; padding-top: 4px; overflow: hidden;"></div>
+            div {
+                white-space: break-spaces;
+                padding-top: 4px;
+                overflow: hidden;
+
+                -webkit-user-select: text; /* Для Safari и старых Chrome/Opera */
+                -moz-user-select: text;    /* Для старых версий Firefox */
+                -ms-user-select: text;     /* Для старых версий Internet Explorer */
+                user-select: text;         /* Стандартное свойство */
+            }
+        </style>
+        <div flex ~html="value"></div>
     `,
     colorMode: 'content',
     value: '',

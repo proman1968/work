@@ -16,17 +16,17 @@ ODA({ is: 'audio-player', template: /* html */`
             audio {
                 display: none;
             }
-            span{
+            span {
                 font-size: small;
             }
         </style>
         <audio :src @loadeddata="onLoadedData" @timeupdate="updateTheProgressBar" controls></audio>
         <div vertical center>
-            <oda-icon :icon-size="iconSize * 1.5" " :icon="tapIcon" @tap="onTap"></oda-icon>
+            <oda-icon :icon-size="iconSize * 1.5" :icon="tapIcon" @tap="onTap"></oda-icon>
             <span>{{timeText}}</span>
         </div>
     `,
-    get src(){
+    get src() {
         return this.$pdp.$item?.url
     },
     get audioEl() {
@@ -34,13 +34,13 @@ ODA({ is: 'audio-player', template: /* html */`
     },
 
     iconSize: 34,
-    rainbow:{
+    rainbow: {
         $def: false,
         $attr: true,
     },
     isPlayed: {
         $def: false,
-        set(n){
+        set(n) {
             this.rainbow = n
         }
     },
@@ -58,7 +58,7 @@ ODA({ is: 'audio-player', template: /* html */`
         return this.isPlayed || this.isPaused ? `${this.currentTimeFormated} / ${this.duration}` : this.duration;
     },
     onTap(e) {
-        if(!this.isPlayed) {
+        if (!this.isPlayed) {
             this.audioEl.play();
             this.isPlayed = true;
         } else {
@@ -74,7 +74,7 @@ ODA({ is: 'audio-player', template: /* html */`
         const duration = e.target.duration;
         const currentTime = e.target.currentTime;
         // this.progressBarWidth = (currentTime / duration) * 100;
-        if(currentTime === duration) {
+        if (currentTime === duration) {
             this.isPlayed = false;
         }
         this.currentTimeFormated = this.getMinSecFromTime(currentTime);

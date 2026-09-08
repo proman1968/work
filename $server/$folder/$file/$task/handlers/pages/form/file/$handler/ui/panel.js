@@ -19,7 +19,7 @@ ODA({ is: 'microchat-panel',
                 @tap="sendAction(false)"></oda-button>
         </div>
         <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
-            ::value ::files :pending :error="isDo"
+            ::value ::files :pending :is-do
             :model="data?.model" :effort="data?.effort" ::tts-mode
             :usage-stats="usageStats"
             ready-icon="eva:f-arrow-upward"
@@ -51,7 +51,7 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    /** approve после стрима; «Продолжить» — хвост агента без stop, не пользовательский prompt */
+    /** approve после стрима; «Продолжить» — хвост без stop при незакрытой goal (не пользовательский prompt) */
     get actionButton() {
         if (this.pending) return null;
         const focus = this.$pdp.focusedBlock;
@@ -62,6 +62,8 @@ ODA({ is: 'microchat-panel',
         }
         if (this.$pdp.streaming || stop === true || focus?.type === 'prompt') return null;
         if (!this.liveOpen) return null;
+        // goal.done — цель достигнута; AI-continue только для незакрытой сессии
+        if (this.data?.goal?.status === 'done') return null;
         return { label: 'Продолжить', colorMode: 'info-invert', cancel: false, role: 'AI' };
     },
     get userRole() {
@@ -156,6 +158,10 @@ ODA({ is: 'microchat-panel',
     },
     stop() {
         this.pending = false;
+        if (this.$pdp) {
+            this.$pdp.streaming = false;
+            this.$pdp.streamingText = '';
+        }
         this._tts().cancel();
         this.$item?.fetch('stop', {});
     },
