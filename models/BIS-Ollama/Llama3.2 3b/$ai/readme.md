@@ -11,9 +11,9 @@
 - **id:** `Llama3.2 3b`
 
 - **model:** `llama3.2:3b` (тег API / remote)
-- **icon:** `ai:llama`
+- **icon:** `ai:llama3`
 - **maxTokens:** `131072`
-- **capabilities:** chat, stream, functions
+- **capabilities:** chat, stream
 
 Источник истины полей — `class.js` в meta этой точки (readme не дублирует реализацию, только контракт).
 

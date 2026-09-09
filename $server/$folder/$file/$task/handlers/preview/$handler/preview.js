@@ -19,7 +19,7 @@ export default {
     `,
     get src() {
         return this.$item?.load().then(res => {
-            return res?.title
+            return res?.title || '';
         }).catch(err => {
             return '';
         })

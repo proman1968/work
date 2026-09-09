@@ -70,6 +70,20 @@ export default {
         resolve(payload || {});
         return true;
     },
+    /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать do. */
+    async _reviseWait(text, session) {
+        const body = await this.body;
+        const waiting = findWaitingBlock(body, this._waiters);
+        if (!waiting)
+            return false;
+        delete waiting.stop;
+        waiting.state = 'уточнено';
+        const parent = parentOfBlock(body, waiting);
+        if (parent)
+            dropUsedType(parent, waiting.type);
+        await this._save(session);
+        return this._resolveWait(waiting, { accept: false, content: text });
+    },
     /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
     async _runAgent(params, session) {
         const body = await this.body;
@@ -79,6 +93,8 @@ export default {
             throw new Error('$task: метод prompt (ai) не найден у класса');
         // tilde-метод общий: зафиксировать владельца до execute (иначе meta_folder = undefined)
         engine.$context = owner;
+        const worn = await this._skillStep();
+        const skillStep = worn?.step?.type === params.block.type ? worn.step : null;
         await engine.execute({
             agent: params.block.type,
             block: params.block,
@@ -89,6 +105,8 @@ export default {
             live: this._live(session),
             model: body.model,
             effort: body.effort,
+            skillStep,
+            task: this,
         });
         await this._save(session);
         return params.block;
@@ -98,6 +116,9 @@ export default {
         if (this._waiters?.size)
             return null; // движок уже ждёт человека в этом блоке — не перезапускать
         const body = await this.body;
+        const focus = await this._active_box();
+        if (this.pipe[focus.type]?.agent && !hasBody(focus) && !focus.error)
+            return { block: focus, box: parentOfBlock(body, focus) || body };
         let box = body;
         for (;;) {
             const next = box.items?.last;
@@ -115,13 +136,19 @@ export default {
         let { prompt: rawPrompt, role, session, agent: agentParam } = params;
         const pipe = await this.pipe;
 
-        // @web текст… → agent + хвост (только субагент)
+        // @web / @register-accounts текст… → агент или навык + хвост
         let text = String(rawPrompt ?? '').trim();
         let agent = agentParam;
-        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+        const mention = text.match(/^@([a-zA-Z_][\w-]*)(?:\s+|$)/);
         if (mention) {
             const id = mention[1];
-            if (pipe[id]?.agent) {
+            const skills = await this._listSkills();
+            if (skills.some(s => s.id === id)) {
+                params.skillMention = id;
+                text = text.slice(mention[0].length).trim();
+                params.prompt = text;
+            }
+            else if (pipe[id]?.agent) {
                 agent = id;
                 text = text.slice(mention[0].length).trim();
                 params.prompt = text;
@@ -179,21 +206,31 @@ export default {
                         params.block.files = JSON.parse(params.includes);
                         await this._push_block(params);
                     }
-                    delete params.box.using_blocks;
+                    if (!this.pipe[params.box.type]?.agent)
+                        delete params.box.using_blocks;
                     this._stopped = false;
 
                     // durable goal: новая постановка или вход к открытой; waiting+resume → форс / continue
-                    if (text) {
+                    if (text || params.skillMention) {
                         const body = await this.body;
                         const g = body.goal;
+                        const goalText = text || ('@' + params.skillMention);
                         if (!g || g.status === 'done') {
+                            const need = await this._classifyGoalNeed(goalText, session);
                             body.goal = {
-                                text,
+                                text: goalText,
                                 status: 'open',
                                 resume: null,
                                 pursue: 0,
-                                need: await this._classifyGoalNeed(text, session),
+                                need,
                             };
+                            delete body.skill;
+                            await this._wearSkill({
+                                text: goalText,
+                                need,
+                                session,
+                                mention: params.skillMention,
+                            });
                         }
                         else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
                             agent = g.resume.agent;
@@ -211,6 +248,11 @@ export default {
                         }
                         await this._save(session);
                     }
+
+                    if (text && this._waiters?.size && await this._reviseWait(text, session))
+                        return { ok: true };
+                    if (text)
+                        releaseStaleStops(params.box);
 
                     // прямой вход в субагента — исполняет движок класса
                     if (agent) {
@@ -364,11 +406,16 @@ export default {
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
-        else if (!next.length)
-            choice = this.pipe.total ? 'total' : null;
-        else if (next.length === 1)
-            choice = next[0];
-        else {
+        else if (attachmentsAwaitingIntent(this.body) && next.includes('question'))
+            choice = 'question';
+        else
+            choice = await this._skillChoice(using_blocks);
+        if (!choice) {
+            if (!next.length)
+                choice = this.pipe.total ? 'total' : null;
+            else if (next.length === 1)
+                choice = next[0];
+            else {
             const lines = next.map(id => {
                 const n = this.pipe[id];
                 const cap = n?.[mode]?.description || n?.[mode]?.inject
@@ -377,7 +424,8 @@ export default {
             });
             const need = goal?.need || 'side';
             const hasSideEvidence = (params.box?.items || []).some(b =>
-                (b.type === 'work' || b.type === 'create' || b.type === 'write')
+                (b.type === 'work' || b.type === 'create' || b.type === 'write'
+                    || b.type === 'image' || b.type === 'generate')
                 && b.content && !b.error);
             let menu = [
                 'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
@@ -386,6 +434,8 @@ export default {
                 'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
                 'Один агентный ход, если его достаточно — не planning «на всякий случай».',
                 '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
+                '«нарисуй / изображение / картинка» — агент image ($ai.generateImage), не chat-модель задачи и не web.',
+                '«запомни / навык / рецепт» — агент freeze (лента → ai/skills/{id}.js), не work.write и не report. @freeze. Не класть freeze в pipe навыка.',
                 '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
                 hasSideEvidence
                     ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
@@ -404,21 +454,27 @@ export default {
             let response = await this._streamChat({ messages, silent: true, session });
             if (this._stopped)
                 return { loop: false, block: params.block };
-            choice = menuPick(response.content, next)
-                || (next.includes('thinking') ? 'thinking' : next[0]);
+                choice = menuPick(response.content, next)
+                    || (next.includes('thinking') ? 'thinking' : next[0]);
+            }
         }
 
         if (!choice || this._stopped)
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
+        if (choice === 'question' && attachmentsAwaitingIntent(this.body))
+            params.block.content = 'Вложение прочитано. Что с ним делать?';
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
         // выбранный агент исполняет движок класса (live-контракт), не цикл таска
         if (pushed && this.pipe[choice]?.agent) {
+            if (hasBody(params.block) && params.block.stop) {
+                await this._noteGoalWait(params.block, params.box, session);
+                return { loop: false, waiting: true, block: params.block };
+            }
             await this._runAgent(params, session);
             await this._captionDoc(params, session);
-            await this._save(session);
             const b = params.block;
             if (this._stopped)
                 return { loop: false, block: b };
@@ -426,6 +482,8 @@ export default {
                 await this._noteGoalWait(b, params.box, session);
                 return { loop: false, waiting: true, block: b };
             }
+            await this._advanceSkillIf(choice);
+            await this._save(session);
             // субагент действия отработал — слот continue больше не нужен
             if (choice !== 'question' && choice !== 'form')
                 clearGoalContinue(this.body.goal);
@@ -480,16 +538,19 @@ export default {
     },
 
     /**
-     * goal.need=facts: успешный сбор фактов или реплика — закрыть цель (без pursue).
+     * Закрыть цель: facts — answer/report; side — готовый html (артефакт в ленте).
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
         const g = this.body?.goal;
-        if (!g || g.status === 'done' || goalNeed(g) !== 'facts')
+        if (!g || g.status === 'done')
             return false;
         if (!block || !hasBody(block) || block.error)
             return false;
-        if (!FACTS_EVIDENCE.has(block.type))
+        const need = goalNeed(g);
+        if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
+            return false;
+        if (need === 'side' && block.type !== 'html')
             return false;
         g.status = 'done';
         g.resume = null;
@@ -589,8 +650,12 @@ export default {
         const box_pipe = this.pipe[params.box?.type];
         const prompt = next_pipe?.prompt || box_pipe?.prompt;
         if (!prompt) {
-            params.block.error = true;
-            params.block.content = '$task: нет pipe/prompt для «' + params.block.type + '»';
+            // total на корне задачи — сводка этапа, не стрим; ошибку в task.content не писать
+            const items = params.box?.items;
+            const i = items ? items.indexOf(params.block) : -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            dropUsedType(params.box, params.block.type);
             return;
         }
         let messages;
@@ -638,6 +703,8 @@ export default {
         if (this._stopped || !block) return false;
         if (!hasBody(block))
             return !!block.box;
+        if (block.error && this._pipe?.[block.type]?.stopOnError)
+            return false;
         return !block.stop;
     },
     async _init(params = {}) {
@@ -665,9 +732,13 @@ export default {
         const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
         let messages;
         const goalBlock = formatGoalBlock(body.goal);
+        const skillDef = body.skill?.id
+            ? (await this._listSkills()).find(s => s.id === body.skill.id)
+            : null;
+        const skillBlock = formatSkillBlock(body.skill, skillDef);
         if (handoff) {
             // база system от заказчика (уже с расположением); исполнитель дополнит локально
-            const base = [String(body.system || '').trim(), goalBlock].filter(Boolean).join('\n\n');
+            const base = [String(body.system || '').trim(), goalBlock, skillBlock].filter(Boolean).join('\n\n');
             messages = base ? [{ role: 'system', content: base }] : [];
         }
         else {
@@ -678,6 +749,7 @@ export default {
             messages = [{ role: 'system', content: [
                 ...layers.map(l => l.system).filter(Boolean),
                 goalBlock,
+                skillBlock,
                 timeNow(body.tz),
                 topicsMap(pipe, focus, mode),
                 leafSystem,
@@ -890,6 +962,132 @@ export default {
             return null;
         }
     },
+    async _skillsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('skills') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/skills');
+        }
+        catch {
+            return null;
+        }
+    },
+    async _listSkills() {
+        if (this._skills)
+            return this._skills;
+        const list = [];
+        try {
+            const dir = await this._skillsDir();
+            if (!dir)
+                return this._skills = list;
+            const kids = (await dir.inherit_children) || (await dir.children) || [];
+            const byId = new Map();
+            for (const f of kids) {
+                if (f?.id?.endsWith?.('.js'))
+                    byId.set(f.id, f);
+            }
+            for (const [fileId, file] of byId) {
+                const id = fileId.replace(/\.js$/, '');
+                const mod = await this._importPipeFile(file);
+                const def = mod.default;
+                if (def && typeof def === 'object')
+                    list.push({ ...def, id: def.id || id });
+            }
+        }
+        catch { /* нет каталога */ }
+        return this._skills = list;
+    },
+    async _wearSkill({ text, need, session, mention } = {}) {
+        const skills = await this._listSkills();
+        if (!skills.length)
+            return;
+        let skill;
+        if (mention)
+            skill = skills.find(s => s.id === mention);
+        else {
+            const fit = skills.filter(s => !s.when?.need || s.when.need === need);
+            const hits = fit.filter(s => phraseHits(text, s.when?.phrases));
+            if (hits.length === 1)
+                skill = hits[0];
+            else if (hits.length > 1)
+                skill = await this._pickSkillMenu(hits, session);
+        }
+        if (!skill)
+            return;
+        if (!await pointsExist(skill.points))
+            return;
+        this.body.skill = {
+            id: skill.id,
+            cursor: 0,
+            slots: { ...(skill.defaults || {}) },
+        };
+    },
+    async _pickSkillMenu(hits, session) {
+        const ids = hits.map(s => s.id);
+        const lines = [
+            'NONE - обычная лента;',
+            ...hits.map(s => s.id.toUpperCase() + ' - ' + (s.label || s.id) + ';'),
+        ];
+        const response = await this._streamChat({
+            silent: true,
+            session,
+            messages: [{
+                role: 'user',
+                content: [
+                    'Выбери навык для этой цели или NONE.',
+                    'Ответь одним словом строго из списка, без знаков и пояснений.',
+                    '',
+                    '[menu]',
+                    ...lines,
+                ].join('\n'),
+            }],
+        });
+        if (this._stopped)
+            return;
+        const pick = skillMenuPick(response.content, ids);
+        if (!pick || pick === 'none')
+            return;
+        return hits.find(s => s.id === pick);
+    },
+    async _skillStep() {
+        const bind = this.body?.skill;
+        if (!bind?.id)
+            return null;
+        const skill = (await this._listSkills()).find(s => s.id === bind.id);
+        const step = skill?.pipe?.[bind.cursor];
+        if (!step) {
+            delete this.body.skill;
+            return null;
+        }
+        return { skill, step, bind };
+    },
+    async _skillChoice(using_blocks) {
+        for (;;) {
+            const worn = await this._skillStep();
+            if (!worn)
+                return;
+            const type = worn.step.type;
+            if (!this.pipe[type] || (using_blocks || []).includes(type)) {
+                this.body.skill.cursor++;
+                continue;
+            }
+            return type;
+        }
+    },
+    async _advanceSkillIf(type) {
+        const worn = await this._skillStep();
+        if (worn?.step?.type === type)
+            this.body.skill.cursor++;
+        await this._skillStep();
+    },
     get body() {
         return new AsyncPromise(async () => {
             await this.pipe;
@@ -1046,6 +1244,31 @@ function sameBlock(a, b) {
     return a.type === b.type && a.label === b.label && a.content === b.content;
 }
 
+function releaseStaleStops(box) {
+    if (!box?.items)
+        return;
+    for (const b of box.items) {
+        if (!b.stop)
+            continue;
+        delete b.stop;
+        b.state = 'уточнено';
+        dropUsedType(box, b.type);
+    }
+}
+
+function findWaitingBlock(root, waiters) {
+    if (!root || !waiters?.size)
+        return null;
+    for (const b of root.items || []) {
+        if (waiters.has(b.time))
+            return b;
+        const inner = findWaitingBlock(b, waiters);
+        if (inner)
+            return inner;
+    }
+    return null;
+}
+
 function parentOfBlock(root, block) {
     if (!root || !block) return null;
     for (const b of (root.items || [])) {
@@ -1094,6 +1317,18 @@ function topicsMap(pipe, focus, mode) {
     if (agents.length)
         parts.push('[доступные агенты]\n' + topics(pipe, agents, mode));
     return parts.join('\n\n');
+}
+
+/** Надетый навык: точки и слоты в system. */
+function formatSkillBlock(bind, skill) {
+    if (!bind?.id || !skill)
+        return '';
+    const lines = ['[skill] ' + skill.id];
+    for (const [k, v] of Object.entries(skill.points || {}))
+        lines.push('point.' + k + ': ' + v);
+    if (bind.slots && Object.keys(bind.slots).length)
+        lines.push('slots:\n' + JSON.stringify(bind.slots, null, 2));
+    return lines.join('\n');
 }
 
 /** Сессионная цель для system/меню: факт + норма достижения. */
@@ -1181,6 +1416,8 @@ function agentBrief(body, block) {
 
 function liftBag(ns, bag, flag) {
     for (const [tid, raw] of Object.entries(bag || {})) {
+        if (ns[tid])
+            continue; // ход оркестратора (file вложений) выше тёзки tool агента
         const t = { ...raw, ...flag };
         if (t.description && !t.inject)
             t.inject = t.description;
@@ -1282,6 +1519,50 @@ function agentResult(agent, block, extra = {}) {
 }
 
 /** Слово меню: точное / первое слово / id из списка внутри текста. */
+function phraseHits(text, phrases) {
+    if (!phrases?.length)
+        return false;
+    const t = String(text || '').toLowerCase();
+    return phrases.some(p => {
+        const phrase = String(p || '').toLowerCase().trim();
+        if (!phrase)
+            return false;
+        if (t.includes(phrase))
+            return true;
+        const words = phrase.split(/\s+/).filter(w => w.length > 2);
+        return words.length > 0 && words.every(w => t.includes(w));
+    });
+}
+
+async function pointsExist(points) {
+    for (const path of Object.values(points || {})) {
+        if (!path)
+            continue;
+        try {
+            if (!await WORK.get_item(path))
+                return false;
+        }
+        catch {
+            return false;
+        }
+    }
+    return true;
+}
+
+function skillMenuPick(text, ids) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t)
+        return;
+    if (t === 'none')
+        return 'none';
+    if (ids.includes(t))
+        return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_-]+/g, '');
+    if (first === 'none' || ids.includes(first))
+        return first;
+    return ids.find(id => new RegExp('\\b' + id.replace(/-/g, '\\-') + '\\b', 'i').test(t));
+}
+
 function menuPick(text, next) {
     const t = String(text || '').trim().toLowerCase();
     if (!t || !next?.length) return;
@@ -1299,6 +1580,14 @@ function stageOpen(block, node) {
 
 function hasBody(b) {
     return !!String(b?.content ?? '').trim();
+}
+
+/** Вложения разобраны, текста задачи нет — спросить, что делать, не explore/work. */
+function attachmentsAwaitingIntent(body) {
+    if (String(body?.goal?.text || '').trim())
+        return false;
+    const inc = (body?.items || []).filter(b => b.type === 'includes');
+    return inc.length > 0 && inc.every(b => hasBody(b));
 }
 
 function dropUsedType(box, type) {

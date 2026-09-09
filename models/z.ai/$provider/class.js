@@ -1,5 +1,5 @@
 /**
- * z.ai — провайдер моделей z.ai.
+ * z.ai — провайдер ($provider) моделей z.ai.
  */
 export default {
     icon: 'carbon:cloud-upload',

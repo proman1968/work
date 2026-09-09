@@ -16,10 +16,16 @@ function escapeAttr(s) {
 }
 
 /** ссылка в шапке: ~html (нативный <a> :href в ODA давал пустой узел) */
-function titleLinkHtml(href, text, blank) {
+function titleLinkHtml(href, text, blank, tip) {
     const blankAttrs = blank ? ' target="_blank" rel="noopener noreferrer"' : '';
-    return '<a href="' + escapeAttr(href) + '" title="' + escapeAttr(text) + '"' + blankAttrs
+    return '<a href="' + escapeAttr(href) + '" title="' + escapeAttr(tip || text) + '"' + blankAttrs
         + ' onclick="event.stopPropagation()">' + escapeHtml(text) + '</a>';
+}
+
+function pathBasename(p) {
+    const s = String(p || '').replace(/\/$/, '');
+    const i = s.lastIndexOf('/');
+    return i >= 0 ? s.slice(i + 1) : s;
 }
 
 ODA({ is: 'microchat-ribbon',
@@ -164,6 +170,23 @@ ODA({ is: 'microchat-view',
                 @apply --info-invert;
                 min-width: 0;
             }
+            :host([only-doc]) {
+                @apply --content;
+                overflow: auto;
+            }
+            :host([only-doc]:has(microchat-html)) {
+                overflow: hidden;
+                position: relative;
+            }
+            :host([only-doc]:has(microchat-html)) .untitled,
+            :host([only-doc]:has(microchat-html)) .untitled > .body {
+                overflow: hidden;
+                position: relative;
+            }
+            :host([only-doc]) > .untitled > .body {
+                margin: 0;
+                border-radius: 0;
+            }
             :host([host-sticky]) {
                 position: sticky;
                 top: var(--chat-sticky-top, 0px);
@@ -210,6 +233,7 @@ ODA({ is: 'microchat-view',
                 word-break: break-word;
                 max-width: 100%;
                 min-width: 0;
+                margin-bottom: 8px;
             }
             .body oda-markdown-viewer {
                 max-width: 100%;
@@ -244,14 +268,14 @@ ODA({ is: 'microchat-view',
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>
+                <div ~is="extendTag" ~if="extendTag" :data :fill="onlyDoc"></div>
             </div>
         </details>
-        <div ~if="!showTitle" vertical class="untitled">
+        <div ~if="!showTitle" vertical class="untitled" :flex="onlyDoc">
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="false" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>
+                <div ~is="extendTag" ~if="extendTag" :data :fill="onlyDoc"></div>
             </div>
         </div>
     `,
@@ -290,6 +314,8 @@ ODA({ is: 'microchat-view',
         return raw;
     },
     get blockTitle() {
+        if (this.data?.type === 'file')
+            return 'Файл';
         return this.label || String(this.data?.type || '').trim();
     },
     get blockState() {
@@ -298,8 +324,10 @@ ODA({ is: 'microchat-view',
     /** path → form; иначе http(s) url → _blank */
     get linkHtml() {
         const p = String(this.data?.path || '').trim();
-        if (p.startsWith('/'))
-            return titleLinkHtml(p.replace(/\/$/, '') + '/~/handlers/pages/form/', p, false);
+        if (p.startsWith('/')) {
+            const text = this.label || pathBasename(p);
+            return titleLinkHtml(p.replace(/\/$/, '') + '/~/handlers/pages/form/', text, false, p);
+        }
         const u = String(this.data?.url || '').trim();
         if (/^https?:\/\//i.test(u))
             return titleLinkHtml(u, u, true);
@@ -505,9 +533,34 @@ ODA({ is: 'microchat-view-prompt',
 
 const HEIGHT_PING = `<script>
 (function(){
+  var last = 0, lock = false;
+  function contentH(){
+    var html = document.documentElement, body = document.body;
+    var hs = html.style.height, hmin = html.style.minHeight;
+    var bs = body && body.style.height, bmin = body && body.style.minHeight;
+    html.style.height = 'auto';
+    html.style.minHeight = '0';
+    if (body) { body.style.height = 'auto'; body.style.minHeight = '0'; }
+    var h = Math.max(html.scrollHeight, body && body.scrollHeight || 0);
+    var kids = body ? body.children : [];
+    for (var i = 0; i < kids.length; i++) {
+      var r = kids[i].getBoundingClientRect();
+      h = Math.max(h, Math.ceil(r.bottom + (window.scrollY || 0)));
+    }
+    html.style.height = hs;
+    html.style.minHeight = hmin;
+    if (body) { body.style.height = bs; body.style.minHeight = bmin; }
+    return h;
+  }
   function send(){
-    var h = Math.max(document.documentElement.scrollHeight, document.body && document.body.scrollHeight || 0);
-    parent.postMessage({type:'microchat-html-h', height:h}, '*');
+    if (lock) return;
+    lock = true;
+    try {
+      var h = contentH();
+      if (h <= 0 || Math.abs(h - last) < 2) return;
+      last = h;
+      parent.postMessage({type:'microchat-html-h', height:h}, '*');
+    } finally { lock = false; }
   }
   addEventListener('load', send);
   if (document.readyState === 'complete') send();
@@ -546,34 +599,53 @@ ODA({ is: 'microchat-html',
                 min-width: 0;
                 box-sizing: border-box;
             }
+            :host([fill]) {
+                position: absolute;
+                inset: 0;
+                overflow: hidden;
+            }
             iframe {
                 width: 100%;
                 border: none;
                 display: block;
                 background: var(--content-background);
             }
+            :host([fill]) iframe {
+                position: absolute;
+                inset: 0;
+            }
         </style>
         <iframe sandbox="allow-scripts" :srcdoc="srcdoc" ~style="frameStyle"></iframe>
     `,
     data: null,
+    fill: {
+        $def: false,
+        $attr: true,
+    },
     frameH: 0,
     get html() { return pageHtml(this.data) || ''; },
     get srcdoc() {
         const raw = this.html;
         if (!raw) return '';
+        if (this.fill) return raw;
         if (raw.includes('microchat-html-h')) return raw;
         return raw + HEIGHT_PING;
     },
     get frameStyle() {
-        return this.frameH ? { height: this.frameH + 'px' } : {};
+        if (this.fill)
+            return {};
+        if (this.frameH)
+            return { height: this.frameH + 'px' };
+        return { minHeight: '50vh' };
     },
     attached() {
         this._onHtmlH = e => {
-            if (e.data?.type !== 'microchat-html-h') return;
+            if (this.fill || e.data?.type !== 'microchat-html-h') return;
             const iframe = this.$('iframe');
             if (!iframe || e.source !== iframe.contentWindow) return;
             const h = Number(e.data.height);
-            if (h > 0) this.frameH = h;
+            if (!(h > 0) || Math.abs(h - this.frameH) < 2) return;
+            this.frameH = h;
         };
         window.addEventListener('message', this._onHtmlH);
     },

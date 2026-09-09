@@ -31,7 +31,7 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
         <div class="print-flow" vertical flex style="overflow: hidden;"  ~style="styleZoom">
             <slot name="top" class="pe-no-print vertical no-flex"></slot>
             <div class="print-flow" horizontal flex style="overflow: hidden;">
-                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left"  :buttons="left_buttons">
+                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left"  :buttons="left_buttons" @focused-index-changed="_onFocusedIndexChanged">
                     <slot name="left-title" class="pe-no-print" slot="title"></slot>
                     <slot name="left-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
@@ -40,7 +40,7 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
                     <slot name="main" class="print-flow vertical flex" style="overflow: hidden; z-index: 0"></slot>
 
                 </div>
-                <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :buttons="right_buttons">
+                <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :buttons="right_buttons" @focused-index-changed="_onFocusedIndexChanged">
                     <slot name="right-title" class="pe-no-print" slot="title"></slot>
                     <slot name="right-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
@@ -112,6 +112,9 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
         resize() {
             this.mobile = undefined;
         }
+    },
+    _onFocusedIndexChanged(e) {
+
     }
 });
 

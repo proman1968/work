@@ -111,7 +111,6 @@ export const file = {
             let fileItem = files[length];
             fileItem = await WORK.get_item(fileItem);
             await fileItem.init;
-            block.title = `file ${length + 1}: ['${fileItem.label}'](<${fileItem.path}>)\n\n`;
             const chain = await fileItem.type_chain;
             const image = chain.includes('$image') || String(fileItem.contentType).startsWith('image/');
             if (image) {
@@ -128,11 +127,11 @@ export const file = {
             block.icon = fileItem.icon;
             block.label = fileItem.label;
             block.path = fileItem.path;
-            block.state = 'прочитан';
+            block.state = 'прочитано';
         } catch (e) {
             block.error = true;
             block.state = 'ошибка';
-            block.content = block.title + '\n\n' + e.message + '\n\n';
+            block.content = (block.label || 'файл') + '\n\n' + e.message + '\n\n';
         }
         return true;
     },

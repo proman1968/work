@@ -33,7 +33,7 @@
             console.log(e.message)
         }
 
-        if (item_path === '/' && !WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
+        if (!(location.hash?.length > 2) && item_path === '/' && !WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
             const base = item_path.replace(/\/$/, '');
             location.replace(location.origin + base + '/~/handlers//site/index.html');
         } else {

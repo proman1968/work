@@ -1,4 +1,4 @@
-# Exaone3.5 7.8b
+# Qwen3.8 Flash Next 125b MLX
 
 ## Назначение
 
@@ -6,13 +6,13 @@
 
 ## Устройство
 
-- **path:** `/MODELS/BIS-Ollama/Exaone3.5 7.8b`
+- **path:** `/MODELS/BIS-Ollama/Qwen3.8 Flash Next 125b MLX`
 - **type:** `$ai`
-- **id:** `Exaone3.5 7.8b`
+- **id:** `Qwen3.8 Flash Next 125b MLX`
 
-- **model:** `exaone3.5:7.8b` (тег API / remote)
-- **icon:** `carbon:ai-brain`
-- **maxTokens:** `32768`
+- **model:** `qwen3.8-flash-next:125b-mlx` (тег API / remote)
+- **icon:** `ai:qwen`
+- **maxTokens:** `131072`
 - **capabilities:** chat, stream, functions
 
 Источник истины полей — `class.js` в meta этой точки (readme не дублирует реализацию, только контракт).

@@ -1,6 +1,19 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [17:25] Агент `freeze`: удачная лента → `ai/skills/{id}.js` (draft/confirm/write). Меню «запомни». Не дамп task, не overwrite `register-accounts` без флага. Причина: зафиксировать рецепт после прогона, не руками.
+- [17:15] `image.stopOnError`: 404 generate не уходит в html. Причина: 1788962655786.
+- [16:57] Агент `image`: `$ai.generateImage` (capabilities `image`) → файл в work. Мозг задачи — только chat (пикер/hydrate). Причина: 1788960700166 — z-image-turbo в streamChat, 400 does not support chat.
+- [15:42] create `$ai`: тег с `:` `/` больше не отказ — имя папки `safeNodeName`, тег в `model`. Закон на `$class.create` / `save_file`. Причина: 1788957171695 — `x/z-image-turbo:bf16` как id.
+- [15:14] Шум навыка: `skillToolNext` — не повторять ok tool, после create → total; work `expand` (targets check); в боксе-агенте не сбрасывать `using_blocks` на промпт. Причина: 1788954844440 — read несуществующего 01, второй create, check без targets.
+- [14:30] `$task` грузит `ai/skills/`: выбор на новой цели (`@id` / `when`+phrases), `body.skill`, ходы `pipe` вместо меню; движок — `skillStep.system`/`tools`. Причина: прогон рецепта, не спонтанная лента.
+- [14:07] `ai/skills/`: контракт навыка (`when` / `points` / `slots` / `defaults` / `pipe`) и пример `register-accounts` (точки `/REGISTER`). Discover, выбор и replay не подключены. Причина: зафиксировать удачный пайп счетов как рецепт, не дамп task.
+- [23:30] Провайдеры MODELS: meta `$provider` (тип в `$ai/$folder/$class/$provider`, list_remote). Модели остаются `$ai`. tilde: cross-type `parent/$folder/$class/<type>` (как register→account). explore remote только при `type===$provider`; pathFromMap предпочитает `$provider`/leaf. Причина: слой провайдер≠модель без pickProviderPath.
+- [23:12] explore/check `loadItemDevice`: `$class.import()` (tilde), не один meta_file; канал `meta/$folder/$class/<type>` для baseUrl. remote/ask: путь через pathFromMap(brief), без дефолта ls.path каталога; remote без baseUrl — отказ + дети. Без pickProviderPath. Причина: 1788897630079 — remote/ask на /MODELS, тонкий class провайдера без tilde.
+- [22:58] `buildSystemPrompt`: + `storage_folder/readme.md` места (`$context`). Peer-ask / standalone получают контракт класса в system. Explore-tool readme — улика в ленте. Причина: ask без закона домена игнорировал ходы/запреты.
+- [22:45] Readme `/MODELS` и `/MODELS/BIS-Ollama` сжаты до ходов/запретов (улика в ленте, не system). Причина: длинный текст не удерживал remote на пути провайдера.
+- [22:30] explore ls ветки: `info({ deep: 2 })` вместо `-1` (для `/MODELS` — провайдеры + модели). Причина: два слоя канона без безлимитного обхода.
+- [22:26] explore: ls ветки снова `info({ deep: -1 })` (корень `/` — компас). Readme `/MODELS` и `/MODELS/BIS-Ollama` — два слоя (провайдеры → модели); remote на провайдере. Причина: 1788894190976 — ls/remote на `/MODELS`, ask без дерева моделей.
 - [18:10] explore: без ROOT_HINTS и без прыжка в `/MODELS`/`/REGISTER`. Осмотр по слоям (карта `/` → путь только с карты/ls → один уровень детей + readme). ls не deep=-1. Причина: корневые классы — прикладное наполнение, не канон агента.
 - [18:05] explore: ROOT_HINTS журнал/счета/касса → `/REGISTER`; pathFromMap по label/типу карты; после map — seed readme+ls целевой ветки (не init=false). Причина: 1788879281146 — read/ls в using без листьев, path не резолвился.
 - [17:55] readme ≠ инвентарь: журнал без «фактов» 10/50 на диске; explore — readme+ls для «добавь», enrichTotal без ложного плана tools; work/оркестратор — не «уже есть» без ls/create. Причина: 1788878813069 — цель «добавь кассу» закрыта чтением readme без create.
@@ -49,6 +62,7 @@
 - Parallel fan-out `ask` по нескольким классам (тот же Object.create `$context`).
 
 ## Ключевые решения
+- Решение: ls ветки explore — `info({ deep: 2 })`; `/MODELS` readme — провайдеры vs модели; remote на провайдере. Причина: два слоя без unlimited deep=-1.
 - Решение: check — постусловие операции (путь, class.js читается, readme/content), не сверка предметных полей device. Expect — только из своей секции evidence. Причина: 1788858416648 — model одного create прилип к другому → ложный gap.
 - Решение: продолжение цикла tool — только по факту прогресса в его же результате (новый класс/файл), не по внешней оценке «ещё нужно». Операнды — пачкой за один fill. Причина: условие цикла у кода + операнд у LLM = незавершаемость.
 - Решение: `init===false` сжигает тип в боксе (не снимает с using). Операнды tools детерминированы из ленты — между двумя pick улик не прибавляется, повтор бессмыслен; сужающееся меню гарантирует завершение. Причина: 1788856240964 — зависание после activation.

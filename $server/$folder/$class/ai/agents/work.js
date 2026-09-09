@@ -137,7 +137,7 @@ const writeTool = {
     system: [
         '# Режим: запись файла',
         'Пиши только путь и содержимое из контекста ленты (сообщения пользователя, уже прочитанные файлы).',
-        'Новый класс WORK (ребёнок провайдера $ai и т.п.) — tool create, не write и не save_file в несуществующий $ai/.',
+        'Новый класс WORK (ребёнок $provider и т.п.) — tool create, не write в несуществующий meta.',
         'После create или правки class.js / устройства класса — обнови readme.md в storage_folder точки (у класса = meta: назначение, устройство, контракт = текущий class.js).',
         'Не выдумывай путь и не выдумывай тело файла. Не обращайся к пользователю.',
     ].join('\n'),
@@ -212,8 +212,9 @@ const createTool = {
     description: 'дочерние классы у родителя ($class.create): все нужные за один ход; секция = родитель, тип, id, class.js',
     system: [
         '# Режим: create классов',
-        'Все классы, которые нужно создать, — в одном ответе, секциями. Секция: путь родителя; тип ($ai / $class / …); id узла; опционально label; class.js в fence.',
-        'id — имя узла WORK без «:» и без пути (тег API — поле model внутри class.js).',
+        'Все классы, которые нужно создать, — в одном ответе, секциями. Секция: путь родителя; тип ($provider / $ai / $class / …); id узла; опционально label; class.js в fence.',
+        'Провайдер под /MODELS — type $provider; модель под провайдером — type $ai.',
+        'id — имя папки на диске; «:» и «/» в теге API нормализуются, тег — поле model в class.js.',
         'Один model — один класс у провайдера; уже существующие классы не перечисляй.',
         'model — только из фактов ленты: список remote провайдера, ls, реплика человека. Тег, которого нет в ленте, не создавай — такой класс отклоняется.',
         'type — из контракта родителя/readme (счета журнала — $account, не $register и не $class). Одна meta на узел = type.',
@@ -319,11 +320,18 @@ async function createOne(b, spec, params) {
         b.content = 'create: нужны путь родителя, тип ($…) и id класса';
         return { created: false };
     }
-    if (spec.id.includes(':') || spec.id.includes('/')) {
+    const rawId = spec.id;
+    const safeId = typeof WORK.constructor?.safeNodeName === 'function'
+        ? WORK.constructor.safeNodeName(rawId)
+        : rawId;
+    if (!safeId) {
         b.error = true;
-        b.content = 'create: id без «:» и «/» (тег API — в class.js как model), сейчас: ' + spec.id;
+        b.content = 'create: пустое имя узла после нормализации';
         return { created: false };
     }
+    spec = { ...spec, id: safeId };
+    if (spec.type === '$ai' && rawId !== safeId && !modelFromPost(spec.post))
+        spec.post = ensureModelInPost(spec.post, rawId);
     if (!spec.post) {
         b.error = true;
         b.content = 'create: нужен class.js (fence)';
@@ -393,19 +401,46 @@ async function createOne(b, spec, params) {
     }
 }
 
+const TOOL_CALL_HEAD = /^\s*\[(read|ls|search|write|create|meta|ask)\b/i;
+
+/** content activation — план для человека, не псевдовызов tool. */
+function activationPlanGap(text) {
+    const s = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!s)
+        return 'activation: нужен план create/write для человека, не пусто';
+    const head = s.split('\n').find(Boolean) || '';
+    if (TOOL_CALL_HEAD.test(head))
+        return 'activation: нужен план create/write, не вызов tool. Сначала read, если не хватает факта.';
+    return '';
+}
+
 const activationTool = {
     label: 'Требуется режим исполнения',
     icon: 'icons:check-box-outline-blank',
     description: 'нужен write файлов или create классов; html в ленте и обзор — без этого',
     prompt: `После активации появится право менять область: write файлов и create дочерних классов.
-Обзор, html в ленте и чтение доступны и без активации.
+Обзор, html в ленте и чтение доступны и без активации (tool read — до этой кнопки).
 [instruction]
-Кратко: что изменишь (пути файлов и/или какие классы создашь; для классов — type, id, label, icon и readme.md). Не вставляй выдуманный ls/карту. Ничего не пиши и не создавай, пока пользователь не подтвердит.
+2–6 строк для человека: какие create/write (путь, type, id, label). Не [read …], не [ls …], не «сначала прочитаю». Readme ещё нет в ленте — сначала tool read, activation не выбирай. Ничего не пиши и не создавай, пока пользователь не подтвердит.
 `,
     stop: 'Перейти к действиям',
     async init(params = {}) {
         tagAgent(params.box, AGENT_TAG, 'нужен режим do');
         return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        const gap = activationPlanGap(b?.content);
+        if (gap) {
+            delete b.stop;
+            b.error = true;
+            b.content = gap;
+            dropUsed(params.box, 'activation');
+            tagAgent(params.box, AGENT_TAG, 'план не принят');
+            return;
+        }
+        const first = String(b.content).replace(/\r\n/g, '\n').trim().split('\n').find(Boolean) || '';
+        tagAgent(params.box, AGENT_TAG, clip(first, 48));
     },
     async approve(params = {}) {
         (await params.task.body).mode = 'do';
@@ -416,6 +451,8 @@ const activationTool = {
 export default {
     label: 'Работаю с файлами',
     icon: 'icons:folder',
+    /** листья create/write/file в контекст (check targets), не только сводка total */
+    expand: true,
     allowReasoning: true,
     description: 'файлы и классы области: read/write/create; search внутри выбранного класса; строение WORK — explore; журнал — logs',
     system: [
@@ -424,7 +461,7 @@ export default {
         'Не читай …/logs/.data.logs/history/… через read/search — это logs ($class.logs / read_log_entry).',
         'search — только внутри выбранного класса (путь + запрос); не semantic_search по корню WORK.',
         'Список моделей у провайдера (API/baseUrl) — explore meta+remote, не search в /SERVICES и не web.',
-        'Подключить модель / новый класс у провайдера — create ($ai + class.js по образцу), не write «файла модели».',
+        'Подключить модель / новый класс у провайдера — create ($ai под $provider + class.js по образцу), не write «файла модели».',
         'Один remote model — один дочерний класс; другой id с тем же model запрещён.',
         'Перед правкой класса — readme из storage_folder в ленте (или explore read). После create/write устройства — обнови тот же readme.md (назначение, устройство, контракт = class.js); в ленту — артефакты class.js/readme (doc).',
         '«Добавь / создай» класс: примеры путей в readme — не доказательство наличия. Нет узла в ls/explore ленты — activation → create. Не закрывай цель отчётом «уже есть» без create/write в ленте.',
@@ -450,7 +487,7 @@ export default {
             'search не по корню WORK — сначала класс (часто через explore).',
             'Класс ещё не читали — сначала readme.md из storage_folder (как explore read), потом class.js / прочие файлы.',
             'Задача «добавь/создай»: если в ленте нет ls родителя с этим id — нужен create (activation → do), не итог «уже есть по readme».',
-            'Activation если нужен write или create класса.',
+            'Activation = план create/write на кнопку человеку; чтение — tool read до неё, не в content activation.',
             'Подключение модели к провайдеру — create, не «новый файл».',
             'Нет операнда для действия — не выдумывай.',
             'Недостающий факт у человека — зафиксируй в итоге; спросит оркестратор (question).',
@@ -860,6 +897,16 @@ function modelFromPost(post) {
     const m = String(post || '').match(/model:\s*['"]([^'"]+)['"]/)
         || String(post || '').match(/model:\s*([^\s,}\n]+)/);
     return m ? m[1].trim() : '';
+}
+
+function ensureModelInPost(post, tag) {
+    const raw = String(post || '');
+    if (!tag || /\bmodel\s*:/.test(raw))
+        return raw;
+    const m = raw.match(/export\s+default\s*\{/);
+    if (m)
+        return raw.slice(0, m.index + m[0].length) + '\n    model: ' + JSON.stringify(tag) + ',' + raw.slice(m.index + m[0].length);
+    return raw;
 }
 
 async function isThinClassReadme(file) {

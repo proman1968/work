@@ -547,30 +547,78 @@ function isWorkClass(item) {
 
 const SECRET_KEY = /^(apiKey|token|accessToken|password|secret|authorization|privateKey)$/i;
 
+/**
+ * Полное устройство $class: import() = tilde-merge class.js (не один meta_file).
+ * Нет baseUrl — дополнить каналом meta/$folder/$class/<type>.
+ */
 async function loadItemDevice(item) {
     if (!item)
         throw new Error('нет item');
-    let data;
-    const metaFile = await item.meta_file;
-    if (metaFile && typeof metaFile.importScript === 'function')
-        data = await metaFile.importScript();
-    else if (typeof item.import === 'function' && isWorkClass(item))
-        data = await item.import();
-    else {
-        await item.init;
-        data = item.DATA;
-        if ((!data || typeof data !== 'object' || !Object.keys(data).length)
-            && typeof item.tilde !== 'undefined') {
+    let data = null;
+    if (isWorkClass(item) && typeof item.import === 'function') {
+        try {
+            data = await item.import();
+        }
+        catch { /* fallback */ }
+    }
+    if (!data || typeof data !== 'object') {
+        try {
+            await item.init;
+            data = item.DATA;
+        }
+        catch { data = null; }
+    }
+    if ((!data || typeof data !== 'object' || !Object.keys(data).length)
+        && typeof item.tilde !== 'undefined') {
+        try {
             const layers = ((await item.tilde) || []).filter(f => f?.id === 'class.js');
             if (layers.length && typeof $server?.mergeFiles === 'function') {
                 const script = await $server.mergeFiles(layers);
                 data = await item.constructor.importScript(script);
             }
         }
+        catch { /* */ }
+    }
+    if (!data || typeof data !== 'object') {
+        try {
+            const metaFile = await item.meta_file;
+            if (metaFile && typeof metaFile.importScript === 'function')
+                data = await metaFile.importScript();
+        }
+        catch { /* */ }
     }
     if (!data || typeof data !== 'object')
         throw new Error('пустые метаданные / class.js');
+    if (isWorkClass(item) && !String(data.baseUrl || '').trim()) {
+        const channel = await loadTypeChannelDevice(item);
+        if (channel && typeof channel === 'object')
+            data = { ...channel, ...data };
+    }
     return sanitizeDevice(data);
+}
+
+async function loadTypeChannelDevice(item) {
+    try {
+        const meta = await Promise.resolve(item.meta_folder);
+        if (!meta || typeof meta.get_item !== 'function')
+            return null;
+        const typeId = item.type || meta.id;
+        if (!typeId)
+            return null;
+        const channelType = typeId === '$provider' ? '$ai' : typeId;
+        const proto = await meta.get_item('$folder/$class/' + channelType);
+        if (!proto)
+            return null;
+        if (typeof proto.import === 'function')
+            return await proto.import();
+        if (typeof proto.get_item === 'function') {
+            const file = await proto.get_item('class.js');
+            if (file && typeof file.importScript === 'function')
+                return await file.importScript();
+        }
+    }
+    catch { /* нет канала */ }
+    return null;
 }
 
 function sanitizeDevice(data, depth = 0) {

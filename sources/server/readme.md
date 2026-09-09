@@ -5,8 +5,9 @@
 ## Файлы
 
 - `index.js` — сборка `CORE` и registry `FS`: `$folder`, `$class`, `$handler`, `$user`, `$file`
-- `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file`, `find_text`, `get_schema`
-- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`
+- `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file` (новое имя — `safeNodeName`), `find_text`, `get_schema`
+- `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`; `create` нормализует id через `safeNodeName` (тег `$ai` → поле `model`)
+- `safe-node-name.js` — имя сегмента пути = имя на диске (без `:` `/` `\`)
 - `file.js` — `$file`: load/read_text/save/edit, history, RAG, триггеры `on_save`
 - `handler.js` — `$handler extends $class`: исполняемый элемент (execute в class.js)
 - `user.js` — `$user`: пользовательская storage-сущность, online-статус
@@ -17,7 +18,7 @@
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `_collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
 - **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
-- **`save_file` → `save_to_history`** — return = history path снимка (карточка file в ai.task показывает его)
+- **`save_file` → `save_to_history`** — return = history path снимка (карточка file в ai.task показывает его). Новое имя файла — `safeNodeName` (существующий путь не переименовывается)
 
 ## Словарь API (канон имён)
 

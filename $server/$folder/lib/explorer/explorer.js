@@ -108,6 +108,9 @@ export default {
         buttons[0].hidden = !top.RTCCaller.current_call
         return buttons;
     },
+    _onFocusedIndexChanged(e) {
+        this.visibleMode = 'main';
+    },
     async _onClose(e) {
         let $item = e.detail.value;
         let iframe = this.$$('iframe').find(f => f.src === $item.open_url);

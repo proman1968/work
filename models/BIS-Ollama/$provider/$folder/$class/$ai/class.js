@@ -1,8 +1,6 @@
 /**
- * BIS-Ollama — прототип для моделей провайдера BIS-Ollama.
- *
- * Наследуется всеми моделями внутри models/BIS-Ollama/.
- * OpenAI-совместимый API Ollama (/v1/chat/completions): protocol 'openai', auth не требуется.
+ * BIS-Ollama — прототип моделей ($ai) провайдера BIS-Ollama.
+ * Канал: protocol/baseUrl наследуются моделями через tilde (cross-type $provider→$ai).
  */
 export default {
     icon: 'ai:ollama',

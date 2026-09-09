@@ -15,7 +15,9 @@
 1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
 2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из меты класса (`$class.meta_folder` → `ai/agents`, канон движка). Тёзки ходов оркестратора выше агентов.
 3. **`body.goal`** — сессионная цель `{ text, status: open|waiting|done, resume, pursue, need }`. `need`: `facts` | `side`. При новой постановке — silent-классификация тем же контрактом, что меню (`_classifyGoalNeed` → `facts`|`side`; сомнение → `side`). Без поля — как `side`. В `context` — блок `[goal]` с нормой по `need`.
-4. **Resume / continue:** стоп `question`/`form` → `waiting` + `resume.agent` (если субагент уже был) или `resume.continue` (вопрос до агента). Следующий user-ход: форс агента либо меню **без `answer`**. `live.wait` (activation) не дублируется.
+3a. **`body.skill`** — надетый рецепт из [`ai/skills/`](/$server/$folder/$class/ai/skills/readme.md/~/handlers/pages/form/) `{ id, cursor, slots }`. На новой цели: `@id` или `when.need`+`phrases` (одно попадание сразу, несколько — меню `none`|`id`). Нет `points` — не надевать. `_promptTurn` берёт `pipe[cursor].type` вместо меню; движок получает `skillStep` (system/prompt/tools). В `context` — блок `[skill]`.
+3b. **Агент `freeze`** (`step: false`): после удачи меню «запомни / навык / рецепт» или `@freeze` → `ai/skills/{id}.js`. Не класть `freeze` в `pipe` навыка. `execute` передаёт `task` (лента + `_skillsDir`).
+4. **Resume / continue:** стоп `question`/`form` → `waiting` + `resume.agent` (если субагент уже был) или `resume.continue` (вопрос до агента). Следующий user-ход: форс агента либо меню **без `answer`**. `live.wait` (activation): кнопка APPROVE **или** обычный промпт — `_reviseWait` снимает wait, текст в движок, `do` не включать (повтор activation с правкой). Нет waiter (обрыв) — снять висящий `stop` и доиграть открытый бокс-агент (`_activeAgentBlock` по фокусу, не только по last). Промпт внутри открытого бокса-агента **не** чистит `using_blocks` (память read/create), только тип стопа.
 5. **Закрытие goal:** `need=facts` — evidence сбора/реплики (`explore`/`web`/`logs`/`answer`/`report`) → `done`. `need=side` — [`check`](/$server/$folder/$class/ai/agents/check.js/~/handlers/pages/form/): targets create/write → exist + (класс: meta читается + readme) / (файл: content) → `goalDone` только при полном соответствии; терминальный `answer` при open → pursue. При `status=done` «Продолжить» (`role:AI`) не показывается и на сервере no-op.
 6. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок и передаёт `live` + `context({handoff})` — `body.system` + `[goal]` + диалог-улики (без topicsMap). Движок дополняет system локально (место, агент). Стоп инструмента (`live.wait`) → `chat.done` (кнопка APPROVE); ответ — `_resolveWait`, исходный prompt продолжает и сам закрывает сессию. Обрыв — `_activeAgentBlock`.
 7. **План → todo → step:** `planning.approve` пишет `box.todo`; `_promptTurn` не стримит в todo — при незакрытых steps сразу пушит `step` (`pipe.todo.next`).
@@ -34,6 +36,8 @@
 
 - ✅ Session-`prompt` на `$task/class.js`; агенты — движок `$class/ai` через `live`
 - ✅ `body.goal` + `need` (facts|side через silent menu); facts → settle без pursue; side → work + `check` (`goalDone`)
+- ✅ `body.skill`: discover `ai/skills/`, выбор на новой цели, replay `pipe`
+- ✅ агент `freeze`: лента → навык (`ai/skills/{id}.js`)
 - ✅ One-shot на `$class/ai`: `/BASE?prompt&agent=&prompt=`
 
 ## 6. Дальнейшие планы

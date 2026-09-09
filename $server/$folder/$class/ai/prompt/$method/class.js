@@ -1,7 +1,7 @@
 ﻿/**
  * $method prompt — движок агентов из пакета ai/agents/* рядом с методом (не meta peer через ~).
- * params: { session, agent, model, mode, effort, messages, prompt, block, box, live }
- * this.$context — класс исполнения (место/system/config домена).
+ * params: { session, agent, model, mode, effort, messages, prompt, block, box, live, task }
+ * this.$context — класс исполнения (место / system.md / readme / config домена).
  * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js ($context или пакет движка).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
  *   Нет live — движок создаёт тихий standalone: события с path класса, без save/wait.
@@ -12,7 +12,7 @@
  * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
  * круг / вложенный агент — снова execute(params), не HTTP.
- * tool/agent.init получают engine: this (для ask peer без ~/ai у цели).
+ * tool/agent.init получают engine: this (для ask peer без ~/ai у цели) и task (владелец ленты, если передан).
  */
 
 export default {
@@ -95,7 +95,11 @@ export default {
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
         const toolIds = Object.keys(tools);
-        const system = agent[mode]?.system || agent.system;
+        let system = agent[mode]?.system || agent.system;
+        if (params.skillStep?.system)
+            system = [system, params.skillStep.system].filter(Boolean).join('\n\n');
+        if (params.skillStep?.prompt)
+            system = [system, params.skillStep.prompt].filter(Boolean).join('\n\n');
         const exec = (target, call, c) => this.exec(target, call, c);
 
         if (!toolIds.length) {
@@ -108,7 +112,7 @@ export default {
                 return;
             }
             if (typeof agent.recalc === 'function')
-                await agent.recalc({ block, live, exec, messages, session });
+                await agent.recalc({ block, live, exec, messages, session, task: params.task });
             if (block.content)
                 messages.push({ role: 'assistant', content: block.content });
             delete block.inited;
@@ -123,6 +127,7 @@ export default {
                 await agent.init({
                     block, box: params.box, messages, session, model, live, exec, agent,
                     engine: this,
+                    task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -138,7 +143,11 @@ export default {
             }
         }
 
-        const next = await this.pick(ctx, nextIds(agent, block, toolIds), tools, mode);
+        const ids = nextIds(agent, block, toolIds);
+        const skillTools = params.skillStep?.tools;
+        const next = skillTools?.length
+            ? skillToolNext(skillTools, ids, block)
+            : await this.pick(ctx, ids, tools, mode);
         if (live?.stopped) {
             delete block.inited;
             return;
@@ -163,6 +172,7 @@ export default {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
                     engine: this,
+                    task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -198,7 +208,7 @@ export default {
                 return;
             }
             if (typeof tool.recalc === 'function')
-                await tool.recalc({ block: child, box: block, messages, session, live, exec });
+                await tool.recalc({ block: child, box: block, messages, session, live, exec, task: params.task });
             if (child.content)
                 messages.push({ role: 'assistant', content: child.content });
             await live.save?.();
@@ -546,8 +556,10 @@ export default {
             }
             catch { /* нет пакета */ }
         }
+        const readme = await loadPlaceReadme(ctx);
         return [
             system,
+            readme,
             placeContext(user_info, class_info),
             location,
             timeNow(tz),
@@ -565,6 +577,27 @@ export default {
         return placeContext(user_info, class_info);
     },
 };
+
+/** Навык: первый unused tool; уже успешный — пропуск; после ok create — итог. */
+function skillToolNext(order, ids, box) {
+    const items = box?.items || [];
+    if (items.some(b => b.type === 'create' && b.done && !b.error))
+        return 'total';
+    const next = (order || []).find(id => ids.includes(id) && !skillToolOk(items, id));
+    return next || 'total';
+}
+
+function skillToolOk(items, type) {
+    return (items || []).some(b => {
+        if (b.type !== type || !b.content || b.error)
+            return false;
+        if (type === 'activation')
+            return b.state === 'принято';
+        if (type === 'create')
+            return !!b.done;
+        return true;
+    });
+}
 
 function nextIds(agent, block, toolIds) {
     const used = block.using_blocks || [];
@@ -586,6 +619,25 @@ function placeContext(user_info, class_info) {
         'Профиль (от чьего имени):\n' + JSON.stringify(user_info, null, 2),
         'Рабочая группа (где задача):\n' + JSON.stringify(class_info, null, 2),
     ].join('\n');
+}
+
+/** Контракт места: storage_folder/readme.md ($context). Для peer-ask — закон домена цели. */
+async function loadPlaceReadme(ctx) {
+    if (!ctx)
+        return '';
+    try {
+        const storage = ctx.storage_folder || ctx;
+        const file = await storage?.get_item?.('readme.md');
+        if (!file)
+            return '';
+        const text = String(await file.load({ encoding: 'utf-8' })).trim();
+        if (!text)
+            return '';
+        return 'Контракт места (readme.md):\n' + text;
+    }
+    catch {
+        return '';
+    }
 }
 
 function timeNow(tz) {

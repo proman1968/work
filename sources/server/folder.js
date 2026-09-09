@@ -6,6 +6,7 @@ import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
+import { safeNodeName } from './safe-node-name.js';
 
 /** Атомарная запись RAG index: temp + rename (не обрезать index.json при краше). */
 async function writeRagIndexAtomic(path, text) {
@@ -23,6 +24,7 @@ async function writeRagIndexAtomic(path, text) {
 
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
+    static safeNodeName = safeNodeName;
     static PATH_STEP = {
         EMPTY: 'empty',
         TILDE: 'tilde',
@@ -873,12 +875,23 @@ export class $folder extends $item{
         }
 
         if (!inherit && this.meta_folder) {
-            // Корень типа: meta верхнего $parent с тем же type.
-            // Тот же walk, что у meta: typeRoot/$folder + type_chain.
+            // Корень типа: meta предка того же type ИЛИ meta/$folder/$class/<type> у предка
+            // другого type (как $register → $account, $provider → $ai).
             let typeRoot = null;
+            const crossDomains = [];
             for (let p = this.$parent; p; p = p.$parent) {
-                if (p instanceof FS.$class && p.type === this.type && p.meta_folder)
+                if (!(p instanceof FS.$class) || !p.meta_folder)
+                    continue;
+                if (p.type === this.type)
                     typeRoot = p.meta_folder;
+                else {
+                    try {
+                        const declared = await p.meta_folder.get_item('$folder/$class/' + this.type);
+                        if (declared)
+                            crossDomains.push(declared);
+                    }
+                    catch { /* нет объявления типа у предка */ }
+                }
             }
             if (typeRoot && typeRoot !== this.meta_folder) {
                 let domain = typeRoot.$folder;
@@ -891,7 +904,8 @@ export class $folder extends $item{
                     }
                 }
             }
-
+            for (const domain of crossDomains)
+                folders.add(domain);
 
             folders.push(...horizontal_folders);
 
@@ -1396,7 +1410,7 @@ export class $folder extends $item{
      * Создать или перезаписать файл в этой папке с записью в историю (→ history → log).
      * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
-     * @param {string} params.filename Имя файла
+     * @param {string} params.filename Имя файла (новое — через safeNodeName; существующее не переименовывается)
      * @param {string} params.folder Имя дополнительной директории
      * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
      * @param {string} [params.message] Текст для log.content
@@ -1416,6 +1430,19 @@ export class $folder extends $item{
             filename = params.folder + '/' + filename;
             // для правильной работы сохранения history и log
             delete params.folder;
+        }
+
+        const leafPath = dir + '/' + params.filename;
+        if (!fs.existsSync(leafPath)) {
+            const safe = safeNodeName(params.filename);
+            if (!safe)
+                throw new Error('save_file: пустое имя файла после нормализации');
+            if (safe !== params.filename) {
+                filename = filename.endsWith(params.filename)
+                    ? filename.slice(0, -params.filename.length) + safe
+                    : safe;
+                params.filename = safe;
+            }
         }
 
         if (!fs.existsSync(dir)) {

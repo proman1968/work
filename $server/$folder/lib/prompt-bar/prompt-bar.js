@@ -22,6 +22,18 @@ function capList(item) {
     return list.length ? list : undefined;
 }
 
+/** Мозг задачи — chat. Нет caps или есть chat; image-only не выбирается. */
+function isChatCaps(caps) {
+    if (caps && typeof caps.then === 'function')
+        return true;
+    const list = Array.isArray(caps)
+        ? caps.map(String)
+        : String(caps || '').split(/[\s,]+/).filter(Boolean);
+    if (!list.length)
+        return true;
+    return list.includes('chat');
+}
+
 ODA({ is: 'work-prompt-bar',
     imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user',
     template: /* html */`
@@ -289,6 +301,10 @@ ODA({ is: 'work-prompt-bar',
         const tree = ODA.createElement('item-tree', {
             $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
             execute(item) {
+                if (item?.type && item.type !== '$ai')
+                    return;
+                if (!isChatCaps(item?.capabilities))
+                    return;
                 this.parentElement.close(item);
             },
         });

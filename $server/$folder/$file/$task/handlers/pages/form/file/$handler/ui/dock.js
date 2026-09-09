@@ -22,6 +22,7 @@ ODA({ is: 'microchat-dock',
                 margin: 2px;
                 padding: 2px;
             }
+            .sheet { overflow: hidden; }
         </style>
         <div class="bar" header no-flex horizontal>
             <oda-button no-flex icon="icons:chevron-left" :disabled="!hasPrev" @tap="step(-1)"></oda-button>
@@ -33,8 +34,8 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
-        <div flex ~if="isHtml" ~is="htmlView" :data="current" only-doc style="overflow-y: auto;"></div>
-        <div flex ~if="current && !isHtml" ~is="mdView" :data="current" only-doc style="overflow-y: auto;"></div>
+        <div flex class="sheet" ~if="isHtml" ~is="htmlView" :data="current" only-doc></div>
+        <div flex class="sheet" ~if="current && !isHtml" ~is="mdView" :data="current" only-doc></div>
     `,
     $item: null,
     htmlView: 'microchat-view-html',

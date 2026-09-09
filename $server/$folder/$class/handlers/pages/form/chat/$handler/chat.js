@@ -1,3 +1,26 @@
+/** Первый лист $ai с chat (или без caps). image-only не мозг задачи. */
+async function firstChatLeaf(node) {
+    if (!node)
+        return null;
+    if (!node.items?.length) {
+        try {
+            const item = node.path ? await WORK.get_item(node.path) : null;
+            const c = item?.capabilities;
+            const list = Array.isArray(c) ? c.map(String) : String(c || '').split(/[\s,]+/).filter(Boolean);
+            if (list.length && !list.includes('chat'))
+                return null;
+        }
+        catch { /* лист без caps — годится */ }
+        return node;
+    }
+    for (const child of node.items) {
+        const found = await firstChatLeaf(child);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
 export default{
     icon: 'icons:question-answer',
     imports: '/oda//toggle.js, ~/lib//tree.js, ~/lib//chat-item',
@@ -98,8 +121,8 @@ ODA({is: 'form-chat',
                 const aiRoot = children?.find(el => el.type === '$ai');
                 if (!aiRoot) return;
                 const tree = await aiRoot.info({ deep: -1 });
-                const walk = (n) => (!n ? null : (!n.items?.length ? n : walk(n.items[0])));
-                const path = walk(tree)?.path;
+                const leaf = await firstChatLeaf(tree);
+                const path = leaf?.path;
                 if (path) {
                     this.model = path;
                     try { ODA.LocalStorage.create(this._savePath).setItem('model', path); } catch {}

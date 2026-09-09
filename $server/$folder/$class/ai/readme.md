@@ -10,23 +10,26 @@
 - [`config.js`](config.js) — дефолты ИИ класса (`model`), tilde-наследование, потомки переопределяют
 - [`task.js`](task.js) — оркестратор (`moves` + `tools`) для pipe
 - [`agents/`](agents/) — агенты: декларации (system/prompt/tools/init, опционально строгая `model`); контракт init — `{ block, box, messages, session, agent, live, exec, streamChat, engine }`; `init === false` — «здесь tool нечего делать»: блок снимается, тип остаётся в `using_blocks` бокса (меню только сужается, повторного pick нет); грузит движок из своего пакета ai (не meta peer через ~)
+- [`skills/`](skills/) — рецепты ленты (`id.js`): `when`, `points`, `slots`, `defaults`, `pipe`; `$task` грузит, выбирает на новой цели, надевает `pipe`
 - [`prompt/$method/`](prompt/$method/class.js) — **движок**: system от заказчика сохраняется и дополняется (место / agent.system в fill); без system — `buildSystemPrompt`; стрим, стопы через `live.wait`
 
 ### Роли агентов
 
 | Агент | Работа |
 |--------|--------|
-| [`explore`](agents/explore.js) | строение WORK **по слоям**: карта `/` → выбор узла с карты → ls одного уровня + readme; путь только с карты/ls; meta/remote; итог — `doc` |
-| [`work`](agents/work.js) | файлы/классы: перед правкой — readme; create/write устройства → обновить `storage_folder/readme.md`; create batch + артефакты `file`; search только в классе |
+| [`explore`](agents/explore.js) | строение WORK: карта `/`; ls `deep=2`; readme; meta; **remote у `$provider`**; ask |
+| [`work`](agents/work.js) | файлы/классы: перед правкой — readme; create/write устройства → обновить `storage_folder/readme.md`; create batch + артефакты `file`; search только в классе; **expand** листьев в контекст (check targets) |
 | [`check`](agents/check.js) | постусловие create/write: exist + class.js + **readme в storage** (непустой); write без актуального readme — gap |
 | [`web`](agents/web.js) | внешний интернет |
 | [`logs`](agents/logs.js) | журнал класса: `$class.logs` (даты, bodies+день+ext, entry); не work.read history |
+| [`image`](agents/image.js) | картинка: `$ai.generateImage` (capabilities `image`) → файл в work; не chat задачи; ошибка — стоп (`stopOnError`) |
+| [`freeze`](agents/freeze.js) | после удачи: лента → `ai/skills/{id}.js` (draft → confirm → write); `step: false`; не в `pipe` навыка |
 
 Сложные агенты (`explore`, `work`, `web`, `logs`, `planning`) и ход `thinking` — `allowReasoning: true` (CoT при `effort` бара ≠ off). Простые (`answer`, `question`, …) — без флага.
 
 ## Вызов
 
-`/BASE?prompt&prompt=привет&model=…` → standalone: движок строит system из `system.md ~` и работает тихо (события с path класса), блок в ответе.
+`/BASE?prompt&prompt=привет&model=…` → standalone: `buildSystemPrompt` = `ai/system.md` (или пакет) + **`storage_folder/readme.md` места** + place/time; тихо (события с path класса), блок в ответе.
 
 `/BASE?prompt&agent=web&prompt=погода` → агент; стоп-блок возвращается как есть (без `live.wait`). Модель: `agent.model` (строгая привязка) → `model` из вызова → `config.js` класса; нет нигде — ошибка. Класс исполнения — `this.$context` метода.
 
@@ -34,7 +37,7 @@
 
 ### Peer-класс (explore `ask`)
 
-Агент [`explore`](agents/explore.js) tool **`ask`**: путь `$class` + вопрос → `Object.create(engine)` с `eng.$context = target` (движок вызывающего; peer без `~/ai`). Агенты — пакет движка; config/system — meta target, иначе пакет. `live` без `wait`. Последовательно; parallel fan-out — следующий шаг.
+Агент [`explore`](agents/explore.js) tool **`ask`**: путь `$class` + вопрос → `Object.create(engine)` с `eng.$context = target` (движок вызывающего; peer без `~/ai`). Агенты — пакет движка; config/`system.md`/readme — meta target, иначе пакет. `live` без `wait`. Последовательно; parallel fan-out — следующий шаг.
 
 ### Журнал (logs)
 
