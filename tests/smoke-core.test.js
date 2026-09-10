@@ -265,6 +265,13 @@ describe('лог-фасад: logs / read_log_entry / append_log_includes', () =>
         assert.ok(found, 'запись найдена по path');
         assert.equal(found.path, target.path);
 
+        if (target.logsFilePath) {
+            const byStub = await WORK.read_log_entry({ path: target.logsFilePath });
+            assert.ok(byStub, 'запись найдена по stub .logs');
+            assert.equal(byStub.path, target.path);
+            assert.equal(byStub.logsFilePath, target.logsFilePath);
+        }
+
         const updated = await WORK.append_log_includes({
             entryPath: target.path,
             includePaths: ['/PLAIN/extra.smoke'],

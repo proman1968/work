@@ -89,13 +89,6 @@ export const file = {
     label: 'Файл',
     icon: 'files:file',
     role: 'user',
-    prompt: [
-        'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
-        'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
-        'Числа, идентификаторы и названия — дословно, без округлений.',
-        'Таблица markdown — не больше 5 колонок, ячейка коротко. Длинный текст — список или секции, не колонка. Широкий исходник не копируй одной простынёй: короткий реестр, детали ниже.',
-        'Выведи обзор/отчёт о содержимом файла в формате markdown.',
-    ].join('\n'),
     async init(params = {}) {
         const { box, block } = params;
         try {
@@ -105,7 +98,7 @@ export const file = {
                 return false;
             delete box.using_blocks;
             box.state = 'файлы: ' + (length + 1) + '/' + files.length;
-            block.state = 'reading';
+            block.state = 'загрузка';
             await params.task._save(params.session);
             let fileItem = files[length];
             fileItem = await WORK.get_item(fileItem);
@@ -120,13 +113,15 @@ export const file = {
                     type: 'image_url',
                     image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
                 };
+                block.content = fileItem.label || 'изображение';
             } else {
-                block.draft = { type: 'text', text: await fileItem.read_text() };
+                const text = await fileItem.read_text();
+                block.content = (fileItem.label ? fileItem.label + '\n\n' : '') + text;
             }
             block.icon = fileItem.icon;
             block.label = fileItem.label;
             block.path = fileItem.path;
-            block.state = 'прочитано';
+            block.state = 'загружено';
         } catch (e) {
             block.error = true;
             block.state = 'ошибка';

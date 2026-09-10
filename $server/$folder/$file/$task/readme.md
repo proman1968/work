@@ -13,7 +13,7 @@
 ## 3. Как это работает
 
 1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
-2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из меты класса (`$class.meta_folder` → `ai/agents`, канон движка). Тёзки ходов оркестратора выше агентов.
+2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из меты класса (`$class.meta_folder` → `ai/agents`, канон движка). Тёзки ходов оркестратора выше агентов. `includes` — ход человека (как prompt): открывает/возобновляет goal, дальше thinking/answer, без вопроса «что делать». `includes.expand` — листья в контекст с бюджетом (`clipContext`). Сырые вложения → сначала `thinking`. `stop: true` у answer/report/question не снимать. Пустой fill — ошибка в ленте, `stop` остаётся.
 3. **`body.goal`** — сессионная цель `{ text, status: open|waiting|done, resume, pursue, need }`. `need`: `facts` | `side`. При новой постановке — silent-классификация тем же контрактом, что меню (`_classifyGoalNeed` → `facts`|`side`; сомнение → `side`). Без поля — как `side`. В `context` — блок `[goal]` с нормой по `need`.
 3a. **`body.skill`** — надетый рецепт из [`ai/skills/`](/$server/$folder/$class/ai/skills/readme.md/~/handlers/pages/form/) `{ id, cursor, slots }`. На новой цели: `@id` или `when.need`+`phrases` (одно попадание сразу, несколько — меню `none`|`id`). Нет `points` — не надевать. `_promptTurn` берёт `pipe[cursor].type` вместо меню; движок получает `skillStep` (system/prompt/tools). В `context` — блок `[skill]`.
 3b. **Агент `freeze`** (`step: false`): после удачи меню «запомни / навык / рецепт» или `@freeze` → `ai/skills/{id}.js`. Не класть `freeze` в `pipe` навыка. `execute` передаёт `task` (лента + `_skillsDir`).

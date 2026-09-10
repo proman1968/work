@@ -41,4 +41,4 @@
 
 ### Журнал (logs)
 
-Агент [`logs`](agents/logs.js): путь `$class` (или place исполнения) → `dates` → `bodies` за день → при необходимости `entry` (`read_log_entry`). Без write.
+Агент [`logs`](agents/logs.js): путь `$class` (или place исполнения) → `dates` → `bodies` за день (peek title/prompt, `file:` артефакт + `entry:` stub) → `entry` (`read_log_entry` по stub или `row.path` + дайджест связанного `.task`). Без write, без work.read history.

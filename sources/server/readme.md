@@ -77,7 +77,7 @@ API элементов — это «система команд» для ИИ-а
 ### Логи ($class, внутренности — `logs.js`)
 
 - `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`
-- `read_log_entry({path})` — одна запись по пути history-файла
+- `read_log_entry({path})` — одна запись по stub `.logs` или связанному `row.path`
 - `append_log_includes({entryPath, includePaths})` — дописать includes записи
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`
 

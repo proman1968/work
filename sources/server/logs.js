@@ -228,23 +228,36 @@ function sameLogPath(rowPath, target, shortTarget) {
         || rowPath.endsWith(target) || target.endsWith(rowPath);
 }
 
-/** Найти JSON-запись лога по path history-файла (ai.task и т.п.). */
+/** Ключ записи: stub `.logs` или связанный `row.path`. */
+export function matchesEntry(entryPath, row, logsFilePath) {
+    if (!entryPath)
+        return false;
+    const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
+    const shortTarget = $item.toShortPath(target);
+    if (logsFilePath) {
+        const stub = logsFilePath.startsWith('/') ? logsFilePath : '/' + logsFilePath;
+        if (sameLogPath(stub, target, shortTarget))
+            return true;
+    }
+    if (!row?.path)
+        return false;
+    const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
+    return sameLogPath(rowPath, target, shortTarget);
+}
+
+/** Найти JSON-запись лога по stub (.logs) или связанному path (task/html/…). */
 export async function findEntry(storage, entryPath) {
     if (!entryPath)
         return null;
-    const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
-    const shortTarget = $item.toShortPath(target);
     const days = await datesList(storage);
     for (const day of days) {
         for (const f of await dayFilesArray(storage, day)) {
             try {
                 const raw = await f.load();
                 const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (!row?.path)
+                if (!matchesEntry(entryPath, row, f.path))
                     continue;
-                const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
-                if (sameLogPath(rowPath, target, shortTarget))
-                    return row;
+                return Object.assign({ logsFilePath: f.path }, row);
             }
             catch { /* skip */ }
         }

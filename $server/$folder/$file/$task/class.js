@@ -210,12 +210,15 @@ export default {
                         delete params.box.using_blocks;
                     this._stopped = false;
 
-                    // durable goal: новая постановка или вход к открытой; waiting+resume → форс / continue
-                    if (text || params.skillMention) {
+                    // durable goal: текст или вложение = ход человека; waiting+resume → форс / continue
+                    if (text || params.includes || params.skillMention) {
                         const body = await this.body;
                         const g = body.goal;
-                        const goalText = text || ('@' + params.skillMention);
-                        if (!g || g.status === 'done') {
+                        const goalText = String(text || '').trim()
+                            || (params.includes && g?.text ? String(g.text).trim() : '')
+                            || attachGoalText(params.includes)
+                            || (params.skillMention ? '@' + params.skillMention : '');
+                        if (goalText && (!g || g.status === 'done')) {
                             const need = await this._classifyGoalNeed(goalText, session);
                             body.goal = {
                                 text: goalText,
@@ -232,17 +235,17 @@ export default {
                                 mention: params.skillMention,
                             });
                         }
-                        else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
+                        else if (g?.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
                             agent = g.resume.agent;
                             params.agent = agent;
                             g.status = 'open';
                             g.resume = null;
                         }
-                        else if (g.status === 'waiting' && g.resume?.continue) {
+                        else if (g?.status === 'waiting' && g.resume?.continue) {
                             // ответ на question до субагента — меню без answer
                             g.status = 'open';
                         }
-                        else if (g.status === 'waiting') {
+                        else if (g?.status === 'waiting') {
                             g.status = 'open';
                             g.resume = null;
                         }
@@ -251,7 +254,7 @@ export default {
 
                     if (text && this._waiters?.size && await this._reviseWait(text, session))
                         return { ok: true };
-                    if (text)
+                    if (text || params.includes)
                         releaseStaleStops(params.box);
 
                     // прямой вход в субагента — исполняет движок класса
@@ -370,6 +373,8 @@ export default {
                     await this._save(session);
                     return { loop: false, block: leaf };
                 }
+                if (!hasBody(leaf))
+                    return { loop: this._canLoop(leaf), block: leaf };
                 await this._noteGoalWait(leaf, params.box, session);
                 return { loop: false, waiting: true, block: leaf };
             }
@@ -406,12 +411,12 @@ export default {
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
-        else if (attachmentsAwaitingIntent(this.body) && next.includes('question'))
-            choice = 'question';
         else
             choice = await this._skillChoice(using_blocks);
         if (!choice) {
-            if (!next.length)
+            if (attachmentsNeedDigest(this.body) && next.includes('thinking'))
+                choice = 'thinking';
+            else if (!next.length)
                 choice = this.pipe.total ? 'total' : null;
             else if (next.length === 1)
                 choice = next[0];
@@ -443,7 +448,7 @@ export default {
                 'report — только сводка в ленту; файл на диске он не создаёт. report не заменяет create и не закрывает side без evidence.',
                 'Состав/инвентарь системы или провайдера — explore (ls, meta, remote), не web «на всякий случай» и не перечень из readme.',
                 need === 'facts'
-                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); факты есть — answer по ним. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
+                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); сводка thinking/report уже есть — answer. Сырые вложения без сводки — thinking, не answer по простыне. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
                     : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
                 'Если разумный default уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
@@ -463,8 +468,6 @@ export default {
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
-        if (choice === 'question' && attachmentsAwaitingIntent(this.body))
-            params.block.content = 'Вложение прочитано. Что с ним делать?';
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
         // выбранный агент исполняет движок класса (live-контракт), не цикл таска
@@ -644,7 +647,7 @@ export default {
             params.block.label = words;
     },
 
-    /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
+    /** Лист без тела: стрим в тот же блок. Пустой стоп — ошибка в ленте, тип снять с using. */
     async _fillLeaf(params = {}, session) {
         const next_pipe = this.pipe[params.block.type];
         const box_pipe = this.pipe[params.box?.type];
@@ -692,8 +695,14 @@ export default {
             text = this.pipe.unwrapFence(text);
         if (text)
             params.block.content = text;
-        else
+        else {
             delete params.block.content;
+            if (!this.pipe[params.block.type]?.ignore) {
+                dropUsedType(params.box, params.block.type);
+                params.block.error = true;
+                params.block.content = 'Модель не вернула текст.';
+            }
+        }
         if (response.usage)
             params.block.usage = response.usage;
         if (!hasBody(params.block) && !this.pipe[params.block.type]?.ignore)
@@ -782,7 +791,7 @@ export default {
     },
     /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
      *  evidence: false (генерация total) — предки без уликов-боксов.
-     *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
+     *  expand-box отдаёт листья с ролью их узла (бюджет clipContext); маркер box.content в контекст не идёт. */
     _box_context(box, focus = true, evidence = true, handoff = false) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
@@ -811,7 +820,10 @@ export default {
             if (b.box && this.pipe[b.type]?.expand) {
                 for (const leaf of (b.items || []))
                     if (leaf.content && !(leaf.error && !evidence) && !this.pipe[leaf.type]?.ignore)
-                        messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
+                        messages.push({
+                            role: this.pipe[leaf.type]?.role || 'assistant',
+                            content: clipContext(leaf.content),
+                        });
             }
             else if (focus || b.type === 'prompt' || b.box)
                 messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
@@ -1250,6 +1262,9 @@ function releaseStaleStops(box) {
     for (const b of box.items) {
         if (!b.stop)
             continue;
+        // stop === true — вид без шапки (answer/report/question), не wait; не снимать
+        if (b.type === 'answer' || b.type === 'report' || b.type === 'question')
+            continue;
         delete b.stop;
         b.state = 'уточнено';
         dropUsedType(box, b.type);
@@ -1350,7 +1365,8 @@ function formatGoalBlock(goal) {
         if (need === 'facts') {
             lines.push(
                 'need=facts: цель — ответ человеку фактами. explore/web/logs — сбор, они цель не закрывают; закрывает answer (или report) по фактам из ленты.',
-                'Факты уже в ленте (ls/meta/remote/страница) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+                'Факты уже в ленте (ls/meta/remote/страница, сводка thinking/report) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+                'Сырые вложения (includes/file) без сводки — сначала thinking или report, не answer по простыне.',
             );
         }
         else {
@@ -1585,12 +1601,45 @@ function hasBody(b) {
     return !!String(b?.content ?? '').trim();
 }
 
-/** Вложения разобраны, текста задачи нет — спросить, что делать, не explore/work. */
-function attachmentsAwaitingIntent(body) {
-    if (String(body?.goal?.text || '').trim())
-        return false;
+/** Имена файлов из params.includes — постановка, если текста нет. */
+function attachGoalText(raw) {
+    if (!raw)
+        return '';
+    try {
+        const list = JSON.parse(raw);
+        const names = (Array.isArray(list) ? list : []).map(p => {
+            const s = String(p?.path || p?.label || p || '').replace(/\\/g, '/');
+            return s.split('/').filter(Boolean).pop() || '';
+        }).filter(Boolean);
+        return names.join(', ');
+    } catch {
+        return '';
+    }
+}
+
+/** Закрытые вложения без сводки — сначала thinking, не answer по сырым простыням. */
+function attachmentsNeedDigest(body) {
     const inc = (body?.items || []).filter(b => b.type === 'includes');
-    return inc.length > 0 && inc.every(b => hasBody(b));
+    if (!inc.length || inc.some(b => !hasBody(b)))
+        return false;
+    if (layerHasDigest(body))
+        return false;
+    return !(body.items || []).some(b => b.type === 'thinking');
+}
+
+function layerHasDigest(box) {
+    return (box?.items || []).some(b =>
+        (b.type === 'thinking' || b.type === 'report') && hasBody(b) && !b.error);
+}
+
+/** Бюджет листа expand: простыня xlsx не должна целиком уходить в каждый fill. */
+const EXPAND_LEAF_CHARS = 8000;
+
+function clipContext(text, max = EXPAND_LEAF_CHARS) {
+    const s = String(text || '');
+    if (s.length <= max)
+        return s;
+    return s.slice(0, max).trimEnd() + '\n\n[… обрезано, полный текст в ленте]';
 }
 
 function dropUsedType(box, type) {
