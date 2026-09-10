@@ -92,8 +92,10 @@ ODA({is: 'chat-item',
                 return 'item-node';
             const name = file.form || 'file';
             const view = await file.get_item('/~/handlers//form/' + name);
-            await view?.importView?.();
-            return 'item-' + (view?.id || name);
+            const ext = String(file.ext || '').toLowerCase();
+            const is = ext ? `item-${name}-${ext}` : `item-${name}`;
+            await view?.importView?.(is);
+            return is;
         });
     },
     get includeFiles() {

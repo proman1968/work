@@ -404,8 +404,10 @@ ODA({is: 'work-form',
                     this.removeChild(old);
             }
             if (!el) {
-                await n.importView();
-                el = ODA.createComponent('item-' + n.id, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
+                const ext = String(this.$item?.ext || '').toLowerCase();
+                const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
+                await n.importView(is);
+                el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
                 this.controls[n.id] = el;
                 this.appendChild(el);
             }

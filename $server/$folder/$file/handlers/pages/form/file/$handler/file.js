@@ -24,6 +24,6 @@ export default {
     },
     fileControl: 'object',
     get url(){
-        return this.$context?.url;
+        return this.$item?.url;
     }
 }
