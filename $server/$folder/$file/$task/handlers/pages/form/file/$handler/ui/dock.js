@@ -22,7 +22,7 @@ ODA({ is: 'microchat-dock',
                 margin: 2px;
                 padding: 2px;
             }
-            .sheet { overflow: hidden; }
+            .sheet { min-height: 0; overflow-y: auto; }
         </style>
         <div class="bar" header no-flex horizontal>
             <oda-button no-flex icon="icons:chevron-left" :disabled="!hasPrev" @tap="step(-1)"></oda-button>

@@ -80,6 +80,7 @@ ODA({is: 'work-form',
                     center icon-pos="top"
                 ></oda-button>
                 <div flex></div>
+                <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
                     <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
@@ -129,8 +130,8 @@ ODA({is: 'work-form',
                     </div>
                 </div>
             </div>
-            <oda-button @tap="toggleFullscreen" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
-            <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
+            <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
         <div slot="footer" footer horizontal flex style="justify-items: space-between">
             <item-tools :$item filter="service"></item-tools>
@@ -141,6 +142,48 @@ ODA({is: 'work-form',
             </div>
         </div>
     `,
+    async call(e) {
+        const el = ODA.createComponent('call-users-list');
+        const users = await el.users;
+        if (users.length === 1) {
+            el.selectedUsers.push(users[0]);
+        }
+        const updateEnable = () => {
+            const cond = el.selectedUsers.length > 0;
+            if (el.domParent) {
+                el.domParent.enable = cond;
+            }
+            return cond;
+        };
+        el.addEventListener('changed', updateEnable);
+        try {
+            this.async(() => { updateEnable() }, 100);
+            const res = await WORK.showDialog(el, {
+                enable: false,
+                TITLE: { label: 'Выбор собеседников', icon: 'communication:call' },
+                OK: { label: 'позвонить', icon: 'communication:call' },
+                BUTTONS: [
+                    {
+                        label: 'записать видео',
+                        icon: 'av:videocam',
+                        click: async () => {
+                            WORK.top.RTCCaller.startRecord(await this.$item);
+                        }
+                    }
+                ]
+            });
+            if (res === 'ok') {
+                const receivers = el.selectedUsers;
+                WORK.top.RTCCaller.startCall(await this.$item, receivers.map(u => u.id));
+            }
+        }
+        catch (err) {
+            console.log(err);
+        }
+        finally {
+            el.removeEventListener('selected-users-changed', updateEnable);
+        }
+    },
     allowZoom: true,
     iconSize: 24,
     openView(e) {
@@ -379,4 +422,112 @@ ODA({is: 'work-form',
             }
         }
     }
-})
+});
+
+ODA({
+    is: 'call-users-list',
+    template: /*html*/`
+    <style>
+        :host{
+            @apply --vertical;
+            overflow: hidden;
+
+            .filter-box{
+                @apply --horizontal;
+                @apply --header;
+                @apply --no-flex;
+                padding: 4px;
+
+                input{
+                    @apply --flex;
+                    @apply --content;
+                    margin: auto;
+                    padding: 8px;
+                    width: 0px;
+                    border: none;
+                    outline: none;
+                    border-radius: 2em;
+                }
+            }
+
+            .users-box{
+                @apply --vertical;
+                overflow-x: hidden;
+                text-overflow: ellipsis;
+                overflow-y: auto;
+                gap: 4px;
+                padding: 8px;
+                min-height: calc(52px * 5);
+
+                .user-row{
+                    @apply --horizontal;
+                    align-items: center;
+                    min-height: fit-content;
+                    flex-wrap: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    border-radius: 0em;
+                    padding: 0px 3px;
+                    transition: border-radius, background-color 0.3s ease;
+
+                    &[selected]{
+                        border-radius: 2em;
+                    }
+
+                    item-node{
+                        pointer-events: none;
+                    }
+                }
+                .nope-row{
+                    text-align: center;
+                    opacity: 0.25;
+                }
+
+            }
+        }
+    </style>
+    <div ~if="users?.length" class="filter-box">
+        <input type="search" ::value="filterVal" placeholder="filter">
+    </div>
+    <div ~if="users?.length" class="users-box">
+        <div class="user-row" ~for="filteredUsers" @click="select_user($for.item)" :selected="isSelected($for.item)">
+            <oda-icon :icon="isSelected($for.item) ? 'icons:check' : ''" icon-size="48" :success="isSelected($for.item)" style="border-radius: 50%;"></oda-icon>
+            <item-node :$item="$for.item" icon-size="48"></item-node>
+        </div>
+        <h2 ~if="filteredUsers.length === 0" class="nope-row">не найдено</h2>
+    </div>
+    <h1 center ~if="!users">Загрузка...</h1>
+    <h1 center ~if="users?.length === 0">пользователи не найдены</h1>
+    `,
+    get users() {
+        return (async () => {
+            const $users = await WORK.get_item('/USERS');
+            const users = await $users.items;
+            return (users || []).filter(u => u.id !== WORK.uid);
+        })();
+    },
+    filterVal: '',
+    get filteredUsers() {
+        if (!this.users) return;
+        return this.filterVal
+            ? this.users.filter(u => [u.label, u.id].some(s => s.includes(this.filterVal)))
+            : this.users;
+    },
+    selectedUsers: [],
+    getIndex($user) {
+        return this.selectedUsers.findIndex(u => u.id === $user.id)
+    },
+    isSelected($user) {
+        return this.getIndex($user) > -1;
+    },
+    select_user($user) {
+        const idx = this.getIndex($user);
+        if (idx > -1) {
+            this.selectedUsers.splice(idx, 1);
+        }
+        else {
+            this.selectedUsers.push($user);
+        }
+        this.fire('changed');
+    }
+});

@@ -538,7 +538,7 @@ export default {
     },
 
     /**
-     * Закрыть цель: facts — answer/report; side — готовый html (артефакт в ленте).
+     * Закрыть цель: facts — answer/report; side — report/answer/html на корне.
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
@@ -550,7 +550,7 @@ export default {
         const need = goalNeed(g);
         if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
             return false;
-        if (need === 'side' && block.type !== 'html')
+        if (need === 'side' && !SIDE_EVIDENCE.has(block.type))
             return false;
         g.status = 'done';
         g.resume = null;
@@ -1355,7 +1355,7 @@ function formatGoalBlock(goal) {
         }
         else {
             lines.push(
-                'need=side: цель — действие в системе; закрывается evidence / check после факта в ленте, не репликой.',
+                'need=side: цель — действие в системе; закрывает report / answer / html на корне task, не check и не листья create/write.',
                 'Пока status не done — цель не достигнута; сессия не считается выполненной.',
                 'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
                 'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
@@ -1372,6 +1372,9 @@ function goalNeed(goal) {
 
 /** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
 const FACTS_EVIDENCE = new Set(['answer', 'report']);
+
+/** need=side: конечный отчёт на корне, не постусловие check. */
+const SIDE_EVIDENCE = new Set(['answer', 'report', 'html']);
 
 function clearGoalContinue(goal) {
     if (goal?.resume?.continue)

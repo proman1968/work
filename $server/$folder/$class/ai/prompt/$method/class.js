@@ -259,7 +259,7 @@ export default {
         });
     },
 
-    /** Итог бокса: один результат — без LLM; только ошибки — агрегат; иначе fill по agent.prompt. */
+    /** Итог бокса: один чистый успех — без LLM; только ошибки — агрегат; иначе fill (не склейка листьев). */
     async total(ctx, tools) {
         const { block, agent, model, messages, live, session, params } = ctx;
         if (live?.stopped) {
@@ -271,7 +271,7 @@ export default {
             b.content && b.type !== 'prompt' && tools[b.type]?.role === 'user');
         const results = data.filter(b => !b.error);
         const fails = data.filter(b => b.error);
-        if (results.length === 1) {
+        if (results.length === 1 && !fails.length) {
             block.content = results[0].content;
             delete block.error;
             delete block.state;
@@ -286,17 +286,8 @@ export default {
                 block.state = fails[0].state || 'ошибка';
             delete block.using_blocks;
         }
-        else if (results.length && results.every(b => b.type === results[0].type)) {
-            // однотипные успехи (N create / N write) — склейка без LLM
-            block.content = results.map(b => b.content).filter(Boolean).join('\n\n');
-            delete block.error;
-            if (fails.length)
-                block.state = 'ошибки: ' + fails.length;
-            else
-                delete block.state;
-            delete block.using_blocks;
-        }
-        else {
+        else if (results.length) {
+            // успех есть — сводка человеку; промах разведки (read «нет файла») не ошибка этапа
             await this.fill(block, {
                 agent: {
                     system: agent[mode]?.system || agent.system,
@@ -312,8 +303,7 @@ export default {
             }
             if (block.content) {
                 delete block.error;
-                if (/^сайты:/.test(block.state || ''))
-                    delete block.state;
+                delete block.state;
             }
         }
         if (typeof agent.enrichTotal === 'function' && block.content)

@@ -5,7 +5,7 @@
  *    write → exist → file (непустой / сниппет из секции write);
  *    без доменных полей (model и т.п.) — только выполнение операции.
  *  Блоки в ленте: `exist` (путь) и `file` (любой файл: path реальный, тело в content); критерий — `crit`.
- *  goalDone только полное соответствие; enrichTotal — сводка.
+ *  Цель сессии не закрывает — после ok фокус на корне task. enrichTotal — сводка.
  *  Движок: init({ block, box, messages, session, agent, live, exec, streamChat, engine }).
  */
 
@@ -56,7 +56,7 @@ export default {
         'Файл: exist → file (непустой / согласован с секцией write).',
         'Write class.js без обновлённого readme того же класса — gap. class.js без icon из реального набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:) — gap. Набора register: нет.',
         'Не сверяй предметные поля устройства (model и т.п.) — это не роль check; icon обязателен как поле UI.',
-        'goalDone только когда все критерии по всем targets ok.',
+        'Цель сессии не закрывай — постусловие в ветке, дальше корень task.',
         'Не создавай и не правь. Не web. Не осмотр системы (explore).',
     ].join('\n'),
     prompt: [
@@ -83,8 +83,6 @@ export default {
         if (!box)
             return;
         ensureTargets(box, params.messages);
-        if (allTargetsFullyOk(box))
-            params.live?.goalDone?.();
     },
     enrichTotal(_content, block) {
         return formatCheckReport(block);

@@ -73,7 +73,7 @@ ODA({is: 'chat-item',
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
         <div class="card"  shadow :flex="expanded || compact" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
+            <div class="title" light horizontal style="justify-content: space-between; align-items: center;">
                 <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" :hide-history-time="compact"></item-node>
                 <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       

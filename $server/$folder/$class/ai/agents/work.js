@@ -178,7 +178,6 @@ const writeTool = {
                 }, { block });
             }
             block.done = true;
-            block.doc = true;
             block.state = 'ok';
             block.content = formatWriteArtifact(block.path, block.post);
         }
@@ -451,6 +450,7 @@ const activationTool = {
 export default {
     label: 'Работаю с файлами',
     icon: 'icons:folder',
+    doc: true,
     /** листья create/write/file в контекст (check targets), не только сводка total */
     expand: true,
     allowReasoning: true,
@@ -463,7 +463,7 @@ export default {
         'Список моделей у провайдера (API/baseUrl) — explore meta+remote, не search в /SERVICES и не web.',
         'Подключить модель / новый класс у провайдера — create ($ai под $provider + class.js по образцу), не write «файла модели».',
         'Один remote model — один дочерний класс; другой id с тем же model запрещён.',
-        'Перед правкой класса — readme из storage_folder в ленте (или explore read). После create/write устройства — обнови тот же readme.md (назначение, устройство, контракт = class.js); в ленту — артефакты class.js/readme (doc).',
+        'Перед правкой класса — readme из storage_folder в ленте (или explore read). После create/write устройства — обнови тот же readme.md (назначение, устройство, контракт = class.js); в ленту — артефакты class.js/readme.',
         '«Добавь / создай» класс: примеры путей в readme — не доказательство наличия. Нет узла в ls/explore ленты — activation → create. Не закрывай цель отчётом «уже есть» без create/write в ленте.',
         'Проверка — агент check, не повторный create.',
         'Подумай, какие именно действия необходимы.',
@@ -595,12 +595,11 @@ function formatWriteArtifact(path, post) {
     ].join('\n');
 }
 
-/** Evidence созданного класса: блок create (`doc`) + артефакты class.js / readme.md (тела, WORK-ссылки). */
+/** Evidence созданного класса: блок create + артефакты class.js / readme.md (тела, WORK-ссылки). */
 async function attachCreateEvidence(box, block, spec, opts = {}) {
     const path = String(block?.path || '').replace(/\/$/, '');
     if (!path || !block)
         return;
-    block.doc = true;
 
     const classFile = await resolveMetaFile(path, 'class.js');
     const readmeFile = await resolveMetaFile(path, 'readme.md');
@@ -638,12 +637,11 @@ function pushDocArtifact(box, spec) {
         return;
     box.items ??= [];
     const path = String(spec.path || '').replace(/\/$/, '');
-    if (path && box.items.some(x => x.type === 'file' && x.path === path && x.doc))
+    if (path && box.items.some(x => x.type === 'file' && x.path === path))
         return;
     box.items.push({
         type: 'file',
         label: 'Файл',
-        doc: true,
         role: 'user',
         done: true,
         icon: spec.icon || 'icons:description',

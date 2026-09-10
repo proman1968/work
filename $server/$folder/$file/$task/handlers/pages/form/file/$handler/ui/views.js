@@ -173,15 +173,7 @@ ODA({ is: 'microchat-view',
             :host([only-doc]) {
                 @apply --content;
                 overflow: auto;
-            }
-            :host([only-doc]:has(microchat-html)) {
-                overflow: hidden;
-                position: relative;
-            }
-            :host([only-doc]:has(microchat-html)) .untitled,
-            :host([only-doc]:has(microchat-html)) .untitled > .body {
-                overflow: hidden;
-                position: relative;
+                min-height: 0;
             }
             :host([only-doc]) > .untitled > .body {
                 margin: 0;
@@ -268,14 +260,14 @@ ODA({ is: 'microchat-view',
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data :fill="onlyDoc"></div>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
             </div>
         </details>
         <div ~if="!showTitle" vertical class="untitled" :flex="onlyDoc">
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="false" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data :fill="onlyDoc"></div>
+                <div ~is="extendTag" ~if="extendTag" :data></div>
             </div>
         </div>
     `,
@@ -386,8 +378,10 @@ ODA({ is: 'microchat-view',
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.data?.url);
     },
-    /** expand-box: в ленте дети, не маркер box.content ([attachments] …) */
+    /** expand-box: в ленте дети, не маркер; в доке — итог бокса */
     get showMarkdown() {
+        if (this.onlyDoc)
+            return this.showContent;
         if (this.items.length && (this.data?.expand || this.data?.type === 'includes'))
             return false;
         return this.showContent;
@@ -599,48 +593,32 @@ ODA({ is: 'microchat-html',
                 min-width: 0;
                 box-sizing: border-box;
             }
-            :host([fill]) {
-                position: absolute;
-                inset: 0;
-                overflow: hidden;
-            }
             iframe {
                 width: 100%;
                 border: none;
                 display: block;
                 background: var(--content-background);
             }
-            :host([fill]) iframe {
-                position: absolute;
-                inset: 0;
-            }
         </style>
         <iframe sandbox="allow-scripts" :srcdoc="srcdoc" ~style="frameStyle"></iframe>
     `,
     data: null,
-    fill: {
-        $def: false,
-        $attr: true,
-    },
     frameH: 0,
     get html() { return pageHtml(this.data) || ''; },
     get srcdoc() {
         const raw = this.html;
         if (!raw) return '';
-        if (this.fill) return raw;
         if (raw.includes('microchat-html-h')) return raw;
         return raw + HEIGHT_PING;
     },
     get frameStyle() {
-        if (this.fill)
-            return {};
         if (this.frameH)
             return { height: this.frameH + 'px' };
         return { minHeight: '50vh' };
     },
     attached() {
         this._onHtmlH = e => {
-            if (this.fill || e.data?.type !== 'microchat-html-h') return;
+            if (e.data?.type !== 'microchat-html-h') return;
             const iframe = this.$('iframe');
             if (!iframe || e.source !== iframe.contentWindow) return;
             const h = Number(e.data.height);
