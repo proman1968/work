@@ -886,7 +886,7 @@ export class $class extends $folder{
     /** Slave видит элементы только своего класса (не дочерние). */
     _isSlaveVisible(item, params) {
         const itemClass = item.$class ?? item.$owner;
-        return itemClass === this;
+        return itemClass.path === this.path;
     }
 
     /** Гость видит свой класс, зону guests и логи класса (чат); не видит work и системное. */

@@ -1,5 +1,6 @@
 /** Агент work: файлы рабочей области. Меню = ключи tools (plan/do).
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat }).
+ *  typed — файл типа ($file when+METADATA) + save_file на месте; create — только класс.
  *  Строение WORK — explore; интернет — web. approve стоп-блока — владелец ленты (task).
  *  search — только внутри уже выбранного класса (не корень WORK). */
 
@@ -197,6 +198,115 @@ const writeTool = {
     },
 };
 
+/** Действие = файл типа ($file child class.js: when + METADATA) + save_file на месте (message + time). */
+const typedTool = {
+    label: 'Сохраняю файл',
+    icon: 'carbon:document-add',
+    role: 'user',
+    allowReasoning: true,
+    description: 'файл типа по when (встреча → $ics): поля METADATA, save_file на классе-месте с message и time; не create класса',
+    system: [
+        '# Режим: файл типа',
+        'Действие в журнале места — файл типа $file (when + METADATA), не create класса и не write произвольного пути.',
+        'Первая строка — тип ($ics и др. с when). Дальше строки field: value только из фактов ленты.',
+        'Нет факта для обязательного поля — не выдумывай, пропусти строку.',
+        'Не обращайся к пользователю.',
+    ].join('\n'),
+    prompt: [
+        'Тип и поля METADATA.',
+        'Пример:',
+        '$ics',
+        'start: 2026-09-12T15:00',
+        'end: 2026-09-12T16:00',
+        'summary: встреча с Олегом',
+        'allDay: false',
+    ].join('\n'),
+    async init(params = {}) {
+        const b = params.block;
+        if (b.done)
+            return false;
+        b.place = await placePath(params);
+        if (b.place && params.box)
+            params.box.place = b.place;
+        const types = await listTypedFileTypes();
+        const hits = matchTypedTypes(types, await typedHint(params));
+        if (hits.length === 1)
+            b.typed = hits[0].id;
+        tagAgent(params.box, AGENT_TAG, b.typed ? ('файл ' + b.typed) : 'файл типа…');
+        return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        if (b.done)
+            return;
+        const types = await listTypedFileTypes();
+        if (!types.length) {
+            b.error = true;
+            b.content = 'typed: нет типов $file с when и METADATA.FIELDS';
+            return;
+        }
+        const parsed = parseTypedFill(b.content, b.typed);
+        const spec = types.find(t => t.id === parsed.type)
+            || matchTypedTypes(types, await typedHint(params))[0];
+        if (!spec) {
+            b.error = true;
+            b.content = 'typed: тип не выбран. Есть: ' + types.map(t => t.id).join(', ');
+            return;
+        }
+        const fields = fillTypedFields(spec.fields, parsed.values);
+        const gap = requiredTypedGap(spec.fields, fields);
+        if (gap) {
+            b.error = true;
+            b.content = 'typed: нужны поля ' + spec.id + ': ' + gap;
+            tagAgent(params.box, AGENT_TAG, 'нужны поля');
+            return;
+        }
+        const place = b.place || params.box?.place || await placePath(params);
+        const parent = place ? await WORK.get_item(place) : null;
+        if (!parent || typeof parent.save_file !== 'function') {
+            b.error = true;
+            b.content = 'typed: нет класса-места для save_file' + (place ? ': ' + place : '');
+            return;
+        }
+        const body = typedBody(spec, fields);
+        if (spec.id === '$ics' && (!body.start || !body.summary)) {
+            b.error = true;
+            b.content = 'typed: нужны поля $ics: '
+                + [!body.start && 'start', !body.summary && 'summary'].filter(Boolean).join(', ');
+            tagAgent(params.box, AGENT_TAG, 'нужны поля');
+            return;
+        }
+        const filename = typedFilename(spec.id);
+        const startMs = typedStartMs(body);
+        try {
+            const result = await params.exec(parent, {
+                method: 'save_file',
+                args: {
+                    filename,
+                    post: JSON.stringify(body),
+                    message: JSON.stringify(body),
+                    time: startMs,
+                    session: params.session,
+                },
+            }, { block: b });
+            const path = typedSavedPath(result, parent, filename);
+            b.path = path;
+            b.typed = spec.id;
+            b.done = true;
+            b.state = 'ok';
+            b.content = formatWriteArtifact(path, JSON.stringify(body, null, 2));
+            tagAgent(params.box, AGENT_TAG, spec.id + ' ' + clip(body.summary || filename, 40));
+        }
+        catch (e) {
+            if (!b.error) {
+                b.error = true;
+                b.content = (b.content || '') + String(e.message || e);
+            }
+            throw e;
+        }
+    },
+};
+
 /** Дочерние классы у родителя: $class.create (не save_file). Один ход = все классы из fill (N секций).
  *  Каждая секция → свой блок create (первая — этот блок, остальные — соседи в боксе).
  *  Прогресс = хотя бы один реально созданный класс → тип снова доступен (dropUsed).
@@ -219,6 +329,7 @@ const createTool = {
         'type — из контракта родителя/readme (счета журнала — $account, не $register и не $class). Одна meta на узел = type.',
         'В каждом class.js обязательно icon из реального набора ODA: carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor: (набора register: нет). Бери с предка типа / соседей или carbon: по смыслу; без существующего набора — icon предка. Без icon create неполный.',
         'После успешного create движок пишет readme.md в storage_folder того же type; при ручной правке class.js — сам обнови readme write.',
+        'Встреча / событие календаря — tool typed, не create.',
         'Не выдумывай post — бери из образца в ленте. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -454,10 +565,11 @@ export default {
     /** листья create/write/file в контекст (check targets), не только сводка total */
     expand: true,
     allowReasoning: true,
-    description: 'файлы и классы области: read/write/create; search внутри выбранного класса; строение WORK — explore; журнал — logs',
+    description: 'файлы и классы области: typed/read/write/create; search внутри выбранного класса; строение WORK — explore; журнал — logs',
     system: [
         '# Агент: work',
         'Файлы и классы рабочей области. Строение системы (модели, сервисы) — explore; интернет — web; журнал класса — logs.',
+        'Действие в журнале места (встреча, событие) — tool typed: тип $file по when, поля METADATA, save_file на классе-месте. Не create класса и не write без типа.',
         'Не читай …/logs/.data.logs/history/… через read/search — это logs ($class.logs / read_log_entry).',
         'search — только внутри выбранного класса (путь + запрос); не semantic_search по корню WORK.',
         'Список моделей у провайдера (API/baseUrl) — explore meta+remote, не search в /SERVICES и не web.',
@@ -481,13 +593,14 @@ export default {
             live.mode = 'plan';
     },
     plan: {
-        description: 'чтение и поиск; write/create — после activation',
+        description: 'чтение, поиск, typed (событие); write/create класса — после activation',
         system: [
-            'Система WORK: search (путь класса + запрос) и read файлов.',
+            'Система WORK: search (путь класса + запрос), read файлов, typed (файл типа на месте).',
+            'Встреча / запланируй / событие календаря — typed ($ics), не activation и не create.',
             'search не по корню WORK — сначала класс (часто через explore).',
             'Класс ещё не читали — сначала readme.md из storage_folder (как explore read), потом class.js / прочие файлы.',
-            'Задача «добавь/создай»: если в ленте нет ls родителя с этим id — нужен create (activation → do), не итог «уже есть по readme».',
-            'Activation = план create/write на кнопку человеку; чтение — tool read до неё, не в content activation.',
+            'Задача «добавь/создай» класс: если в ленте нет ls родителя с этим id — нужен create (activation → do), не итог «уже есть по readme».',
+            'Activation = план create/write класса на кнопку человеку; чтение — tool read до неё, не в content activation.',
             'Подключение модели к провайдеру — create, не «новый файл».',
             'Нет операнда для действия — не выдумывай.',
             'Недостающий факт у человека — зафиксируй в итоге; спросит оркестратор (question).',
@@ -495,6 +608,7 @@ export default {
         ].join('\n'),
         tools: {
             activation: activationTool,
+            typed: typedTool,
             search: searchTool,
             read: readTool,
         },
@@ -502,7 +616,8 @@ export default {
     do: {
         description: 'write файлов и create классов области',
         system: [
-            'Система WORK: write файлов и create дочерних классов.',
+            'Система WORK: typed (файл типа на месте), write файлов и create дочерних классов.',
+            'Встреча / событие — typed, не create класса.',
             'write — путь и содержимое из контекста; create — родитель + тип + id + class.js (не save_file вместо класса).',
             'Операнды (пути, тела, образцы) — только из evidence ленты; tool без операнда не выбирай.',
             'Подключение модели: create $ai (id как у соседей, model = тег API); один model — один класс.',
@@ -515,6 +630,7 @@ export default {
             'Подумай, какие именно действия необходимы.',
         ].join('\n'),
         tools: {
+            typed: typedTool,
             search: searchTool,
             read: readTool,
             write: writeTool,
@@ -1046,6 +1162,231 @@ async function resolveParent(path) {
     if (!parent || typeof parent.save_file !== 'function')
         throw new Error('write: нельзя создать файл в ' + parentPath);
     return { parent, filename };
+}
+
+async function listTypedFileTypes() {
+    const roots = await WORK.$folder?.children;
+    const fileRoot = (roots || []).find(f => f.id === '$file');
+    if (!fileRoot)
+        return [];
+    const kids = (await fileRoot.children) || [];
+    const out = [];
+    for (const kid of kids) {
+        const id = String(kid.id || '');
+        if (!id.startsWith('$'))
+            continue;
+        const data = await loadTypeClass(kid);
+        const fields = data?.METADATA?.FIELDS?.fields;
+        if (!data?.when || !Array.isArray(fields) || !fields.length)
+            continue;
+        out.push({
+            id,
+            label: data.label || id,
+            description: data.description || '',
+            when: data.when,
+            fields,
+        });
+    }
+    return out;
+}
+
+async function loadTypeClass(folder) {
+    try {
+        const cf = typeof folder.get_item === 'function' ? await folder.get_item('class.js') : null;
+        if (!cf)
+            return null;
+        if (typeof cf.importScript === 'function')
+            return await cf.importScript();
+        const raw = typeof cf.read_text === 'function' ? String(await cf.read_text() || '') : '';
+        const importScript = folder.constructor?.importScript;
+        if (!raw || typeof importScript !== 'function')
+            return null;
+        return await importScript.call(folder.constructor, /export\s+default/.test(raw) ? raw : 'export default ' + raw);
+    }
+    catch {
+        return null;
+    }
+}
+
+function matchTypedTypes(types, text) {
+    const t = String(text || '').toLowerCase();
+    if (!t)
+        return [];
+    return (types || []).filter(ty => (ty.when?.phrases || [])
+        .some(p => t.includes(String(p).toLowerCase())));
+}
+
+async function typedHint(params) {
+    const parts = [];
+    try {
+        const body = await params.task?.body;
+        if (body?.goal?.text)
+            parts.push(String(body.goal.text));
+    }
+    catch { /* */ }
+    const brief = String(params.box?.brief || '').trim();
+    if (brief)
+        parts.push(brief);
+    const last = lastUserContent(params.messages);
+    if (last)
+        parts.push(last);
+    return parts.join('\n');
+}
+
+async function placePath(params) {
+    const ctx = params.engine?.$context;
+    const fromCtx = String(ctx?.short || ctx?.path || '').trim();
+    if (fromCtx)
+        return fromCtx;
+    const own = String(params.block?.place || params.box?.place || '').trim();
+    if (own)
+        return own;
+    try {
+        const body = await params.task?.body;
+        const m = String(body?.system || '').match(/"path"\s*:\s*"(\/[^"]+)"/);
+        if (m)
+            return m[1];
+    }
+    catch { /* */ }
+    return '';
+}
+
+function parseTypedFill(content, fallbackType) {
+    const raw = String(content || '').replace(/\r\n/g, '\n').trim();
+    const values = Object.create(null);
+    let type = String(fallbackType || '').trim();
+    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) {
+        try {
+            const obj = JSON.parse(fence[1]);
+            if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                if (obj.type && String(obj.type).startsWith('$'))
+                    type = String(obj.type);
+                for (const [k, v] of Object.entries(obj)) {
+                    if (k !== 'type')
+                        values[k] = v;
+                }
+                return { type, values };
+            }
+        }
+        catch { /* строки */ }
+    }
+    for (const line of raw.split('\n')) {
+        const t = line.trim();
+        if (!t || t.startsWith('#'))
+            continue;
+        if (!type && /^\$[a-z0-9]+$/i.test(t)) {
+            type = t;
+            continue;
+        }
+        const cut = t.indexOf(':');
+        if (cut <= 0)
+            continue;
+        const key = t.slice(0, cut).trim();
+        const val = t.slice(cut + 1).trim();
+        if (key === 'type' && val.startsWith('$'))
+            type = val;
+        else if (key)
+            values[key] = val;
+    }
+    return { type, values };
+}
+
+function fillTypedFields(schema, values) {
+    const out = Object.create(null);
+    for (const f of schema || []) {
+        const id = f.id;
+        if (!id || values[id] == null || values[id] === '')
+            continue;
+        out[id] = coerceTyped(f, values[id]);
+    }
+    return out;
+}
+
+function coerceTyped(f, v) {
+    const t = String(f.type || '').toLowerCase();
+    if (t === 'boolean')
+        return /^(1|true|да|yes)$/i.test(String(v).trim());
+    if (t === 'number') {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : v;
+    }
+    return typeof v === 'string' ? v.trim() : v;
+}
+
+function requiredTypedGap(schema, fields) {
+    return (schema || [])
+        .filter(f => f.required && (fields[f.id] == null || fields[f.id] === ''))
+        .map(f => f.id)
+        .join(', ');
+}
+
+function typedBody(spec, fields) {
+    if (spec.id === '$ics')
+        return icsBody(fields);
+    return { ...fields };
+}
+
+function icsBody(raw) {
+    const allDay = !!raw.allDay && raw.allDay !== 'false';
+    let start = persistTime(raw.start);
+    let end = persistTime(raw.end);
+    if (allDay && start) {
+        const s = new Date(start);
+        s.setHours(0, 0, 0, 0);
+        const e = new Date(end || s);
+        if (!end)
+            e.setDate(e.getDate() + 1);
+        e.setHours(0, 0, 0, 0);
+        start = persistTime(s);
+        end = persistTime(e);
+    }
+    else if (start && !end) {
+        const e = new Date(start);
+        e.setHours(e.getHours() + 1);
+        end = persistTime(e);
+    }
+    return {
+        start,
+        end,
+        summary: String(raw.summary || '').trim(),
+        location: String(raw.location || '').trim(),
+        allDay,
+    };
+}
+
+function persistTime(v) {
+    if (v == null || v === '')
+        return '';
+    if (typeof v === 'number' && Number.isFinite(v)) {
+        const d = new Date(v);
+        return isNaN(d) ? '' : (typeof d.toISOTimezoneString === 'function' ? d.toISOTimezoneString() : d.toISOString());
+    }
+    const d = new Date(v);
+    if (isNaN(d))
+        return '';
+    return typeof d.toISOTimezoneString === 'function' ? d.toISOTimezoneString() : d.toISOString();
+}
+
+function typedFilename(typeId) {
+    const ext = String(typeId || '').replace(/^\$/, '') || 'txt';
+    const stem = ext === 'ics' ? 'event' : ext;
+    return stem + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+}
+
+function typedStartMs(body) {
+    const ms = new Date(body?.start).getTime();
+    return Number.isFinite(ms) ? ms : Date.now();
+}
+
+function typedSavedPath(result, parent, filename) {
+    if (result && typeof result === 'object') {
+        const p = result.path || result.logFullPath || result.logPath;
+        if (p)
+            return String(p);
+    }
+    const base = String(parent?.short || parent?.path || '').replace(/\/$/, '');
+    return base ? base + '/' + filename : filename;
 }
 
 function lastUserContent(messages) {

@@ -352,6 +352,12 @@ ODA({is: 'oda-tree-node',
     get items() {
         return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
             let items = applyTreeFilters(raw, this.$pdp);
+            if (this.$item?.type === '$server') {
+                //const allAdmins = await this.$item?.allAdmins;
+                if (!(await this.$item.isAdmin)) {
+                    items = items.filter(f => f instanceof CORE.$class);
+                }
+            }
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
                     this.$item.expanded = true;

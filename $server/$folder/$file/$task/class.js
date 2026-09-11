@@ -95,6 +95,8 @@ export default {
         engine.$context = owner;
         const worn = await this._skillStep();
         const skillStep = worn?.step?.type === params.block.type ? worn.step : null;
+        // handoff: блок уже в дереве — сразу диск + changed, не ждать context/execute
+        await this._save(session);
         await engine.execute({
             agent: params.block.type,
             block: params.block,
@@ -117,16 +119,16 @@ export default {
             return null; // движок уже ждёт человека в этом блоке — не перезапускать
         const body = await this.body;
         const focus = await this._active_box();
-        if (this.pipe[focus.type]?.agent && !hasBody(focus) && !focus.error)
+        if (agentPending(focus, this.pipe))
             return { block: focus, box: parentOfBlock(body, focus) || body };
         let box = body;
         for (;;) {
             const next = box.items?.last;
             if (!next)
                 return null;
-            if (this.pipe[next.type]?.agent && !hasBody(next) && !next.error)
+            if (agentPending(next, this.pipe))
                 return { block: next, box };
-            if (next.box && !hasBody(next))
+            if (boxOpen(next))
                 box = next;
             else
                 return null;
@@ -218,7 +220,7 @@ export default {
                             || (params.includes && g?.text ? String(g.text).trim() : '')
                             || attachGoalText(params.includes)
                             || (params.skillMention ? '@' + params.skillMention : '');
-                        if (goalText && (!g || g.status === 'done')) {
+                        if (goalText && (!g || g.status === 'done') && agent !== 'review') {
                             const need = await this._classifyGoalNeed(goalText, session);
                             body.goal = {
                                 text: goalText,
@@ -400,6 +402,14 @@ export default {
         let using_blocks = params.box.using_blocks ??= [];
         // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
         next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
+        // сбор уже в ленте — не предлагать сборщиков и не дублировать сводку report
+        const gathered = (params.box?.items || []).some(b => COLLECTORS.has(b.type) && b.content && !b.error);
+        if (gathered)
+            next = next.filter(id => !COLLECTORS.has(id) && id !== 'report');
+        // осмотр ≠ поручение писать: нет глагола (создай/запланируй/встреч…) — work не в меню
+        const lookOnly = gathered && !asksWrite(lastPromptText(params.box));
+        if (lookOnly)
+            next = next.filter(id => id !== 'work');
         // после question без субагента / pursue — answer не в меню, пока goal open
         const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
@@ -411,6 +421,8 @@ export default {
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
+        else if (lookOnly && next.includes('answer'))
+            choice = 'answer';
         else
             choice = await this._skillChoice(using_blocks);
         if (!choice) {
@@ -439,8 +451,10 @@ export default {
                 'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
                 'Один агентный ход, если его достаточно — не planning «на всякий случай».',
                 '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
+                '«запланируй / встреча / событие календаря» — work typed ($ics по when типа), не create класса.',
                 '«нарисуй / изображение / картинка» — агент image ($ai.generateImage), не chat-модель задачи и не web.',
                 '«запомни / навык / рецепт» — агент freeze (лента → ai/skills/{id}.js), не work.write и не report. @freeze. Не класть freeze в pipe навыка.',
+                '«не то / разбор ленты» — агент review (закон + слой + path), не work. @review. Не класть review в pipe навыка.',
                 '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
                 hasSideEvidence
                     ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
@@ -653,6 +667,8 @@ export default {
         const box_pipe = this.pipe[params.box?.type];
         const prompt = next_pipe?.prompt || box_pipe?.prompt;
         if (!prompt) {
+            if (draftText(params.block))
+                return;
             // total на корне задачи — сводка этапа, не стрим; ошибку в task.content не писать
             const items = params.box?.items;
             const i = items ? items.indexOf(params.block) : -1;
@@ -662,7 +678,7 @@ export default {
             return;
         }
         let messages;
-        if (params.block.draft) {
+        if (params.block.draft && (params.block.draft.type === 'image_url' || prompt)) {
             const draft = params.block.draft;
             const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
             const content = draft.type === 'image_url'
@@ -670,7 +686,8 @@ export default {
                 : head + (draft.type === 'text' ? draft.text : draft);
             messages = await this.context({ session, leaf: params.block });
             messages.push({ role: 'user', content });
-            delete params.block.draft;
+            if (draft.type === 'image_url')
+                delete params.block.draft;
         }
         else {
             messages = await this.context({
@@ -734,7 +751,7 @@ export default {
         for (;;) {
             chain.push(box);
             const next = box.items?.last;
-            if (next?.box && !hasBody(next)) box = next;
+            if (boxOpen(next)) box = next;
             else break;
         }
         const focus = box;
@@ -812,21 +829,25 @@ export default {
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
             // иначе после «страница недоступна» модель не видит провал и лезет в planning
-            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !hasBody(b)))
+            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close)
+                continue;
+            // провал сборщика (ok=0) не улика, если тот же тип уже дал content
+            if (collectorMissed(b) && collectorHasWin(box.items, b.type))
+                continue;
+            if (b.box && !hasBody(b) && !draftText(b))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
                 continue;
             if (b.box && this.pipe[b.type]?.expand) {
-                for (const leaf of (b.items || []))
-                    if (leaf.content && !(leaf.error && !evidence) && !this.pipe[leaf.type]?.ignore)
-                        messages.push({
-                            role: this.pipe[leaf.type]?.role || 'assistant',
-                            content: clipContext(leaf.content),
-                        });
+                for (const leaf of (b.items || [])) {
+                    if ((leaf.error && !evidence) || this.pipe[leaf.type]?.ignore)
+                        continue;
+                    pushLiftContext(messages, leaf, this.pipe[leaf.type]?.role || 'assistant');
+                }
             }
             else if (focus || b.type === 'prompt' || b.box)
-                messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
+                pushLiftContext(messages, b, this.pipe[b.type]?.role || 'assistant');
             if (b.page && !hasBody(b))
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
@@ -926,7 +947,9 @@ export default {
                         continue; // ходы оркестратора (thinking, answer, planning, report) выше агентов-тёзок
                     const mod = await this._importPipeFile(file);
                     registerAgent(ns, id, mod.default);
-                    agentIds.push(id);
+                    const onlyNested = mod.default?.step === false && Array.isArray(mod.default?.nested);
+                    if (!onlyNested)
+                        agentIds.push(id);
                     if (mod.default?.step !== false)
                         stepAgents.push(id);
                 }
@@ -1197,7 +1220,7 @@ export default {
     async _active_box() {
         let next, box = await this.body;
         while (next = box.items?.last){
-            if(next.box && !hasBody(next))
+            if (boxOpen(next))
                 box = next;
             else
                 break;
@@ -1386,6 +1409,32 @@ function goalNeed(goal) {
     return goal?.need === 'facts' ? 'facts' : 'side';
 }
 
+/** Сборщики: после их content меню их больше не предлагает. */
+const COLLECTORS = new Set(['web', 'explore', 'logs']);
+
+function collectorMissed(b) {
+    return COLLECTORS.has(b?.type) && b.error && !(b.budget?.ok);
+}
+
+function collectorHasWin(items, type) {
+    return (items || []).some(x => x.type === type && x.content && !x.error);
+}
+
+function lastPromptText(box) {
+    let t = '';
+    for (const b of box?.items || []) {
+        if (b.type === 'prompt' && b.content)
+            t = String(b.content);
+    }
+    return t.trim();
+}
+
+/** Постановка просит писать в систему — иначе после сбора work не предлагать. */
+function asksWrite(text) {
+    return /(?:создай|напиши|запиши|сохрани|добавь|подключи|удали|исправь|поправь|сделай\s+файл|запланируй|запланировать|встреч)\b/i
+        .test(String(text || ''));
+}
+
 /** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
 const FACTS_EVIDENCE = new Set(['answer', 'report']);
 
@@ -1399,7 +1448,7 @@ function clearGoalContinue(goal) {
 
 const GOAL_PURSUE_MAX = 3;
 
-/** Последний незакрытый субагент в ленте (не question/form) — кому вернуть ответ человека. */
+/** Последний незакрытый субагент в ленте (не question/form, не step:false вроде site). */
 function lastResumeAgent(body, pipe) {
     const walk = (items) => {
         for (let i = (items || []).length - 1; i >= 0; i--) {
@@ -1407,7 +1456,8 @@ function lastResumeAgent(body, pipe) {
             const nested = walk(b.items);
             if (nested)
                 return nested;
-            if (pipe[b.type]?.agent && b.type !== 'question' && b.type !== 'form')
+            if (pipe[b.type]?.agent && pipe[b.type].step !== false
+                && b.type !== 'question' && b.type !== 'form')
                 return b.type;
         }
         return null;
@@ -1474,14 +1524,15 @@ function registerAgent(ns, id, def) {
         toolBags.push(def.do.tools);
     const allTools = Object.assign({}, ...toolBags);
     const toolKeys = liftBag(ns, allTools, { tool: true });
-    const hasTools = toolKeys.length > 0;
+    const nestedKeys = Array.isArray(def.nested) ? def.nested : [];
+    const hasTools = toolKeys.length > 0 || nestedKeys.length > 0;
     const withTotal = (keys) => {
         const list = [...keys];
         if (hasTools && !list.includes('total'))
             list.push('total');
         return list;
     };
-    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {})]);
+    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {}), ...nestedKeys]);
     const node = {
         ...def,
         agent: true,
@@ -1634,6 +1685,50 @@ function layerHasDigest(box) {
 
 /** Бюджет листа expand: простыня xlsx не должна целиком уходить в каждый fill. */
 const EXPAND_LEAF_CHARS = 8000;
+
+function draftText(block) {
+    const d = block?.draft;
+    if (d == null || d === '')
+        return '';
+    if (typeof d === 'string')
+        return d;
+    if (d.type === 'text')
+        return String(d.text || '');
+    return '';
+}
+
+function queueOf(block) {
+    if (!block)
+        return [];
+    if (block.type === 'web')
+        return block.sites || [];
+    return block.pages || block.sites || [];
+}
+
+/** Бокс ещё открыт: нет сводки и это не лист (только draft). */
+function boxOpen(b) {
+    if (!b?.box || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function agentPending(b, pipe) {
+    if (!pipe[b?.type]?.agent || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function pushLiftContext(messages, block, role) {
+    const d = draftText(block);
+    if (d)
+        messages.push({ role, content: clipContext(d) });
+    if (block.content)
+        messages.push({ role, content: clipContext(block.content) });
+}
 
 function clipContext(text, max = EXPAND_LEAF_CHARS) {
     const s = String(text || '');

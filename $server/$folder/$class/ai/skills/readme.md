@@ -29,7 +29,7 @@
 - `system` / `prompt` — добавка к агенту на этом боксе, не замена `agents/*.js`
 - `tools[]` — предпочтительный внутренний порядок. Движок пропускает уже успешный tool (activation — только `state=принято`); после ok create — `total`, не второй create
 
-Не класть в навык: thinking, ложные question, тела create, `using_blocks`, агент `freeze`. Пути рабочих точек — в `points`.
+Не класть в навык: thinking, ложные question, тела create, `using_blocks`, агенты `freeze` и `review`. Пути рабочих точек — в `points`.
 
 Новый файл появляется не правкой руками, а агентом [`freeze`](/$server/$folder/$class/ai/agents/freeze.js/~/handlers/pages/form/): после удачного прогона меню «запомни / навык / рецепт» или `@freeze`. Черновик собирает код из ленты (`pipe` агентных боксов, `points` осмотра, `defaults` из create). Человек правит id / label / цельные phrases и APPROVE. Пишет `id.js` в этот каталог; кэш `$task._skills` сбрасывается. Не затирает существующий файл без `overwrite: да`. Пример `register-accounts` — эталон, не дефолтный id.
 

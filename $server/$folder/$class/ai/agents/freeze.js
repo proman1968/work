@@ -4,7 +4,7 @@
 
 const AGENT_TAG = 'Навык';
 const PIPE_TYPES = new Set(['explore', 'work', 'check', 'web', 'logs', 'image']);
-const SKIP_TOOLS = new Set(['file', 'total', 'exist', 'map', 'html']);
+const SKIP_TOOLS = new Set(['file', 'total', 'exist', 'map', 'html', 'site']);
 
 const draftTool = {
     label: 'Черновик навыка',

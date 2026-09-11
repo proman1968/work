@@ -555,5 +555,11 @@ export class $file extends $folder{
         }
         return log;
     }
+    async allowAccess(params) {
+        const $item = (await this.$class) || (await this.$owner);
+        if (!$item)
+            return true;
+        return $item.allowAccess(params);
+    }
 }
 $file.type_chain = Object.create(null);

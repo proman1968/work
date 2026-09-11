@@ -8,6 +8,7 @@
 - `$task/` — ИИ-задача (`ai.task`, PDCA/PIPE, preview)
 - `$prompt/` — файлы промптов
 - `$txt/`, `$md/`, `$eml/`, `$ics/`, `$msg/` — типы по расширениям
+- `$ics` — событие календаря: `when` + `METADATA.FIELDS`; агент `work.typed` пишет `.ics` через `save_file` (message + time)
 - `$image/`, `$video/`, `$audio/` — медиа-типы
 - `$office/` — документы Office
 - `$pack/` — пакеты файлов

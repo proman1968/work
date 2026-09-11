@@ -151,30 +151,31 @@ ODA({is: 'work-form',
         const updateEnable = () => {
             const cond = el.selectedUsers.length > 0;
             if (el.domParent) {
-                el.domParent.enable = cond;
+                if (cond) {
+                    el.domParent.OK.label = 'Позвонить [' + el.selectedUsers.length + ']';
+                    el.domParent.OK.icon = 'communication:call';
+                }
+                else {
+                    el.domParent.OK.label = 'Записать видео';
+                    el.domParent.OK.icon = 'av:videocam';
+                }
             }
-            return cond;
         };
         el.addEventListener('changed', updateEnable);
         try {
             this.async(() => { updateEnable() }, 100);
             const res = await WORK.showDialog(el, {
-                enable: false,
                 TITLE: { label: 'Выбор собеседников', icon: 'communication:call' },
                 OK: { label: 'позвонить', icon: 'communication:call' },
-                BUTTONS: [
-                    {
-                        label: 'записать видео',
-                        icon: 'av:videocam',
-                        click: async () => {
-                            WORK.top.RTCCaller.startRecord(await this.$item);
-                        }
-                    }
-                ]
             });
             if (res === 'ok') {
                 const receivers = el.selectedUsers;
-                WORK.top.RTCCaller.startCall(await this.$item, receivers.map(u => u.id));
+                if (receivers > 0) {
+                    WORK.top.RTCCaller.startCall(await this.$item, receivers.map(u => u.id));
+                }
+                else {
+                    WORK.top.RTCCaller.startRecord(await this.$item);
+                }
             }
         }
         catch (err) {
@@ -433,6 +434,7 @@ ODA({
         :host{
             @apply --vertical;
             overflow: hidden;
+            min-width: 300px;
 
             .filter-box{
                 @apply --horizontal;

@@ -25,7 +25,7 @@ Shell + `ui/`: лента, док закрытых box (wide), промптба�
 - Полоска слева у тела — только box (`:host([box])`, `data.items` — массив).
 - Form-слот: колонка (`--vertical`); fieldset `max-width: 400px`; default `microchat-form` рисует разметку из `content` (`parseFormHtml`, старый `data.html` — фолбэк); подпись — хвост после fence. Поле ввода у «Другое» скрыто, пока пункт не выбран. `data.values` пишутся только на `@change` (на `@input` — лишь показ «Другое»): мутация data на каждый символ перерисовывала форму и теряла ввод; `restore()` не трогает контрол в фокусе.
 - Html-слот: `type === 'html'` → `microchat-html` `iframe[srcdoc]` + sandbox (`allow-scripts`); страница из `content` (`unwrapFence`). Лента и док — высота по контенту (`HEIGHT_PING`, не `100vh`; `50vh` только до замера).
-- `site` — обычный блок: `label` = hostname, тело = `content` (метка `[site N: url]` + обзор). `data.url` есть у слота.
+- `site` — шапка (`label`/`state`, `data.url`). Лист: тело пустое (`draft` не показывать). Узел: тело — сводка (`content`) после обхода `pages`. Без `page`.
 
 ## 4. Из чего это состоит
 

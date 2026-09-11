@@ -63,9 +63,15 @@ export default {
             block.stop ??= agent.stop;
         if (prompt && !block.brief)
             block.brief = String(prompt).trim();
+        if (block.label == null && agent.stop !== true)
+            block.label = agent.label;
+        if (block.icon == null)
+            block.icon = agent.icon;
 
         if (own)
             live.send({ type: 'chat.start' });
+
+        await live.save?.();
 
         try {
             await this.turn({
@@ -85,7 +91,7 @@ export default {
         }
     },
 
-    /** Ход агента: лист → fill; box → init / tool (стоп через live.wait) → снова execute. */
+    /** Ход агента: лист → fill; box → init / tool / nested-агент (стоп через live.wait) → снова execute. */
     async turn(ctx) {
         const { block, agent, type, model, messages, session, live, params } = ctx;
         if (live?.stopped) {
@@ -95,6 +101,7 @@ export default {
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
         const toolIds = Object.keys(tools);
+        const nested = Array.isArray(agent.nested) ? agent.nested : [];
         let system = agent[mode]?.system || agent.system;
         if (params.skillStep?.system)
             system = [system, params.skillStep.system].filter(Boolean).join('\n\n');
@@ -102,7 +109,7 @@ export default {
             system = [system, params.skillStep.prompt].filter(Boolean).join('\n\n');
         const exec = (target, call, c) => this.exec(target, call, c);
 
-        if (!toolIds.length) {
+        if (!toolIds.length && !nested.length) {
             await this.fill(block, {
                 agent: { ...agent, system },
                 model, messages, live, box: params.box, effort: params.effort,
@@ -124,7 +131,7 @@ export default {
         if (!block.inited) {
             block.inited = true;
             if (typeof agent.init === 'function') {
-                await agent.init({
+                const ok = await agent.init({
                     block, box: params.box, messages, session, model, live, exec, agent,
                     engine: this,
                     task: params.task,
@@ -135,6 +142,11 @@ export default {
                     delete block.inited;
                     return;
                 }
+                if (ok === false) {
+                    delete block.inited;
+                    block.skip = true;
+                    return;
+                }
                 if (block.error && block.content) {
                     messages.push({ role: 'assistant', content: block.content });
                     delete block.inited;
@@ -142,6 +154,8 @@ export default {
                 }
             }
         }
+        if (typeof agent.recalc === 'function')
+            await agent.recalc({ block, box: params.box, messages, session, live, exec, task: params.task });
 
         const ids = nextIds(agent, block, toolIds);
         const skillTools = params.skillStep?.tools;
@@ -191,7 +205,7 @@ export default {
                     return this.turn(ctx);
                 }
             }
-            if (!child.content && (child.draft || tool.prompt || tool.system)) {
+            if (!child.content && !draftText(child) && (tool.prompt || tool.system)) {
                 await this.fill(child, {
                     agent: {
                         system: tool.system || system,
@@ -201,16 +215,17 @@ export default {
                     },
                     model, messages, live, box: block, effort: params.effort,
                 });
-                delete child.draft;
             }
             if (live?.stopped) {
                 delete block.inited;
                 return;
             }
             if (typeof tool.recalc === 'function')
-                await tool.recalc({ block: child, box: block, messages, session, live, exec, task: params.task });
-            if (child.content)
-                messages.push({ role: 'assistant', content: child.content });
+                await tool.recalc({
+                    block: child, box: block, messages, session, live, exec,
+                    engine: this, task: params.task,
+                });
+            pushLift(messages, child);
             await live.save?.();
             if (child.stop) {
                 if (!live.wait) {
@@ -237,20 +252,29 @@ export default {
             });
         }
 
-        // вложенный агент — свой блок в items, тот же live
-        const sub = await this.execute({
+        // вложенный агент — в ленту до execute (как tool: push → save → ход)
+        const sub = { type: next, time: Date.now() };
+        block.items.push(sub);
+        await live.save?.();
+        await this.execute({
             ...params,
             agent: next,
             prompt: undefined,
-            block: undefined,
+            block: sub,
             box: block,
         });
         if (live?.stopped) {
             delete block.inited;
             return;
         }
-        block.items.push(sub);
-        await live.save?.();
+        if (sub.skip) {
+            const i = block.items.indexOf(sub);
+            if (i >= 0)
+                block.items.splice(i, 1);
+            await live.save?.();
+        }
+        else
+            pushLift(messages, sub);
         return this.execute({
             ...params,
             agent: type, model, messages, session, live,
@@ -259,7 +283,7 @@ export default {
         });
     },
 
-    /** Итог бокса: один чистый успех — без LLM; только ошибки — агрегат; иначе fill (не склейка листьев). */
+    /** Итог бокса: один ребёнок с content — лифт; только ошибки — агрегат; draft/несколько — fill. */
     async total(ctx, tools) {
         const { block, agent, model, messages, live, session, params } = ctx;
         if (live?.stopped) {
@@ -267,27 +291,39 @@ export default {
             return;
         }
         const mode = live?.mode || 'plan';
-        const data = (block.items || []).filter(b =>
-            b.content && b.type !== 'prompt' && tools[b.type]?.role === 'user');
+        const data = (block.items || []).filter(b => {
+            if (b.type === 'prompt' || tools[b.type]?.ignore)
+                return false;
+            if (tools[b.type]?.role && tools[b.type].role !== 'user')
+                return false;
+            return !!(b.content || draftText(b));
+        });
         const results = data.filter(b => !b.error);
         const fails = data.filter(b => b.error);
-        if (results.length === 1 && !fails.length) {
+        const nest = Array.isArray(agent.nested) && agent.nested.length;
+        const ownDraft = !!draftText(block);
+        if (nest && ownDraft && !data.length) {
+            // лист: только draft, сводку пишет родитель
+            delete block.inited;
+            delete block.using_blocks;
+            await live.save?.();
+            return;
+        }
+        if (results.length === 1 && !fails.length && !ownDraft && results[0].content) {
+            // один ребёнок с готовым content — лифт; draft (простыня) не копировать
             block.content = results[0].content;
             delete block.error;
             delete block.state;
-            delete block.using_blocks;
         }
-        else if (!results.length && fails.length) {
+        else if (!results.length && fails.length && !ownDraft) {
             block.error = true;
             block.content = fails.map(b => b.content).filter(Boolean).join('\n') || 'ошибка';
             if (fails.length > 1)
                 block.state = 'ошибки: ' + fails.length;
             else if (!block.state || /^сайты:/.test(block.state))
                 block.state = fails[0].state || 'ошибка';
-            delete block.using_blocks;
         }
-        else if (results.length) {
-            // успех есть — сводка человеку; промах разведки (read «нет файла») не ошибка этапа
+        else if (results.length || ownDraft) {
             await this.fill(block, {
                 agent: {
                     system: agent[mode]?.system || agent.system,
@@ -301,6 +337,13 @@ export default {
                 delete block.inited;
                 return;
             }
+            if (!block.content) {
+                const bits = results.map(b => b.content).filter(Boolean);
+                if (bits.length === 1)
+                    block.content = bits[0];
+                else if (bits.length)
+                    block.content = bits.join('\n\n');
+            }
             if (block.content) {
                 delete block.error;
                 delete block.state;
@@ -309,10 +352,11 @@ export default {
         if (typeof agent.enrichTotal === 'function' && block.content)
             block.content = agent.enrichTotal(block.content, block);
         if (typeof agent.finish === 'function')
-            await agent.finish({ block, live, session });
+            await agent.finish({ block, live, session, box: params.box });
         if (block.content)
             messages.push({ role: 'assistant', content: block.content });
         delete block.inited;
+        delete block.using_blocks;
         await live.save?.();
     },
 
@@ -325,7 +369,9 @@ export default {
         if (ids.length === 1)
             return ids[0];
         const lines = ids.map(id => {
-            const node = tools[id] || {};
+            const node = tools[id] || (id === 'site'
+                ? { description: 'страница по url из очереди' }
+                : {});
             return `- ${id}: ${node.description || node.label || id}`;
         });
         const response = await this.streamChat({
@@ -589,9 +635,33 @@ function skillToolOk(items, type) {
     });
 }
 
+function draftText(block) {
+    const d = block?.draft;
+    if (d == null || d === '')
+        return '';
+    if (typeof d === 'string')
+        return d;
+    if (d.type === 'text')
+        return String(d.text || '');
+    return '';
+}
+
+/** Подъём: draft и content — разные источники, оба в контекст. */
+function pushLift(messages, block) {
+    const d = draftText(block);
+    if (d)
+        messages.push({ role: 'assistant', content: d });
+    if (block?.content)
+        messages.push({ role: 'assistant', content: block.content });
+}
+
 function nextIds(agent, block, toolIds) {
     const used = block.using_blocks || [];
     const ids = toolIds.filter(id => !used.includes(id));
+    for (const id of agent.nested || []) {
+        if (!used.includes(id) && !ids.includes(id))
+            ids.push(id);
+    }
     if (agent.prompt && !used.includes('total') && !used.includes('stop'))
         ids.push('stop');
     return ids;
