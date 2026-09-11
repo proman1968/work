@@ -49,6 +49,10 @@ ODA({is: 'chat-item',
                 overflow: auto;
                 width: stretch;
             }
+            .preview {
+                min-height: 0;
+                overflow: auto;
+            }
             :host([compact]) .card {
                 border-radius: 0;
             }
