@@ -6,6 +6,7 @@ export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
     GET: 'context',
+    METADATA: {},
     async _fc_exec(target, call = {}, ctx = {}) {
         const { method, args } = call;
         const block = ctx.block;
@@ -70,6 +71,20 @@ export default {
         resolve(payload || {});
         return true;
     },
+    /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать do. */
+    async _reviseWait(text, session) {
+        const body = await this.body;
+        const waiting = findWaitingBlock(body, this._waiters);
+        if (!waiting)
+            return false;
+        delete waiting.stop;
+        waiting.state = 'уточнено';
+        const parent = parentOfBlock(body, waiting);
+        if (parent)
+            dropUsedType(parent, waiting.type);
+        await this._save(session);
+        return this._resolveWait(waiting, { accept: false, content: text });
+    },
     /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
     async _runAgent(params, session) {
         const body = await this.body;
@@ -79,6 +94,10 @@ export default {
             throw new Error('$task: метод prompt (ai) не найден у класса');
         // tilde-метод общий: зафиксировать владельца до execute (иначе meta_folder = undefined)
         engine.$context = owner;
+        const worn = await this._skillStep();
+        const skillStep = worn?.step?.type === params.block.type ? worn.step : null;
+        // handoff: блок уже в дереве — сразу диск + changed, не ждать context/execute
+        await this._save(session);
         await engine.execute({
             agent: params.block.type,
             block: params.block,
@@ -89,6 +108,8 @@ export default {
             live: this._live(session),
             model: body.model,
             effort: body.effort,
+            skillStep,
+            task: this,
         });
         await this._save(session);
         return params.block;
@@ -98,14 +119,17 @@ export default {
         if (this._waiters?.size)
             return null; // движок уже ждёт человека в этом блоке — не перезапускать
         const body = await this.body;
+        const focus = await this._active_box();
+        if (agentPending(focus, this.pipe))
+            return { block: focus, box: parentOfBlock(body, focus) || body };
         let box = body;
         for (;;) {
             const next = box.items?.last;
             if (!next)
                 return null;
-            if (this.pipe[next.type]?.agent && !hasBody(next) && !next.error)
+            if (agentPending(next, this.pipe))
                 return { block: next, box };
-            if (next.box && !hasBody(next))
+            if (boxOpen(next))
                 box = next;
             else
                 return null;
@@ -115,13 +139,19 @@ export default {
         let { prompt: rawPrompt, role, session, agent: agentParam } = params;
         const pipe = await this.pipe;
 
-        // @web текст… → agent + хвост (только субагент)
+        // @web / @register-accounts текст… → агент или навык + хвост
         let text = String(rawPrompt ?? '').trim();
         let agent = agentParam;
-        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
+        const mention = text.match(/^@([a-zA-Z_][\w-]*)(?:\s+|$)/);
         if (mention) {
             const id = mention[1];
-            if (pipe[id]?.agent) {
+            const skills = await this._listSkills();
+            if (skills.some(s => s.id === id)) {
+                params.skillMention = id;
+                text = text.slice(mention[0].length).trim();
+                params.prompt = text;
+            }
+            else if (pipe[id]?.agent) {
                 agent = id;
                 text = text.slice(mention[0].length).trim();
                 params.prompt = text;
@@ -179,38 +209,56 @@ export default {
                         params.block.files = JSON.parse(params.includes);
                         await this._push_block(params);
                     }
-                    delete params.box.using_blocks;
+                    if (!this.pipe[params.box.type]?.agent)
+                        delete params.box.using_blocks;
                     this._stopped = false;
 
-                    // durable goal: новая постановка или вход к открытой; waiting+resume → форс / continue
-                    if (text) {
+                    // durable goal: текст или вложение = ход человека; waiting+resume → форс / continue
+                    if (text || params.includes || params.skillMention) {
                         const body = await this.body;
                         const g = body.goal;
-                        if (!g || g.status === 'done') {
+                        const goalText = String(text || '').trim()
+                            || (params.includes && g?.text ? String(g.text).trim() : '')
+                            || attachGoalText(params.includes)
+                            || (params.skillMention ? '@' + params.skillMention : '');
+                        if (goalText && (!g || g.status === 'done') && agent !== 'review') {
+                            const need = await this._classifyGoalNeed(goalText, session);
                             body.goal = {
-                                text,
+                                text: goalText,
                                 status: 'open',
                                 resume: null,
                                 pursue: 0,
-                                need: await this._classifyGoalNeed(text, session),
+                                need,
                             };
+                            delete body.skill;
+                            await this._wearSkill({
+                                text: goalText,
+                                need,
+                                session,
+                                mention: params.skillMention,
+                            });
                         }
-                        else if (g.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
+                        else if (g?.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
                             agent = g.resume.agent;
                             params.agent = agent;
                             g.status = 'open';
                             g.resume = null;
                         }
-                        else if (g.status === 'waiting' && g.resume?.continue) {
+                        else if (g?.status === 'waiting' && g.resume?.continue) {
                             // ответ на question до субагента — меню без answer
                             g.status = 'open';
                         }
-                        else if (g.status === 'waiting') {
+                        else if (g?.status === 'waiting') {
                             g.status = 'open';
                             g.resume = null;
                         }
                         await this._save(session);
                     }
+
+                    if (text && this._waiters?.size && await this._reviseWait(text, session))
+                        return { ok: true };
+                    if (text || params.includes)
+                        releaseStaleStops(params.box);
 
                     // прямой вход в субагента — исполняет движок класса
                     if (agent) {
@@ -328,6 +376,8 @@ export default {
                     await this._save(session);
                     return { loop: false, block: leaf };
                 }
+                if (!hasBody(leaf))
+                    return { loop: this._canLoop(leaf), block: leaf };
                 await this._noteGoalWait(leaf, params.box, session);
                 return { loop: false, waiting: true, block: leaf };
             }
@@ -353,6 +403,17 @@ export default {
         let using_blocks = params.box.using_blocks ??= [];
         // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
         next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
+        // сбор уже в ленте — не предлагать сборщиков и не дублировать сводку report
+        const gathered = (params.box?.items || []).some(b => COLLECTORS.has(b.type) && b.content && !b.error);
+        if (gathered)
+            next = next.filter(id => !COLLECTORS.has(id) && id !== 'report');
+        // осмотр ≠ поручение писать: нет глагола (создай/запланируй/встреч…) — work не в меню
+        const lookOnly = gathered && !asksWrite(lastPromptText(params.box));
+        if (lookOnly)
+            next = next.filter(id => id !== 'work');
+        // картинка / N файлов с изображениями — image.generate, не work.write
+        if (asksImage(lastPromptText(params.box)))
+            next = next.filter(id => id !== 'work');
         // после question без субагента / pursue — answer не в меню, пока goal open
         const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
@@ -364,11 +425,18 @@ export default {
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
-        else if (!next.length)
-            choice = this.pipe.total ? 'total' : null;
-        else if (next.length === 1)
-            choice = next[0];
-        else {
+        else if (lookOnly && next.includes('answer'))
+            choice = 'answer';
+        else
+            choice = await this._skillChoice(using_blocks);
+        if (!choice) {
+            if (attachmentsNeedDigest(this.body) && next.includes('thinking'))
+                choice = 'thinking';
+            else if (!next.length)
+                choice = this.pipe.total ? 'total' : null;
+            else if (next.length === 1)
+                choice = next[0];
+            else {
             const lines = next.map(id => {
                 const n = this.pipe[id];
                 const cap = n?.[mode]?.description || n?.[mode]?.inject
@@ -377,7 +445,8 @@ export default {
             });
             const need = goal?.need || 'side';
             const hasSideEvidence = (params.box?.items || []).some(b =>
-                (b.type === 'work' || b.type === 'create' || b.type === 'write')
+                (b.type === 'work' || b.type === 'create' || b.type === 'write'
+                    || b.type === 'image' || b.type === 'generate')
                 && b.content && !b.error);
             let menu = [
                 'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
@@ -386,6 +455,10 @@ export default {
                 'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
                 'Один агентный ход, если его достаточно — не planning «на всякий случай».',
                 '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
+                '«запланируй / встреча / событие календаря» — work typed ($ics по when типа), не create класса.',
+                '«нарисуй / изображение / картинка / фото / N файлов с картинками / по сезонам» — агент image: N generate (по файлу), не коллаж и не work.write.',
+                '«запомни / навык / рецепт» — агент freeze (лента → ai/skills/{id}.js), не work.write и не report. @freeze. Не класть freeze в pipe навыка.',
+                '«не то / разбор ленты» — агент review (закон + слой + path), не work. @review. Не класть review в pipe навыка.',
                 '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
                 hasSideEvidence
                     ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
@@ -393,7 +466,7 @@ export default {
                 'report — только сводка в ленту; файл на диске он не создаёт. report не заменяет create и не закрывает side без evidence.',
                 'Состав/инвентарь системы или провайдера — explore (ls, meta, remote), не web «на всякий случай» и не перечень из readme.',
                 need === 'facts'
-                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); факты есть — answer по ним. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
+                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); сводка thinking/report уже есть — answer. Сырые вложения без сводки — thinking, не answer по простыне. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
                     : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
                 'Если разумный default уже есть в контексте — не спрашивай, действуй.',
                 'Ответь одним словом строго из списка, без знаков и пояснений.',
@@ -404,8 +477,9 @@ export default {
             let response = await this._streamChat({ messages, silent: true, session });
             if (this._stopped)
                 return { loop: false, block: params.block };
-            choice = menuPick(response.content, next)
-                || (next.includes('thinking') ? 'thinking' : next[0]);
+                choice = menuPick(response.content, next)
+                    || (next.includes('thinking') ? 'thinking' : next[0]);
+            }
         }
 
         if (!choice || this._stopped)
@@ -416,9 +490,12 @@ export default {
         const pushed = await this._push_block(params);
         // выбранный агент исполняет движок класса (live-контракт), не цикл таска
         if (pushed && this.pipe[choice]?.agent) {
+            if (hasBody(params.block) && params.block.stop) {
+                await this._noteGoalWait(params.block, params.box, session);
+                return { loop: false, waiting: true, block: params.block };
+            }
             await this._runAgent(params, session);
             await this._captionDoc(params, session);
-            await this._save(session);
             const b = params.block;
             if (this._stopped)
                 return { loop: false, block: b };
@@ -426,6 +503,8 @@ export default {
                 await this._noteGoalWait(b, params.box, session);
                 return { loop: false, waiting: true, block: b };
             }
+            await this._advanceSkillIf(choice);
+            await this._save(session);
             // субагент действия отработал — слот continue больше не нужен
             if (choice !== 'question' && choice !== 'form')
                 clearGoalContinue(this.body.goal);
@@ -480,16 +559,19 @@ export default {
     },
 
     /**
-     * goal.need=facts: успешный сбор фактов или реплика — закрыть цель (без pursue).
+     * Закрыть цель: facts — answer/report; side — report/answer/html на корне.
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
         const g = this.body?.goal;
-        if (!g || g.status === 'done' || goalNeed(g) !== 'facts')
+        if (!g || g.status === 'done')
             return false;
         if (!block || !hasBody(block) || block.error)
             return false;
-        if (!FACTS_EVIDENCE.has(block.type))
+        const need = goalNeed(g);
+        if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
+            return false;
+        if (need === 'side' && !SIDE_EVIDENCE.has(block.type))
             return false;
         g.status = 'done';
         g.resume = null;
@@ -583,18 +665,24 @@ export default {
             params.block.label = words;
     },
 
-    /** Лист без тела: стрим в тот же блок. Пустой стоп — content не писать, тип снять с using. */
+    /** Лист без тела: стрим в тот же блок. Пустой стоп — ошибка в ленте, тип снять с using. */
     async _fillLeaf(params = {}, session) {
         const next_pipe = this.pipe[params.block.type];
         const box_pipe = this.pipe[params.box?.type];
         const prompt = next_pipe?.prompt || box_pipe?.prompt;
         if (!prompt) {
-            params.block.error = true;
-            params.block.content = '$task: нет pipe/prompt для «' + params.block.type + '»';
+            if (draftText(params.block))
+                return;
+            // total на корне задачи — сводка этапа, не стрим; ошибку в task.content не писать
+            const items = params.box?.items;
+            const i = items ? items.indexOf(params.block) : -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            dropUsedType(params.box, params.block.type);
             return;
         }
         let messages;
-        if (params.block.draft) {
+        if (params.block.draft && (params.block.draft.type === 'image_url' || prompt)) {
             const draft = params.block.draft;
             const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
             const content = draft.type === 'image_url'
@@ -602,7 +690,8 @@ export default {
                 : head + (draft.type === 'text' ? draft.text : draft);
             messages = await this.context({ session, leaf: params.block });
             messages.push({ role: 'user', content });
-            delete params.block.draft;
+            if (draft.type === 'image_url')
+                delete params.block.draft;
         }
         else {
             messages = await this.context({
@@ -627,8 +716,14 @@ export default {
             text = this.pipe.unwrapFence(text);
         if (text)
             params.block.content = text;
-        else
+        else {
             delete params.block.content;
+            if (!this.pipe[params.block.type]?.ignore) {
+                dropUsedType(params.box, params.block.type);
+                params.block.error = true;
+                params.block.content = 'Модель не вернула текст.';
+            }
+        }
         if (response.usage)
             params.block.usage = response.usage;
         if (!hasBody(params.block) && !this.pipe[params.block.type]?.ignore)
@@ -638,6 +733,8 @@ export default {
         if (this._stopped || !block) return false;
         if (!hasBody(block))
             return !!block.box;
+        if (block.error && this._pipe?.[block.type]?.stopOnError)
+            return false;
         return !block.stop;
     },
     async _init(params = {}) {
@@ -658,16 +755,20 @@ export default {
         for (;;) {
             chain.push(box);
             const next = box.items?.last;
-            if (next?.box && !hasBody(next)) box = next;
+            if (boxOpen(next)) box = next;
             else break;
         }
         const focus = box;
         const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
         let messages;
         const goalBlock = formatGoalBlock(body.goal);
+        const skillDef = body.skill?.id
+            ? (await this._listSkills()).find(s => s.id === body.skill.id)
+            : null;
+        const skillBlock = formatSkillBlock(body.skill, skillDef);
         if (handoff) {
             // база system от заказчика (уже с расположением); исполнитель дополнит локально
-            const base = [String(body.system || '').trim(), goalBlock].filter(Boolean).join('\n\n');
+            const base = [String(body.system || '').trim(), goalBlock, skillBlock].filter(Boolean).join('\n\n');
             messages = base ? [{ role: 'system', content: base }] : [];
         }
         else {
@@ -678,6 +779,7 @@ export default {
             messages = [{ role: 'system', content: [
                 ...layers.map(l => l.system).filter(Boolean),
                 goalBlock,
+                skillBlock,
                 timeNow(body.tz),
                 topicsMap(pipe, focus, mode),
                 leafSystem,
@@ -685,10 +787,10 @@ export default {
         }
         /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
         const push = (nextRole, content) => {
-            if (!content) return;
+            if (!content || (Array.isArray(content) && !content.length)) return;
             const last = messages.last;
             if (last?.role === nextRole && nextRole === 'user') {
-                last.content += '\n\n' + content;
+                last.content = mergeUserContent(last.content, content);
                 return;
             }
             if (last?.role === 'assistant' && nextRole === 'assistant')
@@ -702,15 +804,16 @@ export default {
             push('user', stageOpen(focus, this.pipe[focus.type]));
         if (prompt) {
             if (messages.last?.role === 'user')
-                messages.last.content += '\n\n[instruction]\n' + prompt;
+                messages.last.content = mergeUserContent(messages.last.content, '[instruction]\n' + prompt);
             else
                 messages.push({ role: 'user', content: prompt });
         }
+        await hydrateImageParts(messages);
         return messages;
     },
     /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
      *  evidence: false (генерация total) — предки без уликов-боксов.
-     *  expand-box отдаёт листья с ролью их узла, маркер box.content в контекст не идёт. */
+     *  expand-box отдаёт листья с ролью их узла (бюджет clipContext); маркер box.content в контекст не идёт. */
     _box_context(box, focus = true, evidence = true, handoff = false) {
         const node = this.pipe[box.type];
         const mode = this.body.mode || 'plan';
@@ -731,18 +834,25 @@ export default {
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
             // иначе после «страница недоступна» модель не видит провал и лезет в planning
-            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close || (b.box && !hasBody(b)))
+            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close)
+                continue;
+            // провал сборщика (ok=0) не улика, если тот же тип уже дал content
+            if (collectorMissed(b) && collectorHasWin(box.items, b.type))
+                continue;
+            if (b.box && !hasBody(b) && !draftText(b))
                 continue;
             const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
             if (!focus && !frame)
                 continue;
             if (b.box && this.pipe[b.type]?.expand) {
-                for (const leaf of (b.items || []))
-                    if (leaf.content && !(leaf.error && !evidence) && !this.pipe[leaf.type]?.ignore)
-                        messages.push({ role: this.pipe[leaf.type]?.role || 'assistant', content: leaf.content });
+                for (const leaf of (b.items || [])) {
+                    if ((leaf.error && !evidence) || this.pipe[leaf.type]?.ignore)
+                        continue;
+                    pushLiftContext(messages, leaf, this.pipe[leaf.type]?.role || 'assistant');
+                }
             }
             else if (focus || b.type === 'prompt' || b.box)
-                messages.push({ role: this.pipe[b.type]?.role || 'assistant', content: b.content });
+                pushLiftContext(messages, b, this.pipe[b.type]?.role || 'assistant');
             if (b.page && !hasBody(b))
                 messages.push({ role: 'user', content: b.page });
             if (b.answer != null)
@@ -842,7 +952,9 @@ export default {
                         continue; // ходы оркестратора (thinking, answer, planning, report) выше агентов-тёзок
                     const mod = await this._importPipeFile(file);
                     registerAgent(ns, id, mod.default);
-                    agentIds.push(id);
+                    const onlyNested = mod.default?.step === false && Array.isArray(mod.default?.nested);
+                    if (!onlyNested)
+                        agentIds.push(id);
                     if (mod.default?.step !== false)
                         stepAgents.push(id);
                 }
@@ -889,6 +1001,132 @@ export default {
         catch {
             return null;
         }
+    },
+    async _skillsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('skills') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/skills');
+        }
+        catch {
+            return null;
+        }
+    },
+    async _listSkills() {
+        if (this._skills)
+            return this._skills;
+        const list = [];
+        try {
+            const dir = await this._skillsDir();
+            if (!dir)
+                return this._skills = list;
+            const kids = (await dir.inherit_children) || (await dir.children) || [];
+            const byId = new Map();
+            for (const f of kids) {
+                if (f?.id?.endsWith?.('.js'))
+                    byId.set(f.id, f);
+            }
+            for (const [fileId, file] of byId) {
+                const id = fileId.replace(/\.js$/, '');
+                const mod = await this._importPipeFile(file);
+                const def = mod.default;
+                if (def && typeof def === 'object')
+                    list.push({ ...def, id: def.id || id });
+            }
+        }
+        catch { /* нет каталога */ }
+        return this._skills = list;
+    },
+    async _wearSkill({ text, need, session, mention } = {}) {
+        const skills = await this._listSkills();
+        if (!skills.length)
+            return;
+        let skill;
+        if (mention)
+            skill = skills.find(s => s.id === mention);
+        else {
+            const fit = skills.filter(s => !s.when?.need || s.when.need === need);
+            const hits = fit.filter(s => phraseHits(text, s.when?.phrases));
+            if (hits.length === 1)
+                skill = hits[0];
+            else if (hits.length > 1)
+                skill = await this._pickSkillMenu(hits, session);
+        }
+        if (!skill)
+            return;
+        if (!await pointsExist(skill.points))
+            return;
+        this.body.skill = {
+            id: skill.id,
+            cursor: 0,
+            slots: { ...(skill.defaults || {}) },
+        };
+    },
+    async _pickSkillMenu(hits, session) {
+        const ids = hits.map(s => s.id);
+        const lines = [
+            'NONE - обычная лента;',
+            ...hits.map(s => s.id.toUpperCase() + ' - ' + (s.label || s.id) + ';'),
+        ];
+        const response = await this._streamChat({
+            silent: true,
+            session,
+            messages: [{
+                role: 'user',
+                content: [
+                    'Выбери навык для этой цели или NONE.',
+                    'Ответь одним словом строго из списка, без знаков и пояснений.',
+                    '',
+                    '[menu]',
+                    ...lines,
+                ].join('\n'),
+            }],
+        });
+        if (this._stopped)
+            return;
+        const pick = skillMenuPick(response.content, ids);
+        if (!pick || pick === 'none')
+            return;
+        return hits.find(s => s.id === pick);
+    },
+    async _skillStep() {
+        const bind = this.body?.skill;
+        if (!bind?.id)
+            return null;
+        const skill = (await this._listSkills()).find(s => s.id === bind.id);
+        const step = skill?.pipe?.[bind.cursor];
+        if (!step) {
+            delete this.body.skill;
+            return null;
+        }
+        return { skill, step, bind };
+    },
+    async _skillChoice(using_blocks) {
+        for (;;) {
+            const worn = await this._skillStep();
+            if (!worn)
+                return;
+            const type = worn.step.type;
+            if (!this.pipe[type] || (using_blocks || []).includes(type)) {
+                this.body.skill.cursor++;
+                continue;
+            }
+            return type;
+        }
+    },
+    async _advanceSkillIf(type) {
+        const worn = await this._skillStep();
+        if (worn?.step?.type === type)
+            this.body.skill.cursor++;
+        await this._skillStep();
     },
     get body() {
         return new AsyncPromise(async () => {
@@ -987,7 +1225,7 @@ export default {
     async _active_box() {
         let next, box = await this.body;
         while (next = box.items?.last){
-            if(next.box && !hasBody(next))
+            if (boxOpen(next))
                 box = next;
             else
                 break;
@@ -1046,6 +1284,34 @@ function sameBlock(a, b) {
     return a.type === b.type && a.label === b.label && a.content === b.content;
 }
 
+function releaseStaleStops(box) {
+    if (!box?.items)
+        return;
+    for (const b of box.items) {
+        if (!b.stop)
+            continue;
+        // stop === true — вид без шапки (answer/report/question), не wait; не снимать
+        if (b.type === 'answer' || b.type === 'report' || b.type === 'question')
+            continue;
+        delete b.stop;
+        b.state = 'уточнено';
+        dropUsedType(box, b.type);
+    }
+}
+
+function findWaitingBlock(root, waiters) {
+    if (!root || !waiters?.size)
+        return null;
+    for (const b of root.items || []) {
+        if (waiters.has(b.time))
+            return b;
+        const inner = findWaitingBlock(b, waiters);
+        if (inner)
+            return inner;
+    }
+    return null;
+}
+
 function parentOfBlock(root, block) {
     if (!root || !block) return null;
     for (const b of (root.items || [])) {
@@ -1096,6 +1362,18 @@ function topicsMap(pipe, focus, mode) {
     return parts.join('\n\n');
 }
 
+/** Надетый навык: точки и слоты в system. */
+function formatSkillBlock(bind, skill) {
+    if (!bind?.id || !skill)
+        return '';
+    const lines = ['[skill] ' + skill.id];
+    for (const [k, v] of Object.entries(skill.points || {}))
+        lines.push('point.' + k + ': ' + v);
+    if (bind.slots && Object.keys(bind.slots).length)
+        lines.push('slots:\n' + JSON.stringify(bind.slots, null, 2));
+    return lines.join('\n');
+}
+
 /** Сессионная цель для system/меню: факт + норма достижения. */
 function formatGoalBlock(goal) {
     if (!goal?.text)
@@ -1115,12 +1393,13 @@ function formatGoalBlock(goal) {
         if (need === 'facts') {
             lines.push(
                 'need=facts: цель — ответ человеку фактами. explore/web/logs — сбор, они цель не закрывают; закрывает answer (или report) по фактам из ленты.',
-                'Факты уже в ленте (ls/meta/remote/страница) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+                'Факты уже в ленте (ls/meta/remote/страница, сводка thinking/report) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+                'Сырые вложения (includes/file) без сводки — сначала thinking или report, не answer по простыне.',
             );
         }
         else {
             lines.push(
-                'need=side: цель — действие в системе; закрывается evidence / check после факта в ленте, не репликой.',
+                'need=side: цель — действие в системе; закрывает report / answer / html на корне task, не check и не листья create/write.',
                 'Пока status не done — цель не достигнута; сессия не считается выполненной.',
                 'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
                 'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
@@ -1135,8 +1414,44 @@ function goalNeed(goal) {
     return goal?.need === 'facts' ? 'facts' : 'side';
 }
 
+/** Сборщики: после их content меню их больше не предлагает. */
+const COLLECTORS = new Set(['web', 'explore', 'logs']);
+
+function collectorMissed(b) {
+    return COLLECTORS.has(b?.type) && b.error && !(b.budget?.ok);
+}
+
+function collectorHasWin(items, type) {
+    return (items || []).some(x => x.type === type && x.content && !x.error);
+}
+
+function lastPromptText(box) {
+    let t = '';
+    for (const b of box?.items || []) {
+        if (b.type === 'prompt' && b.content)
+            t = String(b.content);
+    }
+    return t.trim();
+}
+
+/** Постановка просит писать в систему — иначе после сбора work не предлагать. */
+function asksWrite(text) {
+    return /(?:создай|напиши|запиши|сохрани|добавь|подключи|удали|исправь|поправь|сделай\s+файл|запланируй|запланировать|встреч)\b/i
+        .test(String(text || ''));
+}
+
+/** Картинка / файлы-слайды — image, не work.write png. */
+function asksImage(text) {
+    const t = String(text || '');
+    return /(?:нарисуй|нарисовать|рисунок|картинк|изображен|фото|generateImage|слайд|по\s+сезонам)/i.test(t)
+        || /файл\w*\s+(?:с\s+)?(?:изображен|картинк|рисунок|фото)/i.test(t);
+}
+
 /** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
 const FACTS_EVIDENCE = new Set(['answer', 'report']);
+
+/** need=side: конечный отчёт на корне, не постусловие check. */
+const SIDE_EVIDENCE = new Set(['answer', 'report', 'html']);
 
 function clearGoalContinue(goal) {
     if (goal?.resume?.continue)
@@ -1145,7 +1460,7 @@ function clearGoalContinue(goal) {
 
 const GOAL_PURSUE_MAX = 3;
 
-/** Последний незакрытый субагент в ленте (не question/form) — кому вернуть ответ человека. */
+/** Последний незакрытый субагент в ленте (не question/form, не step:false вроде site). */
 function lastResumeAgent(body, pipe) {
     const walk = (items) => {
         for (let i = (items || []).length - 1; i >= 0; i--) {
@@ -1153,7 +1468,8 @@ function lastResumeAgent(body, pipe) {
             const nested = walk(b.items);
             if (nested)
                 return nested;
-            if (pipe[b.type]?.agent && b.type !== 'question' && b.type !== 'form')
+            if (pipe[b.type]?.agent && pipe[b.type].step !== false
+                && b.type !== 'question' && b.type !== 'form')
                 return b.type;
         }
         return null;
@@ -1175,12 +1491,14 @@ function agentBrief(body, block) {
         }
     };
     walk(body?.items);
-    const text = String(last || body?.title || '').trim();
+    const text = String(last || body?.name || '').trim();
     return text.slice(0, 500);
 }
 
 function liftBag(ns, bag, flag) {
     for (const [tid, raw] of Object.entries(bag || {})) {
+        if (ns[tid])
+            continue; // ход оркестратора (file вложений) выше тёзки tool агента
         const t = { ...raw, ...flag };
         if (t.description && !t.inject)
             t.inject = t.description;
@@ -1218,14 +1536,15 @@ function registerAgent(ns, id, def) {
         toolBags.push(def.do.tools);
     const allTools = Object.assign({}, ...toolBags);
     const toolKeys = liftBag(ns, allTools, { tool: true });
-    const hasTools = toolKeys.length > 0;
+    const nestedKeys = Array.isArray(def.nested) ? def.nested : [];
+    const hasTools = toolKeys.length > 0 || nestedKeys.length > 0;
     const withTotal = (keys) => {
         const list = [...keys];
         if (hasTools && !list.includes('total'))
             list.push('total');
         return list;
     };
-    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {})]);
+    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {}), ...nestedKeys]);
     const node = {
         ...def,
         agent: true,
@@ -1282,6 +1601,50 @@ function agentResult(agent, block, extra = {}) {
 }
 
 /** Слово меню: точное / первое слово / id из списка внутри текста. */
+function phraseHits(text, phrases) {
+    if (!phrases?.length)
+        return false;
+    const t = String(text || '').toLowerCase();
+    return phrases.some(p => {
+        const phrase = String(p || '').toLowerCase().trim();
+        if (!phrase)
+            return false;
+        if (t.includes(phrase))
+            return true;
+        const words = phrase.split(/\s+/).filter(w => w.length > 2);
+        return words.length > 0 && words.every(w => t.includes(w));
+    });
+}
+
+async function pointsExist(points) {
+    for (const path of Object.values(points || {})) {
+        if (!path)
+            continue;
+        try {
+            if (!await WORK.get_item(path))
+                return false;
+        }
+        catch {
+            return false;
+        }
+    }
+    return true;
+}
+
+function skillMenuPick(text, ids) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t)
+        return;
+    if (t === 'none')
+        return 'none';
+    if (ids.includes(t))
+        return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_-]+/g, '');
+    if (first === 'none' || ids.includes(first))
+        return first;
+    return ids.find(id => new RegExp('\\b' + id.replace(/-/g, '\\-') + '\\b', 'i').test(t));
+}
+
 function menuPick(text, next) {
     const t = String(text || '').trim().toLowerCase();
     if (!t || !next?.length) return;
@@ -1299,6 +1662,157 @@ function stageOpen(block, node) {
 
 function hasBody(b) {
     return !!String(b?.content ?? '').trim();
+}
+
+/** Имена файлов из params.includes — постановка, если текста нет. */
+function attachGoalText(raw) {
+    if (!raw)
+        return '';
+    try {
+        const list = JSON.parse(raw);
+        const names = (Array.isArray(list) ? list : []).map(p => {
+            const s = String(p?.path || p?.label || p || '').replace(/\\/g, '/');
+            return s.split('/').filter(Boolean).pop() || '';
+        }).filter(Boolean);
+        return names.join(', ');
+    } catch {
+        return '';
+    }
+}
+
+/** Закрытые вложения без сводки — сначала thinking, не answer по сырым простыням. */
+function attachmentsNeedDigest(body) {
+    const inc = (body?.items || []).filter(b => b.type === 'includes');
+    if (!inc.length || inc.some(b => !hasBody(b)))
+        return false;
+    if (layerHasDigest(body))
+        return false;
+    return !(body.items || []).some(b => b.type === 'thinking');
+}
+
+function layerHasDigest(box) {
+    return (box?.items || []).some(b =>
+        (b.type === 'thinking' || b.type === 'report') && hasBody(b) && !b.error);
+}
+
+/** Бюджет листа expand: простыня xlsx не должна целиком уходить в каждый fill. */
+const EXPAND_LEAF_CHARS = 8000;
+
+function draftText(block) {
+    const d = block?.draft;
+    if (d == null || d === '')
+        return '';
+    if (typeof d === 'string')
+        return d;
+    if (d.type === 'text')
+        return String(d.text || '');
+    return '';
+}
+
+function queueOf(block) {
+    if (!block)
+        return [];
+    if (block.type === 'web')
+        return block.sites || [];
+    return block.pages || block.sites || [];
+}
+
+/** Бокс ещё открыт: нет сводки и это не лист (только draft). */
+function boxOpen(b) {
+    if (!b?.box || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function agentPending(b, pipe) {
+    if (!pipe[b?.type]?.agent || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function pushLiftContext(messages, block, role) {
+    const d = draftText(block);
+    const text = [d && clipContext(d), block.content && clipContext(block.content)]
+        .filter(Boolean).join('\n\n');
+    const pic = imageRef(block);
+    if (pic) {
+        const parts = [];
+        if (text)
+            parts.push({ type: 'text', text });
+        parts.push(pic);
+        messages.push({ role, content: parts });
+        return;
+    }
+    if (text)
+        messages.push({ role, content: text });
+}
+
+function imageRef(block) {
+    const d = block?.draft;
+    if (d?.type !== 'image_url')
+        return;
+    const url = d.image_url?.url || String(block.path || '');
+    if (!url)
+        return;
+    return { type: 'image_url', image_url: { url } };
+}
+
+function contentParts(value) {
+    if (Array.isArray(value))
+        return value.filter(Boolean);
+    if (value == null || value === '')
+        return [];
+    return [{ type: 'text', text: String(value) }];
+}
+
+function mergeUserContent(a, b) {
+    if (!Array.isArray(a) && !Array.isArray(b))
+        return a ? String(a) + '\n\n' + b : b;
+    return [...contentParts(a), ...contentParts(b)];
+}
+
+async function hydrateImageParts(messages) {
+    for (const m of messages || []) {
+        if (!Array.isArray(m?.content))
+            continue;
+        const next = [];
+        for (const part of m.content) {
+            if (part?.type !== 'image_url') {
+                next.push(part);
+                continue;
+            }
+            const url = String(part.image_url?.url || '');
+            if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+                next.push(part);
+                continue;
+            }
+            if (!url.startsWith('/'))
+                continue;
+            try {
+                const file = await WORK.get_item(url);
+                const buf = await file.load({ encoding: null });
+                const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+                const mime = file.contentType || 'image/jpeg';
+                next.push({
+                    type: 'image_url',
+                    image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
+                });
+            }
+            catch { /* нет байтов — только подпись файла */ }
+        }
+        m.content = next.length === 1 && next[0]?.type === 'text' ? next[0].text : next;
+    }
+}
+
+function clipContext(text, max = EXPAND_LEAF_CHARS) {
+    const s = String(text || '');
+    if (s.length <= max)
+        return s;
+    return s.slice(0, max).trimEnd() + '\n\n[… обрезано, полный текст в ленте]';
 }
 
 function dropUsedType(box, type) {

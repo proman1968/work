@@ -1,8 +1,10 @@
 /** Агент logs: журнал класса ($class.logs). Хронология процессов и взаимодействий.
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat, engine }).
- *  Read-only: dates → bodies (день + ext) → entry через read_log_entry. Не work.read по .logs. */
+ *  Read-only: dates → bodies (день + ext) → entry через read_log_entry.
+ *  Stub `.logs` ≠ связанный файл (`row.path`). Дайджест связанного — здесь, не work.read history. */
 const BODIES_LIMIT = 40;
 const ENTRY_CONTENT_MAX = 1200;
+const PEEK_CHARS = 80;
 
 /** Подсказки темы → фильтр ext для $class.logs({ ext }). Без фильтра = все типы дня. */
 const EXT_HINTS = [
@@ -52,6 +54,7 @@ const bodiesTool = {
         'День YYYY-MM-DD (или «вчера»/«сегодня») и опционально ext.',
         'Фильтры: календарь → ics; почта → eml; задачи ИИ → task; общий журнал → logs.',
         'Только через $class.logs — не читай history-файлы через work.',
+        'В списке file: — связанный артефакт, entry: — stub для tool entry. Peek — title/prompt, не выдумывай.',
         'Не выдумывай записи.',
     ].join('\n'),
     prompt: [
@@ -85,7 +88,7 @@ const bodiesTool = {
             if (ext)
                 args.ext = ext;
             const rows = await target.logs(args);
-            b.content = formatBodies(rows, b.path, dayKey, ext);
+            b.content = await formatBodies(rows, b.path, dayKey, ext);
             b.done = true;
             return true;
         }
@@ -105,8 +108,8 @@ const entryTool = {
     description: 'одна запись через read_log_entry (не work.read)',
     system: [
         '# Режим: одна запись',
-        'Путь entry из bodies (строка entry: …/history/…/*.logs|*.task|…).',
-        'Читай только через read_log_entry класса — не work.read / search.',
+        'Путь entry: из bodies (stub …/*.logs) или file: связанного артефакта.',
+        'Читай только через read_log_entry. Связанный файл подтягивает tool (дайджест), не work.read.',
         'Не выдумывай содержимое.',
     ].join('\n'),
     prompt: [
@@ -127,7 +130,8 @@ const entryTool = {
         b.state = 'entry';
         try {
             const row = await target.read_log_entry({ path: entryPath });
-            b.content = formatEntry(row, entryPath);
+            const digest = row?.path ? await digestRelated(row.path, row.ext) : '';
+            b.content = formatEntry(row, entryPath, digest);
             b.done = true;
             return true;
         }
@@ -147,12 +151,13 @@ export default {
     system: [
         '# Агент: logs',
         'Хронология места только через $class.logs / read_log_entry. Не explore, не work.read history.',
-        'Порядок: dates → bodies(день, опц. ext) → entry по пути entry: из bodies.',
+        'Порядок: dates → bodies(день, опц. ext) → entry по entry: (stub) или file: (артефакт).',
+        'bodies: file: — связанный файл, entry: — stub, peek — title/prompt. entry — дайджест артефакта.',
         'День: YYYY-MM-DD или «вчера»/«сегодня». Фильтр: ics (календарь), eml (почта), task, logs.',
         'Класс: путь из запроса или place исполнения. Без write / save_message.',
         'Не выдумывай записи — только факты из журнала.',
     ].join('\n'),
-    prompt: 'Сводка по журналу: кто, когда, что (по фактам из dates/bodies/entry). Пути history не предлагай читать через work.',
+    prompt: 'Сводка по журналу: кто, когда, что (peek/дайджест из bodies/entry). Пути history не предлагай читать через work.',
     tools: {
         dates: datesTool,
         bodies: bodiesTool,
@@ -317,44 +322,48 @@ function parseEntryPath(block, box, messages, defaultLabel) {
     return hit ? hit[1] : '';
 }
 
-function formatBodies(rows, classPath, day, ext) {
+async function formatBodies(rows, classPath, day, ext) {
     const list = Array.isArray(rows) ? rows : [];
     const filt = ext ? ' .' + ext : '';
     const head = '[логи ' + classPath + ' @ ' + day + filt + ': ' + list.length + ']';
     if (!list.length)
         return head + '\n(нет записей)';
     const slice = list.slice(0, BODIES_LIMIT);
-    const lines = [head];
-    for (const row of slice)
-        lines.push(formatBodyLine(row));
+    const lines = [head, ...await Promise.all(slice.map(row => formatBodyLine(row)))];
     if (list.length > BODIES_LIMIT)
         lines.push('- … ещё ' + (list.length - BODIES_LIMIT) + ' записей');
     return lines.join('\n');
 }
 
-function formatBodyLine(row) {
+async function formatBodyLine(row) {
     const t = row.time ? new Date(row.time).toISOString().slice(11, 19) : '??:??:??';
     const who = row.sender || row.user || row.uid || '—';
     const ext = row.ext || '';
     const msg = String(row.message || row.content || row.text || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-    const file = row.logsFilePath || row.path || '';
+    const related = row.path || '';
+    const stub = row.logsFilePath || '';
+    const peek = !msg && related ? await peekRelated(related, ext) : '';
     const bits = ['- ' + t, who];
     if (ext)
         bits.push('(' + ext + ')');
     if (msg)
         bits.push('— ' + msg);
+    else if (peek)
+        bits.push('— ' + peek);
     let line = bits.join(' ');
-    // entry: — для tool entry / read_log_entry; не маскировать под обычный файл для work
-    if (file)
-        line += '\n  entry: ' + file;
+    if (related)
+        line += '\n  file: ' + related;
+    if (stub)
+        line += '\n  entry: ' + stub;
     return line;
 }
 
-function formatEntry(row, path) {
+function formatEntry(row, path, digest) {
     if (!row)
         return '[entry ' + path + ']\n(пусто)';
     const t = row.time ? new Date(row.time).toISOString() : '';
     const who = row.sender || row.user || row.uid || '';
+    const ext = row.ext || '';
     const msg = String(row.message || row.content || row.text || '').trim();
     const includes = Array.isArray(row.includes) ? row.includes : [];
     const lines = ['[entry ' + path + ']'];
@@ -362,11 +371,101 @@ function formatEntry(row, path) {
         lines.push('time: ' + t);
     if (who)
         lines.push('sender: ' + who);
+    if (ext)
+        lines.push('ext: ' + ext);
+    if (row.path)
+        lines.push('file: ' + row.path);
     if (msg)
         lines.push(msg.slice(0, ENTRY_CONTENT_MAX));
+    if (digest)
+        lines.push(digest);
     if (includes.length)
         lines.push('includes:\n' + includes.map(p => '- ' + p).join('\n'));
     return lines.join('\n');
+}
+
+function relatedExt(path, ext) {
+    if (ext)
+        return String(ext).replace(/^\./, '').toLowerCase();
+    const id = String(path || '').split('/').pop() || '';
+    const dot = id.lastIndexOf('.');
+    return dot > 0 ? id.slice(dot + 1).toLowerCase() : '';
+}
+
+function fileName(path) {
+    return String(path || '').split('/').pop() || '';
+}
+
+function isTaskExt(ext) {
+    return ext === 'task' || ext === 'ai';
+}
+
+async function loadRelatedJson(path) {
+    const item = await WORK.get_item(path);
+    if (!item?.load)
+        return null;
+    const raw = await item.load();
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+
+function peekTask(data) {
+    const title = String(data?.name || '').trim();
+    if (title)
+        return title.slice(0, PEEK_CHARS);
+    const prompt = (data?.items || []).find(i => i?.type === 'prompt' && i.content);
+    if (prompt)
+        return String(prompt.content).replace(/\s+/g, ' ').trim().slice(0, PEEK_CHARS);
+    return '';
+}
+
+async function peekRelated(path, ext) {
+    const e = relatedExt(path, ext);
+    if (!isTaskExt(e))
+        return fileName(path);
+    try {
+        const data = await loadRelatedJson(path);
+        return peekTask(data) || fileName(path);
+    }
+    catch {
+        return fileName(path);
+    }
+}
+
+function digestTask(data) {
+    const lines = [];
+    const title = String(data?.name || '').trim();
+    if (title)
+        lines.push('name: ' + title);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const prompts = items.filter(i => i?.type === 'prompt' && i.content);
+    if (prompts.length) {
+        lines.push('prompts:');
+        for (const p of prompts) {
+            const t = String(p.content).replace(/\s+/g, ' ').trim();
+            if (t)
+                lines.push('- ' + t);
+        }
+    }
+    const lastAnswer = [...items].reverse().find(i => i?.type === 'answer' && i.content);
+    if (lastAnswer)
+        lines.push('answer: ' + String(lastAnswer.content).replace(/\s+/g, ' ').trim());
+    let text = lines.join('\n');
+    if (text.length > ENTRY_CONTENT_MAX)
+        text = text.slice(0, ENTRY_CONTENT_MAX) + '…';
+    return text;
+}
+
+async function digestRelated(path, ext) {
+    const e = relatedExt(path, ext);
+    if (!isTaskExt(e))
+        return '';
+    try {
+        const data = await loadRelatedJson(path);
+        return data ? digestTask(data) : '';
+    }
+    catch {
+        return '';
+    }
 }
 
 function lastUserContent(messages) {

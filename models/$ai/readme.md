@@ -19,5 +19,5 @@
 
 - [`$ai/class.js`](/MODELS/$ai/class.js/~/handlers/pages/form/) — тип корня-каталога
 - [`$folder/$class/$provider/`](/MODELS/$ai/$folder/$class/$provider/readme.md/~/handlers/pages/form/) — тип провайдера (`list_remote`)
-- [`$folder/$class/$ai/`](/MODELS/$ai/$folder/$class/$ai/class.js/~/handlers/pages/form/) — прототип моделей
+- [`$folder/$class/$ai/`](/MODELS/$ai/$folder/$class/$ai/class.js/~/handlers/pages/form/) — прототип моделей (`streamChat`, `generateImage`)
 - дети `/MODELS` — `$provider`; их дети — `$ai` (инвентарь — только ls/info)

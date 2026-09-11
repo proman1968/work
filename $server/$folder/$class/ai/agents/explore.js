@@ -273,7 +273,6 @@ const AGENT_TAG = 'Осмотр';
 export default {
     label: 'Осматриваю систему',
     icon: 'icons:explore',
-    doc: true,
     /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total — work.create проверяет model по ним */
     expand: true,
     allowReasoning: true,

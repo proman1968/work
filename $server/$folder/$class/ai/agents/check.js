@@ -2,10 +2,10 @@
  *  Контракт:
  *    block.targets[] = { path, kind: class|file, expect? } из evidence операций;
  *    create → exist (класс, type/id) → file class.js (устройство читается) → file readme.md (непустой);
- *    write → exist → file (непустой / сниппет из секции write);
+ *    write → exist → file (картинка: байты, без OCR; иначе непустой / сниппет из секции write);
  *    без доменных полей (model и т.п.) — только выполнение операции.
  *  Блоки в ленте: `exist` (путь) и `file` (любой файл: path реальный, тело в content); критерий — `crit`.
- *  goalDone только полное соответствие; enrichTotal — сводка.
+ *  Итог — `content` сводка (дети exist/file ignore, без сводки бокс не закрывается). Цель сессии не закрывает.
  *  Движок: init({ block, box, messages, session, agent, live, exec, streamChat, engine }).
  */
 
@@ -56,7 +56,7 @@ export default {
         'Файл: exist → file (непустой / согласован с секцией write).',
         'Write class.js без обновлённого readme того же класса — gap. class.js без icon из реального набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:) — gap. Набора register: нет.',
         'Не сверяй предметные поля устройства (model и т.п.) — это не роль check; icon обязателен как поле UI.',
-        'goalDone только когда все критерии по всем targets ok.',
+        'Итог — сводка в content. Цель сессии не закрывай — дальше корень task.',
         'Не создавай и не правь. Не web. Не осмотр системы (explore).',
     ].join('\n'),
     prompt: [
@@ -66,16 +66,16 @@ export default {
     async init(params = {}) {
         const box = params.block;
         const messages = params.messages || [];
-        box.targets = collectTargets(messages);
-        const n = box.targets.length;
+        if (!box.targets?.length)
+            box.targets = collectTargets(messages);
+        const n = (box.targets || []).length;
         tagAgent(box, AGENT_TAG, n ? (n + ' target' + (n > 1 ? 's' : '')) : 'нет targets');
-        if (!n)
-            return;
         box.items ??= [];
-        for (const t of box.targets) {
-            await verifyTarget(box, t, messages);
+        if (n && !allTargetsSettled(box)) {
+            for (const t of box.targets)
+                await verifyTarget(box, t, messages);
         }
-        settleCheckTools(box);
+        closeCheck(box);
         await params.live?.save?.();
     },
     finish(params = {}) {
@@ -83,8 +83,7 @@ export default {
         if (!box)
             return;
         ensureTargets(box, params.messages);
-        if (allTargetsFullyOk(box))
-            params.live?.goalDone?.();
+        closeCheck(box);
     },
     enrichTotal(_content, block) {
         return formatCheckReport(block);
@@ -128,6 +127,8 @@ async function toolStep(params, kind) {
 
 async function verifyTarget(box, t, messages) {
     for (const crit of criteriaFor(t)) {
+        if (hasSettled(box, crit, t.path))
+            continue;
         const b = crit === 'exist'
             ? { type: 'exist', label: existTool.label, icon: 'icons:check-circle', time: Date.now() }
             : { type: 'file', label: fileTool.label, icon: 'icons:description', time: Date.now() };
@@ -182,7 +183,7 @@ async function fillExist(b, t) {
         lines.push(...gaps.map(g => '- ' + g));
     }
     else {
-        b.state = 'ok · ' + kind + (type ? ' ' + type : '');
+        b.state = 'ok';
     }
     b.content = lines.join('\n');
 }
@@ -230,7 +231,7 @@ async function fillMeta(b, t) {
         b.content = '[file ' + b.path + ']\ngap: ' + iconGap;
         return;
     }
-    b.state = linesState(meta.text, 'ok');
+    b.state = 'ok';
     b.content = fileReport(b.path, meta.text, 'js');
 }
 
@@ -256,7 +257,7 @@ async function fillClassFile(b, t, name, { requireText } = {}) {
         b.content = '[file ' + b.path + ']\nпусто';
         return;
     }
-    b.state = linesState(f.text, 'ok');
+    b.state = 'ok';
     b.content = fileReport(b.path, f.text, langOf(b.path));
 }
 
@@ -264,7 +265,34 @@ async function fillWriteFile(b, t) {
     const path = t.path;
     b.path = path;
     const file = await WORK.get_item(path);
-    if (!file || typeof file.read_text !== 'function') {
+    if (!file) {
+        b.error = true;
+        b.state = 'gap';
+        b.content = '[file ' + path + ']\nнет файла';
+        return;
+    }
+    if (await isImageFile(file)) {
+        let n = 0;
+        try {
+            n = await fileByteLength(file);
+        }
+        catch (e) {
+            b.error = true;
+            b.state = 'gap';
+            b.content = '[file ' + path + ']\n' + String(e.message || e);
+            return;
+        }
+        if (!n) {
+            b.error = true;
+            b.state = 'gap';
+            b.content = '[file ' + path + ']\nпусто';
+            return;
+        }
+        b.state = 'ok';
+        b.content = '[file ' + path + ']\nok: image ' + n + ' b';
+        return;
+    }
+    if (typeof file.read_text !== 'function') {
         b.error = true;
         b.state = 'gap';
         b.content = '[file ' + path + ']\nнет файла';
@@ -293,8 +321,29 @@ async function fillWriteFile(b, t) {
         b.content = '[file ' + path + ']\ngap: нет ожидаемого фрагмента из write';
         return;
     }
-    b.state = linesState(text, snippet ? 'ok · snippet' : 'ok');
+    b.state = 'ok';
     b.content = fileReport(path, text, langOf(path), snippet ? 'snippet: ok' : '');
+}
+
+async function isImageFile(file) {
+    try {
+        const chain = await file.type_chain;
+        if (Array.isArray(chain) && chain.includes('$image'))
+            return true;
+    }
+    catch { /* ext */ }
+    if (String(file.contentType || '').startsWith('image/'))
+        return true;
+    return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(String(file.path || file.id || ''));
+}
+
+async function fileByteLength(file) {
+    const n = Number(file.size);
+    if (Number.isFinite(n) && n > 0)
+        return n;
+    const buf = await file.load({ encoding: null });
+    const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || []);
+    return raw.length;
 }
 
 /** Файл в meta класса (get_item → meta_folder → WORK path). */
@@ -354,12 +403,6 @@ function fileReport(path, text, lang, note) {
         note || '',
         shown,
     ].filter(Boolean).join('\n');
-}
-
-function linesState(text, prefix = 'ok') {
-    const body = String(text || '').replace(/\r\n/g, '\n').trimEnd();
-    const n = body ? body.split('\n').length : 0;
-    return prefix + (n ? ' · ' + n + ' lines' : '');
 }
 
 function langOf(path) {
@@ -502,6 +545,13 @@ function settleIfDone(box) {
 function settleCheckTools(box) {
     if (box)
         box.using_blocks = ['exist', 'file'];
+}
+
+function closeCheck(box) {
+    if (!box)
+        return;
+    settleCheckTools(box);
+    box.content = formatCheckReport(box);
 }
 
 function formatCheckReport(block) {

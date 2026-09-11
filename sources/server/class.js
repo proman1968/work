@@ -5,6 +5,7 @@ import * as mime from "mime-types";
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { assertClassId } from './assert-class-id.js';
+import { safeNodeName } from './safe-node-name.js';
 import * as LOGS from './logs.js';
 import { DEV_MODE } from "../host/config.js";
 
@@ -23,6 +24,7 @@ export function looksLikeFileId(id) {
 
 export class $class extends $folder{
     static sourceUrl = import.meta.url;
+    static safeNodeName = safeNodeName;
 
     /** Роли пользователей в классе. */
     static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER', GUEST: 'GUEST' };
@@ -884,7 +886,7 @@ export class $class extends $folder{
     /** Slave видит элементы только своего класса (не дочерние). */
     _isSlaveVisible(item, params) {
         const itemClass = item.$class ?? item.$owner;
-        return itemClass === this;
+        return itemClass.path === this.path;
     }
 
     /** Гость видит свой класс, зону guests и логи класса (чат); не видит work и системное. */
@@ -1023,9 +1025,10 @@ export class $class extends $folder{
      */
     async create(p = {}) {
         await this.assertAccess(p, $class.ACCESS_LEVEL.WRITE);
-        const id = String(p.id ?? '').trim();
+        const rawId = String(p.id ?? '').trim();
+        const id = safeNodeName(rawId);
         if (!id)
-            throw new Error('create: нужен id класса');
+            throw new Error('create: пустое имя узла после нормализации');
         if (looksLikeFileId(id))
             throw new Error('create создаёт только класс. Файл — save_file({ filename, post })');
         let type = p.type || '$class';
@@ -1036,9 +1039,14 @@ export class $class extends $folder{
         if (type === '$class')
             assertClassId(id);
 
-        const post = p.post ?? `export default {
+        let post = p.post ?? `export default {
     label: '${p.label || id}'
 }`;
+        if (type === '$ai' && rawId && rawId !== id) {
+            const early = await parseCreateDevice(post);
+            if (!early?.model)
+                post = ensureModelField(post, rawId);
+        }
         // Инвариант: поле model в class.js уникально среди детей родителя (один remote → один класс).
         const device = await parseCreateDevice(post);
         const modelKey = device?.model != null && device.model !== ''
@@ -1092,6 +1100,19 @@ export class $class extends $folder{
     }
 }
 $class.type_chain = Object.create(null);
+
+/** Вставить model в export default, если поля ещё нет. */
+function ensureModelField(post, tag) {
+    const raw = String(post || '');
+    if (!tag || /\bmodel\s*:/.test(raw))
+        return raw;
+    const m = raw.match(/export\s+default\s*\{/);
+    if (m)
+        return raw.slice(0, m.index + m[0].length) + '\n    model: ' + JSON.stringify(tag) + ',' + raw.slice(m.index + m[0].length);
+    if (/^\s*\{/.test(raw))
+        return raw.replace(/^\s*\{/, '{ model: ' + JSON.stringify(tag) + ', ');
+    return raw;
+}
 
 /** class.js post → device object (или null). */
 async function parseCreateDevice(post) {

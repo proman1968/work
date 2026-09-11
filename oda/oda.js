@@ -1293,7 +1293,7 @@ ODA.DIRECTIVES = {
                 }
             }
 
-            const $for = { item, index: i, items, key: item.key ?? i };
+            const $for = { item, index: i, items /* , key: item.key ?? i*/};
             if (!Reactor.equal(target.$for, $for, 2)) {
                 target.$for = $for;
             }

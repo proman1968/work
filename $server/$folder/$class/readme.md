@@ -17,7 +17,7 @@
 - `import()` — импорт `class.js` как ES-модуля
 - `save()` — сохранение `class.js` (только разница с точкой наследования)
 - `logs()` — единая точка чтения логов (mode: folder/bodies/index/files/dates)
-- `read_log_entry()` — одна запись лога по пути history-файла
+- `read_log_entry()` — одна запись лога по stub `.logs` или связанному `row.path`
 - `append_log_includes()` — добавить пути в includes записи лога
 - `save_message({ message, includes })` — чистая лог-запись (сообщение без файла)
 - `read_secret()` / `save_secret()` — секреты модулей в `#secret/`

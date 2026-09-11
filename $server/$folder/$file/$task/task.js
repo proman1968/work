@@ -89,14 +89,6 @@ export const file = {
     label: 'Файл',
     icon: 'files:file',
     role: 'user',
-    doc: true,
-    prompt: [
-        'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
-        'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
-        'Числа, идентификаторы и названия — дословно, без округлений.',
-        'Таблица markdown — не больше 5 колонок, ячейка коротко. Длинный текст — список или секции, не колонка. Широкий исходник не копируй одной простынёй: короткий реестр, детали ниже.',
-        'Выведи обзор/отчёт о содержимом файла в формате markdown.',
-    ].join('\n'),
     async init(params = {}) {
         const { box, block } = params;
         try {
@@ -106,33 +98,29 @@ export const file = {
                 return false;
             delete box.using_blocks;
             box.state = 'файлы: ' + (length + 1) + '/' + files.length;
-            block.state = 'reading';
+            block.state = 'загрузка';
             await params.task._save(params.session);
             let fileItem = files[length];
             fileItem = await WORK.get_item(fileItem);
             await fileItem.init;
-            block.title = `file ${length + 1}: ['${fileItem.label}'](<${fileItem.path}>)\n\n`;
             const chain = await fileItem.type_chain;
             const image = chain.includes('$image') || String(fileItem.contentType).startsWith('image/');
             if (image) {
-                const buf = await fileItem.load({ encoding: null });
-                const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-                const mime = fileItem.contentType || 'image/jpeg';
-                block.draft = {
-                    type: 'image_url',
-                    image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
-                };
+                // маркер для context(): байты грузятся из path, не в JSON
+                block.draft = { type: 'image_url' };
+                block.content = fileItem.label || 'изображение';
             } else {
-                block.draft = { type: 'text', text: await fileItem.read_text() };
+                const text = await fileItem.read_text();
+                block.content = (fileItem.label ? fileItem.label + '\n\n' : '') + text;
             }
             block.icon = fileItem.icon;
             block.label = fileItem.label;
             block.path = fileItem.path;
-            block.state = 'прочитан';
+            block.state = 'загружено';
         } catch (e) {
             block.error = true;
             block.state = 'ошибка';
-            block.content = block.title + '\n\n' + e.message + '\n\n';
+            block.content = (block.label || 'файл') + '\n\n' + e.message + '\n\n';
         }
         return true;
     },
@@ -203,6 +191,8 @@ export default {
                 '# Режим: размышление',
                 'Разбери запрос и контекст. Не обращайся к пользователю, не планируй списком шагов, ничего не делай.',
                 'Не утверждай, что нет интернета или метеоданных — поиск и файлы делают субагенты.',
+                'Картинка во вложении уже в этом ходе (vision) — смотри её, не спрашивай «что на файле».',
+                'N картинок / файлов с изображениями — image, N generate, не коллаж и не work.write.',
                 'Не предлагай «спросить разрешение» на инструмент — выбор сделает меню после тебя.',
             ].join('\n'),
             prompt: [

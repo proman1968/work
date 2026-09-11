@@ -10,6 +10,12 @@
 import { $class } from './class.js';
 
 export class $handler extends $class {
+    async allowAccess(params) {
+        const $context = await this.$context;
+        if (!$context)
+            return true;
+        return $context.allowAccess(params);
+    }
 }
 export class $trigger extends $handler {
 }

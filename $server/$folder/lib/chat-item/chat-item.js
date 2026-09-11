@@ -8,7 +8,9 @@ ODA({is: 'chat-item',
         <style>
             :host {
                 @apply --horizontal;
-                max-height: var(--ribbon-height, none);
+                max-height: var(--chat-card-max, none);
+                min-height: 0;
+                overflow: hidden;
                 border-radius: 4px;
                 opacity: 0;
                 transition: opacity .2s ease;
@@ -24,6 +26,8 @@ ODA({is: 'chat-item',
                 left: 0px;
                 right: 0px;
                 bottom: 0px;
+                max-height: none;
+                overflow: auto;
             }
             :host([expanded]) .card{
                 border-radius: 0px;
@@ -34,8 +38,16 @@ ODA({is: 'chat-item',
             
             .card {
                 min-width: 70px;
+                min-height: 0;
+                max-height: 100%;
                 overflow: hidden;
                 border-radius: 8px;
+                width: min-content;
+            }
+            .preview {
+                min-height: 0;
+                overflow: auto;
+                width: stretch;
             }
             :host([compact]) .card {
                 border-radius: 0;
@@ -67,17 +79,27 @@ ODA({is: 'chat-item',
                 padding: 2px 8px; 
                 font-size: x-small;
             }
+            .file-time{
+                @apply --no-flex;
+                font-size: xx-small;
+                opacity: .55;
+                margin-left: 6px;
+                white-space: nowrap;
+                align-self: center;
+            }
         </style>
         <div vertical ~if="!compact && !hideAvatar" style="padding: 0px 8px;">
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
         <div class="card"  shadow :flex="expanded || compact" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div class="title" light horizontal style="justify-content: space-between; align-items: center; position: relative;">
-                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" :hide-history-time="compact"></item-node>
+            <div class="title" light horizontal style="justify-content: space-between; align-items: center;">
+                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" hide-history-time>
+                    <span class="file-time" ~if="fileTime">{{fileTime}}</span>
+                </item-node>
                 <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
-            <div ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;"></div>
+            <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;"></div>
             <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
@@ -92,8 +114,10 @@ ODA({is: 'chat-item',
                 return 'item-node';
             const name = file.form || 'file';
             const view = await file.get_item('/~/handlers//form/' + name);
-            await view?.importView?.();
-            return 'item-' + (view?.id || name);
+            const ext = String(file.ext || '').toLowerCase();
+            const is = ext ? `item-${name}-${ext}` : `item-${name}`;
+            await view?.importView?.(is);
+            return is;
         });
     },
     get includeFiles() {
@@ -203,7 +227,7 @@ ODA({is: 'chat-item',
     },
     previewTag: 'item-node',
     hasPreview: false,
-    _bodyCacheKeys: ['itemBody', 'fileLabel', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
+    _bodyCacheKeys: ['itemBody', 'fileLabel', 'fileTime', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
     _resetBodyCache() {
         if (this[R]?.cache) {
             for (const key of this._bodyCacheKeys)
@@ -216,6 +240,22 @@ ODA({is: 'chat-item',
     },
     get isText() {
         return this.ext === 'txt' || this.ext === 'md';
+    },
+    get fileTime() {
+        if (this.compact)
+            return '';
+        return Promise.resolve(this.itemBody).then(body => {
+            const ms = +(body?.time || this.log?.time);
+            if (!Number.isFinite(ms) || ms <= 0)
+                return '';
+            const d = new Date(ms);
+            if (isNaN(d))
+                return '';
+            const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            return dd + '.' + mm + ' ' + time;
+        });
     },
     get ext() {
         if (this._includeFile?.ext)
@@ -291,10 +331,37 @@ ODA({is: 'chat-item',
     },
     get fileLabel() {
         if (this._includeFile?.path)
-            return CORE.historyEntryLabel(this._includeFile.path);
-        return Promise.resolve(this.itemBody).then(body =>
-            body?.path ? CORE.historyEntryLabel(body.path) : ''
-        );
+            return this._labelForItem(this._includeFile.path, this._includeFile);
+        return Promise.resolve(this.itemBody).then(body => this._labelForLog(body));
+    },
+    _labelForItem(path, file) {
+        if (String(path || '').includes('/history/'))
+            return CORE.historyEntryLabel(path);
+        return this._nameFromDataFile(file);
+    },
+    async _labelForLog(body) {
+        if (!body)
+            return '';
+        if (String(body.path || '').includes('/history/'))
+            return CORE.historyEntryLabel(body.path);
+        try {
+            const raw = body.content;
+            const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (data?.name)
+                return data.name;
+        } catch { /* content не JSON точки */ }
+        return (await this._nameFromDataFile(await this.$file)) || body.ext || '';
+    },
+    async _nameFromDataFile(file) {
+        if (!file?.load)
+            return file?.ext || '';
+        try {
+            const raw = await file.load();
+            const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (data?.name)
+                return data.name;
+        } catch { /* не JSON */ }
+        return file.ext || '';
     },
     async loadPreview($file) {
         if (!$file) {

@@ -1,6 +1,31 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [02:34] image generate: после `save_file` — `saved: true` (док не предлагает второй Save). Причина: файл уже в work, кнопка Save была активна.
+- [02:18] image `wantedCount`: «N фото / по сезонам» = N generate. Причина: 1789167828473 — «4 фото» считалось как 1 кадр, дальше plan+work.write.
+- [01:39] check: сводка в `content` (enrichTotal и без детей); повторный init не дублирует exist/file. Причина: 1789165968911 — 4 targets ×2, «Продолжить» no-op.
+- [01:28] check `state` — ok/gap (не kind/байты); image: path только после save, не путь модели. Причина: шапка «ok · file $file» / имя модели вместо файла.
+- [00:23] image: N картинок = N `generate` (сцена+файл), не коллаж; меню после image не предлагает `work`; `work.write` png/jpg/svg — отказ. Причина: 1789161436803 — один коллаж, затем fake png/svg через write.
+- [00:13] check write картинки: байты, не OCR. Причина: 1789160658480 — Tesseract `eng` → ложный gap.
+- [13:58] `work.typed`: действие = файл типа (`$file/*/class.js` `when` + `METADATA`) + `save_file` на месте (`message` + `time`). `$ics` — встреча, не `create` класса. Причина: 1789123179476 — «запланируй встречу» ушёл в пустой create.
+- [13:23] `review`: без nested work; диагноз = закон + слой + path. `agents/readme` — этот каталог = runtime. Причина: после APPROVE work угадывал канон; граница — адрес исполнения, не «система/данные».
+- [12:58] Агент `review`: схема ленты → диагноз; nested `work` после APPROVE или brief «исправ». `@review`, не новая goal. Причина: цикл разбора прогона перенести в ту же задачу.
+- [12:37] `total`: один ребёнок с `content` — лифт, не второй fill. Draft по-прежнему не копировать. Причина: 1789119154268 — сид уже свёл, web завис на повторной сводке, `web.content` пуст.
+- [12:29] Ошибка fetch ≠ визит: повтор URL до 2 раз; пустой web снимает тип в корне. `site` не пишет `pages` на task. Причина: 1789118444899 / 1789118943978 — HTTP 500, потом skip site.
+- [12:17] Оркестратор: сборщик с content снимается с меню. Откат «URL = facts». Причина: 1789118130893 — answer без web; 1789117090173 — explore после web.
+- [11:51] Лист `site` — только `draft`. Узел — свой draft + `content` из draft детей (`pages`, как `sites` у web). Подъём в контекст — оба поля. Причина: 1789115600874 — сводка на каждом URL.
+- [11:27] `web`/`site`: пока очередь и бюджет живы — только site, не site|total. В очередь — исходный href (не срез `/`). Причина: 1789115038731 — total на 3/6, hostmap не взят; `/web/` стал `/web` и 404.
+- [11:15] `web` спрашивает агента `site` (не tool/`page`). Fetch → `draft` внутри; наружу только сводка (`content`). `total` не копирует одного ребёнка. Причина: лента и основной цикл ели HTML; тип `page` лишний.
+- [10:28] Агент `web`: URL из нитки/цели — без поиска. `site` — box, дети `page` (fetch → content). Свой URL — обход same-site из markdown-ссылок (до 6). `fetch_url` оставляет `[текст](url)`. Причина: голый URL уходил в поиск; href выкидывались; одна точка мало для «изучи сайт».
+- [10:06] Агент `web` `site`: fetch → `content` (клип 8000), без `draft` и fill-обзора. Как `file.init`. Причина: страница читалась дважды (сеть + LLM), в ленте был пересказ.
+- [14:50] Агент `logs`: bodies — `file:` + peek title/prompt, `entry:` — stub; `read_log_entry` резолвит stub и связанный path; entry дайджестит `.task` (title/prompts/answer). Не work.read. Причина: «чем занимался» видел только время/тип пустых `.logs`.
+- [17:25] Агент `freeze`: удачная лента → `ai/skills/{id}.js` (draft/confirm/write). Меню «запомни». Не дамп task, не overwrite `register-accounts` без флага. Причина: зафиксировать рецепт после прогона, не руками.
+- [17:15] `image.stopOnError`: 404 generate не уходит в html. Причина: 1788962655786.
+- [16:57] Агент `image`: `$ai.generateImage` (capabilities `image`) → файл в work. Мозг задачи — только chat (пикер/hydrate). Причина: 1788960700166 — z-image-turbo в streamChat, 400 does not support chat.
+- [15:42] create `$ai`: тег с `:` `/` больше не отказ — имя папки `safeNodeName`, тег в `model`. Закон на `$class.create` / `save_file`. Причина: 1788957171695 — `x/z-image-turbo:bf16` как id.
+- [15:14] Шум навыка: `skillToolNext` — не повторять ok tool, после create → total; work `expand` (targets check); в боксе-агенте не сбрасывать `using_blocks` на промпт. Причина: 1788954844440 — read несуществующего 01, второй create, check без targets.
+- [14:30] `$task` грузит `ai/skills/`: выбор на новой цели (`@id` / `when`+phrases), `body.skill`, ходы `pipe` вместо меню; движок — `skillStep.system`/`tools`. Причина: прогон рецепта, не спонтанная лента.
+- [14:07] `ai/skills/`: контракт навыка (`when` / `points` / `slots` / `defaults` / `pipe`) и пример `register-accounts` (точки `/REGISTER`). Discover, выбор и replay не подключены. Причина: зафиксировать удачный пайп счетов как рецепт, не дамп task.
 - [23:30] Провайдеры MODELS: meta `$provider` (тип в `$ai/$folder/$class/$provider`, list_remote). Модели остаются `$ai`. tilde: cross-type `parent/$folder/$class/<type>` (как register→account). explore remote только при `type===$provider`; pathFromMap предпочитает `$provider`/leaf. Причина: слой провайдер≠модель без pickProviderPath.
 - [23:12] explore/check `loadItemDevice`: `$class.import()` (tilde), не один meta_file; канал `meta/$folder/$class/<type>` для baseUrl. remote/ask: путь через pathFromMap(brief), без дефолта ls.path каталога; remote без baseUrl — отказ + дети. Без pickProviderPath. Причина: 1788897630079 — remote/ask на /MODELS, тонкий class провайдера без tilde.
 - [22:58] `buildSystemPrompt`: + `storage_folder/readme.md` места (`$context`). Peer-ask / standalone получают контракт класса в system. Explore-tool readme — улика в ленте. Причина: ask без закона домена игнорировал ходы/запреты.
@@ -60,7 +85,7 @@
 - Решение: продолжение цикла tool — только по факту прогресса в его же результате (новый класс/файл), не по внешней оценке «ещё нужно». Операнды — пачкой за один fill. Причина: условие цикла у кода + операнд у LLM = незавершаемость.
 - Решение: `init===false` сжигает тип в боксе (не снимает с using). Операнды tools детерминированы из ленты — между двумя pick улик не прибавляется, повтор бессмыслен; сужающееся меню гарантирует завершение. Причина: 1788856240964 — зависание после activation.
 - Решение: evidence create/write — блок с `doc` + WORK-ссылки + тела (тип `artifact` в ленте); check остаётся постусловием ok/gap. Причина: человек читает результат в доке, не checklist.
-- Решение: журнал только `$class.logs` / `read_log_entry` (день, ext); не work по history. Причина: иначе модель читает .logs как файлы и путает день.
+- Решение: журнал только `$class.logs` / `read_log_entry` (день, ext, stub и `row.path`); дайджест связанного файла внутри logs, не work по history. Причина: иначе модель читает .logs как файлы и путает день / не видит смысл задач.
 - Решение: explore ls ветки — `info({ deep: -1 })` (не один уровень имён); карта `/` — компас. Причина: состав домена (модели под провайдерами) виден сразу, без серии ls/ask.
 - Решение: work.search — путь класса + запрос, запрет корня WORK; строение системы — explore. Причина: глобальный semantic_search ломает слои и роняет xenova/RAG.
 - Решение: `allowReasoning` у сложных агентов; CoT только при effort бара ≠ off. Причина: гейт был, флаг не стоял.

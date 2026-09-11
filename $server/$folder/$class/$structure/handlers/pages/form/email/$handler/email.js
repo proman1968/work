@@ -586,12 +586,12 @@ ODA({
             return;
         const map = Object.create(null);
         try {
-            let entries = await item.get_item('/~/logs/.data.logs/history/*');
+            let entries = await item.get_item('/~/logs/*');
             entries = asItemArray(await Promise.resolve(entries));
             for (const entry of entries) {
                 const day = dayKeyFromEntry(entry);
                 const path = entry?.path;
-                if (!day || !path)
+                if (!day || !path || !/^\d{4}-\d{2}-\d{2}$/.test(day))
                     continue;
                 (map[day] ??= []).push(path);
             }

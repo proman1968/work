@@ -1,5 +1,5 @@
 /** Док закрытых box: view блока + стрелки + copy/share/save. */
-import { pageHtml } from './views.js';
+import { pageHtml, viewTag, pathBasename } from './views.js';
 
 ODA({ is: 'microchat-dock',
     imports: 'oda//button',
@@ -22,6 +22,7 @@ ODA({ is: 'microchat-dock',
                 margin: 2px;
                 padding: 2px;
             }
+            .sheet { min-height: 0; overflow-y: auto; }
         </style>
         <div class="bar" header no-flex horizontal>
             <oda-button no-flex icon="icons:chevron-left" :disabled="!hasPrev" @tap="step(-1)"></oda-button>
@@ -33,12 +34,22 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
             <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
         </div>
-        <div flex ~if="isHtml" ~is="htmlView" :data="current" only-doc style="overflow-y: auto;"></div>
-        <div flex ~if="current && !isHtml" ~is="mdView" :data="current" only-doc style="overflow-y: auto;"></div>
+        <div flex class="sheet" ~if="current" ~is="docView" :data="current" only-doc></div>
     `,
     $item: null,
-    htmlView: 'microchat-view-html',
-    mdView: 'microchat-view',
+    _sheetKeys: ['docView', 'reports', 'index', 'current', 'pos', 'hasPrev', 'hasNext', 'saved', 'isHtml', 'text'],
+    attached() {
+        this._wake();
+        this.render?.(true);
+        this._bindSheet();
+    },
+    _wake() {
+        const cache = this[R]?.cache;
+        if (!cache) return;
+        for (const k of this._sheetKeys)
+            cache[k] = undefined;
+    },
+    get docView() { return viewTag(this.current); },
     get reports() { return this.$pdp?.dockReports || []; },
     get index() { return this.$pdp?.dockIndex ?? -1; },
     get current() { return this.$pdp?.dockCurrent; },
@@ -48,14 +59,34 @@ ODA({ is: 'microchat-dock',
     },
     get hasPrev() { return this.index > 0; },
     get hasNext() { return this.index >= 0 && this.index < this.reports.length - 1; },
-    cap(b) { return b?.label || b?.type || 'отчёт'; },
+    docPath(b) {
+        const p = String(b?.path || '').trim();
+        return p.startsWith('/') ? p : '';
+    },
+    cap(b) {
+        return pathBasename(this.docPath(b)) || b?.label || b?.type || 'отчёт';
+    },
     step(d) {
         const i = this.index + d;
         if (i < 0 || i >= this.reports.length || !this.$pdp) return;
-        this.$pdp.dockPick = i;
+        this.$pdp.pickDock(i);
+        this._wake();
+        this.render?.(true);
+        this._bindSheet();
+    },
+    _bindSheet() {
+        const block = this.current;
+        if (!block) return;
+        const tag = viewTag(block);
+        let el = this.$('.sheet');
+        if (el && el.localName !== tag && el.__vnode__)
+            el = el.__vnode__.replaceElement(el, tag) || el;
+        if (!el) return;
+        el.data = block;
+        el._wakeSheet?.();
     },
     hide() { if (this.$pdp) this.$pdp.dockOpen = false; },
-    get saved() { return !!this.current?.saved; },
+    get saved() { return !!(this.current?.saved || this.docPath(this.current)); },
     get isHtml() { return this.current?.type === 'html'; },
     get text() {
         return pageHtml(this.current) || String(this.current?.content || '');

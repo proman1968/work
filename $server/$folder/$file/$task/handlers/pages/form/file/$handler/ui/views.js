@@ -2,8 +2,11 @@ import { parseFormHtml, unwrapFence } from '/$server/$folder/$file/$task/task.js
 
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
+    // check.file (crit) — строка проверки, не превью артефакта
+    if (item.type === 'file' && item.crit)
+        return 'microchat-view';
     const name = 'microchat-view-' + item.type;
-    if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo' || item.type === 'html')
+    if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo' || item.type === 'html' || item.type === 'file' || item.type === 'generate')
         return name;
     return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
 }
@@ -16,10 +19,22 @@ function escapeAttr(s) {
 }
 
 /** ссылка в шапке: ~html (нативный <a> :href в ODA давал пустой узел) */
-function titleLinkHtml(href, text, blank) {
+function titleLinkHtml(href, text, blank, tip) {
     const blankAttrs = blank ? ' target="_blank" rel="noopener noreferrer"' : '';
-    return '<a href="' + escapeAttr(href) + '" title="' + escapeAttr(text) + '"' + blankAttrs
+    return '<a href="' + escapeAttr(href) + '" title="' + escapeAttr(tip || text) + '"' + blankAttrs
         + ' onclick="event.stopPropagation()">' + escapeHtml(text) + '</a>';
+}
+
+export function pathBasename(p) {
+    const s = String(p || '').replace(/\/$/, '');
+    const i = s.lastIndexOf('/');
+    return i >= 0 ? s.slice(i + 1) : s;
+}
+
+function formatElapsed(ms) {
+    const s = Math.max(0, Math.floor(Number(ms) / 1000));
+    const m = Math.floor(s / 60);
+    return m + ':' + String(s % 60).padStart(2, '0');
 }
 
 ODA({ is: 'microchat-ribbon',
@@ -164,6 +179,15 @@ ODA({ is: 'microchat-view',
                 @apply --info-invert;
                 min-width: 0;
             }
+            :host([only-doc]) {
+                @apply --content;
+                overflow: auto;
+                min-height: 0;
+            }
+            :host([only-doc]) > .untitled > .body {
+                margin: 0;
+                border-radius: 0;
+            }
             :host([host-sticky]) {
                 position: sticky;
                 top: var(--chat-sticky-top, 0px);
@@ -210,6 +234,7 @@ ODA({ is: 'microchat-view',
                 word-break: break-word;
                 max-width: 100%;
                 min-width: 0;
+                margin-bottom: 8px;
             }
             .body oda-markdown-viewer {
                 max-width: 100%;
@@ -244,18 +269,38 @@ ODA({ is: 'microchat-view',
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="showTitle && !pinned && !box" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>
+                <div ~is="extendTag" ~if="extendTag" :flex="extendFlex" :only-doc="onlyDoc" :no-flex="extendNoFlex" :data :$item="$file"></div>
             </div>
         </details>
-        <div ~if="!showTitle" vertical class="untitled">
+        <div ~if="!showTitle" vertical class="untitled" :flex="docFill">
             <div flex class="body" :content="!data?.ignore">
                 <microchat-ribbon ~if="items.length && !onlyDoc" :data></microchat-ribbon>
                 <oda-markdown-viewer vertical :light="false" ~show="showMarkdown" ~class="{ stream: streamTail }" :value="viewContent"></oda-markdown-viewer>
-                <div ~is="extendTag" ~if="extendTag" :data></div>
+                <div ~is="extendTag" ~if="extendTag" :flex="extendFlex" :only-doc="onlyDoc" :no-flex="extendNoFlex" :data :$item="$file" style="height: stretch;"></div>
             </div>
         </div>
     `,
-    data: null,
+    data: {
+        $def: null,
+        set() {
+            if (this.onlyDoc)
+                this._wakeSheet();
+        },
+    },
+    /** Смена :data на живом ~is: кэш геттеров и preview не сами по себе. */
+    _wakeSheet() {
+        const cache = this[R]?.cache;
+        if (cache) {
+            for (const k of ['content', 'viewContent', 'showMarkdown', 'showContent', 'path', '$file', 'extendTag', 'extendFlex', 'extendNoFlex', 'blockTitle', 'linkHtml', 'blockState', 'label', 'showTitle', 'docFill', 'items'])
+                cache[k] = undefined;
+        }
+        if (this.previewTag)
+            this.previewTag = 'item-node';
+        this.tickText = '';
+        this._armTick?.();
+        this.render?.(true);
+    },
+    get $file() { return; },
     onlyDoc: {
         $def: false,
         $attr: true,
@@ -273,16 +318,20 @@ ODA({ is: 'microchat-view',
     get showTitle() {
         return this.data && this.data.stop !== true && !this.onlyDoc;
     },
+    /** only-doc: untitled заполняет док */
+    get docFill() { return this.onlyDoc; },
+    get extendNoFlex() { return false; },
+    get extendFlex() { return false; },
 
     // --- шапка: одна ссылка (path | url, не оба) через ~html ---
     get content() { return this.data?.content; },
-    /** человеческая подпись; не дублирует path/url */
+    /** тип хода (что делаем); не дублирует path/url */
     get label() {
         const raw = String(this.data?.label || '').trim();
         if (!raw)
             return '';
         const path = String(this.data?.path || '').trim();
-        if (path && raw === path)
+        if (path && (raw === path || raw === pathBasename(path)))
             return '';
         const u = String(this.data?.url || '').trim();
         if (u && raw === u)
@@ -292,14 +341,17 @@ ODA({ is: 'microchat-view',
     get blockTitle() {
         return this.label || String(this.data?.type || '').trim();
     },
+    tickText: '',
     get blockState() {
-        return String(this.data?.state || '').trim();
+        return String(this.tickText || this.data?.state || '').trim();
     },
-    /** path → form; иначе http(s) url → _blank */
+    /** название: имя файла из path (не label) → form; иначе http(s) url → _blank */
     get linkHtml() {
         const p = String(this.data?.path || '').trim();
-        if (p.startsWith('/'))
-            return titleLinkHtml(p.replace(/\/$/, '') + '/~/handlers/pages/form/', p, false);
+        if (p.startsWith('/')) {
+            const text = pathBasename(p) || p;
+            return titleLinkHtml(p.replace(/\/$/, '') + '/~/handlers/pages/form/', text, false, p);
+        }
         const u = String(this.data?.url || '').trim();
         if (/^https?:\/\//i.test(u))
             return titleLinkHtml(u, u, true);
@@ -325,22 +377,16 @@ ODA({ is: 'microchat-view',
     },
     get open() { return !this.showTitle || this.pinned || this.userOpen; },
     onSummaryClick(e) {
-        if (this.pinned) {
-            e.preventDefault();
+        e.preventDefault();
+        if (this.pinned)
             return;
-        }
-        const details = e.currentTarget?.parentElement;
-        if (details?.localName === 'details' && !details.open)
-            this.userOpen = true;
+        this.userOpen = !this.userOpen;
     },
     onToggle(e) {
         const el = e?.target;
         if (!el || el.localName !== 'details') return;
-        if (this.pinned) {
+        if (this.pinned)
             el.open = true;
-            return;
-        }
-        this.userOpen = !!el.open;
     },
 
     // --- stream ---
@@ -358,8 +404,10 @@ ODA({ is: 'microchat-view',
     get showContent() {
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.data?.url);
     },
-    /** expand-box: в ленте дети, не маркер box.content ([attachments] …) */
+    /** expand-box: в ленте дети, не маркер; в доке — итог бокса */
     get showMarkdown() {
+        if (this.onlyDoc)
+            return this.showContent;
         if (this.items.length && (this.data?.expand || this.data?.type === 'includes'))
             return false;
         return this.showContent;
@@ -505,9 +553,34 @@ ODA({ is: 'microchat-view-prompt',
 
 const HEIGHT_PING = `<script>
 (function(){
+  var last = 0, lock = false;
+  function contentH(){
+    var html = document.documentElement, body = document.body;
+    var hs = html.style.height, hmin = html.style.minHeight;
+    var bs = body && body.style.height, bmin = body && body.style.minHeight;
+    html.style.height = 'auto';
+    html.style.minHeight = '0';
+    if (body) { body.style.height = 'auto'; body.style.minHeight = '0'; }
+    var h = Math.max(html.scrollHeight, body && body.scrollHeight || 0);
+    var kids = body ? body.children : [];
+    for (var i = 0; i < kids.length; i++) {
+      var r = kids[i].getBoundingClientRect();
+      h = Math.max(h, Math.ceil(r.bottom + (window.scrollY || 0)));
+    }
+    html.style.height = hs;
+    html.style.minHeight = hmin;
+    if (body) { body.style.height = bs; body.style.minHeight = bmin; }
+    return h;
+  }
   function send(){
-    var h = Math.max(document.documentElement.scrollHeight, document.body && document.body.scrollHeight || 0);
-    parent.postMessage({type:'microchat-html-h', height:h}, '*');
+    if (lock) return;
+    lock = true;
+    try {
+      var h = contentH();
+      if (h <= 0 || Math.abs(h - last) < 2) return;
+      last = h;
+      parent.postMessage({type:'microchat-html-h', height:h}, '*');
+    } finally { lock = false; }
   }
   addEventListener('load', send);
   if (document.readyState === 'complete') send();
@@ -529,6 +602,96 @@ function formParts(data) {
         markup: data?.html || parsed.html,
     };
 }
+
+/** file — path → $file → {ext}-preview, иначе item-node. */
+ODA({ is: 'microchat-view-file',
+    extends: 'microchat-view',
+    imports: '~/lib//node',
+    template: /*html*/`
+        <style>
+            .body {
+                @apply --vertical;
+            }
+        </style>
+    `,
+    previewTag: 'item-node',
+    get path() { return this.data?.path; },
+    get $file() {
+        const p = String(this.path || '');
+        if (!p.startsWith('/'))
+            return;
+        return WORK.get_item(p).then(async file => {
+            if (String(this.path || '') !== p)
+                return;
+            let tag = 'item-node';
+            try {
+                if (file && await CORE.$file.loadPreview(file))
+                    tag = String(file.ext || 'file') + '-preview';
+            }
+            catch { /* item-node */ }
+            this.previewTag = tag;
+            return file;
+        });
+    },
+    get extendTag() { return this.path ? this.previewTag : ''; },
+    get extendFlex() { return this.onlyDoc && this.previewTag !== 'item-node'; },
+    get showMarkdown() {
+        if (this.previewTag && this.previewTag !== 'item-node')
+            return false;
+        if (this.onlyDoc)
+            return this.showContent;
+        if (this.items.length && (this.data?.expand || this.data?.type === 'includes'))
+            return false;
+        return this.showContent;
+    },
+});
+
+ODA({ is: 'microchat-view-generate',
+    extends: 'microchat-view-file',
+    attached() {
+        this._bumpLayout();
+        this._armTick();
+    },
+    detached() {
+        this._clearTick();
+        this._bumpLayout();
+    },
+    _armTick() {
+        this._clearTick();
+        if (this.data?.done || this.data?.error) {
+            this.tickText = '';
+            this._tickStart = 0;
+            return;
+        }
+        this._tickStart = Number(this.data?.time) || Date.now();
+        this._paintElapsed();
+        this._tick = setInterval(() => {
+            if (this.data?.done || this.data?.error) {
+                this.tickText = '';
+                this._clearTick();
+                return;
+            }
+            if (!this._tickStart)
+                this._tickStart = Number(this.data?.time) || Date.now();
+            this._paintElapsed();
+        }, 1000);
+    },
+    _paintElapsed() {
+        const t = Number(this.data?.time) || this._tickStart || Date.now();
+        this.tickText = formatElapsed(Date.now() - t);
+    },
+    _clearTick() {
+        if (!this._tick)
+            return;
+        clearInterval(this._tick);
+        this._tick = 0;
+    },
+    get showMarkdown() {
+        if (this.data?.error)
+            return this.showContent;
+        return false;
+    },
+});
 
 /** html — слот в ленте: страница из content, вид по type. */
 ODA({ is: 'microchat-view-html',
@@ -565,7 +728,9 @@ ODA({ is: 'microchat-html',
         return raw + HEIGHT_PING;
     },
     get frameStyle() {
-        return this.frameH ? { height: this.frameH + 'px' } : {};
+        if (this.frameH)
+            return { height: this.frameH + 'px' };
+        return { minHeight: '50vh' };
     },
     attached() {
         this._onHtmlH = e => {
@@ -573,7 +738,8 @@ ODA({ is: 'microchat-html',
             const iframe = this.$('iframe');
             if (!iframe || e.source !== iframe.contentWindow) return;
             const h = Number(e.data.height);
-            if (h > 0) this.frameH = h;
+            if (!(h > 0) || Math.abs(h - this.frameH) < 2) return;
+            this.frameH = h;
         };
         window.addEventListener('message', this._onHtmlH);
     },

@@ -2,7 +2,7 @@
  * DuckDuckGo — поиск в интернете и чтение страниц.
  *
  * search — Instant Answer, иначе HTML GET / lite.
- * fetch_url — HTML → плоский текст + хвосты [images] / [video].
+ * fetch_url — HTML → текст с markdown-ссылками `[текст](url)` + хвосты [images] / [video].
  *
  * SCHEMA — описание методов для ИИ (function calling).
  */
@@ -19,13 +19,21 @@ function pageBlocked(html, text) {
         .test(String(html || '') + '\n' + String(text || ''));
 }
 
-function htmlToText(html = '') {
-    return String(html)
+function htmlToText(html = '', base = '') {
+    let s = String(html)
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<(?:head|nav|footer|noscript|svg|iframe)[\s\S]*?<\/(?:head|nav|footer|noscript|svg|iframe)>/gi, ' ')
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
+        .replace(/<!--[\s\S]*?-->/g, ' ');
+    s = s.replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, (all, inner) => {
+        const url = absUrl(attr(all, 'href'), base);
+        const text = decodeEntities(String(inner).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+        if (!url)
+            return text || ' ';
+        return '[' + (text || url) + '](' + url + ')';
+    });
+    return s
+        .replace(/<(?:head|noscript|svg|iframe)[\s\S]*?<\/(?:head|noscript|svg|iframe)>/gi, ' ')
+        .replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr|section|article|nav|footer)>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/gi, ' ')
         .replace(/&amp;/gi, '&')
@@ -273,7 +281,7 @@ export default {
             },
         },
         fetch_url: {
-            description: 'Прочитать веб-страницу по URL: плоский текст (до 20000) и хвосты [images] / [video] — абсолютные url. Используй после search.',
+            description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url) (до 20000) и хвосты [images] / [video]. Используй после search.',
             params: {
                 type: 'object',
                 properties: {
@@ -336,11 +344,11 @@ export default {
             if (/json/i.test(type))
                 return { url, content: raw.slice(0, MAX_PAGE_TEXT), truncated: raw.length > MAX_PAGE_TEXT };
 
+            const pageUrl = response.url || url;
             const title = (raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
-            const text = htmlToText(raw);
+            const text = htmlToText(raw, pageUrl);
             if (pageBlocked(raw, text) || text.replace(/\s+/g, ' ').trim().length < 40)
                 return { error: 'страница недоступна', url };
-            const pageUrl = response.url || url;
             const images = pageImages(raw, pageUrl);
             const videos = pageVideos(raw, pageUrl);
             return {

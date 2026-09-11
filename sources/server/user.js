@@ -31,5 +31,8 @@ export class $user extends $class{
             }
         }
     }
+    async allowAccess(params) {
+        return params?.session?.$user?.id;
+    }
 }
 $user.type_chain = Object.create(null);

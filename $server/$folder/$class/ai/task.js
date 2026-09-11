@@ -89,7 +89,6 @@ export const file = {
     label: 'Файл',
     icon: 'files:file',
     role: 'user',
-    doc: true,
     prompt: [
         'Проанализируй этот файл, и вытащи из него всю полезную информацию.',
         'Не выдумывай, не фантазируй, не используй другие источники информации, кроме этого файла.',
@@ -111,7 +110,6 @@ export const file = {
             let fileItem = files[length];
             fileItem = await WORK.get_item(fileItem);
             await fileItem.init;
-            block.title = `file ${length + 1}: ['${fileItem.label}'](<${fileItem.path}>)\n\n`;
             const chain = await fileItem.type_chain;
             const image = chain.includes('$image') || String(fileItem.contentType).startsWith('image/');
             if (image) {
@@ -128,11 +126,11 @@ export const file = {
             block.icon = fileItem.icon;
             block.label = fileItem.label;
             block.path = fileItem.path;
-            block.state = 'прочитан';
+            block.state = 'прочитано';
         } catch (e) {
             block.error = true;
             block.state = 'ошибка';
-            block.content = block.title + '\n\n' + e.message + '\n\n';
+            block.content = (block.label || 'файл') + '\n\n' + e.message + '\n\n';
         }
         return true;
     },
@@ -205,8 +203,10 @@ export default {
                 '# Режим: размышление',
                 'Разбери запрос и контекст. Не обращайся к пользователю, не планируй списком шагов, ничего не делай.',
                 'Не утверждай, что нет интернета или метеоданных — поиск, осмотр системы и файлы делают субагенты (web / explore / work).',
-                'Строение WORK, что где лежит, состав веток и классов — explore; файлы с известным путём/области — work; интернет — web.',
+                'Строение WORK, что где лежит, состав веток и классов — explore; файлы с известным путём/области — work; интернет — web; картинка / фото / N файлов с изображениями / по сезонам — image (N generate, не коллаж и не work.write).',
+                'Удачный прогон зафиксировать как навык — freeze (рецепт в ai/skills/, не дамп task); не invent pipe.',
                 'Хронология, «чем занимались», почта/календарь в журнале — logs ($class.logs: день, при необходимости ext eml/ics); не читать history .logs через work.',
+                'Запланировать встречу — work typed ($ics), не create класса.',
                 'Не предлагай «спросить разрешение» на инструмент — выбор сделает меню после тебя.',
             ].join('\n'),
             prompt: [

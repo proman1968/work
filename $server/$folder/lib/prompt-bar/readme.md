@@ -10,7 +10,7 @@ ODA-компонент строки ввода: текст, вложения, м
 
 ## Как это работает
 
-- Модель: `selectModel($event)` → `WORK.showDropdown(item-tree, TITLE, e)` на нативном pointerdown; `this.model = item.path`.
+- Модель: `selectModel($event)` → `WORK.showDropdown(item-tree, TITLE, e)` на нативном pointerdown; `this.model = item.path`. Лист без `chat` в `capabilities` не выбирается (image-only — агент `image`).
 - Effort: кнопка только если в `capabilities` модели есть флаг `effort`; пока список грузится — скрыта. Цикл `off/low/medium/high` → `this.effort`.
 - TTS: цикл `off/local/browser` в `this.ttsMode`.
 - Usage: кнопка-кольцо (`showUsage`) → `showStats` → `WORK.showDropdown(work-usage-panel, {}, кнопка)` — якорь-элемент, не координаты курсора (popover при нехватке места снизу открывается над якорем). Панель получает `host: this` и читает `stats` живым геттером `host.usageStats` — доехавший `maxTokens` модели обновляет открытый попап; закрытие по клику снаружи/Esc — стандартный стек popover.

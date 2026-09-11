@@ -1,4 +1,4 @@
-# Exaone3.5 7.8b
+# x/z-image-turbo:bf16
 
 ## Назначение
 
@@ -6,14 +6,14 @@
 
 ## Устройство
 
-- **path:** `/MODELS/BIS-Ollama/Exaone3.5 7.8b`
+- **path:** `/MODELS/BIS-Ollama/z-image-turbo bf16`
 - **type:** `$ai`
-- **id:** `Exaone3.5 7.8b`
+- **id:** `z-image-turbo bf16`
+- **label:** x/z-image-turbo:bf16
+- **model:** `x/z-image-turbo:bf16` (тег API / remote)
+- **icon:** `carbon:image`
 
-- **model:** `exaone3.5:7.8b` (тег API / remote)
-- **icon:** `carbon:ai-brain`
-- **maxTokens:** `32768`
-- **capabilities:** chat, stream, functions
+- **capabilities:** image
 
 Источник истины полей — `class.js` в meta этой точки (readme не дублирует реализацию, только контракт).
 

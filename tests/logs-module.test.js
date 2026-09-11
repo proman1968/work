@@ -52,4 +52,13 @@ describe('logs.js: чистые функции', () => {
         assert.equal(LOGS.matchesFilter({ ext: 'md' }, { exts: ['md'] }), true);
         assert.equal(LOGS.matchesFilter({ ext: 'md' }, { exts: ['txt'] }), false);
     });
+
+    it('matchesEntry: stub .logs и связанный path', () => {
+        const row = { path: '/U/work/task/.ai.task/history/2026-09-10/1.task' };
+        const stub = '/U/logs/2026-09-10/1.logs';
+        assert.equal(LOGS.matchesEntry(stub, row, stub), true);
+        assert.equal(LOGS.matchesEntry(row.path, row, stub), true);
+        assert.equal(LOGS.matchesEntry('/other.logs', row, stub), false);
+        assert.equal(LOGS.matchesEntry('', row, stub), false);
+    });
 });

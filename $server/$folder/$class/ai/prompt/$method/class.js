@@ -1,6 +1,6 @@
 ﻿/**
  * $method prompt — движок агентов из пакета ai/agents/* рядом с методом (не meta peer через ~).
- * params: { session, agent, model, mode, effort, messages, prompt, block, box, live }
+ * params: { session, agent, model, mode, effort, messages, prompt, block, box, live, task }
  * this.$context — класс исполнения (место / system.md / readme / config домена).
  * model: agent.model (строгая) → params.model (выбор пользователя/REST) → ai/config.js ($context или пакет движка).
  * live — контракт владельца ленты: { send(event), save(), stopped, wait(block), mode }.
@@ -12,7 +12,7 @@
  * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
  * круг / вложенный агент — снова execute(params), не HTTP.
- * tool/agent.init получают engine: this (для ask peer без ~/ai у цели).
+ * tool/agent.init получают engine: this (для ask peer без ~/ai у цели) и task (владелец ленты, если передан).
  */
 
 export default {
@@ -63,9 +63,15 @@ export default {
             block.stop ??= agent.stop;
         if (prompt && !block.brief)
             block.brief = String(prompt).trim();
+        if (block.label == null && agent.stop !== true)
+            block.label = agent.label;
+        if (block.icon == null)
+            block.icon = agent.icon;
 
         if (own)
             live.send({ type: 'chat.start' });
+
+        await live.save?.();
 
         try {
             await this.turn({
@@ -85,7 +91,7 @@ export default {
         }
     },
 
-    /** Ход агента: лист → fill; box → init / tool (стоп через live.wait) → снова execute. */
+    /** Ход агента: лист → fill; box → init / tool / nested-агент (стоп через live.wait) → снова execute. */
     async turn(ctx) {
         const { block, agent, type, model, messages, session, live, params } = ctx;
         if (live?.stopped) {
@@ -95,10 +101,15 @@ export default {
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
         const toolIds = Object.keys(tools);
-        const system = agent[mode]?.system || agent.system;
+        const nested = Array.isArray(agent.nested) ? agent.nested : [];
+        let system = agent[mode]?.system || agent.system;
+        if (params.skillStep?.system)
+            system = [system, params.skillStep.system].filter(Boolean).join('\n\n');
+        if (params.skillStep?.prompt)
+            system = [system, params.skillStep.prompt].filter(Boolean).join('\n\n');
         const exec = (target, call, c) => this.exec(target, call, c);
 
-        if (!toolIds.length) {
+        if (!toolIds.length && !nested.length) {
             await this.fill(block, {
                 agent: { ...agent, system },
                 model, messages, live, box: params.box, effort: params.effort,
@@ -108,7 +119,7 @@ export default {
                 return;
             }
             if (typeof agent.recalc === 'function')
-                await agent.recalc({ block, live, exec, messages, session });
+                await agent.recalc({ block, live, exec, messages, session, task: params.task });
             if (block.content)
                 messages.push({ role: 'assistant', content: block.content });
             delete block.inited;
@@ -120,14 +131,20 @@ export default {
         if (!block.inited) {
             block.inited = true;
             if (typeof agent.init === 'function') {
-                await agent.init({
+                const ok = await agent.init({
                     block, box: params.box, messages, session, model, live, exec, agent,
                     engine: this,
+                    task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
                 if (live?.stopped) {
                     delete block.inited;
+                    return;
+                }
+                if (ok === false) {
+                    delete block.inited;
+                    block.skip = true;
                     return;
                 }
                 if (block.error && block.content) {
@@ -137,8 +154,14 @@ export default {
                 }
             }
         }
+        if (typeof agent.recalc === 'function')
+            await agent.recalc({ block, box: params.box, messages, session, live, exec, task: params.task });
 
-        const next = await this.pick(ctx, nextIds(agent, block, toolIds), tools, mode);
+        const ids = nextIds(agent, block, toolIds);
+        const skillTools = params.skillStep?.tools;
+        const next = skillTools?.length
+            ? skillToolNext(skillTools, ids, block)
+            : await this.pick(ctx, ids, tools, mode);
         if (live?.stopped) {
             delete block.inited;
             return;
@@ -163,6 +186,7 @@ export default {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
                     engine: this,
+                    task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                 });
                 await live.save?.();
@@ -181,7 +205,7 @@ export default {
                     return this.turn(ctx);
                 }
             }
-            if (!child.content && (child.draft || tool.prompt || tool.system)) {
+            if (!child.content && !draftText(child) && (tool.prompt || tool.system)) {
                 await this.fill(child, {
                     agent: {
                         system: tool.system || system,
@@ -191,16 +215,17 @@ export default {
                     },
                     model, messages, live, box: block, effort: params.effort,
                 });
-                delete child.draft;
             }
             if (live?.stopped) {
                 delete block.inited;
                 return;
             }
             if (typeof tool.recalc === 'function')
-                await tool.recalc({ block: child, box: block, messages, session, live, exec });
-            if (child.content)
-                messages.push({ role: 'assistant', content: child.content });
+                await tool.recalc({
+                    block: child, box: block, messages, session, live, exec,
+                    engine: this, task: params.task,
+                });
+            pushLift(messages, child);
             await live.save?.();
             if (child.stop) {
                 if (!live.wait) {
@@ -227,20 +252,29 @@ export default {
             });
         }
 
-        // вложенный агент — свой блок в items, тот же live
-        const sub = await this.execute({
+        // вложенный агент — в ленту до execute (как tool: push → save → ход)
+        const sub = { type: next, time: Date.now() };
+        block.items.push(sub);
+        await live.save?.();
+        await this.execute({
             ...params,
             agent: next,
             prompt: undefined,
-            block: undefined,
+            block: sub,
             box: block,
         });
         if (live?.stopped) {
             delete block.inited;
             return;
         }
-        block.items.push(sub);
-        await live.save?.();
+        if (sub.skip) {
+            const i = block.items.indexOf(sub);
+            if (i >= 0)
+                block.items.splice(i, 1);
+            await live.save?.();
+        }
+        else
+            pushLift(messages, sub);
         return this.execute({
             ...params,
             agent: type, model, messages, session, live,
@@ -249,7 +283,7 @@ export default {
         });
     },
 
-    /** Итог бокса: один результат — без LLM; только ошибки — агрегат; иначе fill по agent.prompt. */
+    /** Итог бокса: один ребёнок с content — лифт; только ошибки — агрегат; draft/несколько — fill. */
     async total(ctx, tools) {
         const { block, agent, model, messages, live, session, params } = ctx;
         if (live?.stopped) {
@@ -257,36 +291,39 @@ export default {
             return;
         }
         const mode = live?.mode || 'plan';
-        const data = (block.items || []).filter(b =>
-            b.content && b.type !== 'prompt' && tools[b.type]?.role === 'user');
+        const data = (block.items || []).filter(b => {
+            if (b.type === 'prompt' || tools[b.type]?.ignore)
+                return false;
+            if (tools[b.type]?.role && tools[b.type].role !== 'user')
+                return false;
+            return !!(b.content || draftText(b));
+        });
         const results = data.filter(b => !b.error);
         const fails = data.filter(b => b.error);
-        if (results.length === 1) {
+        const nest = Array.isArray(agent.nested) && agent.nested.length;
+        const ownDraft = !!draftText(block);
+        if (nest && ownDraft && !data.length) {
+            // лист: только draft, сводку пишет родитель
+            delete block.inited;
+            delete block.using_blocks;
+            await live.save?.();
+            return;
+        }
+        if (results.length === 1 && !fails.length && !ownDraft && results[0].content) {
+            // один ребёнок с готовым content — лифт; draft (простыня) не копировать
             block.content = results[0].content;
             delete block.error;
             delete block.state;
-            delete block.using_blocks;
         }
-        else if (!results.length && fails.length) {
+        else if (!results.length && fails.length && !ownDraft) {
             block.error = true;
             block.content = fails.map(b => b.content).filter(Boolean).join('\n') || 'ошибка';
             if (fails.length > 1)
                 block.state = 'ошибки: ' + fails.length;
             else if (!block.state || /^сайты:/.test(block.state))
                 block.state = fails[0].state || 'ошибка';
-            delete block.using_blocks;
         }
-        else if (results.length && results.every(b => b.type === results[0].type)) {
-            // однотипные успехи (N create / N write) — склейка без LLM
-            block.content = results.map(b => b.content).filter(Boolean).join('\n\n');
-            delete block.error;
-            if (fails.length)
-                block.state = 'ошибки: ' + fails.length;
-            else
-                delete block.state;
-            delete block.using_blocks;
-        }
-        else {
+        else if (results.length || ownDraft) {
             await this.fill(block, {
                 agent: {
                     system: agent[mode]?.system || agent.system,
@@ -300,19 +337,30 @@ export default {
                 delete block.inited;
                 return;
             }
+            if (!block.content) {
+                const bits = results.map(b => b.content).filter(Boolean);
+                if (bits.length === 1)
+                    block.content = bits[0];
+                else if (bits.length)
+                    block.content = bits.join('\n\n');
+            }
             if (block.content) {
                 delete block.error;
-                if (/^сайты:/.test(block.state || ''))
-                    delete block.state;
+                delete block.state;
             }
         }
-        if (typeof agent.enrichTotal === 'function' && block.content)
-            block.content = agent.enrichTotal(block.content, block);
+        // сводка и без детей в total (check: exist/file ignore) — иначе бокс без content не закрывается
+        if (typeof agent.enrichTotal === 'function') {
+            const text = agent.enrichTotal(block.content || '', block);
+            if (text)
+                block.content = text;
+        }
         if (typeof agent.finish === 'function')
-            await agent.finish({ block, live, session });
+            await agent.finish({ block, live, session, box: params.box });
         if (block.content)
             messages.push({ role: 'assistant', content: block.content });
         delete block.inited;
+        delete block.using_blocks;
         await live.save?.();
     },
 
@@ -325,7 +373,9 @@ export default {
         if (ids.length === 1)
             return ids[0];
         const lines = ids.map(id => {
-            const node = tools[id] || {};
+            const node = tools[id] || (id === 'site'
+                ? { description: 'страница по url из очереди' }
+                : {});
             return `- ${id}: ${node.description || node.label || id}`;
         });
         const response = await this.streamChat({
@@ -568,9 +618,54 @@ export default {
     },
 };
 
+/** Навык: первый unused tool; уже успешный — пропуск; после ok create — итог. */
+function skillToolNext(order, ids, box) {
+    const items = box?.items || [];
+    if (items.some(b => b.type === 'create' && b.done && !b.error))
+        return 'total';
+    const next = (order || []).find(id => ids.includes(id) && !skillToolOk(items, id));
+    return next || 'total';
+}
+
+function skillToolOk(items, type) {
+    return (items || []).some(b => {
+        if (b.type !== type || !b.content || b.error)
+            return false;
+        if (type === 'activation')
+            return b.state === 'принято';
+        if (type === 'create')
+            return !!b.done;
+        return true;
+    });
+}
+
+function draftText(block) {
+    const d = block?.draft;
+    if (d == null || d === '')
+        return '';
+    if (typeof d === 'string')
+        return d;
+    if (d.type === 'text')
+        return String(d.text || '');
+    return '';
+}
+
+/** Подъём: draft и content — разные источники, оба в контекст. */
+function pushLift(messages, block) {
+    const d = draftText(block);
+    if (d)
+        messages.push({ role: 'assistant', content: d });
+    if (block?.content)
+        messages.push({ role: 'assistant', content: block.content });
+}
+
 function nextIds(agent, block, toolIds) {
     const used = block.using_blocks || [];
     const ids = toolIds.filter(id => !used.includes(id));
+    for (const id of agent.nested || []) {
+        if (!used.includes(id) && !ids.includes(id))
+            ids.push(id);
+    }
     if (agent.prompt && !used.includes('total') && !used.includes('stop'))
         ids.push('stop');
     return ids;

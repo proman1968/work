@@ -65,7 +65,7 @@ export default {
         if (!dayFrom || !dayTo || !source)
             return [];
         return (async () => {
-            const history = await source.get_item('/~/logs/.data.logs/history');
+            const history = await source.get_item('/~/logs');
             this._boundOnLogsChanged ||= () => { this.events = undefined; };
             if (history !== this._historyFolder) {
                 this._historyFolder?.unlisten?.('changed', this._boundOnLogsChanged);
@@ -153,9 +153,12 @@ export default {
         if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
             return;
 
-        const filename = isEdit
-            ? filenameFromHistoryPath(el.$item?.path || historyPath)
-            : `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ics`;
+        persist.time = startDate.getTime();
+        const stem = String(persist.summary || 'встреча').trim() || 'встреча';
+        const editPath = el.$item?.path || historyPath || '';
+        const filename = isEdit && /\/history(?:\/|$)/.test(editPath)
+            ? filenameFromHistoryPath(editPath)
+            : `${stem}.ics`;
         const body = isEdit
             ? (el.$item?.body ?? JSON.stringify(persist))
             : JSON.stringify(persist);
@@ -165,9 +168,10 @@ export default {
             end: persist.end,
             summary: persist.summary,
             location: persist.location,
-            allDay: !!persist.allDay
+            allDay: !!persist.allDay,
+            time: persist.time
         });
-        await this.$item.save_file(file, { message, time: startDate.getTime() });
+        await this.$item.save_file(file, { message, time: persist.time });
         this.events = undefined;
     }
 }

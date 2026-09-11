@@ -34,7 +34,7 @@ export class $class extends $folder{
     }
     log_files(day){
         day ??= new Date().toISOString().slice(0, 10);
-        return this.get_item(`/~/logs/.data.logs/history/${day}/*.logs`);
+        return this.get_item(`/~/logs/${day}/*.logs`);
     }
     get admins(){
         return this.fetch('admins');

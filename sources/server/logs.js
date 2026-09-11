@@ -1,6 +1,6 @@
 /**
- * Подсистема логов класса: data.logs + history в метапапке
- * (`<meta>/logs/.data.logs/history/YYYY-MM-DD/*.logs`).
+ * Подсистема логов класса: файл данных `.logs`
+ * (`<meta>/logs/YYYY-MM-DD/{time}.{uid}.logs`). Папка logs — сама журнал.
  *
  * Чистые функции над storage ($class). Публичный фасад — методы $class:
  * logs({mode}), read_log_entry(), append_log_includes().
@@ -89,18 +89,24 @@ export function resolveDays(params = {}) {
     return [today()];
 }
 
+/** Папка журнала класса (`meta/logs`). Она же история. */
+export function logsFolder(storage) {
+    return storage.meta_folder.get_item('/logs');
+}
+
+/** @deprecated имя; то же, что logsFolder */
 export function historyFolder(storage) {
-    return storage.meta_folder.get_item('/logs/.data.logs/history');
+    return logsFolder(storage);
 }
 
 /** Даты, за которые есть логи (по убыванию); сегодня — всегда в списке. */
 export async function datesList(storage) {
     let dates = [];
     try {
-        const history = await historyFolder(storage);
-        if (history) {
-            dates = await history.folders;
-            dates = dates.map(f => f.name);
+        const root = await logsFolder(storage);
+        if (root) {
+            dates = await root.folders;
+            dates = dates.map(f => f.name).filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n));
             dates.sort((a, b) => b.localeCompare(a));
         }
     }
@@ -117,7 +123,7 @@ export async function datesList(storage) {
 /** .logs файлы дня (без load) — для инкрементального чата. */
 export function dayFiles(storage, day) {
     day ??= today();
-    return storage.meta_folder.get_item('/logs/.data.logs/history/' + day + '/*.logs');
+    return storage.meta_folder.get_item('/logs/' + day + '/*.logs');
 }
 
 /** Папка дня (создаётся при отсутствии). */
@@ -228,23 +234,36 @@ function sameLogPath(rowPath, target, shortTarget) {
         || rowPath.endsWith(target) || target.endsWith(rowPath);
 }
 
-/** Найти JSON-запись лога по path history-файла (ai.task и т.п.). */
+/** Ключ записи: stub `.logs` или связанный `row.path`. */
+export function matchesEntry(entryPath, row, logsFilePath) {
+    if (!entryPath)
+        return false;
+    const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
+    const shortTarget = $item.toShortPath(target);
+    if (logsFilePath) {
+        const stub = logsFilePath.startsWith('/') ? logsFilePath : '/' + logsFilePath;
+        if (sameLogPath(stub, target, shortTarget))
+            return true;
+    }
+    if (!row?.path)
+        return false;
+    const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
+    return sameLogPath(rowPath, target, shortTarget);
+}
+
+/** Найти JSON-запись лога по stub (.logs) или связанному path (task/html/…). */
 export async function findEntry(storage, entryPath) {
     if (!entryPath)
         return null;
-    const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
-    const shortTarget = $item.toShortPath(target);
     const days = await datesList(storage);
     for (const day of days) {
         for (const f of await dayFilesArray(storage, day)) {
             try {
                 const raw = await f.load();
                 const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (!row?.path)
+                if (!matchesEntry(entryPath, row, f.path))
                     continue;
-                const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
-                if (sameLogPath(rowPath, target, shortTarget))
-                    return row;
+                return Object.assign({ logsFilePath: f.path }, row);
             }
             catch { /* skip */ }
         }

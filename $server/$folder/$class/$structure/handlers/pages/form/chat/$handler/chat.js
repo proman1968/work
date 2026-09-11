@@ -1,3 +1,26 @@
+/** Первый лист $ai с chat (или без caps). image-only не мозг задачи. */
+async function firstChatLeaf(node) {
+    if (!node)
+        return null;
+    if (!node.items?.length) {
+        try {
+            const item = node.path ? await WORK.get_item(node.path) : null;
+            const c = item?.capabilities;
+            const list = Array.isArray(c) ? c.map(String) : String(c || '').split(/[\s,]+/).filter(Boolean);
+            if (list.length && !list.includes('chat'))
+                return null;
+        }
+        catch { /* лист без caps — годится */ }
+        return node;
+    }
+    for (const child of node.items) {
+        const found = await firstChatLeaf(child);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
 export default{
     icon: 'icons:question-answer',
     imports: '/oda//toggle.js, ~/lib//tree.js, ~/lib//chat-item',
@@ -9,12 +32,11 @@ export default{
                 position: relative;
             }
         </style>
-        <div slot="top">TOOLS</div>
         <form-chat flex :$item></form-chat>
     `
 }
 ODA({is: 'form-chat',
-    imports: '/oda//toggle.js, ~/lib//tree.js, ~/lib//users.js',
+    imports: '/oda//toggle.js, ~/lib//tree.js',
     template: /* html */`
         <style>
             :host {
@@ -22,42 +44,11 @@ ODA({is: 'form-chat',
                 overflow: hidden;
                 position: relative;
             }
-            .tools {
-                gap: 8px;
-                padding: 4px;
-                align-items: center;
-                justify-content: end;
-                margin-bottom: 1px;
-                @apply --shadow;
-            }
         </style>
-        <div class="tools" accent-invert horizontal>
-            <item-users ~if="!isPrivate" flex :$item @selected_users-changed="_onSelectionChanged"></item-users>
-            <oda-button shadow :icon="callIcon" @tap="call" title="Call..." :icon-size="iconSize * 1.5" style="border-radius: 50%;"></oda-button>
-        </div>
         <oda-chat id="chat" :$item ::model ::efforts></oda-chat>
     `,
-    get callIcon(){
-        return this.receivers.length?'communication:call':'av:videocam'
-    },
-    async _onSelectionChanged(e){
-        const itemUsers = e.currentTarget;
-        this.receivers = (await itemUsers.selectedUsers) || [];
-    },
     async attached(){
-        const itemUsers = this.$('item-users');
-        if (itemUsers)
-            this.receivers = (await itemUsers.selectedUsers) || [];
         await this._hydrateModel();
-    },
-    get showCallButton(){
-        return this.receivers?.length
-    },
-    async call(e) {
-        if(this.receivers?.length)
-            WORK.top.RTCCaller.startCall(await this.$item, this.receivers.map(u => u.id));
-        else
-            WORK.top.RTCCaller.startRecord(await this.$item);
     },
     last:{
         $def: 0,
@@ -98,8 +89,8 @@ ODA({is: 'form-chat',
                 const aiRoot = children?.find(el => el.type === '$ai');
                 if (!aiRoot) return;
                 const tree = await aiRoot.info({ deep: -1 });
-                const walk = (n) => (!n ? null : (!n.items?.length ? n : walk(n.items[0])));
-                const path = walk(tree)?.path;
+                const leaf = await firstChatLeaf(tree);
+                const path = leaf?.path;
                 if (path) {
                     this.model = path;
                     try { ODA.LocalStorage.create(this._savePath).setItem('model', path); } catch {}
@@ -362,15 +353,16 @@ ODA({is: 'oda-chat',
                     if (paths.length)
                         params.includes = JSON.stringify(paths);
                 }
+                const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
                 const body = {
-                    title: text,
+                    name,
                     created: Date.now(),
                     items: [],
                 };
                 if (this.model) body.model = this.model;
                 // effort всегда в body: hasEffort ложен, пока capabilities ещё Promise — иначе task стартует без effort → off
                 body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
-                const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
+                const taskFile = new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
             } else {
@@ -425,6 +417,7 @@ ODA({is: 'chat-ribbon',
                 scroll-behavior: smooth;
                 flex-direction: column-reverse;
                 background: transparent;
+                --chat-card-max: {{ribbonHeight > 0 ? (ribbonHeight * 0.8) + 'px' : 'none'}};
             }
             #ribbon{
                 overflow: visible;
@@ -573,7 +566,7 @@ ODA({is: 'chat-day',
                 z-index: 1;
             }
             .date-line{
-                top: 0px;
+                top: 4px;
                 position: sticky;
                 align-items: center;
                 width: -webkit-fill-available;
@@ -664,7 +657,7 @@ ODA({is: 'chat-day',
             return false;
         // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
         await source.logs(this.day);
-        let folder = await source.get_item('/~/logs/.data.logs/history/' + this.day);
+        let folder = await source.get_item('/~/logs/' + this.day);
         folder = await Promise.resolve(folder);
         if (!folder)
             return false;
@@ -768,7 +761,7 @@ ODA({is: 'chat-day',
                 const onChanged = e => this._onLogsChanged(e);
                 source?.listen?.('changed', onChanged);
                 this.$pdp.$item?.listen?.('changed', onChanged);
-                const history = await source.get_item('/~/logs/.data.logs/history');
+                const history = await source.get_item('/~/logs');
                 history?.listen?.('changed', onChanged);
             }
             await this._bindLogsFolder();

@@ -315,6 +315,53 @@ export default {
             yield* flushFunctionCall();
         })();
     },
+
+    /**
+     * Сгенерировать изображение по тексту. Только capabilities `image`. Не chat.
+     * @param {object} [params]
+     * @param {string} params.prompt Текст сцены
+     * @returns {Promise<{ mime: string, base64: string, model: string }>}
+     */
+    async generateImage(params = {}) {
+        const ai = params.$ai || this;
+        if (!hasCap(ai, 'image'))
+            throw new Error('generateImage: у модели нет capabilities image');
+        const prompt = String(params.prompt || params.post || '').trim();
+        if (!prompt)
+            throw new Error('generateImage: пустой prompt');
+        const tag = String(params.model || ai.model || '').trim();
+        if (!tag)
+            throw new Error('generateImage: нет model');
+        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        if (!base)
+            throw new Error('generateImage: нет baseUrl у ' + (ai.short || ai.path || '?'));
+        let origin;
+        try {
+            origin = new URL(base).origin;
+        }
+        catch {
+            throw new Error('generateImage: некорректный baseUrl: ' + base);
+        }
+        const headers = await getAuthHeaders(ai);
+        let lastErr = '';
+        const jobs = [
+            { url: origin + '/api/generate', body: { model: tag, prompt, stream: false } },
+            { url: origin + '/v1/images/generations', body: { model: tag, prompt, n: 1, response_format: 'b64_json' } },
+        ];
+        for (const job of jobs) {
+            try {
+                const data = await httpsPostJson(job.url, headers, job.body, ai, 180000);
+                const pic = pickGeneratedImage(data);
+                if (pic)
+                    return { ...pic, model: tag };
+                lastErr = 'нет изображения в ответе';
+            }
+            catch (e) {
+                lastErr = String(e.message || e);
+            }
+        }
+        throw new Error('generateImage: не удалось получить картинку (' + lastErr + ')');
+    },
 };
 
 function hasCap(ai, name) {
@@ -616,6 +663,83 @@ async function getAuthHeaders(ai) {
         }
     }
     return headers;
+}
+
+/** POST JSON по HTTPS (generateImage). timeoutMs — долгая генерация картинки. */
+function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
+    const url = new URL(urlStr);
+    const insecure = ai?.protocol === 'gigachat';
+    const payload = JSON.stringify(body || {});
+    return new Promise((resolve, reject) => {
+        const req = WORK.https.request({
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname + url.search,
+            method: 'POST',
+            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            headers: { Accept: 'application/json', ...headers, 'Content-Length': Buffer.byteLength(payload) },
+            timeout: timeoutMs,
+        }, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf-8');
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error('HTTP ' + res.statusCode + ': ' + text.slice(0, 160)));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(text));
+                }
+                catch (e) {
+                    reject(new Error('JSON: ' + e.message));
+                }
+            });
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('timeout'));
+        });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+    });
+}
+
+/** Ответ Ollama /api/generate или OpenAI /v1/images/generations → { mime, base64 }. */
+function pickGeneratedImage(data) {
+    if (!data || typeof data !== 'object')
+        return null;
+    const raws = [];
+    if (typeof data.image === 'string')
+        raws.push(data.image);
+    if (Array.isArray(data.images))
+        raws.push(...data.images.filter(x => typeof x === 'string'));
+    if (typeof data.b64_json === 'string')
+        raws.push(data.b64_json);
+    if (Array.isArray(data.data)) {
+        for (const row of data.data) {
+            if (row?.b64_json)
+                raws.push(row.b64_json);
+            else if (row?.b64)
+                raws.push(row.b64);
+        }
+    }
+    const raw = raws.find(s => s && String(s).length > 80);
+    if (!raw)
+        return null;
+    let b64 = String(raw).replace(/\s/g, '');
+    let mime = 'image/png';
+    const dataUrl = b64.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (dataUrl) {
+        mime = dataUrl[1];
+        b64 = dataUrl[2];
+    }
+    else if (b64.startsWith('/9j/'))
+        mime = 'image/jpeg';
+    else if (b64.startsWith('iVBORw0KGgo'))
+        mime = 'image/png';
+    return { mime, base64: b64 };
 }
 
 /** GET JSON по HTTPS (list_remote и т.п.). */
