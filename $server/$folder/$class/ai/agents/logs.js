@@ -409,7 +409,7 @@ async function loadRelatedJson(path) {
 }
 
 function peekTask(data) {
-    const title = String(data?.title || '').trim();
+    const title = String(data?.name || '').trim();
     if (title)
         return title.slice(0, PEEK_CHARS);
     const prompt = (data?.items || []).find(i => i?.type === 'prompt' && i.content);
@@ -433,9 +433,9 @@ async function peekRelated(path, ext) {
 
 function digestTask(data) {
     const lines = [];
-    const title = String(data?.title || '').trim();
+    const title = String(data?.name || '').trim();
     if (title)
-        lines.push('title: ' + title);
+        lines.push('name: ' + title);
     const items = Array.isArray(data?.items) ? data.items : [];
     const prompts = items.filter(i => i?.type === 'prompt' && i.content);
     if (prompts.length) {

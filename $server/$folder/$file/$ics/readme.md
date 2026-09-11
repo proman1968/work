@@ -2,7 +2,7 @@
 
 ## Что это
 
-Тип файла `.ics` у `$file`. Тело — JSON `{ start, end, summary, location, allDay }`, не RFC 5545.
+Тип файла `.ics` у `$file` — **файл данных** (`METADATA`). Тело — JSON `{ start, end, summary, location, allDay, time, name }`, не RFC 5545.
 
 ## Зачем
 
@@ -11,7 +11,7 @@
 ## Как
 
 1. `when` + `METADATA.FIELDS` — в [`class.js`](class.js). Обязательные: `start`, `summary`. `end` пустой — +1 час от `start` (весь день — 00:00…00:00 следующего).
-2. Запись — `save_file` на классе-месте: файл `event-*.ics`, `message` = те же поля, `time` = начало. Календарь и `logs({ ext: 'ics' })` читают только это.
+2. Запись — `save_file` на классе-месте: точка `work/ics/…/DAY/{time}.{uid}.ics`. Stem пути → `name`; корень `time` = начало встречи (день папки). Лог.path = этот файл. Календарь и `logs({ ext: 'ics' })` читают только это.
 3. Форма сетки — [`calendar-form`](/$server/$folder/lib/calendar-form/calendar-form.js/~/handlers/pages/form/); preview парсит JSON.
 
 ## Состав

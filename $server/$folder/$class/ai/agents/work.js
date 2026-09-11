@@ -276,8 +276,10 @@ const typedTool = {
             tagAgent(params.box, AGENT_TAG, 'нужны поля');
             return;
         }
-        const filename = typedFilename(spec.id);
         const startMs = typedStartMs(body);
+        if (spec.id === '$ics')
+            body.time = startMs;
+        const filename = typedFilename(spec, body);
         try {
             const result = await params.exec(parent, {
                 method: 'save_file',
@@ -570,7 +572,7 @@ export default {
         '# Агент: work',
         'Файлы и классы рабочей области. Строение системы (модели, сервисы) — explore; интернет — web; журнал класса — logs.',
         'Действие в журнале места (встреча, событие) — tool typed: тип $file по when, поля METADATA, save_file на классе-месте. Не create класса и не write без типа.',
-        'Не читай …/logs/.data.logs/history/… через read/search — это logs ($class.logs / read_log_entry).',
+        'Не читай …/logs/YYYY-MM-DD/… через read/search — это logs ($class.logs / read_log_entry).',
         'search — только внутри выбранного класса (путь + запрос); не semantic_search по корню WORK.',
         'Список моделей у провайдера (API/baseUrl) — explore meta+remote, не search в /SERVICES и не web.',
         'Подключить модель / новый класс у провайдера — create ($ai под $provider + class.js по образцу), не write «файла модели».',
@@ -1346,12 +1348,15 @@ function icsBody(raw) {
         e.setHours(e.getHours() + 1);
         end = persistTime(e);
     }
+    const summary = String(raw.summary || '').trim();
+    const startMs = start ? new Date(start).getTime() : NaN;
     return {
         start,
         end,
-        summary: String(raw.summary || '').trim(),
+        summary,
         location: String(raw.location || '').trim(),
         allDay,
+        time: Number.isFinite(startMs) ? startMs : undefined,
     };
 }
 
@@ -1368,10 +1373,10 @@ function persistTime(v) {
     return typeof d.toISOTimezoneString === 'function' ? d.toISOTimezoneString() : d.toISOString();
 }
 
-function typedFilename(typeId) {
-    const ext = String(typeId || '').replace(/^\$/, '') || 'txt';
-    const stem = ext === 'ics' ? 'event' : ext;
-    return stem + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+function typedFilename(spec, body) {
+    const ext = String(spec?.id || '').replace(/^\$/, '') || 'txt';
+    const stem = String(body?.summary || body?.name || ext).trim() || ext;
+    return stem + '.' + ext;
 }
 
 function typedStartMs(body) {

@@ -353,15 +353,16 @@ ODA({is: 'oda-chat',
                     if (paths.length)
                         params.includes = JSON.stringify(paths);
                 }
+                const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
                 const body = {
-                    title: text,
+                    name,
                     created: Date.now(),
                     items: [],
                 };
                 if (this.model) body.model = this.model;
                 // effort всегда в body: hasEffort ложен, пока capabilities ещё Promise — иначе task стартует без effort → off
                 body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
-                const taskFile = new File([JSON.stringify(body, null, 2)], 'ai.task', { type: 'application/json' });
+                const taskFile = new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' });
                 this.clear();
                 await this.$pdp.$item.save_file(taskFile, params);
             } else {
@@ -416,6 +417,7 @@ ODA({is: 'chat-ribbon',
                 scroll-behavior: smooth;
                 flex-direction: column-reverse;
                 background: transparent;
+                --chat-card-max: {{ribbonHeight > 0 ? (ribbonHeight * 0.8) + 'px' : 'none'}};
             }
             #ribbon{
                 overflow: visible;
@@ -655,7 +657,7 @@ ODA({is: 'chat-day',
             return false;
         // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
         await source.logs(this.day);
-        let folder = await source.get_item('/~/logs/.data.logs/history/' + this.day);
+        let folder = await source.get_item('/~/logs/' + this.day);
         folder = await Promise.resolve(folder);
         if (!folder)
             return false;
@@ -759,7 +761,7 @@ ODA({is: 'chat-day',
                 const onChanged = e => this._onLogsChanged(e);
                 source?.listen?.('changed', onChanged);
                 this.$pdp.$item?.listen?.('changed', onChanged);
-                const history = await source.get_item('/~/logs/.data.logs/history');
+                const history = await source.get_item('/~/logs');
                 history?.listen?.('changed', onChanged);
             }
             await this._bindLogsFolder();

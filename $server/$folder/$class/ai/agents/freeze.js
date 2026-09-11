@@ -176,7 +176,7 @@ function buildDraft(body) {
     const creates = collectCreates(items);
     const pipe = collectPipe(items, points);
     const need = body.goal?.need === 'facts' ? 'facts' : 'side';
-    const goal = String(body.goal?.text || body.title || '').trim();
+    const goal = String(body.goal?.text || body.name || '').trim();
     const id = suggestId(points, creates, goal);
     const draft = {
         id,

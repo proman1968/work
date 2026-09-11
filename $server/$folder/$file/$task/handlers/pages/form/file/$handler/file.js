@@ -191,7 +191,7 @@ export default {
         const i = this.dockIndex;
         return i < 0 ? null : this.dockReports[i];
     },
-    get title() { return this.data?.title || this.$item?.name || 'task'; },
+    get title() { return this.data?.name || this.$item?.name || 'task'; },
     get items() { return this.data?.items; },
     get result() {
         return this.$('microchat-ribbon')?.viewFor(this.focusedBlock)?.result;

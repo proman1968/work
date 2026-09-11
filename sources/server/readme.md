@@ -18,7 +18,7 @@
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `_collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
 - **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
-- **`save_file` → `save_to_history`** — return = history path снимка (карточка file в ai.task показывает его). Новое имя файла — `safeNodeName` (существующий путь не переименовывается)
+- **`save_file` → `save_to_history`** — обычный файл: живая копия + снимок в `history/` + лог. **Файл данных** (у `$file/$ext` есть `METADATA`): точка `ext/…/YYYY-MM-DD/{time}.{uid}.{ext}`, `name` в JSON, `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`. Новое имя обычного файла — `safeNodeName`
 
 ## Словарь API (канон имён)
 
@@ -69,14 +69,14 @@ API элементов — это «система команд» для ИИ-а
 | `save({ post })` | `$class` | сохранить `class.js` (слои) |
 | `save({ post })` | `$file` | перезаписать содержимое этого файла |
 | `edit({ post })` | `$file` | точечная правка SEARCH/REPLACE; deprecated-алиас: `edit_file` |
-| `save_file({ filename, post })` | `$folder`/`$class` | создать/перезаписать файл в папке (→ history → log) |
+| `save_file({ filename, post })` | `$folder`/`$class` | обычный файл → history + лог; файл данных (`METADATA`) → точка в папке ext + лог |
 | `save_files` | `$folder` | батч файлов + одна `save_message` |
 | `save_message({ message, includes })` | `$class` | чистая лог-запись без файла |
 | `ensure_folder({ id })` | `$folder` | создать дочернюю папку по имени |
 
 ### Логи ($class, внутренности — `logs.js`)
 
-- `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`
+- `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`. Журнал: `<meta>/logs/YYYY-MM-DD/{time}.{uid}.logs` (файл данных, не `.data.logs/history`)
 - `read_log_entry({path})` — одна запись по stub `.logs` или связанному `row.path`
 - `append_log_includes({entryPath, includePaths})` — дописать includes записи
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`

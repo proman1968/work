@@ -12,10 +12,10 @@ Page-handler календаря класса: сетка встреч (день 
 
 - `viewMode`: `day` | `workweek` | `month` | `week`. Диапазон — геттеры `day` / `dayFrom` / `dayTo` от `currentDate` (ISO-неделя с понедельника). `workweek` — пн–пт той же недели.
 - `oda-date-nav` показывает период по `viewMode`: день `dd.mm.yyyy`, неделя/рабочая неделя — диапазон (`04 - 10.08.2026` / `28.07 - 03.08.2026`), месяц — `Month yyyy`. Дата выбирается нативным календарём, не с клавиатуры; `currentDate` — выбранный день.
-- `events` — `logs({ mode: 'bodies', from, to, ext: 'ics' })`. Фильтр `selected_users` по `sender`. Живое обновление — `listen('changed')` на папке `history`. Поле `allDay` из JSON тела прокидывается в событие.
+- `events` — `logs({ mode: 'bodies', from, to, ext: 'ics' })`. Фильтр `selected_users` по `sender`. Живое обновление — `listen('changed')` на папке `logs`. Поле `allDay` из JSON тела прокидывается в событие.
 - Time-режимы — `oda-calendar-time-grid`: 1 / 5 / 7 колонок, слот 30 минут, позиция timed-события — доля суток; шапка закреплена сверху, колонка часов — слева. Шапка колонки: строка 1 — число месяца слева, день недели на остатке ширины (`class="flex"`); строка 2 — полоса all-day (клик создаёт встречу на весь день, чипы — сохранённые `allDay` этого дня; мультидневные — чип в каждом пересечённом дне). All-day в timed-сетку не попадают.
 - Месяц — `oda-calendar-month-view`: дни = `dayFrom..dayTo`, сетка 8 колонок; слева вертикальная подпись диапазона недели (первая–последняя ячейка строки; месяц один раз, если совпадает).
-- Создание и правка — `showMeeting` → `calendar-form` (чекбокс All day) → `save_file` с `message` `{ start, end, summary, location, allDay }` и `time` = начало встречи. All-day: `start` 00:00 дня, `end` 00:00 следующего.
+- Создание и правка — `showMeeting` → `calendar-form` (чекбокс All day) → `save_file` файла данных `{summary}.ics` с `time` в корне JSON (= начало). All-day: `start` 00:00 дня, `end` 00:00 следующего.
 
 ## 4. Из чего это состоит
 

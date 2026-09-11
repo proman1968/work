@@ -55,7 +55,7 @@ describe('logs.js: чистые функции', () => {
 
     it('matchesEntry: stub .logs и связанный path', () => {
         const row = { path: '/U/work/task/.ai.task/history/2026-09-10/1.task' };
-        const stub = '/U/logs/.data.logs/history/2026-09-10/1.logs';
+        const stub = '/U/logs/2026-09-10/1.logs';
         assert.equal(LOGS.matchesEntry(stub, row, stub), true);
         assert.equal(LOGS.matchesEntry(row.path, row, stub), true);
         assert.equal(LOGS.matchesEntry('/other.logs', row, stub), false);

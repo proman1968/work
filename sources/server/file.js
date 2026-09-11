@@ -214,6 +214,51 @@ export class $file extends $folder{
             return folder.path.split('/').slice(3);
         })
     }
+    /** Расширение из имени или пути (`Исходящие/Письмо.eml` → `eml`). */
+    static fileExt(filename) {
+        const leaf = String(filename || '').replace(/\\/g, '/').split('/').pop() || '';
+        const dot = leaf.lastIndexOf('.');
+        return dot > 0 ? leaf.slice(dot + 1).toLowerCase() : '';
+    }
+    /** DATA class.js типа `$file/$ext`. Кэш сбрасывается вместе с __ext_scripts__. */
+    static typeData(ext) {
+        const key = String(ext || '').replace(/^\$/, '').toLowerCase();
+        if (!key)
+            return Promise.resolve(null);
+        return $file.__type_data__[key] ??= new AsyncPromise(async () => {
+            try {
+                let folder = await WORK.$folder.children;
+                folder = (folder || []).find(f => f.id === '$file');
+                if (!folder)
+                    return null;
+                folder = await folder.find_item('$' + key, item => item.id?.[0] === '$');
+                if (!folder || typeof folder.get_item !== 'function')
+                    return null;
+                const cf = await folder.get_item('class.js');
+                if (!cf)
+                    return null;
+                if (typeof cf.importScript === 'function')
+                    return await cf.importScript();
+                const raw = typeof cf.read_text === 'function' ? String(await cf.read_text() || '') : '';
+                if (!raw)
+                    return null;
+                return await $file.importScript(/export\s+default/.test(raw) ? raw : 'export default ' + raw);
+            }
+            catch {
+                return null;
+            }
+        });
+    }
+    /** Файл данных: у типа `$file/$ext` есть METADATA в class.js. */
+    static async isDataFile(extOrName) {
+        const ext = /[./\\]/.test(String(extOrName || ''))
+            ? $file.fileExt(extOrName)
+            : String(extOrName || '').replace(/^\$/, '').toLowerCase();
+        if (!ext)
+            return false;
+        const data = await $file.typeData(ext);
+        return data?.METADATA != null;
+    }
     get rag(){
         return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
     }
@@ -483,10 +528,7 @@ export class $file extends $folder{
         let date = params.dateTime.toISOTimezoneString();
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
-        // Логи (data.logs) пишутся через LOGS.appendRow без role,
-        // поэтому они физически в meta_folder/logs/.
-        // this.storage_folder для них = meta_folder/logs/.data.logs — корректно.
-        // Для пользовательских файлов в $work — личная история рядом с файлом.
+        // Обычный файл: снимок в storage/.history. Логи (.logs) пишутся как файл данных в meta/logs/DAY/.
         let dir = this.storage_folder.dir + '/history/' + params.date;
         fs.mkdirSync(dir, { recursive: true });
         let id = params.time + '.' + uid + '.' + this.ext;
@@ -563,3 +605,4 @@ export class $file extends $folder{
     }
 }
 $file.type_chain = Object.create(null);
+$file.__type_data__ = Object.create(null);

@@ -6,6 +6,7 @@ export default {
     icon: 'bootstrap:robot',
     contentType: 'application/json',
     GET: 'context',
+    METADATA: {},
     async _fc_exec(target, call = {}, ctx = {}) {
         const { method, args } = call;
         const block = ctx.block;
@@ -1479,7 +1480,7 @@ function agentBrief(body, block) {
         }
     };
     walk(body?.items);
-    const text = String(last || body?.title || '').trim();
+    const text = String(last || body?.name || '').trim();
     return text.slice(0, 500);
 }
 

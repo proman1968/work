@@ -158,10 +158,15 @@ export class $folder extends $item{
             return this;
         })
     }
-    /** Подпапка для сохранения файла по MIME-типу или расширению. */
+    /** Подпапка для сохранения файла по MIME-типу или расширению.
+     *  Файл данных (тип с METADATA) — всегда папка расширения, не MIME. */
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
+
+        const ext = FS.$file.fileExt(params.filename);
+        if (ext && await FS.$file.isDataFile(ext))
+            return this._get_next_item(ext, FS.$folder);
 
         let folder_name = mime.contentType(params.filename);
         if (folder_name) {
@@ -1408,18 +1413,21 @@ export class $folder extends $item{
 
     /**
      * Создать или перезаписать файл в этой папке с записью в историю (→ history → log).
+     * Файл данных (тип с METADATA): точка `{folders}/{date}/{time}.{uid}.{ext}`, без копии в history/.
      * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
      * @param {string} params.filename Имя файла (новое — через safeNodeName; существующее не переименовывается)
      * @param {string} params.folder Имя дополнительной директории
      * @param {string|Buffer|object} params.post Содержимое (строка, Buffer или объект с path)
      * @param {string} [params.message] Текст для log.content
-     * @returns {Promise<object>} Запись лога (path = history-снимок)
+     * @returns {Promise<object>} Запись лога (path = history-снимок или файл данных)
      */
     async save_file(params = {}) {
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
+        if (await FS.$file.isDataFile(params.filename))
+            return this.save_data_file(params);
 
         // полный путь к директории сохранения
         let dir = this.dir;
@@ -1484,6 +1492,57 @@ export class $folder extends $item{
         file.reset();
         this.reset();
         return await FS.$file.save_to_history.call(file, params);
+    }
+
+    /** Файл данных: JSON-точка в папке расширения (она же история). */
+    async save_data_file(params = {}) {
+        const relName = params.folder
+            ? String(params.folder).replace(/\/$/, '') + '/' + params.filename
+            : params.filename;
+        if (params.folder)
+            delete params.folder;
+        const parsed = parseDataFilename(relName);
+        if (!parsed.ext)
+            throw new Error('save_file: файл данных без расширения');
+        const body = await readDataPost(params.post);
+        body.name = parsed.name;
+        const time = dataFileTime(body, params);
+        body.time = time;
+        params.time = time;
+        const actor = params.session;
+        let uid = actor?.uid;
+        if (!uid) {
+            if (actor === globalThis.WORK)
+                uid = WORK.id;
+            else
+                uid = actor?.$user?.id || actor?.id || 'system';
+        }
+        if (actor && actor !== globalThis.WORK && !actor.uid)
+            params.session = { uid, $user: actor.$user || actor };
+        params.dateTime = new Date(time);
+        const stamp = typeof params.dateTime.toISOTimezoneString === 'function'
+            ? params.dateTime.toISOTimezoneString()
+            : params.dateTime.toISOString();
+        params.date = stamp.slice(0, 10).split('.').toReversed().join('-');
+        const id = time + '.' + uid + '.' + parsed.ext;
+        const dir = this.dir + '/' + [...parsed.folders, params.date].join('/');
+        fs.mkdirSync(dir, { recursive: true });
+        const json = JSON.stringify(body);
+        await fsp.writeFile(dir + '/' + id, json, 'utf-8');
+        params.post = json;
+        params.message = json;
+        let folder = this;
+        for (const step of [...parsed.folders, params.date]) {
+            folder = await folder._get_next_item(step, FS.$folder);
+            if (!folder)
+                throw new Error('save_file: нет папки ' + step);
+            await folder.save();
+        }
+        const file = await folder._get_next_item(id, FS.$file);
+        const res = await FS.$file.save_to_log.call(file, params);
+        folder.reset();
+        this.reset();
+        return res;
     }
 
     write_streams = Object.create(null);
@@ -1574,6 +1633,7 @@ export class $folder extends $item{
                    $server.merges[key] = undefined;
                 // Типизаторы файлов могли измениться — пересобрать по требованию
                 FS.$file.__ext_scripts__ = Object.create(null);
+                FS.$file.__type_data__ = Object.create(null);
                 this.$owner?.debounce('reset_owner', ()=>{
                     this.$owner.reset(initiator || this);
                 }, 100)
@@ -1672,4 +1732,73 @@ export class $folder extends $item{
         }
     }
 }
+function parseDataFilename(filename) {
+    const raw = String(filename || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const parts = raw.split('/').filter(Boolean);
+    const leaf = parts.pop() || '';
+    const dot = leaf.lastIndexOf('.');
+    return {
+        folders: parts,
+        name: dot > 0 ? leaf.slice(0, dot) : leaf,
+        ext: dot > 0 ? leaf.slice(dot + 1).toLowerCase() : '',
+    };
+}
+
+async function readDataPost(post) {
+    if (isPlainDataBody(post))
+        return { ...post };
+    let raw = '';
+    if (post?.path)
+        raw = await fsp.readFile(post.path, { encoding: 'utf-8' });
+    else
+        raw = dataPostText(post);
+    if (!String(raw).trim())
+        throw new Error('save_file: файл данных — пустое тело');
+    let obj;
+    try {
+        obj = JSON.parse(raw);
+    }
+    catch {
+        throw new Error('save_file: файл данных должен быть JSON');
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj))
+        throw new Error('save_file: файл данных должен быть JSON-объект');
+    return obj;
+}
+
+function isPlainDataBody(post) {
+    return !!(post && typeof post === 'object'
+        && !Buffer.isBuffer(post)
+        && !ArrayBuffer.isView(post)
+        && !(post instanceof ArrayBuffer)
+        && post.path == null);
+}
+
+function dataPostText(post) {
+    if (post == null)
+        return '';
+    if (typeof post === 'string')
+        return post;
+    if (Buffer.isBuffer(post))
+        return post.toString('utf-8');
+    if (post instanceof ArrayBuffer)
+        return Buffer.from(post).toString('utf-8');
+    if (ArrayBuffer.isView(post))
+        return Buffer.from(post.buffer, post.byteOffset, post.byteLength).toString('utf-8');
+    return '';
+}
+
+function dataFileTime(body, params) {
+    const raw = body?.time ?? params?.time;
+    if (raw == null || raw === '')
+        return Date.now();
+    if (typeof raw === 'number' && Number.isFinite(raw))
+        return raw;
+    const n = Number(raw);
+    if (Number.isFinite(n) && String(raw).trim() !== '')
+        return n;
+    const ms = new Date(raw).getTime();
+    return Number.isFinite(ms) ? ms : Date.now();
+}
+
 $folder.type_chain = Object.create(null);

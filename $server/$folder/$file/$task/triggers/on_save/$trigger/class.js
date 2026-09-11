@@ -21,7 +21,7 @@ export default {
 
         await WORK.fsp.writeFile(file.dir, JSON.stringify(body, null, 4), 'utf-8');
         await file.init;
-        params.prompt = body.title;
+        params.prompt = body.name;
         return file.prompt(params);
     },
 };
