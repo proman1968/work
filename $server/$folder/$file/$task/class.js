@@ -167,12 +167,48 @@ export default {
         try {
             switch (role) {
                 case 'AI':{
-                    // goal.done — не крутить меню по «Продолжить» (хвост без stop)
-                    const g = (await this.body)?.goal;
-                    if (g?.status === 'done') {
-                        session?.send?.({ type: 'chat.done', path: this.short });
-                        return { ok: true };
+                    const body = await this.body;
+                    const g = body?.goal;
+                    const raw = params.prompt ?? params.post?.prompt;
+                    // последняя form, не focused: после report фокус не form, JSON всё равно ответы
+                    const form = lastOfType(body, 'form');
+                    if (form && raw) {
+                        try {
+                            const pipe = await this.pipe;
+                            await pipe.form.approve?.({
+                                ...params,
+                                block: form,
+                                prompt: raw,
+                                task: this,
+                            });
+                            form.state = 'принято';
+                            delete form.stop;
+                            dropUsedType(body, 'work');
+                            dropUsedType(body, 'check');
+                            dropUsedType(body, 'report');
+                            await this._save(session);
+                        }
+                        catch { /* prompt не JSON ответов */ }
                     }
+                    // goal.done — не крутить меню, кроме gap в check (форма ещё правится)
+                    if (g?.status === 'done') {
+                        if (!lastCheckIncomplete(body)) {
+                            session?.send?.({ type: 'chat.done', path: this.short });
+                            return { ok: true };
+                        }
+                        g.status = 'open';
+                        g.resume = { continue: true };
+                        dropUsedType(body, 'work');
+                        dropUsedType(body, 'check');
+                        dropUsedType(body, 'report');
+                        await this._save(session);
+                    }
+                    // waiting без текста — иначе «Продолжить» не открывает goal и меню с form.next=[]
+                    if (g?.status === 'waiting') {
+                        g.status = 'open';
+                        await this._save(session);
+                    }
+                    this._stopped = false;
                 } break;
                 case 'APPROVE':{
                     const accept = params.accept === true || params.accept === 'true';
@@ -395,7 +431,8 @@ export default {
         let mode = this.body.mode || 'plan';
         let node = this.pipe[params.block.type];
         let next = node?.[mode]?.next || node?.next;
-        if (!next || node.box) {
+        // [] у листа (form/question) truthy — иначе меню не поднимается на корень
+        if (!next?.length || node.box) {
             node = this.pipe[params.box.type];
             next = node?.[mode]?.next || node?.next;
         }
@@ -417,7 +454,7 @@ export default {
         // после question без субагента / pursue — answer не в меню, пока goal open
         const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
-            next = next.filter(id => id !== 'answer');
+            next = next.filter(id => id !== 'answer' && id !== 'form' && id !== 'question');
 
         let choice;
         // незакрытый todo → сразу step (не fill и не меню report/question)
@@ -427,6 +464,8 @@ export default {
             choice = 'step';
         else if (lookOnly && next.includes('answer'))
             choice = 'answer';
+        else if (goal?.resume?.continue && asksWrite(lastPromptText(params.box)) && next.includes('work'))
+            choice = 'work';
         else
             choice = await this._skillChoice(using_blocks);
         if (!choice) {
@@ -559,7 +598,7 @@ export default {
     },
 
     /**
-     * Закрыть цель: facts — answer/report; side — report/answer/html на корне.
+     * Закрыть цель: facts — answer/report; side — report/answer/html, не при gap в check.
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
@@ -571,7 +610,7 @@ export default {
         const need = goalNeed(g);
         if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
             return false;
-        if (need === 'side' && !SIDE_EVIDENCE.has(block.type))
+        if (need === 'side' && (!SIDE_EVIDENCE.has(block.type) || lastCheckIncomplete(this.body)))
             return false;
         g.status = 'done';
         g.resume = null;
@@ -1436,7 +1475,7 @@ function lastPromptText(box) {
 
 /** Постановка просит писать в систему — иначе после сбора work не предлагать. */
 function asksWrite(text) {
-    return /(?:создай|напиши|запиши|сохрани|добавь|подключи|удали|исправь|поправь|сделай\s+файл|запланируй|запланировать|встреч)\b/i
+    return /(?:создай|напиши|запиши|сохрани|добавь|подключи|удали|исправь|поправь|сделай\s+файл|запланир\w*|встреч)\b/i
         .test(String(text || ''));
 }
 
@@ -1450,8 +1489,34 @@ function asksImage(text) {
 /** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
 const FACTS_EVIDENCE = new Set(['answer', 'report']);
 
-/** need=side: конечный отчёт на корне, не постусловие check. */
+/** need=side: конечный отчёт на корне; gap в check не даёт закрыть. */
 const SIDE_EVIDENCE = new Set(['answer', 'report', 'html']);
+
+function lastOfType(root, type) {
+    let found;
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (b.type === type) found = b;
+            walk(b.items);
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+function checkFullyOk(block) {
+    if (block?.type !== 'check')
+        return false;
+    if (block.error)
+        return false;
+    const c = String(block.content || '');
+    return !!c && !/gap:/i.test(c);
+}
+
+function lastCheckIncomplete(root) {
+    const chk = lastOfType(root, 'check');
+    return !!chk && !checkFullyOk(chk);
+}
 
 function clearGoalContinue(goal) {
     if (goal?.resume?.continue)

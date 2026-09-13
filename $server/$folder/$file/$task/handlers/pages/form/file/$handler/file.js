@@ -198,8 +198,23 @@ export default {
     },
     get title() { return this.data?.name || this.$item?.name || 'task'; },
     get items() { return this.data?.items; },
+    get formBlock() {
+        return lastOfType(this.data, 'form');
+    },
+    get checkGap() {
+        const c = lastOfType(this.data, 'check');
+        return !!c && !checkFullyOk(c);
+    },
     get result() {
-        return this.$('microchat-ribbon')?.viewFor(this.focusedBlock)?.result;
+        const ribbon = this.$('microchat-ribbon');
+        const form = this.formBlock;
+        if (form) {
+            const live = ribbon?.viewFor(form)?.result;
+            if (live && Object.keys(live).length)
+                return live;
+            return form.values || form.answer;
+        }
+        return ribbon?.viewFor(this.focusedBlock)?.result;
     },
     get focusedBlock() {
         let items = this.items;
@@ -222,3 +237,22 @@ export default {
         return (b && !b.content) ? b : undefined;
     },
 };
+
+function lastOfType(root, type) {
+    let found;
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (b.type === type) found = b;
+            walk(b.items);
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+function checkFullyOk(block) {
+    if (block?.type !== 'check') return false;
+    if (block.error) return false;
+    const c = String(block.content || '');
+    return !!c && !/gap:/i.test(c);
+}

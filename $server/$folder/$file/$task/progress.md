@@ -1,6 +1,11 @@
 # Прогресс: $task
 
 ## Последние изменения
+- [12:12] `task-preview`: один `_task` / `file.body`; геттер не зовёт `load()` повторно. Причина: 12:11 — бесконечные `*.task?load`.
+- [12:08] `task-preview`: тело из `:log` (уже объект) или `load`; `JSON.parse` только строки. Причина: shadow пустой — parse объекта `[object Object]`, `block` null; CSS слота не при чём.
+- [11:28] Сданная форма: слот скрыт, тело — `approved` (без `[form answers]`). Причина: 1789285997649 — после «принято» контролы пустые, не видно, что вводили.
+- [12:38] Форма: снимок контролов до `pending`; `values`+`answer`; Continue с последней form (не focused); side не `done` при check gap; Continue при done+gap. Причина: 1789204371291 — Continue сбросил поля в office/пусто, ICS на весь день, править форму было нельзя.
+- [12:30] «Продолжить»: `waiting` → `open`; меню с корня если `next` листа пустой; continue без form/question; запланир → work; form JSON и на Continue. Причина: 1789204371291 — после form сессия умерла, Continue no-op.
 - [02:34] Док: стрелка — `_bindSheet` (`data` + `_wakeSheet`), не `~if` remount. Имя = basename(`path`); Save выкл при `saved`/`path`. Причина: reopen — бар «Рисую», тело чужой сводки; generate уже файл, Save лишний.
 - [02:18] `asksImage`: «фото / по сезонам» — как картинка, `work` с меню снят. Причина: 1789167828473 — «4 фото» → 1 generate, затем plan и work.write png.
 - [01:45] `generate` тикер пишет в `tickText` → слот `blockState` шапки. Причина: геттер наследника шапка не видела, «Рисую» без времени.

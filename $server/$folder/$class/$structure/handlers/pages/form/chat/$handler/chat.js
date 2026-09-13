@@ -505,19 +505,19 @@ ODA({is: 'chat-ribbon',
         if (!this.$item)
             return false;
         const today = new Date().toISOString().slice(0, 10);
+        let dates;
         if (this.dateList.length) {
-            if (this.dateList.includes(today))
+            dates = this.dateList.filter(d => d <= today);
+            if (dates.includes(today) && dates.length === this.dateList.length)
                 return false;
-            this.dateList = [...this.dateList, today];
-            this.render();
-            return true;
+        } else {
+            delete this.$item[R]?.cache?.logs_dates;
+            dates = await this.$item.fetch('logs', { mode: 'dates' });
+            // dates на сервере — по убыванию; в ленте дни — от старых к новым, не дальше сегодня
+            dates = dates.slice().reverse().filter(d => d <= today);
         }
-        delete this.$item[R]?.cache?.logs_dates;
-        let dates = await this.$item.fetch('logs', { mode: 'dates' });
-        // dates на сервере — по убыванию; в ленте дни — от старых к новым
-        dates = dates.slice().reverse();
-        if (dates.indexOf(today) === -1)
-            dates.push(today);
+        if (!dates.includes(today))
+            dates = [...dates, today];
         this.dateList = dates;
         this.render();
         return true;

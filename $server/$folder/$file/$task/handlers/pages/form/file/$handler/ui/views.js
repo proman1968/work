@@ -603,6 +603,11 @@ function formParts(data) {
     };
 }
 
+/** approved в ленте — без служебной строки [form answers]. */
+function formAnswersText(data) {
+    return String(data?.approved || '').replace(/^\s*\[form answers\]\s*/i, '').trim();
+}
+
 /** file — path → $file → {ext}-preview, иначе item-node. */
 ODA({ is: 'microchat-view-file',
     extends: 'microchat-view',
@@ -716,43 +721,23 @@ ODA({ is: 'microchat-html',
                 background: var(--content-background);
             }
         </style>
-        <iframe sandbox="allow-scripts" :srcdoc="srcdoc" ~style="frameStyle"></iframe>
+        <iframe sandbox="allow-scripts" :srcdoc="srcdoc" style="min-height: 30vh; height: stretch; min-width: 30vw;"></iframe>
     `,
     data: null,
-    frameH: 0,
     get html() { return pageHtml(this.data) || ''; },
     get srcdoc() {
         const raw = this.html;
         if (!raw) return '';
         if (raw.includes('microchat-html-h')) return raw;
         return raw + HEIGHT_PING;
-    },
-    get frameStyle() {
-        if (this.frameH)
-            return { height: this.frameH + 'px' };
-        return { minHeight: '50vh' };
-    },
-    attached() {
-        this._onHtmlH = e => {
-            if (e.data?.type !== 'microchat-html-h') return;
-            const iframe = this.$('iframe');
-            if (!iframe || e.source !== iframe.contentWindow) return;
-            const h = Number(e.data.height);
-            if (!(h > 0) || Math.abs(h - this.frameH) < 2) return;
-            this.frameH = h;
-        };
-        window.addEventListener('message', this._onHtmlH);
-    },
-    detached() {
-        if (this._onHtmlH)
-            window.removeEventListener('message', this._onHtmlH);
-    },
+    }
 });
 
-/** form — слот: разметка из content (fence); ui по data.ui или default microchat-form. */
+/** form — слот: разметка из content (fence); после approve — ответы, не контролы. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     get extendTag() {
+        if (this.data?.approved) return '';
         if (!formParts(this.data).markup) return '';
         const ui = this.data.ui;
         if (!ui) return 'microchat-form';
@@ -761,10 +746,12 @@ ODA({ is: 'microchat-view-form',
         return 'microchat-form-' + name;
     },
     get viewContent() {
+        if (this.data?.approved)
+            return (formAnswersText(this.data) || this.data.approved) + this.streamTail;
         return (formParts(this.data).caption || '') + this.streamTail;
     },
     get showContent() {
-        return !!(formParts(this.data).caption || this.streamTail);
+        return !!(this.data?.approved || formParts(this.data).caption || this.streamTail);
     },
 });
 
@@ -869,7 +856,7 @@ ODA({ is: 'microchat-form',
         if (this.data) this.data.values = this.result;
     },
     restore() {
-        const values = this.data?.values;
+        const values = this.data?.values || this.data?.answer;
         if (values) {
             for (const el of this.$$('input, select, textarea')) {
                 const key = el.name || el.id;

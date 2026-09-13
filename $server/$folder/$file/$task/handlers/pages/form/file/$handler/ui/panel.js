@@ -51,7 +51,7 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    /** approve после стрима; «Продолжить» — хвост без stop при незакрытой goal (не пользовательский prompt) */
+    /** approve после стрима; «Продолжить» — хвост без строкового stop; report `stop: true` не прячет, пока goal открыта или check в gap */
     get actionButton() {
         if (this.pending) return null;
         const focus = this.$pdp.focusedBlock;
@@ -60,10 +60,13 @@ ODA({ is: 'microchat-panel',
             if (this.$pdp.streamTarget) return null;
             return { label: stop, role: 'APPROVE', colorMode: 'success-invert' };
         }
-        if (this.$pdp.streaming || stop === true || focus?.type === 'prompt') return null;
+        if (this.$pdp.streaming || focus?.type === 'prompt') return null;
         if (!this.liveOpen) return null;
-        // goal.done — цель достигнута; AI-continue только для незакрытой сессии
-        if (this.data?.goal?.status === 'done') return null;
+        const g = this.data?.goal?.status;
+        const gap = !!this.$pdp.checkGap;
+        if (g === 'done' && !gap) return null;
+        // report stop:true прячет кнопку, кроме открытой goal / done+gap (править форму)
+        if (stop === true && !(g && g !== 'done') && !(g === 'done' && gap)) return null;
         return { label: 'Продолжить', colorMode: 'info-invert', cancel: false, role: 'AI' };
     },
     get userRole() {
@@ -76,9 +79,9 @@ ODA({ is: 'microchat-panel',
     get isDo() {
         return this.data?.mode === 'do';
     },
-    /** form — сдача данных в ленту; иначе vote yes/no */
+    /** form в ленте — сдача живых контролов, даже если фокус уже report */
     get isFormAction() {
-        return this.$pdp.focusedBlock?.type === 'form';
+        return !!this.$pdp.formBlock;
     },
     /** Источник модели/effort — файл (data), не двусторонний биндинг: эхо пустого значения от бара игнорируется */
     onModelChanged(e) {
@@ -105,10 +108,11 @@ ODA({ is: 'microchat-panel',
     },
     async sendAction(accept) {
         const { role } = this.actionButton;
-        this.pending = true;
+        // снимок до pending: ~html на form сбрасывает контролы к option[0]
         let prompt;
-        if (role === 'APPROVE' && accept && this.isFormAction)
+        if (this.isFormAction && accept !== false)
             prompt = JSON.stringify(this.$pdp.result || {});
+        this.pending = true;
         await this.$item.fetch('prompt', { accept, prompt, role });
         this._focus();
     },
