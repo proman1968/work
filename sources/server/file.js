@@ -249,7 +249,10 @@ export class $file extends $folder{
             }
         });
     }
-    /** Файл данных: у типа `$file/$ext` есть METADATA в class.js. */
+    /**
+     * @deprecated Развилка save_file — `$class.is_data_type` / `data_types`.
+     * Оставлено для редких вызовов вне класса.
+     */
     static async isDataFile(extOrName) {
         const ext = /[./\\]/.test(String(extOrName || ''))
             ? $file.fileExt(extOrName)
@@ -257,7 +260,7 @@ export class $file extends $folder{
         if (!ext)
             return false;
         const data = await $file.typeData(ext);
-        return data?.METADATA != null;
+        return data?.isDataFile ?? false;
     }
     get rag(){
         return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);

@@ -18,12 +18,12 @@
 | Агент | Работа |
 |--------|--------|
 | [`explore`](agents/explore.js) | строение WORK: карта `/`; ls `deep=2`; readme; meta; **remote у `$provider`**; ask |
-| [`work`](agents/work.js) | файлы/классы: **typed** (тип `$file` по `when` + `METADATA` → `save_file` на месте с `message`/`time`); перед правкой — readme; create/write устройства → обновить `storage_folder/readme.md`; create batch + артефакты `file`; search только в классе; **expand** листьев в контекст (check targets) |
-| [`check`](agents/check.js) | постусловие create/write: exist + class.js + **readme в storage** (непустой); write без актуального readme — gap |
+| [`work`](agents/work.js) | файлы/классы: **typed** (тип `$file` по `when` + `METADATA` → `save_file` на месте с `message`/`time`); перед правкой — readme; create/write устройства → обновить `storage_folder/readme.md`; create batch + артефакты `file`; search только в классе; картинка — image, не write png/svg; **expand** листьев в контекст (check targets) |
+| [`check`](agents/check.js) | постусловие create/write: exist + class.js + **readme в storage** (непустой); write картинки — байты, не OCR; **content-сводка закрывает бокс** (дети ignore); write без актуального readme — gap |
 | [`web`](agents/web.js) | внешний интернет; `sites` из нитки или поиска; спрашивает [`site`](agents/site.js); один ребёнок с `content` — лифт, без второго fill; иначе сводка из draft+content |
 | [`site`](agents/site.js) | fetch → `draft`; лист без `content`; узел — `pages` из href и `content` из draft детей; подъём — оба поля; не в меню корня |
 | [`logs`](agents/logs.js) | журнал класса: `$class.logs` (даты, bodies+день+ext, entry); не work.read history |
-| [`image`](agents/image.js) | картинка: `$ai.generateImage` (capabilities `image`) → файл в work; не chat задачи; ошибка — стоп (`stopOnError`) |
+| [`image`](agents/image.js) | картинка: `$ai.generateImage` → файл в work; **N из запроса (картинка/фото/по сезонам) — N generate** (по файлу), не коллаж и не work.write; после save — `path` + `saved`; ошибка — стоп (`stopOnError`) |
 | [`freeze`](agents/freeze.js) | после удачи: лента → `ai/skills/{id}.js` (draft → confirm → write); `step: false`; не в `pipe` навыка |
 | [`review`](agents/review.js) | разбор этой ленты: схема `task.body` → закон + слой + `path`; не пишет файлы; `@review`; `step: false`; не в `pipe` навыка |
 

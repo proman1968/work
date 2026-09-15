@@ -8,23 +8,16 @@ ODA({
     is: 'oda-devs-viewer',
     extends: 'oda-app-layout',
     template: /* html */`
-        <oda-code-editor slot="main" class="flex" @change :src></oda-code-editor>
+        <oda-code-editor slot="main" class="flex" @change :src="value"></oda-code-editor>
         <oda-icons-tree slot="right-panel" light label="Icons" icon="carbon:image" style="height: 0px;"></oda-icons-tree>
     `,
-    $item: {
-        $def: null,
-        set(n) {
-            if (n) {
-                this.$item = n;
-            }
-        }
-    },
-    get src() {
+    $item: null,
+    get value() {
         if (this.$item) {
-            return this.$item.load().then(src => {
-                if (typeof src === 'object')
-                    src = JSON.stringify(src, undefined, 4);
-                return src;
+            return this.$item.load().then(value => {
+                if (typeof value === 'object')
+                    value = JSON.stringify(value, undefined, 4);
+                return value;
             })
         }
     },

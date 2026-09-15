@@ -41,6 +41,7 @@ export default {
         const { block, prompt: raw, task } = params;
         const answers = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
         block.answer = answers;
+        block.values = answers;
         block.state = 'submitted';
         const parse = task.pipe.parseFormHtml;
         const markup = (typeof parse === 'function' ? parse(block.content).html : '') || block.html;

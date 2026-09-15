@@ -42,10 +42,12 @@ ODA({is: 'chat-item',
                 max-height: 100%;
                 overflow: hidden;
                 border-radius: 8px;
+                width: min-content;
             }
             .preview {
                 min-height: 0;
                 overflow: auto;
+                width: stretch;
             }
             :host([compact]) .card {
                 border-radius: 0;
@@ -150,6 +152,11 @@ ODA({is: 'chat-item',
     expanded: {
         $attr: true,
         $def: false,
+        set(n) {
+            if (n)
+                return;
+            this._resetBodyCache();
+        },
     },
     get isSender(){
         return this.senderId === WORK.uid;

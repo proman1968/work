@@ -144,28 +144,59 @@ export class $folder extends $item{
      * get_item гарантирует await init для каждого найденного элемента —
      * элемент "рождается пропатченным".
      */
+    /**
+     * Сборка DATA из цепочки class.js.
+     * Обычные папки без типа — без init.
+     * Типизаторы `$file/$data/$ext`: mergeFiles по real_dir
+     *   `$data/class.js` → `$ext/class.js` (inherit_ancestor) → own overlay.
+     * Own overlay без inherit_source (физический class.js) иначе теряет icon/label прототипа.
+     * Без inherit(..., this): у всех слоёв id `class.js`, inherit схлопнет в один слот.
+     * `$class` / `$handler` / `$method` — merge из tilde.
+     */
     get init(){
-        if(this.constructor === FS.$folder)
+        if(this.constructor === FS.$folder && !this.isType)
             return Promise.resolve(this);
         return this[R].cache.init ??= new AsyncPromise(async ()=>{
-            let files = await this.tilde;
-            files = files.filter(f=>f.id === 'class.js');
-            if(files.length){
+            let files = [];
+            if (this.constructor === FS.$folder && this.isType) {
+                const classJsOf = (folder) =>
+                    (folder?._collect_own() || []).filter(f => f.id === 'class.js');
+                const layers = [];
+                const dataParent = this.parent?.id === '$data'
+                    ? this.parent
+                    : (this.real_source?.parent?.id === '$data' ? this.real_source.parent : null);
+                if (dataParent)
+                    layers.push(...classJsOf(dataParent.real_source || dataParent));
+                const ancestor = await this.inherit_ancestor;
+                if (ancestor && ancestor !== this)
+                    layers.push(...classJsOf(ancestor.real_source || ancestor));
+                const real = this.real_source;
+                if (real && real !== this)
+                    layers.push(...classJsOf(real));
+                layers.push(...classJsOf(this));
+                files = layers;
+            }
+            if (!files.length) {
+                files = await this.tilde;
+                files = files.filter(f => f.id === 'class.js');
+            }
+            if (files.length) {
                 let script = await $server.mergeFiles(files);
                 script = await this.constructor.importScript(script);
-                this.DATA = script;
+                if (script)
+                    this.DATA = script;
             }
             return this;
         })
     }
     /** Подпапка для сохранения файла по MIME-типу или расширению.
-     *  Файл данных (тип с METADATA) — всегда папка расширения, не MIME. */
+     *  Файл данных ($class.data_types) — всегда папка расширения, не MIME. */
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
 
         const ext = FS.$file.fileExt(params.filename);
-        if (ext && await FS.$file.isDataFile(ext))
+        if (ext && this.$class && await this.$class.is_data_type(ext))
             return this._get_next_item(ext, FS.$folder);
 
         let folder_name = mime.contentType(params.filename);
@@ -393,7 +424,18 @@ export class $folder extends $item{
             },
             get isCustom(){
                 return this.$parent?.isCustom;
-            }
+            },
+            /** После init(class.js) — иначе toJSON отдаёт пустой icon у типизаторов. */
+            get icon(){
+                return this.DATA?.icon;
+            },
+            get label(){
+                return this.DATA?.label || this.name;
+            },
+            /** Схема полей типизатора (`$file/$data/$ics` и т.п.) — в info для builder. */
+            get METADATA(){
+                return this.DATA?.METADATA;
+            },
         }
     }
     get stat(){
@@ -922,7 +964,9 @@ export class $folder extends $item{
         }
         // folders = horizontal_folders;
         if (!this.meta_folder) {
-            folders.push(this.$folder);
+            // `$ics`/`$call`/… (не meta под классом): class.js в самой папке.
+            // Meta `$folder` и обычные папки — по-прежнему через this.$folder.
+            folders.push((this.isType && !this.isMetaFolder) ? this : this.$folder);
         }
         folders = folders.filter(Boolean);
         const _folders = folders.toReversed();
@@ -1413,7 +1457,7 @@ export class $folder extends $item{
 
     /**
      * Создать или перезаписать файл в этой папке с записью в историю (→ history → log).
-     * Файл данных (тип с METADATA): точка `{folders}/{date}/{time}.{uid}.{ext}`, без копии в history/.
+     * Файл данных (расширение из $class.data_types): точка `{folders}/{date}/{time}.{uid}.{ext}`, без копии в history/.
      * Для правки существующего $file — file.save / file.edit.
      * @param {object} [params]
      * @param {string} params.filename Имя файла (новое — через safeNodeName; существующее не переименовывается)
@@ -1426,7 +1470,7 @@ export class $folder extends $item{
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
-        if (await FS.$file.isDataFile(params.filename))
+        if (this.$class && await this.$class.is_data_type(params.filename))
             return this.save_data_file(params);
 
         // полный путь к директории сохранения

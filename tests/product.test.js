@@ -25,8 +25,8 @@ describe('$product type', () => {
         const def = await loadDefault(PRODUCT_CLASS);
         assert.equal(def.icon, 'carbon:product');
         assert.equal(def.label, 'Продукт');
-        assert.ok(Array.isArray(def.METADATA.FIELDS.fields));
-        const ids = def.METADATA.FIELDS.fields.map(f => f.id);
+        assert.ok(Array.isArray(def.METADATA.FIELDS));
+        const ids = def.METADATA.FIELDS.map(f => f.id);
         assert.deepEqual(ids, ['label', 'price', 'description']);
     });
 
@@ -58,14 +58,14 @@ describe('MARKET/PAAS product path', () => {
 describe('$bid schema', () => {
     it('class.js METADATA.FIELDS keep bid contract ids', async () => {
         const def = await loadDefault(BID_CLASS);
-        assert.ok(Array.isArray(def.METADATA.FIELDS.fields));
-        const ids = def.METADATA.FIELDS.fields.map(f => f.id);
+        assert.ok(Array.isArray(def.METADATA.FIELDS));
+        const ids = def.METADATA.FIELDS.map(f => f.id);
         assert.deepEqual(ids, ['status', 'product', 'input']);
-        const status = def.METADATA.FIELDS.fields.find(f => f.id === 'status');
+        const status = def.METADATA.FIELDS.find(f => f.id === 'status');
         assert.deepEqual(status.options, ['', 'draft', 'submitted']);
-        const product = def.METADATA.FIELDS.fields.find(f => f.id === 'product');
+        const product = def.METADATA.FIELDS.find(f => f.id === 'product');
         assert.equal(product.type, 'object');
-        const input = def.METADATA.FIELDS.fields.find(f => f.id === 'input');
+        const input = def.METADATA.FIELDS.find(f => f.id === 'input');
         assert.equal(input.type, 'form');
         const domain = input.fields?.find(f => f.id === 'domainName');
         assert.ok(domain, 'input.domainName missing');

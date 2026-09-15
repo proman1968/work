@@ -107,23 +107,19 @@ export default {
     capabilities: ['1c', 'odata'],
 
     METADATA: {
-        FIELDS: {
-            id: 'FIELDS',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'baseUrl',
-                type: 'String',
-                placeholder: 'https://1c.example/base',
-            }, {
-                id: 'login',
-                type: 'String',
-                placeholder: 'пользователь 1С',
-            }, {
-                id: 'password',
-                type: 'String',
-                placeholder: 'пароль',
-            }],
-        },
+        FIELDS: [{
+            id: 'baseUrl',
+            type: 'String',
+            placeholder: 'https://1c.example/base',
+        }, {
+            id: 'login',
+            type: 'String',
+            placeholder: 'пользователь 1С',
+        }, {
+            id: 'password',
+            type: 'String',
+            placeholder: 'пароль',
+        }],
     },
 
     SCHEMA: {

@@ -9,22 +9,18 @@ export default {
     description: 'Внешние сервисы и коннекторы',
 
     METADATA: {
-        FIELDS: {
-            id: 'FIELDS',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'baseUrl',
-                type: 'String',
-                placeholder: 'https://example.com',
-            }, {
-                id: 'apiKey',
-                type: 'String',
-                placeholder: 'API ключ (если требуется)',
-            }, {
-                id: 'capabilities',
-                type: 'String',
-                placeholder: 'search, translate, ...',
-            }],
-        },
+        FIELDS: [{
+            id: 'baseUrl',
+            type: 'String',
+            placeholder: 'https://example.com',
+        }, {
+            id: 'apiKey',
+            type: 'String',
+            placeholder: 'API ключ (если требуется)',
+        }, {
+            id: 'capabilities',
+            type: 'String',
+            placeholder: 'search, translate, ...',
+        }],
     },
 };

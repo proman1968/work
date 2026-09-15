@@ -349,8 +349,12 @@ export default {
                 delete block.state;
             }
         }
-        if (typeof agent.enrichTotal === 'function' && block.content)
-            block.content = agent.enrichTotal(block.content, block);
+        // сводка и без детей в total (check: exist/file ignore) — иначе бокс без content не закрывается
+        if (typeof agent.enrichTotal === 'function') {
+            const text = agent.enrichTotal(block.content || '', block);
+            if (text)
+                block.content = text;
+        }
         if (typeof agent.finish === 'function')
             await agent.finish({ block, live, session, box: params.box });
         if (block.content)

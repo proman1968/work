@@ -437,7 +437,7 @@ export function createRequestHandler() {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';
         // }
         // else
-        if (item?.constructor === CORE.$class && method === 'load')
+        if (item instanceof CORE.$class && method === 'load')
             header["Content-Type"] = 'application/javascript; charset=utf-8';
         else if (item?.constructor === CORE.$file) {
             if (method === 'download') {

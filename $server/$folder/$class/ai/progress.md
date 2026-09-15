@@ -1,6 +1,13 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
+- [12:38] form.`approve`: `values` = `answer` (restore после load). Причина: 1789204371291 — живые поля не попадали в JSON, Continue писал дефолты разметки.
+- [02:34] image generate: после `save_file` — `saved: true` (док не предлагает второй Save). Причина: файл уже в work, кнопка Save была активна.
+- [02:18] image `wantedCount`: «N фото / по сезонам» = N generate. Причина: 1789167828473 — «4 фото» считалось как 1 кадр, дальше plan+work.write.
+- [01:39] check: сводка в `content` (enrichTotal и без детей); повторный init не дублирует exist/file. Причина: 1789165968911 — 4 targets ×2, «Продолжить» no-op.
+- [01:28] check `state` — ok/gap (не kind/байты); image: path только после save, не путь модели. Причина: шапка «ok · file $file» / имя модели вместо файла.
+- [00:23] image: N картинок = N `generate` (сцена+файл), не коллаж; меню после image не предлагает `work`; `work.write` png/jpg/svg — отказ. Причина: 1789161436803 — один коллаж, затем fake png/svg через write.
+- [00:13] check write картинки: байты, не OCR. Причина: 1789160658480 — Tesseract `eng` → ложный gap.
 - [13:58] `work.typed`: действие = файл типа (`$file/*/class.js` `when` + `METADATA`) + `save_file` на месте (`message` + `time`). `$ics` — встреча, не `create` класса. Причина: 1789123179476 — «запланируй встречу» ушёл в пустой create.
 - [13:23] `review`: без nested work; диагноз = закон + слой + path. `agents/readme` — этот каталог = runtime. Причина: после APPROVE work угадывал канон; граница — адрес исполнения, не «система/данные».
 - [12:58] Агент `review`: схема ленты → диагноз; nested `work` после APPROVE или brief «исправ». `@review`, не новая goal. Причина: цикл разбора прогона перенести в ту же задачу.

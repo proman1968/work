@@ -1,0 +1,50 @@
+# $task — длинная ИИ-сессия (ai.task)
+
+## 1. Что это
+
+Тип `$task` — JSON-носитель длинного диалога/PDCA (`ai.task`): `type: 'task'` + `items` (+ `todo`, `mode`, `system`, `model`, `goal`) и **session-`prompt`** на самом типе файла.
+
+Расширение `.task`. `contentType: 'application/json'`.
+
+## 2. Зачем это нужно
+
+Сохранить ленту, todo, цель (`goal`), модель и history между заходами; UI preview. Короткий one-shot между классами без файла — [`$class/ai`](/$server/$folder/$class/ai/readme.md/~/handlers/pages/form/) (`?prompt`).
+
+## 3. Как это работает
+
+1. **`class.js`** — session harness на типе: `prompt` / `stop` / `change_*` / `remove_block` / `pipe` / `body` / `model`.
+2. **`pipe`**: `task.js` из tilde (ходы оркестратора) + декларации агентов из пакета движка (`_aiPackage` → `ai/agents`). Тёзки ходов оркестратора выше агентов. Правка меню / `goal` / `lookOnly` — этот тип [`class.js`](class.js), не файл `ai.task` в профиле. `includes` — ход человека (как prompt): открывает/возобновляет goal, дальше thinking/answer, без вопроса «что делать». `includes.expand` — листья в контекст с бюджетом (`clipContext`). Сырые вложения → сначала `thinking`. Картинка: `draft.type=image_url` (без base64 в JSON), байты в ход из `path` как vision-часть. `stop: true` у answer/report/question не снимать. Пустой fill — ошибка в ленте, `stop` остаётся.
+3. **`body.goal`** — сессионная цель `{ text, status: open|waiting|done, resume, pursue, need }`. `need`: `facts` | `side`. При новой постановке — silent-классификация тем же контрактом, что меню (`_classifyGoalNeed` → `facts`|`side`; сомнение → `side`). Без поля — как `side`. В `next` после успешного сборщика (`web`/`explore`/`logs`) этих id и `report` больше нет (не дубль сводки). Нет глагола «создай/напиши/добавь/запланируй/встреч…» в последнем prompt — с `next` снимается и `work`, ход `answer`. «нарисуй / фото / по сезонам» — `asksImage`: с `next` снимается `work` (N generate у image, не write png). «запланируй / встреча» — `work.typed` (`$ics` по `when` типа), не `create` класса. В `context` провал сборщика (`error` и `ok=0`) не улика, если тот же тип уже дал `content`. В `context` — блок `[goal]` с нормой по `need`.
+3a. **`body.skill`** — надетый рецепт из [`ai/skills/`](/$server/$folder/$class/ai/skills/readme.md/~/handlers/pages/form/) `{ id, cursor, slots }`. На новой цели: `@id` или `when.need`+`phrases` (одно попадание сразу, несколько — меню `none`|`id`). Нет `points` — не надевать. `_promptTurn` берёт `pipe[cursor].type` вместо меню; движок получает `skillStep` (system/prompt/tools). В `context` — блок `[skill]`.
+3b. **Агент `freeze`** (`step: false`): после удачи меню «запомни / навык / рецепт» или `@freeze` → `ai/skills/{id}.js`. Не класть `freeze` в `pipe` навыка. `execute` передаёт `task` (лента + `_skillsDir`).
+3c. **Агент `review`** (`step: false`): `@review` + претензия → диагноз (закон + слой + один `path`, откуда runtime читает). Не открывает новую goal. Файлы не пишет; правка — отдельная постановка / `@work` с этим path. Не в `pipe` навыка.
+4. **Resume / continue:** стоп `question`/`form` → `waiting` + `resume.agent` (субагент с `step !== false`, не вложенный `site`) или `resume.continue` (вопрос до агента). Следующий ход (текст **или** «Продолжить» `role:AI`): `waiting` → `open`; меню с **корня**, если у листа `next` пустой (`[]` не держат фокус). `resume.continue` снимает с `next` `answer`/`form`/`question`; «запланир… / встреч» — сразу `work`. Форма в ленте: JSON живых контролов (`$pdp.result` с последней `form`, снимок **до** `pending`) и на Continue, даже если хвост уже `report`. `approve` пишет `answer` и `values`; с `using_blocks` снимаются `work`/`check`/`report`, чтобы переписать файл. `live.wait` (activation): кнопка APPROVE **или** обычный промпт — `_reviseWait` снимает wait, текст в движок, `do` не включать (повтор activation с правкой). Нет waiter (обрыв) — снять висящий `stop` и доиграть открытый бокс-агент (`_activeAgentBlock` по фокусу, не только по last). Промпт внутри открытого бокса-агента **не** чистит `using_blocks` (память read/create), только тип стопа.
+5. **Закрытие goal:** `need=facts` — evidence сбора/реплики (`explore`/`web`/`logs`/`answer`/`report`) → `done`. `need=side` — [`check`](/$server/$folder/$class/ai/agents/check.js/~/handlers/pages/form/): targets create/write (в т.ч. `typed` как `[write path]`) → exist + (класс: meta читается + readme) / (файл: content); `_settleFactsGoal` на `report`/`answer`/`html` **не** ставит `done`, пока в последнем `check` есть `gap:`. Терминальный `answer` при open → pursue. При `status=done` «Продолжить» не показывается и на сервере no-op, **кроме** gap в check: кнопка есть, `role:AI` открывает goal и заново сдаёт форму.
+6. **Агенты исполняет движок класса** ([`prompt/$method`](/$server/$folder/$class/ai/prompt/$method/class.js/~/handlers/pages/form/)): таск пушит блок и передаёт `live` + `context({handoff})` — `body.system` + `[goal]` + диалог-улики (без topicsMap). Движок дополняет system локально (место, агент). Стоп инструмента (`live.wait`) → `chat.done` (кнопка APPROVE); ответ — `_resolveWait`, исходный prompt продолжает и сам закрывает сессию. Обрыв — `_activeAgentBlock`.
+7. **План → todo → step:** `planning.approve` пишет `box.todo`; `_promptTurn` не стримит в todo — при незакрытых steps сразу пушит `step` (`pipe.todo.next`).
+8. **`on_save`** пишет `body.system` (`buildSystemPrompt` из `prompt/$method`) и вызывает `file.prompt`.
+9. UI: `parseFormHtml` / `unwrapFence` из локального [`task.js`](task.js).
+
+## 4. Из чего это состоит
+
+- [`class.js`](class.js) — session prompt, оркестратор ленты, контракт `live` для движка агентов
+- [`task.js`](task.js) — оркестратор (`tools` / ходы) + хелперы UI
+- [`triggers/on_save/`](triggers/on_save/$trigger/class.js) — system + первый prompt
+- [`handlers/`](handlers/) — preview микрочата; карточка чата — последний `doc` или последний блок; `~if`/`~is` reuse → `_reload` на `$item` / `changed` / `attached` (`load`, не снимок `log`)
+- [`readme.md`](readme.md) / [`progress.md`](progress.md)
+
+## 5. Состояние
+
+- ✅ Session-`prompt` на `$task/class.js`; агенты — движок `$class/ai` через `live`
+- ✅ `body.goal` + `need` (facts|side через silent menu); facts → settle без pursue; side → work + `check` (`goalDone`)
+- ✅ `body.skill`: discover `ai/skills/`, выбор на новой цели, replay `pipe`
+- ✅ агент `freeze`: лента → навык (`ai/skills/{id}.js`)
+- ✅ агент `review`: `@review` → диагноз + слот path; не писатель
+- ✅ `work.typed`: встреча / `$ics` (`when` + `METADATA`) → `save_file` на месте; не create
+- ✅ One-shot на `$class/ai`: `/BASE?prompt&agent=&prompt=`
+
+## 6. Дальнейшие планы
+
+- Свести собственные ходы таска (`_streamChat` / `_fillLeaf`) на движок `$class/ai`.
+- Кросс-классовый запуск агентов (адресация чужого класса из процесса).
+- Подключение модели в провайдер: tool `create` (`$class.create`) в пайплайне work — ✅ в [`agents/work.js`](/$server/$folder/$class/ai/agents/work.js/~/handlers/pages/form/).

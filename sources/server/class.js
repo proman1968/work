@@ -58,7 +58,7 @@ export class $class extends $folder{
     }
     get METADATA(){
         return this.DATA.METADATA ?? {
-            FIELDS: { id: 'FIELDS', icon: 'iconoir:input-field', fields: [] }
+            FIELDS: []
         }
     }
     static validateVarName(name) {
@@ -391,26 +391,12 @@ export class $class extends $folder{
     }
 
     /**
-     * Рабочая зона роли — папка, куда пишутся файлы пользователя этой роли.
-     * ADMIN → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
-     * BOSS → управленческая зона (distributed_folder/$work)
-     * USER → рабочая зона (meta_folder/$work)
-     * GUEST → зона гостей (meta_folder/guests)
+     * Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли.
+     * Имя папки = params.role || 'GUESTS' (ADMIN | BOSS | USER | GUEST | GUESTS).
      */
     async work_zone(params = {}){
-        const {role} = params;
-        switch(role){
-            case $class.ROLES.ADMIN:
-                return this.$folder._get_next_item('work', FS.$folder);
-            case $class.ROLES.BOSS:
-                const dist = await this.$distr_folder;
-                return dist._get_next_item('work', FS.$folder);
-            case $class.ROLES.USER:
-                return this.meta_folder._get_next_item('work', FS.$folder);
-            case $class.ROLES.GUEST:
-                return this.meta_folder._get_next_item('guests', FS.$folder);
-        }
-        return this.meta_folder
+        const role = params.role || 'GUESTS';
+        return this.meta_folder._get_next_item(role, FS.$folder);
     }
     /** @deprecated используй work_zone */
     get_storage(params){
@@ -508,8 +494,7 @@ export class $class extends $folder{
         return true;
     }
     async save_file(params = {}){
-        // Логи (data.logs) — системная операция: всегда пишутся в meta_folder,
-        // минуя work_zone, чтобы не попадать в зону $work по role.
+        // Логи (data.logs) — системная операция: всегда в meta_folder, минуя work_zone.
         if (params.filename === 'data.logs') {
             const folder = await this.meta_folder.getFolderToSaveFile(params);
             return folder.save_file(params);
@@ -528,6 +513,30 @@ export class $class extends $folder{
     }
     get $folder(){
         return this.constructor.inherit(WORK.$folder, this.meta_folder);
+    }
+
+    /**
+     * Типы файлов данных класса: дети `$folder/$file/$data` (через children, не inherit_children).
+     * Builder и save_file смотрят сюда, не в глобальный `$file.isDataFile`.
+     */
+    get data_types() {
+        return this.meta_folder.get_item('$folder/$file/$data/*')
+            .then(async list => {
+                const types = (Array.isArray(list) ? list : []).filter(f => f.isType);
+                await Promise.all(types.map(t => t.init));
+                return types;
+            });
+    }
+
+    /** Расширение (или имя файла) — файл данных этого класса? */
+    async is_data_type(extOrName) {
+        const ext = FS.$file.fileExt(extOrName)
+            || String(extOrName || '').replace(/^\$/, '').toLowerCase();
+        if (!ext)
+            return false;
+        const types = await this.data_types;
+        const id = '$' + ext;
+        return (types || []).some(t => t.id === id);
     }
 
     get meta_folder(){

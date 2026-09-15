@@ -15,18 +15,16 @@ function getDifferenceGolden() {
         getDDD() { return 'ddd'; },
         getppp() { return 'ppp'; },
         METADATA: {
-            FIELDS: {
-                fields: [
-                    { id: 'f1', type: 'String' },
-                    { id: 'f2' },
-                    { id: 'f3', type: 'Boolean' },
-                    {
-                        id: 'f4',
-                        type: 'String',
-                        fields: [{ id: 'f41', type: 'String' }],
-                    },
-                ],
-            },
+            FIELDS: [
+                { id: 'f1', type: 'String' },
+                { id: 'f2' },
+                { id: 'f3', type: 'Boolean' },
+                {
+                    id: 'f4',
+                    type: 'String',
+                    fields: [{ id: 'f41', type: 'String' }],
+                },
+            ],
         },
     };
     const old_data = {
@@ -38,13 +36,11 @@ function getDifferenceGolden() {
         get foo() { return 'foo 2'; },
         getDDD() { return 'ddd'; },
         METADATA: {
-            FIELDS: {
-                fields: [
-                    { id: 'f1', type: 'String' },
-                    { id: 'f2' },
-                    { id: 'f4', type: 'String' },
-                ],
-            },
+            FIELDS: [
+                { id: 'f1', type: 'String' },
+                { id: 'f2' },
+                { id: 'f4', type: 'String' },
+            ],
         },
     };
     return { new_data, old_data, diff: $class.getDifference(new_data, old_data) };
@@ -55,19 +51,17 @@ function separateInheritGolden() {
         label: 'test structure',
         get foo() { return 'foo'; },
         METADATA: {
-            FIELDS: {
-                fields: [
-                    { id: 'f1', type: 'String' },
-                    { id: 'f2', type: 'String' },
-                    {
-                        id: 'f3',
-                        type: 'String',
-                        fields: [{ id: 'f31', type: 'String', to_inherit: true }],
-                    },
-                    { id: 'f4', type: 'String', to_inherit: false },
-                    { id: 'f5', type: 'String', to_inherit: true },
-                ],
-            },
+            FIELDS: [
+                { id: 'f1', type: 'String' },
+                { id: 'f2', type: 'String' },
+                {
+                    id: 'f3',
+                    type: 'String',
+                    fields: [{ id: 'f31', type: 'String', to_inherit: true }],
+                },
+                { id: 'f4', type: 'String', to_inherit: false },
+                { id: 'f5', type: 'String', to_inherit: true },
+            ],
         },
     };
     const [self_data, inherit_data] = $class.separateInheritData(new_data);
@@ -95,7 +89,7 @@ describe('$class.getDifference', () => {
         assert.deepEqual(diff.attr2, { sub: 'ttt' });
         assert.equal(diff.attrr4, 'x');
         assert.equal(typeof diff.getppp, 'function');
-        const fields = diff.METADATA.FIELDS.fields;
+        const fields = diff.METADATA.FIELDS;
         assert.equal(fields.length, 2);
         assert.deepEqual(fields[0], { id: 'f3', type: 'Boolean' });
         assert.deepEqual(fields[1], {
@@ -107,7 +101,7 @@ describe('$class.getDifference', () => {
     it('does not include unchanged fields with id in arrays', () => {
         const { new_data, old_data } = getDifferenceGolden();
         const diff = $class.getDifference(new_data, old_data);
-        const ids = diff.METADATA.FIELDS.fields.map(f => f.id);
+        const ids = diff.METADATA.FIELDS.map(f => f.id);
         assert.ok(!ids.includes(undefined));
         assert.equal(ids.includes('f1'), false);
         assert.equal(ids.includes('f2'), false);
@@ -120,14 +114,14 @@ describe('$class.separateInheritData', () => {
 
         assert.equal(self_data.label, 'test structure');
         assert.equal(typeof Object.getOwnPropertyDescriptor(self_data, 'foo')?.get, 'function');
-        const selfFields = self_data.METADATA.FIELDS.fields;
+        const selfFields = self_data.METADATA.FIELDS;
         assert.equal(selfFields.length, 4);
         assert.equal(selfFields[0].id, 'f1');
         assert.equal(selfFields[2].id, 'f3');
         assert.equal(selfFields[2].fields, undefined);
         assert.equal(selfFields[3].to_inherit, false);
 
-        const inheritFields = inherit_data.METADATA.FIELDS.fields;
+        const inheritFields = inherit_data.METADATA.FIELDS;
         assert.equal(inheritFields.length, 2);
         assert.equal(inheritFields[0].id, 'f3');
         assert.equal(inheritFields[0].fields[0].id, 'f31');

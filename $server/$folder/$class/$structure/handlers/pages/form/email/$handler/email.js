@@ -21,93 +21,6 @@ export default {
     get odaFormEmail() {
         return this.$('oda-form-email');
     },
-    async showSettings(...params) {
-        return runEmailSettingsDialog(this);
-    },
-}
-
-/** RFC 2047: один encoded-word → строка (ошибка → null). */
-function decodeMimeWord(charset, encoding, data) {
-    try {
-        let bytes;
-        const enc = String(encoding || '').toUpperCase();
-        if (enc === 'B') {
-            const bin = atob(String(data || '').replace(/\s+/g, ''));
-            bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
-        }
-        else if (enc === 'Q') {
-            const q = String(data || '').replace(/_/g, ' ');
-            const out = [];
-            for (let i = 0; i < q.length; i++) {
-                if (q[i] === '=' && i + 2 < q.length) {
-                    const hex = q.slice(i + 1, i + 3);
-                    if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
-                        out.push(parseInt(hex, 16));
-                        i += 2;
-                        continue;
-                    }
-                }
-                out.push(q.charCodeAt(i));
-            }
-            bytes = new Uint8Array(out);
-        }
-        else {
-            return null;
-        }
-        const cs = String(charset || 'utf-8').trim().toLowerCase();
-        const label = cs === 'utf8' ? 'utf-8' : cs;
-        return new TextDecoder(label).decode(bytes);
-    }
-    catch {
-        return null;
-    }
-}
-
-/** RFC 2047 encoded-words в значении заголовка; без =?...?= — без изменений. */
-function decodeRfc2047(str) {
-    str = String(str ?? '');
-    if (!str.includes('=?'))
-        return str;
-    // LWSP только между соседними encoded-word удаляется (RFC 2047 §6.2)
-    str = str.replace(/(\=\?[^?]+\?[bBqQ]\?[^?]*\?=)(\s+)(?=\=\?)/g, '$1');
-    return str.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (full, charset, encoding, data) => {
-        const decoded = decodeMimeWord(charset, encoding, data);
-        return decoded != null ? decoded : full;
-    });
-}
-
-function parseEmlClient(raw) {
-    raw = String(raw ?? '');
-    const sep = raw.match(/\r?\n\r?\n/);
-    const head = sep ? raw.slice(0, sep.index) : raw;
-    const body = sep ? raw.slice(sep.index + sep[0].length) : '';
-    const headers = Object.create(null);
-    for (const line of head.split(/\r?\n/)) {
-        const m = line.match(/^([\w-]+):\s*(.*)$/i);
-        if (m)
-            headers[m[1].toLowerCase()] = m[2].trim();
-    }
-    for (const key of Object.keys(headers))
-        headers[key] = decodeRfc2047(headers[key]);
-    return {
-        headers,
-        body,
-        subject: headers.subject || '(без темы)',
-        from: headers.from || '',
-        to: headers.to || '',
-        status: headers['x-work-status'] || '',
-    };
-}
-
-/** path лога: …/message/.<account>/<box>.eml… */
-function mailboxFromPath(path) {
-    const m = String(path || '').match(/\/message\/\.([^/]+)\/(inbox|outbox|trash)\.eml/i);
-    if (!m)
-        return null;
-    return {
-        address: decodeURIComponent(m[1]),
-        box: m[2].toLowerCase(),
-    };
 }
 
 function accountAddresses(mailboxes = {}) {
@@ -135,21 +48,6 @@ function dayKeyFromEntry(entry) {
     return parts.pop() || '';
 }
 
-function parseLogContent(row) {
-    let meta = row?.content;
-    if (typeof meta === 'string') {
-        try {
-            meta = JSON.parse(meta);
-        }
-        catch {
-            meta = null;
-        }
-    }
-    if (!meta || typeof meta !== 'object')
-        return {};
-    return meta;
-}
-
 function formatMailDate(value) {
     if (!value)
         return '';
@@ -164,17 +62,18 @@ function formatMailDate(value) {
     });
 }
 
-function defaultEml({ from, to, subject, body, address, status = 'pending' }) {
-    return [
-        `X-WORK-Status: ${status}`,
-        address ? `X-WORK-Mailbox: ${address}` : '',
-        from ? `From: ${from}` : '',
-        to ? `To: ${to}` : '',
-        subject ? `Subject: ${subject}` : 'Subject: ',
-        'Content-Type: text/plain; charset=utf-8',
-        '',
-        body || '',
-    ].filter((l, i) => i > 0 || l).join('\r\n');
+function defaultEmlJson({ from, to, subject, body, address, status = 'pending' }) {
+    return {
+        subject: subject || '(без темы)',
+        from: from || '',
+        to: to || '',
+        date: new Date().toISOString(),
+        body: body || '',
+        html: '',
+        status,
+        box: 'outbox',
+        mailbox: address || '',
+    };
 }
 
 function emptyMailbox(address = '') {
@@ -184,86 +83,6 @@ function emptyMailbox(address = '') {
         imap: { host: '', port: 993, secure: true },
         auth: { user: address, pass: '' },
     };
-}
-
-function mailboxesToAccounts(mailboxes = {}) {
-    return Object.entries(mailboxes).map(([address, box]) => ({
-        address,
-        smtp: { host: '', port: 465, secure: true, ...box.smtp },
-        imap: { host: '', port: 993, secure: true, ...box.imap },
-        auth: { user: address, pass: '', ...box.auth },
-    }));
-}
-
-function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
-    const mailboxes = Object.create(null);
-    for (const acc of accounts) {
-        const address = String(acc.auth?.user || '').trim();
-        if (!address)
-            continue;
-        const prevPass = previousMailboxes[address]?.auth?.pass || '';
-        const nextPass = acc.auth?.pass || '';
-        mailboxes[address] = {
-            smtp: { ...acc.smtp },
-            imap: { ...acc.imap },
-            auth: {
-                user: address,
-                pass: nextPass || prevPass || '',
-            },
-        };
-    }
-    return mailboxes;
-}
-
-async function runEmailSettingsDialog($item) {
-    if (runEmailSettingsDialog.opening)
-        return;
-    runEmailSettingsDialog.opening = true;
-    let el, settings, $context;
-    try {
-        $context = $item.$context;
-        settings = await $context.fetch('read_secret', { filename: 'email.json' });
-        el = ODA.createElement('oda-email-settings', {
-            accounts: mailboxesToAccounts(settings?.mailboxes),
-        });
-        if (!el.accounts.length) {
-            el.addAccount();
-        }
-        else {
-            el.index = 0;
-        }
-    }
-    catch (e) {
-        ODA.showMessage(e.message)
-        return;
-    }
-    finally {
-        runEmailSettingsDialog.opening = false;
-    }
-    try {
-        await WORK.showDialog(el, {
-            TITLE: { label: 'Почтовые ящики', icon: 'enterprise:email' },
-            OK: { label: 'Сохранить', icon: 'icons:save' },
-            CANCEL: { label: 'Отмена', icon: 'icons:close' },
-        });
-    }
-    catch {
-        return null;
-    }
-    try {
-        el.validate();
-        const mailboxes = accountsToMailboxes(el.accounts, settings?.mailboxes);
-        await $context.fetch(
-            'save_secret',
-            { filename: 'email.json' },
-            JSON.stringify({ mailboxes }),
-        );
-        return mailboxes;
-    }
-    catch (e) {
-        alert(e.message || e);
-        return null;
-    }
 }
 
 ODA({
@@ -457,18 +276,16 @@ ODA({
     mode: 'idle',
     draft: { to: '', subject: '', body: '' },
     get _settings() {
-        this.$item?.fetch('read_secret', { filename: 'email.json' }).then(res => {
-            this._settings = res;
-        });
-        return null;
+        return this.$item?.fetch('read_secret', { filename: 'email.json' });
     },
     _watch: null,
     _datesEpoch: 0,
     get accounts() {
-        return accountAddresses(this._settings?.mailboxes);
+        return Promise.resolve(this._settings).then(_settings => {
+            return accountAddresses(_settings?.mailboxes);
+        });
     },
     async attached() {
-        await this._settings;
         this.async(() => {
             this.init();
         });
@@ -498,8 +315,9 @@ ODA({
         this.mode = 'view';
         this.render();
     },
-    createEmail() {
-        const address = this.accounts[0];
+    async createEmail() {
+        const accounts = await this.accounts;
+        const address = accounts[0];
         if (!address) {
             alert('Сначала настройте почтовый ящик (⚙)');
             return;
@@ -510,14 +328,15 @@ ODA({
         this.render();
     },
     async sendDraft() {
-        const address = this.accounts[0];
+        const accounts = await this.accounts;
+        const address = accounts[0];
         if (!address) {
             alert('Сначала настройте почтовый ящик (⚙)');
             return;
         }
         const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
         const box = settings?.mailboxes?.[address];
-        const eml = defaultEml({
+        const eml = defaultEmlJson({
             from: box?.auth?.user || address,
             to: this.draft.to,
             subject: this.draft.subject,
@@ -526,7 +345,7 @@ ODA({
             status: 'pending',
         });
         try {
-            await this.$item.save_file(new File([eml], 'outbound.eml', { type: 'message/rfc822' }), {
+            await this.$item.save_file(new File([JSON.stringify(eml)], 'outbound.eml', { type: 'application/json' }), {
                 encoding: 'utf-8',
                 folder: address,
             });
@@ -757,25 +576,32 @@ ODA({
                         }
                         if (!row?.path)
                             continue;
-                        const hit = mailboxFromPath(row.path);
-                        if (!hit || hit.box !== this.boxId)
-                            continue;
                         if (seen.has(row.path))
                             continue;
                         seen.add(row.path);
-                        const meta = parseLogContent(row);
-                        const dateValue = meta.date || row.time || '';
-                        rows.push({
-                            ...row,
-                            address: hit.address,
-                            box: hit.box,
-                            subject: meta.subject || '(без темы)',
-                            from: meta.from || '',
-                            to: meta.to || '',
-                            date: dateValue,
-                            dateLabel: formatMailDate(dateValue),
-                            sortTime: dateValue ? new Date(dateValue).getTime() : (row.time || 0),
-                        });
+                        try {
+                            const res = await fetch(row.path);
+                            const raw = await res.text();
+                            const json = JSON.parse(raw);
+                            if (!json.box || json.box !== this.boxId)
+                                continue;
+                            const dateValue = json.date || row.time || '';
+                            rows.push({
+                                path: row.path,
+                                subject: json.subject || '(без темы)',
+                                from: json.from || '',
+                                to: json.to || '',
+                                date: dateValue,
+                                body: json.body ?? '',
+                                html: json.html || '',
+                                status: json.status || '',
+                                box: json.box,
+                                address: json.mailbox || '',
+                                dateLabel: formatMailDate(dateValue),
+                                sortTime: dateValue ? new Date(dateValue).getTime() : (row.time || 0),
+                            });
+                        }
+                        catch { /* не JSON / старый формат — пропуск */ }
                     }
                 }
                 catch { /* нет файлов в папке дня */ }
@@ -849,6 +675,13 @@ ODA({
                 overflow: auto;
                 padding: 8px 0;
             }
+            .view-html {
+                overflow: auto;
+                padding: 8px 0;
+            }
+            .view-html img {
+                max-width: 100%;
+            }
         </style>
         <div ~if="mode === 'idle'" class="idle" flex>Выберите письмо</div>
         <div ~if="mode === 'compose'" vertical flex>
@@ -873,7 +706,8 @@ ODA({
             <span class="msg-meta">От: {{view.from}}</span>
             <span class="msg-meta">Кому: {{view.to}}</span>
             <span ~if="view.status" class="msg-meta">Статус: {{view.status}}</span>
-            <div class="view-body" flex>{{view.body}}</div>
+            <div class="view-html" flex ::innerHTML="view.html" ~if="view.html"></div>
+            <div class="view-body" flex ~if="!view.html">{{view.body}}</div>
         </div>
     `,
     get mode() {
@@ -885,7 +719,7 @@ ODA({
     get view() {
         const row = this.$pdp?.selected;
         if (!row)
-            return { subject: '', from: '', to: '', body: '', status: '' };
+            return { subject: '', from: '', to: '', body: '', html: '', status: '' };
         if (row.body == null)
             this.async(() => this._ensureBody());
         return {
@@ -893,6 +727,7 @@ ODA({
             from: row.from || '',
             to: row.to || '',
             body: row.body ?? '',
+            html: row.html || '',
             status: row.status || '',
         };
     },
@@ -903,14 +738,17 @@ ODA({
         try {
             const res = await fetch(row.path);
             const raw = await res.text();
-            const parsed = parseEmlClient(raw);
-            row.body = parsed.body;
-            row.subject = parsed.subject;
-            row.from = parsed.from;
-            row.to = parsed.to;
-            row.status = parsed.status;
+            const json = JSON.parse(raw);
+            row.body = json.body || '';
+            row.html = json.html || '';
+            row.subject = json.subject || row.subject;
+            row.from = json.from || row.from;
+            row.to = json.to || row.to;
+            row.status = json.status || '';
         }
         catch (e) {
+            console.error(e);
+            ODA.showMessage(e.message);
             row.body = e.message;
         }
         finally {

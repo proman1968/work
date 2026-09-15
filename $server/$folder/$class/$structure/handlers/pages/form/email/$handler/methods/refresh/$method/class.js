@@ -75,14 +75,51 @@ async function resolveUidsToFetch(client, cursor) {
     return [...uids].map(Number).filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
 }
 
+async function streamToString(stream) {
+    const chunks = [];
+    for await (const chunk of stream)
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return Buffer.concat(chunks).toString('utf-8');
+}
+
+/** Найти part-id для text/plain и text/html в bodyStructure. */
+function findTextPartIds(structure) {
+    const found = { text: '', html: '' };
+    const walk = (node) => {
+        if (!node || typeof node !== 'object')
+            return;
+        if (node.type === 'text/plain' && !found.text && node.part)
+            found.text = String(node.part);
+        if (node.type === 'text/html' && !found.html && node.part)
+            found.html = String(node.part);
+        for (const child of node.childNodes || [])
+            walk(child);
+    };
+    walk(structure);
+    return found;
+}
+
+async function downloadPart(client, uid, part) {
+    if (!part)
+        return '';
+    try {
+        const { content } = await client.download(uid, part, { uid: true });
+        return content ? await streamToString(content) : '';
+    }
+    catch {
+        return '';
+    }
+}
+
 async function syncMailboxFolder(client, storage, {
     address,
     imapPath,
     delimiter,
+    box,
     role,
     session,
-    stampImapCursor,
-    readImapCursor,
+    stampJsonCursor,
+    readCursorAuto,
     imapFolderToFilename,
     getEmlHeader,
 }) {
@@ -93,33 +130,48 @@ async function syncMailboxFolder(client, storage, {
     const lock = await client.getMailboxLock(imapPath);
     try {
         const existingRaw = await loadCurrentEml(storage, role, address, filename, session);
-        const cursor = readImapCursor(existingRaw);
+        const cursor = readCursorAuto(existingRaw);
         const uids = await resolveUidsToFetch(client, cursor);
         const uidValidity = String(client.mailbox?.uidValidity ?? '');
 
         for (const uid of uids) {
             try {
-                const msg = await client.fetchOne(uid, { source: true, envelope: true, uid: true }, { uid: true });
+                const msg = await client.fetchOne(uid, { source: true, bodyStructure: true, envelope: true, uid: true }, { uid: true });
                 if (!msg?.source) {
                     folderReport.skipped++;
                     continue;
                 }
                 let raw = Buffer.isBuffer(msg.source) ? msg.source.toString('utf-8') : String(msg.source);
-                raw = stampImapCursor(raw, {
-                    uid: msg.uid ?? uid,
-                    uidValidity,
-                    folder: imapPath,
-                    address,
-                });
+                const parts = findTextPartIds(msg.bodyStructure);
+                const [body, html] = await Promise.all([
+                    downloadPart(client, msg.uid ?? uid, parts.text),
+                    downloadPart(client, msg.uid ?? uid, parts.html),
+                ]);
                 const env = msg.envelope || {};
                 const date = env.date
                         ? new Date(env.date).toISOString()
                         : (getEmlHeader(raw, 'Delivery-Date') || new Date().toISOString());
                 const time = new Date(date).getTime();
-                const meta = {
+                const json = stampJsonCursor({
                     subject: env.subject || getEmlHeader(raw, 'Subject') || '(без темы)',
                     from: formatAddrs(env.from) || getEmlHeader(raw, 'From'),
                     to: formatAddrs(env.to) || getEmlHeader(raw, 'To'),
+                    date,
+                    body,
+                    html,
+                    'rfc-822': raw,
+                    messageId: getEmlHeader(raw, 'Message-ID') || '',
+                    box,
+                }, {
+                    uid: msg.uid ?? uid,
+                    uidValidity,
+                    folder: imapPath,
+                    address,
+                });
+                const meta = {
+                    subject: json.subject,
+                    from: json.from,
+                    to: json.to,
                     date,
                 };
                 await storage.save_file({
@@ -127,7 +179,7 @@ async function syncMailboxFolder(client, storage, {
                     folder: address,
                     encoding: 'utf-8',
                     message: JSON.stringify(meta),
-                    post: raw,
+                    post: JSON.stringify(json),
                     time,
                     session,
                     role,
@@ -162,9 +214,10 @@ export default {
         ]);
 
         const {
-            stampImapCursor,
-            readImapCursor,
+            stampJsonCursor,
+            readCursorAuto,
             imapFolderToFilename,
+            imapFolderToBox,
             getEmlHeader,
         } = emailUtils;
 
@@ -211,15 +264,19 @@ export default {
                     const imapPath = mb.path;
                     if (!imapPath)
                         continue;
+                    const box = imapFolderToBox(imapPath);
+                    if (!box)
+                        continue;
                     try {
                         const folderReport = await syncMailboxFolder(client, storage, {
                             address,
                             imapPath,
                             delimiter: mb.delimiter || '/',
+                            box,
                             role,
                             session,
-                            stampImapCursor,
-                            readImapCursor,
+                            stampJsonCursor,
+                            readCursorAuto,
                             imapFolderToFilename,
                             getEmlHeader,
                         });

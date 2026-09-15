@@ -92,19 +92,19 @@ export function createMailboxTransport(box) {
     });
 }
 
-export async function sendOutboxEml(box, raw) {
-    const parsed = parseEml(raw);
-    const from = parsed.headers.from || box.auth?.user || box.address;
-    const to = parsed.headers.to;
+export async function sendOutboxEml(box, data) {
+    const json = parseJsonEml(data);
+    const from = json.from || box.auth?.user || box.address;
+    const to = json.to;
     if (!to)
-        throw new Error('Не указан заголовок To');
+        throw new Error('Не указан получатель');
     const transport = createMailboxTransport(box);
     await transport.sendMail({
         from,
         to,
-        subject: parsed.headers.subject || '(без темы)',
-        text: parsed.body,
-        html: parsed.headers['content-type']?.includes('html') ? parsed.body : undefined,
+        subject: json.subject || '(без темы)',
+        text: json.body || '',
+        html: json.html || undefined,
     });
 }
 
@@ -127,6 +127,91 @@ export function pendingOutboxEml(raw, address) {
     if (address && !getEmlHeader(raw, MAILBOX_HEADER))
         raw = setEmlHeaders(raw, { [MAILBOX_HEADER]: address });
     return raw;
+}
+
+/**
+ * Маппинг IMAP-папки на бокс WORK (inbox|outbox|trash).
+ * Папки вне тройки (Drafts, Spam и т.п.) возвращают '' (игнор).
+ */
+export function imapFolderToBox(imapPath) {
+    const name = String(imapPath ?? '').toLowerCase().trim();
+    if (!name)
+        return '';
+    if (name === 'inbox')
+        return 'inbox';
+    if (name === 'outbox' || /sent/.test(name))
+        return 'outbox';
+    if (/trash|deleted|bin/.test(name))
+        return 'trash';
+    return '';
+}
+
+/**
+ * Парсинг содержимого .eml как JSON (новый формат WORK).
+ * Объект возвращается как есть; строка парсится JSON.parse;
+ * при ошибке возвращается {} (признак старого RFC 822).
+ */
+export function parseJsonEml(data) {
+    if (data == null)
+        return {};
+    if (typeof data === 'object')
+        return data;
+    try {
+        const parsed = JSON.parse(String(data));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+
+/** Установить статус отправки в JSON-письме. */
+export function markJsonStatus(json, status, extra = {}) {
+    json.status = status;
+    if (status === 'sent')
+        json.sentAt = new Date().toISOString();
+    if (status === 'failed' && extra.error)
+        json.error = extra.error;
+    return json;
+}
+
+export function pendingJsonEml(json, address) {
+    if (!json.status)
+        json.status = 'pending';
+    if (address && !json.mailbox)
+        json.mailbox = address;
+    return json;
+}
+
+/** Проставить IMAP-курсор и служебные поля в JSON-письме. */
+export function stampJsonCursor(json, { uid, uidValidity, folder, address } = {}) {
+    if (uid != null && uid !== '')
+        json.imapUid = Number(uid);
+    if (uidValidity != null && uidValidity !== '')
+        json.imapUidValidity = String(uidValidity);
+    if (folder)
+        json.imapFolder = String(folder);
+    if (address)
+        json.mailbox = String(address);
+    return json;
+}
+
+/** Курсор синхронизации из JSON-письма. */
+export function readJsonCursor(json) {
+    const uid = Number(json?.imapUid);
+    return {
+        uid: Number.isFinite(uid) && uid > 0 ? uid : 0,
+        uidValidity: String(json?.imapUidValidity || ''),
+        messageId: String(json?.messageId || ''),
+    };
+}
+
+/** Курсор из текущего .eml: JSON (новый) или RFC 822 (старый) — автоопределение. */
+export function readCursorAuto(data) {
+    const json = parseJsonEml(data);
+    if (Object.keys(json).length && (json.imapUid != null || json.imapUidValidity || json.messageId))
+        return readJsonCursor(json);
+    return readImapCursor(String(data ?? ''));
 }
 
 /** Имя файла .eml из IMAP path (без расширения). */

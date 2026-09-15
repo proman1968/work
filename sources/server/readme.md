@@ -53,7 +53,7 @@ API элементов — это «система команд» для ИИ-а
 
 - `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
 - `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
-- `work_zone({role})` — папка рабочей зоны роли (GUEST → `meta_folder/guests`); deprecated-алиас: `get_storage`
+- `work_zone({role})` — папка в метапапке для `save_file` роли; имя = `role` или `GUESTS`; deprecated-алиас: `get_storage`
 
 ### Описание элемента
 

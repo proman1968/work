@@ -291,6 +291,7 @@ ODA({
         </div>
     `,
     data: null,
+    $item: null,
     get interval() {
         return eventInterval(this.data);
     },
@@ -300,7 +301,7 @@ ODA({
     $listeners: {
         tap(e) {
             e.stopPropagation();
-            this.$pdp.showMeeting(this.data?.$item);
+            this.$pdp.showMeeting(this.$item);
         }
     }
 })
@@ -624,9 +625,7 @@ ODA({
             return !isNaN(start) && !isNaN(end) && end > dayStart && start < next;
         }).map(event => ({ ...event, title: eventTitle(event) }));
     },
-    selectMonthDay(dayInfo) {
-        const start = new Date(dayInfo.date);
-        start.setHours(9, 0, 0, 0);
+    selectMonthDay(start) {
         const end = new Date(start.getTime() + 30 * 60 * 1000);
         this.fire('add-event', { start, end });
     }
@@ -661,7 +660,7 @@ ODA({
             }
         </style>
         <div class="week-label">{{item?.label}}</div>
-        <oda-calendar-month-day ~for="item?.days" :item="$for.item" :other-month="$for.item.otherMonth" :today="$for.item.isToday"></oda-calendar-month-day>
+        <oda-calendar-month-day ~for="item?.days" :item="$for.item" :date="$for.item.date" :other-month="$for.item.otherMonth" :today="$for.item.isToday"></oda-calendar-month-day>
     `,
     item: null,
 })
@@ -684,12 +683,13 @@ ODA({
             }
         </style>
         <div class="day-number">{{item?.day}}</div>
-        <oda-calendar-event badge ~for="item?.events" :data="$for.item" :title="$for.item.title"></oda-calendar-event>
+        <oda-calendar-event badge ~for="item?.events" :data="$for.item" :title="$for.item.title" :$item="$for.item.$item"></oda-calendar-event>
     `,
     item: null,
+    date: null,
     $listeners: {
         tap(e) {
-            this.$pdp.selectMonthDay(this.item)
+            this.$pdp.selectMonthDay(this.date)
         }
     }
 })

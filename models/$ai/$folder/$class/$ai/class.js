@@ -25,63 +25,59 @@ export default {
         effort: '',
     },
     METADATA: {
-        FIELDS: {
-            id: 'FIELDS',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'protocol',
-                type: 'String',
-                placeholder: 'openai | anthropic | gigachat | custom',
-                required: true,
-            }, {
-                id: 'baseUrl',
-                type: 'String',
-                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/chat/completions',
-                required: true,
-            }, {
-                id: 'apiKey',
-                type: 'String',
-                placeholder: 'sk-...',
-            }, {
-                id: 'token',
-                type: 'String',
-                placeholder: 'Authorization key (GigaChat OAuth)',
-                required: true,
-            }, {
-                id: 'authUrl',
-                type: 'String',
-                placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/oauth',
-            }, {
-                id: 'scope',
-                type: 'String',
-                placeholder: 'GIGACHAT_API_PERS',
-            }, {
-                id: 'model',
-                type: 'String',
-                placeholder: 'GigaChat-Pro',
-                required: true,
-            }, {
-                id: 'maxTokens',
-                type: 'Number',
-                placeholder: '4096',
-            }, {
-                id: 'capabilities',
-                type: 'String',
-                placeholder: 'chat, stream, effort',
-            }, {
-                id: 'effort',
-                type: 'String',
-                placeholder: 'off | low | medium | high',
-            }, {
-                id: 'functionCalling',
-                type: 'Boolean',
-                placeholder: 'false',
-            }, {
-                id: 'trustLevel',
-                type: 'Number',
-                placeholder: '0',
-            }],
-        },
+        FIELDS: [{
+            id: 'protocol',
+            type: 'String',
+            placeholder: 'openai | anthropic | gigachat | custom',
+            required: true,
+        }, {
+            id: 'baseUrl',
+            type: 'String',
+            placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/chat/completions',
+            required: true,
+        }, {
+            id: 'apiKey',
+            type: 'String',
+            placeholder: 'sk-...',
+        }, {
+            id: 'token',
+            type: 'String',
+            placeholder: 'Authorization key (GigaChat OAuth)',
+            required: true,
+        }, {
+            id: 'authUrl',
+            type: 'String',
+            placeholder: 'https://ngw.devices.gigachat-api.ru/api/v2/oauth',
+        }, {
+            id: 'scope',
+            type: 'String',
+            placeholder: 'GIGACHAT_API_PERS',
+        }, {
+            id: 'model',
+            type: 'String',
+            placeholder: 'GigaChat-Pro',
+            required: true,
+        }, {
+            id: 'maxTokens',
+            type: 'Number',
+            placeholder: '4096',
+        }, {
+            id: 'capabilities',
+            type: 'String',
+            placeholder: 'chat, stream, effort',
+        }, {
+            id: 'effort',
+            type: 'String',
+            placeholder: 'off | low | medium | high',
+        }, {
+            id: 'functionCalling',
+            type: 'Boolean',
+            placeholder: 'false',
+        }, {
+            id: 'trustLevel',
+            type: 'Number',
+            placeholder: '0',
+        }],
     },
 
     /** Кэш access token для протоколов с OAuth */

@@ -141,6 +141,7 @@ const writeTool = {
         'Новый класс WORK (ребёнок $provider и т.п.) — tool create, не write в несуществующий meta.',
         'После create или правки class.js / устройства класса — обнови readme.md в storage_folder точки (у класса = meta: назначение, устройство, контракт = текущий class.js).',
         'Не выдумывай путь и не выдумывай тело файла. Не обращайся к пользователю.',
+        'png/jpg/webp/svg — агент image (generateImage), не write.',
     ].join('\n'),
     prompt: [
         'Первая строка — путь файла в WORK.',
@@ -159,6 +160,8 @@ const writeTool = {
         if (block.done || !block.path || block.post == null)
             return;
         try {
+            if (isPicturePath(block.path))
+                throw new Error('write: картинка — агент image (generateImage), не write');
             const edit = /SEARCH|REPLACE/.test(block.post);
             const session = params.session;
             const file = await resolveFile(block.path);
@@ -580,6 +583,7 @@ export default {
         'Перед правкой класса — readme из storage_folder в ленте (или explore read). После create/write устройства — обнови тот же readme.md (назначение, устройство, контракт = class.js); в ленту — артефакты class.js/readme.',
         '«Добавь / создай» класс: примеры путей в readme — не доказательство наличия. Нет узла в ls/explore ленты — activation → create. Не закрывай цель отчётом «уже есть» без create/write в ленте.',
         'Проверка — агент check, не повторный create.',
+        'Картинка (png/jpg/webp/svg) — агент image ($ai.generateImage), не write содержимого файла.',
         'Подумай, какие именно действия необходимы.',
     ].join('\n'),
     prompt: `Проведи анализ текущего этапа работы с файлами/классами и сформируй подробный отчёт о его результатах.`,
@@ -1119,6 +1123,10 @@ function isWorkRootPath(path) {
     return p === '/' || p === '' || p === String(WORK?.path || '').replace(/\/+$/, '');
 }
 
+function isPicturePath(path) {
+    return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(String(path || '').split(/[?#]/)[0]);
+}
+
 function isWorkRootItem(item) {
     if (!item || !WORK)
         return false;
@@ -1172,13 +1180,18 @@ async function listTypedFileTypes() {
     if (!fileRoot)
         return [];
     const kids = (await fileRoot.children) || [];
+    const dataRoot = kids.find(f => f.id === '$data');
+    const typed = [
+        ...kids.filter(k => k.id !== '$data'),
+        ...((dataRoot && await dataRoot.children) || []),
+    ];
     const out = [];
-    for (const kid of kids) {
+    for (const kid of typed) {
         const id = String(kid.id || '');
         if (!id.startsWith('$'))
             continue;
         const data = await loadTypeClass(kid);
-        const fields = data?.METADATA?.FIELDS?.fields;
+        const fields = Array.isArray(data?.METADATA?.FIELDS) ? data.METADATA.FIELDS : [];
         if (!data?.when || !Array.isArray(fields) || !fields.length)
             continue;
         out.push({

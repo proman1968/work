@@ -14,8 +14,6 @@ ODA({is: 'oda-button', extends: 'oda-icon',
             @apply --no-flex;
         }
         label{
-            scale: .95;
-            transition: scale .5s;
             display: block;
             align-self: center;
             white-space: nowrap;
@@ -23,9 +21,6 @@ ODA({is: 'oda-button', extends: 'oda-icon',
             text-overflow: ellipsis;
             cursor: inherit;
             text-align: center;
-        }
-        label:hover {
-            scale: 1;
         }
         .icon{
             scale: .8;

@@ -1,8 +1,7 @@
 export default {
     icon: 'editor:mode-edit',
-    allowSave: true,
     get allowUse() {
-        return this.$context?.FIELDS?.fields?.length;
+        return this.$context?.$fields?.then(f => !!f?.fields?.length);
     },
     template: /*html*/`
     <style>

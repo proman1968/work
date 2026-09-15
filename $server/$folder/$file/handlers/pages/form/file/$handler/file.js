@@ -17,12 +17,12 @@ export default {
                 border: none;
             }
         </style>
-        <div ~is="fileControl" :$item :data="url" content flex></div>
+        <div ~is="fileControl" :$item :src="url" content flex></div>
     `,
     $public:{
         allowSave: false,
     },
-    fileControl: 'object',
+    fileControl: 'iframe',
     get url(){
         return this.$item?.url;
     }
