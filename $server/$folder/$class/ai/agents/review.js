@@ -115,7 +115,7 @@ async function runtimeAddrs(params) {
             lines.push('слой пакет: ' + String(root).replace(/\/$/, '') + '/agents/{id}.js — код агента, который исполняется');
     }
     catch { /* нет пакета */ }
-    lines.push('слой $task: тип $file/$task (class.js) — меню, goal, lookOnly; не файл ai.task в профиле');
+    lines.push('слой $task: тип $file/$task (class.js) — меню, goal, фазы need (facts/side); не файл ai.task в профиле');
     lines.push('слой meta: ai/config.js и system.md места исполнения');
     lines.push('слой инвентарь: create ребёнка у родителя (провайдер, журнал) — пикер и состав мира');
     lines.push('копия ai/agents в USER без смены loadAgent не исполняется');

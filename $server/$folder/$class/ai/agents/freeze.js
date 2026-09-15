@@ -65,7 +65,6 @@ const confirmTool = {
         applyActivation(draft, b.content);
         const idGap = skillIdGap(draft.id);
         if (idGap) {
-            delete b.stop;
             b.error = true;
             b.content = 'freeze: ' + idGap;
             return;

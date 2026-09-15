@@ -51,7 +51,7 @@ ODA({ is: 'microchat-panel',
             n?.listen('chat.done', () => this._onDone());
         },
     },
-    /** approve после стрима; «Продолжить» — хвост без строкового stop; report `stop: true` не прячет, пока goal открыта или check в gap */
+    /** Строковый stop — APPROVE. `stop: true` (вопрос/ответ) — штатная пауза, кнопки нет. «Продолжить» только halt stop|crash. */
     get actionButton() {
         if (this.pending) return null;
         const focus = this.$pdp.focusedBlock;
@@ -61,20 +61,13 @@ ODA({ is: 'microchat-panel',
             return { label: stop, role: 'APPROVE', colorMode: 'success-invert' };
         }
         if (this.$pdp.streaming || focus?.type === 'prompt') return null;
-        if (!this.liveOpen) return null;
-        const g = this.data?.goal?.status;
-        const gap = !!this.$pdp.checkGap;
-        if (g === 'done' && !gap) return null;
-        // report stop:true прячет кнопку, кроме открытой goal / done+gap (править форму)
-        if (stop === true && !(g && g !== 'done') && !(g === 'done' && gap)) return null;
+        if (stop === true) return null;
+        const halt = this.data?.halt;
+        if (halt !== 'stop' && halt !== 'crash') return null;
         return { label: 'Продолжить', colorMode: 'info-invert', cancel: false, role: 'AI' };
     },
     get userRole() {
         return String(this.role || this.$item.role || 'USER').toUpperCase();
-    },
-    get liveOpen() {
-        const root = this.data;
-        return !!(root && !root.content && root.items?.length);
     },
     get isDo() {
         return this.data?.mode === 'do';

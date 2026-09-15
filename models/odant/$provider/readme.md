@@ -6,7 +6,8 @@
 
 1. Дети = подключённые модели `$ai` (`ls` / `info deep=2`).
 2. **remote** здесь — список на API по `baseUrl` (канал `$provider/$folder/$class/$ai`).
-3. Недостающие = remote − дети → `create` `$ai` только под `/MODELS/odant`.
+3. Недостающие = remote − дети → `create` `$ai` только под `/MODELS/odant` (не `write` файла).
+4. `model` в class.js = id с remote; id папки — имя узла. Один `model` — один ребёнок.
 
 ## Запреты
 

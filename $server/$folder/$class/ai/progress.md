@@ -1,102 +1,17 @@
 # Прогресс: $class/ai
 
 ## Последние изменения
-- [12:38] form.`approve`: `values` = `answer` (restore после load). Причина: 1789204371291 — живые поля не попадали в JSON, Continue писал дефолты разметки.
-- [02:34] image generate: после `save_file` — `saved: true` (док не предлагает второй Save). Причина: файл уже в work, кнопка Save была активна.
-- [02:18] image `wantedCount`: «N фото / по сезонам» = N generate. Причина: 1789167828473 — «4 фото» считалось как 1 кадр, дальше plan+work.write.
-- [01:39] check: сводка в `content` (enrichTotal и без детей); повторный init не дублирует exist/file. Причина: 1789165968911 — 4 targets ×2, «Продолжить» no-op.
-- [01:28] check `state` — ok/gap (не kind/байты); image: path только после save, не путь модели. Причина: шапка «ok · file $file» / имя модели вместо файла.
-- [00:23] image: N картинок = N `generate` (сцена+файл), не коллаж; меню после image не предлагает `work`; `work.write` png/jpg/svg — отказ. Причина: 1789161436803 — один коллаж, затем fake png/svg через write.
-- [00:13] check write картинки: байты, не OCR. Причина: 1789160658480 — Tesseract `eng` → ложный gap.
-- [13:58] `work.typed`: действие = файл типа (`$file/*/class.js` `when` + `METADATA`) + `save_file` на месте (`message` + `time`). `$ics` — встреча, не `create` класса. Причина: 1789123179476 — «запланируй встречу» ушёл в пустой create.
-- [13:23] `review`: без nested work; диагноз = закон + слой + path. `agents/readme` — этот каталог = runtime. Причина: после APPROVE work угадывал канон; граница — адрес исполнения, не «система/данные».
-- [12:58] Агент `review`: схема ленты → диагноз; nested `work` после APPROVE или brief «исправ». `@review`, не новая goal. Причина: цикл разбора прогона перенести в ту же задачу.
-- [12:37] `total`: один ребёнок с `content` — лифт, не второй fill. Draft по-прежнему не копировать. Причина: 1789119154268 — сид уже свёл, web завис на повторной сводке, `web.content` пуст.
-- [12:29] Ошибка fetch ≠ визит: повтор URL до 2 раз; пустой web снимает тип в корне. `site` не пишет `pages` на task. Причина: 1789118444899 / 1789118943978 — HTTP 500, потом skip site.
-- [12:17] Оркестратор: сборщик с content снимается с меню. Откат «URL = facts». Причина: 1789118130893 — answer без web; 1789117090173 — explore после web.
-- [11:51] Лист `site` — только `draft`. Узел — свой draft + `content` из draft детей (`pages`, как `sites` у web). Подъём в контекст — оба поля. Причина: 1789115600874 — сводка на каждом URL.
-- [11:27] `web`/`site`: пока очередь и бюджет живы — только site, не site|total. В очередь — исходный href (не срез `/`). Причина: 1789115038731 — total на 3/6, hostmap не взят; `/web/` стал `/web` и 404.
-- [11:15] `web` спрашивает агента `site` (не tool/`page`). Fetch → `draft` внутри; наружу только сводка (`content`). `total` не копирует одного ребёнка. Причина: лента и основной цикл ели HTML; тип `page` лишний.
-- [10:28] Агент `web`: URL из нитки/цели — без поиска. `site` — box, дети `page` (fetch → content). Свой URL — обход same-site из markdown-ссылок (до 6). `fetch_url` оставляет `[текст](url)`. Причина: голый URL уходил в поиск; href выкидывались; одна точка мало для «изучи сайт».
-- [10:06] Агент `web` `site`: fetch → `content` (клип 8000), без `draft` и fill-обзора. Как `file.init`. Причина: страница читалась дважды (сеть + LLM), в ленте был пересказ.
-- [14:50] Агент `logs`: bodies — `file:` + peek title/prompt, `entry:` — stub; `read_log_entry` резолвит stub и связанный path; entry дайджестит `.task` (title/prompts/answer). Не work.read. Причина: «чем занимался» видел только время/тип пустых `.logs`.
-- [17:25] Агент `freeze`: удачная лента → `ai/skills/{id}.js` (draft/confirm/write). Меню «запомни». Не дамп task, не overwrite `register-accounts` без флага. Причина: зафиксировать рецепт после прогона, не руками.
-- [17:15] `image.stopOnError`: 404 generate не уходит в html. Причина: 1788962655786.
-- [16:57] Агент `image`: `$ai.generateImage` (capabilities `image`) → файл в work. Мозг задачи — только chat (пикер/hydrate). Причина: 1788960700166 — z-image-turbo в streamChat, 400 does not support chat.
-- [15:42] create `$ai`: тег с `:` `/` больше не отказ — имя папки `safeNodeName`, тег в `model`. Закон на `$class.create` / `save_file`. Причина: 1788957171695 — `x/z-image-turbo:bf16` как id.
-- [15:14] Шум навыка: `skillToolNext` — не повторять ok tool, после create → total; work `expand` (targets check); в боксе-агенте не сбрасывать `using_blocks` на промпт. Причина: 1788954844440 — read несуществующего 01, второй create, check без targets.
-- [14:30] `$task` грузит `ai/skills/`: выбор на новой цели (`@id` / `when`+phrases), `body.skill`, ходы `pipe` вместо меню; движок — `skillStep.system`/`tools`. Причина: прогон рецепта, не спонтанная лента.
-- [14:07] `ai/skills/`: контракт навыка (`when` / `points` / `slots` / `defaults` / `pipe`) и пример `register-accounts` (точки `/REGISTER`). Discover, выбор и replay не подключены. Причина: зафиксировать удачный пайп счетов как рецепт, не дамп task.
-- [23:30] Провайдеры MODELS: meta `$provider` (тип в `$ai/$folder/$class/$provider`, list_remote). Модели остаются `$ai`. tilde: cross-type `parent/$folder/$class/<type>` (как register→account). explore remote только при `type===$provider`; pathFromMap предпочитает `$provider`/leaf. Причина: слой провайдер≠модель без pickProviderPath.
-- [23:12] explore/check `loadItemDevice`: `$class.import()` (tilde), не один meta_file; канал `meta/$folder/$class/<type>` для baseUrl. remote/ask: путь через pathFromMap(brief), без дефолта ls.path каталога; remote без baseUrl — отказ + дети. Без pickProviderPath. Причина: 1788897630079 — remote/ask на /MODELS, тонкий class провайдера без tilde.
-- [22:58] `buildSystemPrompt`: + `storage_folder/readme.md` места (`$context`). Peer-ask / standalone получают контракт класса в system. Explore-tool readme — улика в ленте. Причина: ask без закона домена игнорировал ходы/запреты.
-- [22:45] Readme `/MODELS` и `/MODELS/BIS-Ollama` сжаты до ходов/запретов (улика в ленте, не system). Причина: длинный текст не удерживал remote на пути провайдера.
-- [22:30] explore ls ветки: `info({ deep: 2 })` вместо `-1` (для `/MODELS` — провайдеры + модели). Причина: два слоя канона без безлимитного обхода.
-- [22:26] explore: ls ветки снова `info({ deep: -1 })` (корень `/` — компас). Readme `/MODELS` и `/MODELS/BIS-Ollama` — два слоя (провайдеры → модели); remote на провайдере. Причина: 1788894190976 — ls/remote на `/MODELS`, ask без дерева моделей.
-- [18:10] explore: без ROOT_HINTS и без прыжка в `/MODELS`/`/REGISTER`. Осмотр по слоям (карта `/` → путь только с карты/ls → один уровень детей + readme). ls не deep=-1. Причина: корневые классы — прикладное наполнение, не канон агента.
-- [18:05] explore: ROOT_HINTS журнал/счета/касса → `/REGISTER`; pathFromMap по label/типу карты; после map — seed readme+ls целевой ветки (не init=false). Причина: 1788879281146 — read/ls в using без листьев, path не резолвился.
-- [17:55] readme ≠ инвентарь: журнал без «фактов» 10/50 на диске; explore — readme+ls для «добавь», enrichTotal без ложного плана tools; work/оркестратор — не «уже есть» без ls/create. Причина: 1788878813069 — цель «добавь кассу» закрыта чтением readme без create.
-- [17:45] create: в class.js обязательно `icon` (предок/соседи/смысл); пример `$account` в prompt; check meta — gap без `icon`. Readme `$account` и журнала — icon обязателен. Причина: счета/классы без иконок в дереве.
-- [17:35] REGISTER: тип `$account` в `$register/$folder/$class/$account` + базовый readme; счета `10`/`50`/`5001`/`5002` — одна meta `$account`; readme журнала — create `$account`. work.ensureClassReadme пишет в meta по `type` create. Причина: dual `$class`+`$register` → meta_folder брал `$class`, labels не видны.
-- [16:50] «площадка» → «система» в UI/агентах (Карта системы, осмотр системы, …). Причина: «площадка» звучит чужеродно.
-- [16:30] Инвариант readme: explore — обращение к item → read `storage_folder/readme.md`; work — перед правкой readme, после create/write class.js обновить тот же readme; check — write class.js без актуального readme = gap; меню оркестратора — explore через readme. Причина: журнал/счета и др. классы без readme модель угадывала FIELDS.
-- [15:50] need=facts закрывает только `answer`/`report` (`FACTS_EVIDENCE`); explore/web/logs — сбор, после них меню ведёт в answer. explore `enrichTotal` = склейка items (без map), не LLM-пересказ; сравнение A/B — meta обоих. Причина: 1788868837392 — goal done после explore без ответа человеку; total выдумал meta Local/BIS (example.com).
-- [14:55] Evidence `.md` в ленте/доке без `` ```markdown `` (рендер как form); `.js` — fence. work `artifactBody` + check `fileReport`; viewContent снимает старый fence у path `.md`. Причина: readme в блоке/доке показывал сырой MD, по ссылке form — нормально.
-- [14:45] explore: `pickProviderPath` — токен brief ∈ имени провайдера (`ollama` → единственный `/MODELS/BIS-Ollama`); remote не жжётся на голом `/MODELS`. Причина: 1788867632272 — ls есть, remote в using без блока, ask/work без diff.
-- [14:35] Откат «сразу question»: меню — сначала explore, question только если после фактов критерий неоднозначен; explore — «недостающие <провайдер>» = remote − ls, имя провайдера в реплике = путь с карты. Гард `modelGrounded` и `expand` оставлены. `providerPathByName`: имя провайдера в реплике → `/MODELS/<id>` по живым детям (ls/meta/remote), карта корня их не показывает. Причина: 1788866899775 — question до осмотра; после «bis-ollama» ls/meta/remote сгорели с `init=false` (путь не резолвился) → снова question вместо remote/diff.
-- [14:25] Против invent-create. work.create: `model` не из не-assistant сообщений (remote/ls/реплика) → отказ «нет факта». explore: `expand` (листья-факты в контекст вместо total), ask = peer. Причина: 1788865825648 — «добавь недостающие модели ollama» → peer-ask, затем 12 create из головы (activation с выдуманным meta.models).
-- [13:05] Шапка: русский `label` (не id type); 2-й слот только ссылка — WORK form / http `_blank`. Причина: thinking+Думаю маслом.
-- [12:50] Шапка ленты: **type | path | state** (иконка остаётся); агенты не кладут path в label — detail в `state`. Причина: type читался только из иконки.
-- [12:35] Файл в ленте — один тип `file` (check и work); check: `exist` + `file` (class.js/readme.md/файл write), реальный path, тело в content, критерий в `crit`; убраны типы meta/readme/content/artifact. Причина: 1788859406397 — `type: readme` — тип блока по имени файла.
-- [12:25] check: только факт create/write (exist + meta читается + readme/content); убраны expect.model/label и expectModelNear. Причина: 1788858416648 — чужой model у второго create → ложный gap → planning/web.
-- [12:05] create: batch — все классы одним fill (секции), блок на класс; dropUsed только при новом классе, иначе тип сожжён → total; убраны `maybeAllowAnotherCreate`/`modelsStillNeeded`; `doc`/artifact только у созданного; устройство readme — `meta_file` созданной точки. explore `doc`. Причина: 1788857474018 — create того же path ×6 (условие цикла у нас, операнд у LLM).
-- [11:45] Движок: `init===false` = «tool здесь нечего делать» → тип остаётся в using_blocks (меню монотонно сужается, без счётчиков). work.read: fill→path→recalc; `doc` ставит tool после done. Причина: 1788856240964 — после activation петля pick(read)→init false→save.
-- [11:20] work create/write: evidence в ленту — `doc` + WORK-ссылки + тела class.js/readme (тип `artifact`); check без изменения роли. Причина: 1788854841637 — check ok, отчёт без содержимого.
-- [11:05] create: уникальный `model` среди детей (`$class.create` + work); без ignore — dropUsed только после нового create / если ещё needed tags; readme из устройства. Причина: 1788853754988 — 3 id на один model, петля.
-- [10:50] `meta_file`: await `meta_folder.files`; readme create → `meta_folder.save_file`; check читает readme из meta. Причина: 1788852757790 — `files.find is not a function`, readme «нет» после ok.
-- [10:25] check: exist + meta/match + readme (класс) / content (файл); work create → readme.md. Причина: постусловие ≠ «путь есть»; точка самодокументирована.
-- [10:10] check: контракт `targets` (все create/write) → exist по каждому; `goalDone` только полное покрытие; `enrichTotal` сводка. Убраны forceCheckDone / «любой ok». Причина: 1788850832971 — один exist, goal done, дубль строк.
-- [10:00] check: путь с пробелами; без ignore; после ok exist → using=[exist,meta] + goalDone по любому ok. Причина: 1788850024575 — ok exist, петля на урезанном `exaone3.5`.
-- [18:20] агент `check` (exist/meta → goalDone); work без goalDone; create skip если path уже в run или на диске. Причина: 1788793771061 — create ok×3, зависание без проверки.
-- [02:30] logs: «вчера/сегодня» → ISO; bodies + `ext` (ics/eml/task); `entry:` вместо `file:`; thinking/work — журнал не через work.read. Причина: зонд «чем занимались» брал сегодня и уходил читать .logs файлами.
-- [02:15] explore `ls` ветки: `info({ deep: -1 })` компактным деревом (path/type/label); корень `/` — по-прежнему один уровень. Причина: зонд моделей останавливался на провайдерах без листьев.
-- [02:05] Слои WORK: thinking → explore для строения; `work.search` только внутри класса (путь+запрос, запрет корня); `allowReasoning` у сложных агентов/thinking; reactor Array без `[R]` не трогает deps (xenova). Причина: зонд «какие модели» ушёл в глобальный search и краш embedding.
-- [01:45] work/explore/logs: динамический `label` бокса («Файлы: читаю /path», «Осмотр: ls /…», «Журнал: …»). Причина: в ленте было неясно, чем и где занят агент.
-- [01:30] `explore` ORIENTATION: один ls = компас, не ответ; спуск/ask листьев; total только по items; без сценария «модели». Причина: зонд — пример; прогон остановился на провайдерах и выдумал ls глубже.
-- [01:25] RAG: skip скрытых `.…`; TEXT_EXTS +`task`/`ai`/…; kreuzberg только whitelist (не ico/unknown) — тихий skip. Причина: warn `.task`, `.clineignore`, `image/x-icon`.
-- [01:20] RAG: `exclude_for_rag` = `.git`/`node_modules`/`.cursor`/`.vscode`; `folder.rag` skip `isInherit`; extract — `real_dir` + `md` в TEXT_EXTS. Причина: warn embeddings на `.git` и призраках `$group/.../readme.md`.
-- [01:15] Агент `logs`: dates / bodies / entry поверх `$class.logs` и `read_log_entry`; класс из пути или place (`engine.$context`). Read-only. Причина: хронология процессов и взаимодействий — отдельная роль от explore/work.
-- [01:10] Агент `explore`: карта/ls/readme/ask + ORIENTATION вынесены из `work`. `work` — только файлы (search/read/write/activation). `web` → локальное WORK это explore. Причина: меню оркестратора стабильно отделяет осмотр системы от записи файлов.
-- [00:50] `loadAgent` — агенты из пакета `_aiPackage()` (parent метода с `agents/`), не `$context.meta_folder` через ~. ask: `Object.create(engine)` + `$context = target`; peer без ~/ai. `loadConfig`/`system.md` — meta target, иначе пакет движка. init получает `engine`. Причина: ask /MODELS — `importScript` of undefined (у peer нет ai/agents).
-- [00:40] `work` tool `ask`: peer `$class` → `Object.create(prompt)` + свой `$context`; ответ в ленте; ORIENTATION — истина домена через ask. Parallel — следующий. Причина: класс сам отвечает за содержимое (зонд моделей), не имена папок.
-- [00:20] `work` карта/ls: только `$class` + type/label/note/readme; контракт «ls → read readme»; read пути класса → `readme.md`. Причина: ориентация по канону WORK, не по мусору репо (.git/node_modules).
-- [00:05] `work`: tool `ls`; `read`/`ls` без пути → `false` (повторный pick); путь с карты/`ROOT_HINTS`. Движок: `init===false` → снова `turn`, не `total`. `web` description — не для локального WORK. Причина: прогон моделей — пустой read валил work, уход в web.
-- [23:40] `work`: легенда ориентации в system + `init` кладёт `[карта /]` (дети корня) в ленту и messages. Причина: агент должен ориентироваться в строении WORK осмотром, а не памятью/web (зонд «какие модели»).
-- [19:16] `execute` не принимает `location`/`tz` (никогда); они только у `buildSystemPrompt` для `on_save`. Handoff несёт уже готовый `body.system`.
-- [11:25] Убрана передача `owner` / `params.$context`: класс исполнения только `this.$context`. Причина: отдельный owner был лишним слоем; `$context` не переписывается.
-- [15:20] Владелец исполнения — `params.$context` (ставит HTTP-диспетчер или таск), `this.$context` — фолбэк; `loadAgent`/`loadConfig`/`buildSystemPrompt` берут owner аргументом. Причина: прогон — падение `undefined (reading 'meta_folder')`: привязка `item.$context` разделяемая, её перебивает параллельный `_methods` другого элемента.
-- [14:35] `prompt/$method` — единый движок агентов: контракт `live` (send/save/stopped/wait/mode) от владельца ленты; standalone REST — тихий live c path класса. Причина: одна реализация для one-shot и живой ленты $task.
+- [17:12] Ошибка create не уводит с create. Write не валит бокс и не оставляет `mode: do`. Activation в меню только после ok read.
+- [17:00] После APPROVE activation — только create. Search убран из do. Write в отсутствующий класс не валит бокс (`need=create`).
+- [16:25] Агенты — только ход. `$ai` / MODELS / odant убраны из work/explore/image. Закон места — в readme `/MODELS`.
 
 ## В работе
-- Parallel fan-out `ask` по нескольким классам (тот же Object.create `$context`).
+- Нет.
 
 ## Ключевые решения
-- Решение: ls ветки explore — `info({ deep: 2 })`; `/MODELS` readme — провайдеры vs модели; remote на провайдере. Причина: два слоя без unlimited deep=-1.
-- Решение: check — постусловие операции (путь, class.js читается, readme/content), не сверка предметных полей device. Expect — только из своей секции evidence. Причина: 1788858416648 — model одного create прилип к другому → ложный gap.
-- Решение: продолжение цикла tool — только по факту прогресса в его же результате (новый класс/файл), не по внешней оценке «ещё нужно». Операнды — пачкой за один fill. Причина: условие цикла у кода + операнд у LLM = незавершаемость.
-- Решение: `init===false` сжигает тип в боксе (не снимает с using). Операнды tools детерминированы из ленты — между двумя pick улик не прибавляется, повтор бессмыслен; сужающееся меню гарантирует завершение. Причина: 1788856240964 — зависание после activation.
-- Решение: evidence create/write — блок с `doc` + WORK-ссылки + тела (тип `artifact` в ленте); check остаётся постусловием ok/gap. Причина: человек читает результат в доке, не checklist.
-- Решение: журнал только `$class.logs` / `read_log_entry` (день, ext, stub и `row.path`); дайджест связанного файла внутри logs, не work по history. Причина: иначе модель читает .logs как файлы и путает день / не видит смысл задач.
-- Решение: explore ls ветки — `info({ deep: -1 })` (не один уровень имён); карта `/` — компас. Причина: состав домена (модели под провайдерами) виден сразу, без серии ls/ask.
-- Решение: work.search — путь класса + запрос, запрет корня WORK; строение системы — explore. Причина: глобальный semantic_search ломает слои и роняет xenova/RAG.
-- Решение: `allowReasoning` у сложных агентов; CoT только при effort бара ≠ off. Причина: гейт был, флаг не стоял.
-- Решение: explore — глубина до фактов домена (ls/ask вниз); один уровень имён — компас; total без выдуманных шагов. Причина: любой доменный зонд (не только модели), иначе итог по контейнерам.
-- Решение: RAG — `exclude_for_rag` + skip `isInherit`; extract по `real_dir` / text `md`. Причина: semantic_search по корню сыпал warn на `.git` и tilde-призраки `$group/.../readme.md`.
-- Решение: explore — осмотр/ask; work — файлы; web — интернет; logs — журнал класса. Причина: одна работа на агента, стабильное меню.
-- Решение: код агентов — пакет движка (`_aiPackage`); `$context` peer — место/домен; ~ у peer для ask не обязателен. Причина: ask чужого класса не должен требовать наследования `ai/agents`.
-- Решение: кросс-класс — `ask` в explore, не подмена за чужой домен; `$context` через `Object.create`. Причина: каждый `$class` отвечает за своё содержимое.
-- Решение: живость ленты — контракт `live` (null-object для REST), а не второй код-путь. Причина: один движок, персист и события принадлежат владельцу ленты.
-- Решение: улики едут диалогом `messages` (handoff-проекция от заказчика), system — всегда локальный. Причина: место исполнения обязано давать свой `system.md ~`.
+- Решение: ошибка create не жжёт ход; activation без ok read не в меню; write/throw не оставляет do. Причина: лента `/PROVIDER/ODANT` → write фразой → второй work сразу в do.
+- Решение: после принятой activation меню do = create. Причина: pick search/write вместо create в несуществующий путь.
+- Решение: пакет агентов не знает прикладной каталог. Причина: `if (type === '$ai')` в work — не принцип create.
 
 ## Блокеры / Открытые вопросы
 - Нет.

@@ -9,10 +9,14 @@
  *   исполнитель дописывает локальные слои (место, agent/tool.system в fill).
  *   Нет system — standalone: buildSystemPrompt({ session }) (без location/tz — их в execute не бывает).
  * block — собрать/продолжить (мутируется на месте — живая лента владельца).
- * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
+ * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает; `stop` на блоке не снимать;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
- * круг / вложенный агент — снова execute(params), не HTTP.
- * tool/agent.init получают engine: this (для ask peer без ~/ai у цели) и task (владелец ленты, если передан).
+ * круг / вложенный агент — callAgent({ agent, brief }): поручение в brief/prompt,
+ *   итог { ok, content, error, block }; не HTTP.
+ * tool/agent.init получают engine, callAgent(id, brief), task.
+ * ok create в боксе → сразу total (не pick write).
+ * принятая activation или write.need=create — nextIds только create (даже если create сожжён).
+ * activation в меню — после ok read в этом боксе.
  */
 
 export default {
@@ -84,6 +88,8 @@ export default {
         catch (e) {
             block.error = true;
             block.content = [block.content, e.message].filter(Boolean).join('\n\n');
+            if (typeof agent.finish === 'function')
+                await agent.finish({ block, live, session, box: params.box });
             await live.save?.();
             if (own)
                 live.send({ type: 'chat.done' });
@@ -136,6 +142,7 @@ export default {
                     engine: this,
                     task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
                 await live.save?.();
                 if (live?.stopped) {
@@ -158,14 +165,18 @@ export default {
             await agent.recalc({ block, box: params.box, messages, session, live, exec, task: params.task });
 
         const ids = nextIds(agent, block, toolIds);
+        if ((block.items || []).some(b => b.type === 'create' && b.done && !b.error))
+            return this.total(ctx, tools);
         const skillTools = params.skillStep?.tools;
-        const next = skillTools?.length
+        const rawNext = skillTools?.length
             ? skillToolNext(skillTools, ids, block)
             : await this.pick(ctx, ids, tools, mode);
         if (live?.stopped) {
             delete block.inited;
             return;
         }
+        const picked = splitPick(rawNext, ids.concat(['stop', 'total']));
+        const next = picked.id;
         if (!next || next === 'stop' || next === 'total')
             return this.total(ctx, tools);
 
@@ -188,6 +199,7 @@ export default {
                     engine: this,
                     task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
                 await live.save?.();
                 if (live?.stopped) {
@@ -241,7 +253,6 @@ export default {
                 }
                 if (res.content)
                     messages.push({ role: 'user', content: String(res.content) });
-                delete child.stop;
                 await live.save?.();
             }
             return this.execute({
@@ -252,35 +263,58 @@ export default {
             });
         }
 
-        // вложенный агент — в ленту до execute (как tool: push → save → ход)
-        const sub = { type: next, time: Date.now() };
-        block.items.push(sub);
-        await live.save?.();
-        await this.execute({
-            ...params,
-            agent: next,
-            prompt: undefined,
-            block: sub,
-            box: block,
-        });
+        await this.callAgent(ctx, { agent: next, brief: picked.brief, parent: block });
         if (live?.stopped) {
             delete block.inited;
             return;
         }
-        if (sub.skip) {
-            const i = block.items.indexOf(sub);
-            if (i >= 0)
-                block.items.splice(i, 1);
-            await live.save?.();
-        }
-        else
-            pushLift(messages, sub);
         return this.execute({
             ...params,
             agent: type, model, messages, session, live,
             prompt: undefined,
             block,
         });
+    },
+
+    /**
+     * Вызов субагента из потока родителя: brief → prompt ребёнка, итог в блок и в messages.
+     * @returns {{ ok: boolean, agent: string, content?: string, error?: boolean, skip?: boolean, state?: string, block: object }}
+     */
+    async callAgent(ctx, spec = {}) {
+        const { agent: id, brief, parent } = spec;
+        const box = parent || ctx.block;
+        const live = ctx.live;
+        box.items ??= [];
+        const sub = { type: id, time: Date.now() };
+        const text = String(brief || '').trim();
+        if (text)
+            sub.brief = text;
+        box.items.push(sub);
+        await live?.save?.();
+        await this.execute({
+            ...ctx.params,
+            agent: id,
+            prompt: text || undefined,
+            block: sub,
+            box,
+            skillStep: undefined,
+        });
+        if (sub.skip) {
+            const i = box.items.indexOf(sub);
+            if (i >= 0)
+                box.items.splice(i, 1);
+            await live?.save?.();
+            return { ok: false, skip: true, agent: id, block: sub };
+        }
+        pushLift(ctx.messages, sub);
+        return {
+            ok: !sub.error,
+            agent: id,
+            content: sub.content,
+            error: sub.error ? true : undefined,
+            state: sub.state,
+            block: sub,
+        };
     },
 
     /** Итог бокса: один ребёнок с content — лифт; только ошибки — агрегат; draft/несколько — fill. */
@@ -387,7 +421,7 @@ export default {
                     content: [
                         agent[mode]?.system || agent.system,
                         block.brief && ('Тема: ' + block.brief),
-                        'Выбери следующий шаг одним словом из списка, без знаков и пояснений.',
+                        'Выбери следующий шаг: id из списка. Субагенту можно дописать поручение в той же строке.',
                         '[menu]',
                         ...lines,
                     ].filter(Boolean).join('\n'),
@@ -396,9 +430,10 @@ export default {
         });
         if (live?.stopped)
             return;
-        const word = String(response.content || '').trim().split(/\s+/)[0]
+        const line = String(response.content || '').trim().split('\n')[0] || '';
+        const word = line.split(/\s+/)[0]
             ?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
-        return ids.includes(word) ? word : ids[0];
+        return ids.includes(word) ? line : ids[0];
     },
 
     async fill(block, { agent, model, messages, live, box, effort }) {
@@ -618,6 +653,17 @@ export default {
     },
 };
 
+/** id из ответа pick + хвост строки = brief субагенту. */
+function splitPick(raw, ids) {
+    const line = String(raw || '').trim();
+    if (!line)
+        return { id: '', brief: '' };
+    const word = line.split(/\s+/)[0]?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
+    if (ids.includes(word))
+        return { id: word, brief: line.slice(word.length).trim() };
+    return { id: '', brief: '' };
+}
+
 /** Навык: первый unused tool; уже успешный — пропуск; после ok create — итог. */
 function skillToolNext(order, ids, box) {
     const items = box?.items || [];
@@ -666,9 +712,32 @@ function nextIds(agent, block, toolIds) {
         if (!used.includes(id) && !ids.includes(id))
             ids.push(id);
     }
+    if (createFirst(block, toolIds))
+        return ['create'];
+    if (ids.includes('activation') && !okRead(block)) {
+        const i = ids.indexOf('activation');
+        if (i >= 0)
+            ids.splice(i, 1);
+    }
     if (agent.prompt && !used.includes('total') && !used.includes('stop'))
         ids.push('stop');
     return ids;
+}
+
+/** После APPROVE activation или write в отсутствующий класс — create, даже если тип сожжён. */
+function createFirst(block, toolIds) {
+    if (!toolIds.includes('create'))
+        return false;
+    const items = block.items || [];
+    if (items.some(b => b.type === 'create' && b.done && !b.error))
+        return false;
+    if (items.some(b => b.type === 'activation' && b.state === 'принято'))
+        return true;
+    return items.some(b => b.type === 'write' && b.need === 'create');
+}
+
+function okRead(block) {
+    return (block.items || []).some(b => b.type === 'read' && b.done && !b.error);
 }
 function samePlace(a, b) {
     if (!a || !b) return false;

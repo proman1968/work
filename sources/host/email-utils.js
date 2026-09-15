@@ -139,9 +139,9 @@ export function imapFolderToBox(imapPath) {
         return '';
     if (name === 'inbox')
         return 'inbox';
-    if (name === 'outbox' || /sent/.test(name))
+    if (/outbox|sent|отправленные/.test(name))
         return 'outbox';
-    if (/trash|deleted|bin/.test(name))
+    if (/trash|deleted|bin|удаленные/.test(name))
         return 'trash';
     return '';
 }

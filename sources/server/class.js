@@ -392,10 +392,10 @@ export class $class extends $folder{
 
     /**
      * Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли.
-     * Имя папки = params.role || 'GUESTS' (ADMIN | BOSS | USER | GUEST | GUESTS).
+     * Имя папки = params.role || 'GUEST' (ADMIN | BOSS | USER | GUEST).
      */
     async work_zone(params = {}){
-        const role = params.role || 'GUESTS';
+        const role = params.role || 'GUEST';
         return this.meta_folder._get_next_item(role, FS.$folder);
     }
     /** @deprecated используй work_zone */
@@ -736,7 +736,7 @@ export class $class extends $folder{
                 return $class.ZONES.WORK;
             }
             if (p.id === 'guests')
-                return $class.ZONES.GUESTS;
+                return $class.ZONES.GUEST;
             // Достигли класса — стоп
             if (p instanceof $class && p !== this)
                 break;
@@ -902,7 +902,7 @@ export class $class extends $folder{
     _isGuestVisible(item, params) {
         if (item === this)
             return true;
-        if (this.resolveZone(item) === $class.ZONES.GUESTS)
+        if (this.resolveZone(item) === $class.ZONES.GUEST)
             return true;
         // Логи гостя пишутся в класс (meta_folder/logs) — нужны для чата
         const path = item?.path ?? '';
@@ -996,7 +996,7 @@ export class $class extends $folder{
     get users(){
         return this._localRole($class.ROLES.USER);
     }
-    /** Гости класса из #security.GUESTS (без наследования). */
+    /** Гости класса из #security.GUEST (без наследования). */
     get guests(){
         return this._localRole($class.ROLES.GUEST);
     }

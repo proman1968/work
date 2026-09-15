@@ -78,7 +78,6 @@ export default {
         const waiting = findWaitingBlock(body, this._waiters);
         if (!waiting)
             return false;
-        delete waiting.stop;
         waiting.state = 'уточнено';
         const parent = parentOfBlock(body, waiting);
         if (parent)
@@ -164,6 +163,7 @@ export default {
 
         session?.send?.({ type: 'chat.start', path: this.short });
         await this._init(params);
+        await this._clearHalt(session);
 
         try {
             switch (role) {
@@ -183,7 +183,6 @@ export default {
                                 task: this,
                             });
                             form.state = 'принято';
-                            delete form.stop;
                             dropUsedType(body, 'work');
                             dropUsedType(body, 'check');
                             dropUsedType(body, 'report');
@@ -219,7 +218,6 @@ export default {
                     } else {
                         params.block.state = 'отклонено';
                     }
-                    delete params.block.stop;
                     delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
@@ -338,6 +336,7 @@ export default {
                     return agentResult(agent, turn.block, { waiting: true });
                 }
                 if (!turn.loop) {
+                    await this._noteCrash(turn.block, session);
                     session?.send?.({ type: 'chat.done', path: this.short });
                     if (agent) {
                         const box = findAgentBlock(await this.body, agent) || turn.block;
@@ -369,6 +368,7 @@ export default {
             params.box ??= await this.body;
             params.block = { type: 'error', content: e.message };
             await this._push_block(params);
+            await this._noteCrash(params.block, session);
             session?.send?.({ type: 'chat.done', path: this.short });
             if (agent)
                 return { ok: false, agent, error: e.message, content: e.message };
@@ -395,6 +395,7 @@ export default {
             // агент снова без итога и без стопа — не крутить цикл, ждать человека
             if (!hasBody(b) && !b?.error)
                 return { loop: false, block: b };
+            liftStepIf(params.box, b);
             if (this._settleFactsGoal(b)) {
                 await this._save(session);
                 return { loop: false, block: b };
@@ -441,37 +442,44 @@ export default {
         let using_blocks = params.box.using_blocks ??= [];
         // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
         next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
-        // сбор уже в ленте — не предлагать сборщиков и не дублировать сводку report
-        const gathered = (params.box?.items || []).some(b => COLLECTORS.has(b.type) && b.content && !b.error);
+        const goal = this.body.goal;
+        const need = goalNeed(goal);
+        const hasAct = hasActEvidence(params.box);
+        const checkOk = checkFullyOk(lastOfType(this.body, 'check'));
+        const gathered = hasCollectorEvidence(params.box);
         if (gathered)
-            next = next.filter(id => !COLLECTORS.has(id) && id !== 'report');
-        // осмотр ≠ поручение писать: нет глагола (создай/запланируй/встреч…) — work не в меню
-        const lookOnly = gathered && !asksWrite(lastPromptText(params.box));
-        if (lookOnly)
-            next = next.filter(id => id !== 'work');
-        // картинка / N файлов с изображениями — image.generate, не work.write
+            next = next.filter(id => !COLLECTORS.has(id) && id !== 'report' && id !== 'planning');
+        if (need === 'facts')
+            next = next.filter(id => !ACTORS.has(id) && id !== 'check');
+        if (need === 'side' && !gathered)
+            next = next.filter(id => !ACTORS.has(id));
+        if (need === 'side' && !hasAct)
+            next = next.filter(id => id !== 'check');
+        // картинка — image.generate; work.write png ломает процесс
         if (asksImage(lastPromptText(params.box)))
             next = next.filter(id => id !== 'work');
         // после question без субагента / pursue — answer не в меню, пока goal open
-        const goal = this.body.goal;
         if (goal && goal.status !== 'done' && goal.resume?.continue)
             next = next.filter(id => id !== 'answer' && id !== 'form' && id !== 'question');
 
         let choice;
+        let pickBrief = '';
         // незакрытый todo → сразу step (не fill и не меню report/question)
         const planned = params.box?.todo?.steps || [];
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
         if (todoFocus && planned.length > realSteps.length && next.includes('step'))
             choice = 'step';
-        else if (lookOnly && next.includes('answer'))
-            choice = 'answer';
-        else if (goal?.resume?.continue && asksWrite(lastPromptText(params.box)) && next.includes('work'))
-            choice = 'work';
         else
             choice = await this._skillChoice(using_blocks);
         if (!choice) {
-            if (attachmentsNeedDigest(this.body) && next.includes('thinking'))
+            if (need === 'facts' && gathered && next.includes('answer'))
+                choice = 'answer';
+            else if (need === 'side' && hasAct && !checkOk && next.includes('check'))
+                choice = 'check';
+            else if (attachmentsNeedDigest(this.body) && next.includes('thinking'))
                 choice = 'thinking';
+            else if (need === 'side' && !gathered && next.includes('explore'))
+                choice = 'explore';
             else if (!next.length)
                 choice = this.pipe.total ? 'total' : null;
             else if (next.length === 1)
@@ -483,42 +491,31 @@ export default {
                     || n?.description || n?.inject || '';
                 return id.toUpperCase() + ' - ' + cap + ';';
             });
-            const need = goal?.need || 'side';
-            const hasSideEvidence = (params.box?.items || []).some(b =>
-                (b.type === 'work' || b.type === 'create' || b.type === 'write'
-                    || b.type === 'image' || b.type === 'generate')
-                && b.content && !b.error);
             let menu = [
-                'Выбери в menu пункт, который двигает открытую [goal] из контекста. Выбирай не по порядку, а по смыслу.',
-                'Последняя реплика пользователя — уточнение или данные к goal, не новая задача (пока goal не done).',
-                'Пункты-остановки (вопрос, форма) — только если без ответа человека продолжить объективно нельзя.',
-                'Сначала факты системы (explore по слоям: карта `/` → узел с карты → readme + ls детей; состав — из ls, не из примеров в readme и не из памяти корней), потом действие; question — только когда после осмотра критерий всё ещё неоднозначен, не вместо осмотра.',
-                'Один агентный ход, если его достаточно — не planning «на всякий случай».',
-                '«сохрани / запиши / в файл / создай файл» — всегда work (write), не report и не explore.',
-                '«запланируй / встреча / событие календаря» — work typed ($ics по when типа), не create класса.',
-                '«нарисуй / изображение / картинка / фото / N файлов с картинками / по сезонам» — агент image: N generate (по файлу), не коллаж и не work.write.',
-                '«запомни / навык / рецепт» — агент freeze (лента → ai/skills/{id}.js), не work.write и не report. @freeze. Не класть freeze в pipe навыка.',
-                '«не то / разбор ленты» — агент review (закон + слой + path), не work. @review. Не класть review в pipe навыка.',
-                '«подключи / добавь модель / создай класс / добавь счёт» — explore (readme+ls), затем work create по факту отсутствия в ls; не report «уже есть» без create/write в ленте.',
-                hasSideEvidence
-                    ? 'В ленте уже create/write — check (exist/meta), не повторный create того же пути и не planning.'
-                    : 'check — только после факта create/write в ленте; до действия не выбирай check.',
-                'report — только сводка в ленту; файл на диске он не создаёт. report не заменяет create и не закрывает side без evidence.',
-                'Состав/инвентарь системы или провайдера — explore (ls, meta, remote), не web «на всякий случай» и не перечень из readme.',
+                'Выбери в menu пункт, который двигает открытую [goal].',
+                'Ответ: id из списка; субагенту можно дописать поручение в той же строке.',
+                'Пункты-остановки (вопрос, форма) — только если без человека продолжить нельзя.',
+                'Один агентный ход. Не planning «на всякий случай».',
                 need === 'facts'
-                    ? 'goal.need=facts: нет фактов в ленте — сбор (explore/web/logs); сводка thinking/report уже есть — answer. Сырые вложения без сводки — thinking, не answer по простыне. Сбор цель не закрывает, закрывает только answer. Не work «на всякий случай».'
-                    : 'goal.need=side: explore или work по смыслу одним ходом; check — постусловие после evidence в ленте, не answer.',
-                'Если разумный default уже есть в контексте — не спрашивай, действуй.',
-                'Ответь одним словом строго из списка, без знаков и пояснений.',
+                    ? 'need=facts: нет фактов — сбор (explore/web/logs); факты в ленте — answer. Сбор цель не закрывает.'
+                    : 'need=side: нет сбора в ленте — explore, не work. После сбора — действие (work/image); после create/write — check; answer без ok check цель не закрывает.',
+                hasAct && !checkOk
+                    ? 'В ленте уже действие — check, не повтор того же пути.'
+                    : (need === 'side' ? 'check — только после create/write в ленте.' : ''),
+                gathered
+                    ? 'Если разумный default уже есть в контексте — не спрашивай, действуй.'
+                    : 'thinking — не сбор. Пока нет explore/web/logs в ленте — не work.',
                 '\n\n[menu]\n',
                 ...lines,
-            ].join('\n');
+            ].filter(Boolean).join('\n');
             let messages = await this.context({ session, prompt: menu });
             let response = await this._streamChat({ messages, silent: true, session });
             if (this._stopped)
                 return { loop: false, block: params.block };
-                choice = menuPick(response.content, next)
+                const picked = menuPickLine(response.content, next);
+                choice = picked.id
                     || (next.includes('thinking') ? 'thinking' : next[0]);
+                pickBrief = picked.brief || '';
             }
         }
 
@@ -526,6 +523,8 @@ export default {
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
+        if (pickBrief)
+            params.block.brief = pickBrief;
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
         // выбранный агент исполняет движок класса (live-контракт), не цикл таска
@@ -544,6 +543,7 @@ export default {
                 return { loop: false, waiting: true, block: b };
             }
             await this._advanceSkillIf(choice);
+            liftStepIf(params.box, b);
             await this._save(session);
             // субагент действия отработал — слот continue больше не нужен
             if (choice !== 'question' && choice !== 'form')
@@ -599,7 +599,7 @@ export default {
     },
 
     /**
-     * Закрыть цель: facts — answer/report; side — report/answer/html, не при gap в check.
+     * Закрыть цель: facts — answer/report; side — answer/report/html только после ok check.
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
@@ -611,8 +611,12 @@ export default {
         const need = goalNeed(g);
         if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
             return false;
-        if (need === 'side' && (!SIDE_EVIDENCE.has(block.type) || lastCheckIncomplete(this.body)))
-            return false;
+        if (need === 'side') {
+            if (!SIDE_EVIDENCE.has(block.type))
+                return false;
+            if (!checkFullyOk(lastOfType(this.body, 'check')))
+                return false;
+        }
         g.status = 'done';
         g.resume = null;
         g.pursue = 0;
@@ -1181,18 +1185,41 @@ export default {
     get model() {
         return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
     },
-    /** Stop: прервать стрим/агента; chat.done гасит pending; дальше start/delta не шлём. */
+    /** Stop: прервать стрим/агента; halt=stop → кнопка «Продолжить»; chat.done гасит pending. */
     async stop(params = {}) {
         this._stopped = true;
-        // отпустить live.wait — иначе движок висит на APPROVE после стопа
         const waiters = this._waiters;
         if (waiters?.size) {
             for (const resolve of waiters.values())
                 resolve({ stopped: true });
             waiters.clear();
         }
+        const body = await this.body;
+        body.halt = 'stop';
+        await this._save(params.session);
         params.session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true, stopped: true };
+    },
+    async _clearHalt(session) {
+        const body = await this.body;
+        if (!body.halt)
+            return;
+        delete body.halt;
+        await this._save(session);
+    },
+    /** Обрыв хода (не штатный stop:true): halt=crash → «Продолжить». Стоп пользователя не затираем. */
+    async _noteCrash(block, session) {
+        const body = await this.body;
+        if (body.halt === 'stop')
+            return;
+        if (block?.stop === true || typeof block?.stop === 'string')
+            return;
+        const collapsed = !!(block?.error || block?.type === 'error'
+            || (block && !hasBody(block)));
+        if (!collapsed)
+            return;
+        body.halt = 'crash';
+        await this._save(session);
     },
     _build_block(type) {
         const node = this.pipe[type] || {};
@@ -1330,10 +1357,9 @@ function releaseStaleStops(box) {
     for (const b of box.items) {
         if (!b.stop)
             continue;
-        // stop === true — вид без шапки (answer/report/question), не wait; не снимать
+        // stop не снимать: фокус уйдёт на новый prompt; строка stop — кнопка, пока блок последний
         if (b.type === 'answer' || b.type === 'report' || b.type === 'question')
             continue;
-        delete b.stop;
         b.state = 'уточнено';
         dropUsedType(box, b.type);
     }
@@ -1439,9 +1465,9 @@ function formatGoalBlock(goal) {
         }
         else {
             lines.push(
-                'need=side: цель — действие в системе; закрывает report / answer / html на корне task, не check и не листья create/write.',
+                'need=side: цель — действие в системе. Закрывает answer / report / html только после ok check.',
+                'Реплика без check цель не закрывает. После create/write следующий ход — check.',
                 'Пока status не done — цель не достигнута; сессия не считается выполненной.',
-                'Реплика пользователю не равна выполнению. Не утверждай side-effect без факта в ленте.',
                 'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
             );
         }
@@ -1456,6 +1482,30 @@ function goalNeed(goal) {
 
 /** Сборщики: после их content меню их больше не предлагает. */
 const COLLECTORS = new Set(['web', 'explore', 'logs']);
+
+/** Действие в системе (не сбор, не реплика). */
+const ACTORS = new Set(['work', 'image', 'create', 'write', 'generate']);
+
+function hasActEvidence(box) {
+    return walkHas(box, b => ACTORS.has(b.type) && b.content && !b.error);
+}
+
+function hasCollectorEvidence(box) {
+    return walkHas(box, b => COLLECTORS.has(b.type) && b.content && !b.error);
+}
+
+function walkHas(box, test) {
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (test(b))
+                return true;
+            if (walk(b.items))
+                return true;
+        }
+        return false;
+    };
+    return walk(box?.items);
+}
 
 function collectorMissed(b) {
     return COLLECTORS.has(b?.type) && b.error && !(b.budget?.ok);
@@ -1472,12 +1522,6 @@ function lastPromptText(box) {
             t = String(b.content);
     }
     return t.trim();
-}
-
-/** Постановка просит писать в систему — иначе после сбора work не предлагать. */
-function asksWrite(text) {
-    return /(?:создай|напиши|запиши|сохрани|добавь|подключи|удали|исправь|поправь|сделай\s+файл|запланир\w*|встреч)\b/i
-        .test(String(text || ''));
 }
 
 /** Картинка / файлы-слайды — image, не work.write png. */
@@ -1517,6 +1561,17 @@ function checkFullyOk(block) {
 function lastCheckIncomplete(root) {
     const chk = lastOfType(root, 'check');
     return !!chk && !checkFullyOk(chk);
+}
+
+function menuPickLine(text, next) {
+    const raw = String(text || '').trim();
+    if (!raw || !next?.length)
+        return {};
+    const id = menuPick(raw, next);
+    if (!id)
+        return {};
+    const cut = raw.replace(new RegExp('^[\\s\\S]*?\\b' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'), '');
+    return { id, brief: cut.trim() };
 }
 
 function clearGoalContinue(goal) {
@@ -1728,6 +1783,13 @@ function stageOpen(block, node) {
 
 function hasBody(b) {
     return !!String(b?.content ?? '').trim();
+}
+
+/** Агент внутри step дал текст — шаг закрыт, иначе пункт 1 не отпускает. */
+function liftStepIf(box, block) {
+    if (box?.type !== 'step' || box.content || !hasBody(block) || block.stop)
+        return;
+    box.content = block.content;
 }
 
 /** Имена файлов из params.includes — постановка, если текста нет. */

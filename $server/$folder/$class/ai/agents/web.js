@@ -16,13 +16,13 @@ export default {
     doc: true,
     nested: ['site'],
     allowReasoning: true,
-    description: 'поиск во внешнем интернете; не для моделей WORK, API провайдера ($ai remote) и путей системы',
+    description: 'поиск во внешнем интернете; не для путей и API дерева классов',
     system: [
         '# Агент: интернет',
         'URL в запросе, цели или нитке — сразу site, без поиска. Иначе поиск уже выполнен при входе.',
         'site — fetch → draft; лист без сводки; узел — content из draft детей. Свой URL — pages внутри site.',
-        'Итог — content детей (лифт одного) или fill из draft+content. Локальная система WORK — explore; файлы области — work.',
-        'Список моделей у провайдера (baseUrl / api/tags) — explore meta+remote, не ollama.com и не library.',
+        'Итог — content детей (лифт одного) или fill из draft+content. Дерево классов — explore; файлы области — work.',
+        'Список с API узла — explore remote, не публичный сайт провайдера.',
     ].join('\n'),
     prompt: [
         'Сводный отчёт по посещённым страницам: только факты по теме задачи.',

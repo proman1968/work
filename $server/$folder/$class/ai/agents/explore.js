@@ -2,17 +2,17 @@
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat, engine }). */
 const MAP_ROOT_LIMIT = 40;
 const INFO_NODE_LIMIT = 200;
-/** Ветка: два уровня вниз (для /MODELS — провайдеры + модели). Не unlimited deep=-1. */
+/** Ветка: два уровня вниз. Не unlimited deep=-1. */
 const LS_BRANCH_DEEP = 2;
 
 const ORIENTATION = [
-    'Ориентация: система WORK — дерево классов. Корневые классы — прикладное наполнение этой поставки: набор любой, их может не быть.',
+    'Ориентация: дерево классов. Корневые классы — прикладное наполнение этой поставки: набор любой, их может не быть.',
     'Осмотр по слоям: карта `/` (дети корня) → выбрать узел с карты → readme узла → ls ветки. Путь — только с карты/ls в ленте.',
-    'Карта `/` — один уровень (компас). ls ветки (не `/`) — `info({ deep: 2 })`: два уровня детей (path/type/label); для /MODELS — провайдеры и модели.',
+    'Карта `/` — один уровень. ls ветки (не `/`) — `info({ deep: 2 })`: два уровня детей (path/type/label).',
     'Факты — только из блоков ленты (карта, ls, readme, ask, meta, remote); не из памяти и не через web.',
     'Карта и ls — только классы (не .git, не node_modules, не обычные папки/файлы).',
     'Устройство item — полное class.js через $class.import() (tilde-merge); не один meta_file. Не info/$public как замена readme.',
-    'Провайдер $provider: подключённые модели = дети $ai; remote = list_remote на пути $provider (baseUrl из tilde/канала). Недостающие = remote − ls. remote/ask — на $provider, не на /MODELS ($ai). ask «нет данных» — не итог.',
+    'remote — list_remote у узла, у которого есть метод (не ls детей). Закон «кого спрашивать» — в readme места.',
     'Item — readme из storage_folder (у класса = meta). Раздел readme «из чего состоит» — контракт слоёв, не инвентарь диска.',
     '«Добавь / создай» — нет узла в ls родителя = create (work), не «уже есть по readme».',
     'В отчёте только то, что есть в items. Не пиши псевдовызовы tool в content — выбирай tools меню.',
@@ -192,19 +192,18 @@ const metaTool = {
     },
 };
 
-/** Живой список моделей у $provider (baseUrl → API), не дети WORK. */
+/** Живой список с API узла (list_remote), не дети дерева. */
 const remoteTool = {
-    label: 'Список у провайдера',
+    label: 'Список у узла',
     icon: 'icons:cloud-circle',
     role: 'user',
-    description: 'list_remote у $provider: модели на API по baseUrl; не ls детей WORK и не web',
+    description: 'list_remote у класса, у которого есть метод; не ls детей и не web',
     system: [
-        '# Режим: remote провайдера',
-        'Первая строка — путь узла $provider (не /MODELS и не модель $ai).',
-        'baseUrl — из полного class.js (tilde / канал $ai). Не выдумывай URL. Не обращайся к пользователю.',
+        '# Режим: remote',
+        'Первая строка — путь класса с list_remote (с карты / ls). Не выдумывай URL. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
-        'Путь $provider с карты / ls.',
+        'Путь класса с карты / ls.',
     ].join('\n'),
     async init(params = {}) {
         const b = params.block;
@@ -212,26 +211,19 @@ const remoteTool = {
             return false;
         const path = resolveRemotePath(b, params.box, params.messages);
         if (!path) {
-            b.content = '[remote]\nнужен путь $provider с карты/ls, не каталог /MODELS';
+            b.content = '[remote]\nнужен путь класса с list_remote (карта/ls)';
             b.error = true;
             return true;
         }
         const target = await WORK.get_item(path);
         if (!isWorkClass(target))
             return false;
-        if (target.type !== '$provider') {
-            const hint = providerHintFromBox(params.box, path === '/MODELS' ? '/MODELS' : parentPath(path));
+        if (typeof target.list_remote !== 'function') {
             b.path = path;
-            b.content = formatRemoteResult({
-                error: 'remote только у $provider, не у «' + (target.type || '?') + '» ' + path
-                    + (hint ? '\nукажи провайдера:\n' + hint : ''),
-                baseUrl: '',
-            }, path, { baseUrl: '' });
+            b.content = '[remote]\nу «' + (target.type || '?') + '» ' + path + ' нет list_remote';
             b.error = true;
             return true;
         }
-        if (typeof target.list_remote !== 'function')
-            return false;
         b.path = path;
         tagAgent(params.box, AGENT_TAG, 'remote ' + path);
         try {
@@ -242,10 +234,8 @@ const remoteTool = {
             }
             catch { /* list_remote сам проверит */ }
             if (!baseUrl) {
-                const hint = providerHintFromBox(params.box, path);
                 b.content = formatRemoteResult({
-                    error: 'нет baseUrl у ' + path
-                        + (hint ? '\nукажи провайдера:\n' + hint : ''),
+                    error: 'нет baseUrl у ' + path,
                     baseUrl: '',
                 }, path, { baseUrl: '' });
                 b.error = true;
@@ -273,23 +263,23 @@ const AGENT_TAG = 'Осмотр';
 export default {
     label: 'Осматриваю систему',
     icon: 'icons:explore',
-    /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total — work.create проверяет model по ним */
+    /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total */
     expand: true,
     allowReasoning: true,
-    description: 'строение WORK: карта `/`; ls ветки = info deep=2; readme; meta; remote у $provider; ask',
+    description: 'строение дерева: карта `/`; ls ветки = info deep=2; readme; meta; remote (list_remote); ask',
     system: [
         '# Агент: explore',
-        'Осмотр системы WORK. Карта корня уже в ленте.',
+        'Осмотр дерева классов. Карта корня уже в ленте.',
         ORIENTATION,
         'Не пиши файлы и не ходи в интернет — это work / web.',
         'Нет пути с карты/ls — не выдумывай; выбери узел из уже показанного слоя.',
         'Выбран узел — readme этого узла и ls ветки (deep=2). Сравнение A и B — readme и meta каждого.',
-        'Провайдер $provider: ls детей + remote того же пути, затем diff. Не remote на /MODELS. Не web.',
+        'remote — у узла с list_remote. Кого спрашивать — readme места.',
     ].join('\n'),
     prompt: [
         'Отчёт только по фактам из items (карта, ls, readme, ask, meta, remote).',
         'Не описывай шаги, которых не было. Если в ls уже дерево deep=2 — итог по видимым детям/внукам, не выдумывай глубже.',
-        'Есть remote и ls одного провайдера — явный diff (на API, нет в WORK).',
+        'Есть remote и ls одного узла — явный diff (на API, нет в дереве).',
     ].join('\n'),
     /** Итог бокса = склейка фактов items (ls/meta/remote/readme/ask), не пересказ модели: LLM-total выдумывал meta. */
     enrichTotal(_content, block) {
@@ -698,26 +688,6 @@ function resolveRemotePath(block, box, messages) {
     return resolveExplorePath(block, box, messages, remoteTool.label, { allowLsFallback: false });
 }
 
-/** Дети-$provider текущего path из последнего ls/info. */
-function providerHintFromBox(box, path) {
-    const base = String(path || '').replace(/\/$/, '');
-    if (!base)
-        return '';
-    const ls = (box?.items || []).findLast?.(b => (b.type === 'ls' || b.type === 'map') && b.content)
-        || [...(box?.items || [])].reverse().find(b => (b.type === 'ls' || b.type === 'map') && b.content);
-    if (!ls?.content)
-        return '';
-    const rows = [...String(ls.content).matchAll(/^\s*\- (\/[^\s(]+)([^\n]*)/gm)];
-    const kids = [...new Set(rows.filter(m => {
-        const p = m[1].replace(/\/$/, '');
-        const rest = m[2] || '';
-        if (!p.startsWith(base + '/') || p.slice(base.length + 1).split('/').filter(Boolean).length !== 1)
-            return false;
-        return /\(\$provider\)/i.test(rest) || !/\(\$ai\)/i.test(rest);
-    }).map(m => m[1]))];
-    return kids.length ? kids.map(p => '- ' + p).join('\n') : '';
-}
-
 async function listRootMap() {
     return listChildrenMap('/');
 }
@@ -863,6 +833,7 @@ function exploreQuery(block, box, messages, defaultLabel) {
     return String(box?.brief || lastUserContent(messages) || '').trim();
 }
 
+/** Путь с карты/ls: имя папки или label в query. Слово типа ($provider) не матчит все узлы. Неясно — пусто. */
 function pathFromMap(box, query) {
     const blocks = (box?.items || []).filter(b =>
         (b.type === 'map' || b.type === 'ls') && b.content);
@@ -890,9 +861,6 @@ function pathFromMap(box, query) {
         }
     }
     for (const { path, rest } of rows) {
-        const type = (rest.match(/\(\$([^)]+)\)/) || [])[1];
-        if (type && type.length >= 3 && q.includes(type.toLowerCase()))
-            hits.push(path);
         const label = ((rest.match(/[—–-]\s*(.+)$/) || [])[1] || '').trim().toLowerCase();
         const words = label.split(/[^a-z0-9а-яё]+/i).filter(w => w.length >= 4);
         if (words.some(w => q.includes(w)))
@@ -902,18 +870,12 @@ function pathFromMap(box, query) {
     if (uniq.length === 1)
         return uniq[0];
     if (uniq.length > 1) {
-        const restOf = p => (rows.find(r => r.path === p)?.rest || '');
-        const providers = uniq.filter(p => /\(\$provider\)/i.test(restOf(p)));
-        if (providers.length === 1)
-            return providers[0];
         const leafHits = uniq.filter(p => {
             const leaf = p.split('/').filter(Boolean).pop()?.toLowerCase() || '';
             return leaf.length >= 3 && q.includes(leaf);
         });
         if (leafHits.length === 1)
             return leafHits[0];
-        if (providers.length > 1)
-            return providers.sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
         // цепочка предок→потомок — самый специфичный (длинный), не корень «модели»
         const sorted = [...uniq].sort((a, b) => b.length - a.length || a.localeCompare(b));
         const nested = sorted.every(o => sorted[0] === o || sorted[0].startsWith(o + '/') || o.startsWith(sorted[0] + '/'));

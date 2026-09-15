@@ -706,7 +706,7 @@ ODA({
             <span class="msg-meta">От: {{view.from}}</span>
             <span class="msg-meta">Кому: {{view.to}}</span>
             <span ~if="view.status" class="msg-meta">Статус: {{view.status}}</span>
-            <div class="view-html" flex ::innerHTML="view.html" ~if="view.html"></div>
+            <div class="view-html" flex ~html="view.html" ~if="view.html"></div>
             <div class="view-body" flex ~if="!view.html">{{view.body}}</div>
         </div>
     `,

@@ -96,6 +96,12 @@ function findTextPartIds(structure) {
             walk(child);
     };
     walk(structure);
+    if (!structure?.childNodes) {
+        if (structure?.type === 'text/plain' && !found.text)
+            found.text = 'TEXT';
+        if (structure?.type === 'text/html' && !found.html)
+            found.html = 'TEXT';
+    }
     return found;
 }
 
@@ -106,7 +112,8 @@ async function downloadPart(client, uid, part) {
         const { content } = await client.download(uid, part, { uid: true });
         return content ? await streamToString(content) : '';
     }
-    catch {
+    catch (err) {
+        console.warn(`[email] download part '${part}' uid=${uid} не удался:`, err?.message || err);
         return '';
     }
 }
