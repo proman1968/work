@@ -1,4 +1,4 @@
-/** Агент work: файлы рабочей области. Меню = ключи tools (plan/do).
+/** Агент work: файлы рабочей области. Меню = ключи tools (plan/build).
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat }).
  *  typed — файл типа ($file when+METADATA) + save_file на месте; create — только класс.
  *  Строение WORK — explore; интернет — web. approve стоп-блока — владелец ленты (task).
@@ -488,7 +488,7 @@ const activationTool = {
 `,
     stop: 'Перейти к действиям',
     async init(params = {}) {
-        tagAgent(params.box, AGENT_TAG, 'нужен режим do');
+        tagAgent(params.box, AGENT_TAG, 'нужен режим build');
         return true;
     },
     async recalc(params = {}) {
@@ -497,7 +497,7 @@ const activationTool = {
             tagAgent(params.box, AGENT_TAG, clip(first, 48));
     },
     async approve(params = {}) {
-        (await params.task.body).mode = 'do';
+        (await params.task.body).mode = 'build';
         params.block.icon = 'icons:check-circle';
     },
 };
@@ -516,7 +516,7 @@ export default {
         'Файл типа (when + METADATA у $file) — typed на классе-месте, не create.',
         'search — путь класса + запрос, не корень дерева.',
         'Перед правкой — readme места в ленте. После create/write устройства — тот же readme.md.',
-        'Нет узла в ls — read места, потом activation → create (do без search). Не закрывай цель без create/write в ленте.',
+        'Нет узла в ls — read места, потом activation → create (build без search). Не закрывай цель без create/write в ленте.',
         'Проверка — агент check. Картинка — агент image, не write png.',
         'Поля и типы — из readme места и образца в ленте, не из памяти.',
         'Подумай, какие именно действия необходимы.',
@@ -530,7 +530,7 @@ export default {
     /** После итога — обратно в plan. Закрытие goal — у check (постусловие). */
     finish(params = {}) {
         const live = params.live;
-        if (live && live.mode === 'do')
+        if (live && live.mode === 'build')
             live.mode = 'plan';
     },
     plan: {
@@ -551,7 +551,7 @@ export default {
             read: readTool,
         },
     },
-    do: {
+    build: {
         description: 'write файлов и create классов области',
         system: [
             'typed, write файлов и create дочерних классов. Search — в plan, не здесь.',

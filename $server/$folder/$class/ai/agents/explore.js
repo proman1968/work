@@ -46,15 +46,14 @@ const askTool = {
         const target = await WORK.get_item(path);
         if (!isWorkClass(target))
             return false;
-        const engine = params.engine;
-        if (typeof engine?.execute !== 'function')
+        await target.init;
+        if (typeof target.prompt !== 'function')
             return false;
         b.path = path;
         tagAgent(params.box, AGENT_TAG, 'ask ' + path);
         try {
             const result = await askClassPeer({
                 target,
-                engine,
                 question,
                 session: params.session,
                 live: params.live,
@@ -469,12 +468,10 @@ function parseAsk(block, box, messages, defaultLabel) {
 }
 
 /**
- * Peer-класс: движок вызывающего (engine) + Object.create + $context = target.
- * Агенты — из пакета движка; peer не обязан иметь ~/ai. Без live.wait.
+ * Peer-класс: `target.prompt(params)`. Агенты — пакет `~/ai/prompt` этого класса.
+ * Без live.wait.
  */
-async function askClassPeer({ target, engine, question, session, live } = {}) {
-    const eng = Object.create(engine);
-    eng.$context = target;
+async function askClassPeer({ target, question, session, live } = {}) {
     const peerLive = {
         path: live?.path || target.short,
         mode: 'plan',
@@ -485,7 +482,7 @@ async function askClassPeer({ target, engine, question, session, live } = {}) {
                 session?.send?.(e);
         },
     };
-    return eng.execute({
+    return target.prompt({
         prompt: question,
         session,
         agent: 'answer',

@@ -1073,7 +1073,7 @@ class Recorder {
         this.mediaRecorder = new MediaRecorder(this.stream, { mimeType: contentType });
         this.mediaRecorder.ondataavailable = (e) => {
             if (!this.recording) return;
-            this.context.writeToStream(e.data, { filename: this.id, contentType });
+            this.context.writeToStream(e.data, { filename: this.id, contentType, role: this.context.role });
         };
         this.mediaRecorder.onerror = (e) => {
             console.warn('recorder error:', e);

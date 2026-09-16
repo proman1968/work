@@ -8,28 +8,6 @@ export default {
     contentType: 'application/json',
     GET: 'context',
     METADATA: {},
-    async _fc_exec(target, call = {}, ctx = {}) {
-        const { method, args } = call;
-        const block = ctx.block;
-        try {
-            let result;
-            if (target && typeof target[method] === 'function')
-                result = await target[method](args || {});
-            else if (typeof WORK?.[method] === 'function')
-                result = await WORK[method](args || {});
-            else
-                throw new Error('unknown method: ' + method);
-            if (block && result != null && block.content == null)
-                block.content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-            return result;
-        } catch (e) {
-            if (block) {
-                block.error = true;
-                block.content = (block.content || '') + String(e.message || e);
-            }
-            throw e;
-        }
-    },
     /** Контракт живой ленты для движка агентов: события, персист, стоп, режим, ожидание человека. */
     _live(session) {
         const task = this;
@@ -43,8 +21,8 @@ export default {
             },
             save: () => task._save(session),
             get stopped() { return !!task._stopped; },
-            get mode() { return task.body.mode || 'plan'; },
-            set mode(v) { task.body.mode = v; },
+            get mode() { return taskMode(task.body.mode); },
+            set mode(v) { task.body.mode = taskMode(v); },
             /** Side-effect агента закрыл цель сессии (например write.done). */
             goalDone() {
                 const g = task.body?.goal;
@@ -72,7 +50,7 @@ export default {
         resolve(payload || {});
         return true;
     },
-    /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать do. */
+    /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать build. */
     async _reviseWait(text, session) {
         const body = await this.body;
         const waiting = findWaitingBlock(body, this._waiters);
@@ -85,20 +63,18 @@ export default {
         await this._save(session);
         return this._resolveWait(waiting, { accept: false, content: text });
     },
-    /** Исполнение блока-агента движком класса (метод prompt из меты ~/ai). Блок мутируется на месте. */
+    /** Исполнение блока-агента: `owner.prompt(params)` (движок `~/ai/prompt` после init). */
     async _runAgent(params, session) {
         const body = await this.body;
         const owner = this.$class;
-        const engine = (await owner?._methods)?.prompt;
-        if (typeof engine?.execute !== 'function')
-            throw new Error('$task: метод prompt (ai) не найден у класса');
-        // tilde-метод общий: зафиксировать владельца до execute (иначе meta_folder = undefined)
-        engine.$context = owner;
+        await owner?.init;
+        if (typeof owner?.prompt !== 'function')
+            throw new Error('$task: метод prompt не найден у класса');
         const worn = await this._skillStep();
         const skillStep = worn?.step?.type === params.block.type ? worn.step : null;
-        // handoff: блок уже в дереве — сразу диск + changed, не ждать context/execute
+        // handoff: блок уже в дереве — сразу диск + changed, не ждать context
         await this._save(session);
-        await engine.execute({
+        await owner.prompt({
             agent: params.block.type,
             block: params.block,
             box: params.box,
@@ -430,7 +406,7 @@ export default {
         if (this.pipe[params.box.type]?.agent)
             return { loop: false, block: params.box };
 
-        let mode = this.body.mode || 'plan';
+        let mode = taskMode(this.body.mode);
         let node = this.pipe[params.block.type];
         let next = node?.[mode]?.next || node?.next;
         // [] у листа (form/question) truthy — иначе меню не поднимается на корень
@@ -816,7 +792,7 @@ export default {
             messages = base ? [{ role: 'system', content: base }] : [];
         }
         else {
-            const mode = body.mode || 'plan';
+            const mode = taskMode(body.mode);
             const pipe = await this.pipe;
             const leafNode = leaf?.type ? pipe[leaf.type] : null;
             const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
@@ -860,7 +836,7 @@ export default {
      *  expand-box отдаёт листья с ролью их узла (бюджет clipContext); маркер box.content в контекст не идёт. */
     _box_context(box, focus = true, evidence = true, handoff = false) {
         const node = this.pipe[box.type];
-        const mode = this.body.mode || 'plan';
+        const mode = taskMode(this.body.mode);
         // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
         const place = String(box.system || '').trim();
         let system;
@@ -1012,7 +988,7 @@ export default {
             if (ns.step) {
                 const sn = ['thinking', ...stepAgents];
                 ns.step.plan = { ...(ns.step.plan || {}), next: sn };
-                ns.step.do = { ...(ns.step.do || {}), next: sn };
+                ns.step.build = { ...(ns.step.build || {}), next: sn };
             }
             this._pipe = ns;
             return ns;
@@ -1388,6 +1364,12 @@ function parentOfBlock(root, block) {
     return null;
 }
 
+/** Режим сессии: plan | build. Старое значение do читается как build. */
+function taskMode(m) {
+    const v = m || 'plan';
+    return v === 'do' ? 'build' : v;
+}
+
 /** Карта узлов из pipe: description / inject / label текущего mode. */
 function topics(pipe, ids, mode) {
     return (ids || []).map(id => {
@@ -1643,7 +1625,7 @@ function registerOrchestrator(ns, def) {
     };
 }
 
-/** Агент: moves + tools (+ plan/do.tools); next = moves ∪ tools ∪ total. */
+/** Агент: moves + tools (+ plan/build.tools); next = moves ∪ tools ∪ total. */
 function registerAgent(ns, id, def) {
     if (!def || typeof def !== 'object')
         return;
@@ -1653,8 +1635,8 @@ function registerAgent(ns, id, def) {
         toolBags.push(def.tools);
     if (def.plan?.tools)
         toolBags.push(def.plan.tools);
-    if (def.do?.tools)
-        toolBags.push(def.do.tools);
+    if (def.build?.tools)
+        toolBags.push(def.build.tools);
     const allTools = Object.assign({}, ...toolBags);
     const toolKeys = liftBag(ns, allTools, { tool: true });
     const nestedKeys = Array.isArray(def.nested) ? def.nested : [];
@@ -1682,11 +1664,11 @@ function registerAgent(ns, id, def) {
             next: withTotal([...moveKeys, ...Object.keys(def.plan.tools || {})]),
         };
     }
-    if (def.do) {
-        node.do = {
-            ...def.do,
-            inject: def.do.description || def.do.inject,
-            next: withTotal([...moveKeys, ...Object.keys(def.do.tools || {})]),
+    if (def.build) {
+        node.build = {
+            ...def.build,
+            inject: def.build.description || def.build.inject,
+            next: withTotal([...moveKeys, ...Object.keys(def.build.tools || {})]),
         };
     }
     if (!def.tools && def.plan?.tools)

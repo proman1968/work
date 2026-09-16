@@ -16,7 +16,7 @@
 ## Ключевые механизмы
 
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `_collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
-- **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
+- **`get_schema()`** — схема методов для ИИ-агента (прототип + функции экземпляра после `init`, включая `$method`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
 - **`save_file` → `save_to_history`** — обычный файл: живая копия + снимок в `history/` + лог. **Файл данных** (у `$file/$ext` есть `METADATA`): точка `ext/…/YYYY-MM-DD/{time}.{uid}.{ext}`, `name` в JSON, `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`. Новое имя обычного файла — `safeNodeName`
 

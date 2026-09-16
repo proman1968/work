@@ -147,21 +147,6 @@ function requestBody(params, request) {
     return params.post ?? request?.post;
 }
 
-async function tryHandlerMethod(item, method, params, request) {
-    try {
-        const handlers = await item._methods;
-        const handler = handlers?.[method];
-        if (handler && typeof handler.execute === 'function') {
-            params.$context = item;
-            return handler.execute(params);
-        }
-    }
-    catch {
-        // handler not found or not executable on server
-    }
-    return undefined;
-}
-
 function resolveClassMethod(item, method, params, request) {
     const post = requestBody(params, request);
     // Обход цепочки прототипов через Object.getPrototypeOf (не __proto__,
@@ -206,10 +191,6 @@ export function execItemMethod(item, method, params, request) {
         const classResult = resolveClassMethod(item, method, params, request);
         if (classResult !== undefined)
             return classResult;
-
-        const handlerResult = await tryHandlerMethod(item, method, params, request);
-        if (handlerResult !== undefined)
-            return handlerResult;
 
         throw new Error(`Unknown method "${method}" for:<br>${item.path}`);
     };

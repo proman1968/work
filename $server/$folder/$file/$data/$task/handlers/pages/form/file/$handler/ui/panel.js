@@ -19,7 +19,7 @@ ODA({ is: 'microchat-panel',
                 @tap="sendAction(false)"></oda-button>
         </div>
         <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
-            ::value ::files :pending :is-do
+            ::value ::files :pending :is-build
             :model="data?.model" :effort="data?.effort" ::tts-mode
             :usage-stats="usageStats"
             ready-icon="eva:f-arrow-upward"
@@ -69,8 +69,9 @@ ODA({ is: 'microchat-panel',
     get userRole() {
         return String(this.role || this.$item.role || 'USER').toUpperCase();
     },
-    get isDo() {
-        return this.data?.mode === 'do';
+    get isBuild() {
+        const m = this.data?.mode;
+        return m === 'build' || m === 'do';
     },
     /** form в ленте — сдача живых контролов, даже если фокус уже report */
     get isFormAction() {

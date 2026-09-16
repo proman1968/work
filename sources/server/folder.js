@@ -152,6 +152,8 @@ export class $folder extends $item{
      * Own overlay без inherit_source (физический class.js) иначе теряет icon/label прототипа.
      * Без inherit(..., this): у всех слоёв id `class.js`, inherit схлопнет в один слот.
      * `$class` / `$handler` / `$method` — merge из tilde.
+     * `$class`: затем `$method` из `~/methods/*` (и `$method`-дети прикладной `~/ai`)
+     * как `item.prompt(params)`. `$file` — только overlay расширения, без `$method`.
      */
     get init(){
         if(this.constructor === FS.$folder && !this.isType)
@@ -186,6 +188,8 @@ export class $folder extends $item{
                 if (script)
                     this.DATA = script;
             }
+            if (this instanceof FS.$class)
+                await this._liftMethods();
             return this;
         })
     }
@@ -871,9 +875,24 @@ export class $folder extends $item{
             properties.push(info);
         }
         const methods = buildAiSchema(this.constructor.prototype);
+        const seen = new Set(methods.map(m => m.name));
+        for (const name of Object.getOwnPropertyNames(this)) {
+            if (seen.has(name) || name[0] === '_' || name[0] === '#')
+                continue;
+            const desc = Object.getOwnPropertyDescriptor(this, name);
+            if (typeof desc?.value !== 'function')
+                continue;
+            seen.add(name);
+            const row = { name, description: '' };
+            if (withBody)
+                row.body = desc.value.toString();
+            methods.push(row);
+        }
         if (withBody) {
             const proto = this.constructor.prototype;
             for (const m of methods) {
+                if (m.body)
+                    continue;
                 const desc = Object.getOwnPropertyDescriptor(proto, m.name);
                 if (desc?.value)
                     m.body = desc.value.toString();
@@ -1048,23 +1067,76 @@ export class $folder extends $item{
             }, {}) || {};
         });
     }
-    /** Контекстные методы: ~/methods/* и ~/ai/* ($method), привязанные к владельцу */
+    /** Каталог `$method`: `~/methods/*`. Прикладная `~/ai` — только дети-`$method`, не `~/ai/*`. */
     get _methods(){
         return new AsyncPromise(async ()=>{
-            const fromMethods = (await this.get_item('~/methods/*')) || [];
-            const fromAi = (await this.get_item('~/ai/*')) || [];
-            const aiMethods = fromAi.filter(item =>
+            const res = {};
+            const take = (item) => {
+                if (!item?.id)
+                    return;
+                res[item.id] = item;
+                item.$context = this;
+            };
+            const isMethod = (item) =>
                 item instanceof FS.$method
                 || item?.constructor?.name === '$method'
                 || item?.type === '$method'
-                || item?.meta_folder?.id === '$method');
-            const res = {};
-            for (const item of [...fromMethods, ...aiMethods]) {
-                res[item.id] = item;
-                item.$context = this;
+                || item?.meta_folder?.id === '$method';
+            for (const item of (await this.get_item('~/methods/*')) || [])
+                take(item);
+            try {
+                const ai = await this.get_item('~/ai');
+                const folders = (Array.isArray(ai) ? ai : ai ? [ai] : []).filter(Boolean);
+                for (const folder of folders) {
+                    const kids = await folder.children;
+                    for (const kid of kids) {
+                        if (!isMethod(kid))
+                            continue;
+                        await kid.init;
+                        take(kid);
+                    }
+                }
             }
+            catch { /* нет прикладной ai — только ~/methods */ }
             return res;
         })
+    }
+    /**
+     * Поднять `$method` на экземпляр: `item.prompt(params)` → handler.execute.
+     * `this` снаружи — элемент; внутри execute — объект `$method`, `$context` — элемент.
+     * Имя уже есть на прототипе или DATA — не трогать.
+     */
+    async _liftMethods() {
+        if (this instanceof FS.$method || this instanceof FS.$trigger || this instanceof FS.$timer)
+            return;
+        let methods;
+        try {
+            methods = await this._methods;
+        }
+        catch {
+            return;
+        }
+        if (!methods)
+            return;
+        for (const [id, handler] of Object.entries(methods)) {
+            if (!id || id[0] === '_' || typeof handler?.execute !== 'function')
+                continue;
+            if (typeof this[id] === 'function')
+                continue;
+            Object.defineProperty(this, id, {
+                value: {
+                    [id]: function (params = {}) {
+                        handler.$context = this;
+                        if (params && typeof params === 'object')
+                            params.$context = this;
+                        return handler.execute(params);
+                    },
+                }[id],
+                writable: true,
+                configurable: true,
+                enumerable: true,
+            });
+        }
     }
     /**
      * Записи каталога: все дочерние элементы без скрытых (папки и файлы).

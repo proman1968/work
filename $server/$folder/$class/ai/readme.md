@@ -18,7 +18,7 @@
 | Агент | Работа |
 |--------|--------|
 | [`explore`](agents/explore.js) | строение дерева: карта `/`; ls `deep=2`; readme; meta; **remote** (`list_remote` у узла); ask; путь с карты — имя папки/label |
-| [`work`](agents/work.js) | файлы/классы: typed (`$file` when+METADATA); write путь `/…` (ошибка на блоке, не throw); create (родитель, тип, id, class.js); search в plan; do без search; activation после ok read; после APPROVE — create (и после ошибки create). Закон места — в readme узла |
+| [`work`](agents/work.js) | файлы/классы: typed (`$file` when+METADATA); write путь `/…` (ошибка на блоке, не throw); create (родитель, тип, id, class.js); search в plan; build без search; activation после ok read; после APPROVE — create (и после ошибки create). Закон места — в readme узла |
 | [`check`](agents/check.js) | постусловие create/write: exist + class.js + **readme в storage** (непустой); write картинки — байты, не OCR; **content-сводка закрывает бокс** (дети ignore); write без актуального readme — gap |
 | [`web`](agents/web.js) | внешний интернет; `sites` из нитки или поиска; спрашивает [`site`](agents/site.js); один ребёнок с `content` — лифт, без второго fill; иначе сводка из draft+content |
 | [`site`](agents/site.js) | fetch → `draft`; лист без `content`; узел — `pages` из href и `content` из draft детей; подъём — оба поля; не в меню корня |
@@ -39,7 +39,7 @@
 
 ### Peer-класс (explore `ask`)
 
-Агент [`explore`](agents/explore.js) tool **`ask`**: путь `$class` + вопрос → `Object.create(engine)` с `eng.$context = target` (движок вызывающего; peer без `~/ai`). Агенты — пакет движка; config/`system.md`/readme — meta target, иначе пакет. `live` без `wait`. Последовательно; parallel fan-out — следующий шаг.
+Агент [`explore`](agents/explore.js) tool **`ask`**: путь `$class` + вопрос → `target.prompt({ prompt, agent: 'answer' })`. Агенты — пакет `~/ai/prompt` этого класса. `live` без `wait`. Последовательно.
 
 ### Журнал (logs)
 

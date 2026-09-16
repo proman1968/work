@@ -115,7 +115,7 @@ async save_file(params = {}) {
 
 ### `get_schema()` в `$folder`
 
-Метод `get_schema()` на `$folder` вызывает `buildAiSchema(this.constructor.prototype)` и возвращает:
+Метод `get_schema()` на `$folder` вызывает `buildAiSchema(this.constructor.prototype)` и добавляет поднятые `$method` (после `init`). Возвращает:
 ```json
 {
     "className": "$class",

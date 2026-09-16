@@ -24,4 +24,4 @@ POST: `multipart/form-data` — поля/файлы; `application/json` и `text
 
 GET тела `$file` (без метода, `?load`, `?script`) — поток с диска (`download`), не `load()`. Сжатие быстрое (brotli/gzip level 4) и только до 256 КБ; крупнее отдаётся как есть. JS/CSS/WASM/SVG — `Cache-Control: must-revalidate, public, max-age=3600`. `load()` — чтение содержимого для кода. `~` merge нескольких JS — по-прежнему строка в памяти. `?download` — вложение, без кэша.
 
-Разрешение метода: сначала метод класса FS, затем (legacy) `~/handlers/methods/`.
+Разрешение метода: `item[name](params)` после `init` (прототип FS, DATA `class.js`, поднятые `$method`).

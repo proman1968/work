@@ -183,19 +183,27 @@ export class $file extends $folder{
      * У файлов нет SELF-слоя и локальной цепочки — набор class.js
      * одинаков для всех файлов одного расширения, где бы они ни лежали.
      * Сбрасывается при reset() любого class.js (см. $folder.reset).
+     * null — типа нет, повторный tilde не нужен.
      */
     static __ext_scripts__ = Object.create(null);
+    /**
+     * Overlay `class.js` расширения: один merge на ext, все файлы того же типа.
+     * Нет типизатора `$task` / `$xml` / … — null, полный init не делается.
+     */
+    static extOverlay(file) {
+        const key = file.ext || file.type;
+        return $file.__ext_scripts__[key] ??= new AsyncPromise(async () => {
+            let files = await file.tilde;
+            files = files.filter(f => f.id === 'class.js');
+            if (!files.length)
+                return null;
+            const script = await $server.mergeFiles(files);
+            return file.constructor.importScript(script);
+        });
+    }
     get init(){
         return this[R].cache.init ??= new AsyncPromise(async ()=>{
-            const key = this.ext || this.type;
-            const script = await ($file.__ext_scripts__[key] ??= new AsyncPromise(async ()=>{
-                let files = await this.tilde;
-                files = files.filter(f => f.id === 'class.js');
-                if(!files.length)
-                    return null;
-                let script = await $server.mergeFiles(files);
-                return this.constructor.importScript(script);
-            }));
+            const script = await $file.extOverlay(this);
             if (script)
                 this.DATA = script;
             return this;
@@ -385,13 +393,13 @@ export class $file extends $folder{
      * @param {object} [params]
      * @returns {Promise<import('node:fs').ReadStream>} ReadStream
      */
-    async download(params = {}){
-        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+    async download(params = {}, force = false){
+        if(!force) await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
         if(fs.existsSync(this.dir))
             return fs.createReadStream(this.dir);
         const ancestor = await this.inherit_ancestor;
         if(ancestor)
-            return ancestor.download(params);
+            return ancestor.download(params, true);
         throw new Error(`file ${this.path} not found`);
     }
     /**

@@ -39,7 +39,7 @@ ODA({ is: 'phone-call', imports: '~/lib//icon.js', template: /* html */`
     `,
     $item: undefined,
     get message() {
-        return this.$item?.load().then(text => JSON.parse(text))
+        return this.$item?.load();
     },
     get user() {
         if (this.message instanceof Promise)
