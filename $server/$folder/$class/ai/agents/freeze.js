@@ -15,6 +15,11 @@ const draftTool = {
         const b = params.block;
         if (b.done)
             return false;
+        // Бокс закрыт отклонением: новый заход — новой командой, не redraft
+        if (params.box?.closed) {
+            tagAgent(params.box, AGENT_TAG, 'закрыт отклонением');
+            return false;
+        }
         const body = await params.task?.body;
         const gap = freezeGap(body);
         if (gap) {

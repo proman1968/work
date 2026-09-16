@@ -44,6 +44,16 @@ const searchTool = {
             b.content = 'search: нужен путь класса (не корень WORK) и запрос';
             return;
         }
+        let kind = '';
+        try {
+            kind = (await params.engine?.resolveTarget?.(path))?.kind || '';
+        }
+        catch { /* fallback ниже */ }
+        if (kind === 'file') {
+            b.error = true;
+            b.content = 'search: это файл, а не класс — читай через read; поиск — внутри класса: ' + path;
+            return;
+        }
         const target = await WORK.get_item(path);
         if (!target || typeof target.semantic_search !== 'function' || isWorkRootItem(target)) {
             b.error = true;

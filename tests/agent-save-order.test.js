@@ -1,8 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import engine, { MAX_TURNS, MAX_SAME_ATTEMPTS, attemptKey, noteAttempt, createFirst } from '../$server/$folder/$class/ai/prompt/$method/class.js';
+import engine, { MAX_TURNS, MAX_SAME_ATTEMPTS, attemptKey, noteAttempt, createFirst, recordReject, isRepeatStop } from '../$server/$folder/$class/ai/prompt/$method/class.js';
 import workAgent from '../$server/$folder/$class/ai/agents/work.js';
 import { translit, normMap } from '../$server/$folder/$class/ai/agents/explore.js';
+import freezeAgent from '../$server/$folder/$class/ai/agents/freeze.js';
+import { shouldCloseOnReject, closeFreezeBox } from '../$server/$folder/$file/$data/$task/class.js';
+import htmlAgent, { validateHtml } from '../$server/$folder/$class/ai/agents/html.js';
+import onSaveTrigger from '../$server/$folder/$file/$data/$task/triggers/on_save/$trigger/class.js';
 
 /**
  * Инвариант «несейвленных блоков нет»:
@@ -192,6 +196,172 @@ describe('createFirst: форсаж create только до веера ошиб
 
     it('без create в меню — false', () => {
         assert.equal(createFirst(approvedBox([]), ['read']), false);
+    });
+});
+
+describe('догма отклонения: повторный стоп без новых данных не ждёт', () => {
+    it('recordReject/isRepeatStop по операнду, пометки леджера не мешают', () => {
+        const box = {};
+        recordReject(box, 'confirm', { type: 'confirm', content: '# Навык\nid: x' });
+        assert.equal(isRepeatStop(box, 'confirm', { type: 'confirm', content: '# Навык\nid: x' }), true);
+        assert.equal(
+            isRepeatStop(box, 'confirm', { type: 'confirm', content: '# Навык\nid: x\n\n[повтор 2: тот же confirm с тем же операндом заблокирован — выбери другой ход или спроси человека]' }),
+            true,
+            'пометка леджера в хвосте не ломает сравнение',
+        );
+        assert.equal(isRepeatStop(box, 'confirm', { type: 'confirm', content: '# Другой\nid: x' }), false);
+        assert.equal(isRepeatStop(box, 'other', { type: 'other', content: '# Навык\nid: x' }), false);
+        assert.equal(isRepeatStop({}, 'confirm', { type: 'confirm', content: 'x' }), false);
+    });
+
+    it('второй identical-стоп уходит в total без второго wait', async () => {
+        const eng = Object.create(engine);
+        eng.execute = async () => {};
+        let waits = 0;
+        const block = { type: 'w', time: 60, items: [] };
+        const snapshots = [];
+        const live = {
+            mode: 'plan', send() {},
+            async save() { snapshots.push(JSON.parse(JSON.stringify(block))); },
+            async wait() { waits++; return { accept: false }; },
+        };
+        const agent = {
+            label: 'W',
+            tools: {
+                t: {
+                    label: 'T', icon: 'x', stop: 'Go',
+                    recalc: async ({ block: b }) => { b.error = true; b.content = 'same'; },
+                },
+            },
+        };
+        const ctx = () => ({ block, agent, type: 'w', model: 'm', messages: [], session: {}, live, params: {} });
+        await eng.turn(ctx());
+        assert.equal(waits, 1, 'первый стоп ждёт человека');
+        // переоткрытие меню (старый путь отклонения) — второй круг
+        delete block.using_blocks;
+        await eng.turn(ctx());
+        assert.equal(waits, 1, 'повторный стоп не ждёт');
+        const last = block.items[block.items.length - 1];
+        assert.equal(last.stop, undefined, 'стоп снят догмой');
+        assert.ok(String(last.content).includes('без ожидания'), 'пометка догмы в ленте');
+        for (const s of snapshots)
+            assert.ok(!(s.items || []).some(b => b.hidden), 'на диске нет hidden-блоков');
+    });
+});
+
+describe('отклонение закрывает freeze: shouldCloseOnReject/closeFreezeBox', () => {
+    it('гейт: только freeze+confirm', () => {
+        assert.equal(shouldCloseOnReject({ type: 'freeze' }, { type: 'confirm' }), true);
+        assert.equal(shouldCloseOnReject({ type: 'work' }, { type: 'activation' }), false);
+        assert.equal(shouldCloseOnReject({ type: 'freeze' }, { type: 'draft' }), false);
+        assert.equal(shouldCloseOnReject(null, null), false);
+    });
+
+    it('closeFreezeBox: саммари + сожжённое меню', () => {
+        const box = { type: 'freeze', time: 70, items: [], using_blocks: ['draft', 'confirm'] };
+        const block = { type: 'confirm', label: 'Подтвердите навык' };
+        assert.equal(closeFreezeBox(box, block), true);
+        assert.equal(box.closed, 'отклонено');
+        assert.deepEqual(box.using_blocks, ['total']);
+        assert.ok(String(box.content).includes('новый заход новой командой'));
+    });
+
+    it('closeFreezeBox: чужой бокс не трогает', () => {
+        const box = { type: 'work', time: 71, items: [], using_blocks: ['read'] };
+        assert.equal(closeFreezeBox(box, { type: 'activation' }), false);
+        assert.deepEqual(box.using_blocks, ['read']);
+        assert.equal(box.closed, undefined);
+    });
+});
+
+describe('freeze draftTool: закрытый бокс не даёт redraft', () => {
+    it('closed → init false', async () => {
+        const tool = freezeAgent.tools.draft;
+        const box = { type: 'freeze', closed: 'отклонено', items: [] };
+        const block = { type: 'draft', time: 72 };
+        assert.equal(await tool.init({ block, box }), false);
+        assert.equal(box.draft, undefined, 'черновик не пересобирается на закрытом боксе');
+    });
+});
+
+describe('callAgent skip сужает меню (без холостых nested-циклов)', () => {
+    it('пропущенный субагент — в using_blocks, повторного pick нет', async () => {
+        const eng = Object.create(engine);
+        eng.execute = async (p) => { p.block.skip = true; };
+        const block = { type: 'p', time: 80, items: [] };
+        const snapshots = [];
+        const live = { mode: 'plan', send() {}, async save() { snapshots.push(JSON.parse(JSON.stringify(block))); } };
+        const agent = { label: 'P', nested: ['sub'] };
+        await eng.turn({ block, agent, type: 'p', model: 'm', messages: [], session: {}, live, params: {} });
+        assert.deepEqual(block.using_blocks, ['sub']);
+        assert.deepEqual(block.items, [], 'skip-блок снят с ленты');
+        for (const s of snapshots)
+            assert.ok(!(s.items || []).some(b => b.hidden), 'на диске нет hidden-блоков');
+    });
+});
+
+describe('work search: файл вместо класса — guided-ошибка', () => {
+    it('без dropUsed-зацикливания, меню сужается', async () => {
+        const tool = workAgent.plan.tools.search;
+        const block = { type: 'search', time: 81, content: '/F\nзапрос' };
+        const box = { type: 'work', items: [] };
+        const fakeEngine = { async resolveTarget() { return { kind: 'file', path: '/F' }; } };
+        await tool.recalc({ block, box, messages: [], engine: fakeEngine });
+        assert.equal(block.error, true);
+        assert.ok(String(block.content).includes('читай через read'));
+    });
+});
+
+describe('html validateHtml: битая разметка не идёт в doc', () => {
+    const good = '<!DOCTYPE html><html><head><style>div{color:red}</style></head>'
+        + '<body><div>hi</div><script>const a={x:1};go();</script></body></html><!-- pad ' + 'x'.repeat(300) + ' -->';
+    it('валидное — ок', () => {
+        assert.equal(validateHtml(good), '');
+    });
+    it('без каркаса, fence, разбаланс — причины', () => {
+        assert.ok(validateHtml('коротко'));
+        assert.ok(validateHtml('```html\n' + good + '\n```'));
+        assert.ok(validateHtml(good.replace('</div>', '')));
+        assert.ok(validateHtml(good.replace('}', '')));
+        assert.ok(validateHtml(good.replace('<!DOCTYPE html>', '')));
+    });
+    it('recalc: битое — error без стопа', async () => {
+        const tool = htmlAgent;
+        const block = { type: 'html', time: 82, content: '```html\n<div>oops' };
+        await tool.recalc({ block });
+        assert.equal(block.error, true);
+        assert.ok(String(block.content).includes('перегенерируй'));
+    });
+});
+
+describe('on_save: повторный вход пропускается', () => {
+    it('двойной save не крутит два prompt', async () => {
+        const prevWork = globalThis.WORK;
+        const fsp = (await import('node:fs/promises')).default;
+        const os = await import('node:os');
+        const path = await import('node:path');
+        const dir = path.join(os.tmpdir(), 'trigger-guard-' + Date.now() + '.task');
+        globalThis.WORK = { fsp };
+        try {
+            let prompts = 0;
+            const file = {
+                dir,
+                init: null,
+                async load() { return JSON.stringify({ name: 't' }); },
+                async prompt() { prompts++; await new Promise(r => setTimeout(r, 50)); return { ok: true }; },
+            };
+            const ctx = { $context: file, $owner: {} };
+            const p1 = onSaveTrigger.execute.call(ctx, {});
+            const p2 = onSaveTrigger.execute.call(ctx, {});
+            const [r1, r2] = await Promise.all([p1, p2]);
+            assert.equal(prompts, 1, 'второй вход отклонён гардом');
+            assert.equal(r2?.skipped !== undefined || r2?.ok === false, true);
+            assert.equal(r1?.ok, true);
+        }
+        finally {
+            globalThis.WORK = prevWork;
+            await fsp.unlink(dir).catch(() => {});
+        }
     });
 });
 
