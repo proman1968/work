@@ -219,7 +219,7 @@ const remoteTool = {
             return false;
         if (typeof target.list_remote !== 'function') {
             b.path = path;
-            b.content = '[remote]\nу «' + (target.type || '?') + '» ' + path + ' нет list_remote';
+            b.content = '[remote]\nу «' + (target.type || '?') + '» ' + path + ' нет list_remote — нужен путь узла $provider с карты/ls (напр. /MODELS/odant), не каталог';
             b.error = true;
             return true;
         }
@@ -234,7 +234,7 @@ const remoteTool = {
             catch { /* list_remote сам проверит */ }
             if (!baseUrl) {
                 b.content = formatRemoteResult({
-                    error: 'нет baseUrl у ' + path,
+                    error: 'нет baseUrl у ' + path + ' — remote только на узле $provider (напр. /MODELS/odant), не на каталоге',
                     baseUrl: '',
                 }, path, { baseUrl: '' });
                 b.error = true;
@@ -831,6 +831,17 @@ function exploreQuery(block, box, messages, defaultLabel) {
 }
 
 /** Путь с карты/ls: имя папки или label в query. Слово типа ($provider) не матчит все узлы. Неясно — пусто. */
+/** Нормализация для мэппинга: транслит + без пробелов/дефисов («о Дант» → odant). */
+export function normMap(s) {
+    return translit(s).replace(/[\s\-_]+/g, '');
+}
+
+/** Кириллица→латиница для мэппинга: «одант» в brief находит /MODELS/odant на карте. */
+export function translit(s) {
+    const map = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+    return String(s || '').toLowerCase().split('').map(c => map[c] ?? c).join('');
+}
+
 function pathFromMap(box, query) {
     const blocks = (box?.items || []).filter(b =>
         (b.type === 'map' || b.type === 'ls') && b.content);
@@ -844,15 +855,15 @@ function pathFromMap(box, query) {
     if (!rows.length)
         return '';
     const paths = [...new Set(rows.map(r => r.path))];
-    const q = String(query || '').toLowerCase();
+    const q = normMap(query);
     const hits = [];
     const ordered = [...paths].sort((a, b) => b.length - a.length);
     for (const p of ordered) {
-        const token = p.replace(/^\//, '').toLowerCase();
+        const token = normMap(p.replace(/^\//, ''));
         if (token.length >= 3 && q.includes(token))
             hits.push(p);
         else {
-            const leaf = p.split('/').filter(Boolean).pop()?.toLowerCase() || '';
+            const leaf = normMap(p.split('/').filter(Boolean).pop() || '');
             if (leaf.length >= 3 && q.includes(leaf))
                 hits.push(p);
         }
@@ -860,7 +871,7 @@ function pathFromMap(box, query) {
     for (const { path, rest } of rows) {
         const label = ((rest.match(/[—–-]\s*(.+)$/) || [])[1] || '').trim().toLowerCase();
         const words = label.split(/[^a-z0-9а-яё]+/i).filter(w => w.length >= 4);
-        if (words.some(w => q.includes(w)))
+        if (words.some(w => { w = normMap(w); return w.length >= 3 && q.includes(w); }))
             hits.push(path);
     }
     const uniq = [...new Set(hits)];
@@ -868,7 +879,7 @@ function pathFromMap(box, query) {
         return uniq[0];
     if (uniq.length > 1) {
         const leafHits = uniq.filter(p => {
-            const leaf = p.split('/').filter(Boolean).pop()?.toLowerCase() || '';
+            const leaf = normMap(p.split('/').filter(Boolean).pop() || '');
             return leaf.length >= 3 && q.includes(leaf);
         });
         if (leafHits.length === 1)

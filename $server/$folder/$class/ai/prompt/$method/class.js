@@ -72,10 +72,10 @@ export default {
         if (block.icon == null)
             block.icon = agent.icon;
 
+        // Инвариант «несейвленных блоков нет»: сначала персист, потом события UI.
+        await live.save?.();
         if (own)
             live.send({ type: 'chat.start' });
-
-        await live.save?.();
 
         try {
             await this.turn({
@@ -103,6 +103,15 @@ export default {
         if (live?.stopped) {
             delete block.inited;
             return;
+        }
+        // Бюджет ходов бокса: страховка от вечных циклов (второй контур после леджера попыток)
+        block.turns = (block.turns || 0) + 1;
+        if (block.turns > MAX_TURNS) {
+            block.content = [block.content, '[лимит ходов ' + MAX_TURNS + ': останавливаюсь, итог — из сделанного выше]'].filter(Boolean).join('\n\n');
+            delete block.inited;
+            await live.save?.();
+            const m = live?.mode || 'plan';
+            return this.total(ctx, agent[m]?.tools || agent.tools || {});
         }
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
@@ -182,7 +191,11 @@ export default {
 
         const tool = tools[next];
         if (tool) {
-            const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now() };
+            // Инвариант «несейвленных блоков нет»: чайлд рождается скрытым
+            // (ribbon и preview фильтруют hidden) и впервые попадает в сейв
+            // уже видимым — после init. Отказанный/прерванный init снимает его
+            // до первого сейва с ним: в файле остаётся только using_blocks.
+            const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now(), hidden: true };
             if (tool.stop != null)
                 child.stop = tool.stop;
             // doc — только после done (write/create evidence); не копировать с tool на пустой стрим
@@ -192,7 +205,6 @@ export default {
                     used.push(next);
             }
             block.items.push(child);
-            await live.save?.();
             if (typeof tool.init === 'function') {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
@@ -201,22 +213,25 @@ export default {
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
                     callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
-                await live.save?.();
-                if (live?.stopped) {
-                    delete block.inited;
-                    return;
-                }
-                if (ok === false) {
+                if (live?.stopped || ok === false) {
                     // init === false — «здесь этому tool нечего делать»: блок снимается,
                     // тип остаётся в using_blocks — в этом боксе его больше не предлагаем (меню только сужается)
-                    block.items.pop();
+                    const i = block.items.indexOf(child);
+                    if (i >= 0)
+                        block.items.splice(i, 1);
                     const used = block.using_blocks ??= [];
                     if (!used.includes(next))
                         used.push(next);
                     await live.save?.();
+                    if (live?.stopped) {
+                        delete block.inited;
+                        return;
+                    }
                     return this.turn(ctx);
                 }
             }
+            delete child.hidden;
+            await live.save?.();
             if (!child.content && !draftText(child) && (tool.prompt || tool.system)) {
                 await this.fill(child, {
                     agent: {
@@ -238,6 +253,9 @@ export default {
                     engine: this, task: params.task,
                 });
             pushLift(messages, child);
+            // Леджер попыток: идентичный провал дважды — dropUsed агента игнорируется,
+            // тип остаётся в using_blocks (защита от вечных циклов вида read ×15)
+            noteAttempt(block, next, child);
             await live.save?.();
             if (child.stop) {
                 if (!live.wait) {
@@ -326,6 +344,8 @@ export default {
         }
         const mode = live?.mode || 'plan';
         const data = (block.items || []).filter(b => {
+            if (b.hidden)
+                return false;
             if (b.type === 'prompt' || tools[b.type]?.ignore)
                 return false;
             if (tools[b.type]?.role && tools[b.type].role !== 'user')
@@ -508,7 +528,9 @@ export default {
                 if (!token)
                     continue;
                 if (!reasonBlock && box?.items) {
-                    reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, time: Date.now() };
+                    // hidden: эфемерный индикатор CoT — ribbon/preview его не рисуют,
+                    // в сводки total не попадает (фильтр ниже), на диск — только скрытым
+                    reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, hidden: true, time: Date.now() };
                     box.items.push(reasonBlock);
                     await live?.save?.();
                 }
@@ -550,6 +572,38 @@ export default {
             }
             throw e;
         }
+    },
+
+    /**
+     * Резолв WORK-пути в вид цели — для guided-ошибок tools.
+     * Агенты зовут через params.engine.resolveTarget(path).
+     * @returns {{kind: 'file'|'class'|'provider'|'missing'|'bad', path, type?, label?, hint?}}
+     */
+    async resolveTarget(path) {
+        const p = String(path || '').trim();
+        if (!p || !p.startsWith('/'))
+            return { kind: 'bad', path: p, hint: 'нужен абсолютный WORK-путь вида /MODELS/odant' };
+        let item = null;
+        try {
+            item = await WORK.get_item(p);
+        }
+        catch { item = null; }
+        if (!item)
+            return { kind: 'missing', path: p };
+        const type = item.type || item.constructor?.name || '';
+        const label = item.label || item.id || p;
+        if (typeof item.list_remote === 'function' || type === '$provider') {
+            return {
+                kind: 'provider', path: p, type, label,
+                hint: 'это провайдер ($provider): remote/list_remote — здесь, модели — дети через ls, новые — create $ai',
+            };
+        }
+        if (type === '$file')
+            return { kind: 'file', path: p, type, label };
+        return {
+            kind: 'class', path: p, type, label,
+            hint: 'это класс, не файл: осмотр — ls/info/readme/meta, действие — create/typed/write по контракту места',
+        };
     },
 
     /**
@@ -653,6 +707,58 @@ export default {
     },
 };
 
+/** Бюджет ходов одного бокса: второй контур защиты от вечных циклов (первый — леджер попыток). */
+export const MAX_TURNS = 50;
+
+/** Повторов одного операнда подряд, после которых тип остаётся в using_blocks. */
+export const MAX_SAME_ATTEMPTS = 2;
+
+/** Ключ попытки: tool + операнд (путь или первая строка контента). */
+export function attemptKey(next, child) {
+    const op = String(child?.path || '').trim()
+        || String(child?.content || '').replace(/\r\n/g, '\n').trim().split('\n').find(Boolean)
+        || '';
+    return next + '\n' + op.slice(0, 200);
+}
+
+function pruneAttempts(box) {
+    const a = box.attempts;
+    if (!a)
+        return;
+    const keys = Object.keys(a);
+    if (keys.length > 20)
+        for (const k of keys.slice(0, keys.length - 20)) delete a[k];
+}
+
+/**
+ * Учёт попытки tool. Успех/нейтраль — сброс счётчиков tool (операнд сменился).
+ * Идентичный провал MAX_SAME_ATTEMPTS раз — dropUsed агента игнорируется:
+ * тип возвращается в using_blocks, меню только сужается.
+ */
+export function noteAttempt(box, next, child) {
+    if (!box || !next || !child)
+        return;
+    if (!child.error) {
+        const at = box.attempts;
+        if (at) {
+            for (const k of Object.keys(at))
+                if (k.startsWith(next + '\n')) delete at[k];
+            if (!Object.keys(at).length) delete box.attempts;
+        }
+        return;
+    }
+    const key = attemptKey(next, child);
+    const at = box.attempts ??= {};
+    at[key] = (at[key] || 0) + 1;
+    pruneAttempts(box);
+    if (at[key] >= MAX_SAME_ATTEMPTS) {
+        const used = box.using_blocks ??= [];
+        if (!used.includes(next))
+            used.push(next);
+        child.content = [child.content, '[повтор ' + at[key] + ': тот же ' + next + ' с тем же операндом заблокирован — выбери другой ход или спроси человека]'].filter(Boolean).join('\n\n');
+    }
+}
+
 /** id из ответа pick + хвост строки = brief субагенту. */
 function splitPick(raw, ids) {
     const line = String(raw || '').trim();
@@ -725,11 +831,16 @@ function nextIds(agent, block, toolIds) {
 }
 
 /** После APPROVE activation или write в отсутствующий класс — create, даже если тип сожжён. */
-function createFirst(block, toolIds) {
+export function createFirst(block, toolIds) {
     if (!toolIds.includes('create'))
         return false;
     const items = block.items || [];
     if (items.some(b => b.type === 'create' && b.done && !b.error))
+        return false;
+    // Гейт против веера пустых create: дважды неуспешно без done — больше не форсим,
+    // ход уходит в общее меню (total/question), а не в восьмой identical create
+    const badCreates = items.filter(b => b.type === 'create' && b.error && !b.done);
+    if (badCreates.length >= 2)
         return false;
     if (items.some(b => b.type === 'activation' && b.state === 'принято'))
         return true;

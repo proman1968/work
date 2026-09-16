@@ -35,6 +35,7 @@ export default {
             /** Стоп на человека: отпускаем UI (chat.done → кнопка APPROVE), ждём _resolveWait. */
             wait: block => {
                 session?.send?.({ type: 'chat.done', path: task.short });
+                task._persistWaiting(block, session);
                 return new Promise(resolve => {
                     (task._waiters ??= new Map()).set(block.time, resolve);
                 });
@@ -47,8 +48,40 @@ export default {
         if (!resolve)
             return false;
         this._waiters.delete(block.time);
+        const b = this.body;
+        if (b && typeof b.then !== 'function' && b.waiting?.time === block?.time)
+            delete b.waiting;
         resolve(payload || {});
         return true;
+    },
+    /** Персист ожидания APPROVE: рестарт не должен молча терять waiter (см. _rearmWaiting). */
+    async _persistWaiting(block, session) {
+        try {
+            const body = await this.body;
+            body.waiting = { time: block.time, type: block.type };
+            await this._save(session);
+        }
+        catch { /* следующий сейв подберёт */ }
+    },
+    /**
+     * Перевооружение ожидания после обрыва/рестарта: waiter в памяти потерян —
+     * помечаем стоп-блок и возвращаем его тип в меню, чтобы ход переспросил.
+     */
+    async _rearmWaiting(session) {
+        const body = await this.body;
+        const w = body.waiting;
+        if (!w || this._waiters?.size)
+            return null;
+        delete body.waiting;
+        const blk = findWaitingBlock(body, new Map([[w.time, true]]));
+        if (blk) {
+            blk.state = 'ожидание снято рестартом — повтори вопрос или ответ';
+            const parent = parentOfBlock(body, blk);
+            if (parent)
+                dropUsedType(parent, blk.type);
+        }
+        await this._save(session);
+        return blk;
     },
     /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать build. */
     async _reviseWait(text, session) {
@@ -91,9 +124,10 @@ export default {
         return params.block;
     },
     /** Незавершённый блок-агент в активной цепочке (обрыв, рестарт) — продолжает движок. */
-    async _activeAgentBlock() {
+    async _activeAgentBlock(session) {
         if (this._waiters?.size)
             return null; // движок уже ждёт человека в этом блоке — не перезапускать
+        await this._rearmWaiting(session);
         const body = await this.body;
         const focus = await this._active_box();
         if (agentPending(focus, this.pipe))
@@ -355,7 +389,7 @@ export default {
     /** Один ход автомата: fill leaf или меню → push. { loop, waiting, block }. */
     async _promptTurn(params, session) {
         // незавершённый агент (обрыв, рестарт) — доигрывает движок класса, не меню таска
-        const broken = await this._activeAgentBlock();
+        const broken = await this._activeAgentBlock(session);
         if (broken) {
             params.block = broken.block;
             params.box = broken.box;
@@ -1172,6 +1206,7 @@ export default {
         }
         const body = await this.body;
         body.halt = 'stop';
+        delete body.waiting;
         await this._save(params.session);
         params.session?.send?.({ type: 'chat.done', path: this.short });
         return { ok: true, stopped: true };
@@ -1314,7 +1349,25 @@ export default {
         return { ok: true };
     },
     async _save(session) {
-        await WORK.fsp.writeFile(this.dir, JSON.stringify(this.body, null, 4), 'utf-8');
+        // Атомарно (tmp+rename): клиент перечитывает файл по send(path) —
+        // он никогда не должен увидеть полузапись после краша между truncate и flush.
+        const text = JSON.stringify(this.body, null, 4);
+        const tmp = this.dir + '.tmp';
+        try {
+            await WORK.fsp.unlink(tmp).catch(() => {});
+            await WORK.fsp.writeFile(tmp, text, 'utf-8');
+            try {
+                await WORK.fsp.rename(tmp, this.dir);
+            }
+            catch {
+                // Windows: rename поверх существующего часто падает
+                await WORK.fsp.unlink(this.dir).catch(() => {});
+                await WORK.fsp.rename(tmp, this.dir);
+            }
+        }
+        catch {
+            await WORK.fsp.writeFile(this.dir, text, 'utf-8');
+        }
         session?.send?.({ path: this.short });
     },
 };

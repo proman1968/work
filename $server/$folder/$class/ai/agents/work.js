@@ -111,6 +111,16 @@ const readTool = {
 };
 
 async function readFileInto(b, path, params) {
+    // Guided-резолв: класс вместо файла — сразу правильный ход, без dropUsed (меню сужается, не цикл)
+    try {
+        const tgt = await params.engine?.resolveTarget?.(path);
+        if (tgt && (tgt.kind === 'class' || tgt.kind === 'provider')) {
+            b.error = true;
+            b.content = 'read: ' + (tgt.hint || 'это класс, не файл') + ': ' + path;
+            return true;
+        }
+    }
+    catch { /* fallback ниже */ }
     const file = await resolveFile(path);
     if (!file) {
         b.error = true;
@@ -480,11 +490,18 @@ async function createOne(b, spec, params) {
     }
 }
 
+const ACTIVATION_TOOL_HEAD = /^\s*\[(read|ls|search|write|create|meta|ask|typed|remote)\b/i;
+
 const activationTool = {
     label: 'Требуется режим исполнения',
     icon: 'icons:check-box-outline-blank',
-    description: 'нужен write файлов или create классов; html в ленте и обзор — без этого',
-    prompt: `Письмо человеку: зачем запись, какие create/write (путь, тип, id), что не трогаешь. Факты только из ленты. Markdown. Не [read]/[ls]/[create], не JSON профиля, не class.js.
+    description: 'Агент сейчас только читает (разведка). Чтобы он мог создавать классы и писать файлы, подтверди кнопкой ниже — там его письмо: что именно будет сделано',
+    prompt: `Письмо человеку за разрешением действовать. Сейчас ты только читаешь (разведка); без подтверждения ничего не создавай и не пиши.
+Структура письма:
+- Зачем: одна строка, что даст действие (из фактов ленты, не из памяти).
+- Что сделаю: списком create/write — путь, тип, id (напр. «create /MODELS/odant, $ai, Qwen3 32b»).
+- Что не трону: одной строкой.
+Плохо: скобки tool-вызовов вроде [read /…], JSON профиля, тела class.js. Хорошо: короткие строки плана.
 `,
     stop: 'Перейти к действиям',
     async init(params = {}) {
@@ -492,7 +509,20 @@ const activationTool = {
         return true;
     },
     async recalc(params = {}) {
-        const first = String(params.block?.content || '').replace(/\r\n/g, '\n').trim().split('\n').find(Boolean) || '';
+        const b = params.block;
+        const text = String(b?.content || '').replace(/\r\n/g, '\n').trim();
+        // Не план, а мусор — такой стоп ждал бы APPROVE по пустоте и вешал ленту:
+        // пусто, один тег [activation …] или псевдовызов tool вроде [read /…]
+        const head = text.split('\n').find(Boolean) || '';
+        if (!text || /^\[activation[^\]]*\]\s*$/i.test(text) || ACTIVATION_TOOL_HEAD.test(head)) {
+            delete b.stop;
+            b.error = true;
+            b.content = 'activation: нужно письмо человеку (зачем, что сделаю списком, что не трону) — не пусто, не тег и не вызов tool в скобках';
+            dropUsed(params.box, 'activation');
+            tagAgent(params.box, AGENT_TAG, 'план не принят');
+            return;
+        }
+        const first = text.split('\n').find(Boolean) || '';
         if (first)
             tagAgent(params.box, AGENT_TAG, clip(first, 48));
     },

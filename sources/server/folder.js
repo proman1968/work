@@ -8,6 +8,28 @@ import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
 import { safeNodeName } from './safe-node-name.js';
 
+/**
+ * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
+ * Живые инстансы обновляются через reset() в save_file; это — чтобы следующий
+ * load/import/tilde собрал слои из новых файлов, а не из закэшированного merge.
+ */
+function resetMergeCaches() {
+    try {
+        const S = globalThis.$server;
+        if (S) {
+            S.merges = {};
+            if (S.__merge_pairs__ instanceof Map)
+                S.__merge_pairs__.clear();
+        }
+    }
+    catch { /* кэши пересоберутся лениво */ }
+    try {
+        FS.$file.__ext_scripts__ = Object.create(null);
+        FS.$file.__type_data__ = Object.create(null);
+    }
+    catch { /* кэши пересоберутся лениво */ }
+}
+
 /** Атомарная запись RAG index: temp + rename (не обрезать index.json при краше). */
 async function writeRagIndexAtomic(path, text) {
     const tmp = path + '.tmp';
@@ -1607,6 +1629,9 @@ export class $folder extends $item{
         const file = await this._get_next_item(filename, FS.$file);
         file.reset();
         this.reset();
+        // Правка слоя обязана менять поведение без рестарта: сносим кэши сборки class.js
+        if (params.filename === 'class.js')
+            resetMergeCaches();
         return await FS.$file.save_to_history.call(file, params);
     }
 
