@@ -225,10 +225,14 @@ export default {
                     if (accept) {
                         await params.pipe_step.approve?.(params);
                         params.block.state = 'принято';
+                        delete params.box.using_blocks;
                     } else {
                         params.block.state = 'отклонено';
+                        // Отклонение закрывает freeze: новый заход — новой командой, не redraft.
+                        // Остальным стопам — точечный сброс только отклонённого типа.
+                        if (!closeFreezeBox(params.box, params.block))
+                            dropUsedType(params.box, params.block?.type);
                     }
-                    delete params.box.using_blocks;
                     await this._save(session);
                     this._stopped = false;
                     // движок ждёт этот блок — доставить факт; chat.done не шлём:
@@ -1985,6 +1989,28 @@ function dropUsedType(box, type) {
     if (j >= 0) used.splice(j, 1);
     if (!used.length)
         delete box.using_blocks;
+}
+
+/** Отклонение закрывает только freeze-confirm (новый заход — новой командой). */
+export function shouldCloseOnReject(box, block) {
+    return box?.type === 'freeze' && block?.type === 'confirm';
+}
+
+/**
+ * Закрыть freeze-бокс отклонением: саммари + сожжённое меню.
+ * @returns {boolean} true — бокс закрыт (обычный путь отклонения не нужен)
+ */
+export function closeFreezeBox(box, block) {
+    if (!shouldCloseOnReject(box, block))
+        return false;
+    if (!box)
+        return true;
+    box.closed = 'отклонено';
+    box.using_blocks = ['total'];
+    const label = block?.label || block?.type || 'блок';
+    box.content = [box.content, '[freeze закрыт отклонением: ' + label + ' — новый заход новой командой]']
+        .filter(Boolean).join('\n\n');
+    return true;
 }
 
 function timeNow(tz) {

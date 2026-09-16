@@ -263,12 +263,22 @@ export default {
                     delete block.inited;
                     return;
                 }
+                // Догма: повторный стоп того же типа с тем же операндом после
+                // отклонения — отказ уже финален, ждать нечего, сразу итог
+                if (isRepeatStop(block, next, child)) {
+                    child.content = [child.content, '[повторный стоп без новых данных после отклонения — закрываю без ожидания]'].filter(Boolean).join('\n\n');
+                    delete child.stop;
+                    await live.save?.();
+                    return this.total(ctx, tools);
+                }
                 // ждём человека; approve выполняет владелец ленты, сюда приходит факт
                 const res = await live.wait(child) || {};
                 if (live?.stopped) {
                     delete block.inited;
                     return;
                 }
+                if (res.accept === false)
+                    recordReject(block, next, child);
                 if (res.content)
                     messages.push({ role: 'user', content: String(res.content) });
                 await live.save?.();
@@ -321,6 +331,11 @@ export default {
             const i = box.items.indexOf(sub);
             if (i >= 0)
                 box.items.splice(i, 1);
+            // Пропущенный субагент — в меню-исключение: повторный pick без новых
+            // данных ушёл бы в тот же skip (вечный холостой цикл nested)
+            const used = box.using_blocks ??= [];
+            if (!used.includes(id))
+                used.push(id);
             await live?.save?.();
             return { ok: false, skip: true, agent: id, block: sub };
         }
@@ -757,6 +772,25 @@ export function noteAttempt(box, next, child) {
             used.push(next);
         child.content = [child.content, '[повтор ' + at[key] + ': тот же ' + next + ' с тем же операндом заблокирован — выбери другой ход или спроси человека]'].filter(Boolean).join('\n\n');
     }
+}
+
+/**
+ * Фиксация отклонения стоп-блока: повтор с тем же операндом ждать не будет.
+ * Ключ — attemptKey (tool + путь/первая строка): пометки леджера в хвосте
+ * контента на сравнение не влияют.
+ */
+export function recordReject(box, next, child) {
+    if (!box || !next)
+        return;
+    (box.rejectedStops ??= {})[next] = attemptKey(next, child);
+}
+
+/** Тот же стоп с тем же операндом уже отклоняли — ожидание бессмысленно. */
+export function isRepeatStop(box, next, child) {
+    const r = box?.rejectedStops;
+    if (!r || !next || !(next in r))
+        return false;
+    return r[next] === attemptKey(next, child);
 }
 
 /** id из ответа pick + хвост строки = brief субагенту. */

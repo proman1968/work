@@ -30,5 +30,37 @@ export default {
         }
         if (inner) block.content = inner;
         delete block.html;
+        // Гейт битой разметки (кейс «сапёра»): невалидное — в ошибку на регенерацию,
+        // а не в doc-превью. Повторы душит леджер движка (2 identical — стоп).
+        const gap = validateHtml(block.content);
+        if (gap) {
+            block.error = true;
+            block.content = 'html: разметка невалидна (' + gap + ') — перегенерируй приложение целиком';
+        }
     },
 };
+
+/**
+ * Грубая валидация одностраничника: каркас, без fence-остатков,
+ * парные div/script/style, баланс фигурных скобок, не заглушка.
+ * @returns {string} '' — ок, иначе причина
+ */
+export function validateHtml(html) {
+    const s = String(html || '');
+    if (s.length < 200)
+        return 'слишком коротко для приложения';
+    if (/```/.test(s))
+        return 'остатки fence';
+    if (!/<!doctype html/i.test(s) || !/<html/i.test(s))
+        return 'нет каркаса <!DOCTYPE>/<html>';
+    for (const tag of ['div', 'script', 'style']) {
+        const open = (s.match(new RegExp('<' + tag + '(?![a-z0-9])', 'gi')) || []).length;
+        const close = (s.match(new RegExp('</' + tag + '\\s*>', 'gi')) || []).length;
+        if (open !== close)
+            return 'разбаланс <' + tag + '>: ' + open + '/' + close;
+    }
+    const braces = (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+    if (braces !== 0)
+        return 'разбаланс {}: ' + braces;
+    return '';
+}
