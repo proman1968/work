@@ -1045,6 +1045,8 @@ export class $class extends $folder{
             throw new Error('create создаёт только класс. Файл — save_file; папки появляются при save_file');
         if (typeof type !== 'string' || type[0] !== '$')
             throw new Error('create: type должен быть $class или типизатором ($…)');
+        if (type.length < 2)
+            throw new Error('create: type должен быть $class или типизатором с именем ($…), не «$»');
         if (type === '$class')
             assertClassId(id);
 
@@ -1055,6 +1057,15 @@ export class $class extends $folder{
             const early = await parseCreateDevice(post);
             if (!early?.model)
                 post = ensureModelField(post, rawId);
+        }
+        // Тело обязано разбираться как модуль до записи: битый class.js убивает merge
+        // всего дерева (Babel) и кладет сервер. Проверяет сам класс, не агент.
+        try {
+            const script = /export\s+default/.test(String(post)) ? String(post) : ('export default ' + String(post));
+            await this.constructor.importScript(script);
+        }
+        catch (e) {
+            throw new Error('create: class.js не разбирается: ' + String(e.message || e).split('\n')[0]);
         }
         // Инвариант: поле model в class.js уникально среди детей родителя (один remote → один класс).
         const device = await parseCreateDevice(post);

@@ -272,7 +272,12 @@ export function createRequestHandler() {
             }
             if (path.includes('~') && items.map(f => f.id).unique().length === 1) {
                 item = items.last;
-                if (!method) {
+                // readme.md из ~ читается сборкой (сырой вид, load, script — одна сборка);
+                // остальное как раньше: mergeFiles без метода, иначе штатный разбор ниже.
+                if (item.constructor === CORE.$file && items[0]?.id === 'readme.md' && isFileBodyMethod(method)) {
+                    result = await $server.mergeTextFiles(items);
+                }
+                else if (!method) {
                     if (item.constructor === CORE.$file) {
                         result = await $server.mergeFiles(items);
                     }
@@ -383,9 +388,13 @@ export function createRequestHandler() {
                         if(steps.last === '~')
                             params.hasTilde = true;
                     }
-                    if (item.constructor === CORE.$file && request.method !== 'POST' && isFileBodyMethod(method))
+                    // Собранный выше результат из ~ (readme merge) не пересчитывать:
+                    // превью (load) и сырой вид получают одну сборку. Остальное как раньше.
+                    const readmeMerged = path.includes('~') && item.id === 'readme.md'
+                        && typeof result === 'string' && result !== '';
+                    if (!readmeMerged && item.constructor === CORE.$file && request.method !== 'POST' && isFileBodyMethod(method))
                         result = item.download(params);
-                    else
+                    else if (result == null)
                         result = execItemMethod(item, method, params, request)
                 }
             }

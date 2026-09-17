@@ -362,6 +362,16 @@ async function fillReadme(b, path, params) {
     if (!file) {
         try {
             const item = await WORK.get_item(path);
+            if (item && typeof item.readme_merged === 'function') {
+                const merged = await item.readme_merged();
+                if (merged?.text) {
+                    b.path = merged.path || path;
+                    tagAgent(params.box, AGENT_TAG, 'readme ' + b.path);
+                    b.content = merged.text;
+                    b.done = true;
+                    return true;
+                }
+            }
             file = await resolveReadme(item);
             if (file)
                 path = file.path || path;
@@ -919,7 +929,7 @@ async function resolveFile(path) {
     return item && typeof item.read_text === 'function' ? item : null;
 }
 
-/** readme.md в storage_folder (класс = meta; папка = сама). */
+/** readme.md в storage_folder (класс = meta; папка = сама). Нет своего — наследованный через ~/readme.md (виртуальная ФС, не прямой путь). */
 async function resolveReadme(item) {
     if (!item)
         return null;
@@ -929,6 +939,14 @@ async function resolveReadme(item) {
         if (file)
             return file;
     }
+    try {
+        const inherited = await item.get_item('~/readme.md');
+        const list = Array.isArray(inherited) ? inherited : (inherited ? [inherited] : []);
+        const found = list.last || list[list.length - 1] || null;
+        if (found && typeof found.read_text === 'function')
+            return found;
+    }
+    catch { /* нет наследованного */ }
     return null;
 }
 

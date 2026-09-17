@@ -131,7 +131,26 @@ async function readFileInto(b, path, params) {
         }
     }
     catch { /* fallback ниже */ }
-    const file = await resolveFile(path);
+    let file = await resolveFile(path);
+    if (!file && /\/readme\.md$/i.test(String(path || ''))) {
+        // readme точки — сборка по ~ из API тела (свои слои + наследованные), не прямой путь
+        try {
+            const parts = String(path).split('/').filter(Boolean);
+            parts.pop();
+            if (parts[parts.length - 1]?.[0] === '$')
+                parts.pop();
+            const cls = await WORK.get_item('/' + parts.join('/'));
+            const merged = cls && typeof cls.readme_merged === 'function' ? await cls.readme_merged() : null;
+            if (merged?.text) {
+                b.path = merged.path || path;
+                tagAgent(params.box, AGENT_TAG, 'читаю ' + b.path);
+                b.content = merged.text;
+                b.done = true;
+                return true;
+            }
+        }
+        catch { /* ниже — штатная ошибка read */ }
+    }
     if (!file) {
         b.error = true;
         b.content = 'read: файл не найден: ' + path;
@@ -353,8 +372,9 @@ const createTool = {
     system: [
         '# Режим: create классов',
         'Все нужные классы — в одном ответе, секциями. Секция: путь родителя; тип ($… из readme родителя); id узла; опционально label; class.js в fence.',
-        'id — имя папки. type и поля class.js — из контракта места (readme / образец в ленте), не из памяти.',
-        'В class.js — icon из набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:) и label. Без icon create неполный.',
+        'id — имя папки. type и поля class.js — только из readme места и поручения (образец в ленте), не из памяти и не из общих списков.',
+        'Устройство class.js (icon, label, поля) — как требует readme места. Агент наборы и шаблоны не знает.',
+        'Поля из поручения/цели — в METADATA.FIELDS внутри того же fence, не терять.',
         'После create движок пишет readme.md в storage_folder того же type; правка class.js — сам обнови readme write.',
         'Файл типа (when в типе) — tool typed, не create. Не выдумывай post. Не обращайся к пользователю.',
     ].join('\n'),
@@ -415,18 +435,7 @@ const createTool = {
     },
 };
 
-/** icon только из реальных наборов ODA (набора register: нет). */
-function createIconGap(post) {
-    const m = String(post || '').match(/\bicon\s*:\s*['"`]([^'"`]+)['"`]/);
-    if (!m)
-        return 'в class.js нужен icon из набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:)';
-    const set = String(m[1]).split(':')[0];
-    if (!/^(carbon|icons|ai|lineawesome|bootstrap|iconoir|editor)$/.test(set))
-        return 'icon «' + m[1] + '» — набора «' + set + ':» нет; возьми carbon: или icon предка';
-    return '';
-}
-
-/** Один класс: проверки → $class.create → readme → evidence. Возвращает { created, path }. */
+/** Один класс: форма → $class.create → readme → evidence. Устройство решает класс через свой API; агент его не проверяет, ошибку отдает дословно. Возвращает { created, path }. */
 async function createOne(b, spec, params) {
     const { session, box } = params;
     if (!spec.parent || !spec.type || !spec.id) {
@@ -447,12 +456,6 @@ async function createOne(b, spec, params) {
     if (!spec.post) {
         b.error = true;
         b.content = 'create: нужен class.js (fence)';
-        return { created: false };
-    }
-    const iconGap = createIconGap(spec.post);
-    if (iconGap) {
-        b.error = true;
-        b.content = 'create: ' + iconGap;
         return { created: false };
     }
     const parent = await WORK.get_item(spec.parent);
@@ -599,7 +602,7 @@ export default {
             'Файл типа — typed, не create. Новый класс — create, не write.',
             'write — путь /… и тело из ленты. create — родитель + тип + id + class.js.',
             'Операнды только из ленты. type и поля — из readme места / образца.',
-            'В class.js — icon набора ODA и label.',
+            'Устройство class.js — как требует readme места. Агент наборов не знает.',
             'После create или write class.js — readme.md в storage_folder.',
             'После create цель не закрывай — check снаружи.',
             'Нет операнда — не выдумывай.',

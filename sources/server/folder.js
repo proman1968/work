@@ -272,6 +272,31 @@ export class $folder extends $item{
     get storage_folder(){
         return this;
     }
+    /**
+     * Собранный readme точки по ~ (корень→SELF, конкатенация слоями, без сборки кода):
+     * свой слой первым, дальше маркер и предки. Сборка — $server.mergeTextFiles.
+     * @returns {Promise<{text: string, path: string}>} Текст сборки и путь ближайшего слоя
+     */
+    async readme_merged(){
+        try {
+            const found = await this.get_item('~/readme.md');
+            const list = Array.isArray(found) ? found : (found ? [found] : []);
+            const text = await $server.mergeTextFiles(list);
+            if (!text)
+                return {text: '', path: ''};
+            let path = '';
+            for (let i = list.length - 1; i >= 0; i--) {
+                const f = list[i];
+                if (f && typeof f.read_text === 'function'
+                    && String(await f.read_text() || '').trim()) {
+                    path = f.path || '';
+                    break;
+                }
+            }
+            return {text, path};
+        }
+        catch { return {text: '', path: ''}; }
+    }
     constructor(data = {}, parent) {
         super(data);
         this.parent = parent;

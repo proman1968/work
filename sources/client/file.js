@@ -44,6 +44,28 @@ export class $file extends $folder{
     get icon(){
         return this.DATA.icon || 'files:document';
     }
+    // todo: Подумать, где этому лучше находиться
+    get metadata() {
+        return this.fetch('METADATA');
+    }
+    // todo: Подумать, где этому лучше находиться
+    get $fields() {
+        return Promise.resolve(this.metadata).then(meta => {
+            meta ??= {};
+            return new CORE.$field({ id: 'FIELDS', fields: meta.FIELDS || [] }, this);
+        })
+    }
+    // todo: Подумать, где этому лучше находиться
+    get dataAccessRoot() {
+        return Promise.all([this.metadata, this.$fields]).then(([metadata, ...fieldGroups]) => {
+            return new CORE.$class.DataAccessRoot({
+                fieldRoot: metadata,
+                fieldGroups,
+                dataRoot: this,
+                key: 'body'
+            });
+        });
+    }
     static loadPreview(n){
         if(!n?.ext)
             return false;

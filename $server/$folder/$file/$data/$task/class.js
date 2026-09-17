@@ -537,7 +537,10 @@ export default {
             return { loop: false, block: params.block };
 
         params.block = this._build_block(choice);
-        if (pickBrief)
+        // Поручение из меню (silent-стрим, cap 64 токена) часто обрезано mid-word:
+        // обрезанный бриф с путями/полями хуже его отсутствия (агент возьмет полную цель).
+        // Короткие целые поручения оставляем, длинные обрезанные отбрасываем.
+        if (pickBrief && pickBrief.length <= 120)
             params.block.brief = pickBrief;
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
@@ -1011,7 +1014,11 @@ export default {
                     const mod = await this._importPipeFile(file);
                     registerAgent(ns, id, mod.default);
                     const onlyNested = mod.default?.step === false && Array.isArray(mod.default?.nested);
-                    if (!onlyNested)
+                    // Мета-действия (навык/разбор ленты) — только явным @freeze/@review, не автоменю:
+                    // иначе после каждого вопроса пользователю в ленту встает красная ошибка
+                    // «нужен успешный прогон», хотя задача просто ждет слов человека.
+                    const manualOnly = id === 'freeze' || id === 'review';
+                    if (!onlyNested && !manualOnly)
                         agentIds.push(id);
                     if (mod.default?.step !== false)
                         stepAgents.push(id);

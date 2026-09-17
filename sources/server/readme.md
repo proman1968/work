@@ -82,3 +82,7 @@ API элементов — это «система команд» для ИИ-а
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`
 
 Deprecated-алиасы удерживаются до миграции всех вызывающих, новые вызовы — только канон.
+
+## TODO
+
+- [ ] Сборка `~/readme.md` в ядре: ветка `~` в `get_item` (`folder.js`) для `id==='readme.md'` возвращает один виртуальный файл (прокси ближайшего слоя, `read_text/load/download` отдают `$server.mergeTextFiles` по тем же слоям). Остальные `~` — массивами как сейчас. После этого удалить: спецветку в `http-server.js` (отдача сборки), `readme_merged()` в `folder.js`, `~/`-блоки чтения readme в `agents/explore.js` и `agents/work.js` (вернуть прямое чтение). Одна ветка в ядре вместо четырех мест.
