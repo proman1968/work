@@ -147,7 +147,7 @@ export default {
     label: 'Смотрю журнал',
     icon: 'carbon:log',
     allowReasoning: true,
-    description: 'журнал класса через $class.logs (дни, день+ext, entry); хронология/вчера/почта/календарь — не work и не чтение .logs файлами',
+    description: 'журнал класса через $class.logs (дни, день+ext, entry); хронология/вчера/почта/календарь — не work и не чтение .logs файлами. Звать когда спрашивают что было',
     system: [
         '# Агент: logs',
         'Хронология места только через $class.logs / read_log_entry. Не explore, не work.read history.',

@@ -57,12 +57,14 @@ export class $file extends $folder{
     }
     // todo: Подумать, где этому лучше находиться
     get dataAccessRoot() {
-        return Promise.all([this.metadata, this.$fields]).then(([metadata, ...fieldGroups]) => {
+        return Promise.all([this.metadata, this.$fields]).then(async([metadata, ...fieldGroups]) => {
+            const body = await this.load();
             return new CORE.$class.DataAccessRoot({
                 fieldRoot: metadata,
                 fieldGroups,
-                dataRoot: this,
-                key: 'body'
+                dataRoot: { body },
+                key: 'body',
+                owner: this
             });
         });
     }

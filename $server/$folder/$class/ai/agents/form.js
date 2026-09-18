@@ -2,7 +2,7 @@
 export default {
     label: 'Готовлю форму',
     icon: 'icons:view-list',
-    description: 'несколько полей от пользователя',
+    description: 'несколько полей от пользователя. Звать когда без нескольких полей не продолжить',
     /** не в меню step — диалог на корне / todo */
     step: false,
     system: [

@@ -206,13 +206,13 @@ export default {
             funcCallName = '';
             funcCallArgs = '';
           };
-          for await (const chunk of res) {
-            const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
-            const lines = text.split('\n');
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
+          // SSE собирается по целым строкам: хвост чанка (разорванный JSON)
+          // держим в буфере до следующего чанка, иначе строка глоталась целиком.
+          let buf = '';
+          const handleLine = function* (line) {
+              if (!line.startsWith('data: ')) return;
               const jsonStr = line.slice(6).trim();
-              if (!jsonStr || jsonStr === '[DONE]') continue;
+              if (!jsonStr || jsonStr === '[DONE]') return;
               try {
                 const json = JSON.parse(jsonStr);
                 const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
@@ -259,8 +259,16 @@ export default {
                   };
                 }
               } catch {}
-            }
+          };
+          for await (const chunk of res) {
+            buf += Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines)
+              yield* handleLine(line);
           }
+          if (String(buf || '').trim())
+            yield* handleLine(buf);
       
           // reasoning не подменяем content: silent-меню иначе получает абзац «think» вместо EXPLORE
       

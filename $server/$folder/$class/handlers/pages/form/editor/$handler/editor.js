@@ -18,5 +18,6 @@ export default {
     async attached() {
         const node = await this.$item.dataAccessRoot
         this.dataAccessNode = node.children.find(n => n.field.id === 'FIELDS');
+        this.body = await node.getDataRoot();
     }
 };

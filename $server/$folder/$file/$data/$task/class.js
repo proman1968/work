@@ -461,20 +461,18 @@ export default {
         const hasAct = hasActEvidence(params.box);
         const checkOk = checkFullyOk(lastOfType(this.body, 'check'));
         const gathered = hasCollectorEvidence(params.box);
-        if (gathered)
-            next = next.filter(id => !COLLECTORS.has(id) && id !== 'report' && id !== 'planning');
-        if (need === 'facts')
-            next = next.filter(id => !ACTORS.has(id) && id !== 'check');
-        if (need === 'side' && !gathered)
-            next = next.filter(id => !ACTORS.has(id));
-        if (need === 'side' && !hasAct)
-            next = next.filter(id => id !== 'check');
+        // Фазовых сужений меню нет (как лесенка ниже): порядок сборки→действия→проверки
+        // модель читает в тексте меню и описаниях агентов, выбор всегда её.
         // картинка — image.generate; work.write png ломает процесс
         if (asksImage(lastPromptText(params.box)))
             next = next.filter(id => id !== 'work');
         // после question без субагента / pursue — answer не в меню, пока goal open
         if (goal && goal.status !== 'done' && goal.resume?.continue)
             next = next.filter(id => id !== 'answer' && id !== 'form' && id !== 'question');
+        // чистый артефакт без действий work: проверять нечего — только закрытие
+        if (need === 'side' && goal && goal.status !== 'done' && !todoFocus
+            && lastValidArtifact(this.body) && !hasWorkAct(this.body))
+            next = next.filter(id => id === 'report' || id === 'answer');
 
         let choice;
         let pickBrief = '';
@@ -486,15 +484,7 @@ export default {
         else
             choice = await this._skillChoice(using_blocks);
         if (!choice) {
-            if (need === 'facts' && gathered && next.includes('answer'))
-                choice = 'answer';
-            else if (need === 'side' && hasAct && !checkOk && next.includes('check'))
-                choice = 'check';
-            else if (attachmentsNeedDigest(this.body) && next.includes('thinking'))
-                choice = 'thinking';
-            else if (need === 'side' && !gathered && next.includes('explore'))
-                choice = 'explore';
-            else if (!next.length)
+            if (!next.length)
                 choice = this.pipe.total ? 'total' : null;
             else if (next.length === 1)
                 choice = next[0];
@@ -561,6 +551,13 @@ export default {
             }
             await this._advanceSkillIf(choice);
             liftStepIf(params.box, b);
+            // Прерыватель серий на уровне задачи (doom_loop по типу, не по операнду):
+            // один агент трижды подряд с ошибкой — тип возвращается в using_blocks,
+            // дальше решает человек. Одинаковый мусор ловит леджер движка, разный — он.
+            // Помета — в state, не в content (контент артефакта не портим).
+            if (this._trippedTypeStreak(params.box, choice)) {
+                b.state = 'ошибки подряд: 3 × ' + choice + ' — останавливаю подбор, нужен человек';
+            }
             await this._save(session);
             // субагент действия отработал — слот continue больше не нужен
             if (choice !== 'question' && choice !== 'form')
@@ -616,7 +613,8 @@ export default {
     },
 
     /**
-     * Закрыть цель: facts — answer/report; side — answer/report/html только после ok check.
+     * Закрыть цель: facts — answer/report; side — answer/report/html,
+     * проверка обязательна только при действиях work (чистый артефакт закрывается отчетом).
      * @returns {boolean} цель закрыта
      */
     _settleFactsGoal(block) {
@@ -631,7 +629,7 @@ export default {
         if (need === 'side') {
             if (!SIDE_EVIDENCE.has(block.type))
                 return false;
-            if (!checkFullyOk(lastOfType(this.body, 'check')))
+            if (hasWorkAct(this.body) && !checkFullyOk(lastOfType(this.body, 'check')))
                 return false;
         }
         g.status = 'done';
@@ -820,7 +818,8 @@ export default {
             else break;
         }
         const focus = box;
-        const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff));
+        const retryType = evidence && !handoff && leaf?.type ? leaf.type : null;
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff, retryType));
         let messages;
         const goalBlock = formatGoalBlock(body.goal);
         const skillDef = body.skill?.id
@@ -875,7 +874,7 @@ export default {
     /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
      *  evidence: false (генерация total) — предки без уликов-боксов.
      *  expand-box отдаёт листья с ролью их узла (бюджет clipContext); маркер box.content в контекст не идёт. */
-    _box_context(box, focus = true, evidence = true, handoff = false) {
+    _box_context(box, focus = true, evidence = true, handoff = false, retryType = null) {
         const node = this.pipe[box.type];
         const mode = taskMode(this.body.mode);
         // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
@@ -894,8 +893,11 @@ export default {
         const messages = [];
         for (const b of (box.items || [])) {
             // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
-            // иначе после «страница недоступна» модель не видит провал и лезет в planning
-            if ((b.error && !evidence) || this.pipe[b.type]?.ignore || this.pipe[b.type]?.close)
+            // иначе после «страница недоступна» модель не видит провал и лезет в planning.
+            // повтор того же типа: предыдущая попытка (включая ignore) видна заполнению,
+            // иначе модель перегенерирует вслепую; evidence:false (total) — без исключений
+            const retry = retryType && b.type === retryType && (b.content || draftText(b));
+            if ((b.error && !evidence) || (this.pipe[b.type]?.ignore && !retry) || this.pipe[b.type]?.close)
                 continue;
             // провал сборщика (ok=0) не улика, если тот же тип уже дал content
             if (collectorMissed(b) && collectorHasWin(box.items, b.type))
@@ -1192,6 +1194,32 @@ export default {
         if (worn?.step?.type === type)
             this.body.skill.cursor++;
         await this._skillStep();
+    },
+    /**
+     * Серия ошибок одного типа подряд в боксе (хвост ленты): трижды — тип
+     * возвращается в using_blocks бокса, подбор останавливается.
+     * @returns {boolean} серия набралась
+     */
+    _trippedTypeStreak(box, type) {
+        if (!box || !type)
+            return false;
+        const items = box.items || [];
+        let streak = 0;
+        for (let i = items.length - 1; i >= 0; i--) {
+            const it = items[i];
+            if (!it || it.type !== type)
+                break;
+            if (it.error && it.content)
+                streak++;
+            else
+                break;
+        }
+        if (streak < 3)
+            return false;
+        const used = box.using_blocks ??= [];
+        if (!used.includes(type))
+            used.push(type);
+        return true;
     },
     get body() {
         return new AsyncPromise(async () => {
@@ -1607,6 +1635,38 @@ function checkFullyOk(block) {
 function lastCheckIncomplete(root) {
     const chk = lastOfType(root, 'check');
     return !!chk && !checkFullyOk(chk);
+}
+
+/** Действия work в ленте (create/write с телом без ошибки): предмет проверки check. */
+function hasWorkAct(root) {
+    let found = false;
+    const walk = items => {
+        for (const b of items || []) {
+            if (found || !b)
+                continue;
+            if ((b.type === 'create' || b.type === 'write') && b.content && !b.error)
+                found = true;
+            walk(b.items);
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+/** Валидный артефакт в ленте: лист-результат (doc) с телом без ошибки. */
+function lastValidArtifact(root) {
+    let found = null;
+    const walk = items => {
+        for (const b of items || []) {
+            if (!b)
+                continue;
+            walk(b.items);
+            if (!b.box && !b.stop && b.doc && b.content && !b.error)
+                found = b;
+        }
+    };
+    walk(root?.items);
+    return found;
 }
 
 function menuPickLine(text, next) {

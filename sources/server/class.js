@@ -32,6 +32,14 @@ export class $class extends $folder{
     /** Зоны доступа внутри класса. */
     static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work', GUESTS: 'guests' };
 
+    /**Зоны доступа по ролям */
+    static ZONES_MAP = {
+        [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
+        [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
+        [$class.ROLES.USER]: $class.ZONES.WORK,
+        [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
+    };
+
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
 
@@ -725,23 +733,16 @@ export class $class extends $folder{
     resolveZone(item) {
         if (!item || typeof item !== 'object')
             return null;
+
         let p = item;
-        while (p) {
-            if (p.id === 'work') {
-                // Проверяем, кто родитель work
-                // distributed work → внутри цепочки наследования ($folder)
-                // meta work → внутри метапапки класса
-                if (p.parent && p.parent.id === '$folder')
-                    return $class.ZONES.MANAGEMENT;
-                return $class.ZONES.WORK;
-            }
-            if (p.id === 'guests')
-                return $class.ZONES.GUEST;
+        while (p.parent && p) {
             // Достигли класса — стоп
-            if (p instanceof $class && p !== this)
+            if (p instanceof $class || p === this){
                 break;
-            if (p === this)
-                break;
+            }
+            if (p.parent.path === this.$class.meta_folder.path) {
+                return $class.ZONES_MAP[p.id] || $class.ZONES.SYSTEM;
+            }
             p = p.parent;
         }
         return $class.ZONES.SYSTEM;
@@ -828,7 +829,7 @@ export class $class extends $folder{
      * Текущая params.role (UI) ограничивает эффективные права: при role≠ADMIN Work ADMIN
      * не получает bypass на ADMIN-операции.
      */
-    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
+    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ, folder) {
         if (DEV_MODE) return;
         if (!params?.session) return;
         if (params.session?.$user === globalThis.WORK) return;
@@ -840,11 +841,11 @@ export class $class extends $folder{
             return;
         switch (level) {
             case $class.ACCESS_LEVEL.READ:
-                if (!(await this.canSee(this, params)))
+                if (!(await this.canSee(folder || this, params)))
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.WRITE:
-                if (!(await this.canWrite(this, params)))
+                if (!(await this.canWrite(folder || this, params)))
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.ADMIN:
@@ -902,7 +903,7 @@ export class $class extends $folder{
     _isGuestVisible(item, params) {
         if (item === this)
             return true;
-        if (this.resolveZone(item) === $class.ZONES.GUEST)
+        if (this.resolveZone(item) === $class.ZONES.GUESTS)
             return true;
         // Логи гостя пишутся в класс (meta_folder/logs) — нужны для чата
         const path = item?.path ?? '';

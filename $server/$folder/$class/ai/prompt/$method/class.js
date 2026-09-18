@@ -256,6 +256,12 @@ export default {
             // Леджер попыток: идентичный провал дважды — dropUsed агента игнорируется,
             // тип остаётся в using_blocks (защита от вечных циклов вида read ×15)
             noteAttempt(block, next, child);
+            // Прерыватель: ошибки подряд (пусть и с разными операндами) — бокс закрывается
+            // итогом, дальше только человек. Одинаковый мусор ловит леджер, разный — он.
+            if (trippedBreaker(block, child)) {
+                await live.save?.();
+                return this.total(ctx, tools);
+            }
             await live.save?.();
             if (child.stop) {
                 if (!live.wait) {
@@ -728,6 +734,9 @@ export const MAX_TURNS = 50;
 /** Повторов одного операнда подряд, после которых тип остаётся в using_blocks. */
 export const MAX_SAME_ATTEMPTS = 2;
 
+/** Ошибок подряд (с любыми операндами), после которых бокс закрывается итогом. */
+export const MAX_CONSECUTIVE_ERRORS = 3;
+
 /** Ключ попытки: tool + операнд (путь или первая строка контента). */
 export function attemptKey(next, child) {
     const op = String(child?.path || '').trim()
@@ -743,6 +752,29 @@ function pruneAttempts(box) {
     const keys = Object.keys(a);
     if (keys.length > 20)
         for (const k of keys.slice(0, keys.length - 20)) delete a[k];
+}
+
+/**
+ * Прерыватель consecutive-ошибок: леджер ловит одинаковый мусор,
+ * этот — разный (каждый раз новый путь/операнд). Успех сбрасывает счёт.
+ * @returns {boolean} бокс пора закрывать итогом
+ */
+export function trippedBreaker(box, child) {
+    if (!box || !child)
+        return false;
+    if (!child.error) {
+        if (box.errorStreak)
+            delete box.errorStreak;
+        return false;
+    }
+    const n = (box.errorStreak = (box.errorStreak || 0) + 1);
+    if (n >= MAX_CONSECUTIVE_ERRORS) {
+        child.content = [child.content,
+            '[ошибки подряд: ' + n + ' — останавливаю бокс, дальше нужен человек]']
+            .filter(Boolean).join('\n\n');
+        return true;
+    }
+    return false;
 }
 
 /**

@@ -170,7 +170,7 @@ ODA({is: 'work-form',
             });
             if (res === 'ok') {
                 const receivers = el.selectedUsers;
-                if (receivers > 0) {
+                if (receivers.length > 0) {
                     WORK.top.RTCCaller.startCall(await this.$item, receivers.map(u => u.id));
                 }
                 else {
@@ -255,13 +255,19 @@ ODA({is: 'work-form',
     $item: {
         $def: null,
         async set(n) {
-            const view_name = this.host.default_view || this.host.view_name || n?.form;
-            this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
-            this.loadFormViews();
             if (n) {
-                const role = await this.activeRole;
-                if (role)
-                    n.role = role;
+                const $class = await this.$item?.$class;
+                this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
+
+                const view_name = this.host.default_view || this.host.view_name || n?.form;
+                this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
+                this.loadFormViews();
+
+                if (!this.activeRole) {
+                    const roles = await this.roles;
+                    this.activeRole = roles[0] || 'GUEST';
+                }
+                n.role = this.activeRole;
             }
         }
     },
@@ -288,16 +294,12 @@ ODA({is: 'work-form',
         })[await role]
     },
     get _savePath() {
-        return new Promise(async () => {
-            const $class = await this.$item?.$class;
-            return ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
-        });
+        return
     },
     activeRole: {
         $save: true,
-        async get() {
-            const roles = await this.roles;
-            return roles[0];
+        get() {
+            return;
         },
         set(role) {
             if (this.$item) {

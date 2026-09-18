@@ -265,11 +265,13 @@ $class.DataAccessNode = class {
 $class.DataAccessRoot = class extends $class.DataAccessNode {
     #dataRoot;
     #fieldGroups;
-    /** @param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[]}} */
-    constructor({ dataRoot, key, fieldRoot, fieldGroups }) {
+    #owner;
+    /** @param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[], owner?: {isChanged: boolean}}} */
+    constructor({ dataRoot, key, fieldRoot, fieldGroups, owner }) {
         super({field: fieldRoot, key});
         this.#dataRoot = dataRoot;
         this.#fieldGroups = fieldGroups;
+        this.#owner = owner;
     }
     get children() {
         return this.#fieldGroups.map(fg => {
@@ -286,6 +288,6 @@ $class.DataAccessRoot = class extends $class.DataAccessNode {
         return this.getDataRoot();
     }
     riseChange() {
-        this.#dataRoot.isChanged = true;
+        (this.#owner ?? this.#dataRoot).isChanged = true;
     }
 };

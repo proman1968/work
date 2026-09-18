@@ -143,7 +143,7 @@ export default {
     expand: true,
     step: false,
     stopOnError: true,
-    description: 'после удачи: лента → ai/skills/{id}.js (рецепт, не дамп task)',
+    description: 'после удачи: лента → ai/skills/{id}.js (рецепт, не дамп task). Только явным @freeze',
     system: [
         '# Агент: freeze',
         'Черновик из ленты (draft), человек подтверждает id/label/phrases, write в пакет skills.',

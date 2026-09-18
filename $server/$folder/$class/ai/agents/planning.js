@@ -4,7 +4,7 @@ export default {
     icon: 'icons:assignment',
     doc: true,
     allowReasoning: true,
-    description: 'несколько ещё не сделанных действий',
+    description: 'несколько ещё не сделанных действий. Звать когда действий несколько и нужен план',
     step: false,
     system: [
         '# Режим: план',

@@ -551,43 +551,6 @@ ODA({ is: 'microchat-view-prompt',
 });
 
 
-const HEIGHT_PING = `<script>
-(function(){
-  var last = 0, lock = false;
-  function contentH(){
-    var html = document.documentElement, body = document.body;
-    var hs = html.style.height, hmin = html.style.minHeight;
-    var bs = body && body.style.height, bmin = body && body.style.minHeight;
-    html.style.height = 'auto';
-    html.style.minHeight = '0';
-    if (body) { body.style.height = 'auto'; body.style.minHeight = '0'; }
-    var h = Math.max(html.scrollHeight, body && body.scrollHeight || 0);
-    var kids = body ? body.children : [];
-    for (var i = 0; i < kids.length; i++) {
-      var r = kids[i].getBoundingClientRect();
-      h = Math.max(h, Math.ceil(r.bottom + (window.scrollY || 0)));
-    }
-    html.style.height = hs;
-    html.style.minHeight = hmin;
-    if (body) { body.style.height = bs; body.style.minHeight = bmin; }
-    return h;
-  }
-  function send(){
-    if (lock) return;
-    lock = true;
-    try {
-      var h = contentH();
-      if (h <= 0 || Math.abs(h - last) < 2) return;
-      last = h;
-      parent.postMessage({type:'microchat-html-h', height:h}, '*');
-    } finally { lock = false; }
-  }
-  addEventListener('load', send);
-  if (document.readyState === 'complete') send();
-  if (window.ResizeObserver) new ResizeObserver(send).observe(document.documentElement);
-})();
-<\/script>`;
-
 /** Страница для iframe: type html → content (fence снимает unwrapFence). Старый block.html — фолбэк. */
 export function pageHtml(data) {
     if (data?.type !== 'html' && !data?.html) return;
@@ -724,12 +687,10 @@ ODA({ is: 'microchat-html',
         <iframe sandbox="allow-scripts" :srcdoc="srcdoc" style="min-height: 30vh; height: stretch; min-width: 30vw;"></iframe>
     `,
     data: null,
+    $item: null,
     get html() { return pageHtml(this.data) || ''; },
     get srcdoc() {
-        const raw = this.html;
-        if (!raw) return '';
-        if (raw.includes('microchat-html-h')) return raw;
-        return raw + HEIGHT_PING;
+        return this.html;
     }
 });
 

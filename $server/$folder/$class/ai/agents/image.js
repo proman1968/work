@@ -100,7 +100,7 @@ export default {
     doc: true,
     expand: true,
     stopOnError: true,
-    description: 'картинка по тексту: generateImage (capabilities image), не chat-модель задачи',
+    description: 'картинка по тексту: generateImage (capabilities image), не chat-модель задачи. Звать когда просят картинку или фото',
     system: [
         '# Агент: изображение',
         'Ход generate — сцена этого кадра и путь модели с image из ленты. Не streamChat задачи.',

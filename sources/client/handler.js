@@ -5,7 +5,7 @@ export class $handler extends $class{
         return 0;
     }
     async import(path, is){
-        path = this.short + '/~/' + path;
+        path = this.short + '/~/' + (path || this.id);
         if(!path.endsWith('.js'))
             path += '.js'
         const module = await import(path);

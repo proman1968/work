@@ -325,12 +325,13 @@ describe('html validateHtml: битая разметка не идёт в doc', 
         assert.ok(validateHtml(good.replace('}', '')));
         assert.ok(validateHtml(good.replace('<!DOCTYPE html>', '')));
     });
-    it('recalc: битое — error без стопа', async () => {
+    it('recalc: битое — error без стопа, контент цел', async () => {
         const tool = htmlAgent;
         const block = { type: 'html', time: 82, content: '```html\n<div>oops' };
         await tool.recalc({ block });
         assert.equal(block.error, true);
-        assert.ok(String(block.content).includes('перегенерируй'));
+        assert.ok(String(block.content).includes('<div>oops'), 'контент не затирается ошибкой');
+        assert.ok(String(block.state).includes('невалидно'), 'диагноз — в state');
     });
 });
 

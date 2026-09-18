@@ -265,7 +265,7 @@ export default {
     /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total */
     expand: true,
     allowReasoning: true,
-    description: 'строение дерева: карта `/`; ls ветки = info deep=2; readme; meta; remote (list_remote); ask',
+    description: 'строение дерева: карта `/`; ls ветки = info deep=2; readme; meta; remote (list_remote); ask. Звать когда нужны факты дерева и их нет в ленте',
     system: [
         '# Агент: explore',
         'Осмотр дерева классов. Карта корня уже в ленте.',

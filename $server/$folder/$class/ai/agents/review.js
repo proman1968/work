@@ -79,7 +79,7 @@ export default {
     step: false,
     stopOnError: true,
     allowReasoning: true,
-    description: 'диагноз этой ленты: закон + слой + path; не пишет файлы',
+    description: 'диагноз этой ленты: закон + слой + path; не пишет файлы. Только явным @review',
     system: [
         '# Агент: review',
         'Операнд — схема ленты этой задачи, не HTML draft.',

@@ -131,9 +131,10 @@ async function readFileInto(b, path, params) {
         }
     }
     catch { /* fallback ниже */ }
-    let file = await resolveFile(path);
-    if (!file && /\/readme\.md$/i.test(String(path || ''))) {
-        // readme точки — сборка по ~ из API тела (свои слои + наследованные), не прямой путь
+    let file = null;
+    if (/\/readme\.md$/i.test(String(path || ''))) {
+        // readme точки — всегда сборка по ~ из API тела (один вид везде:
+        // explore, work, страница, превью), не ближайший слой.
         try {
             const parts = String(path).split('/').filter(Boolean);
             parts.pop();
@@ -149,8 +150,9 @@ async function readFileInto(b, path, params) {
                 return true;
             }
         }
-        catch { /* ниже — штатная ошибка read */ }
+        catch { /* ниже — прямое чтение и штатная ошибка read */ }
     }
+    file = await resolveFile(path);
     if (!file) {
         b.error = true;
         b.content = 'read: файл не найден: ' + path;
@@ -552,7 +554,7 @@ export default {
     /** листья create/write/file в контекст (check targets), не только сводка total */
     expand: true,
     allowReasoning: true,
-    description: 'файлы и классы области: typed/read/write/create; search внутри класса; строение — explore',
+    description: 'файлы и классы области: typed/read/write/create; search внутри класса; строение — explore. Звать когда нужно прочитать, записать или создать в известной области',
     system: [
         '# Агент: work',
         'Файлы и классы области. Строение дерева — explore; интернет — web; журнал класса — logs.',

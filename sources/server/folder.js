@@ -305,7 +305,7 @@ export class $folder extends $item{
     async assertAccess(params = {}, level) {
         const owner = this.$owner || this.$class;
         if (owner && owner !== this)
-            await owner.assertAccess(params, level);
+            await owner.assertAccess(params, level, this);
     }
 
     allowAccess(params) {

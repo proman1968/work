@@ -270,11 +270,6 @@ export default {
                 'Не пересказывай процесс. Не копируй целиком единственную уже показанную сводку.',
                 'Ничего не выдумывай, не предлагай, не фантазируй. Формат вывода красивый markdown.',
             ].join('\n'),
-            stop: true,
-            async approve(params = {}) {
-                const { box, block } = params;
-                box.content = block.content;
-            },
         },
     },
 }
