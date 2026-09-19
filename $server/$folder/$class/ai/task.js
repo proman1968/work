@@ -64,7 +64,7 @@ export const step = {
     },
     /** next = thinking + agents — выставляет loader после discover */
     plan: { next: ['thinking'] },
-    do: { next: ['thinking'] },
+    build: { next: ['thinking'] },
 }
 
 export const includes = {

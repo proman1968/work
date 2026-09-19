@@ -2,8 +2,8 @@
  * $handler — серверный класс для обработчиков.
  *
  * Наследник $class. Имеет import(), load() и все методы класса.
- * Отличие: $handler — это исполняемый элемент (execute в class.js),
- * вызываемый через tryHandlerMethod или напрямую.
+ * Отличие: $handler — исполняемый элемент (`execute` в class.js).
+ * `$method` после init владельца — публичный метод экземпляра (`item.prompt(params)`).
  *
  * Логика конкретного обработчика — в class.js (через import()).
  */
@@ -15,6 +15,12 @@ export class $handler extends $class {
         if (!$context)
             return true;
         return $context.allowAccess(params);
+    }
+    async canSee(item, params = {}) {
+        const $context = await this.$context;
+        if (!$context)
+            return true;
+        return $context.canSee($context, params);
     }
 }
 export class $trigger extends $handler {

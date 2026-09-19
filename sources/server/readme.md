@@ -16,7 +16,7 @@
 ## Ключевые механизмы
 
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `_collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
-- **`get_schema()`** — схема методов для ИИ-агента (через `buildAiSchema`, канон = стандартный JSDoc `@param`/`@returns`)
+- **`get_schema()`** — схема методов для ИИ-агента (прототип + функции экземпляра после `init`, включая `$method`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
 - **`save_file` → `save_to_history`** — обычный файл: живая копия + снимок в `history/` + лог. **Файл данных** (у `$file/$ext` есть `METADATA`): точка `ext/…/YYYY-MM-DD/{time}.{uid}.{ext}`, `name` в JSON, `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`. Новое имя обычного файла — `safeNodeName`
 
@@ -53,7 +53,7 @@ API элементов — это «система команд» для ИИ-а
 
 - `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
 - `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
-- `work_zone({role})` — папка рабочей зоны роли (GUEST → `meta_folder/guests`); deprecated-алиас: `get_storage`
+- `work_zone({role})` — папка в метапапке для `save_file` роли; имя = `role` или `GUESTS`; deprecated-алиас: `get_storage`
 
 ### Описание элемента
 
@@ -82,3 +82,7 @@ API элементов — это «система команд» для ИИ-а
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`
 
 Deprecated-алиасы удерживаются до миграции всех вызывающих, новые вызовы — только канон.
+
+## TODO
+
+- [ ] Сборка `~/readme.md` в ядре: ветка `~` в `get_item` (`folder.js`) для `id==='readme.md'` возвращает один виртуальный файл (прокси ближайшего слоя, `read_text/load/download` отдают `$server.mergeTextFiles` по тем же слоям). Остальные `~` — массивами как сейчас. После этого удалить: спецветку в `http-server.js` (отдача сборки), `readme_merged()` в `folder.js`, `~/`-блоки чтения readme в `agents/explore.js` и `agents/work.js` (вернуть прямое чтение). Одна ветка в ядре вместо четырех мест.

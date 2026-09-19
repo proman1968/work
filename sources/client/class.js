@@ -55,7 +55,11 @@ export class $class extends $folder{
         return this.fetch('guests');
     }
     import(){
-        return import((this.short || '/') + '?load' + `&version=${this.__version}`).then(module => module?.default);
+        const url = (this.short || '/') + '?load' + `&version=${this.__version}`;
+        return import(url).then(module => module?.default ?? {}).catch(err => {
+            console.warn('[WORK] class ?load:', url, err?.message || err);
+            return { METADATA: { FIELDS: [] } };
+        });
     }
     get body(){
         return this.import();
@@ -69,15 +73,25 @@ export class $class extends $folder{
     }
     get metadata() {
         return Promise.resolve(this.body).then(body => {
-            if (!body?.METADATA)
+            body ??= {};
+            if (!body.METADATA)
                 body.METADATA = {};
-            return body?.METADATA;
+            return body.METADATA;
         })
+    }
+    /** METADATA.FIELDS — массив полей; обёртка {id, fields} больше не канон. */
+    static fieldsList(fields) {
+        if (Array.isArray(fields))
+            return fields;
+        if (Array.isArray(fields?.fields))
+            return fields.fields;
+        return [];
     }
     get $fields(){
         return Promise.resolve(this.metadata).then(meta => {
-            meta.FIELDS ??= {id: 'FIELDS', icon: 'iconoir:input-field', fields: []}
-            return new CORE.$field(meta.FIELDS, this);
+            meta ??= {};
+            meta.FIELDS = this.constructor.fieldsList(meta.FIELDS);
+            return new CORE.$field({ id: 'FIELDS', fields: meta.FIELDS }, this);
         })
     }
     async execute(...params){
@@ -251,11 +265,13 @@ $class.DataAccessNode = class {
 $class.DataAccessRoot = class extends $class.DataAccessNode {
     #dataRoot;
     #fieldGroups;
-    /** @param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[]}} */
-    constructor({ dataRoot, key, fieldRoot, fieldGroups }) {
+    #owner;
+    /** @param {{fieldRoot: $field, dataRoot: Record<string, any>, key: string, fieldGroups: $field[], owner?: {isChanged: boolean}}} */
+    constructor({ dataRoot, key, fieldRoot, fieldGroups, owner }) {
         super({field: fieldRoot, key});
         this.#dataRoot = dataRoot;
         this.#fieldGroups = fieldGroups;
+        this.#owner = owner;
     }
     get children() {
         return this.#fieldGroups.map(fg => {
@@ -272,6 +288,6 @@ $class.DataAccessRoot = class extends $class.DataAccessNode {
         return this.getDataRoot();
     }
     riseChange() {
-        this.#dataRoot.isChanged = true;
+        (this.#owner ?? this.#dataRoot).isChanged = true;
     }
 };

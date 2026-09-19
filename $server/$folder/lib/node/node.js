@@ -82,7 +82,7 @@ export default {
         <div horizontal flex style="align-items: center;">
             <div vertical flex>
                 <div horizontal flex>
-                    <label :bold="$item instanceof CORE.$class" flex ~show="!hideLabel">{{label}}</label>
+                    <label :bold="$item instanceof CORE.$class" ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" icon-size="24" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>

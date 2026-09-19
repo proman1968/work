@@ -28,10 +28,10 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
         <div id="appHeader" class="pe-no-print top title">
             <slot name="header" class="vertical"></slot>
         </div>
-        <div class="print-flow" vertical flex style="overflow: hidden;"  ~style="styleZoom">
+        <div class="print-flow" vertical flex style="overflow: hidden;" ~style="styleZoom">
             <slot name="top" class="pe-no-print vertical no-flex"></slot>
             <div class="print-flow" horizontal flex style="overflow: hidden;">
-                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left"  :buttons="left_buttons" @focused-index-changed="_onFocusedIndexChanged">
+                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left" :buttons="left_buttons" @focused-index-changed="_onFocusedIndexChanged">
                     <slot name="left-title" class="pe-no-print" slot="title"></slot>
                     <slot name="left-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
@@ -189,7 +189,7 @@ ODA({is: 'app-layout-drawer',
 
         <div :vertical="mobile" :horizontal="!mobile" ~show="!mobile || !closed" class="drawer" flex>
             <app-tabs accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
-            <div  horizontal header flex style="overflow: hidden;">
+            <div horizontal header flex style="overflow: hidden;">
                 <div flex vertical style="overflow: hidden;" ~show="!closed">
                     <slot name="title" horizontal></slot>
                     <slot id="slot" @slotchange="_onSlotchange" flex vertical></slot>
@@ -272,15 +272,9 @@ ODA({is: 'app-tabs',
                 font-size: x-small;
                 order: {{mobile?1:0}};
             }
-            for-contents > * {
-                 padding: 2px;
-                 aspect-ratio: 1/1;
-                 width: {{mobile?'auto':'-webkit-fill-available'}};
-                 height: {{mobile?'-webkit-fill-available':'auto'}};
-            }
         </style>
         <div :horizontal="mobile">
-            <oda-button :label="$for.item.label" :light="focusedIndex === $for.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px;" @tap="setIndex($for.index)"></oda-button>
+            <oda-button :label="$for.item.label" :light="focusedIndex === $for?.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px; max-width: 40px; font-size: xx-small;" @tap="setIndex($for.index)"></oda-button>
         </div>
         <div flex></div>
         <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 8px;overflow: hidden; text-overflow: ellipsis;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>

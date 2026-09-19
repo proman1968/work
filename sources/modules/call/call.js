@@ -375,7 +375,7 @@ export class RTCCaller extends EventTarget {
     static async sendMessage(callContext, signalMessage) {
         console.log('sendMessage', signalMessage);
         let file = new File([JSON.stringify(signalMessage)], 'phone.call', { type: "application/json" });
-        let params = { receivers: signalMessage.receivers };
+        let params = { receivers: signalMessage.receivers, role: 'USER' };
         await callContext.save_file(file, params);
     }
 
@@ -1073,18 +1073,18 @@ class Recorder {
         this.mediaRecorder = new MediaRecorder(this.stream, { mimeType: contentType });
         this.mediaRecorder.ondataavailable = (e) => {
             if (!this.recording) return;
-            this.context.writeToStream(e.data, { filename: this.id, contentType });
+            this.context.writeToStream(e.data, { filename: this.id, contentType, role: 'USER' });
         };
         this.mediaRecorder.onerror = (e) => {
             console.warn('recorder error:', e);
             if (!this.recording) return;
             this.recording = false;
-            this.context.closeWriteStream({ filename: this.id , receivers: [...users.map(u => u.id)] });
+            this.context.closeWriteStream({ filename: this.id , receivers: [...users.map(u => u.id)], role: 'USER' });
         }
         this.mediaRecorder.onstop = (e) => {
             if (!this.recording) return;
             this.recording = false;
-            this.context.closeWriteStream({ filename: this.id, receivers: [...users.map(u => u.id)] });
+            this.context.closeWriteStream({ filename: this.id, receivers: [...users.map(u => u.id)], role: 'USER' });
         }
     }
     start() {

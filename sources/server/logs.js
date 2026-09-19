@@ -302,6 +302,7 @@ export async function appendRow(storage, row, params = {}) {
         filename: 'data.logs',
         post: JSON.stringify(row, null, 2),
         encoding: 'utf-8',
+        session: { $user: WORK }
     });
     const written = new Set();
     await writeLogTo(storage, log_param, written);

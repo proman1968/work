@@ -4,25 +4,24 @@
  *  Мозг задачи (streamChat) не рисует: capabilities image, не chat. */
 
 const AGENT_TAG = 'Картинка';
-const DEFAULT_IMAGE = '/MODELS/odant/Z-Image-Turbo';
 const IMAGE_MAX = 12;
 
 const generateTool = {
     label: 'Рисую',
     icon: 'carbon:image',
     role: 'user',
-    description: 'generateImage у $ai с capabilities image; сохранить png/jpg',
+    description: 'generateImage у модели с capabilities image; сохранить png/jpg',
     system: [
         '# Режим: generate изображения',
-        'Без пути — ' + DEFAULT_IMAGE + '. Другая image-модель — первая строка, путь $ai.',
-        'Дальше — сцена только ЭТОГО кадра (предмет, свет, стиль). Не «нарисуй N файлов», не коллаж, не сетка, не chat, не web.',
+        'Первая строка — путь модели с capabilities image из ленты. Дальше — сцена только ЭТОГО кадра.',
+        'Не «нарисуй N файлов», не коллаж, не сетка, не chat, не web.',
         'Если в запросе N картинок — это следующий кадр (число уже готовых generate в боксе + 1), одна сцена.',
     ].join('\n'),
     prompt: [
-        'Путь $ai (если не дефолт) и текст сцены этого кадра.',
+        'Путь модели с image (из ленты) и текст сцены этого кадра.',
         'Не копируй [write] предыдущего кадра.',
         'Пример:',
-        DEFAULT_IMAGE,
+        '/путь/к/модели',
         'зимний лес, снег, вечерний свет',
     ].join('\n'),
     async init(params = {}) {
@@ -42,7 +41,7 @@ const generateTool = {
         const ai = await resolveImageAi(path, params.messages);
         if (!ai) {
             b.error = true;
-            b.content = 'generate: нет $ai с capabilities image (путь в fill или одна модель в /MODELS)';
+            b.content = 'generate: нет модели с capabilities image (путь в fill или в ленте)';
             params.box.using_blocks = ['generate'];
             return;
         }
@@ -101,10 +100,10 @@ export default {
     doc: true,
     expand: true,
     stopOnError: true,
-    description: 'картинка по тексту: $ai.generateImage (capabilities image), не chat-модель задачи',
+    description: 'картинка по тексту: generateImage (capabilities image), не chat-модель задачи. Звать когда просят картинку или фото',
     system: [
         '# Агент: изображение',
-        'Ход generate — сцена этого кадра и при необходимости путь $ai с image. Не streamChat задачи.',
+        'Ход generate — сцена этого кадра и путь модели с image из ленты. Не streamChat задачи.',
         'N картинок / фото / файлов с изображениями / по сезонам — N generate (по файлу), не один коллаж и не work.write.',
         'Файл пишется в work пользователя. Когда кадров хватает — total. Ошибка generate — стоп, не html.',
     ].join('\n'),
@@ -138,7 +137,7 @@ function parseGenerate(block, messages) {
 
 function pathFromMessages(messages) {
     const blob = (messages || []).map(m => String(m?.content || '')).join('\n');
-    const m = blob.match(/(\/MODELS\/[^\s\]]+)/);
+    const m = blob.match(/(\/[^\s\]]+)/);
     return m ? m[1].trim() : '';
 }
 
@@ -201,47 +200,17 @@ async function resolveImageAi(path, messages) {
         if (item && hasImageCap(item))
             return item;
     }
-    const preferred = await WORK.get_item(DEFAULT_IMAGE);
-    if (preferred && hasImageCap(preferred))
-        return preferred;
-    const found = await findImageModels();
-    if (found.length === 1)
-        return found[0];
     return null;
 }
 
 function imagePathsFromMessages(messages) {
     const blob = (messages || []).map(m => String(m?.content || '')).join('\n');
     const out = [];
-    for (const m of blob.matchAll(/(\/MODELS\/[^\s\]]+)/g)) {
+    for (const m of blob.matchAll(/(\/[A-Za-z0-9_.$-]+(?:\/[A-Za-z0-9_.$-]+)*)/g)) {
         const p = m[1].trim();
         if (p && !out.includes(p))
             out.push(p);
     }
-    return out;
-}
-
-async function findImageModels() {
-    const root = await WORK.get_item('/MODELS');
-    if (!root || typeof root.info !== 'function')
-        return [];
-    const tree = await root.info({ deep: 2 });
-    const out = [];
-    async function walk(n) {
-        if (!n)
-            return;
-        if (n.type === '$ai' && n.path && !n.items?.length) {
-            try {
-                const item = await WORK.get_item(n.path);
-                if (item && hasImageCap(item))
-                    out.push(item);
-            }
-            catch { /* skip */ }
-        }
-        for (const c of n.items || [])
-            await walk(c);
-    }
-    await walk(tree);
     return out;
 }
 

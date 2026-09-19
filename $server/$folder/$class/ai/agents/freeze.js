@@ -15,6 +15,11 @@ const draftTool = {
         const b = params.block;
         if (b.done)
             return false;
+        // Бокс закрыт отклонением: новый заход — новой командой, не redraft
+        if (params.box?.closed) {
+            tagAgent(params.box, AGENT_TAG, 'закрыт отклонением');
+            return false;
+        }
         const body = await params.task?.body;
         const gap = freezeGap(body);
         if (gap) {
@@ -65,7 +70,6 @@ const confirmTool = {
         applyActivation(draft, b.content);
         const idGap = skillIdGap(draft.id);
         if (idGap) {
-            delete b.stop;
             b.error = true;
             b.content = 'freeze: ' + idGap;
             return;
@@ -139,7 +143,7 @@ export default {
     expand: true,
     step: false,
     stopOnError: true,
-    description: 'после удачи: лента → ai/skills/{id}.js (рецепт, не дамп task)',
+    description: 'после удачи: лента → ai/skills/{id}.js (рецепт, не дамп task). Только явным @freeze',
     system: [
         '# Агент: freeze',
         'Черновик из ленты (draft), человек подтверждает id/label/phrases, write в пакет skills.',

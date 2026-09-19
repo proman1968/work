@@ -91,7 +91,7 @@ ODA({ is: 'work-prompt-bar',
                     <a :href="$for.item.url" target="_blank">{{$for.item.url}}</a>
                 </div>
             </div>
-            <div horizontal style="align-items: flex-end;" :success="isDo">
+            <div horizontal style="align-items: flex-end;" :success="isBuild">
                 <textarea id="text" flex class="prompt" :rows ::value :placeholder
                     :readonly="recording" @keydown="_onKeydown" @paste="_onPaste"></textarea>
                 <div ~if="recording" no-flex style="color: var(--error-color); padding: 6px 4px; white-space: nowrap;">⏺ {{timer}}</div>
@@ -120,7 +120,7 @@ ODA({ is: 'work-prompt-bar',
     get colorMode() {
         return this.pending ? 'dark' : this.$pdp.colorMode || 'light';
     },
-    isDo: false,
+    isBuild: false,
     value: '',
     files: [],
     ai: false,

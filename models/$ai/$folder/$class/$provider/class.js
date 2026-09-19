@@ -9,37 +9,33 @@ export default {
     label: 'Провайдер ИИ',
     form: 'editor',
     METADATA: {
-        FIELDS: {
-            id: 'FIELDS',
-            icon: 'iconoir:input-field',
-            fields: [{
-                id: 'protocol',
-                type: 'String',
-                placeholder: 'openai | anthropic | gigachat | ollama | local | custom',
-                required: true,
-            }, {
-                id: 'baseUrl',
-                type: 'String',
-                placeholder: 'https://…/v1/chat/completions',
-                required: true,
-            }, {
-                id: 'apiKey',
-                type: 'String',
-                placeholder: 'sk-...',
-            }, {
-                id: 'token',
-                type: 'String',
-                placeholder: 'Authorization key (GigaChat OAuth)',
-            }, {
-                id: 'authUrl',
-                type: 'String',
-                placeholder: 'https://…/oauth',
-            }, {
-                id: 'scope',
-                type: 'String',
-                placeholder: 'GIGACHAT_API_PERS',
-            }],
-        },
+        FIELDS: [{
+            id: 'protocol',
+            type: 'String',
+            placeholder: 'openai | anthropic | gigachat | ollama | local | custom',
+            required: true,
+        }, {
+            id: 'baseUrl',
+            type: 'String',
+            placeholder: 'https://…/v1/chat/completions',
+            required: true,
+        }, {
+            id: 'apiKey',
+            type: 'String',
+            placeholder: 'sk-...',
+        }, {
+            id: 'token',
+            type: 'String',
+            placeholder: 'Authorization key (GigaChat OAuth)',
+        }, {
+            id: 'authUrl',
+            type: 'String',
+            placeholder: 'https://…/oauth',
+        }, {
+            id: 'scope',
+            type: 'String',
+            placeholder: 'GIGACHAT_API_PERS',
+        }],
     },
 
     /**

@@ -223,6 +223,36 @@ export class $server extends $class {
         this.broadcastAuthChanged(payload, sessions);
     }
     static merges = {};
+    /**
+     * Сборка наследных readme.md по ~ (как class.js, но конкатенацией, без babel):
+     * свой слой первым, дальше маркер и предки от ближнего к корню.
+     * Без кэша: readme правятся часто, сборка обязана видеть правку сразу.
+     * @param {Array} [files] Слои readme.md из ~ (корень→SELF)
+     * @returns {Promise<string>} Собранный текст
+     */
+    static async mergeTextFiles(files = []){
+        const layers = [];
+        const seen = new Set();
+        for (const f of files || []) {
+            const key = f?.real_dir || f?.path;
+            if (!key || seen.has(key))
+                continue;
+            seen.add(key);
+            if (typeof f.read_text !== 'function')
+                continue;
+            const text = String(await f.read_text() || '').trim();
+            if (text)
+                layers.push(text);
+        }
+        if (!layers.length)
+            return '';
+        if (layers.length === 1)
+            return layers[0];
+        const self = layers[layers.length - 1];
+        const ancestors = layers.slice(0, -1).reverse();
+        const mark = '\n\n---\n\nНАСЛЕДУЕТСЯ ОТ\n===\n\n---\n\n';
+        return self + mark + ancestors.join(mark);
+    }
     static async mergeFiles(files = [], reset = false){
         const {dirs, unique_files} = files.reduce((res, file) => {
             if (!res.dirs.includes(file.real_dir)) {

@@ -18,11 +18,6 @@ after(() => {
     globalThis.WORK = prevWork;
 });
 
-// В unit-тестах нет WORK.$folder, поэтому геттер _methods ядра (доступ к ~/methods/*)
-// падал бы с TypeError, который tryHandlerMethod глотает (catch {}) — тест проходил,
-// но консоль засорялась и ветка хендлеров не тестировалась. Заглушка _methods
-// отдаёт собственный набор хендлеров теста (__handlers) и позволяет проверить
-// ветку tryHandlerMethod по-настоящему.
 const withStubMethods = (Base) => class extends Base {
     get _methods() {
         return Promise.resolve(this.__handlers || {});
@@ -48,7 +43,7 @@ describe('execItemMethod', () => {
     });
 
     it('throws on unknown method', async () => {
-        class TestFolder extends withStubMethods(CORE.$folder) {}
+        class TestFolder extends CORE.$folder {}
         const folder = new TestFolder({ id: 'test' });
         folder.path = '/test';
         await assert.rejects(
@@ -57,7 +52,7 @@ describe('execItemMethod', () => {
         );
     });
 
-    it('runs ~/methods/* handler branch (tryHandlerMethod)', async () => {
+    it('calls lifted $method as item[name](params)', async () => {
         class TestFolder extends withStubMethods(CORE.$folder) {}
         const folder = new TestFolder({ id: 'test' });
         folder.path = '/test';
@@ -68,11 +63,13 @@ describe('execItemMethod', () => {
                 },
             },
         };
+        await folder._liftMethods();
         const result = await execItemMethod(folder, 'ping', {}, { method: 'POST' });
         assert.deepEqual(result, { called: true, ctxIsItem: true });
+        assert.equal(typeof folder.ping, 'function');
     });
 
-    it('class method wins over handler with same name', async () => {
+    it('class method wins over $method with same name', async () => {
         class TestFolder extends withStubMethods(CORE.$folder) {
             async ping() {
                 return { fromClass: true };
@@ -81,6 +78,7 @@ describe('execItemMethod', () => {
         const folder = new TestFolder({ id: 'test' });
         folder.path = '/test';
         folder.__handlers = { ping: { async execute() { return { fromHandler: true }; } } };
+        await folder._liftMethods();
         const result = await execItemMethod(folder, 'ping', {}, { method: 'POST' });
         assert.deepEqual(result, { fromClass: true });
     });
@@ -107,7 +105,7 @@ describe('execItemMethod', () => {
         owner.path = '/root/test/$group';
         Object.defineProperty(owner, '$class', { get: () => owner });
 
-        class TestFolder extends withStubMethods(CORE.$folder) {}
+        class TestFolder extends CORE.$folder {}
         const folder = new TestFolder({ id: 'sources' });
         folder.path = '/sources';
         Object.defineProperty(folder, '$class', { get: () => owner });
@@ -134,5 +132,33 @@ describe('execItemMethod', () => {
         const result = await execItemMethod(storage, 'save_message', params, { method: 'POST' });
         assert.equal(result.post, body);
         assert.equal(result.paramsPost, body);
+    });
+});
+
+describe('$file.extOverlay', () => {
+    after(() => {
+        CORE.$file.__ext_scripts__ = Object.create(null);
+    });
+
+    it('reuses one overlay per ext; null type skips DATA', async () => {
+        CORE.$file.__ext_scripts__ = Object.create(null);
+        const shared = { label: 'typed' };
+        CORE.$file.__ext_scripts__.task = Promise.resolve(shared);
+        CORE.$file.__ext_scripts__.md = Promise.resolve(null);
+
+        const taskA = new CORE.$file({ id: 'a.task' });
+        taskA.path = '/x/a.task';
+        const taskB = new CORE.$file({ id: 'b.task' });
+        taskB.path = '/x/b.task';
+        const md = new CORE.$file({ id: 'c.md' });
+        md.path = '/x/c.md';
+
+        await taskA.init;
+        await taskB.init;
+        await md.init;
+
+        assert.equal(CORE.$file.extOverlay(taskA), CORE.$file.extOverlay(taskB));
+        assert.equal(await CORE.$file.extOverlay(taskA), shared);
+        assert.equal(await CORE.$file.extOverlay(md), null);
     });
 });

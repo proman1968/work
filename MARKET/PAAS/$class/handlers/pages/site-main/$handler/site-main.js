@@ -7,7 +7,7 @@ async function loadBidInputFields() {
     for (const url of urls) {
         try {
             const mod = await import(url);
-            const fields = mod?.default?.METADATA?.FIELDS?.fields;
+            const fields = Array.isArray(mod?.default?.METADATA?.FIELDS) ? mod.default.METADATA.FIELDS : null;
             if (!Array.isArray(fields))
                 continue;
             const input = fields.find(f => f.id === 'input');

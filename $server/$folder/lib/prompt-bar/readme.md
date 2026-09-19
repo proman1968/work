@@ -16,7 +16,7 @@ ODA-компонент строки ввода: текст, вложения, м
 - Usage: кнопка-кольцо (`showUsage`) → `showStats` → `WORK.showDropdown(work-usage-panel, {}, кнопка)` — якорь-элемент, не координаты курсора (popover при нехватке места снизу открывается над якорем). Панель получает `host: this` и читает `stats` живым геттером `host.usageStats` — доехавший `maxTokens` модели обновляет открытый попап; закрытие по клику снаружи/Esc — стандартный стек popover.
 - Mic: пустая кнопка / Enter — запись; при записи textarea readonly, interim+final в `value`, таймер справа; **Esc** — отрезать последнее слово от `value` (и sync `final_transcript`), запись не стопать; стоп — без send; отправка отдельно. Beep start/end.
 - Вложения: кнопка / Ctrl+Enter — диалог; Ctrl+V картинки из буфера → `files` (имена `paste-…` для скриншотов). Текст без image — обычный paste.
-- Хост: `model` / `effort` биндит хост (два-way `::` если свойство хоста — хранилище вроде `$save`; при асинхронном источнике, как файл `.task`, — one-way `:` вниз + `@model-changed` / `@effort-changed` вверх, эхо пустого значения хост игнорирует); `::tts-mode`; `:pending` — хост; `fire` только send / stop / clear / prompt-key.
+- Хост: `model` / `effort` биндит хост (два-way `::` если свойство хоста — хранилище вроде `$save`; при асинхронном источнике, как файл `.task`, — one-way `:` вниз + `@model-changed` / `@effort-changed` вверх, эхо пустого значения хост игнорирует); `::tts-mode`; `:is-build` — `success` на textarea в режиме исполнения; `:pending` — хост; `fire` только send / stop / clear / prompt-key.
 
 ## Из чего это состоит
 

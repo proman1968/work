@@ -8,17 +8,13 @@ export default {
       },
     label: "Конференция",
     METADATA: {
-        FIELDS: {
-            id: "FIELDS",
-            icon: "iconoir:input-field",
-            fields: [{
-                id: "asd",
-                type: "String"
-            },{
-                id: "qwe",
-                type: "Number"
-            }]
-        }
+        FIELDS: [{
+            id: "asd",
+            type: "String"
+        },{
+            id: "qwe",
+            type: "Number"
+        }]
     },
     asd: "wdadasd",
     qwe: "13123"

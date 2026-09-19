@@ -9,10 +9,14 @@
  *   исполнитель дописывает локальные слои (место, agent/tool.system в fill).
  *   Нет system — standalone: buildSystemPrompt({ session }) (без location/tz — их в execute не бывает).
  * block — собрать/продолжить (мутируется на месте — живая лента владельца).
- * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает;
+ * Стоп на человека: tool.stop + live.wait — движок ждёт ответ и продолжает; `stop` на блоке не снимать;
  *   лист-агент со stop (question/form/planning/report) возвращается владельцу как есть.
- * круг / вложенный агент — снова execute(params), не HTTP.
- * tool/agent.init получают engine: this (для ask peer без ~/ai у цели) и task (владелец ленты, если передан).
+ * круг / вложенный агент — callAgent({ agent, brief }): поручение в brief/prompt,
+ *   итог { ok, content, error, block }; не HTTP.
+ * tool/agent.init получают engine, callAgent(id, brief), task.
+ * ok create в боксе → сразу total (не pick write).
+ * принятая activation или write.need=create — nextIds только create (даже если create сожжён).
+ * activation в меню — после ok read в этом боксе.
  */
 
 export default {
@@ -68,10 +72,10 @@ export default {
         if (block.icon == null)
             block.icon = agent.icon;
 
+        // Инвариант «несейвленных блоков нет»: сначала персист, потом события UI.
+        await live.save?.();
         if (own)
             live.send({ type: 'chat.start' });
-
-        await live.save?.();
 
         try {
             await this.turn({
@@ -84,6 +88,8 @@ export default {
         catch (e) {
             block.error = true;
             block.content = [block.content, e.message].filter(Boolean).join('\n\n');
+            if (typeof agent.finish === 'function')
+                await agent.finish({ block, live, session, box: params.box });
             await live.save?.();
             if (own)
                 live.send({ type: 'chat.done' });
@@ -97,6 +103,15 @@ export default {
         if (live?.stopped) {
             delete block.inited;
             return;
+        }
+        // Бюджет ходов бокса: страховка от вечных циклов (второй контур после леджера попыток)
+        block.turns = (block.turns || 0) + 1;
+        if (block.turns > MAX_TURNS) {
+            block.content = [block.content, '[лимит ходов ' + MAX_TURNS + ': останавливаюсь, итог — из сделанного выше]'].filter(Boolean).join('\n\n');
+            delete block.inited;
+            await live.save?.();
+            const m = live?.mode || 'plan';
+            return this.total(ctx, agent[m]?.tools || agent.tools || {});
         }
         const mode = live?.mode || 'plan';
         const tools = agent[mode]?.tools || agent.tools || {};
@@ -136,6 +151,7 @@ export default {
                     engine: this,
                     task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
                 await live.save?.();
                 if (live?.stopped) {
@@ -158,20 +174,28 @@ export default {
             await agent.recalc({ block, box: params.box, messages, session, live, exec, task: params.task });
 
         const ids = nextIds(agent, block, toolIds);
+        if ((block.items || []).some(b => b.type === 'create' && b.done && !b.error))
+            return this.total(ctx, tools);
         const skillTools = params.skillStep?.tools;
-        const next = skillTools?.length
+        const rawNext = skillTools?.length
             ? skillToolNext(skillTools, ids, block)
             : await this.pick(ctx, ids, tools, mode);
         if (live?.stopped) {
             delete block.inited;
             return;
         }
+        const picked = splitPick(rawNext, ids.concat(['stop', 'total']));
+        const next = picked.id;
         if (!next || next === 'stop' || next === 'total')
             return this.total(ctx, tools);
 
         const tool = tools[next];
         if (tool) {
-            const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now() };
+            // Инвариант «несейвленных блоков нет»: чайлд рождается скрытым
+            // (ribbon и preview фильтруют hidden) и впервые попадает в сейв
+            // уже видимым — после init. Отказанный/прерванный init снимает его
+            // до первого сейва с ним: в файле остаётся только using_blocks.
+            const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now(), hidden: true };
             if (tool.stop != null)
                 child.stop = tool.stop;
             // doc — только после done (write/create evidence); не копировать с tool на пустой стрим
@@ -181,30 +205,33 @@ export default {
                     used.push(next);
             }
             block.items.push(child);
-            await live.save?.();
             if (typeof tool.init === 'function') {
                 const ok = await tool.init({
                     block: child, box: block, messages, session, model, live, exec, agent,
                     engine: this,
                     task: params.task,
                     streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
-                await live.save?.();
-                if (live?.stopped) {
-                    delete block.inited;
-                    return;
-                }
-                if (ok === false) {
+                if (live?.stopped || ok === false) {
                     // init === false — «здесь этому tool нечего делать»: блок снимается,
                     // тип остаётся в using_blocks — в этом боксе его больше не предлагаем (меню только сужается)
-                    block.items.pop();
+                    const i = block.items.indexOf(child);
+                    if (i >= 0)
+                        block.items.splice(i, 1);
                     const used = block.using_blocks ??= [];
                     if (!used.includes(next))
                         used.push(next);
                     await live.save?.();
+                    if (live?.stopped) {
+                        delete block.inited;
+                        return;
+                    }
                     return this.turn(ctx);
                 }
             }
+            delete child.hidden;
+            await live.save?.();
             if (!child.content && !draftText(child) && (tool.prompt || tool.system)) {
                 await this.fill(child, {
                     agent: {
@@ -226,6 +253,15 @@ export default {
                     engine: this, task: params.task,
                 });
             pushLift(messages, child);
+            // Леджер попыток: идентичный провал дважды — dropUsed агента игнорируется,
+            // тип остаётся в using_blocks (защита от вечных циклов вида read ×15)
+            noteAttempt(block, next, child);
+            // Прерыватель: ошибки подряд (пусть и с разными операндами) — бокс закрывается
+            // итогом, дальше только человек. Одинаковый мусор ловит леджер, разный — он.
+            if (trippedBreaker(block, child)) {
+                await live.save?.();
+                return this.total(ctx, tools);
+            }
             await live.save?.();
             if (child.stop) {
                 if (!live.wait) {
@@ -233,15 +269,24 @@ export default {
                     delete block.inited;
                     return;
                 }
+                // Догма: повторный стоп того же типа с тем же операндом после
+                // отклонения — отказ уже финален, ждать нечего, сразу итог
+                if (isRepeatStop(block, next, child)) {
+                    child.content = [child.content, '[повторный стоп без новых данных после отклонения — закрываю без ожидания]'].filter(Boolean).join('\n\n');
+                    delete child.stop;
+                    await live.save?.();
+                    return this.total(ctx, tools);
+                }
                 // ждём человека; approve выполняет владелец ленты, сюда приходит факт
                 const res = await live.wait(child) || {};
                 if (live?.stopped) {
                     delete block.inited;
                     return;
                 }
+                if (res.accept === false)
+                    recordReject(block, next, child);
                 if (res.content)
                     messages.push({ role: 'user', content: String(res.content) });
-                delete child.stop;
                 await live.save?.();
             }
             return this.execute({
@@ -252,35 +297,63 @@ export default {
             });
         }
 
-        // вложенный агент — в ленту до execute (как tool: push → save → ход)
-        const sub = { type: next, time: Date.now() };
-        block.items.push(sub);
-        await live.save?.();
-        await this.execute({
-            ...params,
-            agent: next,
-            prompt: undefined,
-            block: sub,
-            box: block,
-        });
+        await this.callAgent(ctx, { agent: next, brief: picked.brief, parent: block });
         if (live?.stopped) {
             delete block.inited;
             return;
         }
-        if (sub.skip) {
-            const i = block.items.indexOf(sub);
-            if (i >= 0)
-                block.items.splice(i, 1);
-            await live.save?.();
-        }
-        else
-            pushLift(messages, sub);
         return this.execute({
             ...params,
             agent: type, model, messages, session, live,
             prompt: undefined,
             block,
         });
+    },
+
+    /**
+     * Вызов субагента из потока родителя: brief → prompt ребёнка, итог в блок и в messages.
+     * @returns {{ ok: boolean, agent: string, content?: string, error?: boolean, skip?: boolean, state?: string, block: object }}
+     */
+    async callAgent(ctx, spec = {}) {
+        const { agent: id, brief, parent } = spec;
+        const box = parent || ctx.block;
+        const live = ctx.live;
+        box.items ??= [];
+        const sub = { type: id, time: Date.now() };
+        const text = String(brief || '').trim();
+        if (text)
+            sub.brief = text;
+        box.items.push(sub);
+        await live?.save?.();
+        await this.execute({
+            ...ctx.params,
+            agent: id,
+            prompt: text || undefined,
+            block: sub,
+            box,
+            skillStep: undefined,
+        });
+        if (sub.skip) {
+            const i = box.items.indexOf(sub);
+            if (i >= 0)
+                box.items.splice(i, 1);
+            // Пропущенный субагент — в меню-исключение: повторный pick без новых
+            // данных ушёл бы в тот же skip (вечный холостой цикл nested)
+            const used = box.using_blocks ??= [];
+            if (!used.includes(id))
+                used.push(id);
+            await live?.save?.();
+            return { ok: false, skip: true, agent: id, block: sub };
+        }
+        pushLift(ctx.messages, sub);
+        return {
+            ok: !sub.error,
+            agent: id,
+            content: sub.content,
+            error: sub.error ? true : undefined,
+            state: sub.state,
+            block: sub,
+        };
     },
 
     /** Итог бокса: один ребёнок с content — лифт; только ошибки — агрегат; draft/несколько — fill. */
@@ -292,6 +365,8 @@ export default {
         }
         const mode = live?.mode || 'plan';
         const data = (block.items || []).filter(b => {
+            if (b.hidden)
+                return false;
             if (b.type === 'prompt' || tools[b.type]?.ignore)
                 return false;
             if (tools[b.type]?.role && tools[b.type].role !== 'user')
@@ -387,7 +462,7 @@ export default {
                     content: [
                         agent[mode]?.system || agent.system,
                         block.brief && ('Тема: ' + block.brief),
-                        'Выбери следующий шаг одним словом из списка, без знаков и пояснений.',
+                        'Выбери следующий шаг: id из списка. Субагенту можно дописать поручение в той же строке.',
                         '[menu]',
                         ...lines,
                     ].filter(Boolean).join('\n'),
@@ -396,9 +471,10 @@ export default {
         });
         if (live?.stopped)
             return;
-        const word = String(response.content || '').trim().split(/\s+/)[0]
+        const line = String(response.content || '').trim().split('\n')[0] || '';
+        const word = line.split(/\s+/)[0]
             ?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
-        return ids.includes(word) ? word : ids[0];
+        return ids.includes(word) ? line : ids[0];
     },
 
     async fill(block, { agent, model, messages, live, box, effort }) {
@@ -473,7 +549,9 @@ export default {
                 if (!token)
                     continue;
                 if (!reasonBlock && box?.items) {
-                    reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, time: Date.now() };
+                    // hidden: эфемерный индикатор CoT — ribbon/preview его не рисуют,
+                    // в сводки total не попадает (фильтр ниже), на диск — только скрытым
+                    reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, hidden: true, time: Date.now() };
                     box.items.push(reasonBlock);
                     await live?.save?.();
                 }
@@ -515,6 +593,38 @@ export default {
             }
             throw e;
         }
+    },
+
+    /**
+     * Резолв WORK-пути в вид цели — для guided-ошибок tools.
+     * Агенты зовут через params.engine.resolveTarget(path).
+     * @returns {{kind: 'file'|'class'|'provider'|'missing'|'bad', path, type?, label?, hint?}}
+     */
+    async resolveTarget(path) {
+        const p = String(path || '').trim();
+        if (!p || !p.startsWith('/'))
+            return { kind: 'bad', path: p, hint: 'нужен абсолютный WORK-путь вида /MODELS/odant' };
+        let item = null;
+        try {
+            item = await WORK.get_item(p);
+        }
+        catch { item = null; }
+        if (!item)
+            return { kind: 'missing', path: p };
+        const type = item.type || item.constructor?.name || '';
+        const label = item.label || item.id || p;
+        if (typeof item.list_remote === 'function' || type === '$provider') {
+            return {
+                kind: 'provider', path: p, type, label,
+                hint: 'это провайдер ($provider): remote/list_remote — здесь, модели — дети через ls, новые — create $ai',
+            };
+        }
+        if (type === '$file')
+            return { kind: 'file', path: p, type, label };
+        return {
+            kind: 'class', path: p, type, label,
+            hint: 'это класс, не файл: осмотр — ls/info/readme/meta, действие — create/typed/write по контракту места',
+        };
     },
 
     /**
@@ -618,6 +728,114 @@ export default {
     },
 };
 
+/** Бюджет ходов одного бокса: второй контур защиты от вечных циклов (первый — леджер попыток). */
+export const MAX_TURNS = 50;
+
+/** Повторов одного операнда подряд, после которых тип остаётся в using_blocks. */
+export const MAX_SAME_ATTEMPTS = 2;
+
+/** Ошибок подряд (с любыми операндами), после которых бокс закрывается итогом. */
+export const MAX_CONSECUTIVE_ERRORS = 3;
+
+/** Ключ попытки: tool + операнд (путь или первая строка контента). */
+export function attemptKey(next, child) {
+    const op = String(child?.path || '').trim()
+        || String(child?.content || '').replace(/\r\n/g, '\n').trim().split('\n').find(Boolean)
+        || '';
+    return next + '\n' + op.slice(0, 200);
+}
+
+function pruneAttempts(box) {
+    const a = box.attempts;
+    if (!a)
+        return;
+    const keys = Object.keys(a);
+    if (keys.length > 20)
+        for (const k of keys.slice(0, keys.length - 20)) delete a[k];
+}
+
+/**
+ * Прерыватель consecutive-ошибок: леджер ловит одинаковый мусор,
+ * этот — разный (каждый раз новый путь/операнд). Успех сбрасывает счёт.
+ * @returns {boolean} бокс пора закрывать итогом
+ */
+export function trippedBreaker(box, child) {
+    if (!box || !child)
+        return false;
+    if (!child.error) {
+        if (box.errorStreak)
+            delete box.errorStreak;
+        return false;
+    }
+    const n = (box.errorStreak = (box.errorStreak || 0) + 1);
+    if (n >= MAX_CONSECUTIVE_ERRORS) {
+        child.content = [child.content,
+            '[ошибки подряд: ' + n + ' — останавливаю бокс, дальше нужен человек]']
+            .filter(Boolean).join('\n\n');
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Учёт попытки tool. Успех/нейтраль — сброс счётчиков tool (операнд сменился).
+ * Идентичный провал MAX_SAME_ATTEMPTS раз — dropUsed агента игнорируется:
+ * тип возвращается в using_blocks, меню только сужается.
+ */
+export function noteAttempt(box, next, child) {
+    if (!box || !next || !child)
+        return;
+    if (!child.error) {
+        const at = box.attempts;
+        if (at) {
+            for (const k of Object.keys(at))
+                if (k.startsWith(next + '\n')) delete at[k];
+            if (!Object.keys(at).length) delete box.attempts;
+        }
+        return;
+    }
+    const key = attemptKey(next, child);
+    const at = box.attempts ??= {};
+    at[key] = (at[key] || 0) + 1;
+    pruneAttempts(box);
+    if (at[key] >= MAX_SAME_ATTEMPTS) {
+        const used = box.using_blocks ??= [];
+        if (!used.includes(next))
+            used.push(next);
+        child.content = [child.content, '[повтор ' + at[key] + ': тот же ' + next + ' с тем же операндом заблокирован — выбери другой ход или спроси человека]'].filter(Boolean).join('\n\n');
+    }
+}
+
+/**
+ * Фиксация отклонения стоп-блока: повтор с тем же операндом ждать не будет.
+ * Ключ — attemptKey (tool + путь/первая строка): пометки леджера в хвосте
+ * контента на сравнение не влияют.
+ */
+export function recordReject(box, next, child) {
+    if (!box || !next)
+        return;
+    (box.rejectedStops ??= {})[next] = attemptKey(next, child);
+}
+
+/** Тот же стоп с тем же операндом уже отклоняли — ожидание бессмысленно. */
+export function isRepeatStop(box, next, child) {
+    const r = box?.rejectedStops;
+    if (!r || !next || !(next in r))
+        return false;
+    return r[next] === attemptKey(next, child);
+}
+
+/** id из ответа pick + хвост строки = brief субагенту. */
+function splitPick(raw, ids) {
+    const line = String(raw || '').trim();
+    if (!line)
+        return { id: '', brief: '' };
+    const word = line.split(/\s+/)[0]?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
+    if (ids.includes(word))
+        return { id: word, brief: line.slice(word.length).trim() };
+    return { id: '', brief: '' };
+}
+
 /** Навык: первый unused tool; уже успешный — пропуск; после ok create — итог. */
 function skillToolNext(order, ids, box) {
     const items = box?.items || [];
@@ -666,9 +884,37 @@ function nextIds(agent, block, toolIds) {
         if (!used.includes(id) && !ids.includes(id))
             ids.push(id);
     }
+    if (createFirst(block, toolIds))
+        return ['create'];
+    if (ids.includes('activation') && !okRead(block)) {
+        const i = ids.indexOf('activation');
+        if (i >= 0)
+            ids.splice(i, 1);
+    }
     if (agent.prompt && !used.includes('total') && !used.includes('stop'))
         ids.push('stop');
     return ids;
+}
+
+/** После APPROVE activation или write в отсутствующий класс — create, даже если тип сожжён. */
+export function createFirst(block, toolIds) {
+    if (!toolIds.includes('create'))
+        return false;
+    const items = block.items || [];
+    if (items.some(b => b.type === 'create' && b.done && !b.error))
+        return false;
+    // Гейт против веера пустых create: дважды неуспешно без done — больше не форсим,
+    // ход уходит в общее меню (total/question), а не в восьмой identical create
+    const badCreates = items.filter(b => b.type === 'create' && b.error && !b.done);
+    if (badCreates.length >= 2)
+        return false;
+    if (items.some(b => b.type === 'activation' && b.state === 'принято'))
+        return true;
+    return items.some(b => b.type === 'write' && b.need === 'create');
+}
+
+function okRead(block) {
+    return (block.items || []).some(b => b.type === 'read' && b.done && !b.error);
 }
 function samePlace(a, b) {
     if (!a || !b) return false;

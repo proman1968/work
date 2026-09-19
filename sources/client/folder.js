@@ -19,6 +19,23 @@ export class $folder extends $item {
     get tools() {
         return [];
     }
+    /** Схема FIELDS типизатора — из DATA.METADATA. Не кэшировать до прихода METADATA (иначе пустой root навсегда). */
+    get $fields() {
+        const meta = this.DATA?.METADATA;
+        if (!meta) {
+            this._fieldsRoot = undefined;
+            this._fieldsMeta = undefined;
+            return undefined;
+        }
+        const listFn = globalThis.CORE?.$class?.fieldsList;
+        meta.FIELDS = listFn
+            ? listFn(meta.FIELDS)
+            : (Array.isArray(meta.FIELDS) ? meta.FIELDS : (meta.FIELDS?.fields || []));
+        if (this._fieldsRoot && this._fieldsMeta === meta)
+            return this._fieldsRoot;
+        this._fieldsMeta = meta;
+        return this._fieldsRoot = new CORE.$field({ id: 'FIELDS', fields: meta.FIELDS }, this);
+    }
     get $public() {
         return {
             '@system': {
@@ -200,6 +217,8 @@ export class $folder extends $item {
         });
     }
     get icon() {
+        if (this.DATA?.icon)
+            return this.DATA.icon;
         if (this.expanded)
             return this.isType ? 'fontawesome:s-folder-open' : 'fontawesome:r-folder-open';
         return this.isType ? 'fontawesome:s-folder' : 'fontawesome:r-folder';

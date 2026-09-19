@@ -369,12 +369,18 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
     it('work_zone({role}) даёт зону роли, get_storage — deprecated алиас', async () => {
         const mbox = await WORK.get_item('/MBOX');
+        const slash = p => p.replaceAll('\\', '/');
+        const metaPath = slash(mbox.meta_folder.path);
         const zone = await mbox.work_zone({ role: 'USER' });
-        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/work'), 'USER-зона — папка work');
+        assert.equal(slash(zone.path), metaPath + '/USER', 'USER-зона — папка USER в мета');
         const legacy = await mbox.get_storage({ role: 'USER' });
         assert.equal(legacy.path, zone.path, 'алиас возвращает ту же папку');
         const def = await mbox.work_zone({});
-        assert.equal(def, mbox.meta_folder, 'без роли — метапапка');
+        assert.equal(slash(def.path), metaPath + '/GUESTS', 'без роли — папка GUESTS');
+        for (const role of ['ADMIN', 'BOSS', 'GUEST']) {
+            const z = await mbox.work_zone({ role });
+            assert.equal(slash(z.path), metaPath + '/' + role, role + '-зона — папка ' + role + ' в мета');
+        }
     });
 
     it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
@@ -392,15 +398,15 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         const roles = await gbox.roles({ session: { uid: 'u3' } });
         assert.deepEqual(roles, ['GUEST'], 'roles гостя — только GUEST');
         const zone = await gbox.work_zone({ role: 'GUEST' });
-        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/guests'), 'GUEST-зона — папка guests');
+        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/GUEST'), 'GUEST-зона — папка GUEST');
         const all = await gbox.assignedUsers;
         assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
     });
 
     it('GUEST видит guests и логи, но не work; пишет только в guests', async () => {
         const gbox = await WORK.get_item('/GUESTBOX');
-        const guests = await gbox.work_zone({ role: 'GUEST' });
-        const work = await gbox.work_zone({ role: 'USER' });
+        const guests = await gbox.meta_folder._get_next_item('guests', FS.$folder);
+        const work = await gbox.meta_folder._get_next_item('work', FS.$folder);
         const params = { session: { uid: 'u3' }, role: 'GUEST' };
 
         assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');

@@ -4,13 +4,12 @@ export default {
     icon: 'icons:assignment',
     doc: true,
     allowReasoning: true,
-    description: 'несколько ещё не сделанных действий',
+    description: 'несколько ещё не сделанных действий. Звать когда действий несколько и нужен план',
     step: false,
     system: [
         '# Режим: план',
         'Несколько ещё не сделанных действий — краткое название и нумерованный список.',
         'Не для приветствий и не вместо ответа по уже известным фактам.',
-        '«Не подключены у провайдера»: (1) ls детей /MODELS/<provider> ($provider); (2) remote/list_remote; (3) diff. Не путать каталог WORK с API. Не web на публичный ollama.com.',
     ].join('\n'),
     prompt: `
 Предложи план:

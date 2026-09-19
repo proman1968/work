@@ -52,10 +52,9 @@ export default {
         '# Агент: check',
         'Постусловие side-effect: операция create/write из ленты выполнена.',
         'targets = [create …] (классы) и [write …] (файлы) из контекста.',
-        'Класс: exist (класс, type/id из секции create) → file class.js (читается, есть icon) → file readme.md в storage_folder (непустой, актуален).',
-        'Файл: exist → file (непустой / согласован с секцией write).',
-        'Write class.js без обновлённого readme того же класса — gap. class.js без icon из реального набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:) — gap. Набора register: нет.',
-        'Не сверяй предметные поля устройства (model и т.п.) — это не роль check; icon обязателен как поле UI.',
+        'Класс: exist (класс, type/id из секции create) → file class.js (импортируется через API) → file readme.md в storage_folder (непустой).',
+        'Файл: exist → file (читается, непустой). Содержимое показывается в evidence, судит модель/человек.',
+        'Устройство (icon, поля, секции) проверяет только readme точки, не код. Не сверяй предметные поля и наборы.',
         'Итог — сводка в content. Цель сессии не закрывай — дальше корень task.',
         'Не создавай и не правь. Не web. Не осмотр системы (explore).',
     ].join('\n'),
@@ -68,7 +67,11 @@ export default {
         const messages = params.messages || [];
         if (!box.targets?.length)
             box.targets = collectTargets(messages);
-        const n = (box.targets || []).length;
+        // проверять нечего: действий work в ленте нет — отказ без следа,
+        // тип уходит в using_blocks, меню продолжается без check
+        if (!box.targets?.length)
+            return false;
+        const n = box.targets.length;
         tagAgent(box, AGENT_TAG, n ? (n + ' target' + (n > 1 ? 's' : '')) : 'нет targets');
         box.items ??= [];
         if (n && !allTargetsSettled(box)) {
@@ -80,7 +83,7 @@ export default {
     },
     finish(params = {}) {
         const box = params.block;
-        if (!box)
+        if (!box || !box.targets?.length)
             return;
         ensureTargets(box, params.messages);
         closeCheck(box);
@@ -224,13 +227,6 @@ async function fillMeta(b, t) {
         b.content = '[file ' + b.path + ']\ngap: class.js не читается — ' + String(e.message || e);
         return;
     }
-    const iconGap = iconSetGap(meta.text);
-    if (iconGap) {
-        b.error = true;
-        b.state = 'gap';
-        b.content = '[file ' + b.path + ']\ngap: ' + iconGap;
-        return;
-    }
     b.state = 'ok';
     b.content = fileReport(b.path, meta.text, 'js');
 }
@@ -314,15 +310,8 @@ async function fillWriteFile(b, t) {
         b.content = '[file ' + path + ']\nпусто';
         return;
     }
-    const snippet = t.expect?.snippet;
-    if (snippet && !text.includes(snippet)) {
-        b.error = true;
-        b.state = 'gap';
-        b.content = '[file ' + path + ']\ngap: нет ожидаемого фрагмента из write';
-        return;
-    }
     b.state = 'ok';
-    b.content = fileReport(path, text, langOf(path), snippet ? 'snippet: ok' : '');
+    b.content = fileReport(path, text, langOf(path), '');
 }
 
 async function isImageFile(file) {
@@ -376,19 +365,6 @@ async function resolveClassFile(cls, name) {
     }
     catch { /* нет */ }
     return out;
-}
-
-/** icon в class.js — только реальные наборы ODA (не выдуманный register:). */
-const ODA_ICON_SET = /^(carbon|icons|ai|lineawesome|bootstrap|iconoir|editor)$/;
-
-function iconSetGap(text) {
-    const m = String(text || '').match(/\bicon\s*:\s*['"`]([^'"`]+)['"`]/);
-    if (!m)
-        return 'нет icon в class.js';
-    const set = String(m[1]).split(':')[0];
-    if (!ODA_ICON_SET.test(set))
-        return 'icon «' + m[1] + '» не из набора ODA (carbon:, icons:, ai:, lineawesome:, bootstrap:, iconoir:, editor:)';
-    return '';
 }
 
 function fileReport(path, text, lang, note) {
@@ -449,12 +425,7 @@ function collectTargets(messages) {
             if (seen.has(classPath))
                 continue;
         }
-        const section = evidenceSection(blob, match.index);
-        add({
-            path,
-            kind: 'file',
-            expect: { snippet: writeSnippetFromSection(section) },
-        });
+        add({ path, kind: 'file' });
         const classJs = path.match(/^(.*?)\/\$[^/]+\/class\.js$/i) || path.match(/^(.*)\/class\.js$/i);
         if (classJs?.[1]) {
             const classPath = classJs[1];
@@ -465,26 +436,9 @@ function collectTargets(messages) {
     return out;
 }
 
-/** Текст от маркера операции до следующего [create|write …] или конца. */
-function evidenceSection(blob, index) {
-    const from = index ?? 0;
-    const rest = blob.slice(from);
-    const next = rest.slice(1).search(/\n\[(?:create|write)\s+\//);
-    const end = next < 0 ? rest.length : next + 1;
-    return rest.slice(0, end);
-}
-
 function sectionField(section, name) {
     const m = String(section || '').match(new RegExp('^' + name + ':\\s*(.+)$', 'mi'));
     return m ? m[1].trim() : '';
-}
-
-function writeSnippetFromSection(section) {
-    const lines = String(section || '').split('\n').map(l => l.trim());
-    const line = lines.find(l =>
-        l && !/^\[write\s+\//i.test(l) && !/^ok\b/i.test(l) && !/^###?\s/.test(l)
-        && !/^```/.test(l) && l.length > 12 && !l.startsWith('_'));
-    return line ? line.slice(0, 80) : '';
 }
 
 function ensureTargets(box, messages) {

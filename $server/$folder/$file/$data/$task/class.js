@@ -1,0 +1,2097 @@
+﻿/**
+ * $task — длинная ИИ-сессия (JSON).
+ * prompt / pipe / body — на этом типе; one-shot между классами — $class/ai.
+ */
+export default {
+    icon: 'bootstrap:robot',
+    label: 'Задачи',
+    contentType: 'application/json',
+    GET: 'context',
+    METADATA: {},
+    /** Контракт живой ленты для движка агентов: события, персист, стоп, режим, ожидание человека. */
+    _live(session) {
+        const task = this;
+        return {
+            path: this.short,
+            send: e => {
+                // после Стоп — не поднимать pending (start/delta); done/прочее — ок
+                if (task._stopped && (e?.type === 'chat.delta' || e?.type === 'chat.start'))
+                    return;
+                session?.send?.({ ...e, path: task.short });
+            },
+            save: () => task._save(session),
+            get stopped() { return !!task._stopped; },
+            get mode() { return taskMode(task.body.mode); },
+            set mode(v) { task.body.mode = taskMode(v); },
+            /** Side-effect агента закрыл цель сессии (например write.done). */
+            goalDone() {
+                const g = task.body?.goal;
+                if (!g || g.status === 'done')
+                    return;
+                g.status = 'done';
+                g.resume = null;
+                g.pursue = 0;
+            },
+            /** Стоп на человека: отпускаем UI (chat.done → кнопка APPROVE), ждём _resolveWait. */
+            wait: block => {
+                session?.send?.({ type: 'chat.done', path: task.short });
+                task._persistWaiting(block, session);
+                return new Promise(resolve => {
+                    (task._waiters ??= new Map()).set(block.time, resolve);
+                });
+            },
+        };
+    },
+    /** Доставка ответа человека в ожидающий движок (стоп-блок по time). */
+    _resolveWait(block, payload) {
+        const resolve = block && this._waiters?.get(block.time);
+        if (!resolve)
+            return false;
+        this._waiters.delete(block.time);
+        const b = this.body;
+        if (b && typeof b.then !== 'function' && b.waiting?.time === block?.time)
+            delete b.waiting;
+        resolve(payload || {});
+        return true;
+    },
+    /** Персист ожидания APPROVE: рестарт не должен молча терять waiter (см. _rearmWaiting). */
+    async _persistWaiting(block, session) {
+        try {
+            const body = await this.body;
+            body.waiting = { time: block.time, type: block.type };
+            await this._save(session);
+        }
+        catch { /* следующий сейв подберёт */ }
+    },
+    /**
+     * Перевооружение ожидания после обрыва/рестарта: waiter в памяти потерян —
+     * помечаем стоп-блок и возвращаем его тип в меню, чтобы ход переспросил.
+     */
+    async _rearmWaiting(session) {
+        const body = await this.body;
+        const w = body.waiting;
+        if (!w || this._waiters?.size)
+            return null;
+        delete body.waiting;
+        const blk = findWaitingBlock(body, new Map([[w.time, true]]));
+        if (blk) {
+            blk.state = 'ожидание снято рестартом — повтори вопрос или ответ';
+            const parent = parentOfBlock(body, blk);
+            if (parent)
+                dropUsedType(parent, blk.type);
+        }
+        await this._save(session);
+        return blk;
+    },
+    /** Промпт вместо APPROVE: снять live.wait, отдать текст, не включать build. */
+    async _reviseWait(text, session) {
+        const body = await this.body;
+        const waiting = findWaitingBlock(body, this._waiters);
+        if (!waiting)
+            return false;
+        waiting.state = 'уточнено';
+        const parent = parentOfBlock(body, waiting);
+        if (parent)
+            dropUsedType(parent, waiting.type);
+        await this._save(session);
+        return this._resolveWait(waiting, { accept: false, content: text });
+    },
+    /** Исполнение блока-агента: `owner.prompt(params)` (движок `~/ai/prompt` после init). */
+    async _runAgent(params, session) {
+        const body = await this.body;
+        const owner = this.$class;
+        await owner?.init;
+        if (typeof owner?.prompt !== 'function')
+            throw new Error('$task: метод prompt не найден у класса');
+        const worn = await this._skillStep();
+        const skillStep = worn?.step?.type === params.block.type ? worn.step : null;
+        // handoff: блок уже в дереве — сразу диск + changed, не ждать context
+        await this._save(session);
+        await owner.prompt({
+            agent: params.block.type,
+            block: params.block,
+            box: params.box,
+            brief: params.block.brief,
+            messages: await this.context({ handoff: true, session }),
+            session,
+            live: this._live(session),
+            model: body.model,
+            effort: body.effort,
+            skillStep,
+            task: this,
+        });
+        await this._save(session);
+        return params.block;
+    },
+    /** Незавершённый блок-агент в активной цепочке (обрыв, рестарт) — продолжает движок. */
+    async _activeAgentBlock(session) {
+        if (this._waiters?.size)
+            return null; // движок уже ждёт человека в этом блоке — не перезапускать
+        await this._rearmWaiting(session);
+        const body = await this.body;
+        const focus = await this._active_box();
+        if (agentPending(focus, this.pipe))
+            return { block: focus, box: parentOfBlock(body, focus) || body };
+        let box = body;
+        for (;;) {
+            const next = box.items?.last;
+            if (!next)
+                return null;
+            if (agentPending(next, this.pipe))
+                return { block: next, box };
+            if (boxOpen(next))
+                box = next;
+            else
+                return null;
+        }
+    },
+    async prompt(params = {}) {
+        let { prompt: rawPrompt, role, session, agent: agentParam } = params;
+        const pipe = await this.pipe;
+
+        // @web / @register-accounts текст… → агент или навык + хвост
+        let text = String(rawPrompt ?? '').trim();
+        let agent = agentParam;
+        const mention = text.match(/^@([a-zA-Z_][\w-]*)(?:\s+|$)/);
+        if (mention) {
+            const id = mention[1];
+            const skills = await this._listSkills();
+            if (skills.some(s => s.id === id)) {
+                params.skillMention = id;
+                text = text.slice(mention[0].length).trim();
+                params.prompt = text;
+            }
+            else if (pipe[id]?.agent) {
+                agent = id;
+                text = text.slice(mention[0].length).trim();
+                params.prompt = text;
+                params.agent = agent;
+            }
+        }
+        else if (agent && !pipe[agent]?.agent)
+            return { ok: false, error: 'unknown agent: ' + agent };
+
+        session?.send?.({ type: 'chat.start', path: this.short });
+        await this._init(params);
+        await this._clearHalt(session);
+
+        try {
+            switch (role) {
+                case 'AI':{
+                    const body = await this.body;
+                    const g = body?.goal;
+                    const raw = params.prompt ?? params.post?.prompt;
+                    // последняя form, не focused: после report фокус не form, JSON всё равно ответы
+                    const form = lastOfType(body, 'form');
+                    if (form && raw) {
+                        try {
+                            const pipe = await this.pipe;
+                            await pipe.form.approve?.({
+                                ...params,
+                                block: form,
+                                prompt: raw,
+                                task: this,
+                            });
+                            form.state = 'принято';
+                            dropUsedType(body, 'work');
+                            dropUsedType(body, 'check');
+                            dropUsedType(body, 'report');
+                            await this._save(session);
+                        }
+                        catch { /* prompt не JSON ответов */ }
+                    }
+                    // goal.done — не крутить меню, кроме gap в check (форма ещё правится)
+                    if (g?.status === 'done') {
+                        if (!lastCheckIncomplete(body)) {
+                            session?.send?.({ type: 'chat.done', path: this.short });
+                            return { ok: true };
+                        }
+                        g.status = 'open';
+                        g.resume = { continue: true };
+                        dropUsedType(body, 'work');
+                        dropUsedType(body, 'check');
+                        dropUsedType(body, 'report');
+                        await this._save(session);
+                    }
+                    // waiting без текста — иначе «Продолжить» не открывает goal и меню с form.next=[]
+                    if (g?.status === 'waiting') {
+                        g.status = 'open';
+                        await this._save(session);
+                    }
+                    this._stopped = false;
+                } break;
+                case 'APPROVE':{
+                    const accept = params.accept === true || params.accept === 'true';
+                    if (accept) {
+                        await params.pipe_step.approve?.(params);
+                        params.block.state = 'принято';
+                        delete params.box.using_blocks;
+                    } else {
+                        params.block.state = 'отклонено';
+                        // Отклонение закрывает freeze: новый заход — новой командой, не redraft.
+                        // Остальным стопам — точечный сброс только отклонённого типа.
+                        if (!closeFreezeBox(params.box, params.block))
+                            dropUsedType(params.box, params.block?.type);
+                    }
+                    await this._save(session);
+                    this._stopped = false;
+                    // движок ждёт этот блок — доставить факт; chat.done не шлём:
+                    // исходный prompt ещё в _runAgent и сам закроет сессию по завершении
+                    // (вход в APPROVE уже дал chat.start → pending на продолжение работы)
+                    if (this._resolveWait(params.block, {
+                        accept,
+                        content: params.block.approved || params.block.state,
+                    })) {
+                        return { ok: true };
+                    }
+                } break;
+                default:{
+                    if (text) {
+                        params.block = {
+                            type: 'prompt',
+                            content: text,
+                        };
+                        await this._push_block(params);
+                    }
+                    if (params.includes) {
+                        params.block = this._build_block('includes');
+                        params.block.files = JSON.parse(params.includes);
+                        await this._push_block(params);
+                    }
+                    if (!this.pipe[params.box.type]?.agent)
+                        delete params.box.using_blocks;
+                    this._stopped = false;
+
+                    // durable goal: текст или вложение = ход человека; waiting+resume → форс / continue
+                    if (text || params.includes || params.skillMention) {
+                        const body = await this.body;
+                        const g = body.goal;
+                        const goalText = String(text || '').trim()
+                            || (params.includes && g?.text ? String(g.text).trim() : '')
+                            || attachGoalText(params.includes)
+                            || (params.skillMention ? '@' + params.skillMention : '');
+                        if (goalText && (!g || g.status === 'done') && agent !== 'review') {
+                            const need = await this._classifyGoalNeed(goalText, session);
+                            body.goal = {
+                                text: goalText,
+                                status: 'open',
+                                resume: null,
+                                pursue: 0,
+                                need,
+                            };
+                            delete body.skill;
+                            await this._wearSkill({
+                                text: goalText,
+                                need,
+                                session,
+                                mention: params.skillMention,
+                            });
+                        }
+                        else if (g?.status === 'waiting' && g.resume?.agent && pipe[g.resume.agent]?.agent) {
+                            agent = g.resume.agent;
+                            params.agent = agent;
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        else if (g?.status === 'waiting' && g.resume?.continue) {
+                            // ответ на question до субагента — меню без answer
+                            g.status = 'open';
+                        }
+                        else if (g?.status === 'waiting') {
+                            g.status = 'open';
+                            g.resume = null;
+                        }
+                        await this._save(session);
+                    }
+
+                    if (text && this._waiters?.size && await this._reviseWait(text, session))
+                        return { ok: true };
+                    if (text || params.includes)
+                        releaseStaleStops(params.box);
+
+                    // прямой вход в субагента — исполняет движок класса
+                    if (agent) {
+                        await this._init(params);
+                        if (params.box.type !== agent) {
+                            params.block = this._build_block(agent);
+                            if (text)
+                                params.block.brief = text;
+                            const pushed = await this._push_block(params);
+                            if (pushed) {
+                                await this._runAgent(params, session);
+                                await this._captionDoc(params, session);
+                            }
+                            await this._save(session);
+                            // движок довёл агента до итога / стопа — без меню оркестратора
+                            if (pushed) {
+                                if (params.block.stop && hasBody(params.block))
+                                    await this._noteGoalWait(params.block, params.box, session);
+                                session?.send?.({ type: 'chat.done', path: this.short });
+                                return agentResult(agent, params.block, { waiting: !!params.block.stop });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // цикл шагов: при agent — await до content агента; иначе один шаг + async
+            for (;;) {
+                await this._init(params);
+                await this.pipe[params.box.type]?.recalc?.(params);
+
+                const turn = await this._promptTurn(params, session);
+                if (turn.waiting) {
+                    // answer+stop тоже waiting (конец ветки) — при open goal pursue, не отдавать UI
+                    if (!agent && turn.block?.type === 'answer' && await this._pursueGoal(turn, session)) {
+                        params = { role: 'AI', session };
+                        continue;
+                    }
+                    session?.send?.({ type: 'chat.done', path: this.short });
+                    return agentResult(agent, turn.block, { waiting: true });
+                }
+                if (!turn.loop) {
+                    await this._noteCrash(turn.block, session);
+                    session?.send?.({ type: 'chat.done', path: this.short });
+                    if (agent) {
+                        const box = findAgentBlock(await this.body, agent) || turn.block;
+                        return agentResult(agent, box);
+                    }
+                    return { ok: true };
+                }
+                if (agent) {
+                    const box = findAgentBlock(await this.body, agent);
+                    // конец агента — только content (сводка); error на боксе при частичных site — не стоп
+                    if (box && hasBody(box)) {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return agentResult(agent, box);
+                    }
+                    // ждём человека внутри агента
+                    const live = await this._active_block();
+                    if (live?.stop) {
+                        session?.send?.({ type: 'chat.done', path: this.short });
+                        return agentResult(agent, live, { waiting: true });
+                    }
+                    params = { role: 'AI', session, agent };
+                    continue;
+                }
+                this.async(() => this.prompt({ role: 'AI', session }));
+                return { ok: true };
+            }
+        }
+        catch (e) {
+            params.box ??= await this.body;
+            params.block = { type: 'error', content: e.message };
+            await this._push_block(params);
+            await this._noteCrash(params.block, session);
+            session?.send?.({ type: 'chat.done', path: this.short });
+            if (agent)
+                return { ok: false, agent, error: e.message, content: e.message };
+            return { ok: false, error: e.message };
+        }
+    },
+
+    /** Один ход автомата: fill leaf или меню → push. { loop, waiting, block }. */
+    async _promptTurn(params, session) {
+        // незавершённый агент (обрыв, рестарт) — доигрывает движок класса, не меню таска
+        const broken = await this._activeAgentBlock(session);
+        if (broken) {
+            params.block = broken.block;
+            params.box = broken.box;
+            this._stopped = false;
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            await this._save(session);
+            const b = params.block;
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
+                return { loop: false, waiting: true, block: b };
+            }
+            // агент снова без итога и без стопа — не крутить цикл, ждать человека
+            if (!hasBody(b) && !b?.error)
+                return { loop: false, block: b };
+            liftStepIf(params.box, b);
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
+            return { loop: this._canLoop(b), block: b };
+        }
+        const leaf = params.block;
+        // box.todo — чеклист плана, не лист для стрима; иначе после APPROVE fill todo → стоп без step
+        const todoFocus = leaf && (leaf.type === 'todo' || leaf === params.box?.todo);
+        if (leaf && leaf !== params.box && !leaf.box && !hasBody(leaf) && !todoFocus) {
+            this._stopped = false;
+            await this._fillLeaf(params, session);
+            await this._save(session);
+            if (leaf.stop) {
+                if (this._settleFactsGoal(leaf)) {
+                    await this._save(session);
+                    return { loop: false, block: leaf };
+                }
+                if (!hasBody(leaf))
+                    return { loop: this._canLoop(leaf), block: leaf };
+                await this._noteGoalWait(leaf, params.box, session);
+                return { loop: false, waiting: true, block: leaf };
+            }
+            if (this._settleFactsGoal(leaf)) {
+                await this._save(session);
+                return { loop: false, block: leaf };
+            }
+            return { loop: this._canLoop(leaf), block: leaf };
+        }
+
+        // внутри бокса-агента таск не ходит — им владеет движок (live.wait / человек)
+        if (this.pipe[params.box.type]?.agent)
+            return { loop: false, block: params.box };
+
+        let mode = taskMode(this.body.mode);
+        let node = this.pipe[params.block.type];
+        let next = node?.[mode]?.next || node?.next;
+        // [] у листа (form/question) truthy — иначе меню не поднимается на корень
+        if (!next?.length || node.box) {
+            node = this.pipe[params.box.type];
+            next = node?.[mode]?.next || node?.next;
+        }
+
+        let using_blocks = params.box.using_blocks ??= [];
+        // только id с записью в pipe (TODO_NEXT не должен предлагать мёртвый question)
+        next = (next || []).filter(id => !using_blocks.includes(id) && this.pipe[id]);
+        const goal = this.body.goal;
+        const need = goalNeed(goal);
+        const hasAct = hasActEvidence(params.box);
+        const checkOk = checkFullyOk(lastOfType(this.body, 'check'));
+        const gathered = hasCollectorEvidence(params.box);
+        // Фазовых сужений меню нет (как лесенка ниже): порядок сборки→действия→проверки
+        // модель читает в тексте меню и описаниях агентов, выбор всегда её.
+        // картинка — image.generate; work.write png ломает процесс
+        if (asksImage(lastPromptText(params.box)))
+            next = next.filter(id => id !== 'work');
+        // после question без субагента / pursue — answer не в меню, пока goal open
+        if (goal && goal.status !== 'done' && goal.resume?.continue)
+            next = next.filter(id => id !== 'answer' && id !== 'form' && id !== 'question');
+        // чистый артефакт без действий work: проверять нечего — только закрытие
+        if (need === 'side' && goal && goal.status !== 'done' && !todoFocus
+            && lastValidArtifact(this.body) && !hasWorkAct(this.body))
+            next = next.filter(id => id === 'report' || id === 'answer');
+
+        let choice;
+        let pickBrief = '';
+        // незакрытый todo → сразу step (не fill и не меню report/question)
+        const planned = params.box?.todo?.steps || [];
+        const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
+        if (todoFocus && planned.length > realSteps.length && next.includes('step'))
+            choice = 'step';
+        else
+            choice = await this._skillChoice(using_blocks);
+        if (!choice) {
+            if (!next.length)
+                choice = this.pipe.total ? 'total' : null;
+            else if (next.length === 1)
+                choice = next[0];
+            else {
+            const lines = next.map(id => {
+                const n = this.pipe[id];
+                const cap = n?.[mode]?.description || n?.[mode]?.inject
+                    || n?.description || n?.inject || '';
+                return id.toUpperCase() + ' - ' + cap + ';';
+            });
+            let menu = [
+                'Выбери в menu пункт, который двигает открытую [goal].',
+                'Ответ: id из списка; субагенту можно дописать поручение в той же строке.',
+                'Пункты-остановки (вопрос, форма) — только если без человека продолжить нельзя.',
+                'Один агентный ход. Не planning «на всякий случай».',
+                need === 'facts'
+                    ? 'need=facts: нет фактов — сбор (explore/web/logs); факты в ленте — answer. Сбор цель не закрывает.'
+                    : 'need=side: нет сбора в ленте — explore, не work. После сбора — действие (work/image); после create/write — check; answer без ok check цель не закрывает.',
+                hasAct && !checkOk
+                    ? 'В ленте уже действие — check, не повтор того же пути.'
+                    : (need === 'side' ? 'check — только после create/write в ленте.' : ''),
+                gathered
+                    ? 'Если разумный default уже есть в контексте — не спрашивай, действуй.'
+                    : 'thinking — не сбор. Пока нет explore/web/logs в ленте — не work.',
+                '\n\n[menu]\n',
+                ...lines,
+            ].filter(Boolean).join('\n');
+            let messages = await this.context({ session, prompt: menu });
+            let response = await this._streamChat({ messages, silent: true, session });
+            if (this._stopped)
+                return { loop: false, block: params.block };
+                const picked = menuPickLine(response.content, next);
+                choice = picked.id
+                    || (next.includes('thinking') ? 'thinking' : next[0]);
+                pickBrief = picked.brief || '';
+            }
+        }
+
+        if (!choice || this._stopped)
+            return { loop: false, block: params.block };
+
+        params.block = this._build_block(choice);
+        // Поручение из меню (silent-стрим, cap 64 токена) часто обрезано mid-word:
+        // обрезанный бриф с путями/полями хуже его отсутствия (агент возьмет полную цель).
+        // Короткие целые поручения оставляем, длинные обрезанные отбрасываем.
+        if (pickBrief && pickBrief.length <= 120)
+            params.block.brief = pickBrief;
+        const boxBefore = params.box;
+        const pushed = await this._push_block(params);
+        // выбранный агент исполняет движок класса (live-контракт), не цикл таска
+        if (pushed && this.pipe[choice]?.agent) {
+            if (hasBody(params.block) && params.block.stop) {
+                await this._noteGoalWait(params.block, params.box, session);
+                return { loop: false, waiting: true, block: params.block };
+            }
+            await this._runAgent(params, session);
+            await this._captionDoc(params, session);
+            const b = params.block;
+            if (this._stopped)
+                return { loop: false, block: b };
+            if (b?.stop && hasBody(b)) {
+                await this._noteGoalWait(b, params.box, session);
+                return { loop: false, waiting: true, block: b };
+            }
+            await this._advanceSkillIf(choice);
+            liftStepIf(params.box, b);
+            // Прерыватель серий на уровне задачи (doom_loop по типу, не по операнду):
+            // один агент трижды подряд с ошибкой — тип возвращается в using_blocks,
+            // дальше решает человек. Одинаковый мусор ловит леджер движка, разный — он.
+            // Помета — в state, не в content (контент артефакта не портим).
+            if (this._trippedTypeStreak(params.box, choice)) {
+                b.state = 'ошибки подряд: 3 × ' + choice + ' — останавливаю подбор, нужен человек';
+            }
+            await this._save(session);
+            // субагент действия отработал — слот continue больше не нужен
+            if (choice !== 'question' && choice !== 'form')
+                clearGoalContinue(this.body.goal);
+            if (this._settleFactsGoal(b)) {
+                await this._save(session);
+                return { loop: false, block: b };
+            }
+            return { loop: this._canLoop(b), block: b };
+        }
+        if (pushed) {
+            if (!params.block.box && !hasBody(params.block))
+                await this._fillLeaf(params, session);
+            if (this._stopped)
+                return { loop: false, block: params.block };
+            if (hasBody(params.block))
+                await this.pipe[params.block.type]?.recalc?.(params);
+            await this._captionDoc(params, session);
+        }
+        await this._save(session);
+
+        const focus = pushed ? params.block : boxBefore;
+        if (focus?.stop && hasBody(focus)) {
+            if (this._settleFactsGoal(focus)) {
+                await this._save(session);
+                return { loop: false, block: focus };
+            }
+            await this._noteGoalWait(focus, params.box, session);
+            return { loop: false, waiting: true, block: focus };
+        }
+        return { loop: this._canLoop(focus), block: focus };
+    },
+
+    /** question/form stop (не live.wait): goal.waiting + resume.agent | resume.continue. */
+    async _noteGoalWait(block, box, session) {
+        const type = block?.type;
+        if (type !== 'question' && type !== 'form')
+            return;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done')
+            return;
+        g.status = 'waiting';
+        const pipe = await this.pipe;
+        let agent = null;
+        if (box && pipe[box.type]?.agent && box.type !== 'question' && box.type !== 'form')
+            agent = box.type;
+        else
+            agent = lastResumeAgent(body, pipe);
+        // до субагента — continue: следующий ход без answer в меню
+        g.resume = agent ? { agent } : { continue: true };
+        await this._save(session);
+    },
+
+    /**
+     * Закрыть цель: facts — answer/report; side — answer/report/html,
+     * проверка обязательна только при действиях work (чистый артефакт закрывается отчетом).
+     * @returns {boolean} цель закрыта
+     */
+    _settleFactsGoal(block) {
+        const g = this.body?.goal;
+        if (!g || g.status === 'done')
+            return false;
+        if (!block || !hasBody(block) || block.error)
+            return false;
+        const need = goalNeed(g);
+        if (need === 'facts' && !FACTS_EVIDENCE.has(block.type))
+            return false;
+        if (need === 'side') {
+            if (!SIDE_EVIDENCE.has(block.type))
+                return false;
+            if (hasWorkAct(this.body) && !checkFullyOk(lastOfType(this.body, 'check')))
+                return false;
+        }
+        g.status = 'done';
+        g.resume = null;
+        g.pursue = 0;
+        return true;
+    },
+
+    /**
+     * После терминального answer при незакрытой side-goal — ещё ход оркестратора (budget).
+     * facts уже закрыты в _settleFactsGoal. chat.done не шлём при pursue: pending держит prompt.
+     */
+    async _pursueGoal(turn, session) {
+        if (this._stopped)
+            return false;
+        const body = await this.body;
+        const g = body.goal;
+        if (!g || g.status === 'done' || g.status === 'waiting')
+            return false;
+        if (goalNeed(g) === 'facts')
+            return false;
+        const leaf = turn?.block;
+        if (!leaf || leaf.type !== 'answer' || !hasBody(leaf))
+            return false;
+        const n = Number(g.pursue) || 0;
+        if (n >= GOAL_PURSUE_MAX)
+            return false;
+        g.pursue = n + 1;
+        g.resume = { continue: true };
+        await this._save(session);
+        return true;
+    },
+
+    /**
+     * need цели: silent menu facts|side (тот же контракт, что выбор хода).
+     * Не эвристика по языку постановки — универсально для любой формулировки.
+     */
+    async _classifyGoalNeed(text, session) {
+        const t = String(text || '').trim();
+        if (!t)
+            return 'side';
+        if (this._stopped)
+            return 'side';
+        try {
+            const response = await this._streamChat({
+                silent: true,
+                session,
+                messages: [{
+                    role: 'user',
+                    content: [
+                        'Классифицируй цель сессии.',
+                        'facts — узнать, сверить или перечислить по фактам (ответ, сводка, инвентарь).',
+                        'side — изменить систему или внешний ресурс (создать, записать, удалить, подключить, установить).',
+                        'Сначала узнать и сразу изменить → side. Сомнение → side.',
+                        '',
+                        'Цель:',
+                        t,
+                        '',
+                        'Ответь одним словом строго из списка, без знаков и пояснений.',
+                        '',
+                        '[menu]',
+                        'FACTS - ответ фактами;',
+                        'SIDE - действие в системе;',
+                    ].join('\n'),
+                }],
+            });
+            if (this._stopped)
+                return 'side';
+            return menuPick(response.content, ['facts', 'side']) || 'side';
+        }
+        catch {
+            return 'side';
+        }
+    },
+
+    async _captionDoc(params, session) {
+        const kind = this.pipe[params.block.type];
+        const src = String(params.block.content || '').trim();
+        const label = String(params.block.label || '').trim();
+        const def = String(kind?.label || '').trim();
+        // без своего имени: пусто (stop-doc вроде answer) / type / дефолт pipe
+        const untitled = !label || label === params.block.type || (def && label === def);
+        if (!(params.block.doc && !this._stopped && src && untitled))
+            return;
+        const cap = await this._streamChat({
+            messages: [{ role: 'user', content: src + '\n\n[instruction]\n Сделай заголовок для этого блока. 2-3 слова. Без знаков и пояснений.' }],
+            silent: true,
+            session,
+        });
+        const words = String(cap.content || '').trim().replace(/^["«']+|["»'.]+$/g, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        if (words)
+            params.block.label = words;
+    },
+
+    /** Лист без тела: стрим в тот же блок. Пустой стоп — ошибка в ленте, тип снять с using. */
+    async _fillLeaf(params = {}, session) {
+        const next_pipe = this.pipe[params.block.type];
+        const box_pipe = this.pipe[params.box?.type];
+        const prompt = next_pipe?.prompt || box_pipe?.prompt;
+        if (!prompt) {
+            if (draftText(params.block))
+                return;
+            // total на корне задачи — сводка этапа, не стрим; ошибку в task.content не писать
+            const items = params.box?.items;
+            const i = items ? items.indexOf(params.block) : -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            dropUsedType(params.box, params.block.type);
+            return;
+        }
+        let messages;
+        if (params.block.draft && (params.block.draft.type === 'image_url' || prompt)) {
+            const draft = params.block.draft;
+            const head = prompt + `\n\n[${params.block.type}: ${params.block.label}]\n`;
+            const content = draft.type === 'image_url'
+                ? [{ type: 'text', text: head }, draft]
+                : head + (draft.type === 'text' ? draft.text : draft);
+            messages = await this.context({ session, leaf: params.block });
+            messages.push({ role: 'user', content });
+            if (draft.type === 'image_url')
+                delete params.block.draft;
+        }
+        else {
+            messages = await this.context({
+                prompt, session,
+                evidence: params.block.type !== 'total',
+                leaf: params.block,
+            });
+        }
+        const response = await this._streamChat({
+            messages, session,
+            maxOutput: next_pipe?.maxOutput ?? box_pipe?.maxOutput,
+            allowReasoning: next_pipe?.allowReasoning ?? box_pipe?.allowReasoning,
+        });
+        this._applyStream(params, response);
+    },
+    _applyStream(params, response) {
+        let text = String(response.content || '').trim();
+        if (params.block.title && text)
+            text = String(params.block.title).trim() + '\n\n' + text;
+        // внешний ```…``` → code-block в ленте; хвост после fence (подпись form) сохраняется
+        if (text && typeof this.pipe?.unwrapFence === 'function')
+            text = this.pipe.unwrapFence(text);
+        if (text)
+            params.block.content = text;
+        else {
+            delete params.block.content;
+            if (!this.pipe[params.block.type]?.ignore) {
+                dropUsedType(params.box, params.block.type);
+                params.block.error = true;
+                params.block.content = 'Модель не вернула текст.';
+            }
+        }
+        if (response.usage)
+            params.block.usage = response.usage;
+        if (!hasBody(params.block) && !this.pipe[params.block.type]?.ignore)
+            dropUsedType(params.box, params.block.type);
+    },
+    _canLoop(block) {
+        if (this._stopped || !block) return false;
+        if (!hasBody(block))
+            return !!block.box;
+        if (block.error && this._pipe?.[block.type]?.stopOnError)
+            return false;
+        return !block.stop;
+    },
+    async _init(params = {}) {
+        params.block = await this._active_block();
+        params.box = await this._active_box();
+        const pipe = await this.pipe;
+        params.pipe_step = pipe[params.block.type] || pipe.thinking;
+        params.task = this;
+    },
+    /** handoff: заказчик передаёт свой system (body.system: место, локация, время) + диалог-улики;
+     *  без topicsMap/leafSystem/ролей ходов таска — их допишет исполнитель (агент/tool).
+     *  system только role=system, не user-кадром. */
+    async context(params = {}) {
+        const { prompt, evidence = true, leaf, handoff } = params;
+        const body = await this.body;
+        const chain = [];
+        let box = body;
+        for (;;) {
+            chain.push(box);
+            const next = box.items?.last;
+            if (boxOpen(next)) box = next;
+            else break;
+        }
+        const focus = box;
+        const retryType = evidence && !handoff && leaf?.type ? leaf.type : null;
+        const layers = chain.map(b => this._box_context(b, b === focus, evidence, handoff, retryType));
+        let messages;
+        const goalBlock = formatGoalBlock(body.goal);
+        const skillDef = body.skill?.id
+            ? (await this._listSkills()).find(s => s.id === body.skill.id)
+            : null;
+        const skillBlock = formatSkillBlock(body.skill, skillDef);
+        if (handoff) {
+            // база system от заказчика (уже с расположением); исполнитель дополнит локально
+            const base = [String(body.system || '').trim(), goalBlock, skillBlock].filter(Boolean).join('\n\n');
+            messages = base ? [{ role: 'system', content: base }] : [];
+        }
+        else {
+            const mode = taskMode(body.mode);
+            const pipe = await this.pipe;
+            const leafNode = leaf?.type ? pipe[leaf.type] : null;
+            const leafSystem = leafNode?.[mode]?.system || leafNode?.system || '';
+            messages = [{ role: 'system', content: [
+                ...layers.map(l => l.system).filter(Boolean),
+                goalBlock,
+                skillBlock,
+                timeNow(body.tz),
+                topicsMap(pipe, focus, mode),
+                leafSystem,
+            ].filter(Boolean).join('\n\n') }];
+        }
+        /** user+user — один ход; assistant+assistant — не склеивать (thinking|html|report), между ними «продолжай» */
+        const push = (nextRole, content) => {
+            if (!content || (Array.isArray(content) && !content.length)) return;
+            const last = messages.last;
+            if (last?.role === nextRole && nextRole === 'user') {
+                last.content = mergeUserContent(last.content, content);
+                return;
+            }
+            if (last?.role === 'assistant' && nextRole === 'assistant')
+                messages.push({ role: 'user', content: 'ok' });
+            messages.push({ role: nextRole, content });
+        };
+        for (const layer of layers)
+            for (const m of layer.messages)
+                push(m.role, m.content);
+        if (!handoff && focus !== body)
+            push('user', stageOpen(focus, this.pipe[focus.type]));
+        if (prompt) {
+            if (messages.last?.role === 'user')
+                messages.last.content = mergeUserContent(messages.last.content, '[instruction]\n' + prompt);
+            else
+                messages.push({ role: 'user', content: prompt });
+        }
+        await hydrateImageParts(messages);
+        return messages;
+    },
+    /** focus — все блоки слоя; предок — рамка: prompt, закрытые боксы (улики), answers.
+     *  evidence: false (генерация total) — предки без уликов-боксов.
+     *  expand-box отдаёт листья с ролью их узла (бюджет clipContext); маркер box.content в контекст не идёт. */
+    _box_context(box, focus = true, evidence = true, handoff = false, retryType = null) {
+        const node = this.pipe[box.type];
+        const mode = taskMode(this.body.mode);
+        // box.system (on_save: кто/где) — база; pipe.system — слой роли агента/хода, не подмена
+        const place = String(box.system || '').trim();
+        let system;
+        if (handoff) {
+            // system заказчика уже в messages[0] из body.system; слой роли хода таска не тащим
+            system = '';
+        }
+        else {
+            const role = String(node?.[mode]?.system || node?.system || '').trim();
+            system = [place, role].filter(Boolean).join('\n\n');
+            if (box.todo)
+                system += '\n\n[todo]\n' + (box.todo.content || '');
+        }
+        const messages = [];
+        for (const b of (box.items || [])) {
+            // error в total (evidence:false) — не в сводку (ложный провенанс); в обычный контекст — да,
+            // иначе после «страница недоступна» модель не видит провал и лезет в planning.
+            // повтор того же типа: предыдущая попытка (включая ignore) видна заполнению,
+            // иначе модель перегенерирует вслепую; evidence:false (total) — без исключений
+            const retry = retryType && b.type === retryType && (b.content || draftText(b));
+            if ((b.error && !evidence) || (this.pipe[b.type]?.ignore && !retry) || this.pipe[b.type]?.close)
+                continue;
+            // провал сборщика (ok=0) не улика, если тот же тип уже дал content
+            if (collectorMissed(b) && collectorHasWin(box.items, b.type))
+                continue;
+            if (b.box && !hasBody(b) && !draftText(b))
+                continue;
+            const frame = b.type === 'prompt' || (b.box && evidence) || b.answer != null;
+            if (!focus && !frame)
+                continue;
+            if (b.box && this.pipe[b.type]?.expand) {
+                for (const leaf of (b.items || [])) {
+                    if ((leaf.error && !evidence) || this.pipe[leaf.type]?.ignore)
+                        continue;
+                    pushLiftContext(messages, leaf, this.pipe[leaf.type]?.role || 'assistant');
+                }
+            }
+            else if (focus || b.type === 'prompt' || b.box)
+                pushLiftContext(messages, b, this.pipe[b.type]?.role || 'assistant');
+            if (b.page && !hasBody(b))
+                messages.push({ role: 'user', content: b.page });
+            if (b.answer != null)
+                messages.push({ role: 'user', content: b.approved || (typeof b.answer === 'string' ? b.answer : JSON.stringify(b.answer)) });
+        }
+        return { system, messages };
+    },
+    async _streamChat(params = {}) {
+        const {messages, silent, session} = params;
+        const model = await this.model;
+        const bar = (await this.body).effort;
+        const effort = (bar && bar !== 'off' && params.allowReasoning === true) ? bar : 'off';
+        const cap = silent ? 64 : Number(params.maxOutput);
+        let content = '', usage = 0;
+        let reasonBlock, reasonBox, reasonClosed;
+        const closeReason = async () => {
+            if (!reasonBlock || reasonClosed)
+                return;
+            reasonClosed = true;
+            const items = reasonBox?.items;
+            const i = items?.indexOf(reasonBlock) ?? -1;
+            if (i >= 0)
+                items.splice(i, 1);
+            await this._save(session);
+        };
+        const chat = {
+            messages,
+            temperature: silent ? 0 : .5,
+        };
+        if (effort !== undefined)
+            chat.effort = effort;
+        if (Number.isFinite(cap) && cap > 0)
+            chat.maxOutput = cap;
+        for await (const chunk of model.streamChat(chat)) {
+            if (this._stopped){
+                content = '';
+                break;
+            }
+                
+            if (chunk?.type === 'usage')
+                usage = chunk;
+            else if (chunk?.type === 'reasoning') {
+                if (effort === 'off')
+                    continue;
+                const token = chunk.content || '';
+                if (!token) continue;
+                if (!reasonBlock) {
+                    reasonBox = await this._active_box();
+                    reasonBlock = this._build_block('reasoning');
+                    await this._push_block({ block: reasonBlock, box: reasonBox, session });
+                }
+                if (!this._stopped)
+                    session?.send?.({ type: 'chat.delta', path: this.short, token });
+            }
+            else {
+                let token = chunk?.content ? chunk?.content : chunk;
+                if (typeof token !== 'string')
+                    continue;
+                await closeReason();
+                content += token;
+                if (!silent && !this._stopped)
+                    session?.send?.({ type: 'chat.delta', path: this.short, token });
+            }
+        }
+        await closeReason();
+        return { content, usage };
+    },
+    get pipe() {
+        return this._pipe ??= new AsyncPromise(async () => {
+            const files = await this.tilde;
+            const ns = Object.create(null);
+            const taskFile = [...files].reverse().find(f => f.id === 'task.js')
+                || files.find(f => f.id === 'task.js');
+            if (!taskFile)
+                throw new Error('$task: нет task.js в tilde');
+            const taskMod = await this._importPipeFile(taskFile);
+            const taskDef = taskMod.default;
+            for (const [k, v] of Object.entries(taskMod)) {
+                if (k === 'default') continue;
+                ns[k] = v;
+            }
+            registerOrchestrator(ns, taskDef);
+            // агенты — пакет движка (как prompt._aiPackage), иначе meta ~/ai/agents
+            const agentIds = [];
+            const stepAgents = [];
+            const agentsDir = await this._agentsDir();
+            if (agentsDir) {
+                const kids = (await agentsDir.inherit_children) || (await agentsDir.children) || [];
+                const byId = new Map();
+                for (const f of kids) {
+                    if (f?.id?.endsWith?.('.js'))
+                        byId.set(f.id, f);
+                }
+                for (const [fileId, file] of byId) {
+                    const id = fileId.replace(/\.js$/, '');
+                    if (ns[id])
+                        continue; // ходы оркестратора (thinking, answer, planning, report) выше агентов-тёзок
+                    const mod = await this._importPipeFile(file);
+                    registerAgent(ns, id, mod.default);
+                    const onlyNested = mod.default?.step === false && Array.isArray(mod.default?.nested);
+                    // Мета-действия (навык/разбор ленты) — только явным @freeze/@review, не автоменю:
+                    // иначе после каждого вопроса пользователю в ленту встает красная ошибка
+                    // «нужен успешный прогон», хотя задача просто ждет слов человека.
+                    const manualOnly = id === 'freeze' || id === 'review';
+                    if (!onlyNested && !manualOnly)
+                        agentIds.push(id);
+                    if (mod.default?.step !== false)
+                        stepAgents.push(id);
+                }
+            }
+            const own = [
+                ...Object.keys(taskDef?.moves || {}),
+                ...Object.keys(taskDef?.tools || {}),
+            ];
+            if (ns.task)
+                ns.task.next = [...own, ...agentIds];
+            if (ns.step) {
+                const sn = ['thinking', ...stepAgents];
+                ns.step.plan = { ...(ns.step.plan || {}), next: sn };
+                ns.step.build = { ...(ns.step.build || {}), next: sn };
+            }
+            this._pipe = ns;
+            return ns;
+        });
+    },
+    async _importPipeFile(file) {
+        const raw = await file.load();
+        const script = this.constructor.stripAbsoluteImports(raw);
+        const b64 = Buffer.from(script, 'utf-8').toString('base64');
+        return import('data:text/javascript;base64,' + b64);
+    },
+    /**
+     * Каталог agents/: пакет движка prompt (как _aiPackage), иначе meta $class ~/ai/agents.
+     * Step/меню должны видеть тех же агентов, что execute.
+     */
+    async _agentsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('agents') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/agents');
+        }
+        catch {
+            return null;
+        }
+    },
+    async _skillsDir() {
+        try {
+            const engine = (await this.$class?._methods)?.prompt;
+            if (typeof engine?._aiPackage === 'function') {
+                const ai = await engine._aiPackage();
+                const dir = ai ? await ai.get_item('skills') : null;
+                if (dir)
+                    return dir;
+            }
+        }
+        catch { /* fallthrough */ }
+        try {
+            return await this.$class?.meta_folder?.get_item('ai/skills');
+        }
+        catch {
+            return null;
+        }
+    },
+    async _listSkills() {
+        if (this._skills)
+            return this._skills;
+        const list = [];
+        try {
+            const dir = await this._skillsDir();
+            if (!dir)
+                return this._skills = list;
+            const kids = (await dir.inherit_children) || (await dir.children) || [];
+            const byId = new Map();
+            for (const f of kids) {
+                if (f?.id?.endsWith?.('.js'))
+                    byId.set(f.id, f);
+            }
+            for (const [fileId, file] of byId) {
+                const id = fileId.replace(/\.js$/, '');
+                const mod = await this._importPipeFile(file);
+                const def = mod.default;
+                if (def && typeof def === 'object')
+                    list.push({ ...def, id: def.id || id });
+            }
+        }
+        catch { /* нет каталога */ }
+        return this._skills = list;
+    },
+    async _wearSkill({ text, need, session, mention } = {}) {
+        const skills = await this._listSkills();
+        if (!skills.length)
+            return;
+        let skill;
+        if (mention)
+            skill = skills.find(s => s.id === mention);
+        else {
+            const fit = skills.filter(s => !s.when?.need || s.when.need === need);
+            const hits = fit.filter(s => phraseHits(text, s.when?.phrases));
+            if (hits.length === 1)
+                skill = hits[0];
+            else if (hits.length > 1)
+                skill = await this._pickSkillMenu(hits, session);
+        }
+        if (!skill)
+            return;
+        if (!await pointsExist(skill.points))
+            return;
+        this.body.skill = {
+            id: skill.id,
+            cursor: 0,
+            slots: { ...(skill.defaults || {}) },
+        };
+    },
+    async _pickSkillMenu(hits, session) {
+        const ids = hits.map(s => s.id);
+        const lines = [
+            'NONE - обычная лента;',
+            ...hits.map(s => s.id.toUpperCase() + ' - ' + (s.label || s.id) + ';'),
+        ];
+        const response = await this._streamChat({
+            silent: true,
+            session,
+            messages: [{
+                role: 'user',
+                content: [
+                    'Выбери навык для этой цели или NONE.',
+                    'Ответь одним словом строго из списка, без знаков и пояснений.',
+                    '',
+                    '[menu]',
+                    ...lines,
+                ].join('\n'),
+            }],
+        });
+        if (this._stopped)
+            return;
+        const pick = skillMenuPick(response.content, ids);
+        if (!pick || pick === 'none')
+            return;
+        return hits.find(s => s.id === pick);
+    },
+    async _skillStep() {
+        const bind = this.body?.skill;
+        if (!bind?.id)
+            return null;
+        const skill = (await this._listSkills()).find(s => s.id === bind.id);
+        const step = skill?.pipe?.[bind.cursor];
+        if (!step) {
+            delete this.body.skill;
+            return null;
+        }
+        return { skill, step, bind };
+    },
+    async _skillChoice(using_blocks) {
+        for (;;) {
+            const worn = await this._skillStep();
+            if (!worn)
+                return;
+            const type = worn.step.type;
+            if (!this.pipe[type] || (using_blocks || []).includes(type)) {
+                this.body.skill.cursor++;
+                continue;
+            }
+            return type;
+        }
+    },
+    async _advanceSkillIf(type) {
+        const worn = await this._skillStep();
+        if (worn?.step?.type === type)
+            this.body.skill.cursor++;
+        await this._skillStep();
+    },
+    /**
+     * Серия ошибок одного типа подряд в боксе (хвост ленты): трижды — тип
+     * возвращается в using_blocks бокса, подбор останавливается.
+     * @returns {boolean} серия набралась
+     */
+    _trippedTypeStreak(box, type) {
+        if (!box || !type)
+            return false;
+        const items = box.items || [];
+        let streak = 0;
+        for (let i = items.length - 1; i >= 0; i--) {
+            const it = items[i];
+            if (!it || it.type !== type)
+                break;
+            if (it.error && it.content)
+                streak++;
+            else
+                break;
+        }
+        if (streak < 3)
+            return false;
+        const used = box.using_blocks ??= [];
+        if (!used.includes(type))
+            used.push(type);
+        return true;
+    },
+    get body() {
+        return new AsyncPromise(async () => {
+            await this.pipe;
+            let raw = await this.load();
+            this.body = JSON.parse(raw);
+            this.body.type ??= 'task';
+            this.body.items ??= [];
+            return this.body;
+        });
+    },
+    get model() {
+        return Promise.resolve(this.body).then(body => WORK.get_item(body.model));
+    },
+    /** Stop: прервать стрим/агента; halt=stop → кнопка «Продолжить»; chat.done гасит pending. */
+    async stop(params = {}) {
+        this._stopped = true;
+        const waiters = this._waiters;
+        if (waiters?.size) {
+            for (const resolve of waiters.values())
+                resolve({ stopped: true });
+            waiters.clear();
+        }
+        const body = await this.body;
+        body.halt = 'stop';
+        delete body.waiting;
+        await this._save(params.session);
+        params.session?.send?.({ type: 'chat.done', path: this.short });
+        return { ok: true, stopped: true };
+    },
+    async _clearHalt(session) {
+        const body = await this.body;
+        if (!body.halt)
+            return;
+        delete body.halt;
+        await this._save(session);
+    },
+    /** Обрыв хода (не штатный stop:true): halt=crash → «Продолжить». Стоп пользователя не затираем. */
+    async _noteCrash(block, session) {
+        const body = await this.body;
+        if (body.halt === 'stop')
+            return;
+        if (block?.stop === true || typeof block?.stop === 'string')
+            return;
+        const collapsed = !!(block?.error || block?.type === 'error'
+            || (block && !hasBody(block)));
+        if (!collapsed)
+            return;
+        body.halt = 'crash';
+        await this._save(session);
+    },
+    _build_block(type) {
+        const node = this.pipe[type] || {};
+        const block = {
+            type,
+            box: node.box,
+            doc: node.doc,
+            icon: node.icon,
+            stop: node.stop,
+            // шапка блока скрыта при stop === true — label там мёртвый вес (строковый stop шапку не прячет)
+            label: node.stop === true ? undefined : node.label,
+        };
+        if (node.ignore)
+            block.ignore = true;
+        if (node.expand)
+            block.expand = true;
+        if (block.box)
+            block.items = [];
+        return block;
+    },    
+    async _push_block(params = {}){
+        const {block, session} = params;
+        const box = params.box ??= await this.body;
+        if (!block || !box) return false;
+        box.items ??= [];
+        const node = this.pipe[block.type];
+        if (node?.agent && block.brief == null) {
+            const body = await this.body;
+            block.brief = agentBrief(body, block);
+        }
+        if (!node?.ignore) {
+            const used = box.using_blocks ??= [];
+            if (!used.includes(block.type))
+                used.push(block.type);
+        }
+        // init агента — жизненный цикл движка класса, не пуш ленты
+        const init = node?.agent ? null : node?.init;
+        if (init && !await init(params))
+            return false;
+
+        block.time ??= Date.now();
+        if (block.box)
+            block.items ??= [];
+        box.items.push(block);
+        await this._save(session);
+        return true;
+    },
+    async _active_block() {
+        let box = await this._active_box();
+        const planned = box.todo?.steps || [];
+        const real = (box.items || []).filter(b => b.type === 'step');
+        if (planned.length && (real.some(s => !hasBody(s)) || real.length < planned.length))
+            return box.todo;
+        if (box.type === 'includes') {
+            const pipe = await this.pipe;
+            const list = pipe.includePlan(box);
+            const files = pipe.includeReal(box);
+            const open = files.find(f => !hasBody(f));
+            if (open)
+                return open;
+            if (list.length && files.length < list.length)
+                return box;
+        }
+        const items = box.items || [];
+        for (let i = items.length - 1; i >= 0; i--)
+            if (!this.pipe[items[i].type]?.ignore)
+                return items[i];
+        return box;
+    },
+    async _active_box() {
+        let next, box = await this.body;
+        while (next = box.items?.last){
+            if (boxOpen(next))
+                box = next;
+            else
+                break;
+        }
+        return box;
+    },
+    async change_model(params = {}) {
+        const model = params.model || params.post?.model;
+        const session = params.session;
+        if (!model) return { ok: false, error: 'model required' };
+        (await this.body).model = model;
+        await this._save(session);
+        return { ok: true, model};
+    },
+    async change_effort(params = {}) {
+        const effort = params.effort ?? params.post?.effort;
+        const session = params.session;
+        if (!effort) return { ok: false, error: 'effort required' };
+        (await this.body).effort = effort;
+        await this._save(session);
+        return { ok: true, effort };
+    },
+    async remove_block(params = {}) {
+        const block = params.block || params.post?.block || {
+            time: params.time ?? params.post?.time,
+            type: params.type ?? params.post?.type,
+        };
+        const body = await this.body;
+        const box = parentOfBlock(body, block);
+        if (!box) return { ok: false, error: 'block not found' };
+        const i = box.items.findIndex(b => sameBlock(b, block));
+        if (i < 0) return { ok: false, error: 'block not found' };
+        const type = box.items[i].type;
+        box.items.splice(i, 1);
+        const used = box.using_blocks;
+        if (used) {
+            const j = used.indexOf(type);
+            if (j >= 0) used.splice(j, 1);
+            if (!used.length)
+                delete box.using_blocks;
+        }
+        await this._save(params.session);
+        return { ok: true };
+    },
+    async _save(session) {
+        // Атомарно (tmp+rename): клиент перечитывает файл по send(path) —
+        // он никогда не должен увидеть полузапись после краша между truncate и flush.
+        const text = JSON.stringify(this.body, null, 4);
+        const tmp = this.dir + '.tmp';
+        try {
+            await WORK.fsp.unlink(tmp).catch(() => {});
+            await WORK.fsp.writeFile(tmp, text, 'utf-8');
+            try {
+                await WORK.fsp.rename(tmp, this.dir);
+            }
+            catch {
+                // Windows: rename поверх существующего часто падает
+                await WORK.fsp.unlink(this.dir).catch(() => {});
+                await WORK.fsp.rename(tmp, this.dir);
+            }
+        }
+        catch {
+            await WORK.fsp.writeFile(this.dir, text, 'utf-8');
+        }
+        session?.send?.({ path: this.short });
+    },
+};
+
+function sameBlock(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.time && b.time)
+        return Number(a.time) === Number(b.time) && a.type === b.type;
+    return a.type === b.type && a.label === b.label && a.content === b.content;
+}
+
+function releaseStaleStops(box) {
+    if (!box?.items)
+        return;
+    for (const b of box.items) {
+        if (!b.stop)
+            continue;
+        // stop не снимать: фокус уйдёт на новый prompt; строка stop — кнопка, пока блок последний
+        if (b.type === 'answer' || b.type === 'report' || b.type === 'question')
+            continue;
+        b.state = 'уточнено';
+        dropUsedType(box, b.type);
+    }
+}
+
+function findWaitingBlock(root, waiters) {
+    if (!root || !waiters?.size)
+        return null;
+    for (const b of root.items || []) {
+        if (waiters.has(b.time))
+            return b;
+        const inner = findWaitingBlock(b, waiters);
+        if (inner)
+            return inner;
+    }
+    return null;
+}
+
+function parentOfBlock(root, block) {
+    if (!root || !block) return null;
+    for (const b of (root.items || [])) {
+        if (sameBlock(b, block)) return root;
+        const p = parentOfBlock(b, block);
+        if (p) return p;
+    }
+    return null;
+}
+
+/** Режим сессии: plan | build. Старое значение do читается как build. */
+function taskMode(m) {
+    const v = m || 'plan';
+    return v === 'do' ? 'build' : v;
+}
+
+/** Карта узлов из pipe: description / inject / label текущего mode. */
+function topics(pipe, ids, mode) {
+    return (ids || []).map(id => {
+        const n = pipe[id];
+        const inj = n?.[mode]?.description || n?.[mode]?.inject
+            || n?.description || n?.inject || n?.label || '';
+        return inj ? id + ' — ' + inj : id;
+    }).join('\n');
+}
+
+/** next текущего фокуса минус using_blocks — что реально можно выбрать сейчас. */
+function topicsMap(pipe, focus, mode) {
+    const node = pipe[focus?.type];
+    const used = focus?.using_blocks || [];
+    const ids = (node?.[mode]?.next || node?.next || []).filter(id => !used.includes(id));
+    if (!ids.length) return '';
+    const moves = ids.filter(id => pipe[id]?.move);
+    const agents = ids.filter(id => pipe[id]?.agent);
+    const tools = ids.filter(id => pipe[id]?.tool);
+    const parts = [];
+    if (node?.agent) {
+        if (moves.length)
+            parts.push('[доступные ходы]\n' + topics(pipe, moves, mode));
+        const rest = ids.filter(id => !pipe[id]?.move);
+        if (rest.length)
+            parts.push('[доступные инструменты]\n' + topics(pipe, rest, mode));
+        return parts.join('\n\n');
+    }
+    if (moves.length)
+        parts.push('[доступные ходы]\n' + topics(pipe, moves, mode));
+    if (tools.length)
+        parts.push('[доступные инструменты]\n' + topics(pipe, tools, mode));
+    const other = ids.filter(id => !pipe[id]?.move && !pipe[id]?.tool && !pipe[id]?.agent);
+    if (other.length)
+        parts.push('[доступные ходы]\n' + topics(pipe, other, mode));
+    if (agents.length)
+        parts.push('[доступные агенты]\n' + topics(pipe, agents, mode));
+    return parts.join('\n\n');
+}
+
+/** Надетый навык: точки и слоты в system. */
+function formatSkillBlock(bind, skill) {
+    if (!bind?.id || !skill)
+        return '';
+    const lines = ['[skill] ' + skill.id];
+    for (const [k, v] of Object.entries(skill.points || {}))
+        lines.push('point.' + k + ': ' + v);
+    if (bind.slots && Object.keys(bind.slots).length)
+        lines.push('slots:\n' + JSON.stringify(bind.slots, null, 2));
+    return lines.join('\n');
+}
+
+/** Сессионная цель для system/меню: факт + норма достижения. */
+function formatGoalBlock(goal) {
+    if (!goal?.text)
+        return '';
+    const need = goalNeed(goal);
+    const lines = [
+        '[goal]',
+        String(goal.text).trim(),
+        'status: ' + (goal.status || 'open'),
+        'need: ' + need,
+    ];
+    if (goal.resume?.agent)
+        lines.push('resume: ' + goal.resume.agent);
+    if (goal.resume?.continue)
+        lines.push('resume: continue (данные получены — действуй, не болтай)');
+    if (goal.status !== 'done') {
+        if (need === 'facts') {
+            lines.push(
+                'need=facts: цель — ответ человеку фактами. explore/web/logs — сбор, они цель не закрывают; закрывает answer (или report) по фактам из ленты.',
+                'Факты уже в ленте (ls/meta/remote/страница, сводка thinking/report) — следующий ход answer, не повторный сбор и не write «на всякий случай».',
+                'Сырые вложения (includes/file) без сводки — сначала thinking или report, не answer по простыне.',
+            );
+        }
+        else {
+            lines.push(
+                'need=side: цель — действие в системе. Закрывает answer / report / html только после ok check.',
+                'Реплика без check цель не закрывает. После create/write следующий ход — check.',
+                'Пока status не done — цель не достигнута; сессия не считается выполненной.',
+                'Ответ человека после question — данные к цели; следующий ход — действие по goal, не «понял, сделаю».',
+            );
+        }
+    }
+    return lines.join('\n');
+}
+
+/** facts | side; без поля — side (старые сессии / сомнение). */
+function goalNeed(goal) {
+    return goal?.need === 'facts' ? 'facts' : 'side';
+}
+
+/** Сборщики: после их content меню их больше не предлагает. */
+const COLLECTORS = new Set(['web', 'explore', 'logs']);
+
+/** Действие в системе (не сбор, не реплика). */
+const ACTORS = new Set(['work', 'image', 'create', 'write', 'generate']);
+
+function hasActEvidence(box) {
+    return walkHas(box, b => ACTORS.has(b.type) && b.content && !b.error);
+}
+
+function hasCollectorEvidence(box) {
+    return walkHas(box, b => COLLECTORS.has(b.type) && b.content && !b.error);
+}
+
+function walkHas(box, test) {
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (test(b))
+                return true;
+            if (walk(b.items))
+                return true;
+        }
+        return false;
+    };
+    return walk(box?.items);
+}
+
+function collectorMissed(b) {
+    return COLLECTORS.has(b?.type) && b.error && !(b.budget?.ok);
+}
+
+function collectorHasWin(items, type) {
+    return (items || []).some(x => x.type === type && x.content && !x.error);
+}
+
+function lastPromptText(box) {
+    let t = '';
+    for (const b of box?.items || []) {
+        if (b.type === 'prompt' && b.content)
+            t = String(b.content);
+    }
+    return t.trim();
+}
+
+/** Картинка / файлы-слайды — image, не work.write png. */
+function asksImage(text) {
+    const t = String(text || '');
+    return /(?:нарисуй|нарисовать|рисунок|картинк|изображен|фото|generateImage|слайд|по\s+сезонам)/i.test(t)
+        || /файл\w*\s+(?:с\s+)?(?:изображен|картинк|рисунок|фото)/i.test(t);
+}
+
+/** need=facts закрывает только реплика человеку (answer / report); explore/web/logs — сбор, goal остаётся open. */
+const FACTS_EVIDENCE = new Set(['answer', 'report']);
+
+/** need=side: конечный отчёт на корне; gap в check не даёт закрыть. */
+const SIDE_EVIDENCE = new Set(['answer', 'report', 'html']);
+
+function lastOfType(root, type) {
+    let found;
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (b.type === type) found = b;
+            walk(b.items);
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+function checkFullyOk(block) {
+    if (block?.type !== 'check')
+        return false;
+    if (block.error)
+        return false;
+    const c = String(block.content || '');
+    return !!c && !/gap:/i.test(c);
+}
+
+function lastCheckIncomplete(root) {
+    const chk = lastOfType(root, 'check');
+    return !!chk && !checkFullyOk(chk);
+}
+
+/** Действия work в ленте (create/write с телом без ошибки): предмет проверки check. */
+function hasWorkAct(root) {
+    let found = false;
+    const walk = items => {
+        for (const b of items || []) {
+            if (found || !b)
+                continue;
+            if ((b.type === 'create' || b.type === 'write') && b.content && !b.error)
+                found = true;
+            walk(b.items);
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+/** Валидный артефакт в ленте: лист-результат (doc) с телом без ошибки. */
+function lastValidArtifact(root) {
+    let found = null;
+    const walk = items => {
+        for (const b of items || []) {
+            if (!b)
+                continue;
+            walk(b.items);
+            if (!b.box && !b.stop && b.doc && b.content && !b.error)
+                found = b;
+        }
+    };
+    walk(root?.items);
+    return found;
+}
+
+function menuPickLine(text, next) {
+    const raw = String(text || '').trim();
+    if (!raw || !next?.length)
+        return {};
+    const id = menuPick(raw, next);
+    if (!id)
+        return {};
+    const cut = raw.replace(new RegExp('^[\\s\\S]*?\\b' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'), '');
+    return { id, brief: cut.trim() };
+}
+
+function clearGoalContinue(goal) {
+    if (goal?.resume?.continue)
+        goal.resume = null;
+}
+
+const GOAL_PURSUE_MAX = 3;
+
+/** Последний незакрытый субагент в ленте (не question/form, не step:false вроде site). */
+function lastResumeAgent(body, pipe) {
+    const walk = (items) => {
+        for (let i = (items || []).length - 1; i >= 0; i--) {
+            const b = items[i];
+            const nested = walk(b.items);
+            if (nested)
+                return nested;
+            if (pipe[b.type]?.agent && pipe[b.type].step !== false
+                && b.type !== 'question' && b.type !== 'form')
+                return b.type;
+        }
+        return null;
+    };
+    return walk(body?.items);
+}
+
+/** Бриф агенту: URL/тема из последнего prompt, без копирования thinking. */
+function agentBrief(body, block) {
+    let last = '';
+    let t = -1;
+    const walk = (items) => {
+        for (const b of items || []) {
+            if (b.type === 'prompt' && b.content && (b.time || 0) >= t) {
+                t = b.time || 0;
+                last = b.content;
+            }
+            walk(b.items);
+        }
+    };
+    walk(body?.items);
+    const text = String(last || body?.name || '').trim();
+    return text.slice(0, 500);
+}
+
+function liftBag(ns, bag, flag) {
+    for (const [tid, raw] of Object.entries(bag || {})) {
+        if (ns[tid])
+            continue; // ход оркестратора (file вложений) выше тёзки tool агента
+        const t = { ...raw, ...flag };
+        if (t.description && !t.inject)
+            t.inject = t.description;
+        ns[tid] = t;
+    }
+    return Object.keys(bag || {});
+}
+
+/** Оркестратор: moves + tools → pipe; next = ключи обоих (агентов добавит loader). */
+function registerOrchestrator(ns, def) {
+    if (!def || typeof def !== 'object')
+        return;
+    const moveKeys = liftBag(ns, def.moves, { move: true });
+    const toolKeys = liftBag(ns, def.tools, { tool: true });
+    ns.task = {
+        ...def,
+        box: true,
+        orchestrator: true,
+        inject: def.description || def.inject,
+        next: [...moveKeys, ...toolKeys],
+    };
+}
+
+/** Агент: moves + tools (+ plan/build.tools); next = moves ∪ tools ∪ total. */
+function registerAgent(ns, id, def) {
+    if (!def || typeof def !== 'object')
+        return;
+    const moveKeys = liftBag(ns, def.moves, { move: true });
+    const toolBags = [];
+    if (def.tools)
+        toolBags.push(def.tools);
+    if (def.plan?.tools)
+        toolBags.push(def.plan.tools);
+    if (def.build?.tools)
+        toolBags.push(def.build.tools);
+    const allTools = Object.assign({}, ...toolBags);
+    const toolKeys = liftBag(ns, allTools, { tool: true });
+    const nestedKeys = Array.isArray(def.nested) ? def.nested : [];
+    const hasTools = toolKeys.length > 0 || nestedKeys.length > 0;
+    const withTotal = (keys) => {
+        const list = [...keys];
+        if (hasTools && !list.includes('total'))
+            list.push('total');
+        return list;
+    };
+    const own = () => withTotal([...moveKeys, ...Object.keys(def.tools || {}), ...nestedKeys]);
+    const node = {
+        ...def,
+        agent: true,
+        box: hasTools,
+        inject: def.description || def.inject,
+        next: own(),
+    };
+    if (def.step === false)
+        node.step = false;
+    if (def.plan) {
+        node.plan = {
+            ...def.plan,
+            inject: def.plan.description || def.plan.inject,
+            next: withTotal([...moveKeys, ...Object.keys(def.plan.tools || {})]),
+        };
+    }
+    if (def.build) {
+        node.build = {
+            ...def.build,
+            inject: def.build.description || def.build.inject,
+            next: withTotal([...moveKeys, ...Object.keys(def.build.tools || {})]),
+        };
+    }
+    if (!def.tools && def.plan?.tools)
+        node.next = node.plan.next;
+    ns[id] = node;
+}
+
+/** Последний блок типа agentId в дереве (для результата scoped-prompt). */
+function findAgentBlock(root, agentId) {
+    let found;
+    const walk = (box) => {
+        for (const b of box?.items || []) {
+            if (b.type === agentId)
+                found = b;
+            if (b.box)
+                walk(b);
+        }
+    };
+    walk(root);
+    return found;
+}
+
+function agentResult(agent, block, extra = {}) {
+    return {
+        ok: true,
+        agent,
+        content: block?.content,
+        error: block?.error ? true : undefined,
+        state: block?.state,
+        block,
+        ...extra,
+    };
+}
+
+/** Слово меню: точное / первое слово / id из списка внутри текста. */
+function phraseHits(text, phrases) {
+    if (!phrases?.length)
+        return false;
+    const t = String(text || '').toLowerCase();
+    return phrases.some(p => {
+        const phrase = String(p || '').toLowerCase().trim();
+        if (!phrase)
+            return false;
+        if (t.includes(phrase))
+            return true;
+        const words = phrase.split(/\s+/).filter(w => w.length > 2);
+        return words.length > 0 && words.every(w => t.includes(w));
+    });
+}
+
+async function pointsExist(points) {
+    for (const path of Object.values(points || {})) {
+        if (!path)
+            continue;
+        try {
+            if (!await WORK.get_item(path))
+                return false;
+        }
+        catch {
+            return false;
+        }
+    }
+    return true;
+}
+
+function skillMenuPick(text, ids) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t)
+        return;
+    if (t === 'none')
+        return 'none';
+    if (ids.includes(t))
+        return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_-]+/g, '');
+    if (first === 'none' || ids.includes(first))
+        return first;
+    return ids.find(id => new RegExp('\\b' + id.replace(/-/g, '\\-') + '\\b', 'i').test(t));
+}
+
+function menuPick(text, next) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t || !next?.length) return;
+    if (next.includes(t)) return t;
+    const first = t.split(/\s+/)[0]?.replace(/[^a-z0-9_]+/g, '');
+    if (first && next.includes(first)) return first;
+    return next.find(id => new RegExp('\\b' + id + '\\b', 'i').test(t));
+}
+
+function stageOpen(block, node) {
+    if (!node?.box) return '';
+    const label = node.label || block.label || block.type;
+    return 'Текущий этап далее (' + label + ').';
+}
+
+function hasBody(b) {
+    return !!String(b?.content ?? '').trim();
+}
+
+/** Агент внутри step дал текст — шаг закрыт, иначе пункт 1 не отпускает. */
+function liftStepIf(box, block) {
+    if (box?.type !== 'step' || box.content || !hasBody(block) || block.stop)
+        return;
+    box.content = block.content;
+}
+
+/** Имена файлов из params.includes — постановка, если текста нет. */
+function attachGoalText(raw) {
+    if (!raw)
+        return '';
+    try {
+        const list = JSON.parse(raw);
+        const names = (Array.isArray(list) ? list : []).map(p => {
+            const s = String(p?.path || p?.label || p || '').replace(/\\/g, '/');
+            return s.split('/').filter(Boolean).pop() || '';
+        }).filter(Boolean);
+        return names.join(', ');
+    } catch {
+        return '';
+    }
+}
+
+/** Закрытые вложения без сводки — сначала thinking, не answer по сырым простыням. */
+function attachmentsNeedDigest(body) {
+    const inc = (body?.items || []).filter(b => b.type === 'includes');
+    if (!inc.length || inc.some(b => !hasBody(b)))
+        return false;
+    if (layerHasDigest(body))
+        return false;
+    return !(body.items || []).some(b => b.type === 'thinking');
+}
+
+function layerHasDigest(box) {
+    return (box?.items || []).some(b =>
+        (b.type === 'thinking' || b.type === 'report') && hasBody(b) && !b.error);
+}
+
+/** Бюджет листа expand: простыня xlsx не должна целиком уходить в каждый fill. */
+const EXPAND_LEAF_CHARS = 8000;
+
+function draftText(block) {
+    const d = block?.draft;
+    if (d == null || d === '')
+        return '';
+    if (typeof d === 'string')
+        return d;
+    if (d.type === 'text')
+        return String(d.text || '');
+    return '';
+}
+
+function queueOf(block) {
+    if (!block)
+        return [];
+    if (block.type === 'web')
+        return block.sites || [];
+    return block.pages || block.sites || [];
+}
+
+/** Бокс ещё открыт: нет сводки и это не лист (только draft). */
+function boxOpen(b) {
+    if (!b?.box || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function agentPending(b, pipe) {
+    if (!pipe[b?.type]?.agent || hasBody(b) || b.error)
+        return false;
+    if (draftText(b) && !(b.items || []).length && !queueOf(b).length)
+        return false;
+    return true;
+}
+
+function pushLiftContext(messages, block, role) {
+    const d = draftText(block);
+    const text = [d && clipContext(d), block.content && clipContext(block.content)]
+        .filter(Boolean).join('\n\n');
+    const pic = imageRef(block);
+    if (pic) {
+        const parts = [];
+        if (text)
+            parts.push({ type: 'text', text });
+        parts.push(pic);
+        messages.push({ role, content: parts });
+        return;
+    }
+    if (text)
+        messages.push({ role, content: text });
+}
+
+function imageRef(block) {
+    const d = block?.draft;
+    if (d?.type !== 'image_url')
+        return;
+    const url = d.image_url?.url || String(block.path || '');
+    if (!url)
+        return;
+    return { type: 'image_url', image_url: { url } };
+}
+
+function contentParts(value) {
+    if (Array.isArray(value))
+        return value.filter(Boolean);
+    if (value == null || value === '')
+        return [];
+    return [{ type: 'text', text: String(value) }];
+}
+
+function mergeUserContent(a, b) {
+    if (!Array.isArray(a) && !Array.isArray(b))
+        return a ? String(a) + '\n\n' + b : b;
+    return [...contentParts(a), ...contentParts(b)];
+}
+
+async function hydrateImageParts(messages) {
+    for (const m of messages || []) {
+        if (!Array.isArray(m?.content))
+            continue;
+        const next = [];
+        for (const part of m.content) {
+            if (part?.type !== 'image_url') {
+                next.push(part);
+                continue;
+            }
+            const url = String(part.image_url?.url || '');
+            if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+                next.push(part);
+                continue;
+            }
+            if (!url.startsWith('/'))
+                continue;
+            try {
+                const file = await WORK.get_item(url);
+                const buf = await file.load({ encoding: null });
+                const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+                const mime = file.contentType || 'image/jpeg';
+                next.push({
+                    type: 'image_url',
+                    image_url: { url: 'data:' + mime + ';base64,' + raw.toString('base64') },
+                });
+            }
+            catch { /* нет байтов — только подпись файла */ }
+        }
+        m.content = next.length === 1 && next[0]?.type === 'text' ? next[0].text : next;
+    }
+}
+
+function clipContext(text, max = EXPAND_LEAF_CHARS) {
+    const s = String(text || '');
+    if (s.length <= max)
+        return s;
+    return s.slice(0, max).trimEnd() + '\n\n[… обрезано, полный текст в ленте]';
+}
+
+function dropUsedType(box, type) {
+    const used = box?.using_blocks;
+    if (!used) return;
+    const j = used.indexOf(type);
+    if (j >= 0) used.splice(j, 1);
+    if (!used.length)
+        delete box.using_blocks;
+}
+
+/** Отклонение закрывает только freeze-confirm (новый заход — новой командой). */
+export function shouldCloseOnReject(box, block) {
+    return box?.type === 'freeze' && block?.type === 'confirm';
+}
+
+/**
+ * Закрыть freeze-бокс отклонением: саммари + сожжённое меню.
+ * @returns {boolean} true — бокс закрыт (обычный путь отклонения не нужен)
+ */
+export function closeFreezeBox(box, block) {
+    if (!shouldCloseOnReject(box, block))
+        return false;
+    if (!box)
+        return true;
+    box.closed = 'отклонено';
+    box.using_blocks = ['total'];
+    const label = block?.label || block?.type || 'блок';
+    box.content = [box.content, '[freeze закрыт отклонением: ' + label + ' — новый заход новой командой]']
+        .filter(Boolean).join('\n\n');
+    return true;
+}
+
+function timeNow(tz) {
+    const now = new Date();
+    const dayOpts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    const timeOpts = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    if (tz) {
+        dayOpts.timeZone = tz;
+        timeOpts.timeZone = tz;
+    }
+    try {
+        return `Сейчас: ${now.toLocaleDateString('ru-RU', dayOpts)}, время ${now.toLocaleTimeString('ru-RU', timeOpts)}${tz ? ` (${tz})` : ''}.`;
+    } catch {
+        return `Сейчас: ${now.toLocaleDateString('ru-RU')}, время ${now.toLocaleTimeString('ru-RU')}.`;
+    }
+}
+

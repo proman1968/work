@@ -32,6 +32,14 @@ export class $class extends $folder{
     /** Зоны доступа внутри класса. */
     static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work', GUESTS: 'guests' };
 
+    /**Зоны доступа по ролям */
+    static ZONES_MAP = {
+        [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
+        [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
+        [$class.ROLES.USER]: $class.ZONES.WORK,
+        [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
+    };
+
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
 
@@ -58,7 +66,7 @@ export class $class extends $folder{
     }
     get METADATA(){
         return this.DATA.METADATA ?? {
-            FIELDS: { id: 'FIELDS', icon: 'iconoir:input-field', fields: [] }
+            FIELDS: []
         }
     }
     static validateVarName(name) {
@@ -391,26 +399,12 @@ export class $class extends $folder{
     }
 
     /**
-     * Рабочая зона роли — папка, куда пишутся файлы пользователя этой роли.
-     * ADMIN → чат: meta_folder/$folder/$work, системные файлы: вся метапапка кроме $work
-     * BOSS → управленческая зона (distributed_folder/$work)
-     * USER → рабочая зона (meta_folder/$work)
-     * GUEST → зона гостей (meta_folder/guests)
+     * Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли.
+     * Имя папки = params.role || 'GUEST' (ADMIN | BOSS | USER | GUEST).
      */
     async work_zone(params = {}){
-        const {role} = params;
-        switch(role){
-            case $class.ROLES.ADMIN:
-                return this.$folder._get_next_item('work', FS.$folder);
-            case $class.ROLES.BOSS:
-                const dist = await this.$distr_folder;
-                return dist._get_next_item('work', FS.$folder);
-            case $class.ROLES.USER:
-                return this.meta_folder._get_next_item('work', FS.$folder);
-            case $class.ROLES.GUEST:
-                return this.meta_folder._get_next_item('guests', FS.$folder);
-        }
-        return this.meta_folder
+        const role = params.role || 'GUEST';
+        return this.meta_folder._get_next_item(role, FS.$folder);
     }
     /** @deprecated используй work_zone */
     get_storage(params){
@@ -508,8 +502,7 @@ export class $class extends $folder{
         return true;
     }
     async save_file(params = {}){
-        // Логи (data.logs) — системная операция: всегда пишутся в meta_folder,
-        // минуя work_zone, чтобы не попадать в зону $work по role.
+        // Логи (data.logs) — системная операция: всегда в meta_folder, минуя work_zone.
         if (params.filename === 'data.logs') {
             const folder = await this.meta_folder.getFolderToSaveFile(params);
             return folder.save_file(params);
@@ -528,6 +521,30 @@ export class $class extends $folder{
     }
     get $folder(){
         return this.constructor.inherit(WORK.$folder, this.meta_folder);
+    }
+
+    /**
+     * Типы файлов данных класса: дети `$folder/$file/$data` (через children, не inherit_children).
+     * Builder и save_file смотрят сюда, не в глобальный `$file.isDataFile`.
+     */
+    get data_types() {
+        return this.meta_folder.get_item('$folder/$file/$data/*')
+            .then(async list => {
+                const types = (Array.isArray(list) ? list : []).filter(f => f.isType);
+                await Promise.all(types.map(t => t.init));
+                return types;
+            });
+    }
+
+    /** Расширение (или имя файла) — файл данных этого класса? */
+    async is_data_type(extOrName) {
+        const ext = FS.$file.fileExt(extOrName)
+            || String(extOrName || '').replace(/^\$/, '').toLowerCase();
+        if (!ext)
+            return false;
+        const types = await this.data_types;
+        const id = '$' + ext;
+        return (types || []).some(t => t.id === id);
     }
 
     get meta_folder(){
@@ -716,23 +733,16 @@ export class $class extends $folder{
     resolveZone(item) {
         if (!item || typeof item !== 'object')
             return null;
+
         let p = item;
-        while (p) {
-            if (p.id === 'work') {
-                // Проверяем, кто родитель work
-                // distributed work → внутри цепочки наследования ($folder)
-                // meta work → внутри метапапки класса
-                if (p.parent && p.parent.id === '$folder')
-                    return $class.ZONES.MANAGEMENT;
-                return $class.ZONES.WORK;
-            }
-            if (p.id === 'guests')
-                return $class.ZONES.GUESTS;
+        while (p.parent && p) {
             // Достигли класса — стоп
-            if (p instanceof $class && p !== this)
+            if (p instanceof $class || p === this){
                 break;
-            if (p === this)
-                break;
+            }
+            if (p.parent.path === this.$class.meta_folder.path) {
+                return $class.ZONES_MAP[p.id] || $class.ZONES.SYSTEM;
+            }
             p = p.parent;
         }
         return $class.ZONES.SYSTEM;
@@ -819,7 +829,7 @@ export class $class extends $folder{
      * Текущая params.role (UI) ограничивает эффективные права: при role≠ADMIN Work ADMIN
      * не получает bypass на ADMIN-операции.
      */
-    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ) {
+    async assertAccess(params = {}, level = $class.ACCESS_LEVEL.READ, folder) {
         if (DEV_MODE) return;
         if (!params?.session) return;
         if (params.session?.$user === globalThis.WORK) return;
@@ -831,11 +841,11 @@ export class $class extends $folder{
             return;
         switch (level) {
             case $class.ACCESS_LEVEL.READ:
-                if (!(await this.canSee(this, params)))
+                if (!(await this.canSee(folder || this, params)))
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.WRITE:
-                if (!(await this.canWrite(this, params)))
+                if (!(await this.canWrite(folder || this, params)))
                     throw new Error(ACCESS_DENIED);
                 break;
             case $class.ACCESS_LEVEL.ADMIN:
@@ -987,7 +997,7 @@ export class $class extends $folder{
     get users(){
         return this._localRole($class.ROLES.USER);
     }
-    /** Гости класса из #security.GUESTS (без наследования). */
+    /** Гости класса из #security.GUEST (без наследования). */
     get guests(){
         return this._localRole($class.ROLES.GUEST);
     }
@@ -1036,6 +1046,8 @@ export class $class extends $folder{
             throw new Error('create создаёт только класс. Файл — save_file; папки появляются при save_file');
         if (typeof type !== 'string' || type[0] !== '$')
             throw new Error('create: type должен быть $class или типизатором ($…)');
+        if (type.length < 2)
+            throw new Error('create: type должен быть $class или типизатором с именем ($…), не «$»');
         if (type === '$class')
             assertClassId(id);
 
@@ -1046,6 +1058,15 @@ export class $class extends $folder{
             const early = await parseCreateDevice(post);
             if (!early?.model)
                 post = ensureModelField(post, rawId);
+        }
+        // Тело обязано разбираться как модуль до записи: битый class.js убивает merge
+        // всего дерева (Babel) и кладет сервер. Проверяет сам класс, не агент.
+        try {
+            const script = /export\s+default/.test(String(post)) ? String(post) : ('export default ' + String(post));
+            await this.constructor.importScript(script);
+        }
+        catch (e) {
+            throw new Error('create: class.js не разбирается: ' + String(e.message || e).split('\n')[0]);
         }
         // Инвариант: поле model в class.js уникально среди детей родителя (один remote → один класс).
         const device = await parseCreateDevice(post);

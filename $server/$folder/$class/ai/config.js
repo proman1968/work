@@ -3,5 +3,5 @@
  * Используется движком ai/prompt, когда модель не задана ни агентом, ни вызовом.
  */
 export default {
-    model: '/MODELS/BIS-Ollama/Qwen3.8 27b', // дефолтная модель агентов
+    model: '/MODELS/odant/Qwen3.8 27b', // дефолтная модель агентов
 };

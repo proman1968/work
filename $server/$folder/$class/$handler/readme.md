@@ -11,7 +11,7 @@
 
 ## Назначение
 
-Обработчик — это элемент с логикой. Вызывается через `tryHandlerMethod` или `execItemMethod`.
+Обработчик — это элемент с логикой. `$method` владельца после `init` — `item.prompt(params)`. HTTP — `execItemMethod` → `item[name](params)`.
 
 - **Серверный обработчик** — `execute()` выполняется на сервере (Node.js)
 - **Клиентский обработчик** — ODA-компонент с `template`, выполняется в браузере

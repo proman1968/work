@@ -173,18 +173,18 @@ ODA({
         }
     },
     events: undefined,
-    body: {
-        $def: '',
-        set(n) {
-            if (n)
-                this.events = this.parseICSSimple(n);
-        }
-    },
+    // body: {
+    //     $def: '',
+    //     set(n) {
+    //         if (n)
+    //             this.events = this.parseICSSimple(n);
+    //     }
+    // },
     set $item(n) {
         if (n) {
             this.async(async () => {
                 const content = await n.load();
-                this.body = content;
+                this.events = [content];
             })
         }
     },
