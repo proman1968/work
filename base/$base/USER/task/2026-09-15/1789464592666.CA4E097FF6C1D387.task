@@ -1,0 +1,69 @@
+{
+    "name": "Сделай фотографию собаки",
+    "created": 1789464592642,
+    "items": [
+        {
+            "type": "prompt",
+            "content": "Сделай фотографию собаки",
+            "time": 1789464593122
+        },
+        {
+            "type": "thinking",
+            "icon": "carbon:idea",
+            "label": "Думаю",
+            "time": 1789464596674,
+            "content": "Пользователь просит сгенерировать изображение собаки — это чистая задача генерации картинки по текстовому описанию, без необходимости искать файлы, читать логи или обращаться к пользователю за уточнениями. Инструмент `image` как раз предназначен для этого: он вызывает `$ai.generateImage` с capabilities image, а не chat-модель. Формулировка «сделай фотографию собаки» достаточно конкретна для первого прохода — можно сгенерировать естественный снимок собаки, например, портрет или сцену на улице, без дополнительных уточнений. Если результат не устроит, пользователь попросит переделать или уточнит детали. Никаких side-эффектов в системе, никаких файлов для записи — просто один вызов генерации.",
+            "usage": {
+                "type": "usage",
+                "prompt_tokens": 1102,
+                "completion_tokens": 171,
+                "total_tokens": 1273
+            }
+        },
+        {
+            "type": "image",
+            "box": true,
+            "doc": true,
+            "icon": "carbon:image",
+            "label": "Картинка",
+            "expand": true,
+            "items": [
+                {
+                    "type": "generate",
+                    "label": "Рисую",
+                    "icon": "carbon:image",
+                    "time": 1789464604426,
+                    "usage": {
+                        "type": "usage",
+                        "prompt_tokens": 674,
+                        "completion_tokens": 44,
+                        "total_tokens": 718
+                    },
+                    "error": true,
+                    "content": "generate: generateImage: не удалось получить картинку (HTTP 401: {\"type\":\"virtual_key_required\",\"is_bifrost_error\":false,\"status_code\":401,\"error\":{\"message\":\"virtual key is required. Provide a virtual key via the x-bf-vk hea)"
+                }
+            ],
+            "brief": "Сделай фотографию собаки",
+            "time": 1789464604392,
+            "state": "рисую…",
+            "error": true,
+            "content": "generate: generateImage: не удалось получить картинку (HTTP 401: {\"type\":\"virtual_key_required\",\"is_bifrost_error\":false,\"status_code\":401,\"error\":{\"message\":\"virtual key is required. Provide a virtual key via the x-bf-vk hea)"
+        }
+    ],
+    "model": "/MODELS/BIS-Ollama/Qwen3.8 27b",
+    "effort": "low",
+    "time": 1789464592666,
+    "system": "Профиль (от чьего имени):\n{\n  \"id\": \"CA4E097FF6C1D387\",\n  \"name\": \"Роман\",\n  \"label\": \"Перепелкин Роман Александрович\",\n  \"icon\": \"/USERS//CA4E097FF6C1D387/$user/icon.png\",\n  \"type\": \"$user\",\n  \"path\": \"/USERS/CA4E097FF6C1D387\",\n  \"isInherit\": false,\n  \"isCustom\": false,\n  \"METADATA\": {},\n  \"form\": \"chat\"\n}\nРабочая группа (где задача):\n{\n  \"id\": \"BASE\",\n  \"name\": \"BASE\",\n  \"label\": \"Base\",\n  \"icon\": \"office-set:office\",\n  \"type\": \"$base\",\n  \"path\": \"/BASE\",\n  \"isInherit\": false,\n  \"isCustom\": false,\n  \"METADATA\": {},\n  \"form\": \"chat\"\n}\nРасположение: Рязань, Рязанская область, Россия (lat:54.62805219490678, lon:39.74552886653911, tz:Europe/Moscow).\nСейчас: вторник, 15 сентября 2026 г., время 12:29:53.",
+    "type": "task",
+    "goal": {
+        "text": "Сделай фотографию собаки",
+        "status": "open",
+        "resume": null,
+        "pursue": 0,
+        "need": "side"
+    },
+    "using_blocks": [
+        "thinking",
+        "image"
+    ]
+}
