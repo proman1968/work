@@ -952,6 +952,58 @@ export class $folder extends $item{
             json_model: await this.json_model,
         };
     }
+    /**
+     * Сводка внешних сервисов-коннекторов (реестр MCP-уровня, аналог get_schema).
+     * Вызывать на классе SERVICES: сводит SCHEMA + capabilities провайдеров.
+     * @param {object} [params]
+     * @returns {Promise<object>} {services: [{service, path, label, description, icon, capabilities, tools}]}
+     */
+    async services_schema(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        const kids = (await this.children) || [];
+        const services = [];
+        for (const kid of kids) {
+            const id = kid.id || kid.name || '';
+            if (!id || id[0] === '$' || id[0] === '.' || id[0] === '#')
+                continue;
+            if (typeof kid.import !== 'function')
+                continue;
+            let data = null;
+            try {
+                data = await kid.import();
+            }
+            catch {
+                continue;
+            }
+            if (!data || typeof data !== 'object')
+                continue;
+            const caps = Array.isArray(data.capabilities)
+                ? data.capabilities.map(String)
+                : String(data.capabilities || '').split(/[\s,]+/).filter(Boolean);
+            const schema = data.SCHEMA && typeof data.SCHEMA === 'object' ? data.SCHEMA : null;
+            if (!schema && !caps.length)
+                continue;
+            const tools = {};
+            if (schema) {
+                for (const [name, spec] of Object.entries(schema)) {
+                    tools[name] = {
+                        description: String(spec?.description || ''),
+                        params: spec?.params && typeof spec.params === 'object' ? spec.params : null,
+                    };
+                }
+            }
+            services.push({
+                service: id,
+                path: kid.short || kid.path || ('/SERVICES/' + id),
+                label: data.label || id,
+                description: String(data.description || ''),
+                icon: data.icon || '',
+                capabilities: caps,
+                tools,
+            });
+        }
+        return { services };
+    }
 
     /** Цепочка типизаторов элемента (например ['$file', '$smoke']). */
     get type_chain(){
@@ -1333,6 +1385,20 @@ export class $folder extends $item{
     async get_item(path = [], deep = 0, $tilde, params) {
         const item = this;
         const steps = this.constructor.parsePathSteps(path);
+        // Self-префикс корня: /WORK/… ≡ /… (корень и есть WORK; ребёнка с таким id нет).
+        // Только fallback (прямое дитя не трогаем), только от корня — остаток шагов,
+        // включая ~/@/*, идёт штатным конвейером.
+        if (this.parent == null) {
+            const i = steps.findIndex(s => String(s || '').trim() !== '');
+            if (i >= 0 && String(steps[i]).toLowerCase() === 'work') {
+                try {
+                    const kids = (await this.children) || [];
+                    if (!kids.some(k => String(k.id || k.name || '').toLowerCase() === 'work'))
+                        steps.splice(i, 1);
+                }
+                catch { /* ниже — штатный резолв */ }
+            }
+        }
         let step = steps.shift();
         const first_char = step?.[0];
         let result;

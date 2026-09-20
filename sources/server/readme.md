@@ -5,7 +5,7 @@
 ## Файлы
 
 - `index.js` — сборка `CORE` и registry `FS`: `$folder`, `$class`, `$handler`, `$user`, `$file`
-- `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file` (новое имя — `safeNodeName`), `find_text`, `get_schema`
+- `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file` (новое имя — `safeNodeName`), `find_text`, `get_schema`, `services_schema`
 - `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`; `create` нормализует id через `safeNodeName` (тег `$ai` → поле `model`)
 - `safe-node-name.js` — имя сегмента пути = имя на диске (без `:` `/` `\`)
 - `file.js` — `$file`: load/read_text/save/edit, history, RAG, триггеры `on_save`
@@ -17,6 +17,7 @@
 
 - **Наследование** — `~` (tilde) и merge `class.js` по слоям. `_collect_tilde`: ось `WORK.$folder` → meta верхнего `$class` с тем же `type` → локальная `meta/$folder` → SELF
 - **`get_schema()`** — схема методов для ИИ-агента (прототип + функции экземпляра после `init`, включая `$method`)
+- **`services_schema()`** — реестр внешних сервисов (`SERVICES/`): свод `SCHEMA + capabilities` провайдеров для discovery агентами (подробно — `SERVICES/readme.md`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
 - **`save_file` → `save_to_history`** — обычный файл: живая копия + снимок в `history/` + лог. **Файл данных** (у `$file/$ext` есть `METADATA`): точка `ext/…/YYYY-MM-DD/{time}.{uid}.{ext}`, `name` в JSON, `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`. Новое имя обычного файла — `safeNodeName`
 

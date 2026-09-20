@@ -443,25 +443,33 @@ async function fillReadme(b, path, params) {
         tagAgent(params.box, AGENT_TAG, 'мета → родитель ' + path);
     }
     const requested = path;
-    // Явный запрос файла readme.md без прямого попадания — честное «нет»,
-    // без падения в наследованный слой (чужой текст — не улика).
+    // Явный запрос файла readme.md: прямой файл → свой; тильда-путь (…/~/readme.md)
+    // → склейка слоёв как readme_merged; иначе честное «нет» (чужой слой — не улика).
     if (/\/readme\.md$/i.test(requested)) {
         const direct = await resolveFile(requested);
         b.path = requested;
-        if (!direct) {
-            b.state = 'нет';
-            b.content = 'readme: нет';
+        if (direct) {
+            tagAgent(params.box, AGENT_TAG, 'readme ' + requested);
+            await params.exec(direct, {
+                method: 'read_text',
+                args: { session: params.session },
+            }, { block: b });
+            b.content = provenanceHead('read', requested, b.path, 'свой')
+                + '\n' + String(b.content || '');
+            b.done = true;
+            b.state = 'ok';
             return true;
         }
-        tagAgent(params.box, AGENT_TAG, 'readme ' + requested);
-        await params.exec(direct, {
-            method: 'read_text',
-            args: { session: params.session },
-        }, { block: b });
-        b.content = provenanceHead('read', requested, b.path, 'свой')
-            + '\n' + String(b.content || '');
-        b.done = true;
-        b.state = 'ok';
+        const merged = await mergeTildeReadme(requested);
+        if (merged) {
+            b.content = provenanceHead('read', requested, requested, 'сводный merge ~')
+                + '\n' + merged;
+            b.done = true;
+            b.state = 'ok';
+            return true;
+        }
+        b.state = 'нет';
+        b.content = 'readme: нет';
         return true;
     }
     let layer = 'свой';
@@ -512,6 +520,35 @@ async function fillReadme(b, path, params) {
     b.done = true;
     b.state = 'ok';
     return true;
+}
+
+/** Склейка тильда-слоёв readme (как readme_merged): текст + пути слоёв. Пусто — ''. */
+async function mergeTildeReadme(requested) {
+    try {
+        const found = await WORK.get_item(requested);
+        const list = (Array.isArray(found) ? found : (found ? [found] : []))
+            .filter(f => f && typeof f.read_text === 'function');
+        if (!list.length)
+            return '';
+        if (typeof $server?.mergeTextFiles === 'function') {
+            const text = await $server.mergeTextFiles(list);
+            if (String(text || '').trim())
+                return String(text).trim()
+                    + '\n\n[слои]\n' + list.map(f => '- ' + (f.path || '')).join('\n');
+            return '';
+        }
+        const bits = [];
+        for (const f of list) {
+            try {
+                bits.push('--- ' + (f.path || '') + '\n' + String(await f.read_text() || '').trim());
+            }
+            catch { /* слой не читается */ }
+        }
+        return bits.join('\n\n').trim();
+    }
+    catch {
+        return '';
+    }
 }
 
 /** Заголовок провенанса улики: что просили, откуда взяли, чей слой. */

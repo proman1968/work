@@ -259,7 +259,7 @@ ODA({ is: 'microchat-view',
                 <div class="title" horizontal flex>
                     <item-icon no-flex ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon no-flex ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
-                    <span class="type" no-flex ~if="$this.host.blockTitle" @click.stop>{{$this.host.blockTitle}}</span>
+                    <span class="type" no-flex ~if="$this.host.blockTitle">{{$this.host.blockTitle}}</span>
                     <span ~if="$this.host.linkHtml" ~html="$this.host.linkHtml" @click.stop></span>
                     <span class="state" no-flex ~if="$this.host.blockState">{{$this.host.blockState}}</span>
                     <oda-icon no-flex ~if="showContent && !pinned" :icon="shevronIcon" :icon-size="iconSize / 1.5"></oda-icon>

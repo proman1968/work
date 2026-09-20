@@ -81,10 +81,11 @@ export default {
         b.sites = [];
         b.crawl = false;
         b.budget = { ok: 0, limit: SITE_OK_MAX };
+        const paths = await searchPaths(params);
         for (const q of queries) {
             if (live?.stopped)
                 return true;
-            const hit = await searchRace(SERVICES, q);
+            const hit = await searchRace(paths, q);
             if (!hit) continue;
             b.label = 'Web: ' + q;
             b.state = 'найдено: ' + hit.source;
@@ -301,4 +302,21 @@ function searchRace(paths, query) {
             throw new Error(res?.error || 'пусто');
         return res;
     })).catch(() => null);
+}
+
+/** Провайдеры поиска из реестра (services_schema), не хардкод: есть search в SCHEMA — годится. */
+async function searchPaths(params = {}) {
+    try {
+        const root = await WORK.get_item('/SERVICES');
+        const schema = typeof root?.services_schema === 'function'
+            ? await root.services_schema({ session: params.session })
+            : null;
+        const paths = (schema?.services || [])
+            .filter(s => s?.tools && typeof s.tools.search === 'object' && s.path)
+            .map(s => s.path);
+        if (paths.length)
+            return paths;
+    }
+    catch { /* ниже — fallback */ }
+    return SERVICES;
 }

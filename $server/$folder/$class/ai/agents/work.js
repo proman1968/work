@@ -155,6 +155,25 @@ async function readFileInto(b, path, params) {
     }
     file = await resolveFile(path);
     if (!file) {
+        // Тильда-путь readme (…/~/readme.md): склеить слои, как readme_merged.
+        if (/\/readme\.md$/i.test(path)) {
+            try {
+                const found = await WORK.get_item(path);
+                const list = (Array.isArray(found) ? found : []).filter(f => f && typeof f.read_text === 'function');
+                if (list.length) {
+                    const merged = await mergeTildeReadme(list);
+                    if (merged) {
+                        b.path = path;
+                        b.content = '[read ' + path + ' ← сводный merge ~]\n' + merged;
+                        b.done = true;
+                        b.state = 'ok';
+                        tagAgent(params.box, AGENT_TAG, 'читаю ' + path);
+                        return true;
+                    }
+                }
+            }
+            catch { /* ниже — штатные ветки */ }
+        }
         // Путь есть, но это не файл — папка: подсказка (не ошибка), без dropUsed.
         try {
             const target = await WORK.get_item(path);
@@ -1113,6 +1132,30 @@ async function resolveFile(path) {
         return null;
     const item = await WORK.get_item(path);
     return item && typeof item.read_text === 'function' ? item : null;
+}
+
+/** Склейка тильда-слоёв readme (как readme_merged). Пусто — ''. */
+async function mergeTildeReadme(list) {
+    try {
+        if (typeof $server?.mergeTextFiles === 'function') {
+            const text = await $server.mergeTextFiles(list);
+            if (String(text || '').trim())
+                return String(text).trim()
+                    + '\n\n[слои]\n' + list.map(f => '- ' + (f.path || '')).join('\n');
+            return '';
+        }
+        const bits = [];
+        for (const f of list) {
+            try {
+                bits.push('--- ' + (f.path || '') + '\n' + String(await f.read_text() || '').trim());
+            }
+            catch { /* слой не читается */ }
+        }
+        return bits.join('\n\n').trim();
+    }
+    catch {
+        return '';
+    }
 }
 
 async function resolveParent(path) {
