@@ -2,6 +2,14 @@
  *  Контракт движка: init({ block, box, messages, session, agent, live, exec, streamChat, engine }). */
 const MAP_ROOT_LIMIT = 40;
 const INFO_NODE_LIMIT = 200;
+/** Секции обычных папок/файлов в карте. */
+const FS_LIST_LIMIT = 40;
+/** Первый уровень тяжёлых каталогов (имена без readme/info). */
+const FS_SHALLOW_LIMIT = 200;
+/** Никогда не показывать. */
+const FS_HIDE_IDS = ['.RAG'];
+/** Виден в карте, раскрывается только первым уровнем имён, без рекурсии. */
+const FS_SHALLOW_IDS = ['node_modules'];
 /** Ветка: два уровня вниз. Не unlimited deep=-1. */
 const LS_BRANCH_DEEP = 2;
 
@@ -9,8 +17,11 @@ const ORIENTATION = [
     'Ориентация: дерево классов. Корневые классы — прикладное наполнение этой поставки: набор любой, их может не быть.',
     'Осмотр по слоям: карта `/` (дети корня) → выбрать узел с карты → readme узла → ls ветки. Путь — только с карты/ls в ленте.',
     'Карта `/` — один уровень. ls ветки (не `/`) — `info({ deep: 2 })`: два уровня детей (path/type/label).',
-    'Факты — только из блоков ленты (карта, ls, readme, ask, meta, remote); не из памяти и не через web.',
-    'Карта и ls — только классы (не .git, не node_modules, не обычные папки/файлы).',
+    'Факты — только из блоков ленты (карта, ls, readme, ask, meta, remote, fs); не из памяти и не через web.',
+    'Карта и ls — три списка: классы, обычные папки, файлы (секции [папки]/[файлы]; скрыт только точечный мусор). Классы — классами, папки — папками, не смешивать.',
+    'node_modules виден в карте, раскрывается только первым уровнем имён (до 200, без readme); вглубь пакетов не ходить.',
+    'Путь осмотра — класс с карты; хвост /$… — метапапка, не класс: поднимись к родительскому классу.',
+    'Скобки ($base) в карте — тип узла, не часть пути. Путь — только токен после «- ».',
     'Устройство item — полное class.js через $class.import() (tilde-merge); не один meta_file. Не info/$public как замена readme.',
     'remote — list_remote у узла, у которого есть метод (не ls детей). Закон «кого спрашивать» — в readme места.',
     'Item — readme из storage_folder (у класса = meta). Раздел readme «из чего состоит» — контракт слоёв, не инвентарь диска.',
@@ -59,13 +70,19 @@ const askTool = {
                 live: params.live,
             });
             b.content = formatAskResult(result, path);
-            if (result?.error)
+            if (result?.error) {
                 b.error = true;
+                b.state = 'ошибка';
+            }
+            else {
+                b.state = 'ok';
+            }
             b.done = true;
             return true;
         }
         catch (e) {
             b.error = true;
+            b.state = 'ошибка';
             b.content = 'ask ' + path + ': ' + String(e.message || e);
             return true;
         }
@@ -118,6 +135,7 @@ const readTool = {
     system: [
         '# Режим: readme',
         'Первая строка — путь класса с карты или ls в ленте.',
+        'Заголовок `[read <запрошен> ← <источник, слой>]` ставит код; цитируй источник из заголовка, слой не скрывай.',
         'Не выдумывай путь. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -157,6 +175,7 @@ const metaTool = {
         '# Режим: meta / устройство',
         'Первая строка — путь WORK item ($class или $file).',
         'Класс: meta → $class.import() (tilde class.js). Файл: tilde class.js типа → importScript.',
+        'Заголовок `[meta <путь>]` ставит код; устройство — всегда tilde-merge слоёв, не один файл; цитируй путь из заголовка.',
         'Не путай с readme и с содержимым файла. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -171,16 +190,40 @@ const metaTool = {
         let path = itemPath(b, params.box, metaTool.label, query);
         if (!path || path === '/')
             return true;
+        if (!path.startsWith('/')) {
+            b.error = true;
+            b.content = 'meta: нужен путь /…, не «' + path + '»';
+            return true;
+        }
+        const norm = toClassPath(path);
+        if (norm.redirected) {
+            path = norm.path;
+            tagAgent(params.box, AGENT_TAG, 'мета → родитель ' + path);
+        }
         const target = await WORK.get_item(path);
         if (!target)
             return false;
+        // meta — только классы: файл читается через read, папка смотрится через ls (подсказка, не ошибка).
+        if (!isWorkClass(target)) {
+            b.path = path;
+            const isFile = typeof target.read_text === 'function';
+            b.state = isFile ? 'файл → read' : 'папка → ls';
+            b.content = 'meta: ' + path + ' — это ' + (isFile ? 'файл, читай через read ' + path : 'папка, смотри через ls ' + path);
+            tagAgent(params.box, AGENT_TAG, 'meta: не класс');
+            return true;
+        }
         b.path = path;
         tagAgent(params.box, AGENT_TAG, 'meta ' + path);
         try {
             const device = await loadItemDevice(target);
             b.content = formatMetaResult(device, path);
-            if (!device || device.error)
+            if (!device || device.error) {
                 b.error = true;
+                b.state = 'ошибка';
+            }
+            else {
+                b.state = 'ok';
+            }
             return true;
         }
         catch (e) {
@@ -196,10 +239,11 @@ const remoteTool = {
     label: 'Список у узла',
     icon: 'icons:cloud-circle',
     role: 'user',
-    description: 'list_remote у класса, у которого есть метод; не ls детей и не web',
+    description: 'list_remote у класса, у которого есть метод; не ls детей и не web. Сначала capability (list_remote + baseUrl из meta), нет — skip без error-попытки',
     system: [
         '# Режим: remote',
         'Первая строка — путь класса с list_remote (с карты / ls). Не выдумывай URL. Не обращайся к пользователю.',
+        'Сначала capability: метод list_remote у цели + baseUrl из meta. Нет capability — skip без error-попытки, не трать ход.',
     ].join('\n'),
     prompt: [
         'Путь класса с карты / ls.',
@@ -210,17 +254,17 @@ const remoteTool = {
             return false;
         const path = resolveRemotePath(b, params.box, params.messages);
         if (!path) {
-            b.content = '[remote]\nнужен путь класса с list_remote (карта/ls)';
-            b.error = true;
-            return true;
+            // Нет узла с capability в ленте — тихий пропуск (тип уходит в using_blocks),
+            // не error: жечь errorStreak попыткой без операнда запрещено.
+            return false;
         }
         const target = await WORK.get_item(path);
         if (!isWorkClass(target))
             return false;
         if (typeof target.list_remote !== 'function') {
             b.path = path;
+            b.state = 'нет capability → skip';
             b.content = '[remote]\nу «' + (target.type || '?') + '» ' + path + ' нет list_remote — нужен путь узла $provider с карты/ls (напр. /MODELS/odant), не каталог';
-            b.error = true;
             return true;
         }
         b.path = path;
@@ -237,7 +281,7 @@ const remoteTool = {
                     error: 'нет baseUrl у ' + path + ' — remote только на узле $provider (напр. /MODELS/odant), не на каталоге',
                     baseUrl: '',
                 }, path, { baseUrl: '' });
-                b.error = true;
+                b.state = 'нет capability → skip';
                 return true;
             }
             const result = await params.exec(target, {
@@ -245,12 +289,18 @@ const remoteTool = {
                 args: { baseUrl },
             }, { block: b });
             b.content = formatRemoteResult(result, path, { baseUrl });
-            if (result?.error)
+            if (result?.error) {
                 b.error = true;
+                b.state = 'ошибка';
+            }
+            else {
+                b.state = 'ok';
+            }
             return true;
         }
         catch (e) {
             b.error = true;
+            b.state = 'ошибка';
             b.content = 'remote ' + path + ': ' + String(e.message || e);
             return true;
         }
@@ -265,10 +315,11 @@ export default {
     /** в контекст идут листья-факты (map/ls/meta/remote/ask, role user), не пересказ total */
     expand: true,
     allowReasoning: true,
-    description: 'строение дерева: карта `/`; ls ветки = info deep=2; readme; meta; remote (list_remote); ask. Звать когда нужны факты дерева и их нет в ленте',
+    description: 'строение дерева: карта `/` тремя списками (классы/папки/файлы); ls ветки = info deep=2; readme; meta; remote (list_remote); ask. Звать когда нужны факты дерева и их нет в ленте; факт — блок items, не пересказ промпта',
     system: [
         '# Агент: explore',
         'Осмотр дерева классов. Карта корня уже в ленте.',
+        'Факт — только блок items (map/ls/readme/meta/remote/ask); пересказ системного промпта запрещён.',
         ORIENTATION,
         'Не пиши файлы и не ходи в интернет — это work / web.',
         'Нет пути с карты/ls — не выдумывай; выбери узел из уже показанного слоя.',
@@ -277,6 +328,7 @@ export default {
     ].join('\n'),
     prompt: [
         'Отчёт только по фактам из items (карта, ls, readme, ask, meta, remote).',
+        'В итоге различай классы и обычные папки/файлы; сужение «папки» до «классы» без пометы запрещено.',
         'Не описывай шаги, которых не было. Если в ls уже дерево deep=2 — итог по видимым детям/внукам, не выдумывай глубже.',
         'Есть remote и ls одного узла — явный diff (на API, нет в дереве).',
     ].join('\n'),
@@ -342,6 +394,27 @@ function clip(s, n) {
 
 async function fillLs(b, path, box) {
     path = String(path || '').replace(/\/$/, '') || '/';
+    if (path !== '/' && !path.startsWith('/')) {
+        b.error = true;
+        b.content = 'ls: нужен путь /…, не «' + path + '»';
+        return true;
+    }
+    const norm = toClassPath(path);
+    if (norm.redirected) {
+        path = norm.path;
+        tagAgent(box, AGENT_TAG, 'мета → родитель ' + path);
+    }
+    // ls — только каталоги: файл читается через read (подсказка, не ошибка).
+    try {
+        const target = await WORK.get_item(path);
+        if (target && typeof target.read_text === 'function') {
+            b.path = path;
+            b.state = 'файл → read';
+            b.content = 'ls: ' + path + ' — это файл, читай через read ' + path;
+            return true;
+        }
+    }
+    catch { /* ниже — штатный путь */ }
     b.path = path;
     const isRoot = path === '/';
     tagAgent(box, AGENT_TAG, isRoot ? 'ls /' : 'info ' + path);
@@ -351,6 +424,7 @@ async function fillLs(b, path, box) {
     if (!text)
         return false;
     b.content = text;
+    b.state = 'ok';
     return true;
 }
 
@@ -358,8 +432,42 @@ async function fillReadme(b, path, params) {
     path = String(path || '').trim();
     if (!path)
         return false;
+    if (!path.startsWith('/')) {
+        b.error = true;
+        b.content = 'read: нужен путь /…, не «' + path + '»';
+        return true;
+    }
+    const norm = toClassPath(path);
+    if (norm.redirected) {
+        path = norm.path;
+        tagAgent(params.box, AGENT_TAG, 'мета → родитель ' + path);
+    }
+    const requested = path;
+    // Явный запрос файла readme.md без прямого попадания — честное «нет»,
+    // без падения в наследованный слой (чужой текст — не улика).
+    if (/\/readme\.md$/i.test(requested)) {
+        const direct = await resolveFile(requested);
+        b.path = requested;
+        if (!direct) {
+            b.state = 'нет';
+            b.content = 'readme: нет';
+            return true;
+        }
+        tagAgent(params.box, AGENT_TAG, 'readme ' + requested);
+        await params.exec(direct, {
+            method: 'read_text',
+            args: { session: params.session },
+        }, { block: b });
+        b.content = provenanceHead('read', requested, b.path, 'свой')
+            + '\n' + String(b.content || '');
+        b.done = true;
+        b.state = 'ok';
+        return true;
+    }
+    let layer = 'свой';
     let file = await resolveFile(path);
     if (!file) {
+        layer = 'наследованный';
         try {
             const item = await WORK.get_item(path);
             if (item && typeof item.readme_merged === 'function') {
@@ -367,8 +475,10 @@ async function fillReadme(b, path, params) {
                 if (merged?.text) {
                     b.path = merged.path || path;
                     tagAgent(params.box, AGENT_TAG, 'readme ' + b.path);
-                    b.content = merged.text;
+                    b.content = provenanceHead('read', requested, b.path, 'сводный merge ~')
+                        + '\n' + merged.text;
                     b.done = true;
+                    b.state = 'ok';
                     return true;
                 }
             }
@@ -381,12 +491,15 @@ async function fillReadme(b, path, params) {
     if (!file) {
         const readme = path.replace(/\/$/, '') + '/readme.md';
         file = await resolveFile(readme);
-        if (file)
+        if (file) {
             path = readme;
+            layer = 'свой';
+        }
     }
     b.path = path;
     tagAgent(params.box, AGENT_TAG, 'readme ' + path);
     if (!file) {
+        b.state = 'нет';
         b.content = 'readme: нет';
         return true;
     }
@@ -394,8 +507,16 @@ async function fillReadme(b, path, params) {
         method: 'read_text',
         args: { session: params.session },
     }, { block: b });
+    b.content = provenanceHead('read', requested, b.path, layer)
+        + '\n' + String(b.content || '');
     b.done = true;
+    b.state = 'ok';
     return true;
+}
+
+/** Заголовок провенанса улики: что просили, откуда взяли, чей слой. */
+function provenanceHead(kind, requested, actual, layer) {
+    return '[' + kind + ' ' + requested + ' ← ' + actual + ', ' + layer + ']';
 }
 
 function markUsed(box, type) {
@@ -730,24 +851,41 @@ async function formatClassEntry(child, childPath) {
             readme = 'readme: ' + (r.path || childPath.replace(/\/$/, '') + '/readme.md');
     }
     catch { /* ignore */ }
-    const typeBit = type ? ' (' + type + ')' : '';
+    const typeBit = type ? ' [тип: ' + type + ']' : '';
     const labelBit = label && label !== child.id ? ' — ' + label : '';
     const noteBit = note ? '\n  ' + note : '';
-    return '- ' + childPath + typeBit + labelBit + noteBit + '\n  ' + readme;
+    return '- ' + childPath + labelBit + typeBit + noteBit + '\n  ' + readme;
 }
 
-/** Корень `/` — один уровень классов (компас). */
+/** Путь осмотра — класс с карты. Хвост-метапапка (/$…) — не класс: поднимаемся к родителю. */
+function toClassPath(path) {
+    const p = String(path || '').replace(/\/$/, '') || '/';
+    const segs = p.split('/').filter(Boolean);
+    if (segs.length && segs[segs.length - 1].startsWith('$')) {
+        segs.pop();
+        return { path: '/' + segs.join('/'), redirected: true };
+    }
+    return { path: p, redirected: false };
+}
+
+/** Корень `/` — один уровень тремя списками: классы, обычные папки, файлы (компас). */
 async function listChildrenMap(path) {
     path = String(path || '/').trim() || '/';
     try {
         const root = await WORK.get_item(path);
-        const kids = ((await root?.children) || []).filter(isWorkClass);
-        const title = path === '/' ? '[классы /]' : '[классы ' + path + ']';
-        if (!kids.length)
-            return title + '\n(нет дочерних классов)';
-        const lines = [title];
-        const slice = kids.slice(0, MAP_ROOT_LIMIT);
-        for (const child of slice) {
+        const kids = (await root?.children) || [];
+        const classes = kids.filter(isWorkClass);
+        const seen = new Set(classes.map(c => c.id || c.name));
+        const plain = ((await root?.items) || [])
+            .filter(c => !seen.has(c.id || c.name) && !FS_HIDE_IDS.includes(c.id || c.name));
+        const folders = plain.filter(c => typeof c.read_text !== 'function');
+        const files = plain.filter(c => typeof c.read_text === 'function');
+        const tag = path === '/' ? '/' : ' ' + path;
+        const lines = [];
+        lines.push('[классы' + tag + ']');
+        if (!classes.length)
+            lines.push('(нет дочерних классов)');
+        for (const child of classes.slice(0, MAP_ROOT_LIMIT)) {
             const id = child.id || child.name || '';
             if (!id)
                 continue;
@@ -756,13 +894,55 @@ async function listChildrenMap(path) {
                 : (path.replace(/\/$/, '') + '/' + id.replace(/^\//, ''));
             lines.push(await formatClassEntry(child, childPath));
         }
-        if (kids.length > MAP_ROOT_LIMIT)
-            lines.push('- … ещё ' + (kids.length - MAP_ROOT_LIMIT) + ' классов');
+        if (classes.length > MAP_ROOT_LIMIT)
+            lines.push('- … ещё ' + (classes.length - MAP_ROOT_LIMIT) + ' классов');
+        lines.push('[папки' + tag + ']');
+        if (!folders.length)
+            lines.push('(нет)');
+        for (const child of folders.slice(0, FS_LIST_LIMIT)) {
+            const id = child.id || child.name || '';
+            if (!id)
+                continue;
+            const childPath = path === '/'
+                ? (id.startsWith('/') ? id : '/' + id)
+                : (path.replace(/\/$/, '') + '/' + id.replace(/^\//, ''));
+            lines.push(await formatPlainEntry(child, childPath, 'папка'));
+        }
+        if (folders.length > FS_LIST_LIMIT)
+            lines.push('- … ещё ' + (folders.length - FS_LIST_LIMIT) + ' папок');
+        lines.push('[файлы' + tag + ']');
+        if (!files.length)
+            lines.push('(нет)');
+        for (const child of files.slice(0, FS_LIST_LIMIT)) {
+            const id = child.id || child.name || '';
+            if (!id)
+                continue;
+            const childPath = path === '/'
+                ? (id.startsWith('/') ? id : '/' + id)
+                : (path.replace(/\/$/, '') + '/' + id.replace(/^\//, ''));
+            lines.push(await formatPlainEntry(child, childPath, 'файл'));
+        }
+        if (files.length > FS_LIST_LIMIT)
+            lines.push('- … ещё ' + (files.length - FS_LIST_LIMIT) + ' файлов');
         return lines.join('\n');
     }
     catch {
         return '';
     }
+}
+
+/** Строка обычной папки/файла: `- /oda [папка]` + readme, если есть. Тяжёлые каталоги — без readme. */
+async function formatPlainEntry(child, childPath, kind) {
+    let readme = '';
+    if (!FS_SHALLOW_IDS.includes(child.id || child.name)) {
+        try {
+            const r = await resolveReadme(child);
+            if (r && (typeof r.read_text === 'function' || r.path))
+                readme = '\n  readme: ' + (r.path || childPath.replace(/\/$/, '') + '/readme.md');
+        }
+        catch { /* нет readme */ }
+    }
+    return '- ' + childPath + ' [' + kind + ']' + readme;
 }
 
 /**
@@ -777,10 +957,12 @@ async function listInfoDeep(path) {
         const root = await WORK.get_item(path);
         if (!root || typeof root.info !== 'function')
             return '';
-        const tree = await root.info({ deep: LS_BRANCH_DEEP });
-        const lines = ['[info ' + path + ' deep=' + LS_BRANCH_DEEP + ']'];
+        // Тяжёлый каталог — только первый уровень, без рекурсии внутрь пакетов.
+        const shallow = FS_SHALLOW_IDS.includes(path.split('/').filter(Boolean).pop());
+        const tree = await root.info({ deep: shallow ? 1 : LS_BRANCH_DEEP });
+        const lines = ['[info ' + path + ' deep=' + (shallow ? 1 : LS_BRANCH_DEEP) + ']'];
         const state = { count: 0, limit: INFO_NODE_LIMIT };
-        formatInfoTree(tree, lines, 0, state);
+        formatInfoTree(tree, lines, 0, state, shallow);
         if (state.count >= state.limit)
             lines.push('… обрезано (лимит ' + state.limit + ' узлов)');
         const kids = Array.isArray(tree?.items) ? tree.items : [];
@@ -793,28 +975,71 @@ async function listInfoDeep(path) {
     }
 }
 
-function formatInfoTree(node, lines, depth, state) {
+/** Класс — тип $…, кроме базовых $folder/$file. Пустой тип — обычная папка. */
+function isClassType(t) {
+    return !!t && t[0] === '$' && t !== '$folder' && t !== '$file';
+}
+
+function formatInfoTree(node, lines, depth, state, shallowKids = false) {
     if (!node || typeof node !== 'object' || state.count >= state.limit)
         return;
     const id = String(node.id || node.name || '').trim();
     if (id?.[0] === '.')
         return;
+    if (FS_HIDE_IDS.includes(id))
+        return;
+    if (FS_SHALLOW_IDS.includes(id) && depth > 0)
+        return;
     state.count++;
     const pad = '  '.repeat(depth);
     const p = String(node.path || node.short || '').trim();
     const pathBit = p || id || '?';
-    const type = node.type ? ' (' + node.type + ')' : '';
+    const type = node.type ? ' [тип: ' + node.type + ']' : '';
     const labelRaw = String(node.label || '').trim();
     const labelBit = labelRaw && labelRaw !== id && labelRaw !== pathBit
         ? ' — ' + labelRaw
         : '';
     lines.push(pad + '- ' + pathBit + type + labelBit);
+    // Тяжёлый каталог в корне осмотра — дети именами, внутрь не идём.
+    if (shallowKids && depth === 0)
+        return printShallowKids(node, lines, state);
     const kids = Array.isArray(node.items) ? node.items : [];
-    for (const child of kids) {
+    // Порядок: классы → папки → файлы; blacklist-поддеревья не раскрываем.
+    const ordered = [...kids].sort((a, b) => kindRank(a) - kindRank(b));
+    for (const child of ordered) {
         if (state.count >= state.limit)
             break;
-        formatInfoTree(child, lines, depth + 1, state);
+        formatInfoTree(child, lines, depth + 1, state, false);
     }
+}
+
+/** Дети тяжёлого каталога: имена первым уровнем, лимит FS_SHALLOW_LIMIT. */
+function printShallowKids(node, lines, state) {
+    const kids = Array.isArray(node.items) ? node.items : [];
+    const ordered = [...kids].sort((a, b) => kindRank(a) - kindRank(b));
+    const slice = ordered.slice(0, FS_SHALLOW_LIMIT);
+    for (const child of slice) {
+        if (state.count >= state.limit)
+            break;
+        state.count++;
+        const id = String(child.id || child.name || '').trim();
+        if (id?.[0] === '.' || FS_HIDE_IDS.includes(id))
+            continue;
+        const p = String(child.path || child.short || '').trim();
+        lines.push('  - ' + (p || id));
+    }
+    if (kids.length > FS_SHALLOW_LIMIT)
+        lines.push('  - … ещё ' + (kids.length - FS_SHALLOW_LIMIT) + ' записей');
+}
+
+/** 0 класс, 1 папка, 2 файл — для группировки детей уровня. */
+function kindRank(node) {
+    const t = node?.type || '';
+    if (t === '$file')
+        return 2;
+    if (isClassType(t))
+        return 0;
+    return 1;
 }
 
 function readmePathFromMap(box, query) {

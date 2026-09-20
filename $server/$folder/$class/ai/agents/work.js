@@ -121,11 +121,12 @@ const readTool = {
 };
 
 async function readFileInto(b, path, params) {
-    // Guided-резолв: класс вместо файла — сразу правильный ход, без dropUsed (меню сужается, не цикл)
+    // Guided-резолв: класс вместо файла — подсказка (не ошибка): вид цели не тот, цели нет.
     try {
         const tgt = await params.engine?.resolveTarget?.(path);
         if (tgt && (tgt.kind === 'class' || tgt.kind === 'provider')) {
-            b.error = true;
+            b.path = path;
+            b.state = 'класс → ls';
             b.content = 'read: ' + (tgt.hint || 'это класс, не файл') + ': ' + path;
             return true;
         }
@@ -154,6 +155,17 @@ async function readFileInto(b, path, params) {
     }
     file = await resolveFile(path);
     if (!file) {
+        // Путь есть, но это не файл — папка: подсказка (не ошибка), без dropUsed.
+        try {
+            const target = await WORK.get_item(path);
+            if (target) {
+                b.path = path;
+                b.state = 'папка → ls';
+                b.content = 'read: ' + path + ' — это папка, смотри через ls ' + path + ' (explore)';
+                return true;
+            }
+        }
+        catch { /* ниже — штатная ошибка */ }
         b.error = true;
         b.content = 'read: файл не найден: ' + path;
         dropUsed(params.box, 'read');
@@ -167,6 +179,7 @@ async function readFileInto(b, path, params) {
         args: { session: params.session },
     }, { block: b });
     b.done = true;
+    b.state = 'ok';
     return true;
 }
 
@@ -1061,7 +1074,25 @@ function filePath(block, box, defaultLabel) {
     const found = (box?.items || []).findLast?.(b => b.type === 'search' && b.content)
         || [...(box?.items || [])].reverse().find(b => b.type === 'search' && b.content);
     const hit = String(found?.content || '').match(/[/][^\s:]+/);
-    return hit ? hit[0] : '';
+    if (hit)
+        return hit[0];
+    // Путь из brief, сверенный с инвентарем map/ls: читать можно то, что уже перечислено в ленте.
+    const briefHit = String(box?.brief || '').match(/(\/[^\s:;,]+)/);
+    if (briefHit && listedPaths(box).has(briefHit[1].replace(/\/$/, '')))
+        return briefHit[1];
+    return '';
+}
+
+/** Инвентарь путей из блоков map/ls: только перечисленное можно брать без fill. */
+function listedPaths(box) {
+    const out = new Set();
+    for (const b of (box?.items || [])) {
+        if ((b?.type !== 'map' && b?.type !== 'ls') || !b.content)
+            continue;
+        for (const m of String(b.content).matchAll(/(\/[^\s\[(]+)/g))
+            out.add(m[1].replace(/\/$/, ''));
+    }
+    return out;
 }
 
 /** Первая строка write: абсолютный WORK-путь. Обёртку `…` снимаем; «Цель достигнута.» — не путь. */
