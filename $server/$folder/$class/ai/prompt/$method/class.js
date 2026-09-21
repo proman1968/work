@@ -249,8 +249,10 @@ export default {
             }
             if (typeof tool.recalc === 'function')
                 await tool.recalc({
-                    block: child, box: block, messages, session, live, exec,
+                    block: child, box: block, messages, session, model, live, exec, agent,
                     engine: this, task: params.task,
+                    streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
             pushLift(messages, child);
             // Леджер попыток: идентичный провал дважды — dropUsed агента игнорируется,
@@ -332,6 +334,22 @@ export default {
             box,
             skillStep: undefined,
         });
+        // Стоп субагента (form/question): ждём человека, как tool-стопы.
+        // Без live.wait (standalone) — возвращаем как есть, ждёт владелец.
+        if (sub.stop && !sub.error && !live?.stopped) {
+            if (!live?.wait) {
+                pushLift(ctx.messages, sub);
+                return { ok: !sub.error, agent: id, content: sub.content, state: sub.state, block: sub };
+            }
+            const res = await live.wait(sub) || {};
+            if (live?.stopped)
+                return { ok: false, agent: id, block: sub };
+            if (res.accept === false)
+                recordReject(box, id, sub);
+            if (res.content)
+                ctx.messages.push({ role: 'user', content: String(res.content) });
+            await live?.save?.();
+        }
         if (sub.skip || isEmptyResult(sub)) {
             const i = box.items.indexOf(sub);
             if (i >= 0)
@@ -821,14 +839,24 @@ export function trippedBreaker(box, child) {
 }
 
 /**
- * Учёт попытки tool. Успех/нейтраль — сброс счётчиков tool (операнд сменился).
+ * Учёт попытки tool. Успех с новым операндом — сброс счётчиков tool.
  * Идентичный провал MAX_SAME_ATTEMPTS раз — dropUsed агента игнорируется:
  * тип возвращается в using_blocks, меню только сужается.
+ * Идентичный успех (тот же тип + побайтово тот же контент сиблинга) —
+ * тоже повтор: новой информации ноль, тип возвращается в using_blocks.
+ * Перечитывание изменившегося файла не страдает (контент другой — не повтор).
  */
 export function noteAttempt(box, next, child) {
     if (!box || !next || !child)
         return;
     if (!child.error) {
+        if (sameContentSibling(box, next, child)) {
+            const used = box.using_blocks ??= [];
+            if (!used.includes(next))
+                used.push(next);
+            child.content = [child.content, '[повтор: тот же ' + next + ' с тем же результатом — заблокирован, выбери другой ход]'].filter(Boolean).join('\n\n');
+            return;
+        }
         const at = box.attempts;
         if (at) {
             for (const k of Object.keys(at))
@@ -847,6 +875,17 @@ export function noteAttempt(box, next, child) {
             used.push(next);
         child.content = [child.content, '[повтор ' + at[key] + ': тот же ' + next + ' с тем же операндом заблокирован — выбери другой ход или спроси человека]'].filter(Boolean).join('\n\n');
     }
+}
+
+/** Сиблинг того же типа с побайтово тем же контентом (без учёта пометок леджера). */
+function sameContentSibling(box, next, child) {
+    const content = String(child?.content || '');
+    if (!content)
+        return false;
+    const strip = s => String(s || '').replace(/\n\n\[повтор[^\]]*\]$/, '');
+    const norm = strip(content);
+    return (box?.items || []).some(b =>
+        b !== child && b?.type === next && !b?.error && strip(b.content) === norm);
 }
 
 /**

@@ -54,8 +54,10 @@ const searchTool = {
     description: 'поиск MCP-серверов на маркете (Smithery): кандидаты с сигналами доверия',
     system: [
         '# Режим: поиск MCP',
-        'Одна строка — что искать (домен/сервис/инструмент).',
+        'Одна строка — что искать (домен/сервис/инструмент). Заголовки ## — не запрос.',
         'Источники: маркет Smithery (публичный API) + заведомо известные reference.',
+        'Запросы к маркету — только на английском (переформулировка тихим ходом).',
+        'Следующая страница — «ещё» / «page N»: тот же запрос, другая страница.',
         'Не выдумывай серверы. Не обращайся к пользователю.',
     ].join('\n'),
     prompt: [
@@ -73,14 +75,36 @@ const searchTool = {
         const b = params.block;
         if (b.done || b.error)
             return;
-        const query = searchQuery(b, params.box, params.messages);
-        if (!query)
+        const topic = searchQuery(b, params.box, params.messages);
+        if (!topic)
             return;
-        b.state = query;
-        tagAgent(params.box, AGENT_TAG, 'маркет: ' + clip(query, 40));
+        const queries = await reformulateQueries(params, topic);
+        // Канонический ключ — сортированные EN-запросы, не проза head.
+        // Совпадение — точное или схожесть ≥0.5 (переформулировки флэпят).
+        const qkey = [...queries].sort().join('|');
+        const explicit = pageMarker(b);
+        let page = searchPage(b, params.box);
+        if (!explicit) {
+            const max = maxTopicPage(params.box, qkey, b);
+            if (max >= 1)
+                page = max + 1;
+        }
+        b.autoPage = !explicit;
+        b.state = queries[0] + (page > 1 ? ' (стр. ' + page + ')' : '');
+        tagAgent(params.box, AGENT_TAG, 'маркет: ' + clip(queries[0], 40));
         let cards = [];
+        let total = 0;
         try {
-            cards = await searchMarket(query);
+            for (const q of queries) {
+                const res = await searchMarket(q, page);
+                total = Math.max(total, res.total);
+                for (const c of res.cards) {
+                    if (!cards.some(x => x.name === c.name))
+                        cards.push(c);
+                }
+                if (cards.length >= 10)
+                    break;
+            }
         }
         catch (e) {
             b.error = true;
@@ -88,12 +112,24 @@ const searchTool = {
             b.content = 'mcp search: маркет недоступен: ' + String(e.message || e);
             return;
         }
-        const refs = referenceHits(query);
-        b.content = formatSearchResults(query, cards, refs);
+        cards.sort((a, c) => (c.verified - a.verified) || (c.useCount - a.useCount));
+        const refs = referenceHits(topic + ' ' + queries.join(' '));
+        b.page = page;
+        b.topic = topic;
+        b.qkey = qkey;
+        b.content = formatSearchResults(queries, page, total, cards, refs);
         b.done = true;
         b.state = 'ok';
+        // Есть следующие страницы — тип остаётся в меню для «ещё».
+        // Тихий автопоиск — не дальше AUTO_PAGES_CAP: дальше только явный маркер.
+        // Иначе вежливый бесконечный цикл вместо inspect/total.
+        if (total > page * PAGE_SIZE && (!b.autoPage || page < AUTO_PAGES_CAP))
+            dropUsed(params.box, 'search');
     },
 };
+
+/** Потолок тихих страниц одной темы. Явные маркеры — без потолка. */
+const AUTO_PAGES_CAP = 3;
 
 const inspectTool = {
     label: 'Оцениваю сервер',
@@ -174,18 +210,22 @@ const inspectTool = {
     },
 };
 
-/** Машиночитаемая строка вердикта `[вердикт: ставить time fetch | отказ]`. */
+/** Машиночитаемая строка вердикта `[вердикт: ставить time fetch | отказ]`.
+ *  Сегменты через `|`: первый сегмент «ставить + id пресетов» побеждает;
+ *  отказ — только если ставить-id нет ни в одном сегменте. */
 export function parseMachineVerdict(text) {
     const m = String(text || '').match(/\[вердикт:\s*([^\]]+)\]/i);
     if (!m)
         return null;
-    const frag = m[1].toLowerCase();
-    if (/отказ/.test(frag))
-        return { decision: 'refuse', id: '' };
-    const tokens = new Set(frag.split(/[^a-zа-яё0-9]+/i).filter(Boolean));
-    for (const id of Object.keys(PRESETS)) {
-        if (tokens.has(id))
-            return { id, decision: 'install' };
+    for (const part of m[1].split('|')) {
+        const low = part.toLowerCase();
+        if (!/ставить/.test(low) || /не ставить/.test(low))
+            continue;
+        const tokens = new Set(low.split(/[^a-zа-яё0-9]+/i).filter(Boolean));
+        for (const id of Object.keys(PRESETS)) {
+            if (tokens.has(id))
+                return { id, decision: 'install' };
+        }
     }
     return { decision: 'refuse', id: '' };
 }
@@ -232,6 +272,164 @@ export function parseVerdictTable(text) {
     return refused;
 }
 
+const offerTool = {
+    label: 'Предлагаю установку',
+    icon: 'icons:list',
+    role: 'user',
+    description: 'выбор установки формой: вердикты «ставить» + «пока ничего»; только после inspect',
+    system: [
+        '# Режим: предложение установки',
+        'Выбор — только из вердиктов «ставить» этого бокса (inspect-кандидаты).',
+        'Форма — через вложенный form: поле select с именами пресетов + пункт «Пока ничего».',
+        'Значения options — только id пресетов (time fetch filesystem memory sqlite puppeteer) и none.',
+        'Нет вердиктов — нечего предлагать, молча пропусти ход.',
+        'Это предложение, не установка: само создание — только install в build.',
+    ].join('\n'),
+    prompt: [
+        'Собери форму выбора установки из вердиктов бокса.',
+    ].join('\n'),
+    async init(params = {}) {
+        const b = params.block;
+        if (b.done)
+            return false;
+        if (!offerOptions(params.box).length)
+            return false;
+        tagAgent(params.box, AGENT_TAG, 'выбор…');
+        return true;
+    },
+    async recalc(params = {}) {
+        const b = params.block;
+        if (b.done || b.error)
+            return;
+        const options = offerOptions(params.box);
+        if (!options.length)
+            return false;
+        // Выбор — вложенной формой: ждёт человека через стоп движка.
+        let res;
+        try {
+            res = await params.callAgent('form', offerBrief(options));
+        }
+        catch (e) {
+            b.error = true;
+            b.state = 'ошибка';
+            b.content = 'mcp offer: форма не собралась: ' + String(e.message || e);
+            return;
+        }
+        const picked = offerPick(params.box, options) || offerPickText(params.messages, options);
+        if (!picked) {
+            b.done = true;
+            b.state = 'отказ';
+            b.content = '[mcp offer] выбор отклонён — установка не требуется';
+            tagAgent(params.box, AGENT_TAG, 'без установки');
+            return;
+        }
+        const verdict = await inspectCandidate(picked, params);
+        if (!verdict.ok) {
+            b.done = true;
+            b.state = 'отказ';
+            b.content = '[mcp offer] ' + picked + ': ' + verdict.text;
+            return;
+        }
+        params.box.selectedInstall = verdict.spec;
+        b.done = true;
+        b.state = 'выбрано: ' + picked;
+        b.content = '[mcp offer] выбран ' + picked + ' — дальше activation-письмо';
+        tagAgent(params.box, AGENT_TAG, 'выбрано: ' + picked);
+    },
+};
+
+/** Ключ пресета по любому написанию (Time/time/TIME): регистр — не различие. */
+function presetKey(name) {
+    const t = String(name || '').trim().toLowerCase();
+    return Object.keys(PRESETS).includes(t) ? t : '';
+}
+
+/** Вердикты «ставить» бокса: [{id, label}] для формы выбора. */
+export function offerOptions(box) {
+    const out = [];
+    const seen = new Set();
+    for (const b of (box?.items || [])) {
+        const c = b?.candidate;
+        if (b?.type !== 'inspect' || b?.error || !c)
+            continue;
+        const id = presetKey(c.id) || presetKey(c.preset);
+        if (!id || seen.has(id))
+            continue;
+        seen.add(id);
+        out.push({ id, label: PRESETS[id].label || id });
+    }
+    // Вердикты прозой (без candidate): незаконченные и исходы «ставить»/«обзор».
+    for (const b of (box?.items || [])) {
+        if (b?.type !== 'inspect' || b?.error || b?.candidate)
+            continue;
+        if (b?.done && b?.state !== 'ставить' && b?.state !== 'обзор')
+            continue;
+        const hit = parseVerdictIds(b.content);
+        for (const id of hit) {
+            if (seen.has(id))
+                continue;
+            seen.add(id);
+            out.push({ id, label: PRESETS[id].label || id });
+        }
+    }
+    return out;
+}
+
+/** Все id пресетов из текста (для добора, когда candidate не выставлен). */
+function parseVerdictIds(text) {
+    const tokens = new Set(String(text || '').toLowerCase().split(/[^a-zа-яё0-9]+/i).filter(Boolean));
+    return Object.keys(PRESETS).filter(id => tokens.has(id));
+}
+
+/** Бриф форме: select пресетов + «пока ничего», значения — только id. */
+function offerBrief(options) {
+    return [
+        'Выбор установки MCP-сервера: один вариант.',
+        'Поле select, значения options — только из списка (id): '
+            + options.map(o => o.id).join(' ') + ' none.',
+        'Пункт «Пока ничего не ставить» со значением none.',
+    ].join('\n');
+}
+
+/** Выбор текстом (мимо формы): последний user-кадр с id пресета. Отказ-слова — отказ. */
+export function offerPickText(messages, options) {
+    const ids = new Set((options || []).map(o => presetKey(o.id)).filter(Boolean));
+    const last = lastUserContent(messages);
+    if (!last)
+        return null;
+    const t = last.toLowerCase();
+    if (/ничего|не надо|отказ|не ставь|не нужно/.test(t))
+        return null;
+    const tokens = new Set(t.split(/[^a-zа-яё0-9]+/i).filter(Boolean));
+    for (const id of ids) {
+        if (tokens.has(id))
+            return id;
+    }
+    return null;
+}
+
+/** Выбор человека из формы: первое значение-id пресета; none/пусто/мусор — отказ. */
+export function offerPick(box, options) {
+    const ids = new Set((options || []).map(o => presetKey(o.id)).filter(Boolean));
+    for (const b of [...(box?.items || [])].reverse()) {
+        if (b?.type !== 'form' || b?.error)
+            continue;
+        const values = b.answer && typeof b.answer === 'object' ? b.answer : null;
+        const vals = values ? Object.values(values) : [b.approved, b.content].filter(Boolean);
+        for (const v of vals) {
+            const t = String(v ?? '').trim().toLowerCase();
+            if (!t || t === 'none' || /ничего|не надо|отказ|другое/.test(t))
+                return null;
+            const k = presetKey(t);
+            if (k && ids.has(k))
+                return k;
+        }
+        // Форма есть, выбора нет — отказ, дальше не ищем.
+        return null;
+    }
+    return null;
+}
+
 const installTool = {
     label: 'Ставлю сервер',
     icon: 'icons:download',
@@ -269,7 +467,8 @@ const installTool = {
         b.spec = spec;
         b.state = spec.id;
         tagAgent(params.box, AGENT_TAG, 'ставлю ' + spec.id);
-        // Создание — вложенным work: его activation-гейт решает, спрашивать человека или нет.
+        // Создание — вложенным work (в build-режиме create без лишних вопросов;
+        // разрешение человека уже дано через activation-письмо mcp).
         const section = buildCreateSection(spec);
         let res;
         try {
@@ -379,13 +578,14 @@ export default {
     tools: {
         search: searchTool,
         inspect: inspectTool,
+        offer: offerTool,
         install: installTool,
     },
     description: 'маркет MCP-серверов: поиск, оценка, установка в SERVICES/ (с approval). Звать когда нужен внешний инструмент',
     system: [
         '# Агент: mcp',
         'Внешние инструменты — через маркет и установку, не из памяти.',
-        'Порядок: search (кандидаты) → inspect (вердикт) → activation (письмо) → install (только в build).',
+        'Порядок: search (кандидаты) → inspect (вердикт) → offer (выбор формой) → activation (письмо) → install (только в build).',
         'Первый ход бокса — всегда search; install и activation до вердикта запрещены.',
         'Локальное раньше внешнего — но маркет ищет то, чего нет в системе.',
         'Секреты — только secret:ФАЙЛ. Нет вердикта — нет установки.',
@@ -414,6 +614,7 @@ export default {
             activation: activationTool,
             search: searchTool,
             inspect: inspectTool,
+            offer: offerTool,
         },
     },
     build: {
@@ -471,12 +672,12 @@ function installCandidate(box) {
     return installSpec({}, box, []);
 }
 
-/** Запрос маркету: brief/контент/head. */
+/** Запрос маркету: brief/контент/head. Заголовки ## — не запрос. */
 function searchQuery(block, box, messages) {
     const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
     if (raw) {
         const head = raw.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
-        if (head && !head.startsWith('/') && !head.startsWith('['))
+        if (head && !head.startsWith('/') && !head.startsWith('[') && !head.startsWith('#'))
             return head.slice(0, 120);
     }
     const brief = String(box?.brief || lastUserContent(messages) || '').trim();
@@ -484,17 +685,113 @@ function searchQuery(block, box, messages) {
     return String(m?.[1] || brief).trim().slice(0, 120);
 }
 
-/** Маркет Smithery: публичный поиск, без ключа. */
-async function searchMarket(query) {
+const PAGE_SIZE = 10;
+
+/** Маркер страницы в head блока: явный номер или «ещё». */
+function pageMarker(block) {
+    const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
+    const head = raw.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+    return /(?:page|стр\.?|страница)\s*\d+|^(ещё|еще|далее|дальше|more)(\s|$)/i.test(head);
+}
+
+/** Max страницы готовых поисков той же темы: точное qkey или схожесть ≥0.5. */
+export function maxTopicPage(box, qkey, self) {
+    let max = 0;
+    for (const b of (box?.items || [])) {
+        if (b === self || b?.type !== 'search' || !b?.done)
+            continue;
+        const other = String(b.qkey || b.topic || '');
+        if (other !== qkey && !similarQkey(other, qkey))
+            continue;
+        const p = Number(b.page) || 1;
+        if (p > max)
+            max = p;
+    }
+    return max;
+}
+
+/** Схожесть тем: баг-оф-вордс + Жаккар. Переформулировки одной темы матчатся. */
+export function similarQkey(a, b) {
+    const ta = qkeyTokens(a);
+    const tb = qkeyTokens(b);
+    if (!ta.size || !tb.size)
+        return false;
+    let inter = 0;
+    for (const t of ta) {
+        if (tb.has(t))
+            inter++;
+    }
+    return inter / (ta.size + tb.size - inter) >= 0.5;
+}
+
+function qkeyTokens(s) {
+    return new Set(String(s || '').toLowerCase().split(/[^a-zа-яё0-9]+/i).filter(w => w.length >= 3));
+}
+
+/** Страница поиска: явная (page N / стр N) или «ещё» = следующая после показанных. */
+export function searchPage(block, box) {
+    const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
+    const head = raw.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+    const m = head.match(/(?:page|стр\.?|страница)\s*(\d+)/i);
+    if (m)
+        return Math.max(1, Number(m[1]));
+    if (/^(ещё|еще|далее|дальше|more)(\s|$)/i.test(head)) {
+        let max = 1;
+        for (const b of (box?.items || [])) {
+            if (b?.type === 'search' && Number(b.page) > max)
+                max = Number(b.page);
+        }
+        return max + 1;
+    }
+    return 1;
+}
+
+/** Английские запросы тихим ходом (паттерн web.js): тема → до 3 вариантов. */
+async function reformulateQueries(params, topic) {
+    const fallback = [topic];
+    try {
+        const asked = await params.streamChat({
+            silent: true,
+            messages: [
+                ...(params.messages || []),
+                {
+                    role: 'user',
+                    content: [
+                        'Тема для маркета MCP: «' + topic + '». Предложи до 3 поисковых запросов на английском ровно по этой теме: по одному на строке, от конкретного к общему.',
+                        'Новую тему не придумывай. Без кавычек, нумерации и пояснений.',
+                    ].join('\n'),
+                },
+            ],
+        });
+        const out = [];
+        for (const line of String(asked?.content || '').split('\n')) {
+            const q = line.trim()
+                .replace(/^(?:\d+[.)]\s*|[-*•]\s*)/, '')
+                .replace(/^["«'`]+|["»'`]+$/g, '')
+                .trim().slice(0, 120);
+            if (q && !out.includes(q))
+                out.push(q);
+            if (out.length >= 3)
+                break;
+        }
+        return out.length ? out : fallback;
+    }
+    catch {
+        return fallback;
+    }
+}
+
+/** Маркет Smithery: публичный поиск, без ключа. Возвращает {cards, total}. */
+async function searchMarket(query, page = 1) {
     const res = await fetch('https://registry.smithery.ai/servers?q='
-        + encodeURIComponent(query) + '&pageSize=10', {
+        + encodeURIComponent(query) + '&page=' + page + '&pageSize=' + PAGE_SIZE, {
         signal: AbortSignal.timeout(15000),
         headers: { 'Accept': 'application/json' },
     });
     if (!res.ok)
         throw new Error('Smithery HTTP ' + res.status);
     const data = await res.json();
-    return (data?.servers || []).map(s => ({
+    const cards = (data?.servers || []).map(s => ({
         name: String(s.qualifiedName || s.displayName || '').trim(),
         title: String(s.displayName || s.qualifiedName || '').trim(),
         description: String(s.description || '').trim().slice(0, 300),
@@ -503,6 +800,7 @@ async function searchMarket(query) {
         remote: !!s.remote,
         homepage: String(s.homepage || '').trim(),
     })).filter(s => s.name);
+    return { cards, total: Number(data?.pagination?.totalCount) || cards.length };
 }
 
 /** Reference-пресеты, бьющиеся с запросом (транслит — как в explore). */
@@ -518,8 +816,8 @@ function normMap(s) {
     return String(s || '').toLowerCase().split('').map(c => map[c] ?? c).join('').replace(/[\s\-_]+/g, '');
 }
 
-function formatSearchResults(query, cards, refs) {
-    const lines = ['[mcp search: ' + query + ']'];
+function formatSearchResults(queries, page, total, cards, refs) {
+    const lines = ['[mcp search: ' + queries.join(' | ') + (page > 1 ? ' (стр. ' + page + ')' : '') + ']'];
     for (const p of refs)
         lines.push('- пресет ' + p.preset + ' — ' + p.description + ' (npx ' + p.package + ')');
     const seen = new Set(refs.map(r => normMap(r.preset)));
@@ -553,7 +851,7 @@ function inspectName(block, box, messages) {
 async function inspectCandidate(name, params) {
     const preset = PRESETS[name];
     if (!preset)
-        return { ok: false, text: '[mcp inspect: ' + name + ']\nотказ: не пресет и нет stdio-команды (remote-серверы — нужен HTTP-транспорт, долг)' };
+        return { ok: false, text: '[mcp inspect: ' + name + ']\nотказ: не пресет и нет stdio-команды. Remote — можно прокси: «подключи <имя> <https-url>» (+ключ через secret при 401)' };
     const dir = presetOperand(params);
     const spec = {
         id: preset.id,
@@ -594,17 +892,44 @@ function presetOperand(params) {
     return 'C:\\Users\\Acer\\AppData\\Local\\Temp\\opencode';
 }
 
-/** Спецификация установки: только вердикт inspect в боксе. Без вердикта не ставим. */
+/** Спецификация установки: выбор человека, вердикт inspect, явный remote (имя + URL). */
 function installSpec(block, box, messages) {
+    const sel = box?.selectedInstall;
+    if (sel && presetKey(sel.id))
+        return sel;
     for (const b of [...(box?.items || [])].reverse()) {
         if (b?.type === 'inspect' && b?.candidate && !b.error)
             return b.candidate;
     }
-    return null;
+    return customRemoteSpec(box, messages);
 }
 
-/** Секция work.create: родитель + тип + id + class.js. */
+/** Явный remote: «подключи <имя> <url>» в brief или последнем сообщении. */
+export function customRemoteSpec(box, messages) {
+    const text = String(box?.brief || '').trim() + '\n' + lastUserContent(messages);
+    const m = text.match(/(?:подключи|установи|добавь|install|add)\S*\s+(?:mcp[-\s]?(?:сервер)?\s+)?([A-Za-z0-9_-]{2,40})\s+(https?:\/\/[^\s)>\]]+)/i);
+    if (!m)
+        return null;
+    const rawId = m[1].replace(/^mcp[-_]?/i, '');
+    const id = rawId.slice(0, 1).toUpperCase() + rawId.slice(1);
+    const url = m[2].replace(/[.,;:]+$/, '');
+    if (!id || !/^https?:\/\//i.test(url))
+        return null;
+    return {
+        id, label: id,
+        description: 'MCP remote-прокси: ' + url,
+        url, headers: {},
+    };
+}
+
+/** Секция work.create: родитель + тип + id + class.js (stdio или remote-прокси). */
 function buildCreateSection(spec) {
+    const mcpBody = spec.url
+        ? "        url: '" + String(spec.url).replace(/'/g, '') + "',\n"
+            + '        headers: {},'
+        : "        command: 'npx',\n"
+            + '        args: [' + (spec.args || []).map(a => "'" + String(a).replace(/\\/g, '\\\\').replace(/'/g, '') + "'").join(', ') + '],\n'
+            + '        env: {},';
     const classJs = [
         'export default {',
         "    icon: 'carbon:api',",
@@ -612,9 +937,7 @@ function buildCreateSection(spec) {
         "    description: '" + spec.description.replace(/'/g, '') + "',",
         "    capabilities: ['mcp'],",
         '    mcp: {',
-        "        command: 'npx',",
-        '        args: [' + spec.args.map(a => "'" + String(a).replace(/\\/g, '\\\\').replace(/'/g, '') + "'").join(', ') + '],',
-        '        env: {},',
+        mcpBody,
         '    },',
         '};',
     ].join('\n');

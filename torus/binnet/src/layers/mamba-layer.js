@@ -36,6 +36,14 @@ export class MambaLayer extends BinNet {
     async load(f = this.folder) { await Promise.all(this.pipeline.map(l => l.load(f))); }
     async save(f = this.folder) { await Promise.all(this.pipeline.map(l => l.save(f))); }
 
+    // Сброс рекуррентного состояния между независимыми последовательностями.
+    // Без этого контекст течет между строками корпуса при обучении и генерации.
+    resetState() {
+        this.mambaMemory.resetState();
+        this.convDelay.fill(0);
+        this.write(this.convDelay, 'mamba_conv_delay');
+    }
+
     async forward(input = {}) {
         let x_exp = await this.projIn.forward(input);
         let x_conv = this._applyBinaryConv1d(x_exp.data);

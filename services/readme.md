@@ -10,7 +10,10 @@
 
 ## Как это работает
 
-1. **Контракт провайдера** (`SERVICES/<Имя>/$service/class.js`): `label/description/icon`, `capabilities[]` (словарь возможностей: `search`, `fetch_url`, `weather`…), `SCHEMA` (`{метод: {description, params: {type, properties, required}}}`), сами `async`-методы. Методы возвращают канонический JSON (`{…данные}`) или `{error}` — никогда исключения наружу и никогда прозу вместо полей (id — в поле, не в тексте).
+1. **Контракт провайдера** (`SERVICES/<Имя>/$service/class.js`): `label/description/icon`, `capabilities[]`, `SCHEMA`, сами `async`-методы — либо поле `mcp` (клиент из типа, методы наследуются):
+   - локальный: `mcp: {command, args, env}` (stdio-процесс рядом);
+   - прокси: `mcp: {url, headers}` (чужой HTTP-эндпоинт, Streamable HTTP + сессия).
+   Токены — только `secret:ФАЙЛ` (резолв через `read_secret`), открытым текстом запрещены.
 2. **Реестр** — `services_schema()` на классе `SERVICES` (`sources/server/folder.js`, рядом с `get_schema`): сводит всех провайдеров в `{services: [{service, path, label, description, icon, capabilities, tools}]}`. Провайдеры без `SCHEMA` и без `capabilities` в сводку не попадают.
 3. **Discovery**: `web` берёт провайдеров с `tools.search`, `site` — с `tools.fetch_url` из реестра; захардкоженные пути — только fallback, если реестр пуст.
 4. **Валидация до `exec`** (`validateCall` в `prompt/$method/class.js`): обязательные поля `SCHEMA.params.required` проверяются до вызова; провал — guided-подсказка с `state`, без `error` (вид ≠ ошибка). Внутри метода аргументы уже правильные — дополнительных проверок не дублировать.

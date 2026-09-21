@@ -3,11 +3,12 @@ import { BinNet } from '../core/bin-net.js';
 export class Embedding extends BinNet {
     constructor(config = {}) {
         super(config);
-        this.vocabSize = config.vocabSize || 65536;                  
-        this.embSize = config.embSize || 256; // Количество u32-блоков на токен    
+        this.vocabSize = config.vocabSize || 65536;
+        this.embSize = config.embSize || 256; // Количество u32-блоков на токен
+        this.learnRate = config.embLearnRate ?? 0.1; // доля несовпадающих бит, тянущихся к цели за шаг
         this.params = { // параметры изначально указываются в виде размера Uint32Array
-            embeddings: this.vocabSize * this.embSize 
-        }   
+            embeddings: this.vocabSize * this.embSize
+        }
         this.output = this.write(BinNet.create_zeros_vector(this.embSize), 'output');
         this.target = this.write(BinNet.create_zeros_vector(this.embSize), 'target');
     }
@@ -55,9 +56,19 @@ export class Embedding extends BinNet {
     }    
 
     back(data = {}) {
-        let target = data.back_target || 0;
-        let predict = data.predict || 0;
-        
+        // Цель обучения ряда — back_target, пришедший сверху (MambaLayer/Head),
+        // а НЕ собственный выход forward (раньше diff был всегда 0 — веса были заморожены).
+        let incoming = data?.back_target ?? data;
+        if (!this.backTarget) {
+            this.backTarget = incoming;
+            if (!this.gpu.buffers.has(this.backTarget))
+                this.write(this.backTarget, 'back_target: ' + this.id);
+        }
+        else if (this.backTarget !== incoming) {
+            this.backTarget.set(incoming);
+            this.write(this.backTarget);
+        }
+
         if (!this.BACK) {
             if (!this.vars) {
                 this.vars = new Float32Array(6);
@@ -65,8 +76,9 @@ export class Embedding extends BinNet {
             }
 
             this.BACK = this.gpu.compute_info(this.embSize);
+            const rate = Number(this.learnRate).toFixed(4);
             let code = `
-                // BACK Embedding
+                // BACK Embedding: тянем ряд tokenIdx к back_target сверху
                 struct Offsets {
                     output: u32,
                 }
@@ -76,38 +88,38 @@ export class Embedding extends BinNet {
                     predict: u32,
                     target_idx: u32,
                     loss: f32,
-                    random: f32                      
+                    random: f32
                 }
 
-                @group(0) @binding(0) var<storage, read> outputs: array<u32>;   
-                @group(0) @binding(1) var<storage, read_write> embeddings: array<u32>;           
-                @group(0) @binding(2) var<uniform> vars: Vars; 
-                @group(0) @binding(3) var<uniform> offsets: Offsets; 
+                @group(0) @binding(0) var<storage, read> goals: array<u32>;
+                @group(0) @binding(1) var<storage, read_write> embeddings: array<u32>;
+                @group(0) @binding(2) var<uniform> vars: Vars;
+                @group(0) @binding(3) var<uniform> offsets: Offsets;
 
                 @compute @workgroup_size(${this.BACK.workgroup_size})
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${this.BACK.idx_code_gen}
 
                     let emb_idx = idx + offsets.output;
-                    
+
                     let current_emb = embeddings[emb_idx];
-                    let output_val = outputs[idx];
-                    let diff = current_emb ^ output_val;
+                    let goal_val = goals[idx];
+                    let diff = current_emb ^ goal_val;
 
                     let rand_bits = bitcast<u32>(vars.random);
                     var hash = (idx ^ rand_bits) * 0xcc9e2d51u;
                     hash = (hash << 15u) | (hash >> 17u);
                     hash = hash * 0x1b873593u;
-                    // Мутируем биты эмбеддингов порциями (например, 10% за шаг), чтобы память обновлялась плавно
+                    // Мутируем несовпадающие биты порциями, чтобы память обновлялась плавно
                     for (var bit = 0u; bit < 32u; bit++) {
                         let bit_check = 1u << bit;
                         if ((diff & bit_check) != 0u) {
                             let bit_hash = hash ^ bit;
                             let mut_chance = f32((bit_hash * 0x1b873593u) >> 16u) / 65535.0;
-                            
-                            if (mut_chance < 0.1) { // 10% скорость обучения для эмбеддингов
-                                let target_bit = output_val & bit_check;
-                                embeddings[emb_idx] = (embeddings[emb_idx] & ~bit_check) | target_bit;
+
+                            if (mut_chance < ${rate}) {
+                                let goal_bit = goal_val & bit_check;
+                                embeddings[emb_idx] = (embeddings[emb_idx] & ~bit_check) | goal_bit;
                             }
                         }
                     }
@@ -117,15 +129,14 @@ export class Embedding extends BinNet {
         }
 
         const view = new DataView(this.vars.buffer, this.vars.byteOffset);
-        view.setUint32(8, target || 0, true);        
-        view.setFloat32(20, Math.random(), true); 
+        view.setFloat32(20, Math.random(), true);
         this.write(this.vars);
 
         this.BACK.compute([
-            this.output,           
-            this.params.embeddings, 
-            this.vars,             
-            this.FWD.offsets       
+            this.backTarget,
+            this.params.embeddings,
+            this.vars,
+            this.FWD.offsets
         ]);
     }
 }
