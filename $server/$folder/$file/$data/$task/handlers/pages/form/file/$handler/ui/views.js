@@ -776,6 +776,18 @@ ODA({ is: 'microchat-form',
             }
             .slot :where(textarea) { resize: vertical; min-height: 3em; }
             .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
+            /* radio-карточки выбора: строка-label — карточка, выбранная подсвечена */
+            .slot :where(label:has(> input[type="radio"])) {
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                padding: 8px 10px;
+                cursor: pointer;
+                align-items: flex-start;
+            }
+            .slot :where(label:has(> input[type="radio"]:checked)) {
+                border-width: 2px;
+                padding: 7px 9px;
+            }
             .slot :where([hidden]) { display: none !important; }
         </style>
         <div class="slot" ~if="html" ~html="html" @input="onInput" @change="onEdit"></div>

@@ -23,6 +23,7 @@
 | [`web`](agents/web.js) | внешний интернет (провайдеры — по реестру `services_schema`, не хардкод); `sites` из нитки или поиска; спрашивает [`site`](agents/site.js); один ребёнок с `content` — лифт, без второго fill; иначе сводка из draft+content |
 | [`site`](agents/site.js) | fetch → `draft`; лист без `content`; узел — `pages` из href и `content` из draft детей; подъём — оба поля; не в меню корня |
 | [`mcp`](agents/mcp.js) | маркет MCP: plan (`search`, `inspect`, `offer`-форма выбора, `activation`-письмо) → build (`install` через вложенный `work` с approval, smoke `tools/list`); секреты — только `secret:ФАЙЛ` |
+| [`quiz`](agents/quiz.js) | мастер выбора (`step:false`): вопросы по одному, radio-карточки + свой ответ через вложенный `form`; итог-сводка, отказ текстом — стоп без ошибки |
 | [`logs`](agents/logs.js) | журнал класса: `$class.logs` (даты, bodies+день+ext, entry); не work.read history |
 | [`image`](agents/image.js) | картинка: `generateImage` (capabilities image) → файл в work; путь модели из ленты; N кадров — N generate |
 | [`freeze`](agents/freeze.js) | после удачи: лента → `ai/skills/{id}.js` (draft → confirm → write); `step: false`; не в `pipe` навыка |

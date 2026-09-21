@@ -140,7 +140,7 @@ const inspectTool = {
     system: [
         '# Режим: оценка MCP',
         'Кандидат — строка из search (qualifiedName) или пресет (time/fetch/filesystem/memory/sqlite/puppeteer).',
-        'Проверь: verified/useCount (маркет), транспорт (stdio — ставим; только remote — отказ: нужен HTTP-транспорт), секреты (есть — только через #secret), scope (что отдаём: файлы? сеть? ключи?).',
+        'Проверь: verified/useCount (маркет), транспорт (stdio — ставим как есть; remote — ставим прокси, нужны URL+ключ), секреты (есть — только через #secret), scope (что отдаём: файлы? сеть? ключи?).',
         'Вердикт в конце: ставить (+спецификация) или нет (+причина). Не выдумывай поля сервера.',
     ].join('\n'),
     prompt: [
@@ -169,7 +169,7 @@ const inspectTool = {
             b.state = verdict.ok ? 'ставить' : 'отказ';
             tagAgent(params.box, AGENT_TAG, verdict.ok ? 'ставить: ' + name : 'отказ: ' + name);
             if (verdict.ok)
-                rearmActivation(params.box);
+                await rearmIfOrdered(params);
             return;
         }
         // Таблица от fill: вердикт «ставить» переводим в данные (candidate),
@@ -195,7 +195,7 @@ const inspectTool = {
                 b.done = true;
                 b.state = 'ставить';
                 tagAgent(params.box, AGENT_TAG, 'ставить: ' + hit.id);
-                rearmActivation(params.box);
+                await rearmIfOrdered(params);
             }
             else {
                 b.done = true;
@@ -239,7 +239,7 @@ async function applyMachineVerdict(machine, b, params) {
             b.done = true;
             b.state = 'ставить';
             tagAgent(params.box, AGENT_TAG, 'ставить: ' + machine.id);
-            rearmActivation(params.box);
+            await rearmIfOrdered(params);
             return true;
         }
     }
@@ -276,13 +276,13 @@ const offerTool = {
     label: 'Предлагаю установку',
     icon: 'icons:list',
     role: 'user',
-    description: 'выбор установки формой: вердикты «ставить» + «пока ничего»; только после inspect',
+    description: 'выбор установки формой: пресеты и remote-кандидаты + «пока ничего»; только после inspect',
     system: [
         '# Режим: предложение установки',
-        'Выбор — только из вердиктов «ставить» этого бокса (inspect-кандидаты).',
-        'Форма — через вложенный form: поле select с именами пресетов + пункт «Пока ничего».',
-        'Значения options — только id пресетов (time fetch filesystem memory sqlite puppeteer) и none.',
-        'Нет вердиктов — нечего предлагать, молча пропусти ход.',
+        'Выбор — из вердиктов бокса: пресеты «ставить» и remote-кандидаты (`org/name`).',
+        'Форма — через вложенный form: select (значения — id опций и none), inputs url и keyref.',
+        'Пресет ставится как есть; remote — только с URL (иначе исход «нужен URL»).',
+        'Нет кандидатов — нечего предлагать, молча пропусти ход.',
         'Это предложение, не установка: само создание — только install в build.',
     ].join('\n'),
     prompt: [
@@ -316,27 +316,108 @@ const offerTool = {
             return;
         }
         const picked = offerPick(params.box, options) || offerPickText(params.messages, options);
-        if (!picked) {
+        if (picked) {
+            const verdict = await inspectCandidate(picked, params);
+            if (!verdict.ok) {
+                b.done = true;
+                b.state = 'отказ';
+                b.content = '[mcp offer] ' + picked + ': ' + verdict.text;
+                return;
+            }
+            params.box.selectedInstall = verdict.spec;
             b.done = true;
-            b.state = 'отказ';
-            b.content = '[mcp offer] выбор отклонён — установка не требуется';
-            tagAgent(params.box, AGENT_TAG, 'без установки');
+            b.state = 'выбрано: ' + picked;
+            b.content = '[mcp offer] выбран ' + picked + ' — дальше activation-письмо';
+            tagAgent(params.box, AGENT_TAG, 'выбрано: ' + picked);
+            rearmActivation(params.box);
             return;
         }
-        const verdict = await inspectCandidate(picked, params);
-        if (!verdict.ok) {
+        const remote = offerPickRemote(params.box, options);
+        if (remote) {
+            if (!remote.url) {
+                b.done = true;
+                b.state = 'нужен URL';
+                b.content = '[mcp offer] выбран ' + remote.name
+                    + ' (remote): нужен URL эндпоинта — ответь URL, установка продолжится.'
+                    + (remote.keyref ? ' Ключ: secret:' + remote.keyref + '.' : '');
+                tagAgent(params.box, AGENT_TAG, 'нужен URL: ' + remote.name);
+                return;
+            }
+            params.box.selectedInstall = remoteInstallSpec(remote);
             b.done = true;
-            b.state = 'отказ';
-            b.content = '[mcp offer] ' + picked + ': ' + verdict.text;
+            b.state = 'выбрано: ' + remote.name;
+            b.content = '[mcp offer] выбран ' + remote.name + ' (' + remote.url + ')'
+                + (remote.keyref ? ' (ключ: secret:' + remote.keyref + ')' : ' (без ключа)')
+                + ' — дальше activation-письмо';
+            tagAgent(params.box, AGENT_TAG, 'выбрано: ' + remote.name);
+            rearmActivation(params.box);
             return;
         }
-        params.box.selectedInstall = verdict.spec;
         b.done = true;
-        b.state = 'выбрано: ' + picked;
-        b.content = '[mcp offer] выбран ' + picked + ' — дальше activation-письмо';
-        tagAgent(params.box, AGENT_TAG, 'выбрано: ' + picked);
+        b.state = 'отказ';
+        b.content = '[mcp offer] выбор отклонён — установка не требуется';
+        tagAgent(params.box, AGENT_TAG, 'без установки');
     },
 };
+
+/** Выбор remote из формы: {name, url, keyref} | null. Имена полей задаёт бриф (choice/url/keyref). */
+export function offerPickRemote(box, options) {
+    const names = new Set((options || []).filter(o => o.kind === 'remote').map(o => o.name));
+    for (const b of [...(box?.items || [])].reverse()) {
+        if (b?.type !== 'form' || b?.error)
+            continue;
+        const values = b.answer && typeof b.answer === 'object' ? b.answer : null;
+        if (!values)
+            return null;
+        const choice = String(values.choice ?? '').trim();
+        const name = choice.startsWith('remote:') ? choice.slice(7) : '';
+        if (!name || !names.has(name))
+            return null;
+        const url = pickUrl(values);
+        const keyref = pickKeyref(values);
+        return { name, url, keyref };
+    }
+    return null;
+}
+
+function pickUrl(values) {
+    const direct = [values.url, values.URL, values.endpoint].map(v => String(v ?? '').trim());
+    for (const v of direct) {
+        const m = v.match(/https?:\/\/[^\s)>\]]+/i);
+        if (m)
+            return m[0].replace(/[.,;:]+$/, '');
+    }
+    for (const v of Object.values(values)) {
+        const m = String(v ?? '').match(/https?:\/\/[^\s)>\]]+/i);
+        if (m)
+            return m[0].replace(/[.,;:]+$/, '');
+    }
+    return '';
+}
+
+function pickKeyref(values) {
+    for (const [k, v] of Object.entries(values)) {
+        const s = String(v ?? '').trim();
+        if (/^secret:/i.test(s))
+            return s.slice(7).trim();
+        if (/key|ключ|token|токен/i.test(k) && s && s.length < 80)
+            return s;
+    }
+    return '';
+}
+
+/** Spec remote-прокси из выбора: id из имени, url/headers. */
+export function remoteInstallSpec(sel) {
+    const last = String(sel.name || '').split('/').pop() || 'remote';
+    const clean = last.replace(/[^A-Za-z0-9]/g, '') || 'Remote';
+    const id = clean.slice(0, 1).toUpperCase() + clean.slice(1);
+    return {
+        id, label: sel.name,
+        description: 'MCP remote-прокси: ' + sel.url,
+        url: sel.url, headers: {},
+        keyNote: sel.keyref || '',
+    };
+}
 
 /** Ключ пресета по любому написанию (Time/time/TIME): регистр — не различие. */
 function presetKey(name) {
@@ -372,6 +453,44 @@ export function offerOptions(box) {
             out.push({ id, label: PRESETS[id].label || id });
         }
     }
+    // Remote-кандидаты: имена `org/name` из inspect + головы строк выдачи search.
+    // Установка — прокси (нужны URL+ключ, спросим в форме).
+    for (const b of (box?.items || [])) {
+        if (b?.error || (b?.type !== 'inspect' && b?.type !== 'search') || !b?.content)
+            continue;
+        for (const name of parseRemoteNames(b.content)) {
+            const id = 'remote:' + name;
+            if (seen.has(id))
+                continue;
+            seen.add(id);
+            out.push({ id, label: name + ' (remote)', kind: 'remote', name });
+            if (out.filter(o => o.kind === 'remote').length >= 12)
+                break;
+        }
+    }
+    return out;
+}
+
+/** Имена кандидатов: `org/name` в коде + головы строк `- name` выдачи маркета. */
+export function parseRemoteNames(text) {
+    const out = [];
+    const seen = new Set();
+    const take = (name) => {
+        const parts = name.split('/');
+        if (parts.some(p => p.length < 3 || /^\d+$/.test(p)))
+            return;
+        if (/^(https?|file|mcp)$/i.test(parts[0]))
+            return;
+        const key = parts.join('/').toLowerCase();
+        if (seen.has(key))
+            return;
+        seen.add(key);
+        out.push(parts.join('/'));
+    };
+    for (const m of String(text || '').matchAll(/`([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)`/g))
+        take(m[1]);
+    for (const m of String(text || '').matchAll(/^\s*-\s+([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)(?=[\s\[(]|$)/gm))
+        take(m[1]);
     return out;
 }
 
@@ -381,13 +500,15 @@ function parseVerdictIds(text) {
     return Object.keys(PRESETS).filter(id => tokens.has(id));
 }
 
-/** Бриф форме: select пресетов + «пока ничего», значения — только id. */
+/** Бриф форме: select выбора + URL + ключ; значения select — id опций и none. */
 function offerBrief(options) {
     return [
         'Выбор установки MCP-сервера: один вариант.',
-        'Поле select, значения options — только из списка (id): '
+        'Поле select с именем choice, значения options: '
             + options.map(o => o.id).join(' ') + ' none.',
         'Пункт «Пока ничего не ставить» со значением none.',
+        'Поле input с именем url (URL remote-сервера, если выбран remote; иначе пусто).',
+        'Поле input с именем keyref (имя файла секрета #secret, если ключ есть; иначе пусто).',
     ].join('\n');
 }
 
@@ -514,18 +635,20 @@ const installTool = {
 const activationTool = {
     label: 'Требуется установка',
     icon: 'icons:check-box-outline-blank',
-    description: 'Письмо человеку на установку: что поставлю, scope, секреты, что не трону. Только после inspect-вердикта «ставить»',
+    description: 'Письмо человеку на установку: что поставлю, scope, секреты/URL, что не трону. Только после выбора (offer) или вердикта «ставить»',
     prompt: `Письмо человеку за разрешением установить MCP-сервер. Сейчас ты только изучаешь (разведка); без подтверждения ничего не создавай.
 Структура письма:
 - Зачем: одна строка, какую задачу закроет сервер (из фактов ленты, не из памяти).
-- Что поставлю: SERVICES/<Id> ($service): пакет npx, scope (файлы/сеть/память), секреты (нет или secret:ФАЙЛ).
+- Что поставлю: SERVICES/<Id> ($service): stdio — пакет npx; remote-прокси — URL; scope (файлы/сеть/память), секреты (нет или secret:ФАЙЛ).
+- URL — только из ленты (inspect/search/выбор); нет URL — пиши «URL неизвестен», не выдумывай.
 - Что не трону: одной строкой.
 Плохо: скобки tool-вызовов, JSON профиля, тела class.js. Хорошо: короткие строки плана.
 `,
     stop: 'Установить',
     async init(params = {}) {
-        // Нечего ставить — тихий пропуск без красного (тип сгорает, verdict перевооружит).
-        if (!installCandidate(params.box)) {
+        // Письмо — только по явному заказу или выбору человека.
+        // Иначе тихий пропуск без красного (вердикт/выбор перевооружат).
+        if (!await activationArmed(params.box, params.task)) {
             const used = params.box.using_blocks ??= [];
             if (!used.includes('activation'))
                 used.push('activation');
@@ -655,6 +778,18 @@ function dropUsed(box, type) {
         delete box.using_blocks;
 }
 
+/** Перевооружение activation — только при явном заказе.
+ *  Голый вердикт письмо не открывает: нужен заказ или выбор в offer. */
+async function rearmIfOrdered(params) {
+    let goal = '';
+    try {
+        goal = String((await params.task?.body)?.goal?.text || '');
+    }
+    catch { /* только brief */ }
+    if (explicitInstallIntent(params.box, goal))
+        rearmActivation(params.box);
+}
+
 /** Перевооружение activation после вердикта: тип снова доступен в меню. */
 function rearmActivation(box) {
     const used = box?.using_blocks;
@@ -670,6 +805,36 @@ function rearmActivation(box) {
 /** Кандидат на установку: вердикт inspect в боксе (та же функция, что у install). */
 function installCandidate(box) {
     return installSpec({}, box, []);
+}
+
+/** Явный заказ установки: глаголы действия (+цель для «подключи»).
+ *  «Какие подключить» без цели — обзор, не заказ. */
+export function explicitInstallIntent(box, goalText = '') {
+    const text = (String(goalText || '') + '\n' + String(box?.brief || '')).toLowerCase();
+    if (/(установи|установить|поставь|поставить|install|ставь)\S*/i.test(text))
+        return true;
+    if (!/подключи/i.test(text))
+        return false;
+    const tokens = new Set(text.split(/[^a-zа-яё0-9]+/i).filter(Boolean));
+    for (const id of Object.keys(PRESETS)) {
+        if (tokens.has(id))
+            return true;
+    }
+    return /https?:\/\//i.test(text) || /[a-z0-9_.-]+\/[a-z0-9_.-]+/i.test(text);
+}
+
+/** Письмо разрешено: есть кандидат И (явный заказ ИЛИ выбор человека). */
+export async function activationArmed(box, task) {
+    if (!installCandidate(box))
+        return false;
+    if (box?.selectedInstall)
+        return true;
+    let goal = '';
+    try {
+        goal = String((await task?.body)?.goal?.text || '');
+    }
+    catch { /* только brief */ }
+    return explicitInstallIntent(box, goal);
 }
 
 /** Запрос маркету: brief/контент/head. Заголовки ## — не запрос. */
@@ -892,10 +1057,10 @@ function presetOperand(params) {
     return 'C:\\Users\\Acer\\AppData\\Local\\Temp\\opencode';
 }
 
-/** Спецификация установки: выбор человека, вердикт inspect, явный remote (имя + URL). */
+/** Спецификация установки: выбор человека (пресет/remote), вердикт inspect, явный remote. */
 function installSpec(block, box, messages) {
     const sel = box?.selectedInstall;
-    if (sel && presetKey(sel.id))
+    if (sel && (presetKey(sel.id) || /^https?:\/\//i.test(sel.url || '')))
         return sel;
     for (const b of [...(box?.items || [])].reverse()) {
         if (b?.type === 'inspect' && b?.candidate && !b.error)
