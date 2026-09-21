@@ -314,8 +314,7 @@ export default {
      * Вызов субагента из потока родителя: brief → prompt ребёнка, итог в блок и в messages.
      * @returns {{ ok: boolean, agent: string, content?: string, error?: boolean, skip?: boolean, state?: string, block: object }}
      */
-    async callAgent(ctx, spec = {}) {
-        const { agent: id, brief, parent } = spec;
+    async callAgent(ctx, spec = {}) {        const { agent: id, brief, parent } = spec;
         const box = parent || ctx.block;
         const live = ctx.live;
         box.items ??= [];
@@ -333,12 +332,14 @@ export default {
             box,
             skillStep: undefined,
         });
-        if (sub.skip) {
+        if (sub.skip || isEmptyResult(sub)) {
             const i = box.items.indexOf(sub);
             if (i >= 0)
                 box.items.splice(i, 1);
             // Пропущенный субагент — в меню-исключение: повторный pick без новых
-            // данных ушёл бы в тот же skip (вечный холостой цикл nested)
+            // данных ушёл бы в тот же skip (вечный холостой цикл nested).
+            // Пустой итог (нет items/content/error/stop) — тоже skip: холостой вызов
+            // без следа сужает меню вместо накрутки пустых боксов.
             const used = box.using_blocks ??= [];
             if (!used.includes(id))
                 used.push(id);
@@ -388,14 +389,17 @@ export default {
             // один ребёнок с готовым content — лифт; draft (простыня) не копировать
             block.content = results[0].content;
             delete block.error;
-            delete block.state;
+            // Терминальный state: свой — оставить, нет — ok. Пустого state у итога не бывает.
+            if (!block.state)
+                block.state = 'ok';
         }
         else if (!results.length && fails.length && !ownDraft) {
             block.error = true;
             block.content = fails.map(b => b.content).filter(Boolean).join('\n') || 'ошибка';
+            // Красный ⟺ ошибка: stale- state прогресса перезаписывается всегда.
             if (fails.length > 1)
                 block.state = 'ошибки: ' + fails.length;
-            else if (!block.state || /^сайты:/.test(block.state))
+            else
                 block.state = fails[0].state || 'ошибка';
         }
         else if (results.length || ownDraft) {
@@ -421,7 +425,11 @@ export default {
             }
             if (block.content) {
                 delete block.error;
-                delete block.state;
+                if (!block.state)
+                    block.state = 'ok';
+                // Частичный провал при живом итоге: state обязан это отражать.
+                else if (fails.length && !/ошибок|ошибка|error|gap/i.test(block.state))
+                    block.state = block.state + ' (ошибок: ' + fails.length + ')';
             }
         }
         // сводка и без детей в total (check: exist/file ignore) — иначе бокс без content не закрывается
@@ -575,6 +583,15 @@ export default {
     async exec(target, call = {}, ctx = {}) {
         const { method, args } = call;
         const block = ctx.block;
+        // Валидация операндов до вызова (только цели со SCHEMA): подсказка без error.
+        const guidance = await this.validateCall(target, method, args || {});
+        if (guidance) {
+            if (block) {
+                block.state = 'нет операндов';
+                block.content = [block.content, guidance].filter(Boolean).join('\n\n');
+            }
+            return { error: guidance };
+        }
         try {
             let result;
             if (target && typeof target[method] === 'function')
@@ -592,6 +609,32 @@ export default {
                 block.content = (block.content || '') + String(e.message || e);
             }
             throw e;
+        }
+    },
+
+    /**
+     * Проверка операндов по SCHEMA цели до вызова (dsh-урок: внутри execute аргументы уже правильные).
+     * Только $service-цели со SCHEMA; остальным — null (без валидации).
+     * @returns {Promise<string|null>} текст подсказки или null (всё на месте)
+     */
+    async validateCall(target, method, args = {}) {
+        try {
+            const p = String(target?.path || target?.short || '');
+            if (!p.startsWith('/SERVICES/') || typeof target?.import !== 'function' || !method)
+                return null;
+            const data = await target.import();
+            const spec = data?.SCHEMA?.[method];
+            const required = spec?.params?.required;
+            if (!Array.isArray(required) || !required.length)
+                return null;
+            const missing = required.filter(k => args[k] == null || String(args[k]).trim() === '');
+            if (!missing.length)
+                return null;
+            return method + ': нет обязательных полей: ' + missing.join(', ')
+                + (spec.description ? ' — ' + spec.description : '');
+        }
+        catch {
+            return null;
         }
     },
 
@@ -826,14 +869,25 @@ export function isRepeatStop(box, next, child) {
 }
 
 /** id из ответа pick + хвост строки = brief субагенту. */
-function splitPick(raw, ids) {
-    const line = String(raw || '').trim();
+function splitPick(raw, ids) {    const line = String(raw || '').trim();
     if (!line)
         return { id: '', brief: '' };
     const word = line.split(/\s+/)[0]?.replace(/^[`"'«]+|[`"'»;:,.]+$/g, '');
     if (ids.includes(word))
         return { id: word, brief: line.slice(word.length).trim() };
     return { id: '', brief: '' };
+}
+
+/** Пустой итог субагента: нет детей, тела, черновика, ошибки и стопа — холостой вызов, считать skip.
+ *  draft — тоже улика (site/file/image несут результат только в draft): его наличие отменяет пустоту. */
+export function isEmptyResult(sub) {
+    if (!sub || sub.skip || sub.error || sub.stop)
+        return false;
+    if ((sub.items || []).length)
+        return false;
+    if (String(sub.content || '').trim())
+        return false;
+    return !draftText(sub);
 }
 
 /** Навык: первый unused tool; уже успешный — пропуск; после ok create — итог. */
@@ -886,7 +940,9 @@ function nextIds(agent, block, toolIds) {
     }
     if (createFirst(block, toolIds))
         return ['create'];
-    if (ids.includes('activation') && !okRead(block)) {
+    // Гейт «activation после чтения» — только агентам с tool read (work):
+    // без read в меню требование okRead невыполнимо и прятало бы activation навсегда.
+    if (ids.includes('activation') && toolIds.includes('read') && !okRead(block)) {
         const i = ids.indexOf('activation');
         if (i >= 0)
             ids.splice(i, 1);

@@ -10,7 +10,7 @@
 
 ## Как
 
-Файл = агент. Имя файла = id в pipe (`web.js` → `web`). Правка поведения хода — write этого файла. Новый ход — новый файл здесь, не invent в USER. Вызов субагента — `nested` + `callAgent(id, brief)` у движка, не меню `$task` и не домен в system.
+Файл = агент. Имя файла = id в pipe (`web.js` → `web`). Правка поведения хода — write этого файла. Новый ход — новый файл здесь, не invent в USER. Вызов субагента — `nested` + `callAgent(id, brief)` у движка, не меню `$task` и не домен в system. В `nested` — лишь то, что модель выбирает осмысленно из меню; чисто программные вызовы (`install` → `work`) в `nested` не класть — `callAgent` работает без него.
 
 Инвентарь мира — `work.create` у родителя (закон — readme того родителя). Файл типа — `work.typed` (`when` + `METADATA`). `write` — только путь `/…`.
 
@@ -18,4 +18,4 @@
 
 ## Состав
 
-`explore` `work` `check` `web` `site` `logs` `image` `freeze` `review` `html` `planning` `answer` `question` `form` `report`
+`explore` `work` `check` `web` `site` `logs` `image` `freeze` `review` `html` `planning` `answer` `question` `form` `report` `mcp`

@@ -530,7 +530,8 @@ export default {
         // Поручение из меню (silent-стрим, cap 64 токена) часто обрезано mid-word:
         // обрезанный бриф с путями/полями хуже его отсутствия (агент возьмет полную цель).
         // Короткие целые поручения оставляем, длинные обрезанные отбрасываем.
-        if (pickBrief && pickBrief.length <= 120)
+        // Эхо описания пункта («mcp — маркет…») брифом не является — дропаем.
+        if (pickBrief && pickBrief.length <= 120 && !briefEchoes(pickBrief, menuCap(this.pipe[choice], mode)))
             params.block.brief = pickBrief;
         const boxBefore = params.box;
         const pushed = await this._push_block(params);
@@ -706,6 +707,10 @@ export default {
     },
 
     async _captionDoc(params, session) {
+        // Заголовок — только чистым листам (answer/report/html): боксы и блоки
+        // агентов хранят стабильное имя из декларации, переименование по контенту запрещено.
+        if (params.block?.box || this.pipe[params.block?.type]?.agent)
+            return;
         const kind = this.pipe[params.block.type];
         const src = String(params.block.content || '').trim();
         const label = String(params.block.label || '').trim();
@@ -1669,8 +1674,24 @@ function lastValidArtifact(root) {
     return found;
 }
 
-function menuPickLine(text, next) {
-    const raw = String(text || '').trim();
+/** Описание пункта меню (та же формула, что в строке [menu]): для детекта эха в brief. */
+function menuCap(node, mode) {
+    return node?.[mode]?.description || node?.[mode]?.inject
+        || node?.description || node?.inject || '';
+}
+
+/** Бриф — эхо описания пункта меню, а не поручение: ведущий id/тире, хвостовая пунктуация, совпадение/префикс ≥20. */
+export function briefEchoes(brief, cap) {
+    const clean = String(brief || '').replace(/^[-–—]\s*/, '').replace(/[;:.]+$/, '').trim().toLowerCase();
+    const norm = String(cap || '').replace(/[;:.]+$/, '').trim().toLowerCase();
+    if (!clean || !norm)
+        return false;
+    if (clean === norm)
+        return true;
+    return clean.length >= 20 && (norm.includes(clean) || clean.includes(norm));
+}
+
+function menuPickLine(text, next) {    const raw = String(text || '').trim();
     if (!raw || !next?.length)
         return {};
     const id = menuPick(raw, next);

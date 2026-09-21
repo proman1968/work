@@ -53,7 +53,7 @@ export default {
         block.box = true;
         block.budget = budget;
         block.crawl = !!box.crawl;
-        block.service = box.service || agent?.service || SERVICE;
+        block.service = box.service || agent?.service || await fetchPath(params);
         block.depth = (box.type === 'web' || box.depth == null) ? 0 : (Number(box.depth) || 0) + 1;
         block.pages = [];
         block.icon = siteFavicon(seed.url);
@@ -114,6 +114,22 @@ export default {
             applySiteUsing(box);
     },
 };
+
+/** Провайдер чтения страниц из реестра (services_schema), не хардкод: есть fetch_url в SCHEMA — годится. */
+async function fetchPath(params = {}) {
+    try {
+        const root = await WORK.get_item('/SERVICES');
+        const schema = typeof root?.services_schema === 'function'
+            ? await root.services_schema({ session: params.session })
+            : null;
+        const hit = (schema?.services || [])
+            .find(s => s?.tools && typeof s.tools.fetch_url === 'object' && s.path);
+        if (hit)
+            return hit.path;
+    }
+    catch { /* ниже — fallback */ }
+    return SERVICE;
+}
 
 function queueOf(box) {
     if (!box)

@@ -33,10 +33,12 @@ const datesTool = {
             b.content = list.length
                 ? '[логи ' + b.path + ': дни]\n' + list.map(d => '- ' + d).join('\n')
                 : '[логи ' + b.path + ': дни]\n(пусто)';
+            b.state = 'ok';
             return true;
         }
         catch (e) {
             b.error = true;
+            b.state = 'ошибка';
             b.content = 'logs dates: ' + String(e.message || e);
             return true;
         }
@@ -72,11 +74,12 @@ const bodiesTool = {
         const b = params.block;
         if (b.content && b.done)
             return false;
-        const { path, day, ext } = parseDayQuery(b, params.box, params.messages, bodiesTool.label);
+        const tz = await resolveTz(params);
+        const { path, day, ext } = parseDayQuery(b, params.box, params.messages, bodiesTool.label, tz);
         const target = await resolveLogClass(params, path);
         if (!target)
             return false;
-        const dayKey = day || todayISO();
+        const dayKey = day || todayISO(tz);
         b.path = target.short || target.path;
         b.day = dayKey;
         if (ext)
@@ -88,12 +91,13 @@ const bodiesTool = {
             if (ext)
                 args.ext = ext;
             const rows = await target.logs(args);
-            b.content = await formatBodies(rows, b.path, dayKey, ext);
+            b.content = await formatBodies(rows, b.path, dayKey, ext, tz);
             b.done = true;
             return true;
         }
         catch (e) {
             b.error = true;
+            b.state = 'ошибка';
             b.content = 'logs bodies: ' + String(e.message || e);
             return true;
         }
@@ -131,12 +135,14 @@ const entryTool = {
         try {
             const row = await target.read_log_entry({ path: entryPath });
             const digest = row?.path ? await digestRelated(row.path, row.ext) : '';
-            b.content = formatEntry(row, entryPath, digest);
+            b.content = formatEntry(row, entryPath, digest, await resolveTz(params));
             b.done = true;
+            b.state = 'ok';
             return true;
         }
         catch (e) {
             b.error = true;
+            b.state = 'ошибка';
             b.content = 'logs entry: ' + String(e.message || e);
             return true;
         }
@@ -147,7 +153,7 @@ export default {
     label: 'Смотрю журнал',
     icon: 'carbon:log',
     allowReasoning: true,
-    description: 'журнал класса через $class.logs (дни, день+ext, entry); хронология/вчера/почта/календарь — не work и не чтение .logs файлами. Звать когда спрашивают что было',
+    description: 'журнал класса через $class.logs (дни, день+ext, entry); хронология/вчера/почта/календарь — не work и не чтение .logs файлами. Звать когда спрашивают что было; факт — блок items, не пересказ промпта',
     system: [
         '# Агент: logs',
         'Хронология места только через $class.logs / read_log_entry. Не explore, не work.read history.',
@@ -155,6 +161,7 @@ export default {
         'bodies: file: — связанный файл, entry: — stub, peek — title/prompt. entry — дайджест артефакта.',
         'День: YYYY-MM-DD или «вчера»/«сегодня». Фильтр: ics (календарь), eml (почта), task, logs.',
         'Класс: путь из запроса или place исполнения. Без write / save_message.',
+        'Время — только в поясе пользователя с пометой (код ставит `HH:MM UTC±N`); голое UTC и часы без пояса запрещены.',
         'Не выдумывай записи — только факты из журнала.',
     ].join('\n'),
     prompt: 'Сводка по журналу: кто, когда, что (peek/дайджест из bodies/entry). Пути history не предлагай читать через work.',
@@ -174,9 +181,74 @@ function tagAgent(box, _role, detail) {
         box.state = d;
 }
 
-/** Как platform logs.today — YYYY-MM-DD (UTC date). */
-function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+/** Пояс пользователя: body.tz задачи → иначе локаль сервера. Голое UTC запрещено. */
+async function resolveTz(params = {}) {
+    try {
+        const body = await params.task?.body;
+        const tz = String(body?.tz || '').trim();
+        if (tz)
+            return tz;
+    }
+    catch { /* локаль сервера */ }
+    return undefined;
+}
+
+/** HH:MM в поясе с пометой (11:26 UTC+3). */
+function fmtTime(ms, tz) {
+    const d = new Date(ms);
+    if (isNaN(d))
+        return '??:??';
+    try {
+        const s = new Intl.DateTimeFormat('ru-RU', {
+            hour: '2-digit', minute: '2-digit', hour12: false,
+            ...(tz ? { timeZone: tz } : {}),
+        }).format(d);
+        return s + ' ' + tzLabel(d, tz);
+    }
+    catch {
+        return d.toISOString().slice(11, 16) + ' UTC';
+    }
+}
+
+function fmtFull(ms, tz) {
+    const d = new Date(ms);
+    if (isNaN(d))
+        return '';
+    try {
+        const s = new Intl.DateTimeFormat('ru-RU', {
+            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+            ...(tz ? { timeZone: tz } : {}),
+        }).format(d);
+        return s + ' ' + tzLabel(d, tz);
+    }
+    catch {
+        return d.toISOString();
+    }
+}
+
+function tzLabel(d, tz) {
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            ...(tz ? { timeZone: tz } : {}), timeZoneName: 'shortOffset',
+        }).formatToParts(d);
+        const o = (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+        return o.replace(/^GMT/, 'UTC') || 'местн.';
+    }
+    catch {
+        return tz || 'местн.';
+    }
+}
+
+/** Дата YYYY-MM-DD в поясе пользователя, не UTC (граница «сегодня» у полуночи). */
+function todayISO(tz) {
+    try {
+        return new Intl.DateTimeFormat('en-CA', {
+            ...(tz ? { timeZone: tz } : {}), year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+    }
+    catch {
+        return new Date().toISOString().slice(0, 10);
+    }
 }
 
 function shiftISO(day, delta) {
@@ -185,14 +257,14 @@ function shiftISO(day, delta) {
     return d.toISOString().slice(0, 10);
 }
 
-function resolveRelativeDay(text) {
+function resolveRelativeDay(text, tz) {
     const s = String(text || '');
     if (/вчера|yesterday/i.test(s))
-        return shiftISO(todayISO(), -1);
+        return shiftISO(todayISO(tz), -1);
     if (/сегодня|today/i.test(s))
-        return todayISO();
+        return todayISO(tz);
     if (/позавчера/i.test(s))
-        return shiftISO(todayISO(), -2);
+        return shiftISO(todayISO(tz), -2);
     return '';
 }
 
@@ -246,7 +318,7 @@ function isHistoryPath(p) {
     return /\/history\/|\.logs\b|\.task\b|\.eml\b|\.ics\b/i.test(String(p || ''));
 }
 
-function parseDayQuery(block, box, messages, defaultLabel) {
+function parseDayQuery(block, box, messages, defaultLabel, tz) {
     const raw = String(block?.content || '').replace(/\r\n/g, '\n').trim();
     let path = '';
     let day = '';
@@ -257,7 +329,7 @@ function parseDayQuery(block, box, messages, defaultLabel) {
             if (/^\d{4}-\d{2}-\d{2}$/.test(line))
                 day = line;
             else if (/^(вчера|сегодня|позавчера|yesterday|today)$/i.test(line))
-                day = resolveRelativeDay(line) || day;
+                day = resolveRelativeDay(line, tz) || day;
             else if (line.startsWith('/') && !isHistoryPath(line))
                 path = line.replace(/^#+\s*/, '').trim();
             else {
@@ -267,7 +339,7 @@ function parseDayQuery(block, box, messages, defaultLabel) {
             }
         }
         if (!day)
-            day = resolveRelativeDay(raw);
+            day = resolveRelativeDay(raw, tz);
         if (!ext)
             ext = resolveExtHint(raw);
     }
@@ -285,7 +357,7 @@ function parseDayQuery(block, box, messages, defaultLabel) {
         if (m)
             day = m[1];
         else
-            day = resolveRelativeDay(brief);
+            day = resolveRelativeDay(brief, tz);
     }
     if (!ext)
         ext = resolveExtHint(brief) || resolveExtHint(label);
@@ -296,7 +368,7 @@ function parseDayQuery(block, box, messages, defaultLabel) {
     }
     // не подставлять «первый день из dates» — это часто «сегодня» вместо «вчера»
     if (!day)
-        day = todayISO();
+        day = todayISO(tz);
     return { path, day, ext };
 }
 
@@ -322,21 +394,21 @@ function parseEntryPath(block, box, messages, defaultLabel) {
     return hit ? hit[1] : '';
 }
 
-async function formatBodies(rows, classPath, day, ext) {
+async function formatBodies(rows, classPath, day, ext, tz) {
     const list = Array.isArray(rows) ? rows : [];
     const filt = ext ? ' .' + ext : '';
     const head = '[логи ' + classPath + ' @ ' + day + filt + ': ' + list.length + ']';
     if (!list.length)
         return head + '\n(нет записей)';
     const slice = list.slice(0, BODIES_LIMIT);
-    const lines = [head, ...await Promise.all(slice.map(row => formatBodyLine(row)))];
+    const lines = [head, ...await Promise.all(slice.map(row => formatBodyLine(row, tz)))];
     if (list.length > BODIES_LIMIT)
         lines.push('- … ещё ' + (list.length - BODIES_LIMIT) + ' записей');
     return lines.join('\n');
 }
 
-async function formatBodyLine(row) {
-    const t = row.time ? new Date(row.time).toISOString().slice(11, 19) : '??:??:??';
+async function formatBodyLine(row, tz) {
+    const t = row.time ? fmtTime(row.time, tz) : '??:??';
     const who = row.sender || row.user || row.uid || '—';
     const ext = row.ext || '';
     const msg = String(row.message || row.content || row.text || '').replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -358,10 +430,10 @@ async function formatBodyLine(row) {
     return line;
 }
 
-function formatEntry(row, path, digest) {
+function formatEntry(row, path, digest, tz) {
     if (!row)
         return '[entry ' + path + ']\n(пусто)';
-    const t = row.time ? new Date(row.time).toISOString() : '';
+    const t = row.time ? fmtFull(row.time, tz) : '';
     const who = row.sender || row.user || row.uid || '';
     const ext = row.ext || '';
     const msg = String(row.message || row.content || row.text || '').trim();
