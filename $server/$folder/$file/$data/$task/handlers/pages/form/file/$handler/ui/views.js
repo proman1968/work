@@ -1,4 +1,4 @@
-import { parseFormHtml, unwrapFence } from '/$server/$folder/$file//$task/task.js';
+import { parseFormHtml, parseFormSpec, unwrapFence } from '/$server/$folder/$file//$task/task.js';
 
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
@@ -560,9 +560,15 @@ export function pageHtml(data) {
 
 function formParts(data) {
     const parsed = parseFormHtml(data?.content);
+    let spec = null;
+    try {
+        spec = parseFormSpec(data?.content);
+    }
+    catch { /* legacy без спеки */ }
     return {
         caption: parsed.content,
         markup: data?.html || parsed.html,
+        spec,
     };
 }
 
@@ -694,11 +700,12 @@ ODA({ is: 'microchat-html',
     }
 });
 
-/** form — слот: разметка из content (fence); после approve — ответы, не контролы. */
+/** form — слот: спека JSON (мета-форма) либо разметка из content (fence, legacy); после approve — ответы. */
 ODA({ is: 'microchat-view-form',
     extends: 'microchat-view',
     get extendTag() {
         if (this.data?.approved) return '';
+        if (formParts(this.data).spec) return 'item-editor-form';
         if (!formParts(this.data).markup) return '';
         const ui = this.data.ui;
         if (!ui) return 'microchat-form';

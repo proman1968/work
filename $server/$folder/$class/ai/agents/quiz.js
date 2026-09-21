@@ -118,13 +118,13 @@ export function parseQuizSpec(text) {
     return items.filter(q => q.options.length > 0);
 }
 
-/** Бриф форме: radio-карточки + «Свой ответ», значения — id вариантов и custom. */
+/** Бриф форме: JSON-спека выбора (Radio + «Свой ответ»), значения — id вариантов и custom. */
 function quizBrief(question, idx, total) {
     return [
         'Выбор ' + (idx + 1) + ' из ' + total + ': ' + question.q,
-        'Поле radio с именем choice, по одному input на вариант (value → заголовок):',
+        'Опиши форму JSON-спекой {"title": ..., "fields": [{"id": "choice", "label": "...", "type": "Radio", "required": true, "options": [{"value": ..., "label": ..., "desc": ...}], "other": {"value": "custom", "label": "Свой ответ"}}]}.',
+        'Варианты (value = заголовок):',
         ...question.options.map(o => '- ' + o.value + ' = ' + o.label + (o.desc ? ' | ' + o.desc : '')),
-        'Пункт «Свой ответ» со значением custom + рядом input text с именем custom_text.',
     ].join('\n');
 }
 

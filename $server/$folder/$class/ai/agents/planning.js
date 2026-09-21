@@ -4,7 +4,7 @@ export default {
     icon: 'icons:assignment',
     doc: true,
     allowReasoning: true,
-    description: 'несколько ещё не сделанных действий. Звать когда действий несколько и нужен план',
+    description: 'план из 3+ шагов (найти→оценить→выбрать→поставить): название + нумерованный список; после APPROVE шаги едут по одному с чек-листом',
     step: false,
     system: [
         '# Режим: план',

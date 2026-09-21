@@ -37,6 +37,9 @@ ODA({
         button.btn.primary { background: #4d85cf; color: #fff; font-size: 15px; padding: 8px 20px; }
         button.btn.primary:hover { background: #3564a8; }
         .muted { color: #888; font-size: 12px; }
+        .pbar { height: 10px; background: #e5e5e5; border-radius: 999px; overflow: hidden; flex: 1; min-width: 120px; }
+        .pfill { height: 100%; background: #4d85cf; border-radius: 999px; transition: width .3s; }
+        .progtext { font-size: 12px; color: #555; white-space: nowrap; }
     </style>
     <div>
         <h2>BinNet — стенд тестов</h2>
@@ -46,6 +49,10 @@ ODA({
         <button class="btn primary" @tap="runAll">▶ Прогнать всё</button>
         <button class="btn" @tap="copyReport">Копировать отчет</button>
         <span class="pill {{overallPill}}">{{overall || 'еще не запускали'}}</span>
+    </div>
+    <div class="row" ~if="progTotal">
+        <div class="pbar"><div class="pfill" :style="'width:' + progPct + '%'"></div></div>
+        <span class="progtext">{{progDone}}/{{progTotal}} · {{progCurrent || ''}}</span>
     </div>
     <div class="tabs">
         <div class="tab" ~for="tabs" :selected="$for.item === focused" :disabled="$for.item.disabled" @tap="focused = $for.item.disabled ? focused : $for.item"><span class="dot {{$for.item.dot}}"></span>{{$for.item.label}}</div>
@@ -117,6 +124,10 @@ ODA({
     llmTests: [],
     overall: '',
     overallPill: '',
+    progDone: 0,
+    progTotal: 0,
+    progCurrent: '',
+    get progPct() { return this.progTotal ? Math.round(this.progDone / this.progTotal * 100) : 0; },
     gpuSummary: 'не запускали',
     gpuPill: '',
     tokSummary: 'не запускали',
@@ -234,6 +245,7 @@ ODA({
         let passCount = 0;
         for (let i = 0; i < items.length; i++) {
             items[i].status = 'running'; items[i].mark = '…'; items[i].cls = 't-run'; items[i].details = 'выполняется…';
+            this.progCurrent = `${items[i].id} ${items[i].label}`;
             this[key] = [...items];
             const t0 = performance.now();
             try {
@@ -245,16 +257,19 @@ ODA({
                 items[i].details = r.details;
                 if (r.pass) passCount++;
                 this.log(`${r.pass ? 'PASS' : 'FAIL'} ${items[i].id} ${items[i].label}: ${r.details} (${items[i].ms}мс)`);
+                this.progDone++;
                 if (!r.pass) break; // стоп на первом красном
             } catch (e) {
                 items[i].ms = Math.round(performance.now() - t0);
                 items[i].status = 'fail'; items[i].mark = '✗'; items[i].cls = 't-fail';
                 items[i].details = 'исключение: ' + (e.message || e);
                 this.log(`FAIL ${items[i].id}: ${items[i].details}`);
+                this.progDone++;
                 break;
             }
             this[key] = [...items];
         }
+        this.progCurrent = '';
         this[key] = [...items];
         return { passCount, total: items.length, ok: passCount === items.length };
     },
@@ -363,6 +378,11 @@ ODA({
     },
     async runAll() {
         this.overall = 'выполняется…'; this.overallPill = 'run';
+        // Общий знаменатель прогресса: сумма всех пунктов (вызов defs без прогона безопасен)
+        this.progDone = 0; this.progCurrent = '';
+        this.progTotal = this._gpuTestDefs().length + this._tokTestDefs().length
+            + this._embTestDefs().length + this._linTestDefs().length + this._mamTestDefs().length
+            + this._hedTestDefs().length + this._llmTestDefs().length;
         const g = await this.runGpuTests();
         let t = { passCount: 0, total: 0, ok: true };
         let e = { passCount: 0, total: 0, ok: true };
@@ -386,6 +406,8 @@ ODA({
         const ok = g.ok && t.ok && e.ok && l.ok && mm.ok && h.ok && s.ok;
         this.overall = ok ? `✓ ВСЁ ЗЕЛЕНО: ${parts.join(', ')}` : `✗ СТОП: ${parts.join(', ')}`;
         this.overallPill = ok ? 'ok' : 'fail';
+        // Бар закрывается всегда: пропуски видны отсутствием секций + СТОП
+        this.progDone = this.progTotal; this.progCurrent = '';
         this.log(this.overall);
     },
     _updateOverall() {
@@ -530,11 +552,11 @@ ODA({
         return r;
     },
     // --- Linear: реальный класс + BrowserGpu, in=4/out=4/divider=1 ---
-    async _makeLin() {
+    async _makeLin(IN = 4, OUT = 4) {
         const { BrowserGpu } = await import('./browser-gpu.js');
         const { Linear } = await import('../src/layers/linear.js');
         const gpu = await BrowserGpu.create();
-        const lin = new Linear({ in_size: 4, out_size: 4, divider: 1, gpu, folder: 'browser-test' });
+        const lin = new Linear({ in_size: IN, out_size: OUT, divider: 1, gpu, folder: 'browser-test' });
         await lin.load(); // fs зашимлен: свежие случайные веса in-memory
         return { gpu, lin };
     },
@@ -653,6 +675,25 @@ ODA({
                     await gpu.readData(lin.params.weights);
                     const ms = Math.round(performance.now() - t0);
                     return ms < 10000 ? { pass: true, details: `${ms}мс` } : { pass: false, details: `${ms}мс ≥ 10000` };
+                } finally { gpu.destroy(); }
+            }},
+            { id: 'L6', label: 'BACK = транспонированный вотум (крафт-веса)', run: async () => {
+                // Все веса all-ones: вотум за бит = (#единиц цели) − (#нулей).
+                // Цель с 20 единицами → ряд all-ones; с 10 → нули.
+                const { gpu, lin } = await this._makeLin(1, 1);
+                try {
+                    lin.params.weights.fill(0xFFFFFFFF);
+                    const T1 = new Uint32Array([0x000FFFFF]); // 20 единиц
+                    await lin.forward({ data: new Uint32Array([0]) });
+                    await lin.back({ back_target: T1 });
+                    const bt1 = Array.from(await gpu.readData(lin._shaders.BACK.target));
+                    const T2 = new Uint32Array([0x000003FF]); // 10 единиц
+                    await lin.back({ back_target: T2 });
+                    const bt2 = Array.from(await gpu.readData(lin._shaders.BACK.target));
+                    const ok = (bt1[0] >>> 0) === 0xFFFFFFFF && (bt2[0] >>> 0) === 0;
+                    return ok
+                        ? { pass: true, details: '20/32 → все биты, 10/32 → ноль' }
+                        : { pass: false, details: `получено ${(bt1[0] >>> 0).toString(16)}/${(bt2[0] >>> 0).toString(16)}` };
                 } finally { gpu.destroy(); }
             }},
         ];
@@ -962,11 +1003,12 @@ ODA({
         return r;
     },
     // --- LLM сквозной: реальный класс, vocab=512/emb=4/1 слой ---
-    async _makeLlm() {
+    async _makeLlm(cfg = {}) {
         const { BrowserGpu } = await import('./browser-gpu.js');
         const { LLM } = await import('../src/core/llm.js');
         const gpu = await BrowserGpu.create();
-        const llm = new LLM({ vocabSize: 512, embSize: 4, layersCount: 1, gpu, folder: 'browser-test' });
+        const llm = new LLM(Object.assign(
+            { vocabSize: 512, embSize: 4, layersCount: 1, gpu, folder: 'browser-test' }, cfg));
         await llm.load(); // fs зашимлен: свежие случайные веса in-memory
         return { gpu, llm };
     },
@@ -976,53 +1018,68 @@ ODA({
         const line2 = 'Кот Шрёдингера жив и мертв одновременно.';
         return { line1, line2, corpus: line1 + '\n' + line1 + '\n' + line2 };
     },
+    // Поэпоха-обучение с живым прогрессом пункта.
+    // Математика = одному train на N эпох (мерджи/счетчики складываются так же).
+    async _llmTrainSplit(llm, corpus, headEpochs, fullEpochs, testId) {
+        const history = [];
+        const total = headEpochs + fullEpochs;
+        const poke = () => {
+            const it = (this.llmTests || []).find(x => x.id === testId);
+            if (it) {
+                const last = history.length ? history[history.length - 1].acc.toFixed(2) : '…';
+                it.details = `эпоха ${history.length}/${total}, acc ${last}…`;
+                this.llmTests = [...this.llmTests];
+            }
+        };
+        for (let e = 0; e < headEpochs; e++) {
+            const r = await llm.train(corpus, { epochs: 1, headOnlyEpochs: 1 });
+            history.push(...r.history.map(h => ({ ...h, headOnly: true, epoch: history.length })));
+            poke();
+        }
+        for (let e = 0; e < fullEpochs; e++) {
+            const r = await llm.train(corpus, { epochs: 1, headOnlyEpochs: 0 });
+            history.push(...r.history.map(h => ({ ...h, headOnly: false, epoch: history.length })));
+            poke();
+        }
+        return { history };
+    },
     _llmTestDefs() {
+        // Трек 1 (демо-путь): S1,S2,S4 на headlong. S5 — гейт трека 2 (коллапс).
+        // S3 строгий — последним, никого не блокирует.
         const FIX = this._llmFixture();
+        const self = this;
         return [
-            { id: 'S1', label: 'оверфит одной строки (schedule 3+5)', run: async () => {
-                const { gpu, llm } = await this._makeLlm();
+            { id: 'S1', label: 'headlong: оверфит одной строки (10 эпох Head)', run: async () => {
+                const { gpu, llm } = await self._makeLlm();
                 try {
-                    this.llmInfo = 'vocab=512, emb=4, 1 слой, schedule 3 head-only + 5 full';
+                    self.llmInfo = 'vocab=512, emb=4, 1 слой, headlong 10/10';
                     const before = await llm.accuracy(FIX.line1);
-                    const tr = await llm.train(FIX.line1 + '\n' + FIX.line1, { epochs: 8, headOnlyEpochs: 3 });
+                    const tr = await self._llmTrainSplit(llm, FIX.line1 + '\n' + FIX.line1, 10, 0, 'S1');
                     const after = await llm.accuracy(FIX.line1);
-                    const curve = tr.history.map(h => `${h.headOnly ? '*' : ''}${h.acc.toFixed(2)}`).join(',');
-                    this.chartData = [...(this.chartData || []), ...tr.history.map(h => 1 - h.acc)];
+                    const curve = tr.history.map(h => h.acc.toFixed(2)).join(',');
+                    self.chartData = [...(self.chartData || []), ...tr.history.map(h => 1 - h.acc)];
                     return after.acc >= 0.8 && after.acc > before.acc
                         ? { pass: true, details: `acc ${before.acc.toFixed(2)} → ${after.acc.toFixed(2)} (${curve})` }
                         : { pass: false, details: `не заучивает: ${before.acc.toFixed(2)} → ${after.acc.toFixed(2)} (${curve})` };
                 } finally { gpu.destroy(); }
             }},
-            { id: 'S2', label: 'эпохи растят next-token accuracy', run: async () => {
-                const { gpu, llm } = await this._makeLlm();
+            { id: 'S2', label: 'headlong: эпохи растят accuracy', run: async () => {
+                const { gpu, llm } = await self._makeLlm();
                 try {
                     const before = await llm.accuracy(FIX.corpus);
-                    const tr = await llm.train(FIX.corpus, { epochs: 5, headOnlyEpochs: 3 });
+                    const tr = await self._llmTrainSplit(llm, FIX.corpus, 6, 0, 'S2');
                     const after = await llm.accuracy(FIX.corpus);
-                    const curve = tr.history.map(h => `${h.headOnly ? '*' : ''}${h.acc.toFixed(2)}`).join(',');
-                    this.chartData = [...(this.chartData || []), ...tr.history.map(h => 1 - h.acc)];
+                    const curve = tr.history.map(h => h.acc.toFixed(2)).join(',');
+                    self.chartData = [...(self.chartData || []), ...tr.history.map(h => 1 - h.acc)];
                     return after.acc > before.acc
                         ? { pass: true, details: `acc ${before.acc.toFixed(2)} → ${after.acc.toFixed(2)} (${curve})` }
                         : { pass: false, details: `accuracy не растет: ${before.acc.toFixed(2)} → ${after.acc.toFixed(2)} (${curve})` };
                 } finally { gpu.destroy(); }
             }},
-            { id: 'S3', label: 'генерация продолжает заученную строку', run: async () => {
-                const { gpu, llm } = await this._makeLlm();
-                try {
-                    await llm.train(FIX.corpus, { epochs: 11, headOnlyEpochs: 3 });
-                    const prompt = FIX.line1.slice(0, 12);
-                    const gen = await llm.generate(prompt, 30);
-                    if (typeof gen !== 'string') return { pass: false, details: `generate вернул не строку` };
-                    if (!gen.length) return { pass: false, details: 'пустая генерация (сразу EOS)' };
-                    return FIX.line1.includes(prompt + gen)
-                        ? { pass: true, details: `«${prompt}» → «${gen.slice(0, 40)}»` }
-                        : { pass: false, details: `не продолжение строки: «${gen.slice(0, 60)}»` };
-                } finally { gpu.destroy(); }
-            }},
             { id: 'S4', label: 'детерминизм после reset', run: async () => {
-                const { gpu, llm } = await this._makeLlm();
+                const { gpu, llm } = await self._makeLlm();
                 try {
-                    await llm.train(FIX.corpus, { epochs: 4, headOnlyEpochs: 2 });
+                    await self._llmTrainSplit(llm, FIX.corpus, 4, 0, 'S4');
                     const a1 = await llm.accuracy(FIX.corpus);
                     const g1 = await llm.generate(FIX.line1.slice(0, 12), 20);
                     const a2 = await llm.accuracy(FIX.corpus);
@@ -1033,10 +1090,40 @@ ODA({
                         : { pass: false, details: `плавает: ошибки ${a1.errors}/${a2.errors}, gen «${g1.slice(0, 20)}»/«${g2.slice(0, 20)}»` };
                 } finally { gpu.destroy(); }
             }},
+            { id: 'S5', label: 'ГЕЙТ трека 2: медленный низ держит acc', run: async () => {
+                // Трек 2, шаг 1: низ в 10x медленнее (emb lr 0.01, +3 AND в маске Linear).
+                // Дефолты src не тронуты — тормозит только этот тест.
+                const { gpu, llm } = await self._makeLlm({ embLearnRate: 0.01, linUpdateExtra: 3 });
+                try {
+                    const tr = await self._llmTrainSplit(llm, FIX.line1 + '\n' + FIX.line1, 3, 5, 'S5');
+                    const curve = tr.history.map(h => `${h.headOnly ? '*' : ''}${h.acc.toFixed(2)}`).join(',');
+                    const headPhase = tr.history.filter(h => h.headOnly);
+                    const fullPhase = tr.history.filter(h => !h.headOnly);
+                    const peak = Math.max(...headPhase.map(h => h.acc));
+                    const tail = fullPhase.length ? fullPhase[fullPhase.length - 1].acc : 0;
+                    self.chartData = [...(self.chartData || []), ...tr.history.map(h => 1 - h.acc)];
+                    return tail >= Math.max(0.5, peak * 0.7)
+                        ? { pass: true, details: `пик head-only ${peak.toFixed(2)}, хвост ${tail.toFixed(2)} (${curve})` }
+                        : { pass: false, details: `коллапс после разморозки: пик ${peak.toFixed(2)} → хвост ${tail.toFixed(2)} (${curve})` };
+                } finally { gpu.destroy(); }
+            }},
+            { id: 'S3', label: 'генерация продолжает заученную строку (СТРОГО)', run: async () => {
+                const { gpu, llm } = await self._makeLlm();
+                try {
+                    await self._llmTrainSplit(llm, FIX.corpus, 10, 0, 'S3');
+                    const prompt = FIX.line1.slice(0, 12);
+                    const gen = await llm.generate(prompt, 30);
+                    if (typeof gen !== 'string') return { pass: false, details: `generate вернул не строку` };
+                    if (!gen.length) return { pass: false, details: 'пустая генерация (сразу EOS)' };
+                    return FIX.line1.includes(prompt + gen)
+                        ? { pass: true, details: `«${prompt}» → «${gen.slice(0, 40)}»` }
+                        : { pass: false, details: `не продолжение строки: «${gen.slice(0, 60)}»` };
+                } finally { gpu.destroy(); }
+            }},
         ];
     },
     async runLlmTests() {
-        this.log('=== Автотест LLM (S1–S4) ===');
+        this.log('=== Автотест LLM (S1–S5) ===');
         this.llmSummary = 'выполняется…'; this.llmPill = 'run';
         const r = await this._runSuite(this._mkItems(this._llmTestDefs()), 'llmTests');
         const s = this._suiteSummary('llmTests');

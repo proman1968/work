@@ -81,11 +81,40 @@ export class MambaLayer extends BinNet {
     }
 
     async back(targetInput) {
-        // Каскадный спуск градиента: каждый подслой Linear автоматически обновляет веса внутри своего .back()
+        // Каскадный спуск: каждый подслой Linear автоматически обновляет веса внутри своего .back().
+        // Сигналы forget/add ветвей комбинируются консервативно, ветка forget больше не роняется.
         let gOut = await this.projOut.back({ back_target: targetInput.back_target});
-        let gForget = await this.projForget.back({ back_target: gOut.back_target });
-        let gAdd = await this.projAdd.back({ back_target: gOut.back_target });
-        let tBottom = await this.projIn.back({ back_target: gAdd.back_target });
+        let [gForget, gAdd] = await Promise.all([
+            this.projForget.back({ back_target: gOut.back_target }),
+            this.projAdd.back({ back_target: gOut.back_target })
+        ]);
+        if (!this._backCombineShader) {
+            let wg = this.gpu.compute_info(this.dSize);
+            this._backCombineShader = wg;
+            this._backCombined = this.write(BinNet.create_zeros_vector(this.dSize), 'mamba_back_combined');
+            wg.compile(`
+                // BACK_COMBINE: согласие ветвей = уверенность, разногласие = текущий бит
+                @group(0) @binding(0) var<storage, read> sig_forget: array<u32>;
+                @group(0) @binding(1) var<storage, read> sig_add: array<u32>;
+                @group(0) @binding(2) var<storage, read> current: array<u32>;
+                @group(0) @binding(3) var<storage, read_write> combined: array<u32>;
+                @compute @workgroup_size(${wg.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wg.idx_code_gen}
+                    let f = sig_forget[idx];
+                    let a = sig_add[idx];
+                    let agree = ~(f ^ a);
+                    combined[idx] = (f & agree) | (current[idx] & ~agree);
+                }
+            `, this.id + ':BACK_COMBINE');
+        }
+        this._backCombineShader.compute([
+            gForget.back_target,
+            gAdd.back_target,
+            this.convOutput,
+            this._backCombined
+        ]);
+        let tBottom = await this.projIn.back({ back_target: this._backCombined });
         return { back_target: tBottom.back_target};
     }
 }

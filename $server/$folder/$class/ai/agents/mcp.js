@@ -119,7 +119,8 @@ const searchTool = {
         b.qkey = qkey;
         b.content = formatSearchResults(queries, page, total, cards, refs);
         b.done = true;
-        b.state = 'ok';
+        // Шапка несёт запрос (и страницу): одинаковые «Ищу сервер ok» неразличимы.
+        b.state = clip(queries[0], 48) + (page > 1 ? ' (стр. ' + page + ')' : '');
         // Есть следующие страницы — тип остаётся в меню для «ещё».
         // Тихий автопоиск — не дальше AUTO_PAGES_CAP: дальше только явный маркер.
         // Иначе вежливый бесконечный цикл вместо inspect/total.
@@ -500,15 +501,14 @@ function parseVerdictIds(text) {
     return Object.keys(PRESETS).filter(id => tokens.has(id));
 }
 
-/** Бриф форме: select выбора + URL + ключ; значения select — id опций и none. */
+/** Бриф форме: JSON-спека выбора (Radio + URL + keyref). Значения — id опций и none. */
 function offerBrief(options) {
     return [
-        'Выбор установки MCP-сервера: один вариант.',
-        'Поле select с именем choice, значения options: '
-            + options.map(o => o.id).join(' ') + ' none.',
-        'Пункт «Пока ничего не ставить» со значением none.',
-        'Поле input с именем url (URL remote-сервера, если выбран remote; иначе пусто).',
-        'Поле input с именем keyref (имя файла секрета #secret, если ключ есть; иначе пусто).',
+        'Выбор установки MCP-сервера: один вариант. Опиши форму JSON-спекой {"title": ..., "fields": [...]}.',
+        'Поле Radio с id choice, options — по одной на вариант (value → label): '
+            + options.map(o => o.id + ' = ' + (o.label || o.id)).join('; ') + '; none = Пока ничего не ставить.',
+        'Поле String с id url (URL remote-сервера, если выбран remote; иначе пусто).',
+        'Поле String с id keyref (имя файла секрета #secret, если ключ есть; иначе пусто).',
     ].join('\n');
 }
 

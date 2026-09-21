@@ -193,6 +193,7 @@ export default {
                 'Не утверждай, что нет интернета или метеоданных — поиск и файлы делают субагенты.',
                 'Сначала локальное (explore, work), потом web: внешний поиск — только когда локально пусто.',
                 'Вопросы про внешние инструменты/MCP (маркет, установка) — mcp, не web.',
+                'Видишь 3+ разнородных этапа впереди — сначала planning, не первый попавшийся агент.',
                 'Картинка во вложении уже в этом ходе (vision) — смотри её, не спрашивай «что на файле».',
                 'N картинок / файлов с изображениями — image, N generate, не коллаж и не work.write.',
                 'Не предлагай «спросить разрешение» на инструмент — выбор сделает меню после тебя.',
@@ -371,8 +372,7 @@ export function unwrapFence(s) {
     return after ? inner + '\n\n' + after : inner;
 }
 
-export function parseFormHtml(text = '') {
-    const raw = String(text ?? '');
+export function parseFormHtml(text = '') {    const raw = String(text ?? '');
     let html = '';
     let content = '';
     const fence = raw.match(/```[a-z0-9]*[^\n]*\r?\n([\s\S]*?)```/i);
@@ -411,4 +411,76 @@ export function parseFormHtml(text = '') {
         .join('\n')
         .trim();
     return { content, html };
+}
+
+/** Словарь типов полей мета-формы (тот же, что METADATA + выбор). */
+export const FORM_SPEC_TYPES = ['String', 'Text', 'Number', 'Date', 'Boolean', 'Select', 'Radio'];
+
+/** Мета-спека формы из текста: ```json fence или голый объект с fields. Пусто — null. */
+export function parseFormSpec(text = '') {
+    const raw = String(text ?? '');
+    const fences = [...raw.matchAll(/```(?:json)?[^\n]*\r?\n([\s\S]*?)```/gi)].map(m => m[1]);
+    const bare = raw.match(/\{[\s\S]*"fields"\s*:[\s\S]*\}/);
+    if (bare)
+        fences.push(bare[0]);
+    for (const body of fences) {
+        try {
+            const data = JSON.parse(String(body).trim());
+            const spec = normalizeFormSpec(data);
+            if (spec)
+                return spec;
+        }
+        catch { /* следующий кандидат */ }
+    }
+    return null;
+}
+
+/** Проверка/чистка спеки: {title, fields:[{id,label,type,options,required,placeholder,other}]}. */
+export function normalizeFormSpec(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data))
+        return null;
+    const fields = Array.isArray(data.fields) ? data.fields : [];
+    const clean = [];
+    const seen = new Set();
+    for (const f of fields) {
+        if (!f || typeof f !== 'object')
+            continue;
+        const id = String(f.id || '').trim();
+        if (!id || seen.has(id))
+            continue;
+        seen.add(id);
+        const type = FORM_SPEC_TYPES.includes(f.type) ? f.type : 'String';
+        const field = {
+            id,
+            label: String(f.label || id).trim(),
+            type,
+            required: f.required === true,
+            placeholder: String(f.placeholder || '').trim(),
+        };
+        if (type === 'Select' || type === 'Radio') {
+            const options = Array.isArray(f.options) ? f.options : [];
+            field.options = options
+                .filter(o => o && typeof o === 'object' && String(o.value ?? '').trim() !== '')
+                .map(o => ({
+                    value: String(o.value).trim(),
+                    label: String(o.label || o.value).trim(),
+                    desc: String(o.desc || '').trim(),
+                }));
+            if (!field.options.length)
+                continue;
+            if (f.other && typeof f.other === 'object' && String(f.other.value ?? '').trim() !== '') {
+                field.other = {
+                    value: String(f.other.value).trim(),
+                    label: String(f.other.label || 'Свой ответ').trim(),
+                };
+            }
+        }
+        clean.push(field);
+    }
+    if (!clean.length)
+        return null;
+    return {
+        title: String(data.title || '').trim(),
+        fields: clean,
+    };
 }

@@ -1,3 +1,4 @@
+import { loadLibIndex } from '../lib-index.js';
 ODA({is: 'oda-icons-tree', imports: 'oda//tree', extends: 'this, oda-tree',
     template:/* html */`
         <style>
@@ -69,7 +70,6 @@ ODA({is: 'icons-tree-node',
         return 'fontawesome:r-folder';
     }
 })
-const parser = new DOMParser();          
 ODA({is: 'icons-tree-lib',
     template:/* html */`
         <style>
@@ -123,9 +123,9 @@ ODA({is: 'icons-tree-lib',
     },
     get data(){
         const file = this.host.row?.file;
-        const lib = file?.name;
-        if (!file) return undefined;
-        return file.fetch('svg_icons_list').then(ids => ids.map(id => lib + ':' + id));
+        const lib = file?.name?.replace(/\.svg$/i, '');
+        if (!lib) return undefined;
+        return loadLibIndex(lib).then(ids => ids.map(id => lib + ':' + id));
     },
     onIconTap(e, icon) {
         if (!icon) return;

@@ -1,3 +1,4 @@
+import { loadLibIndex } from '../lib-index.js';
 ODA({ is: 'oda-icons-set', imports: 'oda//icon',
     template: `
         <style>
@@ -25,29 +26,25 @@ ODA({ is: 'oda-icons-set', imports: 'oda//icon',
             }
         </style>
         <div class="container horizontal">
-            <oda-icon ~for="searchIcons.length ? searchIcons : icons" :icon="$for.item" :icon-size :light="$for.item === focusedIcon" :title="$for.item" @tap="onIconTap($for.item)" draggable="true" @dragstart="onIconDragStart($event, $for.item)" ~style="{borderRadius: $for.item === focusedIcon ? '50%' : ''}"></oda-icon>
+            <oda-icon ~for="shownIcons" :icon="$for.item" :icon-size :light="$for.item === focusedIcon" :title="$for.item" @tap="onIconTap($for.item)" draggable="true" @dragstart="onIconDragStart($event, $for.item)" ~style="{borderRadius: $for.item === focusedIcon ? '50%' : ''}"></oda-icon>
         </div>
     `,
     library: {
         $def: '',
         async set(n) {
             if (!n) return;
-            this.svg = undefined;
-            const res = await fetch('/oda/tools/icons/lib/svg/' + n + '.svg');
-            const svgText = await res.text();
-            const parser = new DOMParser();
-            this.svg = parser.parseFromString(svgText, 'text/html');
+            const lib = String(n).replace(/\.svg$/i, '');
+            this.icons = (await loadLibIndex(lib)).map(id => lib + ':' + id);
         }
     },
     iconSize: 48,
-    svg: {
-        $def: undefined,
-        set(n) {
-            if (!n) return;
-            this.icons = Array.prototype.map.call(n.querySelectorAll('g[id]'), i => this.library + ':' + i.id);
-        }
-    },
     icons: [],
+    // Тысячи oda-icon вешают страницу: показываем первые N, остальное — через поиск.
+    shownLimit: 300,
+    get shownIcons() {
+        const list = this.searchIcons.length ? this.searchIcons : this.icons;
+        return list.length > this.shownLimit ? list.slice(0, this.shownLimit) : list;
+    },
     searchIcons: [],
     focusedIcon: '',
     onIconTap(icon) {

@@ -11,31 +11,14 @@ export default {
         'Тема — запрос в ленте, не профиль и не рабочая группа.',
     ].join('\n'),
     prompt: [
-        'Сначала один fenced-блок html (внутри form и fieldset). После блока — пояснение (1–10 слов).',
-        'Пояснение — только текст после html, не legend и не fieldset. Не пересказывай эту инструкцию.',
+        'Опиши форму JSON-спекой в одном fenced-```json блоке: {"title": ..., "fields": [{id, label, type, options?, required?, placeholder?, other?}]}.',
+        'После блока — пояснение (1–10 слов). Не пересказывай эту инструкцию.',
         'Тема полей — запрос в ленте, не профиль и не рабочая группа.',
         'Только поля, без которых нельзя идти дальше. Лишнего не спрашивай.',
-        'Одиночный выбор — radio-карточки: заголовок + короткое описание, значения — короткие id; плюс пункт «Свой ответ» (value custom) с input text.',
-        'Мультисбор данных — select + «Другое» + input, не text; скаляр — своим type.',
-        'Свободный text/textarea — только у поля «Другое» и у скаляра (число, дата, деньги).',
-        'Раскладка: один legend на fieldset — человеческое имя поля, не путь и не /id. Legend группы («Общие данные») не заменяет имена полей.',
-        'В fieldset один select — label не нужен, смысл в legend. Рядом input «Другое» — свой name и label. Несколько полей — вложенный fieldset со своим legend.',
-        'Не дублируй legend строкой p/h1–h6. Fieldset в ряд не ставь.',
-        'Подсказка и единица — в placeholder.',
-        'У каждого контрола свой name. legend и label могут начинаться с эмодзи или символа. Никаких customElements. Не заменяй контрол ul/li.',
-        'Домен (сначала это):',
-        '- одиночный выбор — radio-карточки (выше), не select;',
-        '- открытый — тоже select типичных ответов + «Другое» + input, не голый textarea;',
-        '- скаляр — число, дата, деньги: number/date, не список названий.',
-        'Вид скаляра:',
-        '- целое — type=number inputmode=numeric step=1;',
-        '- дробь — type=number inputmode=decimal step под единицу (0.1);',
-        '- деньги — type=number inputmode=numeric step=1 или 1000, единица в placeholder (₽);',
-        '- дата/время/email/tel/url — свой type + autocomplete.',
-        'min/max — только реальный диапазон. maxlength на number запрещён.',
-        'required — на каждом поле, без которого нельзя идти дальше.',
-        'Маски — только HTML-атрибутами, без script.',
-        'Без script, html/body, кнопки отправки.',
+        'Типы: String/Text/Number/Date/Boolean; одиночный выбор — Radio (options: [{value, label, desc?}] + other:{value,label}); мультисбор — Select + other.',
+        'У каждого поля свой id. Подсказка и единица — в placeholder.',
+        'Скаляр — число, дата, деньги (Number/Date, единица в placeholder). required — на каждом поле, без которого нельзя идти дальше.',
+        'HTML не пиши: разметку строит рендер по спеке.',
     ].join('\n'),
     stop: 'Отправить форму',
     async approve(params = {}) {
@@ -44,9 +27,11 @@ export default {
         block.answer = answers;
         block.values = answers;
         block.state = 'submitted';
+        const parseSpec = task.pipe.parseFormSpec;
+        const spec = typeof parseSpec === 'function' ? parseSpec(block.content) : null;
         const parse = task.pipe.parseFormHtml;
         const markup = (typeof parse === 'function' ? parse(block.content).html : '') || block.html;
-        block.approved = formatFormAnswers(answers, markup);
+        block.approved = formatFormAnswers(answers, markup, spec);
     },
 };
 
@@ -80,8 +65,8 @@ function formFieldMeta(html) {
     return meta;
 }
 
-function formatFormAnswers(answers = {}, html = '') {
-    const meta = formFieldMeta(html);
+function formatFormAnswers(answers = {}, html = '', spec = null) {
+    const meta = specMeta(spec) || formFieldMeta(html);
     const lines = ['[form answers]'];
     for (const id of Object.keys(answers || {})) {
         const v = answers[id];
@@ -92,4 +77,27 @@ function formatFormAnswers(answers = {}, html = '') {
         lines.push(`${label}: ${text}`);
     }
     return lines.join('\n');
+}
+
+/** Мета полей из спеки (без парсинга HTML): {id: {label, options}}. */
+function specMeta(spec) {
+    if (!spec || !Array.isArray(spec.fields) || !spec.fields.length)
+        return null;
+    const meta = {};
+    for (const f of spec.fields) {
+        const id = String(f?.id || '').trim();
+        if (!id || meta[id])
+            continue;
+        const entry = { label: String(f.label || id).trim() };
+        if (Array.isArray(f.options) && f.options.length) {
+            entry.options = {};
+            for (const o of f.options) {
+                const value = String(o?.value ?? '').trim();
+                if (value)
+                    entry.options[value] = String(o.label || value).trim();
+            }
+        }
+        meta[id] = entry;
+    }
+    return meta;
 }
