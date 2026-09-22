@@ -1,4 +1,4 @@
-import { loadLibIndex } from '../lib-index.js';
+import { loadLibIndex } from '/oda/tools/icons/lib-index.js';
 ODA({is: 'oda-icons-tree', imports: 'oda//tree', extends: 'this, oda-tree',
     template:/* html */`
         <style>

@@ -129,6 +129,7 @@ export default {
 
     /**
      * Стриминговый чат с поддержкой function calling.
+     * Единственная реализация транспорта (чанки от провайдера).
      * Обычный method (не async*): Reactor/babel-merge ломают AsyncGenerator на DATA;
      * возвращаем async generator изнутри.
      * @param {object} [params]
@@ -236,9 +237,13 @@ export default {
             funcCallArgs = '';
         };
 
+        // SSE собирается по целым строкам: хвост чанка (разорванный JSON)
+        // держим в буфере до следующего чанка, иначе строка глоталась целиком.
+        let buf = '';
         for await (const chunk of res) {
-            const text = Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
-            const lines = text.split('\n');
+            buf += Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
+            const lines = buf.split('\n');
+            buf = lines.pop();
             for (const line of lines) {
                 if (!line.startsWith('data: '))
                     continue;
@@ -302,6 +307,28 @@ export default {
                     }
                 }
                 catch {}
+            }
+        }
+        if (String(buf || '').trim()) {
+            const line = buf;
+            buf = '';
+            if (line.startsWith('data: ')) {
+                const jsonStr = line.slice(6).trim();
+                if (jsonStr && jsonStr !== '[DONE]') {
+                    try {
+                        const json = JSON.parse(jsonStr);
+                        const delta = json.choices?.[0]?.delta || {};
+                        const content = delta.content || delta.text;
+                        if (content) {
+                            contentSeen = true;
+                            if (useFunctions)
+                                yield { type: 'content', content };
+                            else
+                                yield content;
+                        }
+                    }
+                    catch {}
+                }
             }
         }
 

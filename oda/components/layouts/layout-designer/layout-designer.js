@@ -1,4 +1,5 @@
-ODA({ is: 'oda-layout-designer', imports: '@oda/icon',
+import { Reactor } from '../../../../sources/reactor.js';
+ODA({ is: 'oda-layout-designer', imports: 'oda//icon',
     template: /*html*/`
         <style>
             :host{
@@ -114,7 +115,6 @@ ODA({ is: 'oda-layout-designer', imports: '@oda/icon',
         }
     },
     $public: {
-        $pdp: true,
         get isDesignChanged() {
             const flatter = i => i.items && i.items.length ? i.items.flatMap(flatter) : [i];
             const itemsToSave = this.designer.layout.items.flatMap(flatter);
@@ -124,10 +124,10 @@ ODA({ is: 'oda-layout-designer', imports: '@oda/icon',
             $def: false,
             async set(n) {
                 if (n) {
-                    await ODA.import('@oda/tree');
-                    await ODA.import('@tools/property-grid');
+                    await import('/oda/components/tree/tree.js');
+                    await import('/oda/tools/property-grid/property-grid.js');
                 }
-                this.designInfo = this.constructor.__rocks__.descrs.designInfo.$def();
+                this.designInfo = { selected: [], dropTo: { target: null, align: '' } };
             },
         }
     },
@@ -572,7 +572,7 @@ ODA({ is: 'oda-layout-designer-container',
             if (this.designMode) {
                 selectItem.call(this, e)
                 window.dispatchEvent(new PointerEvent('mousedown', e))
-                this.designer.$render();
+                this.designer.render();
             }
         },
         contextmenu(e) {
@@ -611,8 +611,8 @@ async function contextMenu(e) {
     e.preventDefault();
     if (!this.designInfo.selected.includes(this.item))
         this.$listeners.mousedown?.call(this, e)
-    await ODA.import('@tools/containers');
-    await ODA.import('@oda/menu');
+    await import('/oda/tools/containers/containers.js');
+    await import('/oda/components/menus/menu/menu.js');
     const menu = [
         {
             label: `Grouping`,
@@ -704,8 +704,8 @@ ODA({is:'oda-layout-designer-tabs',
     selTab(item){
         this.designInfo.selected = [item];
         this.tabsItem.focusedTab =  item;
-        this.domHost.$render();
-        this.$render();
+        this.host?.render();
+        this.render();
     },
     get tabsItem(){
         return this.layout.items.find(i=>i.itemType === 'tabs');
@@ -827,7 +827,7 @@ ODA({is:'oda-layout-designer-table-cell', extends: 'oda-icon, oda-table-cell',
                 if (this.isLayerRoot && this.item.isChanged) {
                     await this.saveSettings(this.item);
                     this.item.isChanged = false;
-                    this.$render();
+                    this.render();
                 }
             }
         }
@@ -891,10 +891,16 @@ ODA({is:'oda-layout-designer-table-cell', extends: 'oda-icon, oda-table-cell',
     }
 })
 
-const LayoutItem = class extends ROCKS({
-    settings: {
-        $type: Object,
-        async set(n) {
+class LayoutItem extends Reactor {
+    constructor(owner, layer, dataKeys = 'items', data) {
+        super();
+        this.data = data;
+        this.owner = owner;
+        this.dataKeys = layer?.dataKeys || dataKeys;
+        this.layer = layer;
+    }
+    set settings(n) {
+        (async () => {
             for (let step of n?.actions || []) {
                 let context = await this.findItem(step.context);
                 if (!context)
@@ -917,17 +923,17 @@ const LayoutItem = class extends ROCKS({
                 }
                 context[step.action](params);
             }
-        }
-    },
+        })();
+    }
     get states() {
         const layer = this.layer || this;
         return layer.settings?.states?.[this.name];
-    },
-    groups: [],
+    }
+    groups = [];
     get path() {
         if (this.isLayerRoot)
             return !this.layer ? ('ROOT') : this.layer.path + '/' + this.name;
-    },
+    }
     async findItem(name) {
         const items = (this.items?.then ? await this.items : this.items) || []
         for (let i of items) {
@@ -939,15 +945,15 @@ const LayoutItem = class extends ROCKS({
                     return res;
             }
         }
-    },
-    align: '',
+    }
+    align = '';
     get checked() {
         return this.hidden ? 'unchecked' : 'checked';
-    },
+    }
     set checked(v) {
         this.hidden = v === 'unchecked';
         this.layer.isChanged = true;
-    },
+    }
     group(params = { items: [], align }, inLog) {
         let items = [...params.items];
         let align = params.align;
@@ -969,7 +975,7 @@ const LayoutItem = class extends ROCKS({
         if (inLog)
             this.addAction({ action: 'group', context: this.name, params: { items: params.items.map(i => i.name), align } });
         return grp;
-    },
+    }
     addBlock(params = { items: [], align: '' }, inLog) {
         let toItem = this;
         let items = [...params.items];
@@ -990,10 +996,10 @@ const LayoutItem = class extends ROCKS({
         if (inLog)
             this.addAction({ action: 'addBlock', context: this.name, params: { items: params.items.map(i => i.name), align } });
         return toItem.group({ items, align });
-    },
+    }
     generateName(type) {
         return type + (this.layer.groups.filter(i => i.itemType === type).length + 1);
-    },
+    }
     addTab({ }, inLog) {
         if (this.itemType !== 'group')
             return;
@@ -1025,7 +1031,7 @@ const LayoutItem = class extends ROCKS({
         }
         else if (tabs.items.length === 1)
             tabs.focusedTab = tab;
-    },
+    }
     ungroup(params = { items }, inLog) {
         let items = params.items;
         if (!this.itemType) return;
@@ -1035,7 +1041,7 @@ const LayoutItem = class extends ROCKS({
         })
         if (inLog)
             this.addAction({ action: 'ungroup', context: this.name, params: { items: params.items.map(i => i.name) } });
-    },
+    }
     removeItem(params = { item }, inLog) {
         let item = params.item;
         if (!this.items.includes(item))
@@ -1056,7 +1062,7 @@ const LayoutItem = class extends ROCKS({
         }
         if (inLog)
             this.addAction({ action: 'removeItem', context: this.name, params: { item: item.name } });
-    },
+    }
     remove(inLog) {
         if (this.itemType === 'tab') {
             let nextFocus = this.owner.items.indexOf(this);
@@ -1080,7 +1086,7 @@ const LayoutItem = class extends ROCKS({
         }
         if (inLog)
             this.addAction({ action: 'remove', context: this.name });
-    },
+    }
     addItems(params = { items }, inLog) {
         let items = params.items;
         for (let item of items) {
@@ -1088,7 +1094,7 @@ const LayoutItem = class extends ROCKS({
         }
         if (inLog)
             this.addAction({ action: 'addItems', context: this.name, params: { items: params.items.map(i => i.name) } });
-    },
+    }
     addItem(params = { item }, inLog) {
         let item = params.item;
         item.owner?.removeItem({ item });
@@ -1096,7 +1102,7 @@ const LayoutItem = class extends ROCKS({
         item.owner = this;
         if (inLog)
             this.addAction({ action: 'addItem', context: this.name, params: { item: item.name } });
-    },
+    }
     replaceItems(params = { item, items }, inLog) {
         let items = params.items;
         let item = params.item;
@@ -1107,7 +1113,7 @@ const LayoutItem = class extends ROCKS({
             i.owner = this;
         if (inLog)
             this.addAction({ action: 'replaceItems', context: this.name, params: { item, items: params.items.map(i => i.name) } });
-    },
+    }
     replaceItem(params = { old, item }, inLog) {
         let old = params.old;
         let item = params.item;
@@ -1116,71 +1122,52 @@ const LayoutItem = class extends ROCKS({
         item.owner = this;
         if (inLog)
             this.addAction({ action: 'replaceItem', context: this.name, params: { old: old.name, item: item.name } });
-    },
-    items: {
-        $def: [],
-        get() {
-            const items = this.data?.[this.dataKeys];
-            const layer = this.itemType === 'group' ? this.layer : this;
-            if (items?.then) {
-                return items.then(items => {
-                    return items.map(i => new LayoutItem(this, layer, this.dataKeys, i))
-                })
-            }
-            return items?.map(item => new LayoutItem(this, layer, this.dataKeys, item))
+    }
+    get items() {
+        const items = this.data?.[this.dataKeys];
+        const layer = this.itemType === 'group' ? this.layer : this;
+        if (items?.then) {
+            return items.then(items => {
+                return items.map(i => new LayoutItem(this, layer, this.dataKeys, i))
+            })
         }
-    },
+        return items?.map(item => new LayoutItem(this, layer, this.dataKeys, item))
+    }
     addAction(action) {
         const layer = this.layer || this;
         layer.settings.actions ??= [];
         layer.settings.actions.push(action);
         layer.isChanged = true;
-        this.root.designer.$render();
-    },
+        this.root.designer.render();
+    }
     get isLayerRoot() {
         return !!((this.items?.[0]?.layer === this) || this.items?.then);
-    },
-    title: {
-        $readOnly: true,
-        get() {
-            return this.label;
-        }
-    },
+    }
+    get title() {
+        return this.label;
+    }
     get root() {
         return this.owner?.root || this;
 
-    },
-    $public: {
-        label: {
-            $type: String,
-            get() {
-                return this.states?.label || this.data.label || this.name || (!this.owner && 'ROOT');
-            },
-            set(n) {
-                this.setPropValue('label', n)
-            }
-        },
-        hidden: {
-            $type: Boolean,
-            get() {
-                return this.states?.hidden || this.data.hidden || false;
-            },
-            set(n) {
-                this.setPropValue('hidden', n)
-            }
-        },
-        textColor: {
-            $type: String,
-            $editor: '@oda/color-picker[oda-color-picker]',
-            get() {
-                return this.states?.textColor || 'var(--dark-background)';
-            },
-            set(n) {
-                this.setPropValue('textColor', n)
-            }
-        }
-    },
-
+    }
+    get label() {
+        return this.states?.label || this.data.label || this.name || (!this.owner && 'ROOT');
+    }
+    set label(n) {
+        this.setPropValue('label', n)
+    }
+    get hidden() {
+        return this.states?.hidden || this.data.hidden || false;
+    }
+    set hidden(n) {
+        this.setPropValue('hidden', n)
+    }
+    get textColor() {
+        return this.states?.textColor || 'var(--dark-background)';
+    }
+    set textColor(n) {
+        this.setPropValue('textColor', n)
+    }
     setPropValue(prop, val) {
         const layer = this.layer || this;
         layer.settings ??= {};
@@ -1188,21 +1175,20 @@ const LayoutItem = class extends ROCKS({
         layer.settings.states[this.name] ??= {};
         this.states[prop] = val;
         layer.isChanged = true;
-        this.root.designer.$render();
-    },
+        this.root.designer.render();
+    }
     get name() {
         return this.data?.name;
-    },
-    isChanged: false,
+    }
+    isChanged = false;
     get itemType() {
         return this.data?.itemType;
-    },
-    data: Object,
-    __expanded__: false,
-    width: undefined,
+    }
+    __expanded__ = false;
+    width = undefined;
     get icon() {
         return this.data?.icon;
-    },
+    }
     reset(deep) {
         if (deep) {
             for (let item of ((this.items?.length && this.items) || [])) {
@@ -1217,12 +1203,15 @@ const LayoutItem = class extends ROCKS({
             this.__expanded__ = exp;
         }
     }
-}) {
-    constructor(owner, layer, dataKeys = 'items', data) {
-        super(...arguments);
-        this.data = data;
-        this.owner = owner;
-        this.dataKeys = layer?.dataKeys || dataKeys;
-        this.layer = layer;
+    static {
+        // Метаданные property-grid ($public/$editor) в class-синтаксисе не выразить.
+        // this[R] строит реактивные пропсы сразу: конструктор пишет только
+        // plain-поля, а аксессоры обязаны существовать до первого присваивания.
+        this[R];
+        const props = this[R].props;
+        props.label.$public = true;
+        props.hidden.$public = true;
+        props.textColor.$public = true;
+        props.textColor.$editor = '@oda/color-picker[oda-color-picker]';
     }
 }

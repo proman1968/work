@@ -16,6 +16,7 @@ import {
     sendPushNotification,
 } from '../host/push.js';
 import { DEV_MODE, setDevMode } from "../host/config.js";
+import { serverId } from "../host/server-id.js";
 
 /** Прототип HTTP/WS-сессии (`$server.sessions[ssid]` / `params.session`). */
 const sessionProto = {
@@ -97,7 +98,7 @@ export class $server extends $class {
         return this._get_next_item('USERS', $user);
     }
     get id(){
-        return 'WORK';
+        return serverId;
     }
     get label(){
         return 'WORK';

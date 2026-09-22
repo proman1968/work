@@ -10,6 +10,53 @@ import { Reactor } from '../../sources/reactor.js';
 import { VNode } from './vnode.js';
 import { domParser, componentCounter, setAttribute } from './shared.js';
 
+/**
+ * $pdp-наследование (паритет предшественника): голые чтения this.X в методах
+ * резолвятся вверх по host-цепочке. При connect ставим собственные
+ * делегирующие аксессоры для $pdp-имён хостов, которых нет у нас.
+ * Get идёт через host (рекурсия до владельца), set пишет владельцу,
+ * чтобы не плодить тени на промежуточных хостах.
+ */
+const PDP_DELEGATED = '$pdp-delegated';
+function pdpDelegateOwner(el, name) {
+    let host = el.host;
+    while (host) {
+        if (host[R]?.cache?.[PDP_DELEGATED]?.has(name)) {
+            host = host.host;
+            continue;
+        }
+        if (host[R]?.props?.[name] || name in host)
+            return host;
+        host = host.host;
+    }
+    return undefined;
+}
+function installPdpDelegates(el) {
+    const delegated = el[R].cache[PDP_DELEGATED] ??= new Set();
+    for (let host = el.host; host; host = host.host) {
+        if (!host.isComponent)
+            continue;
+        for (const prop of Object.values(host[R]?.props || {})) {
+            const name = prop?.name;
+            if (!prop?.$pdp || !name || name in el || delegated.has(name))
+                continue;
+            delegated.add(name);
+            Object.defineProperty(el, name, {
+                configurable: true,
+                enumerable: false,
+                get() {
+                    return pdpDelegateOwner(this, name)?.[name];
+                },
+                set(value) {
+                    const owner = pdpDelegateOwner(this, name);
+                    if (owner)
+                        owner[name] = value;
+                }
+            });
+        }
+    }
+}
+
 export function registerODA() {
     globalThis.ODA = async function ODA(prototype = {}) {
         return ODA.telemetry[prototype.is] ??= (async () => {
@@ -157,6 +204,7 @@ export function registerODA() {
                         return true;
                     }
                     async connectedCallback() {
+                        installPdpDelegates(this);
                         queueMicrotask(() => {
                             // for(let p of Object.values(this[R].props)){
                             //     if(p.$attr || p.$public){

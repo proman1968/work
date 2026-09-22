@@ -535,7 +535,7 @@ export default {
             block.usage = response.usage;
     },
 
-    /** Единый стрим: effort (гейт allowReasoning), maxOutput, usage, стоп и reasoning-блок через live. */
+    /** Единый стрим (единственная реализация сборки ответа: effort, maxOutput, usage, стоп и reasoning-блок через live). $task._streamChat — лишь адаптер сюда. */
     async streamChat({ model, messages, live, silent, effort, allowReasoning, maxOutput, box } = {}) {
         const modelItem = await WORK.get_item(model);
         const eff = (effort && effort !== 'off' && allowReasoning === true) ? effort : 'off';

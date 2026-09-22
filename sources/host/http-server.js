@@ -100,6 +100,7 @@ export function startServers(requestHandler) {
     httpServer.on('error', (err) => onListenError(PORT, err));
     httpServer.listen({ port: PORT }, () => {
         console.log(`Server running at ${LOCAL_ORIGIN}/`);
+        console.log('Server running at http://localhost:8001/torus/binnet/test-ui/index.html');
     });
 
     let httpsServer;

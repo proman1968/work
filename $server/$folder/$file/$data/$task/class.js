@@ -928,65 +928,35 @@ export default {
         }
         return { system, messages };
     },
+    /** Тонкий адаптер к движку: единый стрим живёт в prompt/$method (streamChat),
+     *  здесь только путь модели/effort и live из сессии. Движку — строка пути:
+     *  резолв item — его дело (объект вместо пути ронял get_item). */
     async _streamChat(params = {}) {
-        const {messages, silent, session} = params;
-        const model = await this.model;
-        const bar = (await this.body).effort;
+        const { messages, silent, session } = params;
+        const self = this;
+        const body = await this.body;
+        const model = body.model;
+        if (typeof model !== 'string' || !model)
+            throw new Error('$task: нет пути модели (body.model — строка)');
+        const bar = body.effort;
         const effort = (bar && bar !== 'off' && params.allowReasoning === true) ? bar : 'off';
-        const cap = silent ? 64 : Number(params.maxOutput);
-        let content = '', usage = 0;
-        let reasonBlock, reasonBox, reasonClosed;
-        const closeReason = async () => {
-            if (!reasonBlock || reasonClosed)
-                return;
-            reasonClosed = true;
-            const items = reasonBox?.items;
-            const i = items?.indexOf(reasonBlock) ?? -1;
-            if (i >= 0)
-                items.splice(i, 1);
-            await this._save(session);
+        const box = await this._active_box();
+        const live = {
+            path: this.short,
+            send: e => session?.send?.({ ...e, path: self.short }),
+            save: () => self._save(session),
+            get stopped() { return !!self._stopped; },
+            get mode() { return taskMode(self.body.mode); },
         };
-        const chat = {
-            messages,
-            temperature: silent ? 0 : .5,
-        };
-        if (effort !== undefined)
-            chat.effort = effort;
-        if (Number.isFinite(cap) && cap > 0)
-            chat.maxOutput = cap;
-        for await (const chunk of model.streamChat(chat)) {
-            if (this._stopped){
-                content = '';
-                break;
-            }
-                
-            if (chunk?.type === 'usage')
-                usage = chunk;
-            else if (chunk?.type === 'reasoning') {
-                if (effort === 'off')
-                    continue;
-                const token = chunk.content || '';
-                if (!token) continue;
-                if (!reasonBlock) {
-                    reasonBox = await this._active_box();
-                    reasonBlock = this._build_block('reasoning');
-                    await this._push_block({ block: reasonBlock, box: reasonBox, session });
-                }
-                if (!this._stopped)
-                    session?.send?.({ type: 'chat.delta', path: this.short, token });
-            }
-            else {
-                let token = chunk?.content ? chunk?.content : chunk;
-                if (typeof token !== 'string')
-                    continue;
-                await closeReason();
-                content += token;
-                if (!silent && !this._stopped)
-                    session?.send?.({ type: 'chat.delta', path: this.short, token });
-            }
-        }
-        await closeReason();
-        return { content, usage };
+        const engine = (await this.$class?._methods)?.prompt;
+        if (!engine || typeof engine.streamChat !== 'function')
+            throw new Error('$task: движок streamChat недоступен');
+        return engine.streamChat({
+            model, messages, live, silent, effort,
+            allowReasoning: params.allowReasoning,
+            maxOutput: params.maxOutput,
+            box,
+        });
     },
     get pipe() {
         return this._pipe ??= new AsyncPromise(async () => {
