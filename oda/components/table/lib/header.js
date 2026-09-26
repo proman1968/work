@@ -1,4 +1,4 @@
-import * as utils from '../table.js'
+import * as utils from '/oda/components/table/table.js'
 ODA({is: 'oda-table-header',
     template:`
         <style>

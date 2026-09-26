@@ -37,19 +37,19 @@ export default {
                 session?.send?.({ type: 'chat.done', path: task.short });
                 task._persistWaiting(block, session);
                 return new Promise(resolve => {
-                    (task._waiters ??= new Map()).set(block.time, resolve);
+                    (task._waiters ??= new Map()).set(block.id, resolve);
                 });
             },
         };
     },
-    /** Доставка ответа человека в ожидающий движок (стоп-блок по time). */
+    /** Доставка ответа человека в ожидающий движок (стоп-блок по id). */
     _resolveWait(block, payload) {
-        const resolve = block && this._waiters?.get(block.time);
+        const resolve = block && this._waiters?.get(block.id);
         if (!resolve)
             return false;
-        this._waiters.delete(block.time);
+        this._waiters.delete(block.id);
         const b = this.body;
-        if (b && typeof b.then !== 'function' && b.waiting?.time === block?.time)
+        if (b && typeof b.then !== 'function' && b.waiting?.id === block?.id)
             delete b.waiting;
         resolve(payload || {});
         return true;
@@ -58,7 +58,7 @@ export default {
     async _persistWaiting(block, session) {
         try {
             const body = await this.body;
-            body.waiting = { time: block.time, type: block.type };
+            body.waiting = { id: block.id, type: block.type };
             await this._save(session);
         }
         catch { /* следующий сейв подберёт */ }
@@ -73,7 +73,7 @@ export default {
         if (!w || this._waiters?.size)
             return null;
         delete body.waiting;
-        const blk = findWaitingBlock(body, new Map([[w.time, true]]));
+        const blk = findWaitingBlock(body, new Map([[w.id, true]]));
         if (blk) {
             blk.state = 'ожидание снято рестартом — повтори вопрос или ответ';
             const parent = parentOfBlock(body, blk);
@@ -476,6 +476,8 @@ export default {
 
         let choice;
         let pickBrief = '';
+        let pre = null;
+        let preHit = false;
         // незакрытый todo → сразу step (не fill и не меню report/question)
         const planned = params.box?.todo?.steps || [];
         const realSteps = (params.box?.items || []).filter(b => b.type === 'step');
@@ -489,6 +491,15 @@ export default {
             else if (next.length === 1)
                 choice = next[0];
             else {
+            // Мгновенный слот стрима: модель холодная, меню едет долго —
+            // «Думаю» видно сразу, а не после ответа меню
+            if (next.includes('thinking') && this.pipe.thinking) {
+                pre = this._build_block('thinking');
+                if (!await this._push_block({ ...params, block: pre }))
+                    pre = null;
+                else
+                    params.block = pre;
+            }
             const lines = next.map(id => {
                 const n = this.pipe[id];
                 const cap = n?.[mode]?.description || n?.[mode]?.inject
@@ -499,7 +510,7 @@ export default {
                 'Выбери в menu пункт, который двигает открытую [goal].',
                 'Ответ: id из списка; субагенту можно дописать поручение в той же строке.',
                 'Пункты-остановки (вопрос, форма) — только если без человека продолжить нельзя.',
-                'Один агентный ход. Не planning «на всякий случай».',
+                'Один агентный ход. planning — только когда впереди 3+ разнородных этапа (найти→оценить→выбрать→поставить); один-два хода — без него, сразу агентом.',
                 need === 'facts'
                     ? 'need=facts: нет фактов — сбор (explore/web/logs); факты в ленте — answer. Сбор цель не закрывает.'
                     : 'need=side: нет сбора в ленте — explore, не work. После сбора — действие (work/image); после create/write — check; answer без ok check цель не закрывает.',
@@ -521,12 +532,34 @@ export default {
                     || (next.includes('thinking') ? 'thinking' : next[0]);
                 pickBrief = picked.brief || '';
             }
+            // Сверка пред-слота: thinking переиспользуем, чужой выбор — снять слот
+            if (pre && choice === 'thinking' && !this._stopped) {
+                params.block = pre;
+                preHit = true;
+            }
+            else if (pre) {
+                const items = params.box.items;
+                const i = items ? items.indexOf(pre) : -1;
+                if (i >= 0)
+                    items.splice(i, 1);
+                dropUsedType(params.box, 'thinking');
+                if (params.block === pre)
+                    params.block = null;
+                await this._save(session);
+            }
         }
 
         if (!choice || this._stopped)
             return { loop: false, block: params.block };
 
-        params.block = this._build_block(choice);
+        let pushed;
+        if (preHit) {
+            // переиспользуем пред-слот (уже в ленте и в using_blocks)
+            pushed = true;
+        }
+        else {
+            params.block = this._build_block(choice);
+        }
         // Поручение из меню (silent-стрим, cap 64 токена) часто обрезано mid-word:
         // обрезанный бриф с путями/полями хуже его отсутствия (агент возьмет полную цель).
         // Короткие целые поручения оставляем, длинные обрезанные отбрасываем.
@@ -534,7 +567,8 @@ export default {
         if (pickBrief && pickBrief.length <= 120 && !briefEchoes(pickBrief, menuCap(this.pipe[choice], mode)))
             params.block.brief = pickBrief;
         const boxBefore = params.box;
-        const pushed = await this._push_block(params);
+        if (pushed === undefined)
+            pushed = await this._push_block(params);
         // выбранный агент исполняет движок класса (live-контракт), не цикл таска
         if (pushed && this.pipe[choice]?.agent) {
             if (hasBody(params.block) && params.block.stop) {
@@ -570,6 +604,12 @@ export default {
             return { loop: this._canLoop(b), block: b };
         }
         if (pushed) {
+            // Снимки для ховер-бара ответа
+            if (choice === 'answer' || choice === 'report') {
+                const b = await this.body;
+                params.block.mode ??= taskMode(b.mode);
+                params.block.model ??= b.model;
+            }
             if (!params.block.box && !hasBody(params.block))
                 await this._fillLeaf(params, session);
             if (this._stopped)
@@ -764,11 +804,13 @@ export default {
                 leaf: params.block,
             });
         }
+        const t0 = Date.now();
         const response = await this._streamChat({
             messages, session,
             maxOutput: next_pipe?.maxOutput ?? box_pipe?.maxOutput,
             allowReasoning: next_pipe?.allowReasoning ?? box_pipe?.allowReasoning,
         });
+        params.block.durationMs = Date.now() - t0;
         this._applyStream(params, response);
     },
     _applyStream(params, response) {
@@ -928,65 +970,35 @@ export default {
         }
         return { system, messages };
     },
+    /** Тонкий адаптер к движку: единый стрим живёт в prompt/$method (streamChat),
+     *  здесь только путь модели/effort и live из сессии. Движку — строка пути:
+     *  резолв item — его дело (объект вместо пути ронял get_item). */
     async _streamChat(params = {}) {
-        const {messages, silent, session} = params;
-        const model = await this.model;
-        const bar = (await this.body).effort;
+        const { messages, silent, session } = params;
+        const self = this;
+        const body = await this.body;
+        const model = body.model;
+        if (typeof model !== 'string' || !model)
+            throw new Error('$task: нет пути модели (body.model — строка)');
+        const bar = body.effort;
         const effort = (bar && bar !== 'off' && params.allowReasoning === true) ? bar : 'off';
-        const cap = silent ? 64 : Number(params.maxOutput);
-        let content = '', usage = 0;
-        let reasonBlock, reasonBox, reasonClosed;
-        const closeReason = async () => {
-            if (!reasonBlock || reasonClosed)
-                return;
-            reasonClosed = true;
-            const items = reasonBox?.items;
-            const i = items?.indexOf(reasonBlock) ?? -1;
-            if (i >= 0)
-                items.splice(i, 1);
-            await this._save(session);
+        const box = await this._active_box();
+        const live = {
+            path: this.short,
+            send: e => session?.send?.({ ...e, path: self.short }),
+            save: () => self._save(session),
+            get stopped() { return !!self._stopped; },
+            get mode() { return taskMode(self.body.mode); },
         };
-        const chat = {
-            messages,
-            temperature: silent ? 0 : .5,
-        };
-        if (effort !== undefined)
-            chat.effort = effort;
-        if (Number.isFinite(cap) && cap > 0)
-            chat.maxOutput = cap;
-        for await (const chunk of model.streamChat(chat)) {
-            if (this._stopped){
-                content = '';
-                break;
-            }
-                
-            if (chunk?.type === 'usage')
-                usage = chunk;
-            else if (chunk?.type === 'reasoning') {
-                if (effort === 'off')
-                    continue;
-                const token = chunk.content || '';
-                if (!token) continue;
-                if (!reasonBlock) {
-                    reasonBox = await this._active_box();
-                    reasonBlock = this._build_block('reasoning');
-                    await this._push_block({ block: reasonBlock, box: reasonBox, session });
-                }
-                if (!this._stopped)
-                    session?.send?.({ type: 'chat.delta', path: this.short, token });
-            }
-            else {
-                let token = chunk?.content ? chunk?.content : chunk;
-                if (typeof token !== 'string')
-                    continue;
-                await closeReason();
-                content += token;
-                if (!silent && !this._stopped)
-                    session?.send?.({ type: 'chat.delta', path: this.short, token });
-            }
-        }
-        await closeReason();
-        return { content, usage };
+        const engine = (await this.$class?._methods)?.prompt;
+        if (!engine || typeof engine.streamChat !== 'function')
+            throw new Error('$task: движок streamChat недоступен');
+        return engine.streamChat({
+            model, messages, live, silent, effort,
+            allowReasoning: params.allowReasoning,
+            maxOutput: params.maxOutput,
+            box,
+        });
     },
     get pipe() {
         return this._pipe ??= new AsyncPromise(async () => {
@@ -1299,13 +1311,21 @@ export default {
         const {block, session} = params;
         const box = params.box ??= await this.body;
         if (!block || !box) return false;
+        block.id ??= genBlockId();
+        // Снимок для ховер-бара: режим и модель на момент отправки (потом меняются)
+        if (block.type === 'prompt' && block.content) {
+            const body = await this.body;
+            block.mode ??= taskMode(body.mode);
+            block.model ??= body.model;
+        }
         box.items ??= [];
         const node = this.pipe[block.type];
         if (node?.agent && block.brief == null) {
             const body = await this.body;
             block.brief = agentBrief(body, block);
         }
-        if (!node?.ignore) {
+        // Ошибочные блоки меню не сужают: их тип в using_blocks не класть
+        if (!node?.ignore && block.type !== 'error') {
             const used = box.using_blocks ??= [];
             if (!used.includes(block.type))
                 used.push(block.type);
@@ -1372,7 +1392,7 @@ export default {
     },
     async remove_block(params = {}) {
         const block = params.block || params.post?.block || {
-            time: params.time ?? params.post?.time,
+            id: params.id ?? params.post?.id,
             type: params.type ?? params.post?.type,
         };
         const body = await this.body;
@@ -1391,6 +1411,40 @@ export default {
         }
         await this._save(params.session);
         return { ok: true };
+    },
+    /**
+     * Сброс до момента (как undo): удалить блок и всё после него,
+     * текст + вложения вернуть в панель ввода. Только лента (v1, без отката файлов).
+     */
+    async revert(params = {}) {
+        const id = params.id ?? params.post?.id;
+        const session = params.session;
+        if (!id)
+            return { ok: false, error: 'id required' };
+        const body = await this.body;
+        const { kept, removed, target } = truncateAfter(body.items, id);
+        if (!target)
+            return { ok: false, error: 'block not found' };
+        body.items = kept;
+        const prompt = target.type === 'prompt' ? String(target.content || '') : '';
+        const includes = collectIncludes(removed);
+        delete body.using_blocks;
+        delete body.halt;
+        delete body.waiting;
+        delete body.todo;
+        delete body.skill;
+        if (this._waiters?.size)
+            this._waiters.clear();
+        if (prompt.trim()) {
+            body.goal = { text: prompt.trim(), status: 'open', resume: null, pursue: 0 };
+        }
+        else if (body.goal) {
+            body.goal.status = 'open';
+            body.goal.resume = null;
+        }
+        await this._save(session);
+        session?.send?.({ type: 'chat.done', path: this.short });
+        return { ok: true, prompt, includes };
     },
     async _save(session) {
         // Атомарно (tmp+rename): клиент перечитывает файл по send(path) —
@@ -1416,12 +1470,19 @@ export default {
     },
 };
 
+/** guid идентичности блока (время коллизирует при пакетном создании). */
+function genBlockId() {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    if (uuid)
+        return uuid;
+    return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+/** Идентичность блоков — строго по id. */
 function sameBlock(a, b) {
     if (!a || !b) return false;
     if (a === b) return true;
-    if (a.time && b.time)
-        return Number(a.time) === Number(b.time) && a.type === b.type;
-    return a.type === b.type && a.label === b.label && a.content === b.content;
+    return !!(a.id && b.id && a.id === b.id);
 }
 
 function releaseStaleStops(box) {
@@ -1438,11 +1499,69 @@ function releaseStaleStops(box) {
     }
 }
 
+/**
+ * Усечение ленты в порядке документа: целевой блок (по id) и всё после —
+ * в removed, всё до — в kept (структура kept не трогается).
+ * @returns {{kept, removed, target}}
+ */
+export function truncateAfter(items, id) {
+    const kept = [];
+    const removed = [];
+    let target = null;
+    for (const b of items || []) {
+        if (target) {
+            removed.push(b);
+            continue;
+        }
+        if (b && b.id === id) {
+            target = b;
+            removed.push(b);
+            continue;
+        }
+        if (b && Array.isArray(b.items)) {
+            const sub = truncateAfter(b.items, id);
+            b.items = sub.kept;
+            if (sub.target) {
+                target = sub.target;
+                removed.push(...sub.removed);
+            }
+        }
+        kept.push(b);
+    }
+    return { kept, removed, target };
+}
+
+/** Пути вложений из удалённого отрезка (блоки includes + file). */
+export function collectIncludes(removed) {
+    const out = [];
+    const walk = (list) => {
+        for (const b of list || []) {
+            if (!b || typeof b !== 'object')
+                continue;
+            if (b.type === 'includes') {
+                const files = Array.isArray(b.files) && b.files.length
+                    ? b.files
+                    : (b.items || []).filter(x => x?.type === 'file');
+                for (const f of files) {
+                    const p = typeof f === 'string' ? f : f?.path;
+                    if (p && !out.includes(p))
+                        out.push(p);
+                }
+            }
+            if (b.type === 'file' && b.path && !out.includes(b.path))
+                out.push(b.path);
+            walk(b.items);
+        }
+    };
+    walk(removed);
+    return out;
+}
+
 function findWaitingBlock(root, waiters) {
     if (!root || !waiters?.size)
         return null;
     for (const b of root.items || []) {
-        if (waiters.has(b.time))
+        if (b?.id && waiters.has(b.id))
             return b;
         const inner = findWaitingBlock(b, waiters);
         if (inner)

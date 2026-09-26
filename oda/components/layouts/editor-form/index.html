@@ -1,0 +1,133 @@
+<meta charset="UTF-8">
+<script type="module" src="../../../oda.js"></script>
+<script type="module" src="./editor-form.js"></script>
+<!--<oda-tester>-->
+    <div vertical style="max-width: 720px; gap: 24px; padding: 8px;">
+        <h3>1. Все типы полей</h3>
+        <oda-editor-form id="demo"></oda-editor-form>
+        <h3>2. Вложенность: поле внутри поля (по мотивам документа)</h3>
+        <oda-editor-form id="doc"></oda-editor-form>
+        <div horizontal style="gap: 8px; align-items: center;">
+            <button id="check">Проверить</button>
+            <span id="valid"></span>
+        </div>
+        <pre id="out" style="background: #f4f4f4; padding: 8px; overflow: auto;"></pre>
+        <h3>3. Встроенный стандарт: объект с METADATA.FIELDS</h3>
+        <oda-editor-form id="meta"></oda-editor-form>
+        <h3>4. Поле-таблица: товары, суммы, итого</h3>
+        <oda-editor-form id="order"></oda-editor-form>
+    </div>
+<!--</oda-tester>-->
+<script type="module">
+    demo.metadata = {
+        title: 'Демо формы',
+        fields: [
+            { id: 'name', label: 'Имя', type: 'String', placeholder: 'Иван', required: true },
+            { id: 'about', label: 'О себе', type: 'Text', placeholder: 'Пара слов...' },
+            { id: 'age', label: 'Возраст', type: 'Number' },
+            { id: 'birth', label: 'Дата рождения', type: 'Date' },
+            { id: 'meeting', label: 'Встреча', type: 'DateTime' },
+            { id: 'agree', label: 'Согласен', type: 'Boolean' },
+            {
+                id: 'color', label: 'Цвет', type: 'Select', required: true,
+                options: [
+                    { value: 'red', label: 'Красный' },
+                    { value: 'green', label: 'Зелёный' },
+                ],
+                other: { label: 'Свой цвет' },
+            },
+            {
+                id: 'size', label: 'Размер', type: 'Radio',
+                options: [
+                    { value: 's', label: 'S', desc: 'Маленький' },
+                    { value: 'm', label: 'M', desc: 'Средний' },
+                ],
+            },
+        ],
+    };
+    demo.data = { name: 'Пётр', size: 'm' };
+
+    doc.metadata = {
+        title: 'Документ',
+        fields: [
+            { id: 'docDate', label: 'Дата', type: 'DateTime', required: true },
+            { id: 'docNo', label: '№', type: 'String', placeholder: 'Номер документа' },
+            { id: 'stock', label: 'Склад', type: 'String' },
+            { id: 'email', label: 'E-mail', type: 'String', inputType: 'email', placeholder: 'name@post.ru' },
+            {
+                id: 'primaryDoc', label: 'Ссылка на первичный документ', type: 'Select',
+                options: [
+                    { value: 'nakl-1', label: 'Накладная №1' },
+                    { value: 'schet-2', label: 'Счёт №2' },
+                ],
+                other: { label: 'Другой документ' },
+            },
+            {
+                id: 'requisites', label: 'Реквизиты первичного документа', type: 'String',
+                children: [
+                    { id: 'reqDate', label: 'Дата', type: 'Date' },
+                    { id: 'reqNo', label: '№', type: 'String' },
+                    {
+                        id: 'contractor', label: 'Контрагент', type: 'Select', required: true,
+                        options: [
+                            { value: 'ooo', label: 'ООО «Поставщик»' },
+                            { value: 'ip', label: 'ИП Иванов' },
+                        ],
+                    },
+                    { id: 'note', label: 'Примечание', type: 'Text' },
+                ],
+            },
+            { id: 'archived', label: 'В архив', type: 'Boolean' },
+            { id: 'locked', label: 'Только чтение', type: 'String', disabled: true },
+        ],
+    };
+    doc.data = { docDate: '2022-04-21T00:00', docNo: '4', locked: 'не редактируется' };
+
+    meta.metadata = {
+        label: 'Модель',
+        METADATA: {
+            FIELDS: [
+                { id: 'baseUrl', type: 'String', placeholder: 'https://...', required: true },
+                { id: 'maxTokens', type: 'Number', placeholder: '4096' },
+                { id: 'functionCalling', type: 'Boolean' },
+            ],
+        },
+    };
+    meta.data = { baseUrl: 'https://example.ru/api' };
+
+    order.metadata = {
+        title: 'Заказ',
+        fields: [
+            {
+                id: 'goods', label: 'Товары', type: 'Table',
+                columns: [
+                    { id: 'article', label: 'Артикул', type: 'String' },
+                    { id: 'name', label: 'Наименование', type: 'String' },
+                    { id: 'unit', label: 'Ед.изм', type: 'String' },
+                    { id: 'qty', label: 'Количество', type: 'Number' },
+                    { id: 'price', label: 'Цена', type: 'Number' },
+                    { id: 'sum', label: 'Сумма', type: 'Number', calc: 'qty * price', total: true },
+                ],
+            },
+            { id: 'total', label: 'Итого', type: 'Number', disabled: true },
+        ],
+    };
+    order.data = {
+        goods: [
+            { article: '123456', name: 'Туфли зелёные', unit: 'пара', qty: 2, price: 3.3 },
+            { article: '212121', name: 'Трусы семейные', unit: 'шт.', qty: 10, price: 20 },
+        ],
+    };
+
+    const render = () => {
+        out.textContent = JSON.stringify({ result: doc.result, errors: doc.errors }, null, 2);
+        valid.textContent = doc.isValid ? 'валидно' : 'есть ошибки';
+        valid.style.color = doc.isValid ? 'green' : 'red';
+    };
+    check.onclick = () => {
+        doc.validate();
+        render();
+    };
+    setInterval(render, 500);
+    render();
+</script>

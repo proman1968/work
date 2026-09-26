@@ -9,8 +9,20 @@ export class Linear extends BinNet {
         this.out_size = config.out_size || 1;
         this.divider = config.divider || 1;
         
+        if (this.in_size % this.divider)
+            throw new Error(`Linear "${config.id ?? ''}": in_size=${this.in_size} не кратен divider=${this.divider}`);
+        if (this.out_size % this.divider)
+            throw new Error(`Linear "${config.id ?? ''}": out_size=${this.out_size} не кратен divider=${this.divider}`);
         this.all_weights_size = (this.in_size / this.divider) * this.out_size * 32;
         this.weight_size = this.all_weights_size / (this.out_size * 32);
+        // Ручка скорости обучения: дополнительные AND-итерации маски (каждая ~ вдвое реже).
+        // 0 = поведение как раньше (дефолт не меняем, чтобы L-тесты и Node не поплыли).
+        this.updateExtra = Math.max(0, Math.trunc(config.linUpdateExtra ?? 0));
+        // Соревнование нейронов: в каждом выходном слове активны только topK
+        // победителей по величине вотума (разные входы — разные победители,
+        // веса не усредняются в «среднее слово»). 32 = как раньше, попиксельно
+        // тот же шейдер (L2-эталон продолжает действовать).
+        this.topK = Math.min(32, Math.max(1, Math.trunc(config.topK ?? 32)));
         
         this.params = { weights: this.all_weights_size };
 
@@ -34,28 +46,47 @@ export class Linear extends BinNet {
         if (!this._shaders.FORWARD) {
             let wg = this.gpu.compute_info(this.out_size);
             this._shaders.FORWARD = wg;
-            let code = `
-                // FORWARD Linear
-                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
-                @group(0) @binding(1) var<storage, read> weights: array<u32>;
-                @group(0) @binding(2) var<storage, read_write> outputs: array<u32>;
-                @compute @workgroup_size(${wg.workgroup_size})
-                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                    ${wg.idx_code_gen} 
-                    const w_size = ${this.weight_size}u;
-                    var out_value = 0u; 
-                    let input_start = (idx / ${this.out_size / this.divider}u) * w_size;
-                    
+            // При topK=32 — попиксельно старый код (sum>0). При меньшем — отбор
+            // победителей: бит ставят только topK нейронов с наибольшим вотумом
+            // (ничьи — в пользу младшего индекса, детерминированно).
+            const voteBody = `
                     for (var o = 0u; o < 32u; o++) {
-                        var sum = 0; 
+                        var sum = 0;
                         let w_start = ((idx * 32u) + o) * w_size;
                         for (var i = 0u; i < w_size; i++) {
                             let input = inputs[input_start + i];
                             let weight = weights[w_start + i];
                             sum += i32(countOneBits(input & weight)) - i32(countOneBits(input & ~weight));
-                        }  
-                        if (sum > 0) { out_value |= (1u << o); }
-                    }     
+                        }
+                        VOTE_COLLECT
+                    }`;
+            const legacyTail = `if (sum > 0) { out_value |= (1u << o); }`;
+            const wtaTail = `s[o] = sum;`;
+            const wtaSelect = `
+                    for (var p = 0u; p < ${this.topK}u; p++) {
+                        var best = 0u;
+                        var bestSum = -2000000000;
+                        for (var j = 0u; j < 32u; j++) {
+                            if (s[j] > bestSum) { bestSum = s[j]; best = j; }
+                        }
+                        out_value |= (1u << best);
+                        s[best] = -2000000000;
+                    }`;
+            const perNeuron = this.topK >= 32 ? legacyTail : wtaTail;
+            let code = `
+                // FORWARD Linear (topK=${this.topK})
+                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
+                @group(0) @binding(1) var<storage, read> weights: array<u32>;
+                @group(0) @binding(2) var<storage, read_write> outputs: array<u32>;
+                @compute @workgroup_size(${wg.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wg.idx_code_gen}
+                    const w_size = ${this.weight_size}u;
+                    var out_value = 0u;
+                    let input_start = (idx / ${this.out_size / this.divider}u) * w_size;
+                    ${this.topK >= 32 ? '' : 'var s: array<i32, 32>;'}
+                    ${voteBody.replace('VOTE_COLLECT', perNeuron)}
+                    ${this.topK >= 32 ? '' : wtaSelect}
                     outputs[idx] = out_value;
                 }
             `;
@@ -78,55 +109,54 @@ export class Linear extends BinNet {
             this.write(this.target);
         }
 
-// Задача: Получить back_targets
-// Для этого находим веса для преобразования outputs в inputs
-// Используя эти веса из targets получим back_targets
-// Находим по отдельности каждый u32 блок веса и постепенно вычисляем отдельные биты back_targets и пакуем в u32
-
+// Задача back: по целям выхода восстановить цели входа.
+// Честное транспонирование: бит входа = знаковый вотум по всем нейронам
+// подсети (бит веса == целевой бит ? +1 : -1). Бинарный аналог W^T·target.
+// (Раньше здесь читался forward-выход как «веса» — сигнал вниз был мусорным.)
         if (!this._shaders.BACK) {
             let wg = this.gpu.compute_info(this.in_size);
             this._shaders.BACK = wg;
-            
+
             // Выделяем буфер под собственный back_target правильного размера (in_size)
             this._shaders.BACK.target = this.write(BinNet.create_zeros_vector(this.in_size), 'back_target');
-            
+
+            const wOut = this.out_size / this.divider;  // выходных u32-блоков на подсеть
+            const wIn = this.weight_size;               // входных u32-блоков на нейрон
+            const inPerSubnet = this.in_size / this.divider;
             let code = `
-                // BACK Linear
-                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
+                // BACK Linear (transpose vote)
+                @group(0) @binding(0) var<storage, read> weights: array<u32>;
                 @group(0) @binding(1) var<storage, read> targets: array<u32>;
-                @group(0) @binding(2) var<storage, read> outputs: array<u32>;
-                @group(0) @binding(3) var<storage, read_write> back_targets: array<u32>; // Новый выходной таргет
+                @group(0) @binding(2) var<storage, read_write> back_targets: array<u32>;
 
                 @compute @workgroup_size(${wg.workgroup_size})
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${wg.idx_code_gen}
-                    const w_size = ${this.out_size / this.divider}u;
-                    let input_word = inputs[idx];
-                    let out_start = (idx / ${this.in_size / this.divider}u) * w_size;
-                    back_targets[idx] = 0u;
-                    for (var b_idx = 0u; b_idx < 32u; b_idx++) {
-                        let input_bit = (input_word >> b_idx) & 1u;
+                    let subnet = idx / ${inPerSubnet}u;
+                    let j = idx % ${inPerSubnet}u;
+                    let out_start = subnet * ${wOut}u;
+                    var back_word = 0u;
+                    for (var b = 0u; b < 32u; b++) {
                         var sum: i32 = 0;
-                        for (var i = 0u; i < w_size; i++) {
-                            var weight = outputs[out_start + i];
-                            if (input_bit == 0u) {
-                                weight = ~weight;
+                        for (var q = 0u; q < ${wOut}u; q++) {
+                            let tword = targets[out_start + q];
+                            for (var o = 0u; o < 32u; o++) {
+                                let w = weights[((out_start + q) * 32u + o) * ${wIn}u + j];
+                                let tbit = (tword >> o) & 1u;
+                                let wbit = (w >> b) & 1u;
+                                sum += select(-1, 1, wbit == tbit);
                             }
-                            let _target = targets[out_start + i];
-                            sum += i32(countOneBits(_target & weight)) - i32(countOneBits(_target & ~weight));
                         }
-                        if (sum > 0) {
-                            back_targets[idx] |= 1u << b_idx;
-                        }
+                        if (sum > 0) { back_word |= 1u << b; }
                     }
+                    back_targets[idx] = back_word;
                 }
-            `;    
+            `;
             wg.compile(code, this.id + ':BACK');
         }
         this._shaders.BACK.compute([
-            this.input,
+            this.params.weights,
             this.target,
-            this.output,
             this._shaders.BACK.target
         ]);
 
@@ -159,7 +189,7 @@ export class Linear extends BinNet {
                     if (error == 0.0) { return; } 
                     
                     var rnd = idx ^ seed;
-                    let loops = i32(clamp(2.0 / (0.14 + error), 1.0, 11.0)); 
+                    let loops = i32(clamp(2.0 / (0.14 + error), 1.0, 11.0)) + ${this.updateExtra}; 
                     var pre_mask = 0xFFFFFFFFu;
                     for (var r = 0; r < loops; r++) { pre_mask &= xorshift32(&rnd); }
                     
@@ -169,8 +199,9 @@ export class Linear extends BinNet {
                         for(var i = 0u; i < w_size; i++) {
                             var inp = inputs[input_start + i];
                             if (target_bit == 0u) { inp = ~inp; }
-                            let rnd_bits = xorshift32(&rnd) & pre_mask;
-                            weights[w_start + i] = (weights[w_start + i] & ~rnd_bits) | (inp & rnd_bits);             
+                            var rnd_bits = xorshift32(&rnd) & pre_mask;
+                            ${this.topK >= 32 ? '' : 'if (((output_word >> o) & 1u) == 0u) { rnd_bits &= xorshift32(&rnd) & xorshift32(&rnd) & xorshift32(&rnd) & xorshift32(&rnd); }'}
+                            weights[w_start + i] = (weights[w_start + i] & ~rnd_bits) | (inp & rnd_bits);
                         }
                     }                
                 }

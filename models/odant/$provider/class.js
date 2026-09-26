@@ -28,7 +28,7 @@ export default {
             placeholder: "GIGACHAT_API_PERS"
         }]
     },
-    icon: "carbon:cloud-upload",
+    icon: "odant:logo",
     label: "odant",
     form: "editor",
     async list_remote(params = {}) {

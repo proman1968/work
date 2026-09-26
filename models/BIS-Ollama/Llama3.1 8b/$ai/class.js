@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:llama3',
     label: 'Llama3.1 8b',
 
     model: 'llama3.1:8b',

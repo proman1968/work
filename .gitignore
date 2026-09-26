@@ -2,6 +2,7 @@ node_modules/
 
 # Secrets and local config
 /#system/mail.json
+/#system/server.json
 /#system/vapid_keys.json
 /#system/settings.json
 /services/AI/GigaChat/$service/#system/settings.json

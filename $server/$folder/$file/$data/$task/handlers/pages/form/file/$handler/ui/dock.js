@@ -49,7 +49,12 @@ ODA({ is: 'microchat-dock',
         for (const k of this._sheetKeys)
             cache[k] = undefined;
     },
-    get docView() { return viewTag(this.current); },
+    get docView() {
+        // html без view-обёртки: в доке сразу iframe
+        if (this.current?.type === 'html' && pageHtml(this.current))
+            return 'microchat-html';
+        return viewTag(this.current);
+    },
     get reports() { return this.$pdp?.dockReports || []; },
     get index() { return this.$pdp?.dockIndex ?? -1; },
     get current() { return this.$pdp?.dockCurrent; },

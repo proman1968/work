@@ -40,14 +40,34 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
         return extract_cells(this.columns);
     },
     get cells_style(){
-        return this.cells.map((col, idx)=>{
-            let width = col.control?.getBoundingClientRect().width || 200;
+        const cells = this.cells;
+        let cached = this[R].cache.cells_widths;
+        if (!cached || cached.cols !== this.columns || cached.length !== cells.length) {
+            cached = this[R].cache.cells_widths = {
+                cols: this.columns,
+                length: cells.length,
+                widths: cells.map(col => col.control?.getBoundingClientRect().width || 200)
+            };
+        }
+        const widths = cached.widths;
+        return cells.map((col, idx)=>{
+            const width = widths[idx];
             return `*::part(cell-${idx}){
     max-width: ${width}px;
     min-width: ${width}px;
     width: ${width}px;
 }`
         }).join('\n');
+    },
+    $listeners: {
+        // Замеры кешируются (getBoundingClientRect вне кэша = layout-thrashing):
+        // сброс — по resize/wake, рендер по ним же идёт штатным путём ядра.
+        resize() {
+            delete this[R].cache.cells_widths;
+        },
+        wake() {
+            delete this[R].cache.cells_widths;
+        }
     },
     $public: {
         allowCategories: false,

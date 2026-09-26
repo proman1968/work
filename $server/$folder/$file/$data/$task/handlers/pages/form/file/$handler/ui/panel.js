@@ -10,7 +10,7 @@ ODA({ is: 'microchat-panel',
             }
             .action-bar { @apply --horizontal; gap: 6px; align-items: stretch; padding: 0 2px 6px; }
         </style>
-        <div class="action-bar" ~if="!pending && actionButton?.label" horizontal>
+        <div class="action-bar" ~if="!pending && actionButton?.label && !hasOwnButtons" horizontal>
             <oda-button border hide-icon flex style="border-radius: 16px;"
                 :color-mode="actionButton.colorMode"
                 :label="actionButton.label"
@@ -77,6 +77,11 @@ ODA({ is: 'microchat-panel',
     get isFormAction() {
         return !!this.$pdp.formBlock;
     },
+    /** Контролы со своими кнопками (в полосе над панелью) — общий action-bar не нужен. */
+    get hasOwnButtons() {
+        const t = this.$pdp?.controlType;
+        return t === 'microchat-control-form' || t === 'microchat-control-quiz';
+    },
     /** Источник модели/effort — файл (data), не двусторонний биндинг: эхо пустого значения от бара игнорируется */
     onModelChanged(e) {
         const n = e.detail?.value;
@@ -91,6 +96,19 @@ ODA({ is: 'microchat-panel',
         this.$item?.fetch('change_effort', { effort: n });
     },
     get usageStats() { return buildUsageStats(this.data, () => this.usageStats = undefined); },
+    /** Черновик из revert: текст в поле, вложения обратно в бар, фокус в ввод. */
+    prefill(res = {}) {
+        if (typeof res.prompt === 'string')
+            this.value = res.prompt;
+        const inc = Array.isArray(res.includes) ? res.includes.filter(Boolean) : [];
+        if (inc.length) {
+            this.files = inc.map(p => ({
+                internalPath: p,
+                name: String(p).split('/').pop() || String(p),
+            }));
+        }
+        this._focus();
+    },
     attached() {
         this._focus();
     },

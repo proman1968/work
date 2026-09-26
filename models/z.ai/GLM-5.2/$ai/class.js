@@ -4,7 +4,6 @@
  * Наследует общие настройки из прототипа (protocol, baseUrl, apiKey).
  */
 export default {
-    icon: 'ai:gigachat',
     label: 'GLM-5.2',
 
     model: 'glm-5.2',

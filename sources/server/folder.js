@@ -1951,7 +1951,10 @@ export class $folder extends $item{
     }
     static parsePathSteps(path) {
         if (Array.isArray(path)) return [...path];
-        return (path ?? '').split('/');
+        if (path == null) return [];
+        if (typeof path !== 'string')
+            throw new Error('get_item: путь — строка, получено: ' + Object.prototype.toString.call(path));
+        return path.split('/');
     }
     static classifyPathStep(step) {
         if (!step) return this.PATH_STEP.EMPTY;

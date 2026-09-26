@@ -4,9 +4,11 @@
  * METADATA содержит поля для настройки подключения.
  * Методы сервиса (methods/) доступны ИИ как функции (function calling).
  *
- * MCP-провайдеры (stdio): наследники задают `mcp: { command, args, env }`
- * в своём class.js и получают клиент бесплатно: `mcp_list_tools` /
- * `mcp_call_tool`. Токены — только `secret:ФАЙЛ` (резолв через read_secret),
+ * MCP-провайдеры двух видов (один класс сущности, разница в полях):
+ * - локальные (stdio): `mcp: { command, args, env }` — процесс рядом;
+ * - прокси (remote): `mcp: { url, headers }` — чужой HTTP-эндпоинт.
+ * Оба получают клиент бесплатно: `mcp_list_tools` / `mcp_call_tool`.
+ * Токены — только `secret:ФАЙЛ` (резолв через read_secret),
  * открытым текстом в class.js запрещены.
  */
 export default {
@@ -61,13 +63,15 @@ export default {
 const MCP_START_TIMEOUT = 15000;
 const MCP_CALL_TIMEOUT = 60000;
 
-/** Один JSON-RPC обмен с MCP-сервером поверх stdio: spawn → initialize → method → kill. */
+/** Один JSON-RPC обмен с MCP-сервером: stdio (spawn) или remote (HTTP). */
 async function mcpRpc(owner, method, params) {
     const cfg = owner?.mcp || {};
+    if (String(cfg.url || '').trim())
+        return mcpHttpRpc(owner, method, params);
     let command = String(cfg.command || '').trim();
     const args = Array.isArray(cfg.args) ? cfg.args.map(String) : [];
     if (!command)
-        return { error: 'mcp: нет mcp.command в class.js провайдера' };
+        return { error: 'mcp: нет mcp.command (stdio) или mcp.url (remote) в class.js провайдера' };
     const env = await mcpEnv(owner, cfg.env);
     if (env.error)
         return env;
@@ -102,7 +106,84 @@ async function mcpRpc(owner, method, params) {
     }
 }
 
-/** Переменные окружения: `secret:ФАЙЛ` резолвятся через read_secret владельца. */
+/** Remote MCP поверх Streamable HTTP: initialize (сессия) → method.
+ *  Заголовки — только явные `mcp.headers` (значения `secret:ФАЙЛ` резолвятся). */
+async function mcpHttpRpc(owner, method, params) {
+    const cfg = owner?.mcp || {};
+    const url = String(cfg.url || '').trim();
+    if (!/^https?:\/\//i.test(url))
+        return { error: 'mcp: плохой mcp.url: ' + url };
+    const env = await mcpEnv(owner, cfg.headers);
+    if (env.error)
+        return env;
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        ...env.vars,
+    };
+    let seq = 1;
+    const call = async (m, p, sessionId) => {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
+            body: JSON.stringify({ jsonrpc: '2.0', id: seq++, method: m, params: p || {} }),
+            signal: AbortSignal.timeout(MCP_CALL_TIMEOUT),
+        });
+        if (res.status === 401 || res.status === 403)
+            throw new Error('HTTP ' + res.status + ' — нужен ключ (secret:ФАЙЛ в headers)');
+        if (!res.ok)
+            throw new Error('HTTP ' + res.status);
+        const sid = res.headers.get('mcp-session-id') || sessionId;
+        const msg = parseHttpRpc(await res.text());
+        if (!msg)
+            throw new Error('пустой ответ');
+        if (msg.error)
+            throw new Error(msg.error.message || JSON.stringify(msg.error));
+        return { result: msg.result, sessionId: sid };
+    };
+    try {
+        const init = await call('initialize', {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'work-mcp', version: '1.0.0' },
+        });
+        const out = await call(method, params || {}, init.sessionId);
+        return out.result ?? out;
+    }
+    catch (e) {
+        return { error: 'mcp ' + method + ' (' + url + '): ' + String(e.message || e) };
+    }
+}
+
+/** Ответ Streamable HTTP: JSON или SSE-поток (строки `data:`). */
+function parseHttpRpc(body) {
+    const text = String(body || '').trim();
+    if (!text)
+        return null;
+    try {
+        const msg = JSON.parse(text);
+        if (msg && typeof msg === 'object' && ('result' in msg || 'error' in msg))
+            return msg;
+    }
+    catch { /* ниже — SSE */ }
+    for (const line of text.split('\n')) {
+        const t = line.trim();
+        if (!t.startsWith('data:'))
+            continue;
+        const payload = t.slice(5).trim();
+        if (!payload || payload === '[DONE]')
+            continue;
+        try {
+            const msg = JSON.parse(payload);
+            if (msg && typeof msg === 'object' && ('result' in msg || 'error' in msg))
+                return msg;
+        }
+        catch { /* следующая строка */ }
+    }
+    return null;
+}
+
+/** Переменные окружения / заголовки: `secret:ФАЙЛ` резолвятся через read_secret владельца. */
 async function mcpEnv(owner, env) {
     const vars = {};
     for (const [k, v] of Object.entries(env && typeof env === 'object' ? env : {})) {

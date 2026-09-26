@@ -121,7 +121,9 @@ export class Head extends BinNet {
 
         if (!this.BACK) {
 
-            this.BACK = this.gpu.compute_info(this.embSize * 2);  // Первая половина потоков обновит веса для target_idx, а вторая половина — для predict
+            // Трети потоков: target (притянуть), predict (оттолкнуть),
+            // случайный негатив (оттолкнуть — рассредоточивает урон по словарю)
+            this.BACK = this.gpu.compute_info(this.embSize * 3);
             let code = `
                 // BACK Head
                 struct Vars {
@@ -150,6 +152,7 @@ export class Head extends BinNet {
                 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     ${this.BACK.idx_code_gen}
                     const e_size = ${this.embSize}u;
+                    const v_size = ${this.vocabSize}u;
 
                     // Базовое случайное зерно из JS
                     let base_seed = bitcast<u32>(vars.random);
@@ -160,19 +163,31 @@ export class Head extends BinNet {
                     // Генерируем фиксированный процент маски (пример: 6.25% == 2 единицы в маске) через И
                     // Первый множитель дает 16 единиц в маске, каждый последующий делит это число на 2
                     let mask = rnd & ((rnd >> 5u) | (rnd << 27u)) & ((rnd >> 11u) | (rnd << 21u)) & ((rnd >> 17u) | (rnd << 15u));
+                    // Притяжение цели — вчетверо сильнее отталкивания (~25%):
+                    // запоминание должно обгонять урон по чужим рядам
+                    let mask_pull = rnd & ((rnd >> 5u) | (rnd << 27u));
 
-                    // Разделяем потоки: первая половина для target, вторая для predict
+                    // Разделяем потоки на три трети: target, predict, случайный негатив
                     if (idx < e_size) {
-                        let i = idx;   
+                        let i = idx;
                         let w_index = vars.target_idx * e_size + i;
                         let old_w = weights[w_index];
                         let new_w = inputs[i];
-                        weights[w_index] = (old_w & ~mask) | (new_w & mask);
+                        weights[w_index] = (old_w & ~mask_pull) | (new_w & mask_pull);
                         back_target[i] = weights[w_index];
-                    } 
-                    else {
+                    }
+                    else if (idx < e_size * 2u) {
                         let i = idx - e_size; // Смещаем индекс обратно к 0..e_size
                         let w_index = vars.predict * e_size + i;
+                        let old_w = weights[w_index];
+                        let new_w = ~inputs[i];
+                        weights[w_index] = (old_w & ~mask) | (new_w & mask);
+                    }
+                    else {
+                        let i = idx - e_size * 2u;
+                        var r = hash(base_seed ^ (idx + 7919u)) % v_size;
+                        if (r == vars.target_idx) { r = (r + 1u) % v_size; }
+                        let w_index = r * e_size + i;
                         let old_w = weights[w_index];
                         let new_w = ~inputs[i];
                         weights[w_index] = (old_w & ~mask) | (new_w & mask);

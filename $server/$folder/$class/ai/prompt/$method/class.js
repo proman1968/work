@@ -62,6 +62,7 @@ export default {
             label: agent.stop === true ? undefined : agent.label,
             icon: agent.icon,
         };
+        block.id ??= genBlockId();
         block.time ??= Date.now();
         if (agent.stop != null)
             block.stop ??= agent.stop;
@@ -176,6 +177,21 @@ export default {
         const ids = nextIds(agent, block, toolIds);
         if ((block.items || []).some(b => b.type === 'create' && b.done && !b.error))
             return this.total(ctx, tools);
+        // Все ходы отклонены (init), а итога нет: молчание здесь превращается
+        // в пустой бокс → loop:false → crash у владельца. Оставляем видимый след,
+        // чтобы таск ушёл в answer («нет данных»), а не в обрыв.
+        // Телом считается и сам бокс (content/error/draft), не только дети.
+        const selfBody = !!(block.content || block.error || draftText(block));
+        if (!ids.some(id => id !== 'stop' && id !== 'total')
+            && (toolIds.length || nested.length)
+            && !block._skipNote
+            && !selfBody
+            && !(block.items || []).some(b => b && (b.content || b.error || draftText(b)))) {
+            block._skipNote = true;
+            block.state = 'нет ходов';
+            block.content = '[все ходы отклонены: не с чего собирать итог]';
+            await live.save?.();
+        }
         const skillTools = params.skillStep?.tools;
         const rawNext = skillTools?.length
             ? skillToolNext(skillTools, ids, block)
@@ -195,7 +211,7 @@ export default {
             // (ribbon и preview фильтруют hidden) и впервые попадает в сейв
             // уже видимым — после init. Отказанный/прерванный init снимает его
             // до первого сейва с ним: в файле остаётся только using_blocks.
-            const child = { type: next, label: tool.label, icon: tool.icon, time: Date.now(), hidden: true };
+            const child = { type: next, label: tool.label, icon: tool.icon, id: genBlockId(), time: Date.now(), hidden: true };
             if (tool.stop != null)
                 child.stop = tool.stop;
             // doc — только после done (write/create evidence); не копировать с tool на пустой стрим
@@ -249,10 +265,14 @@ export default {
             }
             if (typeof tool.recalc === 'function')
                 await tool.recalc({
-                    block: child, box: block, messages, session, live, exec,
+                    block: child, box: block, messages, session, model, live, exec, agent,
                     engine: this, task: params.task,
+                    streamChat: (p) => this.streamChat({ ...p, model, live }),
+                    callAgent: (id, brief) => this.callAgent(ctx, { agent: id, brief, parent: block }),
                 });
             pushLift(messages, child);
+            // Агенты кладут внуков напрямую: у каждого блока должен быть id
+            stampIds(block);
             // Леджер попыток: идентичный провал дважды — dropUsed агента игнорируется,
             // тип остаётся в using_blocks (защита от вечных циклов вида read ×15)
             noteAttempt(block, next, child);
@@ -318,7 +338,7 @@ export default {
         const box = parent || ctx.block;
         const live = ctx.live;
         box.items ??= [];
-        const sub = { type: id, time: Date.now() };
+        const sub = { type: id, id: genBlockId(), time: Date.now() };
         const text = String(brief || '').trim();
         if (text)
             sub.brief = text;
@@ -332,6 +352,22 @@ export default {
             box,
             skillStep: undefined,
         });
+        // Стоп субагента (form/question): ждём человека, как tool-стопы.
+        // Без live.wait (standalone) — возвращаем как есть, ждёт владелец.
+        if (sub.stop && !sub.error && !live?.stopped) {
+            if (!live?.wait) {
+                pushLift(ctx.messages, sub);
+                return { ok: !sub.error, agent: id, content: sub.content, state: sub.state, block: sub };
+            }
+            const res = await live.wait(sub) || {};
+            if (live?.stopped)
+                return { ok: false, agent: id, block: sub };
+            if (res.accept === false)
+                recordReject(box, id, sub);
+            if (res.content)
+                ctx.messages.push({ role: 'user', content: String(res.content) });
+            await live?.save?.();
+        }
         if (sub.skip || isEmptyResult(sub)) {
             const i = box.items.indexOf(sub);
             if (i >= 0)
@@ -486,6 +522,7 @@ export default {
     },
 
     async fill(block, { agent, model, messages, live, box, effort }) {
+        const t0 = Date.now();
         const chat = messages.map(m => ({ ...m }));
         if (agent.system && chat[0]?.role === 'system')
             chat[0] = { role: 'system', content: chat[0].content + '\n\n' + agent.system };
@@ -513,11 +550,15 @@ export default {
             block.content = text;
         else
             delete block.content;
+        block.durationMs = Date.now() - t0;
+        // Снимки для ховер-бара ответа
+        block.mode ??= live?.mode;
+        block.model ??= model;
         if (response.usage)
             block.usage = response.usage;
     },
 
-    /** Единый стрим: effort (гейт allowReasoning), maxOutput, usage, стоп и reasoning-блок через live. */
+    /** Единый стрим (единственная реализация сборки ответа: effort, maxOutput, usage, стоп и reasoning-блок через live). $task._streamChat — лишь адаптер сюда. */
     async streamChat({ model, messages, live, silent, effort, allowReasoning, maxOutput, box } = {}) {
         const modelItem = await WORK.get_item(model);
         const eff = (effort && effort !== 'off' && allowReasoning === true) ? effort : 'off';
@@ -541,39 +582,56 @@ export default {
             reasonBlock = null;
             await live?.save?.();
         };
-        for await (const chunk of modelItem.streamChat(chat)) {
-            if (live?.stopped) {
-                content = '';
+        // Падение runner'а (500) обычно лечится повтором: Ollama поднимает
+        // runner на следующем запросе. Ретраим только до первого токена —
+        // повтор посреди стрима продублировал бы уже отосланные дельты.
+        let attempt = 0;
+        for (;;) {
+            try {
+                for await (const chunk of modelItem.streamChat(chat)) {
+                    if (live?.stopped) {
+                        content = '';
+                        break;
+                    }
+                    if (chunk?.type === 'usage') {
+                        usage = chunk;
+                        continue;
+                    }
+                    if (chunk?.type === 'reasoning') {
+                        if (eff === 'off')
+                            continue;
+                        const token = chunk.content || '';
+                        if (!token)
+                            continue;
+                        if (!reasonBlock && box?.items) {
+                            // hidden: эфемерный индикатор CoT — ribbon/preview его не рисуют,
+                            // в сводки total не попадает (фильтр ниже), на диск — только скрытым
+                            reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, hidden: true, time: Date.now() };
+                            box.items.push(reasonBlock);
+                            await live?.save?.();
+                        }
+                        if (reasonBlock)
+                            live?.send?.({ type: 'chat.delta', token });
+                        continue;
+                    }
+                    const token = typeof chunk === 'string' ? chunk : chunk?.content;
+                    if (typeof token !== 'string' || !token)
+                        continue;
+                    await closeReason();
+                    content += token;
+                    if (!silent)
+                        live?.send?.({ type: 'chat.delta', token });
+                }
                 break;
             }
-            if (chunk?.type === 'usage') {
-                usage = chunk;
-                continue;
+            catch (e) {
+                await closeReason();
+                attempt++;
+                const canRetry = attempt <= STREAM_RETRY_ATTEMPTS && !content && !live?.stopped;
+                if (!canRetry)
+                    throw e;
+                await new Promise(r => setTimeout(r, STREAM_RETRY_PAUSE_MS));
             }
-            if (chunk?.type === 'reasoning') {
-                if (eff === 'off')
-                    continue;
-                const token = chunk.content || '';
-                if (!token)
-                    continue;
-                if (!reasonBlock && box?.items) {
-                    // hidden: эфемерный индикатор CoT — ribbon/preview его не рисуют,
-                    // в сводки total не попадает (фильтр ниже), на диск — только скрытым
-                    reasonBlock = { type: 'reasoning', label: 'Рассуждаю', icon: 'carbon:idea', ignore: true, hidden: true, time: Date.now() };
-                    box.items.push(reasonBlock);
-                    await live?.save?.();
-                }
-                if (reasonBlock)
-                    live?.send?.({ type: 'chat.delta', token });
-                continue;
-            }
-            const token = typeof chunk === 'string' ? chunk : chunk?.content;
-            if (typeof token !== 'string' || !token)
-                continue;
-            await closeReason();
-            content += token;
-            if (!silent)
-                live?.send?.({ type: 'chat.delta', token });
         }
         await closeReason();
         return { content: content.trim(), usage };
@@ -771,6 +829,32 @@ export default {
     },
 };
 
+/** guid идентичности блока (время коллизирует при пакетном создании). */
+function genBlockId() {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    if (uuid)
+        return uuid;
+    return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+/** Проставить id всему поддереву (агенты рождают внуков напрямую, минуя turn). */
+function stampIds(root) {
+    if (!root || typeof root !== 'object')
+        return;
+    if (Array.isArray(root)) {
+        for (const b of root) stampIds(b);
+        return;
+    }
+    root.id ??= genBlockId();
+    if (Array.isArray(root.items)) {
+        for (const b of root.items) stampIds(b);
+    }
+}
+
+/** Повторы упавшего стрима до первого токена (пауза между ними). */
+export const STREAM_RETRY_ATTEMPTS = 2;
+export const STREAM_RETRY_PAUSE_MS = 2000;
+
 /** Бюджет ходов одного бокса: второй контур защиты от вечных циклов (первый — леджер попыток). */
 export const MAX_TURNS = 50;
 
@@ -821,14 +905,24 @@ export function trippedBreaker(box, child) {
 }
 
 /**
- * Учёт попытки tool. Успех/нейтраль — сброс счётчиков tool (операнд сменился).
+ * Учёт попытки tool. Успех с новым операндом — сброс счётчиков tool.
  * Идентичный провал MAX_SAME_ATTEMPTS раз — dropUsed агента игнорируется:
  * тип возвращается в using_blocks, меню только сужается.
+ * Идентичный успех (тот же тип + побайтово тот же контент сиблинга) —
+ * тоже повтор: новой информации ноль, тип возвращается в using_blocks.
+ * Перечитывание изменившегося файла не страдает (контент другой — не повтор).
  */
 export function noteAttempt(box, next, child) {
     if (!box || !next || !child)
         return;
     if (!child.error) {
+        if (sameContentSibling(box, next, child)) {
+            const used = box.using_blocks ??= [];
+            if (!used.includes(next))
+                used.push(next);
+            child.content = [child.content, '[повтор: тот же ' + next + ' с тем же результатом — заблокирован, выбери другой ход]'].filter(Boolean).join('\n\n');
+            return;
+        }
         const at = box.attempts;
         if (at) {
             for (const k of Object.keys(at))
@@ -847,6 +941,17 @@ export function noteAttempt(box, next, child) {
             used.push(next);
         child.content = [child.content, '[повтор ' + at[key] + ': тот же ' + next + ' с тем же операндом заблокирован — выбери другой ход или спроси человека]'].filter(Boolean).join('\n\n');
     }
+}
+
+/** Сиблинг того же типа с побайтово тем же контентом (без учёта пометок леджера). */
+function sameContentSibling(box, next, child) {
+    const content = String(child?.content || '');
+    if (!content)
+        return false;
+    const strip = s => String(s || '').replace(/\n\n\[повтор[^\]]*\]$/, '');
+    const norm = strip(content);
+    return (box?.items || []).some(b =>
+        b !== child && b?.type === next && !b?.error && strip(b.content) === norm);
 }
 
 /**

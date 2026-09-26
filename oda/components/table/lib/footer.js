@@ -70,7 +70,7 @@ ODA({is: 'oda-table-footer-cell',
         }
     },
     get icon(){
-        return this[PROPS].aggregate.$list[this.aggregate] || '';
+        return this[R]?.props?.aggregate?.$list?.[this.aggregate] || '';
     },
     get row(){
         return this.host.row;
@@ -91,7 +91,7 @@ ODA({is: 'oda-table-footer-cell',
     $listeners:{
         tap(e){
             e.preventDefault();
-            let list = this[PROPS].aggregate.$list
+            let list = this[R]?.props?.aggregate?.$list || {}
             let items = Object.keys(list).map((label, i)=>{
                 return {label, execute: () => {
                     this.aggregate = label

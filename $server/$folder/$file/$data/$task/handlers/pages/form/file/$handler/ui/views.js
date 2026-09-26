@@ -1,4 +1,6 @@
-import { parseFormHtml, unwrapFence } from '/$server/$folder/$file//$task/task.js';
+import { unwrapFence } from '/$server/$folder/$file/$data/$task/task.js';
+import { rowTag } from './row.js';
+import { clampFrameHeight } from './rows.js';
 
 export function viewTag(item) {
     if (!item?.type) return 'microchat-view';
@@ -6,7 +8,7 @@ export function viewTag(item) {
     if (item.type === 'file' && item.crit)
         return 'microchat-view';
     const name = 'microchat-view-' + item.type;
-    if (item.type === 'step' || item.type === 'prompt' || item.type === 'form' || item.type === 'todo' || item.type === 'html' || item.type === 'file' || item.type === 'generate')
+    if (item.type === 'step' || item.type === 'prompt' || item.type === 'todo' || item.type === 'file' || item.type === 'generate')
         return name;
     return (customElements.get(name) || ODA.telemetry?.[name]) ? name : 'microchat-view';
 }
@@ -54,17 +56,14 @@ ODA({ is: 'microchat-ribbon',
                 min-height: 0;
             }
         </style>
-        <microchat-view-todo ~if="todo" :data="todo"></microchat-view-todo>
-        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" ~for="items" ></div>
+        <microchat-row-todo ~if="todo" :data="todo"></microchat-row-todo>
+        <div ~is="tag($for.item)" ~if="!$for.item.hidden" :data="$for.item" :$item ~for="items" ></div>
     `,
     top: {
         $def: false,
         $attr: true,
         get() { return !!this.$item; },
     },
-    /** версия раскладки: attach/detach вложенных view бампает её; DOM-геттеры стиков (todoView, prevPrompt)
-     *  читают её и переобходят DOM — иначе Реактор кэширует обход навсегда, а DOM-мутации ему невидимы */
-    layoutTick: 0,
     get todo(){
         return this.data?.todo
     },
@@ -93,9 +92,15 @@ ODA({ is: 'microchat-ribbon',
             if (this.items?.length) this.pinBottom(true);
         },
     },
-    /** specialty этого файла — сразу; остальные — если CE/telemetry уже есть */
+    /** Строки проекции — сразу; остальное — старые view (этап 2б). */
     tag(item) {
-        return viewTag(item);
+        return rowTag(item, this.rowCtx) || viewTag(item);
+    },
+    get rowCtx() {
+        return {
+            focusedId: this.$pdp?.focusedBlock?.id,
+            streaming: !!this.$pdp?.streaming,
+        };
     },
     attached() {
         /** Follow on/off — только намерение пользователя (wheel/touch/drag).
@@ -188,12 +193,6 @@ ODA({ is: 'microchat-view',
                 margin: 0;
                 border-radius: 0;
             }
-            :host([host-sticky]) {
-                position: sticky;
-                top: var(--chat-sticky-top, 0px);
-                z-index: var(--chat-sticky-z, 115);
-                
-            }
             summary {
                 cursor: pointer;
                 user-select: none;
@@ -255,7 +254,7 @@ ODA({ is: 'microchat-view',
 
         <details ~if="showTitle" :open="open" :title="data?.menu || data.type" @toggle="onToggle">
             <summary vertical flex :color-mode
-                    @resize="onResize" @click="onSummaryClick" ~style="headerStyle">
+                    @click="onSummaryClick">
                 <div class="title" horizontal flex>
                     <item-icon no-flex ~if="sender" :$item="sender" default="icons:account-circle" :icon-size="iconSize / 1.5"></item-icon>
                     <oda-icon no-flex ~if="!sender && typeIcon" default="iconoir:google-docs" :icon="typeIcon" :icon-size="iconSize / 1.5"></oda-icon>
@@ -361,9 +360,15 @@ ODA({ is: 'microchat-view',
         return this.data?.state;
     },
     get typeIcon() {
-        if (!this.content && this.$pdp.pending)
+        if ((!this.content && this.$pdp.pending) || this.ancestorActive)
             return 'spinners:3-dots-scale';
         return this.data?.icon;
+    },
+    /** Предок фокуса, пока идёт работа — волна (как было автоматом). */
+    get ancestorActive() {
+        const id = this.data?.id;
+        return !!id && this.$pdp?.focusedBlock?.id !== id
+            && !!this.$pdp?.activeIds?.has(id) && !!this.$pdp?.pending;
     },
     get items() { return this.data?.items || []; },
     sender: null,
@@ -395,6 +400,15 @@ ODA({ is: 'microchat-view',
         return Reactor.equal(this.data, this.$pdp.focusedBlock) ? text : '';
     },
     get viewContent() {
+        // html в ленте — только шапка: исходник смотрит слот и док, не лента
+        if (this.data?.type === 'html' && !this.onlyDoc)
+            return this.streamTail || '';
+        // form в ленте — только шапка: спека и поля живут в слоте; сданная — ответы
+        if (this.data?.type === 'form' && !this.onlyDoc) {
+            if (this.data?.approved)
+                return (formAnswersText(this.data) || '') + this.streamTail;
+            return this.streamTail || '';
+        }
         let text = (this.content || '') + this.streamTail;
         // .md в evidence раньше клали в ```markdown — показать как form, не как code
         if (/\.md$/i.test(String(this.data?.path || '')))
@@ -402,6 +416,10 @@ ODA({ is: 'microchat-view',
         return text;
     },
     get showContent() {
+        if (this.data?.type === 'html' && !this.onlyDoc)
+            return !!this.streamTail;
+        if (this.data?.type === 'form' && !this.onlyDoc)
+            return !!(this.data?.approved || this.streamTail);
          return !!(this.content || this.streamTail || this.items || !this.showTitle || this.data?.url);
     },
     /** expand-box: в ленте дети, не маркер; в доке — итог бокса */
@@ -419,91 +437,11 @@ ODA({ is: 'microchat-view',
         if (this.data?.ignore && this.streamTail) return 'info-invert';
         return this.showTitle ? 'info-invert' : 'content';
     },
-    height: 0,
-    onResize(e) {
-        const el = e.target;
-        const s = getComputedStyle(el);
-        this.height = el.offsetHeight + (parseFloat(s.marginTop) || 0) + (parseFloat(s.marginBottom) || 0);
-    },
-    get headerHeight() { return this.showTitle ? (this.height || 0) : 0; },
-    get parentView() {
-        const el = this.host?.host;
-        return el?.localName?.startsWith('microchat-view') ? el : null;
-    },
-    /** верхняя лента: цепочка host стабильна, кэш безопасен */
-    get topRibbon() {
-        let n = this;
-        while (n) {
-            const r = n.host;
-            if (r?.top) return r;
-            n = r?.host;
-        }
-        return null;
-    },
-    /** attach/detach любого view инвалидирует DOM-обходы: без этого план, появившийся
-     *  посреди сессии, не попадает в закэшированные todoView/prevPrompt до перезагрузки */
-    attached() { this._bumpLayout(); },
-    detached() { this._bumpLayout(); },
-    _bumpLayout() {
-        const r = this.topRibbon;
-        if (r) r.layoutTick++;
-    },
-    get todoView() {
-        const r = this.topRibbon;
-        if (!r) return null;
-        r.layoutTick; // подписка на версию раскладки
-        return r.$?.('microchat-view-todo') || null;
-    },
-    get prevPrompt() {
-        this.topRibbon?.layoutTick; // подписка на версию раскладки
-        let el = this.previousElementSibling;
-        while (el) {
-            if (el.localName === 'microchat-view-prompt' || el.data?.type === 'prompt')
-                return el;
-            el = el.previousElementSibling;
-        }
-        return null;
-    },
-    get top() {
-        if (this.localName === 'microchat-view-todo' || this.data?.type === 'todo')
-            return 0;
-        const parent = this.parentView;
-        const above = parent
-            ? (parent.top || 0) + (parent.headerHeight || 0)
-            : (this.todoView?.headerHeight || 0);
-        if (this.data?.type === 'prompt')
-            return above;
-        return above + (this.prevPrompt?.headerHeight || 0);
-    },
-    hostSticky: {
-        $attr: true,
-        get() {
-            return this.data?.type === 'prompt' || this.data?.type === 'todo'
-                || this.localName === 'microchat-view-prompt'
-                || this.localName === 'microchat-view-todo';
-        },
-    },
-    get headerStyle() {
-        const top = (this.top || 0) + 'px';
-        if (this.hostSticky) {
-            const todo = this.data?.type === 'todo' || this.localName === 'microchat-view-todo';
-            this.style.setProperty('--chat-sticky-top', top);
-            this.style.setProperty('--chat-sticky-z', todo ? '120' : '115');
-            return { position: 'static' };
-        }
-        this.style.removeProperty('--chat-sticky-top');
-        this.style.removeProperty('--chat-sticky-z');
-        return { position: 'sticky', top, zIndex: 100 - this.depth };
-    },
-
     // --- slots ---
     subTitleTag: '',
     extendTag: '',
     get result() {
         return this.extendTag ? this.$(this.extendTag)?.result : undefined;
-    },
-    get depth() {
-        return (this.host.host?.depth ?? 0) + 1;
     },
 });
 
@@ -558,14 +496,6 @@ export function pageHtml(data) {
     return raw || undefined;
 }
 
-function formParts(data) {
-    const parsed = parseFormHtml(data?.content);
-    return {
-        caption: parsed.content,
-        markup: data?.html || parsed.html,
-    };
-}
-
 /** approved в ленте — без служебной строки [form answers]. */
 function formAnswersText(data) {
     return String(data?.approved || '').replace(/^\s*\[form answers\]\s*/i, '').trim();
@@ -617,12 +547,10 @@ ODA({ is: 'microchat-view-file',
 ODA({ is: 'microchat-view-generate',
     extends: 'microchat-view-file',
     attached() {
-        this._bumpLayout();
         this._armTick();
     },
     detached() {
         this._clearTick();
-        this._bumpLayout();
     },
     _armTick() {
         this._clearTick();
@@ -661,237 +589,91 @@ ODA({ is: 'microchat-view-generate',
     },
 });
 
-/** html — слот в ленте: страница из content, вид по type. */
-ODA({ is: 'microchat-view-html',
-    extends: 'microchat-view',
-    get extendTag() { return pageHtml(this.data) ? 'microchat-html' : ''; },
-    get showContent() { return !pageHtml(this.data) && !!(this.content || this.streamTail); },
-});
-
 ODA({ is: 'microchat-html',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
                 width: 100%;
+                height: 100%;
                 min-width: 0;
+                min-height: 0;
                 box-sizing: border-box;
             }
             iframe {
                 width: 100%;
+                height: 80vh;
+                min-height: 120px;
                 border: none;
                 display: block;
                 background: var(--content-background);
             }
+            /* Док: лист залит целиком, как было (80vh — только чат). */
+            :host([only-doc]) iframe {
+                height: 100%;
+            }
         </style>
-        <iframe sandbox="allow-scripts" :srcdoc="srcdoc" style="min-height: 30vh; height: stretch; min-width: 30vw;"></iframe>
+        <iframe sandbox="allow-scripts allow-same-origin" :srcdoc="srcdoc" style="min-width: 30vw;" :style="frameStyle" @load="measure"></iframe>
     `,
     data: null,
     $item: null,
+    onlyDoc: {
+        $def: false,
+        $attr: true,
+    },
+    pingHeight: null,
     get html() { return pageHtml(this.data) || ''; },
     get srcdoc() {
         return this.html;
-    }
-});
-
-/** form — слот: разметка из content (fence); после approve — ответы, не контролы. */
-ODA({ is: 'microchat-view-form',
-    extends: 'microchat-view',
-    get extendTag() {
-        if (this.data?.approved) return '';
-        if (!formParts(this.data).markup) return '';
-        const ui = this.data.ui;
-        if (!ui) return 'microchat-form';
-        const name = String(ui);
-        if (name.includes('-')) return name;
-        return 'microchat-form-' + name;
     },
-    get viewContent() {
-        if (this.data?.approved)
-            return (formAnswersText(this.data) || this.data.approved) + this.streamTail;
-        return (formParts(this.data).caption || '') + this.streamTail;
+    get frameStyle() {
+        return this.pingHeight ? { height: this.pingHeight } : null;
     },
-    get showContent() {
-        return !!(this.data?.approved || formParts(this.data).caption || this.streamTail);
-    },
-});
-
-/**
- * Форма в слоте ленты: разметка из content (fence), values с name-контролов → APPROVE.
- */
-ODA({ is: 'microchat-form',
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical;
-                width: 100%;
-                min-width: 0;
-                box-sizing: border-box;
-                padding: 8px;
-                font-size: small;
-                @apply --info-invert;
-            }
-            .slot {
-                @apply --vertical;
-                gap: 8px;
-                width: 100%;
-                min-width: 0;
-            }
-            .slot :where(fieldset) {
-                width: 100%;
-                max-width: 400px;
-                min-width: 0;
-                box-sizing: border-box;
-                border-radius: 8px;
-                @apply --light;
-                @apply --vertical;
-                margin-bottom: 8px;
-                gap: 4px;
-            }
-            .slot :where(legend) {
-                font-size: x-small;
-                @apply --light;
-                @apply --raised;
-                padding: 4px 8px;
-                border-radius: 4px;
-                width: stretch;
-            }
-            .slot :where(label) {
-                @apply --horizontal;
-                align-items: center;
-                gap: 8px;
-                font-size: xx-small;
-            }
-            .slot :where(input, select, textarea) {
-                border: 1px solid var(--border-color);
-                @apply --content;
-                padding: 6px 8px;
-                font: inherit;
-                color: inherit;
-                width: 100%;
-                min-width: 0;
-                border-radius: 4px;
-                box-sizing: border-box;
-                outline: none;
-            }
-            .slot :where(textarea) { resize: vertical; min-height: 3em; }
-            .slot :where(input[type="checkbox"], input[type="radio"]) { width: auto; flex-shrink: 0; }
-            .slot :where([hidden]) { display: none !important; }
-        </style>
-        <div class="slot" ~if="html" ~html="html" @input="onInput" @change="onEdit"></div>
-    `,
-    data: {
-        $def: null,
-        set() { this.async(() => this.restore()); },
-    },
-    get html() {
-        return formParts(this.data).markup || '';
+    setHeight(px) {
+        const h = clampFrameHeight(px, window.innerHeight);
+        if (h && h !== this.pingHeight)
+            this.pingHeight = h;
     },
     attached() {
-        this.addEventListener('submit', e => { e.preventDefault(); this.sync(); }, true);
-        this.async(() => this.restore());
-    },
-    get result() {
-        const out = {};
-        for (const el of this.$$('input, select, textarea')) {
-            const key = el.name || el.id;
-            if (!key) continue;
-            if (el.type === 'checkbox')
-                out[key] = !!el.checked;
-            else if (el.type === 'radio') {
-                if (el.checked) out[key] = el.value;
-            } else
-                out[key] = el.value;
-        }
-        return out;
-    },
-    /** По input — только показ/скрытие «Другое», без записи в data: мутация data на каждый символ перерисовывает форму и теряет ввод. */
-    onInput() {
-        this.syncOther();
-    },
-    onEdit() {
-        this.syncOther();
-        this.sync();
-    },
-    sync() {
-        if (this.data) this.data.values = this.result;
-    },
-    restore() {
-        const values = this.data?.values || this.data?.answer;
-        if (values) {
-            for (const el of this.$$('input, select, textarea')) {
-                const key = el.name || el.id;
-                if (!key || values[key] == null) continue;
-                if (el.matches(':focus')) continue;
-                if (el.type === 'checkbox') el.checked = !!values[key];
-                else if (el.type === 'radio') el.checked = String(el.value) === String(values[key]);
-                else el.value = values[key];
+        this._onPing = (e) => {
+            let w = null;
+            try {
+                w = this.$('iframe')?.contentWindow;
             }
-        }
-        this.syncOther();
+            catch { return; }
+            if (!w || e.source !== w)
+                return;
+            this.setHeight(e.data?.microchatHeight);
+        };
+        window.addEventListener('message', this._onPing);
+        // Замер для старых приложений без пинг-скрипта (в доке не нужен — там 100%)
+        this._measureTimer = setInterval(() => this.measure(), 2000);
+        this.async(() => this.measure());
     },
-    syncOther() {
-        for (const sel of this.$$('select'))
-            hideOtherInput(otherInputNear(sel), choiceIsOther(sel));
-        const seen = new Set();
-        for (const radio of this.$$('input[type="radio"]')) {
-            const name = radio.name;
-            if (!name || seen.has(name)) continue;
-            seen.add(name);
-            const group = [...this.$$(`input[type="radio"][name="${cssEscape(name)}"]`)];
-            const checked = group.find(r => r.checked);
-            const otherRadio = group.find(r => choiceIsOther(r));
-            hideOtherInput(otherInputNear(otherRadio || checked || radio), choiceIsOther(checked));
+    detached() {
+        window.removeEventListener('message', this._onPing);
+        if (this._measureTimer) {
+            clearInterval(this._measureTimer);
+            this._measureTimer = 0;
         }
-        for (const box of this.$$('input[type="checkbox"]')) {
-            if (!isOtherToken(box.value) && !isOtherToken(box.closest('label')?.textContent))
-                continue;
-            hideOtherInput(otherInputNear(box), !!box.checked);
+    },
+    /** Высота контента напрямую (нужен allow-same-origin в sandbox). */
+    measure() {
+        if (this.onlyDoc)
+            return;
+        let doc = null;
+        try {
+            doc = this.$('iframe')?.contentDocument;
         }
+        catch { return; }
+        if (!doc)
+            return;
+        const el = doc.documentElement;
+        if (!el)
+            return;
+        this.setHeight(Math.max(el.scrollHeight, el.offsetHeight, doc.body ? doc.body.scrollHeight : 0));
     },
 });
-
-function isOtherToken(v) {
-    return /друг|other/i.test(String(v || '').trim());
-}
-
-function choiceIsOther(el) {
-    if (!el) return false;
-    if (el.localName === 'select') {
-        const opt = el.selectedOptions?.[0];
-        return isOtherToken(el.value) || isOtherToken(opt?.textContent);
-    }
-    if (el.type === 'radio' || el.type === 'checkbox')
-        return isOtherToken(el.value) || isOtherToken(el.closest('label')?.textContent);
-    return false;
-}
-
-function otherInputNear(el) {
-    if (!el) return;
-    const box = el.closest('fieldset') || el.parentElement;
-    if (!box) return;
-    const all = [...box.querySelectorAll('select, input, textarea')];
-    const i = all.indexOf(el);
-    for (let j = i + 1; j < all.length; j++) {
-        const n = all[j];
-        if (n.localName === 'select' || n.type === 'radio' || n.type === 'checkbox')
-            break;
-        if (!['checkbox', 'radio', 'hidden', 'submit', 'button'].includes(n.type))
-            return n;
-    }
-    return all.find(n => n !== el && isOtherToken(n.name || n.id || n.placeholder));
-}
-
-function hideOtherInput(el, show) {
-    if (!el) return;
-    const wrap = el.closest('label') || el;
-    wrap.hidden = !show;
-}
-
-function cssEscape(name) {
-    return String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
 
 /**
  * todo — title + subTitle (todo); сырой content в markdown не показываем.
@@ -899,7 +681,6 @@ function cssEscape(name) {
 ODA({ is: 'microchat-view-todo',
     extends: 'microchat-view',
     attached(){
-        this._bumpLayout(); // attached базового view переопределён — бамп раскладки повторяем тут
         this.subTitleTag = 'microchat-todo-steps';
         this.showContent = undefined;
         this.label = undefined;

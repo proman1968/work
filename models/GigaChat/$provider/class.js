@@ -2,6 +2,6 @@
  * GigaChat — провайдер ($provider) моделей GigaChat.
  */
 export default {
-    icon: 'carbon:cloud-upload',
+    icon: 'ai:gigachat',
     label: 'GigaChat',
 }

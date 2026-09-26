@@ -1,0 +1,32 @@
+<meta charset="UTF-8">
+<script type="module" src="../../../oda.js"></script>
+<script type="module" src="./table.js"></script>
+<oda-tester>
+    <oda-table-input id="goods" style="max-width: 960px;"></oda-table-input>
+</oda-tester>
+<script type="module">
+    goods.meta = {
+        columns: [
+            { id: 'article', label: 'Артикул', type: 'String' },
+            { id: 'name', label: 'Наименование', type: 'String' },
+            {
+                id: 'unit', label: 'Ед.изм', type: 'Select',
+                options: [
+                    { value: 'пара', label: 'пара' },
+                    { value: 'шт.', label: 'шт.' },
+                    { value: 'кг', label: 'кг' },
+                ],
+            },
+            { id: 'qty', label: 'Количество', type: 'Number' },
+            { id: 'price', label: 'Цена', type: 'Number' },
+            { id: 'sum', label: 'Сумма', type: 'Number', calc: 'qty * price', total: true },
+            { id: 'arrival', label: 'Поставка', type: 'Date' },
+            { id: 'paid', label: 'Оплачен', type: 'Boolean' },
+        ],
+    };
+    goods.value = [
+        { article: '123456', name: 'Туфли зелёные', unit: 'пара', qty: 2, price: 3.3, arrival: '2022-04-21', paid: true },
+        { article: '111111', name: 'Туфли зелёные', unit: 'шт.', qty: 8, price: 5.5, arrival: '2022-04-22', paid: false },
+        { article: '212121', name: 'Трусы семейные', unit: 'шт.', qty: 10, price: 20, arrival: '2022-04-23', paid: true },
+    ];
+</script>

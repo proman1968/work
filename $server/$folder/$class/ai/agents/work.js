@@ -301,6 +301,7 @@ const typedTool = {
         'end: 2026-09-12T16:00',
         'summary: встреча с Олегом',
         'allDay: false',
+        'Поля name/time не пиши — их подставит tool (из summary/start).',
     ].join('\n'),
     async init(params = {}) {
         const b = params.block;
@@ -336,7 +337,7 @@ const typedTool = {
             b.content = 'typed: тип не выбран. Есть: ' + types.map(t => t.id).join(', ');
             return;
         }
-        const fields = fillTypedFields(spec.fields, parsed.values);
+        const fields = applySystemFields(spec, fillTypedFields(spec.fields, parsed.values));
         const gap = requiredTypedGap(spec.fields, fields);
         if (gap) {
             b.error = true;
@@ -1327,6 +1328,28 @@ function coerceTyped(f, v) {
         return Number.isFinite(n) ? n : v;
     }
     return typeof v === 'string' ? v.trim() : v;
+}
+
+/**
+ * Системные поля $data (name/time) выводит сам tool, не модель:
+ * спека типа мержится со слоем $data, где они required, но модель
+ * их знать не может. name ← summary, time ← start (точнее пересчитает тело).
+ */
+export function applySystemFields(spec, fields) {
+    const out = { ...(fields || {}) };
+    if (out.name == null || out.name === '') {
+        const name = [out.summary, out.title, out.label]
+            .map(s => String(s || '').trim()).find(Boolean);
+        if (name)
+            out.name = name;
+    }
+    if (out.time == null || out.time === '') {
+        if (out.start != null && out.start !== '')
+            out.time = out.start;
+        else
+            out.time = Date.now();
+    }
+    return out;
 }
 
 function requiredTypedGap(schema, fields) {

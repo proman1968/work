@@ -281,24 +281,37 @@ function resolveExtHint(text) {
     return '';
 }
 
-/** $class для логов: явный path → иначе place из engine.$context. */
-async function resolveLogClass(params = {}, pathHint = '') {
-    let path = String(pathHint || '').trim();
-    if (!path)
-        path = classPathFrom(params.block, params.box, params.messages);
-    if (!path) {
-        const ctx = params.engine?.$context;
-        path = String(ctx?.short || ctx?.path || '').trim();
+/**
+ * $class для логов: кандидаты по порядку — явный path, fuzzy-путь из brief,
+ * место исполнения (engine.$context). Первый, у кого есть метод logs.
+ * Fallback обязателен: brief несёт мусор вида tz Europe/Moscow, regex
+ * забирает `/Moscow):` за путь класса — без перебора все tool молча скипаются.
+ */
+export async function resolveLogClass(params = {}, pathHint = '') {
+    const cands = [];
+    const hint = String(pathHint || '').trim();
+    if (hint)
+        cands.push(hint);
+    const fuzzy = classPathFrom(params.block, params.box, params.messages);
+    if (fuzzy && !cands.includes(fuzzy))
+        cands.push(fuzzy);
+    const ctx = params.engine?.$context;
+    const place = String(ctx?.short || ctx?.path || '').trim();
+    if (place && !cands.includes(place))
+        cands.push(place);
+    for (const p of cands) {
+        let item = null;
+        try {
+            item = await WORK.get_item(p);
+        }
+        catch { item = null; }
+        if (item && typeof item.logs === 'function')
+            return item;
     }
-    if (!path)
-        return null;
-    const item = await WORK.get_item(path);
-    if (!item || typeof item.logs !== 'function')
-        return null;
-    return item;
+    return null;
 }
 
-function classPathFrom(block, box, messages) {
+export function classPathFrom(block, box, messages) {
     const own = String(block?.path || '').trim();
     if (own && !isHistoryPath(own) && !/^\d{4}-\d{2}-\d{2}$/.test(own))
         return own;

@@ -557,7 +557,10 @@ export class Reactor extends EventTarget {
             if (!prop.configurable)
                 continue;
 
-            if (key[0] === '@' || key === '$public') {
+            // $pdp-блок ({...}) раскрывается как $public: каждый вложенный ключ
+            // становится пропсом с флагом $pdp (видимость вниз по host-цепочке).
+            // Одиночный флаг $pdp: true идёт обычным путём (безвредные метаданные).
+            if (key[0] === '@' || key === '$public' || (key === '$pdp' && prop.value?.constructor === Object)) {
                 prop = proto[key];
                 extentions = this.proto2props(prop, extention + '/' + key);
                 props = Reactor.join_props(props, extentions);

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BinNet — стенд тестов</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "fs": "./shim-fs.js",
+            "node:fs/promises": "./shim-fs.js",
+            "path": "./shim-fs.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <oda-binnet-tester id="tester"></oda-binnet-tester>
+    <script type="module">
+        import '../../../oda/oda.js';
+        import '../../neuro-module/loss-chart/loss-chart.js';
+        import './oda-binnet-tester.js';
+    </script>
+</body>
+</html>

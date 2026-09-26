@@ -100,6 +100,9 @@ export function startServers(requestHandler) {
     httpServer.on('error', (err) => onListenError(PORT, err));
     httpServer.listen({ port: PORT }, () => {
         console.log(`Server running at ${LOCAL_ORIGIN}/`);
+        console.log('Server running at http://localhost:8001/torus/binnet/test-ui/index.html');
+        console.log('Server running at http://localhost:8001/oda/components/layouts/editor-form/index.html');
+        console.log('Server running at http://localhost:8001/oda/components/table/index.html');
     });
 
     let httpsServer;
@@ -445,7 +448,9 @@ export function createRequestHandler() {
                 if(mime_type){
                     header["Content-Type"] = mime_type;
                     if (isStaticAssetType(mime_type))
-                        header["Cache-Control"] = STATIC_CACHE;
+                        // В dev-режиме UI не кэшируем: иначе правки строк/панели
+                        // доезжают по частям (свежий row.js + старый file.js без activeIds)
+                        header["Cache-Control"] = DEV_MODE ? 'no-cache' : STATIC_CACHE;
                 }
                 else
                     header["Content-Type"] = 'text/plain';

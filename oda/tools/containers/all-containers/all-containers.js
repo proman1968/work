@@ -1,4 +1,4 @@
-import '../containers.js';
+import '/oda/tools/containers/containers.js';
 ODA({ is: 'oda-all-containers', //imports: '@tools/containers.js',
     template: /*html*/`
     <style>

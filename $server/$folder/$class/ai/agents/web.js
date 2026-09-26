@@ -122,7 +122,12 @@ export default {
     },
 };
 
-function applySiteUsing(box) {
+/**
+ * Занятость URL: успешный — сразу, упавший — тоже сразу (n>=1).
+ * Повторный fetch того же адреса даёт ту же ошибку («страница недоступна»
+ * дважды подряд) — ретрай оставлен уровню бокса, не уровню URL.
+ */
+export function applySiteUsing(box) {
     if (!box)
         return;
     const budget = box.budget;
@@ -143,10 +148,8 @@ function applySiteUsing(box) {
         if (k)
             taken.add(k);
     }
-    for (const [k, n] of fails) {
-        if (n >= 2)
-            taken.add(k);
-    }
+    for (const k of fails.keys())
+        taken.add(k);
     const hasMore = (box.sites || []).some(s => {
         const u = typeof s === 'string' ? s : s?.url;
         return u && !taken.has(u) && !taken.has(normUrl(u));

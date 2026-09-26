@@ -16,6 +16,8 @@ export default {
         'Не пример кода, а полноценное рабочее приложение.',
         'Только один fensed-блок с полным html-кодом, без дополнительных пояснений.',
         'Приложение будет работать прямо в ленте чата в iframe.',
+        'В конец body обязательно добавь замер высоты (иначе обрежется):',
+        '<script>addEventListener("load",()=>parent.postMessage({microchatHeight:document.documentElement.scrollHeight},"*"));new ResizeObserver(()=>parent.postMessage({microchatHeight:document.documentElement.scrollHeight},"*")).observe(document.body);</script>',
     ].join('\n'),
     recalc(params = {}) {
         const { block } = params;

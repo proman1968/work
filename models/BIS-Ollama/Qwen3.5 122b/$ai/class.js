@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:qwen',
     label: 'Qwen3.5 122b',
 
     model: 'qwen3.5:122b',

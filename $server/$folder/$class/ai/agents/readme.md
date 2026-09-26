@@ -18,4 +18,4 @@
 
 ## Состав
 
-`explore` `work` `check` `web` `site` `logs` `image` `freeze` `review` `html` `planning` `answer` `question` `form` `report` `mcp`
+`explore` `work` `check` `web` `site` `logs` `image` `freeze` `review` `html` `planning` `answer` `question` `form` `report` `mcp` `quiz`

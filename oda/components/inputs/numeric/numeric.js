@@ -31,7 +31,7 @@ ODA({is: 'oda-numeric-input',
             padding: 2px 4px;
         }
     </style>
-    <input :readonly="readOnly" :dimmed="readOnly" @focus="_focus" @blur="_focus" type="text" :value="valueText" @keydown="onKeyDown" :error :title="valueText"  @input="onInput" @scroll="onScroll" @mouseup="setPos()">
+    <input :readonly="readOnly || disabled" :dimmed="readOnly || disabled" @focus="_focus" @blur="_focus" type="text" :value="valueText" @keydown="onKeyDown" :error :title="valueText"  @input="onInput" @scroll="onScroll" @mouseup="setPos()">
     `,
     minW: 0,
     minH: 0,
@@ -42,11 +42,13 @@ ODA({is: 'oda-numeric-input',
     isFocused: false,
     $public: {
         readOnly: false,
+        disabled: false,
         hideZero: false,
         locale: {
             $def: 'ru-RU',
             get $list() {
                 return ODA.loadJSON("@tools/localization/locales.json").then(list => {
+                    list = list || [];
                     const result = [];
                     for (let key in list) {
                         result.push({ label: key + ': ' + list[key], value: key })
@@ -85,6 +87,7 @@ ODA({is: 'oda-numeric-input',
             $def: 'RUB',
             get $list() {
                 return ODA.loadJSON("@tools/localization/currency.json").then(list => {
+                    list = list || [];
                     const result = list.map(i => {
                         return { value: i.STRCODE, label: i.STRCODE + ': ' + i.NAME + ` (${i.COUNTRY})` }
                     })
@@ -169,7 +172,7 @@ ODA({is: 'oda-numeric-input',
         this.input.scrollLeft = 10000;
     },
     onInput(e) {
-        console.log('onInput', e.target.value);
+        if (this.readOnly || this.disabled) return;
         let ss = this.valueText.length - e.target.selectionStart;
         switch (e.inputType) {
             case 'insertText': {
@@ -247,7 +250,7 @@ ODA({is: 'oda-numeric-input',
         }, 1)
     },
     onKeyDown(e) {
-        if (this.readOnly) return;
+        if (this.readOnly || this.disabled) return;
         let ss = e.target.selectionStart;
         let se = e.target.selectionEnd;
 
