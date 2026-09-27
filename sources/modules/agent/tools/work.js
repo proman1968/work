@@ -79,6 +79,9 @@ export async function callAs(item, method, params, ctx, roleFirst) {
             p.role = role;
         return p;
     };
+    // методы из class.js появляются на элементе после init (свежий элемент после рестарта)
+    if (typeof item?.[method] !== 'function' && item?.init)
+        await item.init;
     if (typeof item?.[method] !== 'function')
         throw new Error('у ' + (item?.path || '?') + ' нет метода ' + method);
     const roles = roleFirst ? [roleFirst] : [undefined, ...(await rolesIn(item, session))];

@@ -178,6 +178,28 @@ async function safeReadme(place) {
     }
 }
 
+/** Координаты → «Город, регион, страна» (Nominatim, кэш по ~1 км). */
+const PLACES = new Map();
+async function resolvePlace(lat, lon) {
+    const key = (+lat).toFixed(2) + ',' + (+lon).toFixed(2);
+    if (PLACES.has(key))
+        return PLACES.get(key);
+    let place = null;
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&accept-language=ru&zoom=10`, {
+            headers: { 'User-Agent': 'ODANT-WORK/1.0 (https://odant.org; work@odant.org)' },
+            signal: AbortSignal.timeout(6000),
+        });
+        if (res.ok) {
+            const a = (await res.json())?.address || {};
+            place = [a.city || a.town || a.village || a.municipality, a.state, a.country].filter(Boolean).join(', ') || null;
+        }
+    }
+    catch { /* сеть — только координаты */ }
+    PLACES.set(key, place);
+    return place;
+}
+
 async function placeBlock(place, session, tzIn, location) {
     const lines = ['# Контекст'];
     if (place) {
@@ -197,8 +219,12 @@ async function placeBlock(place, session, tzIn, location) {
         }
         catch { /* нет ролей */ }
     }
-    if (location?.lat != null && location?.lon != null)
-        lines.push('- Геопозиция пользователя: ' + Number(location.lat).toFixed(4) + ', ' + Number(location.lon).toFixed(4));
+    if (location?.lat != null && location?.lon != null) {
+        const lat = Number(location.lat).toFixed(4), lon = Number(location.lon).toFixed(4);
+        const place = await resolvePlace(lat, lon);
+        lines.push('- Местоположение пользователя: ' + (place ? place + ' (' + lat + ', ' + lon + ')' : lat + ', ' + lon)
+            + ' — для «здесь/у нас/погода/рядом» используй его (передавай город или координаты в инструменты), не выдумывай другой город');
+    }
     const tz = tzIn || process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const now = new Date();
     let local = now.toISOString();
