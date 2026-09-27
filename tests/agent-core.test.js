@@ -323,12 +323,12 @@ describe('сессия .task', () => {
         return file;
     }
 
-    it('prompt → фон → ответ на диске; замок — второй prompt «занят»', async () => {
+    it('prompt → фон → ответ на диске; замок — пустой prompt во время работы «занят»', async () => {
         const file = await newTask('t1');
         globalThis.__MOCK_STREAM__ = scripted([{ text: 'Готово.', delayMs: 2 }]).stream;
         assert.equal((await session.prompt(file, { prompt: 'сделай' })).ok, true);
-        const busy = await session.prompt(file, { prompt: 'ещё' });
-        assert.equal(busy.busy, true);
+        const busy = await session.prompt(file, { prompt: '' });
+        assert.equal(busy.busy, true); // пустая реплика во время работы — «занят»; с текстом — очередь (тест ниже)
         await session.idle(file);
         const body = JSON.parse(fs.readFileSync(file.dir, 'utf-8'));
         assert.equal(body.version, 2);
@@ -385,6 +385,39 @@ describe('сессия .task', () => {
         const r = await session.revert(file, { id: second.id });
         assert.equal(r.prompt, 'второй');
         assert.equal((await session.getBody(file)).items.length, 2);
+    });
+
+    it('реплика во время работы — в очередь, агент получает её следующим ходом', async () => {
+        const file = await newTask('t5');
+        const seen = [];
+        let release;
+        const gate = new Promise(r => release = r);
+        globalThis.__MOCK_STREAM__ = (req) => (async function* () {
+            seen.push(req.messages.filter(m => m.role === 'user').map(m => m.content));
+            if (seen.length === 1) {
+                await gate;
+                yield { type: 'tool_calls', calls: [{ id: 'x1', name: 'ls', arguments: { path: '/BOX' } }] };
+                return;
+            }
+            yield 'учёл: ' + req.messages.filter(m => m.role === 'user').at(-1).content;
+        })();
+        await session.prompt(file, { prompt: 'первое' });
+        const q = await session.prompt(file, { prompt: 'и ещё вот это' });
+        assert.equal(q.queued, true);
+        release();
+        const body = await session.idle(file);
+        assert.ok(!body.queue);
+        assert.deepEqual(seen[1], ['первое', 'и ещё вот это']);
+        assert.equal(body.items.at(-1).content, 'учёл: и ещё вот это');
+    });
+
+    it('картинка во вложении уходит модели только при vision', async () => {
+        const { toMessages } = await import('../sources/modules/agent/loop.js');
+        const items = [{ id: 'u', type: 'user', content: 'что на фото', attachments: [{ path: '/BOX/a.png', name: 'a.png' }] }];
+        const plain = toMessages('', items);
+        assert.equal(typeof plain[0].content, 'string');
+        const withImg = toMessages('', items, new Map([['/BOX/a.png', 'data:image/png;base64,AAA']]));
+        assert.equal(withImg[0].content[1].image_url.url, 'data:image/png;base64,AAA');
     });
 
     it('старый формат (v1) мигрирует в v2', () => {

@@ -1,10 +1,11 @@
-﻿/**
+/**
  * $task — сессия агента (JSON, версия 2): тонкий хост над ядром sources/modules/agent/session.js.
  * Лента, цикл, инструменты, разрешения — в ядре; здесь — API файла для UI и REST.
  *
  * Методы (UI: $item.fetch(method, params)):
  *   prompt({ prompt, attachments, mode, model })   — реплика человека / ответ на вопрос / «продолжить» (пусто)
  *   approve({ call, accept, always, content, values }) — подтверждение вызова или ответ формой
+ *   unqueue({ id })                                — убрать реплику из очереди (отправлена во время работы)
  *   stop()                                         — стоп
  *   revert({ id })                                 — откат ленты к реплике → { prompt, attachments }
  *   configure({ model, effort, mode })             — настройки
@@ -22,6 +23,9 @@ export default {
     },
     async approve(params = {}) {
         return (await WORK_AGENT()).approve(this, params);
+    },
+    async unqueue(params = {}) {
+        return (await WORK_AGENT()).unqueue(this, params);
     },
     async stop(params = {}) {
         return (await WORK_AGENT()).stop(this, params);

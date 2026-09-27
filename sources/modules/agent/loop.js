@@ -63,7 +63,8 @@ export async function runLoop(opts) {
             }
             const system = typeof opts.system === 'function' ? await opts.system() : String(opts.system || '');
             await maybeCompact({ llm, items, host, system });
-            const messages = toMessages(system, items);
+            const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
+            const messages = toMessages(system, items, images);
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
                 system: estimateTokens(system),
@@ -75,6 +76,11 @@ export async function runLoop(opts) {
             await host.save();
             const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: opts.effort });
             if (!calls.length) {
+                // реплики, пришедшие во время хода, — в ленту и ещё один ход
+                if (takeQueued(items, host, opts.depth)) {
+                    await host.save();
+                    continue;
+                }
                 if (!it.content.trim()) {
                     it.error = true;
                     it.content = 'Модель вернула пустой ответ.';
@@ -87,6 +93,8 @@ export async function runLoop(opts) {
             it.tools = calls.map(c => ({ id: c.id || genId(), name: c.name, args: c.arguments || {}, status: 'pending' }));
             await host.save();
             await runCalls({ it, byName, host, llm, opts });
+            if (takeQueued(items, host, opts.depth))
+                await host.save();
         }
     }
     catch (e) {
@@ -97,6 +105,54 @@ export async function runLoop(opts) {
         }
         throw e;
     }
+}
+
+/** Реплики человека, отправленные во время работы (host.takeQueue) → в ленту. @returns {boolean} были ли */
+function takeQueued(items, host, depth) {
+    if (depth)
+        return false; // субагенты реплики человека не забирают
+    const q = host.takeQueue?.() || [];
+    for (const u of q)
+        items.push({ ...u, queued: undefined });
+    return q.length > 0;
+}
+
+export const IMAGE_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+export const IMAGE_MAX = 5 * 1024 * 1024;
+
+/** Картинки из вложений живой ленты → Map(path → data:URL). loader(path) → Buffer. Кэш — на элементе ленты не храним (base64 в JSON не кладём). */
+const imageCache = new Map();
+async function loadImages(items, loader) {
+    const out = new Map();
+    if (typeof loader !== 'function')
+        return out;
+    for (const it of items) {
+        if (it.type !== 'user' || it.compacted)
+            continue;
+        for (const a of it.attachments || []) {
+            const ext = String(a?.path || '').split('.').pop().toLowerCase();
+            const mime = IMAGE_EXT[ext];
+            if (!mime || out.has(a.path))
+                continue;
+            let url = imageCache.get(a.path);
+            if (!url) {
+                try {
+                    const buf = await loader(a.path);
+                    if (!buf || buf.length > IMAGE_MAX)
+                        continue;
+                    url = 'data:' + mime + ';base64,' + Buffer.from(buf).toString('base64');
+                    if (imageCache.size > 50)
+                        imageCache.delete(imageCache.keys().next().value);
+                    imageCache.set(a.path, url);
+                }
+                catch {
+                    continue;
+                }
+            }
+            out.set(a.path, url);
+        }
+    }
+    return out;
 }
 
 /** Инструменты по режиму: plan — только чтение (+ вопросы/план). */
@@ -325,7 +381,7 @@ export function toolContent(t, old = false) {
  * Лента → messages (OpenAI-формат). Сжатые элементы пропускаются,
  * результаты старых ходов урезаются (микросжатие).
  */
-export function toMessages(system, items) {
+export function toMessages(system, items, images = null) {
     const out = [];
     if (system)
         out.push({ role: 'system', content: system });
@@ -336,7 +392,7 @@ export function toMessages(system, items) {
     for (const it of live) {
         switch (it.type) {
             case 'user':
-                out.push({ role: 'user', content: userContent(it) });
+                out.push({ role: 'user', content: userContent(it, images) });
                 break;
             case 'summary':
                 out.push({ role: 'user', content: '[Сводка предыдущей части работы]\n' + it.content });
@@ -365,10 +421,10 @@ export function toMessages(system, items) {
     return out;
 }
 
-function userContent(it) {
+function userContent(it, imageMap) {
     const text = String(it.content || '');
     const att = (it.attachments || []).filter(a => a?.path);
-    const images = att.filter(a => a.image_url);
+    const images = imageMap ? att.filter(a => imageMap.has(a.path)).map(a => ({ image_url: imageMap.get(a.path) })) : [];
     const note = att.length ? '\n\n[Вложения]\n' + att.map(a => '- ' + a.path + (a.name ? ' (' + a.name + ')' : '')).join('\n') : '';
     if (!images.length)
         return text + note;

@@ -24,6 +24,7 @@ import { serverId } from "../host/server-id.js";
  */
 globalThis.WORK_AGENT ??= () => import('../modules/agent/session.js');
 globalThis.WORK_AGENT_CORE ??= () => import('../modules/agent/index.js');
+globalThis.WORK_MCP ??= () => import('../modules/agent/mcp-pool.js');
 
 /** Прототип HTTP/WS-сессии (`$server.sessions[ssid]` / `params.session`). */
 const sessionProto = {

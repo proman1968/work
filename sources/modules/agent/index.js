@@ -35,6 +35,7 @@ export async function llmFor(modelPath) {
         name: path,
         item,
         contextTokens: Number(item.maxTokens) || 32000,
+        vision: caps.includes('vision'),
         stream({ messages, tools, signal, effort }) {
             const req = { messages, temperature: 0.3, signal };
             if (tools?.length)
@@ -107,6 +108,11 @@ export async function createEnv({ place, session, host, tz, location } = {}) {
     const mcpErrors = [];
     const env = {
         place, session, config, agents, skills,
+        /** Байты вложения (картинки для vision) с правами пользователя. */
+        async loadImage(path) {
+            const item = await WORK.get_item(path);
+            return item?.load ? item.load({ session }) : null;
+        },
         mcpErrors,
         llmFor,
         imageModel: () => findImageModel(config),
@@ -229,6 +235,7 @@ export async function runOnce({ place, session, prompt, model, agent, mode = 'au
         tools: await env.makeTools(def, 0),
         host,
         ctx: { session, place, env },
+        loadImage: env.loadImage,
         maxTurns: Number(env.config.maxTurns) || 30,
     });
     return { status: res.status, content: res.content || '', items };

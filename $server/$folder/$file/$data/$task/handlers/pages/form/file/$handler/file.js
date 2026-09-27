@@ -157,9 +157,16 @@ export default {
     /** Своя реплика видна сразу, до перечитывания файла. */
     get feedItems() {
         const o = this.optimistic;
-        if (!o || this.items.some(i => i.type === 'user' && i.content === o.content && i.time >= o.time - 5000))
-            return this.items;
-        return [...this.items, o];
+        const queue = this.data?.queue || [];
+        const list = (!o || this.items.some(i => i.type === 'user' && i.content === o.content && i.time >= o.time - 5000))
+            ? this.items
+            : [...this.items, o];
+        return queue.length ? [...list, ...queue] : list;
+    },
+    async unqueue(item) {
+        const res = await this.$item?.fetch('unqueue', { id: item.id });
+        if (!res?.ok)
+            this.toast('Сообщение уже передано агенту');
     },
     get title() { return this.data?.title || this.data?.name || this.$item?.name || 'Задача'; },
     get busy() { return this.status === 'running'; },

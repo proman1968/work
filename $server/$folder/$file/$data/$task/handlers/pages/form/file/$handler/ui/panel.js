@@ -49,7 +49,7 @@ ODA({ is: 'microchat-panel',
     },
     get hint() {
         switch (this.status) {
-            case 'running': return 'Агент работает · Esc — остановить';
+            case 'running': return 'Агент работает · сообщение встанет в очередь · Esc — остановить';
             case 'waiting': return this.waiting?.kind === 'approval' ? 'Нужно ваше разрешение — выше в ленте' : 'Агент ждёт ответа — выше в ленте';
             case 'stopped': return 'Остановлено';
             case 'error': return 'Работа прервана ошибкой';
@@ -96,13 +96,15 @@ ODA({ is: 'microchat-panel',
         const bar = this.$('work-prompt-bar');
         const files = bar?.files ?? this.files;
         const text = String(this.value ?? '').trim();
-        if ((!text && !files.length) || this.busy)
+        if (!text && !files.length)
             return;
         this.value = '';
         this.files = [];
         const shell = findShell(this);
         const attachments = files.length ? await this._upload(files) : [];
-        shell?.optimisticUser(text, attachments);
+        // во время работы реплика уходит в очередь (видна в ленте из body.queue), иначе — сразу в ленту
+        if (!this.busy)
+            shell?.optimisticUser(text, attachments);
         const res = await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments }));
         if (res?.busy)
             shell?.toast(res.error);

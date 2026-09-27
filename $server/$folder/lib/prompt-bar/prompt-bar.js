@@ -134,8 +134,8 @@ ODA({ is: 'work-prompt-bar',
                 <span class="timer" ~if="recording">⏺ {{timer}}</span>
                 <oda-button class="icon-btn" ~if="speech" :rec="recording" :icon="recording ? 'carbon:stop-filled' : 'carbon:microphone'" :icon-size="18"
                     :title="recording ? 'Остановить диктовку' : 'Диктовка'" @tap="toggleMic"></oda-button>
-                <button class="send" :disabled="!canSend && !pending" :title="pending ? 'Остановить (Esc)' : 'Отправить (Enter)'" @tap="onSendTap">
-                    <oda-icon :icon="pending ? 'carbon:stop-filled' : 'carbon:arrow-up'" :icon-size="18"></oda-icon>
+                <button class="send" :disabled="!canSend && !pending" :title="stopMode ? 'Остановить (Esc)' : (pending ? 'Отправить в очередь (Enter)' : 'Отправить (Enter)')" @tap="onSendTap">
+                    <oda-icon :icon="stopMode ? 'carbon:stop-filled' : 'carbon:arrow-up'" :icon-size="18"></oda-icon>
                 </button>
             </div>
         </div>
@@ -195,6 +195,10 @@ ODA({ is: 'work-prompt-bar',
     },
     get canSend() {
         return !!(String(this.value ?? '').trim() || this.files.length);
+    },
+    /** Идёт работа и поле пусто — кнопка «стоп»; есть текст — отправка (хост может поставить в очередь). */
+    get stopMode() {
+        return this.pending && !this.canSend;
     },
     get speech() {
         return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -299,7 +303,7 @@ ODA({ is: 'work-prompt-bar',
         }
         if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing) {
             e.preventDefault();
-            if (!this.pending)
+            if (this.canSend)
                 this.onSendTap();
             return;
         }
@@ -328,7 +332,7 @@ ODA({ is: 'work-prompt-bar',
         this._mic().toggle();
     },
     onSendTap() {
-        if (this.pending) {
+        if (this.stopMode) {
             this.fire('stop');
             return;
         }

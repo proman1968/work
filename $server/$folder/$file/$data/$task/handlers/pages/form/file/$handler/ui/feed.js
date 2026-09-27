@@ -95,17 +95,24 @@ ODA({ is: 'microchat-user',
                 white-space: pre-wrap; word-break: break-word; line-height: 1.45;
                 user-select: text;
             }
+            .bubble[queued] { opacity: .6; border: 1px dashed var(--accent-color); }
+            .queued { @apply --horizontal; @apply --muted; align-items: center; gap: 4px; font-size: x-small; margin-top: 4px; }
+            .queued oda-button { padding: 0; border-radius: 50%; }
             .att { @apply --horizontal; flex-wrap: wrap; gap: 4px; justify-content: flex-end; margin-top: 4px; }
             .att span { @apply --chip; cursor: pointer; }
             ${HOVER}
         </style>
-        <div class="bubble" ~if="text">{{text}}</div>
+        <div class="bubble" ~if="text" :queued="data?.queued">{{text}}</div>
+        <div class="queued" ~if="data?.queued">
+            <oda-icon icon="carbon:time" :icon-size="12"></oda-icon><span>в очереди — агент прочтёт после текущего шага</span>
+            <oda-button icon="carbon:close" :icon-size="12" title="Отменить" @tap="unqueue"></oda-button>
+        </div>
         <div class="att" ~if="data?.attachments?.length">
             <span ~for="data.attachments" :title="$for.item.path" @tap="open($for.item.path)">
                 <oda-icon icon="carbon:attachment" :icon-size="12"></oda-icon>{{$for.item.name || $for.item.path}}
             </span>
         </div>
-        <div class="meta">
+        <div class="meta" ~if="!data?.queued">
             <span>{{time}}</span>
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
             <oda-button ~if="!nested" icon="carbon:undo" :icon-size="14" title="Вернуться к этому сообщению (изменить и отправить заново)" :disabled="busy" @tap="revert"></oda-button>
@@ -120,6 +127,7 @@ ODA({ is: 'microchat-user',
     copy() { copyText(this.text); },
     open(path) { findShell(this)?.openWorkPath(path); },
     revert() { findShell(this)?.revert(this.data); },
+    unqueue() { findShell(this)?.unqueue(this.data); },
 });
 
 ODA({ is: 'microchat-assistant',

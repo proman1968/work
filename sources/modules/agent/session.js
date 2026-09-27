@@ -172,6 +172,12 @@ function makeHost(s, session) {
         save: () => save(s, session),
         emit: e => send(s, session, { ...e, type: 'task.delta' }),
         setTodos: todos => { body.todos = todos; },
+        /** Очередь реплик, пришедших во время работы: цикл забирает их между ходами. */
+        takeQueue: () => {
+            const q = body.queue || [];
+            delete body.queue;
+            return q;
+        },
         /** Состав контекста последнего хода (оценка): лимит модели, system, схемы инструментов, диалог. */
         noteContext: c => { body.context = { ...c, time: Date.now() }; },
         wait: req => {
@@ -213,6 +219,7 @@ function start(s, session, file) {
                 tools: await env.makeTools(),
                 host,
                 ctx: { session, place, env },
+                loadImage: env.loadImage,
                 effort: body.effort,
                 maxTurns: Number(env.config.maxTurns) || undefined,
             });
@@ -226,7 +233,19 @@ function start(s, session, file) {
         finally {
             delete body.waiting;
             s.waiters.clear();
+            const aborted = !!s.controller?.signal.aborted;
             s.controller = null;
+            // реплики, пришедшие под конец (или при стопе), не теряются: в ленту; без стопа — новый прогон
+            const rest = body.queue || [];
+            delete body.queue;
+            for (const u of rest)
+                body.items.push({ ...u, queued: undefined });
+            if (rest.length && !aborted && body.status !== 'error') {
+                await save(s, session);
+                s.running = null;
+                start(s, session, file);
+                return;
+            }
             await save(s, session);
             s.running = null;
             send(s, session, { type: 'task.state', status: body.status });
@@ -290,7 +309,12 @@ export async function prompt(file, params = {}) {
             resolve(w.kind === 'question' ? { content: text } : { accept: false, content: text });
             return { ok: true, answered: w.kind };
         }
-        return { ok: false, busy: true, error: 'задача выполняется — дождитесь или нажмите «Стоп»' };
+        if (!text && !attachments.length)
+            return { ok: false, busy: true, error: 'задача выполняется' };
+        // реплика во время работы — в очередь: агент получит её между шагами
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true, ...(attachments.length ? { attachments } : {}) });
+        await save(s, session);
+        return { ok: true, queued: true };
     }
     if (body.waiting) {
         // ожидание пережило рестарт: текст — ответ на вопрос или отказ с комментарием
@@ -436,6 +460,19 @@ function lastTodos(items) {
             return (t.args?.todos || []).map(x => ({ content: String(x.content), status: x.status }));
     }
     return [];
+}
+
+/** Отменить реплику из очереди. { id } */
+export async function unqueue(file, params = {}) {
+    const p = argsOf(params);
+    const s = stateOf(file);
+    const body = await getBody(file);
+    const before = (body.queue || []).length;
+    body.queue = (body.queue || []).filter(u => u.id !== p.id);
+    if (!body.queue.length)
+        delete body.queue;
+    await save(s, p.session);
+    return { ok: (body.queue || []).length < before };
 }
 
 /** Настройки задачи: model / effort / mode. */

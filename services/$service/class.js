@@ -68,41 +68,20 @@ async function mcpRpc(owner, method, params) {
     const cfg = owner?.mcp || {};
     if (String(cfg.url || '').trim())
         return mcpHttpRpc(owner, method, params);
-    let command = String(cfg.command || '').trim();
+    const command = String(cfg.command || '').trim();
     const args = Array.isArray(cfg.args) ? cfg.args.map(String) : [];
     if (!command)
         return { error: 'mcp: нет mcp.command (stdio) или mcp.url (remote) в class.js провайдера' };
     const env = await mcpEnv(owner, cfg.env);
     if (env.error)
         return env;
-    if (process.platform === 'win32' && /^npx$/i.test(command))
-        command = 'npx.cmd';
-    let child;
+    // Пул ядра (sources/modules/agent/mcp-pool.js): процесс живёт между вызовами, initialize — один раз
     try {
-        const { spawn } = await import('node:child_process');
-        child = spawn(command, args, { env: { ...process.env, ...env.vars }, stdio: ['pipe', 'pipe', 'pipe'] });
-    }
-    catch (e) {
-        return { error: 'mcp: не стартует ' + command + ': ' + String(e.message || e) };
-    }
-    try {
-        const rpc = mcpChannel(child);
-        await rpc.request('initialize', {
-            protocolVersion: '2024-11-05',
-            capabilities: {},
-            clientInfo: { name: 'work-mcp', version: '1.0.0' },
-        }, MCP_START_TIMEOUT);
-        rpc.notify('notifications/initialized');
-        return await rpc.request(method, params || {}, MCP_CALL_TIMEOUT);
+        const pool = await WORK_MCP();
+        return await pool.rpc({ command, args, env: env.vars, cwd: cfg.cwd }, method, params || {}, MCP_CALL_TIMEOUT);
     }
     catch (e) {
         return { error: 'mcp ' + method + ': ' + String(e.message || e) };
-    }
-    finally {
-        try {
-            child.kill();
-        }
-        catch { /* уже мёртв */ }
     }
 }
 
@@ -208,89 +187,3 @@ async function mcpEnv(owner, env) {
     }
     return { vars };
 }
-
-/** Канал JSON-RPC поверх stdio: строки-ответы по id, запросы сервера — отказом. */
-function mcpChannel(child) {
-    let seq = 1;
-    const pending = new Map();
-    let buf = '';
-    let stderr = '';
-    child.stdout.on('data', chunk => {
-        buf += String(chunk);
-        let i;
-        while ((i = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, i).trim();
-            buf = buf.slice(i + 1);
-            if (!line)
-                continue;
-            let msg;
-            try {
-                msg = JSON.parse(line);
-            }
-            catch {
-                continue; // мусор сервера — не протокол
-            }
-            if (msg.id != null && pending.has(msg.id)) {
-                const { resolve, reject } = pending.get(msg.id);
-                pending.delete(msg.id);
-                if (msg.error)
-                    reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                else
-                    resolve(msg.result);
-            }
-            else if (msg.id != null && msg.method) {
-                // Запрос сервера (roots/sampling): не поддерживаем — честный отказ, не вис.
-                child.stdin.write(JSON.stringify({
-                    jsonrpc: '2.0', id: msg.id,
-                    error: { code: -32601, message: 'not supported by work-mcp' },
-                }) + '\n');
-            }
-        }
-    });
-    child.stderr.on('data', chunk => {
-        stderr += String(chunk);
-        if (stderr.length > 2000)
-            stderr = stderr.slice(-2000);
-    });
-    const failAll = e => {
-        for (const { reject } of pending.values()) {
-            try {
-                reject(e);
-            }
-            catch { /* слушатель ушёл */ }
-        }
-        pending.clear();
-    };
-    child.on('error', failAll);
-    child.on('exit', () => failAll(new Error('процесс MCP завершён')));
-    return {
-        notify(method, params) {
-            try {
-                child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params: params || {} }) + '\n');
-            }
-            catch { /* некому слушать */ }
-        },
-        request(method, params, timeout) {
-            return new Promise((resolve, reject) => {
-                const id = seq++;
-                const timer = setTimeout(() => {
-                    pending.delete(id);
-                    reject(new Error('таймаут ' + timeout + 'мс; stderr: ' + (stderr.trim().slice(-300) || '—')));
-                }, timeout);
-                pending.set(id, {
-                    resolve: v => { clearTimeout(timer); resolve(v); },
-                    reject: e => { clearTimeout(timer); reject(e); },
-                });
-                try {
-                    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} }) + '\n');
-                }
-                catch (e) {
-                    pending.delete(id);
-                    clearTimeout(timer);
-                    reject(e);
-                }
-            });
-        },
-    };
-}
-
