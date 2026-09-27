@@ -29,7 +29,8 @@ export const DIRECTIVES = {
                 array[i] = { item: items[keys[i]], key: keys[i] };
             }
             items = array;
-        } else if (!Number.isNaN(+items)) {
+        } else if (!Array.isArray(items) && !Number.isNaN(+items)) {
+            // число — счётчик; массив [3] сюда не попадает (+[3] === 3 раньше рисовал три элемента)
             const len = Math.floor(+items);
             items = new Array(len);
             for (let i = 0; i < len; i++) items[i] = i;

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>ODA core UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * UI-тесты ядра ODA в настоящем браузере (tests/ui/run.mjs). Результат — window.__results / window.__done.
+ * Компоненты ODA: shadow root закрыт — проверяем через свойства и $() компонента.
+ */
+import '/oda/oda.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 2000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(60);
+    return el;
+}
+const text = el => el?.textContent?.trim();
+
+await ODA({ is: 't-child',
+    template: `<span id="v">{{label}}</span>`,
+    src: null,
+    get label() { return this.src ? this.src.name + ':' + this.suffix : '—'; },
+    suffix: 'x',
+});
+await ODA({ is: 't-host',
+    template: `
+        <t-child ~if="show" :src id="c"></t-child>
+        <div id="list"><b ~for="items" :title="$for.item">{{$for.index}}={{$for.item}}</b></div>
+        <div id="cls" ~class="{on: flag === true, off: flag !== true}"></div>
+        <div id="sty" ~style="{width: w + 'px'}"></div>
+        <input id="inp" ::value="val">
+        <button id="btn" @tap.stop="clicks++">b</button>
+        <div id="nest"><i ~for="rows"><u ~for="$for.item.cells">{{$for.$for.index}}.{{$for.index}}</u></i></div>
+    `,
+    show: true,
+    src: null,
+    items: ['a', 'b'],
+    flag: false,
+    w: 10,
+    val: 'x',
+    clicks: 0,
+    rows: [{ cells: [1, 2] }, { cells: [3] }],
+    $observers: {
+        onPair(flag, w) { this.observed = (this.observed || 0) + 1; this.lastPair = flag + '/' + w; },
+    },
+});
+
+const data = Reactor.activate({ name: 'A' });
+
+await test('~for и {{}} рендерят список, обновление массива', async () => {
+    const h = await mount('t-host', { src: data });
+    assert(await until(() => h.$$('#list b').length === 2), 'два элемента');
+    eq(text(h.$('#list b')), '0=a');
+    h.items = ['a', 'b', 'c'];
+    assert(await until(() => h.$$('#list b').length === 3), 'три после записи');
+    h.remove();
+});
+
+await test('вложенный ~for: $for — внешний, $for.$for — внутренний; массив [3] — не счётчик', async () => {
+    const h = await mount('t-host', { src: data });
+    assert(await until(() => h.$$('#nest u').length === 3), 'html: ' + h.$('#nest')?.innerHTML);
+    eq(h.$$('#nest u').map(text).join(','), '0.0,1.0,0.1');
+    h.remove();
+});
+
+await test('~class объектом и ~style', async () => {
+    const h = await mount('t-host', { src: data });
+    assert(await until(() => h.$('#cls')?.classList.contains('off')));
+    h.flag = true;
+    h.w = 42;
+    assert(await until(() => h.$('#cls').classList.contains('on') && !h.$('#cls').classList.contains('off')), 'класс on');
+    assert(await until(() => h.$('#sty').style.width === '42px'), 'ширина');
+    h.remove();
+});
+
+await test('::value двусторонняя и @tap.stop', async () => {
+    const h = await mount('t-host', { src: data });
+    const inp = h.$('#inp');
+    assert(await until(() => inp.value === 'x'));
+    inp.value = 'typed';
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    assert(await until(() => h.val === 'typed'), 'val из input');
+    h.$('#btn').click();
+    await tick();
+    eq(h.clicks, 1);
+    h.remove();
+});
+
+await test('~if: элемент убран и возвращён — продолжает обновляться', async () => {
+    const src = Reactor.activate({ name: 'N1' });
+    const h = await mount('t-host', { src });
+    assert(await until(() => text(h.$('#c')?.$('#v')) === 'N1:x'), 'первичный рендер');
+    const child = h.$('#c');
+    h.show = false;
+    assert(await until(() => !child.isConnected), 'убран');
+    src.name = 'N2';
+    child.suffix = 'y';
+    h.show = true;
+    assert(await until(() => h.$('#c')?.isConnected), 'возвращён');
+    assert(await until(() => text(h.$('#c').$('#v')) === 'N2:y'), 'после возврата — актуально: ' + text(h.$('#c')?.$('#v')));
+    src.name = 'N3';
+    assert(await until(() => text(h.$('#c').$('#v')) === 'N3:y'), 'и дальше реагирует на чужие данные');
+    const back = h.$('#c');
+    eq(back, child, 'тот же элемент (не пересоздан)');
+    // второй цикл: свои свойства меняются, пока элемент вне DOM, и после возврата
+    h.show = false;
+    assert(await until(() => !back.isConnected));
+    back.suffix = 'z';
+    h.show = true;
+    assert(await until(() => text(back.$('#v')) === 'N3:z'), 'свой prop во время отсутствия: ' + text(back.$('#v')));
+    back.suffix = 'w';
+    assert(await until(() => text(back.$('#v')) === 'N3:w'), 'свой prop после возврата: ' + text(back.$('#v')));
+    h.remove();
+});
+
+await test('100 циклов ~if не копят подписки на общих данных', async () => {
+    const src = Reactor.activate({ name: 'S' });
+    const h = await mount('t-host', { src });
+    for (let i = 0; i < 100; i++) {
+        h.show = !h.show;
+        await tick(5);
+    }
+    h.show = false;
+    await tick(80);
+    const readers = src[R].deps.name?.size || 0;
+    assert(readers <= 1, 'подписчиков name: ' + readers);
+    h.remove();
+    await tick(40);
+    eq(src[R].deps.name?.size || 0, 0, 'после удаления хоста');
+});
+
+await test('$observers вызываются при изменении аргументов', async () => {
+    const h = await mount('t-host', { src: data });
+    assert(await until(() => h.lastPair === 'false/10'), 'первый вызов');
+    h.w = 11;
+    assert(await until(() => h.lastPair === 'false/11'), 'после изменения');
+    h.remove();
+});
+
+await test('invalidate пересчитывает геттер с внешним источником', async () => {
+    let ext = 1;
+    await ODA({ is: 't-inv', template: `<span id="v">{{val}}</span>`, get val() { return 'v' + ext; } });
+    const el = await mount('t-inv');
+    assert(await until(() => text(el.$('#v')) === 'v1'));
+    ext = 2;
+    el.invalidate('val');
+    assert(await until(() => text(el.$('#v')) === 'v2'), 'после invalidate');
+    el.remove();
+});
+
+await test('oda-markdown-viewer: md-link с href, preventDefault отменяет навигацию', async () => {
+    await import('/oda/components/editors/markdown/markdown-viewer/markdown-viewer.js');
+    const el = await mount('oda-markdown-viewer', { value: 'см [файл](/BASE/doc/a.md/~/handlers/pages/form/)' });
+    let got = null;
+    el.addEventListener('md-link', e => { got = e.detail.href; e.preventDefault(); });
+    assert(await until(() => el.$('a')), 'ссылка отрисована');
+    const before = location.href;
+    el.$('a').click();
+    await tick();
+    eq(got, '/BASE/doc/a.md/~/handlers/pages/form/');
+    eq(location.href, before, 'навигации не было');
+    el.remove();
+});
+
+window.__done = true;
+</script>
+</body>
+</html>
