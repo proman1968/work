@@ -31,6 +31,23 @@ describe('доки задачи', () => {
     });
 });
 
+describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
+    const { linkifyWork, isWorkPath } = await import('../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/util.js');
+    it('бэктики, голые пути, готовые ссылки → WORK-формат; код, URL и не-пути — без изменений', () => {
+        const md = 'Где лежит: `/USERS/X/$user/ADMIN/text/сапёр.html`. См. /BASE/doc, а также [отчёт](/BASE/doc/r.md).\n'
+            + 'Внешняя https://example.com/BASE/x и `npm i` и и/или 1/2.\n```\n/BASE/в/коде\n```';
+        const out = linkifyWork(md);
+        assert.ok(out.includes('[`/USERS/X/$user/ADMIN/text/сапёр.html`](/USERS/X/$user/ADMIN/text/%D1%81%D0%B0%D0%BF%D1%91%D1%80.html/~/handlers/pages/form/).'));
+        assert.ok(out.includes('[/BASE/doc](/BASE/doc/~/handlers/pages/form/),'));
+        assert.ok(out.includes('[отчёт](/BASE/doc/r.md/~/handlers/pages/form/)'));
+        assert.ok(out.includes('https://example.com/BASE/x'));
+        assert.ok(out.includes('`npm i`'));
+        assert.ok(out.includes('и/или 1/2'));
+        assert.ok(out.includes('```\n/BASE/в/коде\n```'));
+        assert.ok(isWorkPath('/sources/core.js') && !isWorkPath('/sources/core.js', true) && !isWorkPath('/day'));
+    });
+});
+
 describe('статистика контекста', () => {
     it('токены, сообщения, лимит из body.context, использование по последнему ходу', () => {
         const s = computeStats({ title: 'T', model: '/MODELS/odant/Qwen', items, context: { limit: 10000, system: 500, tools: 300 } });

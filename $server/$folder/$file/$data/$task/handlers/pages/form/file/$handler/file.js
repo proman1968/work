@@ -10,6 +10,20 @@ import './ui/feed.js';
 import './ui/panel.js';
 import './ui/dock.js';
 import { collectDocs, computeStats } from './ui/docs.js';
+import { pathOfWorkHref, workHref, extOf } from './ui/util.js';
+
+/**
+ * Клик по WORK-ссылке в markdown (событие md-link от oda-markdown-viewer): файл — в доки,
+ * класс/папка и клик с Ctrl — форма в новой вкладке (стандартная навигация ссылки). this — шелл.
+ */
+function onMdLink(e) {
+    const { href, ctrl } = e.detail || {};
+    const path = !ctrl && pathOfWorkHref(href);
+    if (!path || !extOf(path))
+        return;
+    e.preventDefault();
+    this.openDoc({ kind: 'file', path });
+}
 
 export default {
     imports: 'oda//button, oda//icon, oda//splitter',
@@ -102,6 +116,7 @@ export default {
         },
     },
     attached() {
+        this.addEventListener('md-link', onMdLink);
         // Где открыта форма: страница form (work-form) — шапка в её top-panel; развёрнутый chat-item — своя шапка вместо его полосы
         if (WORK.DEV_MODE)
             window.__microchat = this; // отладка UI (scripts/ui-shot.mjs)
@@ -128,6 +143,7 @@ export default {
         }, 50);
     },
     detached() {
+        this.removeEventListener('md-link', onMdLink);
         this._ro?.disconnect();
         this._formHeader?.remove();
         this._formHeader = null;
@@ -344,6 +360,16 @@ export default {
             this.toast('Не удалось сохранить: ' + (e?.message || e));
             return '';
         }
+    },
+    /** Путь WORK: файл — в доки, иначе форма элемента в новой вкладке. */
+    openWorkPath(path) {
+        const p = String(path || '');
+        if (!p)
+            return;
+        if (extOf(p))
+            this.openDoc({ kind: 'file', path: p });
+        else
+            window.open(workHref(p), '_blank');
     },
     closeView() {
         this.fire('close-view');

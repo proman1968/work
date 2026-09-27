@@ -7,7 +7,7 @@
  *   microchat-doc     — просмотр дока: html/pdf — страница, картинка, markdown, текст; копировать/сохранить/открыть.
  * Состояние (docs, dockOpen, dockTab, stats) — у шелла (file.js); компоненты читают его через shell.
  */
-import { extOf, fileUrl, copyText, findShell, fmtTime } from './util.js';
+import { extOf, fileUrl, copyText, findShell, fmtTime, linkifyWork, workHref } from './util.js';
 import { fmtNum, fmtDate } from './docs.js';
 
 const IMAGE = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
@@ -224,6 +224,7 @@ ODA({ is: 'microchat-doc',
             .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: small; }
             .sub { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .sub[mono] { font-family: var(--font-mono); }
+            .sub[link] { cursor: pointer; text-decoration: underline dotted; }
             .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
             .body { overflow: auto; min-height: 0; }
             iframe { border: none; width: 100%; height: 100%; background: white; }
@@ -236,7 +237,7 @@ ODA({ is: 'microchat-doc',
         <div class="bar" no-flex>
             <div vertical flex style="min-width: 0;">
                 <span class="name">{{doc?.title}}</span>
-                <span class="sub" :mono="isFile" :title="subtitle">{{subtitle}}</span>
+                <span class="sub" :mono="isFile" :link="isFile" :title="isFile ? 'Открыть форму ' + path : subtitle" @tap="openForm">{{subtitle}}</span>
             </div>
             <oda-button no-flex ~if="isFile" icon="carbon:renew" :icon-size="16" title="Обновить" @tap="reload"></oda-button>
             <oda-button no-flex ~if="!isImage" icon="carbon:copy" :icon-size="16" title="Копировать" @tap="copy"></oda-button>
@@ -247,7 +248,7 @@ ODA({ is: 'microchat-doc',
         <div class="body" flex vertical>
             <iframe flex ~if="isPage" :src="url"></iframe>
             <div class="img" flex ~if="isImage"><img :src="url"></div>
-            <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="text"></oda-markdown-viewer></div>
+            <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
             <pre ~if="!isPage && !isImage && !isMarkdown && text">{{text}}</pre>
             <div class="empty" ~if="!isPage && !isImage && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
         </div>
@@ -273,6 +274,7 @@ ODA({ is: 'microchat-doc',
     get isMarkdown() { return this.ext === 'md'; },
     get url() { return fileUrl(this.path) + '?_=' + this.bust; },
     get text() { return this.isFile ? this.fileText : String(this.doc?.text || ''); },
+    get md() { return linkifyWork(this.text); },
     get subtitle() {
         if (this.isFile)
             return this.path;
@@ -325,4 +327,8 @@ ODA({ is: 'microchat-doc',
             this.saved = res;
     },
     launch() { window.open(fileUrl(this.path), '_blank'); },
+    openForm() {
+        if (this.isFile)
+            window.open(workHref(this.path), '_blank');
+    },
 });

@@ -7,7 +7,7 @@
  */
 import {
     toolMeta, toolTarget, STATUS_META, fmtDuration, fmtTime, fmtTokens, modelShort,
-    copyText, findShell, liveText, resultMarkdown,
+    copyText, findShell, liveText, resultMarkdown, linkifyWork, isWorkPath,
 } from './util.js';
 
 const ACTIVE = ['pending', 'running', 'approval', 'waiting'];
@@ -118,7 +118,7 @@ ODA({ is: 'microchat-user',
     get time() { return fmtTime(this.data?.time); },
     get busy() { return this.$pdp?.status === 'running'; },
     copy() { copyText(this.text); },
-    open(path) { findShell(this)?.openDoc({ kind: 'file', path }); },
+    open(path) { findShell(this)?.openWorkPath(path); },
     revert() { findShell(this)?.revert(this.data); },
 });
 
@@ -147,7 +147,7 @@ ODA({ is: 'microchat-assistant',
             <div class="body" ~if="reasoningOpen">{{reasoning}}</div>
         </div>
         <div class="text" ~if="text" :error="data?.error" :caret="streamingText">
-            <oda-markdown-viewer vertical :value="text"></oda-markdown-viewer>
+            <oda-markdown-viewer vertical :value="md"></oda-markdown-viewer>
         </div>
         <div class="meta" ~if="text && !streamingText">
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
@@ -163,6 +163,8 @@ ODA({ is: 'microchat-assistant',
     get stream() { return this.$pdp?.streams?.[this.data?.id]; },
     get text() { return liveText(this.data?.content, this.stream?.content); },
     get reasoning() { return liveText(this.data?.reasoning, this.stream?.reasoning); },
+    /** Стрим — как есть (ссылки дорисуются по завершении), готовый ответ — с WORK-ссылками. */
+    get md() { return this.streamingText ? this.text : linkifyWork(this.text); },
     get streamingText() { return !!this.stream?.content && !this.data?.durationMs; },
     get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.data?.durationMs; },
     get reasoningOpen() { return this.showReasoning || this.thinkingNow; },
@@ -301,7 +303,7 @@ ODA({ is: 'microchat-tool',
         <div class="row" @tap="open = !open">
             <oda-icon no-flex :icon="meta.icon" :icon-size="16"></oda-icon>
             <span class="label" no-flex>{{meta.label}}</span>
-            <span class="target" flex :title="target" :link="!!artifactPath" @tap.stop="openArtifact">{{target}}</span>
+            <span class="target" flex :title="linkPath ? 'Открыть ' + linkPath : target" :link="!!linkPath" @tap.stop="openArtifact">{{target}}</span>
             <span class="aux" no-flex ~if="data?.diff"><span class="plus">+{{data.diff.added}}</span> <span class="minus">−{{data.diff.removed}}</span></span>
             <span class="aux" no-flex ~if="statusLabel">{{statusLabel}}</span>
             <span class="aux" no-flex ~if="duration">{{duration}}</span>
@@ -349,7 +351,7 @@ ODA({ is: 'microchat-tool',
             </div>
             <div ~if="result">
                 <div class="caption">{{data?.status === 'error' ? 'Ошибка' : 'Результат'}}</div>
-                <oda-markdown-viewer vertical :value="result"></oda-markdown-viewer>
+                <oda-markdown-viewer vertical :value="resultMd"></oda-markdown-viewer>
             </div>
         </div>
         <div class="sub" ~if="data?.items?.length && (open || live)">
@@ -367,6 +369,13 @@ ODA({ is: 'microchat-tool',
     get artifactPath() {
         const p = this.data?.path;
         return ['write', 'edit', 'generate_image', 'read', 'save_skill'].includes(this.data?.name) && p && this.data?.status === 'ok' ? p : '';
+    },
+    /** Кликабельный путь карточки: результат (файл → доки) или операнд-путь WORK (форма в новой вкладке). */
+    get linkPath() {
+        if (this.artifactPath)
+            return this.artifactPath;
+        const p = String(this.data?.path || this.data?.args?.path || this.data?.args?.parent || '');
+        return isWorkPath(p) && !['error', 'denied'].includes(this.data?.status) ? p : '';
     },
     get statusIcon() { return (STATUS_META[this.data?.status] || STATUS_META.pending).icon; },
     get statusLabel() {
@@ -422,13 +431,14 @@ ODA({ is: 'microchat-tool',
             return '**Отчёт субагента**\n\n' + String(this.data.result || '');
         return resultMarkdown(this.data);
     },
+    get resultMd() { return linkifyWork(this.result); },
     attached() {
         if (this.attention)
             this.async(() => this.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }), 50);
     },
     openArtifact() {
-        if (this.artifactPath)
-            findShell(this)?.openDoc({ kind: 'file', path: this.artifactPath });
+        if (this.linkPath)
+            findShell(this)?.openWorkPath(this.linkPath);
         else
             this.open = !this.open;
     },
@@ -482,11 +492,12 @@ ODA({ is: 'microchat-summary',
             <oda-icon icon="carbon:shrink-screen" :icon-size="14"></oda-icon>
             <span>Контекст сжат — ранняя часть свёрнута в сводку</span>
         </div>
-        <div class="body" ~if="open"><oda-markdown-viewer vertical :value="data?.content"></oda-markdown-viewer></div>
+        <div class="body" ~if="open"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
     `,
     data: null,
     nested: false,
     open: false,
+    get md() { return linkifyWork(this.data?.content); },
 });
 
 ODA({ is: 'microchat-error',

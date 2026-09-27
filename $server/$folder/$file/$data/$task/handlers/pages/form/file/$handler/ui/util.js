@@ -128,13 +128,92 @@ export function liveText(saved, streamed) {
 /** Расширение по пути. */
 export function extOf(path) {
     const leaf = String(path || '').split('/').pop() || '';
-    const i = leaf.lastIndexOf('.');
-    return i > 0 ? leaf.slice(i + 1).toLowerCase() : '';
+    const m = leaf.match(/\.([a-z0-9]{1,8})$/i);
+    return m && m.index > 0 ? m[1].toLowerCase() : '';
 }
 
 /** URL файла WORK для браузера. */
 export function fileUrl(path) {
     return String(path || '').split('/').map(s => encodeURIComponent(s)).join('/');
+}
+
+const LOWER_ROOTS = ['sources', 'oda', 'docs', 'rules', 'scripts', 'tests'];
+
+/** Абсолютный WORK-путь (а не просто «что-то со слешем»): /КЛАСС/…, /$server/…, /sources/… */
+export function isWorkPath(s, plain = false) {
+    const t = String(s || '').trim();
+    if (!t.startsWith('/') || t.startsWith('//') || t.length < 3 || /[<>{}]|→|\n/.test(t))
+        return false;
+    if (t.includes('/~/handlers/'))
+        return false;
+    const first = t.slice(1).split('/')[0];
+    if (/^\$[\w-]+$/.test(first))
+        return true;
+    if (/^[A-Z][A-Z0-9_.-]+$/.test(first))
+        return true;
+    return !plain && LOWER_ROOTS.includes(first);
+}
+
+/** WORK-ссылка на форму элемента (rules.md 1.1.1): /путь/~/handlers/pages/form/ */
+export function workHref(path) {
+    const p = String(path || '').trim().replace(/\/+$/, '');
+    return encodeURI(p + '/~/handlers/pages/form/');
+}
+
+/** Путь из WORK-ссылки формы (или null). */
+export function pathOfWorkHref(href) {
+    try {
+        const u = new URL(href, location.origin);
+        if (u.origin !== location.origin)
+            return null;
+        const m = decodeURI(u.pathname).match(/^(.*?)\/~\/handlers\/(?:pages\/)?form\/?$/);
+        return m ? m[1] : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+const TRAIL = /[.,;:!?)»"'…]+$/;
+
+/**
+ * Markdown → с кликабельными WORK-путями (стандарт rules.md 1.1.1):
+ * `/путь` в бэктиках и голые /КЛАСС/… пути в тексте → [путь](/путь/~/handlers/pages/form/);
+ * markdown-ссылки на абсолютные пути → WORK-формат. Блоки кода, внешние URL — без изменений.
+ */
+export function linkifyWork(md) {
+    const src = String(md ?? '');
+    if (!src || !src.includes('/'))
+        return src;
+    const parts = src.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$))/);
+    return parts.map((part, i) => i % 2 ? part : linkifySegment(part)).join('');
+}
+
+function linkifySegment(text) {
+    const keep = [];
+    const hold = s => '\u0000' + (keep.push(s) - 1) + '\u0000';
+    // готовые ссылки: абсолютный путь → WORK-формат
+    text = text.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, label, href) => {
+        let h = href;
+        try { h = decodeURI(href); } catch { /* как есть */ }
+        return hold(isWorkPath(h) ? '[' + label + '](' + workHref(h) + ')' : m);
+    });
+    text = text.replace(/https?:\/\/[^\s)\]]+/g, m => hold(m));
+    text = text.replace(/<[^>\n]+>/g, m => hold(m));
+    // `путь` в бэктиках
+    text = text.replace(/`([^`\n]+)`/g, (m, code) => {
+        const c = code.trim();
+        return hold(isWorkPath(c) ? '[`' + c + '`](' + workHref(c) + ')' : m);
+    });
+    // голые пути в тексте
+    text = text.replace(/(^|[\s(«"'])(\/[^\s`'"«»()\[\]<>]+)/g, (m, pre, raw) => {
+        const tail = (raw.match(TRAIL) || [''])[0];
+        const path = tail ? raw.slice(0, -tail.length) : raw;
+        if (!isWorkPath(path, true))
+            return m;
+        return pre + hold('[' + path + '](' + workHref(path) + ')') + tail;
+    });
+    return text.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[+n]);
 }
 
 /** Результат вызова → markdown для раскрытия. */

@@ -1,5 +1,8 @@
+import { linkifyWork } from '/$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/util.js';
+
 /**
- * Превью .task (карточка в проводнике/ленте): заголовок, статус, последний ответ агента.
+ * Превью .task (карточка в проводнике/ленте): статус (если не «готово») и последний ответ агента.
+ * Заголовок не рисуем — его показывает карточка (chat-item / item-node).
  */
 export default {
     imports: 'oda//icon, oda//markdown//markdown-viewer',
@@ -12,12 +15,8 @@ export default {
             .body { font-size: small; max-height: 240px; overflow: hidden; -webkit-mask-image: linear-gradient(black 75%, transparent); mask-image: linear-gradient(black 75%, transparent); }
             .muted { @apply --muted; font-size: small; }
         </style>
-        <div class="head">
-            <oda-icon no-flex icon="bootstrap:robot" :icon-size="16"></oda-icon>
-            <span class="title" flex>{{title}}</span>
-            <span class="chip" no-flex ~if="statusLabel">{{statusLabel}}</span>
-        </div>
-        <div class="body" ~if="answer"><oda-markdown-viewer vertical :value="answer"></oda-markdown-viewer></div>
+        <div class="head" ~if="statusLabel"><span class="chip">{{statusLabel}}</span></div>
+        <div class="body" ~if="answer"><oda-markdown-viewer vertical :value="answerMd"></oda-markdown-viewer></div>
         <div class="muted" ~if="!answer">{{hint}}</div>
     `,
     task: null,
@@ -47,6 +46,7 @@ export default {
                 return String(items[i].content);
         return '';
     },
+    get answerMd() { return linkifyWork(this.answer); },
     get hint() {
         const items = this.task?.items || [];
         const q = [...items].reverse().flatMap(i => i.tools || []).find(t => t.status === 'waiting' || t.status === 'approval');
