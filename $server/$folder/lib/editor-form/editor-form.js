@@ -1,5 +1,3 @@
-import { parseFormSpec } from '/$server/$folder/$file/$data/$task/task.js';
-
 export default {}
 
 ODA({
@@ -21,18 +19,10 @@ ODA({
     <oda-editor-form ~if="spec" :metadata="spec" :data="values"></oda-editor-form>
     `,
     dataAccessNode: null,
-    /** Мета-спека из content блока (parseFormSpec); legacy — dataAccessNode. */
+    /** Мета-спека формы: data.metadata (массив полей oda-editor-form); иначе legacy — dataAccessNode. */
     get spec() {
-        if (this._specData !== this.data) {
-            this._specData = this.data;
-            try {
-                this._specCache = parseFormSpec(this.data?.content);
-            }
-            catch {
-                this._specCache = null;
-            }
-        }
-        return this._specCache;
+        const m = this.data?.metadata;
+        return Array.isArray(m) && m.length ? m : null;
     },
     /** Значения — объект блока (общий с data.values → $pdp.result → APPROVE). */
     get values() {

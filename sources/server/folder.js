@@ -921,7 +921,8 @@ export class $folder extends $item{
             }
             properties.push(info);
         }
-        const methods = buildAiSchema(this.constructor.prototype);
+        // Копия: buildAiSchema кэширует массив на конструктор — пуш методов экземпляра портил кэш
+        const methods = buildAiSchema(this.constructor.prototype).map(m => ({ ...m }));
         const seen = new Set(methods.map(m => m.name));
         for (const name of Object.getOwnPropertyNames(this)) {
             if (seen.has(name) || name[0] === '_' || name[0] === '#')

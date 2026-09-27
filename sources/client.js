@@ -601,7 +601,9 @@ setTimeout(() => {
             case 'chat.delta':
             case 'chat.done':
             case 'chat.error':
-            case 'chat.clear_stream': {
+            case 'chat.clear_stream':
+            case 'task.delta':
+            case 'task.state': {
                 if(!data.path)
                     return;
                 let item = CORE.$item.ITEMS[data.path];

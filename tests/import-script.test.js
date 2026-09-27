@@ -29,12 +29,12 @@ ODA({ is: 'x' });`;
         const layers = [
             './$server/$folder/class.js',
             './$server/$folder/$file/class.js',
-            './$server/$folder/$file/$task/class.js',
+            './$server/$folder/$file/$data/$task/class.js',
         ].map(p => fs.readFileSync(p, 'utf8'));
         const merged = layers.reduce((acc, code) => MERGE.mergeScripts(acc, code));
         const data = await CORE.$folder.importScript(merged);
         assert.equal(typeof data.prompt, 'function', 'prompt() метода $task переживает merge');
-        assert.equal(data.label, undefined, 'нет label на уровне типов (данные класс-специфичны)');
+        assert.equal(typeof data.approve, 'function', 'approve() — тоже');
     });
 
     it('merged export default идёт после const-объявлений (TDZ)', async () => {

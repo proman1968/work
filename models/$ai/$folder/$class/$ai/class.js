@@ -140,11 +140,14 @@ export default {
         const ai = params.$ai || this;
         return (async function* () {
         const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
-        const useFunctions = Array.isArray(options.functions) && options.functions.length > 0;
         const isGigachat = ai.protocol === 'gigachat';
+        // Нативные инструменты: options.tools (OpenAI-формат) — решает вызывающий;
+        // legacy options.functions — только при ai.functionCalling === true.
+        let tools = Array.isArray(options.tools) && options.tools.length ? options.tools : null;
+        if (!tools && Array.isArray(options.functions) && options.functions.length && ai.functionCalling === true)
+            tools = toOpenAiTools(options.functions);
         let messages = options.messages || [];
-        if (!isGigachat)
-            messages = normalizeOpenAiMessages(messages);
+        messages = isGigachat ? toGigaChatMessages(messages) : normalizeOpenAiMessages(messages);
 
         const body = {
             model: options.model || ai.model || '',
@@ -161,34 +164,17 @@ export default {
         if (!isGigachat)
             body.stream_options = { include_usage: true };
 
-        if (useFunctions && ai.functionCalling === true) {
+        if (tools) {
             if (isGigachat) {
-                let gigaFns = sanitizeGigaChatFunctions(options.functions);
-                const forcedName = options.function_call && typeof options.function_call === 'object'
-                    ? options.function_call.name
-                    : null;
-                if (forcedName === 'save_file') {
-                    const saveFn = gigaFns.find(f => f.name === 'save_file') || {
-                        name: 'save_file',
-                        description: 'Создать или перезаписать файл. filename + post.',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                filename: { type: 'string', description: 'Имя файла' },
-                                post: { type: 'string', description: 'Содержимое' },
-                            },
-                            required: ['filename', 'post'],
-                        },
-                    };
-                    gigaFns = [saveFn];
-                }
+                const gigaFns = sanitizeGigaChatFunctions(tools.map(t => t.function || t));
                 body.functions = gigaFns;
                 body.messages = sanitizeGigaChatMessages(messages, gigaFns);
-                if (options.function_call)
-                    body.function_call = options.function_call;
+                body.function_call = options.function_call || 'auto';
             } else {
-                body.tools = toOpenAiTools(options.functions);
+                body.tools = tools;
                 body.tool_choice = resolveOpenAiToolChoice(options);
+                if (options.parallel_tool_calls != null)
+                    body.parallel_tool_calls = !!options.parallel_tool_calls;
             }
         }
 
@@ -215,26 +201,71 @@ export default {
                 resolve(res);
             });
             req.on('error', reject);
+            // Простой сокета (нет байтов) дольше idleMs — обрыв, а не вечное ожидание.
+            const idleMs = Number(options.idleMs) > 0 ? Number(options.idleMs) : 180000;
+            req.setTimeout?.(idleMs, () => req.destroy(new Error('LLM ' + body.model + ': нет ответа ' + Math.round(idleMs / 1000) + 'с')));
+            // Стоп пользователя: abort сразу рвёт соединение (не ждём следующего чанка).
+            const signal = options.signal;
+            if (signal) {
+                if (signal.aborted)
+                    req.destroy(new Error('aborted'));
+                else
+                    signal.addEventListener?.('abort', () => req.destroy(new Error('aborted')), { once: true });
+            }
             req.write(JSON.stringify(body));
             req.end();
         });
 
-        let funcCallName = '';
-        let funcCallArgs = '';
-        let reasoningAcc = '';
-        let contentSeen = false;
-
-        const flushFunctionCall = function* () {
-            if (!funcCallName)
+        // Вызовы инструментов копятся по index (параллельные tool_calls), отдаются одним событием в конце.
+        const calls = [];
+        const noteCall = (idx, id, name, args) => {
+            const e = calls[idx] ??= { id: '', name: '', args: '' };
+            if (id)
+                e.id = id;
+            if (name)
+                e.name = name;
+            if (args != null)
+                e.args = appendFunctionArgs(e.args, args);
+        };
+        const parseLine = function* (line) {
+            if (!line.startsWith('data:'))
                 return;
-            const parsedArgs = parseFunctionArgs(funcCallArgs);
-            yield {
-                type: 'function_call',
-                name: funcCallName,
-                arguments: parsedArgs,
-            };
-            funcCallName = '';
-            funcCallArgs = '';
+            const jsonStr = line.slice(5).trim();
+            if (!jsonStr || jsonStr === '[DONE]')
+                return;
+            let json;
+            try {
+                json = JSON.parse(jsonStr);
+            }
+            catch {
+                return; // не протокол (keep-alive/мусор)
+            }
+            if (json.error)
+                throw new Error('LLM ' + body.model + ': ' + (json.error.message || JSON.stringify(json.error)));
+            const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
+            const reasoning = delta.reasoning ?? delta.reasoning_content;
+            if (reasoning)
+                yield { type: 'reasoning', content: String(reasoning) };
+            const content = delta.content || delta.text;
+            if (content)
+                yield String(content);
+            if (Array.isArray(delta.tool_calls))
+                for (const tc of delta.tool_calls)
+                    noteCall(tc.index ?? 0, tc.id, tc.function?.name, tc.function?.arguments);
+            if (delta.function_call)
+                noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
+            if (json.usage) {
+                const u = json.usage;
+                const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
+                const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
+                const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
+                yield {
+                    type: 'usage',
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    total_tokens: totalTokens,
+                };
+            }
         };
 
         // SSE собирается по целым строкам: хвост чанка (разорванный JSON)
@@ -244,98 +275,23 @@ export default {
             buf += Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
             const lines = buf.split('\n');
             buf = lines.pop();
-            for (const line of lines) {
-                if (!line.startsWith('data: '))
-                    continue;
-                const jsonStr = line.slice(6).trim();
-                if (!jsonStr || jsonStr === '[DONE]')
-                    continue;
-                try {
-                    const json = JSON.parse(jsonStr);
-                    const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
-
-                    const reasoning = delta.reasoning ?? delta.reasoning_content;
-                    if (reasoning) {
-                        reasoningAcc += String(reasoning);
-                        yield { type: 'reasoning', content: String(reasoning) };
-                    }
-
-                    const content = delta.content || delta.text;
-                    if (content) {
-                        contentSeen = true;
-                        if (useFunctions)
-                            yield { type: 'content', content };
-                        else
-                            yield content;
-                    }
-
-                    if (delta.tool_calls) {
-                        for (const tc of delta.tool_calls) {
-                            if (tc.function?.name)
-                                funcCallName = tc.function.name;
-                            if (tc.function?.arguments != null)
-                                funcCallArgs = appendFunctionArgs(funcCallArgs, tc.function.arguments);
-                        }
-                    }
-                    if (delta.function_call) {
-                        if (delta.function_call.name)
-                            funcCallName = delta.function_call.name;
-                        if (delta.function_call.arguments != null)
-                            funcCallArgs = appendFunctionArgs(funcCallArgs, delta.function_call.arguments);
-                    }
-
-                    const finishReason = json.choices?.[0]?.finish_reason;
-                    if (
-                        finishReason === 'function_call'
-                        || finishReason === 'tool_calls'
-                        || (finishReason === 'stop' && funcCallName)
-                    ) {
-                        yield* flushFunctionCall();
-                    }
-
-                    if (json.usage) {
-                        const u = json.usage;
-                        const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
-                        const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
-                        const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
-                        yield {
-                            type: 'usage',
-                            prompt_tokens: promptTokens,
-                            completion_tokens: completionTokens,
-                            total_tokens: totalTokens,
-                        };
-                    }
-                }
-                catch {}
-            }
+            for (const line of lines)
+                yield* parseLine(line.trim());
         }
-        if (String(buf || '').trim()) {
-            const line = buf;
-            buf = '';
-            if (line.startsWith('data: ')) {
-                const jsonStr = line.slice(6).trim();
-                if (jsonStr && jsonStr !== '[DONE]') {
-                    try {
-                        const json = JSON.parse(jsonStr);
-                        const delta = json.choices?.[0]?.delta || {};
-                        const content = delta.content || delta.text;
-                        if (content) {
-                            contentSeen = true;
-                            if (useFunctions)
-                                yield { type: 'content', content };
-                            else
-                                yield content;
-                        }
-                    }
-                    catch {}
-                }
-            }
-        }
+        if (String(buf || '').trim())
+            yield* parseLine(buf.trim());
 
-        // reasoning не подменяем content: silent-меню иначе получает абзац «think» вместо EXPLORE
-
-        if (useFunctions && funcCallName)
-            yield* flushFunctionCall();
+        // reasoning не подменяем content: silent-меню иначе получает абзац «think»
+        const done = calls.filter(c => c && c.name);
+        if (done.length)
+            yield {
+                type: 'tool_calls',
+                calls: done.map((c, i) => ({
+                    id: c.id || ('call_' + Date.now().toString(36) + '_' + i),
+                    name: c.name,
+                    arguments: parseFunctionArgs(c.args),
+                })),
+            };
         })();
     },
 
@@ -623,6 +579,43 @@ export function sanitizeGigaChatMessages(messages, functions = []) {
 }
 
 /**
+ * OpenAI tool_calls/role:tool → GigaChat function_call/role:function (по одному вызову на ход:
+ * лишние параллельные вызовы превращаются в текст — GigaChat их не принимает).
+ * @param {Array} messages
+ * @returns {Array}
+ */
+export function toGigaChatMessages(messages) {
+    if (!Array.isArray(messages))
+        return [];
+    const names = new Map();
+    const out = [];
+    for (const m of messages) {
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+            const [first, ...rest] = m.tool_calls;
+            for (const tc of m.tool_calls)
+                names.set(tc.id, tc.function?.name);
+            const extra = rest.map(tc => '[' + tc.function?.name + ' ' + tc.function?.arguments + ']').join('\n');
+            let args = first.function?.arguments;
+            try { args = typeof args === 'string' ? JSON.parse(args || '{}') : (args || {}); } catch { args = {}; }
+            out.push({
+                role: 'assistant',
+                content: [m.content, extra].filter(Boolean).join('\n'),
+                function_call: { name: first.function?.name, arguments: args },
+            });
+            continue;
+        }
+        if (m.role === 'tool') {
+            out.push({ role: 'function', name: names.get(m.tool_call_id) || 'tool', content: String(m.content ?? '') });
+            continue;
+        }
+        out.push(m);
+    }
+    return out;
+}
+
+/**
  * Нормализация messages для OpenAI/GLM: нет role:function, есть непустой user.
  * @param {Array} messages
  * @returns {Array}
@@ -675,17 +668,51 @@ async function getAuthHeaders(ai) {
             break;
         }
         case 'anthropic': {
-            headers['x-api-key'] = ai.apiKey;
+            headers['x-api-key'] = await resolveKey(ai, ai.apiKey);
             headers['anthropic-version'] = '2023-06-01';
             break;
         }
         case 'openai':
         default: {
-            if (ai.apiKey)
-                headers['Authorization'] = 'Bearer ' + ai.apiKey;
+            const key = await resolveKey(ai, ai.apiKey);
+            if (key)
+                headers['Authorization'] = 'Bearer ' + key;
         }
     }
     return headers;
+}
+
+/**
+ * Значение ключа: литерал | `env:ИМЯ` (process.env) | `secret:ФАЙЛ` (#secret модели,
+ * затем вверх по родителям — провайдер, MODELS). В файле секрета — value|apiKey|token|key.
+ * @param {object} ai модель
+ * @param {string} raw значение поля
+ * @returns {Promise<string>}
+ */
+export async function resolveKey(ai, raw) {
+    const s = String(raw ?? '').trim();
+    if (!s)
+        return '';
+    if (/^env:/i.test(s))
+        return String(process.env[s.slice(4).trim()] || '');
+    if (!/^secret:/i.test(s))
+        return s;
+    const filename = s.slice(7).trim();
+    let cur = ai;
+    for (let i = 0; i < 6 && cur; i++) {
+        if (typeof cur.read_secret === 'function') {
+            try {
+                const data = await cur.read_secret({ filename });
+                const v = typeof data === 'string' ? data
+                    : data?.value ?? data?.apiKey ?? data?.token ?? data?.key;
+                if (v)
+                    return String(v);
+            }
+            catch { /* выше по дереву */ }
+        }
+        cur = cur.$parent ?? cur.parent;
+    }
+    throw new Error('ключ модели: нет секрета ' + filename + ' (#secret/' + filename + ' у модели или провайдера)');
 }
 
 /** POST JSON по HTTPS (generateImage). timeoutMs — долгая генерация картинки. */
@@ -819,6 +846,7 @@ function normalizeRemoteModelIds(data) {
 
 async function gigachatAuth(ai) {
     const url = new URL(ai.authUrl);
+    const token = await resolveKey(ai, ai.token);
     return new Promise((resolve, reject) => {
         const req = WORK.https.request({
             hostname: url.hostname,
@@ -830,7 +858,7 @@ async function gigachatAuth(ai) {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Accept': 'application/json',
                 'RqUID': crypto.randomUUID(),
-                'Authorization': 'Bearer ' + ai.token,
+                'Authorization': 'Bearer ' + token,
             },
         }, (res) => {
             const chunks = [];
