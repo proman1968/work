@@ -9,6 +9,7 @@ import { runLoop } from './loop.js';
 import { workTools } from './tools/work.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
+import { connectTools } from './tools/connect.js';
 import { loadDocs, loadSystem, loadConfig } from './resources.js';
 import { clip } from './util.js';
 
@@ -82,7 +83,12 @@ WORK — система управления деятельностью, где 
 - Меняя код/конфигурацию системы ($server, sources, oda, MODELS, SERVICES, *.js), объясни зачем — человек подтвердит.
 - Спрашивай человека (ask_user) только о том, что нельзя выяснить самому.
 - Отвечай по-русски, по делу, markdown; ссылки на элементы — WORK-путями. В конце работы — краткий итог: что сделано, где результат.
-- Удачную повторяемую работу предложи сохранить навыком (save_skill).`;
+- Удачную повторяемую работу предложи сохранить навыком (save_skill).
+# Внешние сервисы (аккаунты пользователя)
+- Ты можешь действовать в интернет-сервисах через их API: календари, почта, диски, задачи, CRM, GitHub и любой API по токену (http_request).
+- Доступ к аккаунту даёт только сам пользователь: проверь connections; нет нужного — connect_service (он войдёт на сайте провайдера или вставит токен в карточке). Никогда не проси пароли, коды и токены в чате и не регистрируй аккаунты сам.
+- Чтение (GET) — сразу; любое изменение (создать событие, отправить письмо, удалить…) пользователь подтверждает явно — в reason опиши по-человечески, что именно сделаешь (что, когда, кому).
+- Сайты без API (формы, клики) — не автоматизируешь: предложи пользователю ссылку и шаги.`;
 
 const MODE_NOTE = {
     auto: 'Режим «Авто»: чтение и запись рабочих данных — без вопросов; изменения системы и опасные действия — с подтверждением.',
@@ -124,12 +130,12 @@ export async function createEnv({ place, session, host, tz, location } = {}) {
         },
         /** Инструменты агента (def — субагент или undefined для основного). */
         async makeTools(def, depth = 0) {
-            let all = [...workTools, ...webTools, ...metaTools, ...await env.extTools()];
+            let all = [...workTools, ...webTools, ...connectTools, ...metaTools, ...await env.extTools()];
             if (depth >= MAX_DEPTH)
                 all = all.filter(t => t.name !== 'task');
             if (!def)
                 return all;
-            all = all.filter(t => !['ask_user', 'todo_write', 'save_skill'].includes(t.name));
+            all = all.filter(t => !['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service'].includes(t.name));
             const spec = def.meta.tools;
             if (!spec || spec === '*' || spec === 'all')
                 return all;

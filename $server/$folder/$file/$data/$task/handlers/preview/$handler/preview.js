@@ -134,6 +134,8 @@ export default {
         if (s === 'waiting') {
             if (t?.name === 'ask_user')
                 return String(t.args?.question || 'вопрос');
+            if (t?.name === 'connect_service')
+                return 'подключить ' + (t.connect?.label || t.args?.provider || 'сервис') + ' — ' + (t.args?.reason || '');
             if (t)
                 return 'разрешить «' + toolMeta(t.name).label + '» ' + toolTarget(t);
             return 'нужен ответ';

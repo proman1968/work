@@ -297,7 +297,9 @@ ODA({ is: 'microchat-tool',
             .ghost { border: 1px solid var(--subtle-border); background: var(--content-background); }
             .danger { color: var(--error-color); fill: var(--error-color); }
             .opt[selected] { outline: 2px solid var(--accent-color); }
-            .field { @apply --vertical; gap: 2px; }
+            .field { @apply --vertical; gap: 6px; }
+            .ask .lnk { color: var(--accent-color); text-decoration: underline; cursor: pointer; }
+            .ask code { font-family: var(--font-mono); background: var(--code-background); padding: 0 4px; border-radius: 4px; user-select: all; }
             .field label { font-size: x-small; @apply --muted; }
             input, textarea, select {
                 font: inherit; padding: 6px 8px; border-radius: var(--radius-s); border: 1px solid var(--subtle-border);
@@ -327,8 +329,29 @@ ODA({ is: 'microchat-tool',
             <textarea placeholder="Комментарий или что сделать иначе (необязательно)" ::value="comment"></textarea>
             <div class="btns">
                 <oda-button hide-icon accent-invert label="Разрешить" @tap="approve(true)"></oda-button>
-                <oda-button hide-icon class="ghost" label="Разрешить всегда" :title="'Не спрашивать про «' + meta.label + '» в этой задаче'" @tap="approve(true, true)"></oda-button>
+                <oda-button hide-icon class="ghost" ~if="!data?.noAlways" label="Разрешить всегда" :title="'Не спрашивать про «' + meta.label + '» в этой задаче'" @tap="approve(true, true)"></oda-button>
                 <oda-button hide-icon class="ghost danger" label="Отклонить" @tap="approve(false)"></oda-button>
+            </div>
+        </div>
+
+        <div class="ask" ~if="isConnect">
+            <div class="q">Подключить {{data.connect.label || data.connect.provider}}?</div>
+            <div class="why">{{data.connect.reason}}</div>
+            <div class="why" ~if="data.connect.scopes?.length">Доступ: {{data.connect.scopes.join(', ')}}</div>
+            <div class="why">Вход выполняете вы сами — агент не видит паролей и токенов.</div>
+            <div class="field" ~if="data.connect.provider === 'token'">
+                <microchat-field :field="{ id: 'base_url', label: 'Базовый URL API', type: 'text' }" :value="cred.base_url ?? data.connect.base_url" @value="setCred($event.detail.value.id, $event.detail.value.value)"></microchat-field>
+                <microchat-field :field="{ id: 'token', label: 'Токен (API key)', type: 'password' }" :value="cred.token" @value="setCred($event.detail.value.id, $event.detail.value.value)"></microchat-field>
+            </div>
+            <div class="field" ~if="needClient">
+                <div class="why">OAuth-клиент для {{data.connect.label}} в системе не настроен. Создайте его в <span class="lnk" @tap="openConsole">консоли провайдера</span>, адрес возврата: <code>{{redirectUri}}</code></div>
+                <microchat-field :field="{ id: 'client_id', label: 'Client ID', type: 'text' }" :value="cred.client_id" @value="setCred($event.detail.value.id, $event.detail.value.value)"></microchat-field>
+                <microchat-field :field="{ id: 'client_secret', label: 'Client secret', type: 'password' }" :value="cred.client_secret" @value="setCred($event.detail.value.id, $event.detail.value.value)"></microchat-field>
+            </div>
+            <div class="why" ~if="connectMsg">{{connectMsg}}</div>
+            <div class="btns">
+                <oda-button hide-icon accent-invert :label="data.connect.provider === 'token' ? 'Сохранить' : 'Войти в ' + (data.connect.label || '')" @tap="connect()"></oda-button>
+                <oda-button hide-icon class="ghost danger" label="Не подключать" @tap="approve(false)"></oda-button>
             </div>
         </div>
 
@@ -393,6 +416,29 @@ ODA({ is: 'microchat-tool',
     get duration() { return fmtDuration(this.data?.durationMs); },
     get isApproval() { return this.data?.status === 'approval'; },
     get isQuestion() { return this.data?.status === 'waiting' && this.data?.name === 'ask_user'; },
+    get isConnect() { return this.data?.status === 'waiting' && this.data?.name === 'connect_service' && !!this.data?.connect; },
+    get needClient() { return !!this.data?.connect?.need_client && this.data.connect.provider !== 'token'; },
+    get redirectUri() { return location.origin + '/oauth/callback'; },
+    cred: {},
+    connectMsg: '',
+    openConsole() { window.open(this.data?.connect?.console, '_blank'); },
+    setCred(id, v) { this.cred = { ...this.cred, [id]: v }; },
+    /** Данные — прямо в connect_start задачи (мимо ленты и модели); OAuth — окно входа провайдера. */
+    async connect() {
+        const shell = findShell(this);
+        const win = this.data.connect.provider === 'token' ? null : window.open('about:blank', 'work-oauth', 'width=520,height=700');
+        const res = await shell?.$item?.fetch('connect_start', {}, JSON.stringify({ call: this.data.id, origin: location.origin, ...this.cred }));
+        if (res?.auth_url) {
+            if (win)
+                win.location = res.auth_url;
+            else
+                window.open(res.auth_url, '_blank');
+            this.connectMsg = 'Завершите вход в открывшемся окне — агент продолжит сам.';
+            return;
+        }
+        win?.close();
+        this.connectMsg = res?.ok ? 'Подключено.' : (res?.error || 'Не удалось подключить');
+    },
     get live() { return this.data?.status === 'running' || this.data?.status === 'pending'; },
     get attention() { return this.isApproval || this.isQuestion; },
     get options() { return Array.isArray(this.data?.args?.options) ? this.data.args.options.map(String) : []; },
@@ -583,13 +629,13 @@ ODA({ is: 'microchat-field',
             <span>{{field?.label}}</span>
         </div>
         <textarea ~if="type === 'textarea'" :value="value ?? ''" @input="emit($event.target.value)"></textarea>
-        <input ~if="type === 'text' || type === 'number' || type === 'date'" :type="type" :value="value ?? ''" @input="emit($event.target.value)">
+        <input ~if="type === 'text' || type === 'number' || type === 'date' || type === 'password'" :type="type" autocomplete="off" :value="value ?? ''" @input="emit($event.target.value)">
     `,
     field: null,
     value: undefined,
     get type() {
         const t = this.field?.type;
-        return ['select', 'checkbox', 'textarea', 'number', 'date'].includes(t) ? t : 'text';
+        return ['select', 'checkbox', 'textarea', 'number', 'date', 'password'].includes(t) ? t : 'text';
     },
     get choices() { return (this.field?.options || []).map(String); },
     attached() {

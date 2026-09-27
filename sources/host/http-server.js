@@ -225,6 +225,15 @@ export function createRequestHandler() {
         const url = new URL(`https://${request.headers.host || HOST}` + request.url);
         let path = decodeURIComponent(url.pathname);
 
+        // Возврат со страницы входа провайдера (OAuth подключения агента) — до разбора дерева
+        if (path === '/oauth/callback') {
+            const { callback } = await import('../modules/agent/connections.js');
+            const html = await callback(Object.fromEntries(url.searchParams));
+            response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+            response.end(html);
+            return;
+        }
+
         // console.log(request.url)
 
         item = await WORK.get_item(path, 0, undefined, { session });

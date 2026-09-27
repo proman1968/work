@@ -21,6 +21,10 @@ export const TOOL_META = {
     skill: { label: 'Навык', icon: 'carbon:skill-level' },
     save_skill: { label: 'Новый навык', icon: 'carbon:save' },
     generate_image: { label: 'Изображение', icon: 'carbon:image' },
+    connections: { label: 'Подключения', icon: 'carbon:connect' },
+    connect_service: { label: 'Подключение', icon: 'carbon:connect' },
+    disconnect_service: { label: 'Отключение', icon: 'carbon:connect' },
+    http_request: { label: 'Запрос API', icon: 'carbon:http' },
 };
 
 export function toolMeta(name) {
@@ -43,6 +47,10 @@ export function toolTarget(t) {
         return (a.path || '') + ' → ' + (a.method || '');
     if (t?.name === 'task')
         return (a.agent ? a.agent + ': ' : '') + (a.description || a.prompt || '');
+    if (t?.name === 'http_request')
+        return String(a.method || 'GET').toUpperCase() + ' ' + (a.connection ? a.connection + ': ' : '') + String(a.url || '');
+    if (t?.name === 'connect_service')
+        return (t.connect?.label || a.provider || '') + (a.scopes?.length ? ' · ' + a.scopes.join(', ') : '');
     if (t?.name === 'todo_write')
         return (a.todos || []).filter(x => x.status === 'completed').length + '/' + (a.todos || []).length;
     return String(t?.path || a.path || a.query || a.url || a.snapshot || a.name || a.question || a.prompt || '');

@@ -160,6 +160,44 @@ function findCall(items, callId) {
     return null;
 }
 
+/** Работа короче — без push о завершении (человек, скорее всего, ещё смотрит). */
+export const PUSH_DONE_MIN_MS = 20_000;
+
+/**
+ * Push пользователю: задача ждёт его / закончила долгую работу / упала.
+ * Показывать ли — решает service worker: если вкладка WORK видима и в фокусе, уведомление не показывается.
+ */
+async function pushNotify(s, session, kind, text) {
+    const uid = session?.uid;
+    if (!uid || process.env.WORK_TEST)
+        return;
+    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой' }[kind] || 'Задача';
+    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
+    const path = String(s.file.path || '');
+    const url = encodeURI(path + '/~/handlers//form/index.html');
+    try {
+        const { sendPushNotification, removePushSubscription } = await import('../../host/push.js');
+        await sendPushNotification({
+            receivers: [uid],
+            message: {
+                type: 'task:' + path, tag: 'task:' + path, title,
+                body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
+                data: { url, kind: 'task' },
+                requireInteraction: kind === 'waiting',
+                renotify: kind === 'waiting',
+            },
+        }, removePushSubscription);
+    }
+    catch (e) {
+        console.warn('[task push]', e.message);
+    }
+}
+
+function lastAnswer(body) {
+    const it = [...(body.items || [])].reverse().find(i => i.type === 'assistant' && i.content && !i.error);
+    return String(it?.content || '').split('\n').find(l => l.trim()) || '';
+}
+
 function makeHost(s, session) {
     const body = s.body;
     return {
@@ -186,6 +224,10 @@ function makeHost(s, session) {
             send(s, session, { type: 'chat.done' });
             const p = new Promise(resolve => s.waiters.set(req.call, resolve));
             save(s, session);
+            const hit = findCall(body.items, req.call)?.entry;
+            pushNotify(s, session, 'waiting', req.kind === 'question' ? req.question
+                : req.kind === 'connect' ? 'подключить ' + (hit?.connect?.label || hit?.connect?.provider || 'сервис')
+                    : 'разрешить: ' + (req.reason || req.tool || ''));
             return p.then(res => {
                 delete body.waiting;
                 if (!s.controller?.signal.aborted) {
@@ -202,6 +244,7 @@ function makeHost(s, session) {
 function start(s, session, file) {
     const body = s.body;
     s.controller = new AbortController();
+    s.startedAt = Date.now();
     setStatus(s, session, 'running');
     send(s, session, { type: 'chat.start' });
     const host = makeHost(s, session);
@@ -250,6 +293,10 @@ function start(s, session, file) {
             s.running = null;
             send(s, session, { type: 'task.state', status: body.status });
             send(s, session, { type: 'chat.done' });
+            if (!aborted && body.status === 'error')
+                pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
+            else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
+                pushNotify(s, session, 'done', lastAnswer(body));
         }
     })();
     return s.running;
@@ -279,7 +326,7 @@ function applyOffline(body, reply) {
     }
     if (reply.accept) {
         entry.status = 'approved';
-        if (reply.always && !body.allowed.includes(entry.name))
+        if (reply.always && !entry.noAlways && !body.allowed.includes(entry.name))
             body.allowed.push(entry.name);
     }
     else {
@@ -460,6 +507,32 @@ function lastTodos(items) {
             return (t.args?.todos || []).map(x => ({ content: String(x.content), status: x.status }));
     }
     return [];
+}
+
+/**
+ * Подключение аккаунта из карточки connect_service (данные вводит человек, в ленту не пишутся):
+ * { call, origin, client_id?, client_secret?, token?, base_url? } → { auth_url } (окно входа) | { ok } (токен сохранён).
+ * По завершении входа (OAuth callback) ожидание вызова снимается с accept:true — агент продолжает.
+ */
+export async function connectStart(file, params = {}) {
+    const p = argsOf(params);
+    const body = await getBody(file);
+    const hit = findCall(body.items, p.call);
+    const c = hit?.entry?.connect;
+    if (!c || hit.entry.status !== 'waiting')
+        return { ok: false, error: 'нет ожидающего подключения' };
+    const C = await import('./connections.js');
+    const done = () => approve(file, { call: p.call, accept: true, session: p.session }).catch(() => {});
+    try {
+        return await C.start({
+            uid: p.session?.uid, name: c.name, provider: c.provider, scopes: c.scopes,
+            base_url: p.base_url || c.base_url, token: p.token, header: p.header,
+            client_id: p.client_id, client_secret: p.client_secret, origin: p.origin, onDone: done,
+        });
+    }
+    catch (e) {
+        return { ok: false, error: String(e.message || e) };
+    }
 }
 
 /** Отменить реплику из очереди. { id } */

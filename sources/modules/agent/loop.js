@@ -299,11 +299,14 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     if (decision.verdict === 'ask') {
         entry.status = 'approval';
         entry.reason = decision.reason;
+        // действия во внешнем мире — каждое подтверждается отдельно («разрешить всегда» не предлагается)
+        if (decision.noAlways)
+            entry.noAlways = true;
         await host.save();
         const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason }) || {};
         throwIfStopped(host.signal);
         delete entry.reason;
-        if (res.always)
+        if (res.always && !entry.noAlways)
             host.allowed?.add?.(entry.name);
         if (!res.accept) {
             entry.status = 'denied';

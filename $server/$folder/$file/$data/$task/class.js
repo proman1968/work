@@ -24,6 +24,10 @@ export default {
     async approve(params = {}) {
         return (await WORK_AGENT()).approve(this, params);
     },
+    /** Карточка подключения: данные вводит человек → { auth_url } окна входа или { ok } (токен). Не пишется в ленту. */
+    async connect_start(params = {}) {
+        return (await WORK_AGENT()).connectStart(this, params);
+    },
     async unqueue(params = {}) {
         return (await WORK_AGENT()).unqueue(this, params);
     },
