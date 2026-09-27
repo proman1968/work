@@ -125,8 +125,8 @@ ODA({ is: 'work-prompt-bar',
                 </button>
                 <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="22"></item-user>
                 <div flex></div>
-                <button class="pill" ~if="ai" title="Модель" @pointerdown.stop="selectModel($event)">
-                    <oda-icon icon="carbon:machine-learning-model" :icon-size="14"></oda-icon><span>{{modelName}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
+                <button class="pill" ~if="ai" :title="modelTitle" @pointerdown.stop="selectModel($event)">
+                    <oda-icon :icon="modelIcon" :icon-size="16"></oda-icon><span>{{modelName}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
                 </button>
                 <button class="pill" ~if="ai && hasEffort" title="Уровень рассуждения" @tap="chooseEffort">
                     <oda-icon icon="carbon:idea" :icon-size="14"></oda-icon><span>{{effortLabel}}</span>
@@ -169,6 +169,20 @@ ODA({ is: 'work-prompt-bar',
     },
     get modelName() {
         return String(this.model || '').split('/').pop() || 'Модель';
+    },
+    /** Иконка выбранной модели — её собственная (наследуется от провайдера), как в дереве /MODELS. */
+    get modelIcon() {
+        const fallback = 'carbon:machine-learning-model';
+        if (!this.model)
+            return fallback;
+        return Promise.resolve(this.modelItem)
+            .then(async m => (await m?.icon) || fallback)
+            .catch(() => fallback);
+    },
+    /** Подсказка: провайдер и модель (одинаковые имена у разных провайдеров различимы). */
+    get modelTitle() {
+        const parts = String(this.model || '').split('/').filter(Boolean);
+        return parts.length >= 3 ? 'Модель: ' + parts.slice(1).join(' / ') : 'Выбрать модель';
     },
     /** Строго по capabilities: нет флага `effort` — нет кнопки. Пока список грузится — скрыта. */
     get hasEffort() {
