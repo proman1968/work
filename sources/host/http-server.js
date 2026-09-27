@@ -6,12 +6,26 @@ import * as mime from 'mime-types';
 import * as zlib from 'node:zlib';
 import { pipeline, Readable } from 'node:stream';
 import multiparty from 'multiparty';
+import { createHash } from 'node:crypto';
 import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 
 const COMPRESS_MAX = 256 * 1024;
 const STATIC_CACHE = 'must-revalidate, public, max-age=3600';
+/** В dev — всегда ревалидация (304 по ETag дешёв), правки видны сразу. */
+const DEV_CACHE = 'no-cache';
+const STATIC_PATH = /\.(m?js|css|svg|png|jpe?g|gif|webp|ico|wasm|map|woff2?|ttf|mp3)$/i;
+
+/** ETag тела файла: собранная строка — хеш содержимого, файл на диске — размер+mtime. */
+function etagOf(item, result) {
+    if (typeof result === 'string')
+        return '"' + createHash('sha1').update(result).digest('base64url').slice(0, 20) + '"';
+    const st = item?.stat;
+    if (st?.mtimeMs)
+        return 'W/"' + st.size.toString(36) + '-' + Math.floor(st.mtimeMs).toString(36) + '"';
+    return null;
+}
 
 function resolveFileContentType(item) {
     // Типизатор `$ext` главнее системного mime (кастомные расширения / JSON-типы)
@@ -234,7 +248,9 @@ export function createRequestHandler() {
 
 
 
-        session.sockets[request.headers['x-work-wsid']]?.events?.add(path);
+        // подписка сокета на изменения пути (reset → {path}); статика UI (модули, стили, иконки) — не данные
+        if (!STATIC_PATH.test(path))
+            session.sockets[request.headers['x-work-wsid']]?.events?.add(path);
         params.session = session;
         if (item === undefined){
             if(!path.includes('/@')){
@@ -311,9 +327,8 @@ export function createRequestHandler() {
                     const parts = range.replace(/bytes=/, "").split("-");
                     const start = parseInt(parts[0], 10);
                     let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                    end = Math.max(0, Math.min(end, fileSize - 1));
                     const chunksize = (end - start) + 1;
-                    if(end<0)
-                        end = 0;
                     const file = fs.createReadStream(item.dir, { start, end });
 
                         // Устанавливаем заголовки для частичного контента
@@ -448,14 +463,29 @@ export function createRequestHandler() {
                 if(mime_type){
                     header["Content-Type"] = mime_type;
                     if (isStaticAssetType(mime_type))
-                        // В dev-режиме UI не кэшируем: иначе правки строк/панели
-                        // доезжают по частям (свежий row.js + старый file.js без activeIds)
-                        header["Cache-Control"] = DEV_MODE ? 'no-cache' : STATIC_CACHE;
+                        // dev: ревалидация каждый раз (ETag → 304), правки видны сразу
+                        header["Cache-Control"] = DEV_MODE ? DEV_CACHE : STATIC_CACHE;
                 }
                 else
                     header["Content-Type"] = 'text/plain';
 
-                const size = Number(item.size) || (typeof result === 'string' ? Buffer.byteLength(result) : 0);
+                // ETag/304: повторная загрузка модулей и файлов — без тела
+                const etag = request.method === 'GET' ? etagOf(item, result) : null;
+                if (etag) {
+                    header['ETag'] = etag;
+                    header['Cache-Control'] ??= 'no-cache';
+                    const inm = String(request.headers['if-none-match'] || '');
+                    if (inm && inm.split(/\s*,\s*/).includes(etag)) {
+                        result?.destroy?.();
+                        delete header['Content-Type'];
+                        response.writeHead(304, header);
+                        response.end();
+                        return;
+                    }
+                }
+
+                // размер — тела ответа: у сборки слоёв (~) это строка, не файл последнего слоя
+                const size = typeof result === 'string' ? Buffer.byteLength(result) : (Number(item.size) || 0);
                 const packed = createBodyEncoder(request.headers['accept-encoding'] || '', size);
                 if (packed) {
                     header["Content-Encoding"] = packed.encoding;

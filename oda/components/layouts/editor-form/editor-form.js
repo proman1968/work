@@ -1,13 +1,13 @@
-import '../../inputs/text/text.js';
-import '../../inputs/textarea/textarea.js';
-import '../../inputs/date/date.js';
-import '../../inputs/datetime/datetime.js';
-import '../../inputs/select/select.js';
-import '../../inputs/radio/radio.js';
-import '../../inputs/table/table.js';
-import '../../inputs/numeric/numeric.js';
-import '../../checkbox/checkbox.js';
-import '../../icon/icon.js';
+import '/oda/components/inputs/text/text.js';
+import '/oda/components/inputs/textarea/textarea.js';
+import '/oda/components/inputs/date/date.js';
+import '/oda/components/inputs/datetime/datetime.js';
+import '/oda/components/inputs/select/select.js';
+import '/oda/components/inputs/radio/radio.js';
+import '/oda/components/inputs/table/table.js';
+import '/oda/components/inputs/numeric/numeric.js';
+import '/oda/components/checkbox/checkbox.js';
+import '/oda/components/icon/icon.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
 export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table'];

@@ -24,6 +24,12 @@ attachWebSocket(httpServer, httpsServer);
 
 await WORK.children;
 
+// правки кода на диске (SVN update, редактор) — сброс кэшей сборки без рестарта
+if (process.env.WORK_WATCH !== '0') {
+    const { watchCode } = await import('./host/watch.js');
+    watchCode($server);
+}
+
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);

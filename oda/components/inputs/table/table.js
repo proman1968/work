@@ -1,12 +1,12 @@
-import '../text/text.js';
-import '../textarea/textarea.js';
-import '../date/date.js';
-import '../datetime/datetime.js';
-import '../numeric/numeric.js';
-import '../../checkbox/checkbox.js';
-import '../select/select.js';
-import '../radio/radio.js';
-import '../../table/table.js';
+import '/oda/components/inputs/text/text.js';
+import '/oda/components/inputs/textarea/textarea.js';
+import '/oda/components/inputs/date/date.js';
+import '/oda/components/inputs/datetime/datetime.js';
+import '/oda/components/inputs/numeric/numeric.js';
+import '/oda/components/checkbox/checkbox.js';
+import '/oda/components/inputs/select/select.js';
+import '/oda/components/inputs/radio/radio.js';
+import '/oda/components/table/table.js';
 
 /**
  * oda-table-input — поле-таблица на живой oda-table (work/components/table).
