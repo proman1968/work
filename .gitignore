@@ -7,6 +7,7 @@ node_modules/
 /#system/settings.json
 /services/AI/GigaChat/$service/#system/settings.json
 .env
+**/#secret/
 
 # Local user profiles (runtime data)
 users/*/

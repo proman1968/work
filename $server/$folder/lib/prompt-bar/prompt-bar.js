@@ -43,10 +43,11 @@ ODA({ is: 'work-prompt-bar',
             }
             .box {
                 @apply --vertical; @apply --raised; @apply --content;
-                border-radius: 16px; padding: 6px 8px; gap: 4px;
-                border: 1px solid var(--border-color);
+                border-radius: var(--radius-l, 16px); padding: 6px 8px; gap: 4px;
+                border: 1px solid var(--subtle-border, var(--border-color));
+                transition: border-color .15s, box-shadow .15s;
             }
-            .box:focus-within:not([error]) { border-color: var(--info-color); }
+            .box:focus-within:not([error]) { border-color: var(--accent-color); box-shadow: 0 0 0 3px var(--accent-soft, transparent); }
             .prompt {
                 border: none; outline: none; resize: none; min-width: 0; padding: 6px 4px;
                 max-height: 10em; overflow-y: auto; font-family: inherit; background: transparent;
@@ -76,7 +77,7 @@ ODA({ is: 'work-prompt-bar',
             }
             .ctx-btn span { font-size: 7px; line-height: 1; font-weight: 600; opacity: .9; pointer-events: none; }
         </style>
-        <div class="box" border :error>
+        <div class="box" :error>
             <div ~if="files.length" horizontal style="gap: 4px; flex-wrap: wrap; padding: 2px 0; align-items: flex-start;">
                 <div class="attach-chip" ~for="files">
                     <label flex>{{$for.item.name}}</label>

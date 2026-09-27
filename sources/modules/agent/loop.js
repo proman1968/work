@@ -137,7 +137,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                 it.stopped = true;
                 throw new StopError();
             }
-            it.content = stripThink(it.content);
+            it.content = stripThink(it.content).replace(/^\s+/, '').replace(/\s+$/, '');
             it.durationMs = Date.now() - t0;
             return calls;
         }

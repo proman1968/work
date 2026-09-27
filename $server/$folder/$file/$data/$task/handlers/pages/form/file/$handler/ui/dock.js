@@ -1,129 +1,91 @@
-/** Док закрытых box: view блока + стрелки + copy/share/save. */
-import { pageHtml, viewTag, pathBasename } from './views.js';
+/**
+ * Панель артефакта: предпросмотр файла, созданного/изменённого агентом (html — живая страница,
+ * картинки, markdown, код/текст). Открывается тапом по пути в карточке вызова.
+ */
+import { extOf, fileUrl, copyText, findShell } from './util.js';
+
+const IMAGE = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
+const PAGE = ['html', 'htm', 'pdf'];
 
 ODA({ is: 'microchat-dock',
-    imports: 'oda//button',
-    template: /* html */`
+    imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer',
+    template: /*html*/`
         <style>
-            :host {
-                @apply --vertical;
-                overflow: hidden;
-            }
-            .bar { gap: 4px; padding: 2px 4px; align-items: center; }
-            .pos { font-size: small; }
-            .name {
-                font-size: small;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .save {    
-                border-radius: 4px;
-                margin: 2px;
-                padding: 2px;
-            }
-            .sheet { min-height: 0; overflow-y: auto; }
+            :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--subtle-border); background: var(--subtle-background); }
+            .bar { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--subtle-border); min-width: 0; }
+            .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: small; }
+            .path { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-family: var(--font-mono); }
+            .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .sheet { overflow: auto; min-height: 0; }
+            iframe { border: none; width: 100%; height: 100%; background: white; }
+            .img { @apply --vertical; align-items: center; justify-content: center; padding: 16px; }
+            .img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-s); }
+            .md { padding: 12px 16px; user-select: text; }
+            pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
+            .empty { @apply --muted; padding: 24px; text-align: center; }
         </style>
-        <div class="bar" header no-flex horizontal>
-            <oda-button no-flex icon="icons:chevron-left" :disabled="!hasPrev" @tap="step(-1)"></oda-button>
-            <span class="pos" no-flex>{{pos}}</span>
-            <oda-button no-flex icon="icons:chevron-right" :disabled="!hasNext" @tap="step(1)"></oda-button>
-            <span class="name" flex>{{cap(current)}}</span>
-            <oda-button class="save" no-flex icon="icons:save" title="Сохранить" :disabled="saved" :success-invert="!saved" @tap="save"></oda-button>
-            <oda-button no-flex icon="icons:content-copy" title="Копировать" @tap="copy"></oda-button>
-            <oda-button no-flex icon="social:share" title="Поделиться" @tap="share"></oda-button>
-            <oda-button no-flex icon="icons:close" title="Скрыть" @tap="hide"></oda-button>
+        <div class="bar" no-flex>
+            <oda-icon no-flex :icon="icon" :icon-size="16"></oda-icon>
+            <div vertical flex style="min-width: 0;">
+                <span class="name">{{name}}</span>
+                <span class="path" :title="path">{{path}}</span>
+            </div>
+            <oda-button no-flex icon="carbon:renew" :icon-size="16" title="Обновить" @tap="reload"></oda-button>
+            <oda-button no-flex icon="carbon:copy" :icon-size="16" title="Копировать содержимое" ~if="!isImage" @tap="copy"></oda-button>
+            <oda-button no-flex icon="carbon:launch" :icon-size="16" title="Открыть в новой вкладке" @tap="launch"></oda-button>
+            <oda-button no-flex icon="carbon:close" :icon-size="16" title="Закрыть" @tap="close"></oda-button>
         </div>
-        <div flex class="sheet" ~if="current" ~is="docView" :data="current" only-doc></div>
+        <div class="sheet" flex vertical>
+            <iframe flex ~if="isPage" :src="url"></iframe>
+            <div class="img" flex ~if="isImage"><img :src="url"></div>
+            <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="text"></oda-markdown-viewer></div>
+            <pre ~if="!isPage && !isImage && !isMarkdown && text">{{text}}</pre>
+            <div class="empty" ~if="!isPage && !isImage && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
+        </div>
     `,
-    $item: null,
-    _sheetKeys: ['docView', 'reports', 'index', 'current', 'pos', 'hasPrev', 'hasNext', 'saved', 'isHtml', 'text'],
-    attached() {
-        this._wake();
-        this.render?.(true);
-        this._bindSheet();
+    path: {
+        $def: '',
+        set(n) {
+            this.text = '';
+            this.bust = Date.now();
+            this.loadText();
+        },
     },
-    _wake() {
-        const cache = this[R]?.cache;
-        if (!cache) return;
-        for (const k of this._sheetKeys)
-            cache[k] = undefined;
+    text: '',
+    loading: false,
+    bust: 0,
+    get ext() { return extOf(this.path); },
+    get name() { return String(this.path || '').split('/').pop(); },
+    get isImage() { return IMAGE.includes(this.ext); },
+    get isPage() { return PAGE.includes(this.ext); },
+    get isMarkdown() { return this.ext === 'md'; },
+    get url() { return fileUrl(this.path) + '?_=' + this.bust; },
+    get icon() {
+        if (this.isImage) return 'carbon:image';
+        if (this.isPage) return 'carbon:application-web';
+        return 'carbon:document';
     },
-    get docView() {
-        // html без view-обёртки: в доке сразу iframe
-        if (this.current?.type === 'html' && pageHtml(this.current))
-            return 'microchat-html';
-        return viewTag(this.current);
-    },
-    get reports() { return this.$pdp?.dockReports || []; },
-    get index() { return this.$pdp?.dockIndex ?? -1; },
-    get current() { return this.$pdp?.dockCurrent; },
-    get pos() {
-        const n = this.reports.length;
-        return n ? (this.index + 1) + '/' + n : '';
-    },
-    get hasPrev() { return this.index > 0; },
-    get hasNext() { return this.index >= 0 && this.index < this.reports.length - 1; },
-    docPath(b) {
-        const p = String(b?.path || '').trim();
-        return p.startsWith('/') ? p : '';
-    },
-    cap(b) {
-        return pathBasename(this.docPath(b)) || b?.label || b?.type || 'отчёт';
-    },
-    step(d) {
-        const i = this.index + d;
-        if (i < 0 || i >= this.reports.length || !this.$pdp) return;
-        this.$pdp.pickDock(i);
-        this._wake();
-        this.render?.(true);
-        this._bindSheet();
-    },
-    _bindSheet() {
-        const block = this.current;
-        if (!block) return;
-        const tag = viewTag(block);
-        let el = this.$('.sheet');
-        if (el && el.localName !== tag && el.__vnode__)
-            el = el.__vnode__.replaceElement(el, tag) || el;
-        if (!el) return;
-        el.data = block;
-        el._wakeSheet?.();
-    },
-    hide() { if (this.$pdp) this.$pdp.dockOpen = false; },
-    get saved() { return !!(this.current?.saved || this.docPath(this.current)); },
-    get isHtml() { return this.current?.type === 'html'; },
-    get text() {
-        return pageHtml(this.current) || String(this.current?.content || '');
-    },
-    fileName() {
-        const raw = this.cap(this.current).replace(/[\\/]/g, ' ').trim() || 'отчёт';
-        const base = raw.replace(/\.(md|html|htm)$/i, '');
-        return base + (this.isHtml ? '.html' : '.md');
-    },
-    async copy() {
-        const t = this.text;
-        if (!t) return;
-        try { await navigator.clipboard.writeText(t); }
-        catch { /* нет буфера */ }
-    },
-    async share() {
-        const t = this.text;
-        if (!t) return;
-        const title = this.cap(this.current);
+    async loadText() {
+        if (!this.path || this.isImage || this.isPage)
+            return;
+        this.loading = true;
         try {
-            if (navigator.share)
-                await navigator.share({ title, text: t });
-            else
-                await navigator.clipboard.writeText(t);
+            const item = await WORK.get_item(this.path);
+            const raw = await item?.load?.();
+            this.text = typeof raw === 'string' ? raw : (raw == null ? '' : JSON.stringify(raw, null, 2));
         }
-        catch { /* отмена / нет API */ }
+        catch (e) {
+            this.text = 'Не удалось загрузить: ' + (e?.message || e);
+        }
+        finally {
+            this.loading = false;
+        }
     },
-    async save() {
-        this.current.saved = true;
-        const json = JSON.stringify(this.$pdp.data, null, 4);
-        const owner = await this.$item.$owner;
-        await owner.save_file(new File([this.text], this.fileName(), { type: this.isHtml ? 'text/html' : 'text/markdown' }));
-        await this.$item.fetch('save', { skip_file_handler: true }, json);
+    reload() {
+        this.bust = Date.now();
+        this.loadText();
     },
+    copy() { copyText(this.text); },
+    launch() { window.open(fileUrl(this.path), '_blank'); },
+    close() { findShell(this)?.openArtifact(''); },
 });

@@ -273,6 +273,7 @@ function applyOffline(body, reply) {
  * иначе «занят». Нет работы: реплика в ленту и запуск.
  */
 export async function prompt(file, params = {}) {
+    params = argsOf(params);
     const s = stateOf(file);
     const session = params.session;
     const body = await getBody(file);
@@ -310,6 +311,28 @@ export async function prompt(file, params = {}) {
     return { ok: true };
 }
 
+/** Аргументы HTTP: query + тело POST (JSON-строка или объект). Query побеждает. */
+function argsOf(params = {}) {
+    let post = params.post;
+    if (typeof post === 'string' || Buffer.isBuffer?.(post)) {
+        try {
+            post = JSON.parse(String(post));
+        }
+        catch {
+            post = null;
+        }
+    }
+    const out = { ...(post && typeof post === 'object' && !Array.isArray(post) ? post : {}), ...params };
+    delete out.post;
+    if (typeof out.values === 'string') {
+        try {
+            out.values = JSON.parse(out.values);
+        }
+        catch { /* строка */ }
+    }
+    return out;
+}
+
 function normAttachments(list) {
     if (!list)
         return [];
@@ -326,7 +349,7 @@ function normAttachments(list) {
 /** Подтверждение вызова / ответ формой. { call, accept, always, content, values } */
 export async function approve(file, params = {}) {
     const s = stateOf(file);
-    const p = { ...(params.post && typeof params.post === 'object' ? params.post : {}), ...params };
+    const p = argsOf(params);
     const body = await getBody(file);
     const call = p.call || body.waiting?.call;
     const reply = {
@@ -375,6 +398,7 @@ export async function stop(file, params = {}) {
 
 /** Откат ленты к реплике id (она и всё после удаляются; текст — назад в поле ввода). */
 export async function revert(file, params = {}) {
+    params = argsOf(params);
     const s = stateOf(file);
     const id = params.id ?? params.post?.id;
     if (!id)
@@ -414,7 +438,7 @@ function lastTodos(items) {
 /** Настройки задачи: model / effort / mode. */
 export async function configure(file, params = {}) {
     const s = stateOf(file);
-    const p = { ...(params.post && typeof params.post === 'object' ? params.post : {}), ...params };
+    const p = argsOf(params);
     const body = await getBody(file);
     if (p.model)
         body.model = String(p.model);

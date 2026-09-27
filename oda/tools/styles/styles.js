@@ -89,6 +89,46 @@ let style = /*css*/`
 
 }
 
+/* Современные токены: радиусы, приглушённый текст, тонкие поверхности и рамки — всё от --main-color/ролей */
+:root {
+    --radius-s: 6px;
+    --radius-m: 10px;
+    --radius-l: 16px;
+    --space-s: 4px;
+    --space-m: 8px;
+    --space-l: 16px;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+    --muted-color: color-mix(in oklch, var(--content-color) 58%, transparent);
+    --subtle-background: color-mix(in oklch, var(--content-color) 4%, var(--content-background));
+    --subtle-border: color-mix(in oklch, var(--content-color) 14%, transparent);
+    --code-background: color-mix(in oklch, var(--content-color) 7%, var(--content-background));
+    --accent-soft: color-mix(in oklch, var(--accent-color) 12%, var(--content-background));
+    --success-soft: color-mix(in oklch, green 14%, var(--content-background));
+    --error-soft: color-mix(in oklch, red 12%, var(--content-background));
+    --warning-soft: color-mix(in oklch, orange 16%, var(--content-background));
+}
+:root {
+    --card: {
+        background-color: var(--subtle-background);
+        border: 1px solid var(--subtle-border);
+        border-radius: var(--radius-m);
+    };
+    --muted: {
+        color: var(--muted-color);
+        fill: var(--muted-color);
+    };
+    --chip: {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        font-size: x-small;
+        border: 1px solid var(--subtle-border);
+        white-space: nowrap;
+    };
+}
+
 :root{
     --font-family: Roboto, Noto, sans-serif;
     --font-150:{

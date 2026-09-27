@@ -6,6 +6,7 @@ import { extractor } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $class } from './class.js';
+import { DEV_MODE } from '../host/config.js';
 export class $user extends $class{
     get online(){
         return !!Object.values($server?.sessions)?.find(u => u.uid === this.id);
@@ -32,6 +33,9 @@ export class $user extends $class{
         }
     }
     async allowAccess(params) {
+        // WORK_DEV снимает все проверки видимости — и доступ к кабинету тоже (как canSee/canWrite)
+        if (DEV_MODE)
+            return true;
         return params?.session?.$user?.id;
     }
 }

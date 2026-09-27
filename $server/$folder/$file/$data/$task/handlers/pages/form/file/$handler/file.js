@@ -1,378 +1,279 @@
 /**
- * Визуалка form/file для ai.task — шелл: лента + док закрытых + промптбар.
- * Мета хендлера — class.js.
+ * Форма .task (v2): шапка (заголовок, статус), лента агента, план, панель ввода; справа — артефакт.
+ * Данные — файл задачи (перечитывается по событию changed), стрим — task.delta в streams[id].
+ * Действия ленты (ответ, подтверждение, откат, артефакт) — методы шелла (findShell из ui/util.js).
  */
-
-import './ui/views.js';
-import { focusChainIds } from './ui/rows.js';
-import './ui/row.js';
+import './ui/feed.js';
 import './ui/panel.js';
 import './ui/dock.js';
-import './ui/form.js';
-import './ui/quiz.js';
-import './ui/todo.js';
-import './ui/html.js';
+import { modelShort } from './ui/util.js';
+
+const STATUS = {
+    idle: { label: 'Готово', icon: 'carbon:checkmark' },
+    running: { label: 'Работает', icon: 'spinners:3-dots-scale' },
+    waiting: { label: 'Ждёт вас', icon: 'carbon:help' },
+    stopped: { label: 'Остановлено', icon: 'carbon:pause' },
+    error: { label: 'Ошибка', icon: 'carbon:warning' },
+    limit: { label: 'Лимит шагов', icon: 'carbon:warning' },
+};
 
 export default {
-    imports: 'oda//button, oda//splitter',
+    imports: 'oda//button, oda//icon, oda//splitter',
     template: /* html */`
         <style>
             :host {
+                @apply --horizontal;
+                @apply --content;
                 overflow: hidden;
                 position: relative;
-                @apply --horizontal;
-                @apply --info-invert;
+                font-size: 15px;
             }
-            .dock-over {
-                position: absolute;
-                top: 0;
-                right: 0;
-                z-index: 200;
-                margin: 4px;
-                padding: 0px 8px 0px 0px;
-                border-radius: 16px;
+            .main { min-width: 0; overflow: hidden; }
+            .top {
+                @apply --horizontal; align-items: center; gap: 8px; padding: 8px 16px;
+                border-bottom: 1px solid var(--subtle-border); min-height: 40px; box-sizing: border-box;
             }
-            .feed {
-                overflow: hidden;
-                max-width: {{showDock ?  '100%': '720px'}};
-                margin: 0px auto;
-                transition: width, max-width 0.3s ease-in-out;
+            .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+            .chip { @apply --chip; }
+            .chip[running] { background: var(--accent-soft); border-color: transparent; }
+            .chip[waiting] { background: var(--warning-soft); border-color: transparent; }
+            .chip[error] { background: var(--error-soft); border-color: transparent; }
+            .model { @apply --muted; font-size: x-small; white-space: nowrap; }
+            .top oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .scroller { overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: auto; }
+            .col { width: 100%; max-width: 820px; margin: 0 auto; padding: 20px 16px 8px; box-sizing: border-box; }
+            .empty { @apply --vertical; @apply --muted; align-items: center; gap: 10px; padding: 12vh 16px 16px; text-align: center; }
+            .empty b { font-size: 20px; color: var(--content-color); }
+            .working { @apply --horizontal; @apply --muted; align-items: center; gap: 8px; font-size: small; padding: 10px 0 4px; }
+            .bottom { width: 100%; max-width: 820px; margin: 0 auto; padding: 4px 16px 12px; box-sizing: border-box; gap: 8px; }
+            .toast {
+                position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 10;
+                padding: 6px 14px; border-radius: 999px; font-size: small; @apply --raised; @apply --content;
             }
-            .control-wrap {
-                min-width: 0;
-                min-height: 0;
-                max-height: 80vh;
-                overflow-y: auto;
-            }
+            .legacy { @apply --muted; font-size: x-small; text-align: center; padding-bottom: 12px; }
         </style>
-        
-        <div flex vertical class="feed" ~if="showFeed">
-            <div ~if="mobile" flex></div>
-            <div vertical :flex="!mobile" style="overflow: hidden; padding: 8px;">
-                <microchat-ribbon flex :data :$item></microchat-ribbon>
+        <div class="main" flex vertical ~if="showMain">
+            <div class="top" no-flex>
+                <oda-icon no-flex icon="bootstrap:robot" :icon-size="18"></oda-icon>
+                <span class="title" flex :title="title">{{title}}</span>
+                <span class="chip" no-flex :running="status === 'running'" :waiting="status === 'waiting'" :error="status === 'error' || status === 'limit'">
+                    <oda-icon :icon="statusMeta.icon" :icon-size="12"></oda-icon>{{statusMeta.label}}
+                </span>
+                <span class="model" no-flex ~if="modelLabel">{{modelLabel}}</span>
+                <oda-button no-flex icon="carbon:shrink-screen" :icon-size="16" title="Сжать контекст" ~if="canCompact" @tap="compact"></oda-button>
+                <oda-button no-flex :icon="artifact ? 'carbon:side-panel-close' : 'carbon:side-panel-open'" :icon-size="16"
+                    ~if="lastArtifact" title="Артефакт" @tap="toggleArtifact"></oda-button>
             </div>
-            <div class="control-wrap" ~if="controlType" ~is="controlType" :data="controlData" :$item></div>
-            <microchat-panel info-invert no-flex :data :$item></microchat-panel>
+            <div class="scroller" flex vertical @scroll="onScroll">
+                <div class="col">
+                    <div class="legacy" ~if="data?.legacy">Задача из прежней версии агента — показана упрощённо; продолжить можно как обычно.</div>
+                    <div class="empty" ~if="!items.length && !optimistic">
+                        <oda-icon icon="bootstrap:robot" :icon-size="40"></oda-icon>
+                        <b>Чем помочь?</b>
+                        <span>Агент работает в этом классе с вашими правами: исследует, создаёт и меняет файлы и классы, вызывает сервисы.</span>
+                    </div>
+                    <microchat-feed :items="feedItems"></microchat-feed>
+                    <div class="working" ~if="showWorking">
+                        <oda-icon icon="spinners:3-dots-scale" :icon-size="16"></oda-icon><span>Работаю…</span>
+                    </div>
+                </div>
+            </div>
+            <div class="bottom" vertical no-flex>
+                <microchat-todos ~if="showTodos" :todos="data.todos"></microchat-todos>
+                <microchat-panel :data :$item></microchat-panel>
+            </div>
+            <div class="toast" ~if="toastText">{{toastText}}</div>
         </div>
-        <oda-splitter ~if="showDock && !mobile" left ::width="dockWidth"></oda-splitter>
-        <microchat-dock content no-flex ~if="showDock" :data :$item ~style="dockStyle"></microchat-dock>   
-        <oda-button class="dock-over" content ~if="showDockBtn" shadow icon="icons:chevron-left" :label="dockReports.length" :icon-size title="Отчёты" @tap="openDock"></oda-button>                
-
+        <oda-splitter ~if="artifact && !mobile" left ::width="dockWidth"></oda-splitter>
+        <microchat-dock no-flex ~if="artifact" :path="artifact" ~style="dockStyle"></microchat-dock>
     `,
-    colorMode: 'content',
     data: null,
-    streamingText: '',
-    /** prompt: start → done; typeIcon и стоп панели */
-    pending: false,
-    /** wait-кнопки прячем, пока идёт стрим (реактивный флаг для кэша геттеров) */
-    streaming: false,
-    dockOpen: { $def: true, $save: true },
-    dockPick: -1,
-    dockWidth: { $def: 280, $save: true },
-
-    /** После disconnect cleanupDeps рвёт deps, кэш геттеров остаётся — tap на dockOpen не будит showDock. */
-    _dockKeys: ['canDock', 'showDock', 'showDockBtn', 'showFeed', 'dockReports', 'dockIndex', 'dockCurrent', 'dockStyle'],
-    _invalidateDock() {
-        const cache = this[R]?.cache;
-        if (!cache) return;
-        for (const k of this._dockKeys)
-            cache[k] = undefined;
-    },
-    attached() {
-        this._invalidateDock();
-        this.render?.(true);
-    },
-    openDock() {
-        this.dockOpen = true;
-        this._invalidateDock();
-        this.render?.(true);
-    },
-    pickDock(i) {
-        this.dockPick = i;
-        this._invalidateDock();
-        this.render?.(true);
-    },
-
+    streams: {},
+    status: 'idle',
+    artifact: '',
+    optimistic: null,
+    toastText: '',
+    dockWidth: { $def: 460, $save: true },
+    __microchatShell: true,
+    get modelLabel() { return modelShort(this.data?.model); },
     $item: {
         $def: null,
-        async set(n) {
-            n?.listen('changed', () => {
-                this.streamingText = '';
-                this._reload();
+        set(n) {
+            n?.listen('changed', () => this._reload());
+            n?.listen('task.delta', e => this._onDelta(e.detail?.value));
+            n?.listen('task.state', e => {
+                const s = e.detail?.value?.status;
+                if (s)
+                    this.status = s;
             });
-            n?.listen('chat.start', () => {
-                this.pending = true;
-            });
-            n?.listen('chat.delta', e => {
-                // pending только start→done; delta не поднимает (иначе Стоп снова включает радугу/волны)
-                this.streaming = true;
-                this.streamingText += e.detail?.value?.token || '';
-            });
-            n?.listen('chat.done', () => {
-                this.pending = false;
-                this.streaming = false;
-                this.streamingText = '';
-                this._reload();
-            });
+            n?.listen('chat.done', () => this._reload());
             this._reload();
-            this.streaming = false;
-            // только карта WORK.chatPending: чтение n.chatPending с item без флага уходит в _onEmpty и возвращает truthy Promise
-            this.pending = WORK.chatPending?.[n?.short] === true || WORK.chatPending?.[n?.path] === true;
         },
     },
-    /** Сериализация перезагрузок: не больше одного load в полёте; события во время загрузки схлопываются
-     *  в одну повторную после её завершения. Параллельных запросов нет — ответы не приходят вразнобой,
-     *  финальная загрузка всегда стартует после последнего события и читает финальный файл. */
+    $listeners: {
+        resize() { this.mobile = undefined; },
+        keydown(e) {
+            if (e.key === 'Escape' && this.status === 'running')
+                this.$item?.fetch('stop', {});
+        },
+    },
+    get mobile() { return ODA.states.mobileMode; },
+    get showMain() { return !(this.artifact && this.mobile); },
+    get dockStyle() {
+        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '70%', minWidth: '280px' };
+    },
+    get items() { return this.data?.items || []; },
+    /** Своя реплика видна сразу, до перечитывания файла. */
+    get feedItems() {
+        const o = this.optimistic;
+        if (!o || this.items.some(i => i.type === 'user' && i.content === o.content && i.time >= o.time - 5000))
+            return this.items;
+        return [...this.items, o];
+    },
+    get title() { return this.data?.title || this.data?.name || this.$item?.name || 'Задача'; },
+    get statusMeta() { return STATUS[this.status] || STATUS.idle; },
+    get busy() { return this.status === 'running'; },
+    get showWorking() {
+        if (this.status !== 'running')
+            return false;
+        const last = this.items[this.items.length - 1];
+        if (!last || last.type !== 'assistant')
+            return true;
+        const s = this.streams[last.id];
+        const running = (last.tools || []).some(t => t.status === 'running' || t.status === 'pending');
+        return !s && !last.content && !running;
+    },
+    get showTodos() {
+        const t = this.data?.todos;
+        return Array.isArray(t) && t.length && t.some(x => x.status !== 'completed');
+    },
+    get canCompact() { return !this.busy && this.items.length > 6; },
+    get lastArtifact() {
+        for (let i = this.items.length - 1; i >= 0; i--) {
+            const t = [...(this.items[i].tools || [])].reverse().find(x => x.status === 'ok' && x.path && ['write', 'edit', 'generate_image', 'save_skill'].includes(x.name));
+            if (t)
+                return t.path;
+        }
+        return '';
+    },
+    _onDelta(d) {
+        if (!d?.item || !d.token)
+            return;
+        const cur = this.streams[d.item] || {};
+        const field = d.field === 'reasoning' ? 'reasoning' : 'content';
+        this.streams = { ...this.streams, [d.item]: { ...cur, [field]: (cur[field] || '') + d.token } };
+        if (this.status !== 'running')
+            this.status = 'running';
+        this._stick();
+    },
+    /** Перечитывание файла: не больше одной загрузки в полёте, события во время загрузки схлопываются. */
     _reload() {
         if (this._loading) {
-            this._reloadAgain = true;
+            this._again = true;
             return;
         }
         this._loading = (async () => {
-            let retries = 0;
+            let tries = 0;
             try {
                 do {
-                    this._reloadAgain = false;
+                    this._again = false;
                     try {
-                        this.data = await this.$item?.load();
-                        this._autoDock();
-                        retries = 0;
-                    } catch (e) {
-                        // реджект не должен убивать цикл: сгоревший _reloadAgain = застывшая лента без последнего блока
-                        if (++retries > 5) {
-                            console.warn('microchat reload: сдаюсь после 5 попыток', e);
-                            break;
+                        const raw = await this.$item?.load();
+                        const data = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+                        const fresh = new Set();
+                        for (const it of data.items || [])
+                            if (it.type === 'assistant' && it.durationMs)
+                                fresh.add(it.id);
+                        // стрим законченных ходов больше не нужен
+                        if (Object.keys(this.streams).some(id => fresh.has(id))) {
+                            const s = {};
+                            for (const [id, v] of Object.entries(this.streams))
+                                if (!fresh.has(id))
+                                    s[id] = v;
+                            this.streams = s;
                         }
-                        console.warn('microchat reload: ошибка, повтор', e);
-                        this._reloadAgain = true;
-                        await new Promise(r => setTimeout(r, 300 * retries));
+                        this.data = data;
+                        this.status = data.status || 'idle';
+                        this._stick();
+                        tries = 0;
                     }
-                } while (this._reloadAgain);
-            } finally {
+                    catch (e) {
+                        if (++tries > 5)
+                            break;
+                        this._again = true;
+                        await new Promise(r => setTimeout(r, 300 * tries));
+                    }
+                } while (this._again);
+            }
+            finally {
                 this._loading = null;
             }
         })();
     },
-    /** Новый отчёт — открыть док: «Скрыть» ($save) не должно прятать свежие исследования. Первый reload только запоминает базу. */
-    _autoDock() {
-        const n = this.dockReports.length;
-        if (this._dockSeen != null && n > this._dockSeen)
-            this.dockOpen = true;
-        this._dockSeen = n;
+    attached() {
+        // Высота ленты меняется после рендера (markdown, карточки) — держим низ, пока пользователь не отмотал
+        this._ro ??= new ResizeObserver(() => this._stick());
+        this.async(() => {
+            const col = this.$('.col');
+            if (col)
+                this._ro.observe(col);
+        }, 50);
     },
-    $listeners: {
-        resize() { this.mobile = undefined; },
+    detached() {
+        this._ro?.disconnect();
     },
-    get mobile() {
-        return ODA.states.mobileMode;
+    onScroll(e) {
+        const el = e.target;
+        this._pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     },
-    get canDock() {
-        return this.dockReports.length > 0;
+    /** Прилипание к низу, пока пользователь не отмотал вверх. */
+    _stick() {
+        if (this._pinned === false)
+            return;
+        cancelAnimationFrame(this._raf);
+        this._raf = requestAnimationFrame(() => {
+            const el = this.$('.scroller');
+            if (el)
+                el.scrollTop = el.scrollHeight;
+        });
     },
-    get showDock() {
-        return this.canDock && this.dockOpen;
+    optimisticUser(text, attachments) {
+        if (!text && !attachments?.length)
+            return;
+        this.optimistic = { id: 'optimistic', type: 'user', content: text, attachments, time: Date.now() };
+        this._pinned = true;
+        this.status = 'running';
+        this._stick();
     },
-    get showDockBtn() {
-        return this.canDock && !this.dockOpen;
+    toast(text) {
+        this.toastText = String(text || '');
+        clearTimeout(this._toastT);
+        this._toastT = setTimeout(() => this.toastText = '', 3500);
     },
-    get showFeed() {
-        return !(this.showDock && this.mobile);
+    /** Ответ на вызов: подтверждение ({accept, always, content}) или ответ на вопрос ({content, values}). */
+    async reply(callId, payload = {}) {
+        const res = await this.$item?.fetch('approve', {}, JSON.stringify({ call: callId, ...payload }));
+        if (res && res.ok === false)
+            this.toast(res.error || 'Не удалось отправить ответ');
     },
-    get dockStyle() {
-        return this.mobile ? { width: '100%' } : { width: this.dockWidth + 'px', maxWidth: '80%', minWidth: '30%' };
+    async revert(item) {
+        if (!item?.id || item.id === 'optimistic')
+            return;
+        const res = await this.$item?.fetch('revert', { id: item.id });
+        if (!res || res.ok === false)
+            return this.toast(res?.error || 'Откат не удался');
+        this.optimistic = null;
+        this.$('microchat-panel')?.prefill(res.prompt ? res : { prompt: item.content, attachments: item.attachments });
     },
-    get dockReports() {
-        const out = [];
-        const seen = new Set(); // проталкивание total даёт боксу content ребёнка — дубль в доке не нужен
-        const walk = (items) => {
-            for (const b of items || []) {
-                if (!b || b.hidden) continue;
-                walk(b.items);
-                if (b.doc && b.content && !b.error && !seen.has(b.content)) {
-                    seen.add(b.content);
-                    out.push(b);
-                }
-            }
-        };
-        walk(this.data?.items);
-        if (this.data?.content && !seen.has(this.data.content))
-            out.push(this.data);
-        return out;
+    async compact() {
+        this.toast('Сжимаю контекст…');
+        const res = await this.$item?.fetch('compact', {});
+        this.toast(res?.ok ? 'Контекст сжат' : 'Сжимать пока нечего');
     },
-    get dockIndex() {
-        const n = this.dockReports.length;
-        if (!n) return -1;
-        const i = this.dockPick;
-        return (i < 0 || i >= n) ? n - 1 : i;
+    openArtifact(path) {
+        this.artifact = String(path || '');
     },
-    get dockCurrent() {
-        const i = this.dockIndex;
-        return i < 0 ? null : this.dockReports[i];
-    },
-    get title() { return this.data?.name || this.$item?.name || 'task'; },
-    get items() { return this.data?.items; },
-    get formBlock() {
-        return lastOfType(this.data, 'form');
-    },
-    get checkGap() {
-        const c = lastOfType(this.data, 'check');
-        return !!c && !checkFullyOk(c);
-    },
-    get result() {
-        const form = this.formBlock;
-        if (form)
-            return form.values || form.answer;
-        const ribbon = this.$('microchat-ribbon');
-        return ribbon?.viewFor(this.focusedBlock)?.result;
-    },
-    /**
-     * Контрол над панелью (как в образце: все контролы — часть нижней панели):
-     * открытая форма (внутри quiz — сам quiz) → html в фокусе → висящий todo.
-     */
-    get controlData() {
-        const form = lastOpenForm(this.data);
-        if (form)
-            return quizOfForm(this.data, form) || form;
-        const focus = this.focusedBlock;
-        if (focus && focus.type === 'html' && !focus.error && focus.content)
-            return focus;
-        return pendingTodo(this.data, focus);
-    },
-    get controlType() {
-        const d = this.controlData;
-        if (!d)
-            return null;
-        if (d.type === 'form')
-            return 'microchat-control-form';
-        if (d.type === 'quiz' || d.quiz)
-            return 'microchat-control-quiz';
-        if (d.type === 'html')
-            return 'microchat-control-html';
-        if (d.type === 'todo' || Array.isArray(d.steps))
-            return 'microchat-control-todo';
-        return null;
-    },
-    get focusedBlock() {
-        let items = this.items;
-        while (items?.length) {
-            let last;
-            for (let i = items.length - 1; i >= 0; i--) {
-                const b = items[i];
-                // закрытый ignore без doc/stop (reasoning) — не фокус; пустой — слот стрима CoT.
-                // doc/stop с ignore (html) — артефакт в фокусе, не пропускать
-                if (b && !b.hidden && !(b.ignore && b.content && !b.doc && !b.stop)) { last = b; break; }
-            }
-            // box с content-маркером (includes/expand) — не лист: спускаемся в детей
-            if (!last || !last.items?.length) return last;
-            items = last.items;
-        }
-        return undefined;
-    },
-    /** focused без тела — слот стрима, не факт что стрим идёт (`streaming` — только delta/done) */
-    get streamTarget() {
-        const b = this.focusedBlock;
-        return (b && !b.content) ? b : undefined;
-    },
-    /** id фокуса + всех предков: активные предки раскрыты, иконка — волна. */
-    get activeIds() {
-        return new Set(focusChainIds(this.data, this.focusedBlock?.id));
+    toggleArtifact() {
+        this.artifact = this.artifact ? '' : this.lastArtifact;
     },
 };
-
-function lastOfType(root, type) {
-    let found;
-    const walk = (items) => {
-        for (const b of items || []) {
-            if (b.type === type) found = b;
-            walk(b.items);
-        }
-    };
-    walk(root?.items);
-    return found;
-}
-
-/** Последняя открытая форма: стоп без approved и без ошибки. */
-function lastOpenForm(root) {
-    let found = null;
-    const walk = (items) => {
-        for (const b of items || []) {
-            if (b?.type === 'form' && b?.stop && !b?.approved && !b?.error && b?.content)
-                found = b;
-            walk(b.items);
-        }
-    };
-    walk(root?.items);
-    return found;
-}
-
-/** Quiz-бокс, содержащий форму (прямой родитель с quiz). */
-function quizOfForm(root, form) {
-    let owner = null;
-    const walk = (items, parent) => {
-        for (const b of items || []) {
-            if (b === form) {
-                owner = parent;
-                return true;
-            }
-            if (walk(b.items, b))
-                return true;
-        }
-        return false;
-    };
-    walk(root?.items, root);
-    if (owner && (owner.type === 'quiz' || owner.quiz))
-        return owner;
-    return null;
-}
-
-/** Незавершённый todo: сначала бокс в фокусе, иначе корень. Фокусный контрол его перебивает. */
-function pendingTodo(root, focus) {
-    const chain = focus ? [focus, ...parentsOf(root, focus)] : [];
-    for (const node of chain) {
-        if (isTodoOpen(node?.todo))
-            return node.todo;
-    }
-    if (isTodoOpen(root?.todo))
-        return root.todo;
-    return null;
-}
-
-function isTodoOpen(todo) {
-    const steps = todo?.steps;
-    if (!Array.isArray(steps) || !steps.length)
-        return false;
-    return steps.some(s => s?.state !== 'done');
-}
-
-/** Цепочка родителей блока от прямого к корню. */
-function parentsOf(root, node) {
-    const chain = [];
-    let current = node;
-    for (;;) {
-        const parent = parentOf(root, current);
-        if (!parent)
-            return chain;
-        chain.push(parent);
-        current = parent;
-    }
-}
-
-function parentOf(root, node) {
-    if (!root || !node || root === node)
-        return null;
-    for (const b of (root.items || [])) {
-        if (b === node)
-            return root;
-        const p = parentOf(b, node);
-        if (p)
-            return p;
-    }
-    return null;
-}
-
-function checkFullyOk(block) {
-    if (block?.type !== 'check') return false;
-    if (block.error) return false;
-    const c = String(block.content || '');
-    return !!c && !/gap:/i.test(c);
-}
