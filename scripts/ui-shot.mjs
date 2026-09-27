@@ -68,6 +68,14 @@ for (const pt of String(process.env.CLICK || '').split(';').filter(Boolean)) {
         await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
     await sleep(Number(process.env.CLICK_WAIT) || 4000);
 }
+// TYPE="текст" — ввести в сфокусированное поле и нажать Enter (после CLICK); ждать TYPE_WAIT мс
+if (process.env.TYPE) {
+    await send('Input.insertText', { text: process.env.TYPE });
+    await sleep(300);
+    for (const type of ['keyDown', 'keyUp'])
+        await send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+    await sleep(Number(process.env.TYPE_WAIT) || 8000);
+}
 if (js) {
     const r = await send('Runtime.evaluate', { expression: js, awaitPromise: true, returnByValue: true });
     console.log('[eval]', JSON.stringify(r.result?.result?.value ?? r.result?.exceptionDetails?.text ?? r.result).slice(0, 2000));

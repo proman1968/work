@@ -65,6 +65,22 @@ describe('Reactor', () => {
         assert.equal(g.plus, 6);
     });
 
+    it('toLocalDay: день по местному времени (папки журнала), не по UTC', () => {
+        const prev = process.env.TZ;
+        process.env.TZ = 'Europe/Moscow';
+        try {
+            const d = new Date('2026-09-27T21:30:00Z'); // 00:30 МСК 28-го
+            assert.equal(d.toISOString().slice(0, 10), '2026-09-27');
+            assert.equal(d.toLocalDay(), '2026-09-28');
+        }
+        finally {
+            if (prev === undefined)
+                delete process.env.TZ;
+            else
+                process.env.TZ = prev;
+        }
+    });
+
     it('equal: верхний уровень поэлементно, Date/NaN/циклы', () => {
         assert.ok(Reactor.equal({ a: 1 }, { a: 1, b: undefined }));
         assert.ok(!Reactor.equal({ a: 1 }, { a: 2 }));

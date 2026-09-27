@@ -172,7 +172,7 @@ export const metaTools = [
             const name = String(args.name).trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
             if (!name)
                 throw new Error('имя навыка: латиница/цифры/дефис');
-            const post = stringifyFrontmatter({ name, description: args.description, created: new Date().toISOString().slice(0, 10) }, args.content);
+            const post = stringifyFrontmatter({ name, description: args.description, created: new Date().toLocalDay() }, args.content);
             let folder, where;
             if (args.scope === 'global') {
                 folder = await getItem(ENGINE_AI, ctx);

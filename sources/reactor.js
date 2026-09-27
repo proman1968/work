@@ -1008,6 +1008,13 @@ Array: {
 
 // ===== Расширение Date =====
 Date: {
+    /** День YYYY-MM-DD по местному времени (как папки журнала/истории на сервере), не по UTC. */
+    Object.defineProperty(Date.prototype, 'toLocalDay', {
+        enumerable: false, configurable: true,
+        value: function () {
+            return this.toISOTimezoneString().slice(0, 10);
+        }
+    });
     Object.defineProperty(Date.prototype, 'toISOTimezoneString', {
         enumerable: false, configurable: true,
         value: function () {
