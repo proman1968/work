@@ -47,10 +47,11 @@ export default {
     async change_effort(params = {}) {
         return (await WORK_AGENT()).configure(this, { session: params.session, effort: params.effort ?? params.post?.effort });
     },
+    /** { running, body } — тело не на верхнем уровне: клиентский WORK.__bind принял бы {type:'task'} за элемент дерева и склеил ответы разных задач. */
     async state(params = {}) {
         const core = await WORK_AGENT();
         const body = await core.getBody(this);
-        return { ...body, running: core.isRunning(this) };
+        return { running: core.isRunning(this), body };
     },
     get body() {
         return WORK_AGENT().then(core => core.getBody(this));

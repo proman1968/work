@@ -271,8 +271,10 @@ export default {
         // SSE собирается по целым строкам: хвост чанка (разорванный JSON)
         // держим в буфере до следующего чанка, иначе строка глоталась целиком.
         let buf = '';
+        // потоковый декодер: многобайтный символ UTF-8 на границе чанков не превращается в «��»
+        const decoder = new TextDecoder('utf-8');
         for await (const chunk of res) {
-            buf += Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
+            buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
             const lines = buf.split('\n');
             buf = lines.pop();
             for (const line of lines)

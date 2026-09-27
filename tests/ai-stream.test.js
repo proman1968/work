@@ -53,6 +53,14 @@ describe('streamChat SSE: рваные чанки собираются без п
         assert.equal((await collect(ai, { messages })).out, 'display:flex;padding: 16px;');
     });
 
+    it('многобайтный символ, разрезанный границей чанка, не портится', async () => {
+        const all = Buffer.from(sseLine({ choices: [{ delta: { content: 'Расчёты' } }] }) + 'data: [DONE]\n');
+        const cut = all.indexOf(Buffer.from('ё')) + 1; // посередине двухбайтного «ё»
+        async function* fakeRes() { yield all.subarray(0, cut); yield all.subarray(cut); }
+        globalThis.WORK = { https: { request(_o, cb) { queueMicrotask(() => cb(Object.assign(fakeRes(), { statusCode: 200 }))); return { on() {}, setTimeout() {}, destroy() {}, write() {}, end() {} }; } } };
+        assert.equal((await collect(ai, { messages })).out, 'Расчёты');
+    });
+
     it('целые строки по чанкам — поведение без изменений', async () => {
         installWork([
             sseLine({ choices: [{ delta: { content: 'a' } }] }),
