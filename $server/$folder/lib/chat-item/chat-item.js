@@ -70,7 +70,7 @@ ODA({is: 'chat-item',
                 border-radius: 50%;
             }
             oda-button:hover {
-                @apply --selection;
+                @apply --hover;
             }
             .title {
                 font-size: xx-small;

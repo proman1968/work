@@ -173,6 +173,14 @@
 
 Placeholder наследует цвет с `opacity: .5` (см. `styles.js`).
 
+## Токены и служебные миксины
+
+- Токены (`styles.js`, блок «Современные токены»): `--radius-s|m|l`, `--space-s|m|l`, `--font-mono`, `--muted-color`, `--subtle-background`, `--subtle-border`, `--code-background`, `--accent-soft`, `--success-soft`, `--error-soft`, `--warning-soft` — всё выводится из ролей темы.
+- Миксины `--card`, `--muted`, `--chip` — поверхности и подписи.
+- Только для `@apply` (без глобальных `[attr]`, чтобы не конфликтовать со свойствами компонентов): `cover`, `hover`, `shadow-transition`, `error-before`, `help-after`, `font-150`, `user-select`, `boxed`, `heading`, `text-shadow`, `text-shadow-black` (`APPLY_ONLY`).
+- Неизвестный `@apply --x` — предупреждение в консоли, правило пропускается (раньше в CSS вставлялось `undefined`).
+- `html { touch-action: manipulation }` — прокрутка и масштаб на телефоне; перетаскивание — `pointer*` + `setPointerCapture` в компоненте.
+
 ## API модуля
 
 ```js

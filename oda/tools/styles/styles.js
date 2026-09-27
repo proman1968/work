@@ -270,11 +270,11 @@ let style = /*css*/`
     }
 }
 html {
-    touch-action: none;
+    /* manipulation: прокрутка и масштаб на телефоне работают, двойной тап не зумит (было none — блокировало всё) */
+    touch-action: manipulation;
     -ms-text-size-adjust: 100%;
     -webkit-text-size-adjust: 100%;
     height: 100%;
-    --my-variable: 100px;
 }
 @media print {
     html, body {
@@ -315,9 +315,6 @@ input::placeholder{
     opacity: .5;
 }
 
-::part{
-    min-width: 0px;
-}
 ::part(error){
     position: relative;
     overflow: visible;
@@ -418,9 +415,6 @@ body[context-menu-show] *:not(oda-context-menu){
     };
     --error-before: {
         content: attr(error);
-        background-image: url("/web/oda/tools/styles/error.png");
-        background-size: contain;
-        background-repeat: no-repeat;
         position: absolute;
         top: -6px;
         left: 6px;
@@ -498,9 +492,6 @@ body[context-menu-show] *:not(oda-context-menu){
     };
     --help-after: {
         content: attr(help);
-        background-image: url("/web/oda/tools/styles/help.png");
-        background-size: contain;
-        background-repeat: no-repeat;
         position: absolute;
         top: -6px;
         left: 6px;
@@ -742,6 +733,9 @@ function extractCSSRules (style){
             }).join(';\n\t').trim();
             cssRules[key] ??= val;
             key = key.substring(2);
+            // внутренние миксины — только для @apply: их [атрибуты] конфликтовали бы со свойствами компонентов
+            if (APPLY_ONLY.has(key))
+                continue;
             // класс, булев attr и valued color-mode (взаимоисключающая роль)
             adds.push(`.${key}, [${key}], [color-mode="${key}"] {`)
             adds.push(`${val}`)
@@ -752,14 +746,28 @@ function extractCSSRules (style){
     result.push(...adds);
     return result.join('\n');
 }
+/** Миксины только для @apply (без глобальных [attr]/.class правил): не используются атрибутами в шаблонах. */
+const APPLY_ONLY = new Set(['cover', 'hover', 'shadow-transition', 'error-before', 'help-after', 'font-150', 'user-select', 'boxed', 'heading', 'text-shadow', 'text-shadow-black']);
+const WARNED = new Set();
 function applyStyleMixins (styleText) {
     styleText = styleText.replace(COMMENT_REG_EXP, '');
     styleText =  styleText.split(APPLY_REG_EXP);
-    styleText =  styleText.map(i=>{
+    styleText =  styleText.map((i, n)=>{
+        if (!n)
+            return i;
         let v = i.match(VAR_REG_EXP)?.[0];
         if(!v)
             return i;
-        return i.replace(v+';', cssRules[v]);
+        const body = cssRules[v];
+        if (body === undefined) {
+            // неизвестный миксин: раньше в CSS вставлялось слово «undefined»
+            if (!WARNED.has(v)) {
+                WARNED.add(v);
+                console.warn('[ODA styles] @apply ' + v + ': миксин не найден');
+            }
+            return i.replace(new RegExp('^' + v.replace(/[-]/g, '\\-') + '\\s*;?'), '');
+        }
+        return i.replace(new RegExp('^' + v.replace(/[-]/g, '\\-') + '\\s*;?'), body + ';');
     });
     styleText = styleText.join('');
     return styleText;
