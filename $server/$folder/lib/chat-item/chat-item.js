@@ -238,10 +238,7 @@ ODA({is: 'chat-item',
     hasPreview: false,
     _bodyCacheKeys: ['itemBody', 'fileLabel', 'fileTime', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
     _resetBodyCache() {
-        if (this[R]?.cache) {
-            for (const key of this._bodyCacheKeys)
-                delete this[R].cache[key];
-        }
+        this.invalidate(...this._bodyCacheKeys);
     },
     log: null,
     get logContent() {
@@ -390,8 +387,8 @@ ODA({is: 'chat-item',
             this.previewTag = 'item-node';
         }
         finally {
-            if (this.previousElementSibling?.[R]?.cache)
-                delete this.previousElementSibling[R].cache.hideAvatar;
+            // соседа DOM реактивность не видит — hideAvatar предыдущей карточки сбрасываем явно
+            this.previousElementSibling?.invalidate?.('hideAvatar');
             this.previewIsReady = true;
             this.render();
         }

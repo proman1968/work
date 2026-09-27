@@ -57,6 +57,47 @@ function installPdpDelegates(el) {
     }
 }
 
+/**
+ * $observers: { method(a, b) {...} } — вызвать method(this.a, this.b), когда все аргументы определены
+ * и хотя бы один изменился. Проверка — после каждого рендера (рендер следует за любым изменением).
+ * Имена аргументов — из сигнатуры метода.
+ */
+const OBSERVER_ARGS = new WeakMap();
+function observerArgs(fn) {
+    let args = OBSERVER_ARGS.get(fn);
+    if (!args) {
+        const src = fn.toString().replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+        const m = src.match(/^[^(]*\(([^)]*)\)/);
+        args = (m?.[1] || '').split(',').map(s => s.trim().replace(/=.*$/, '').trim()).filter(Boolean);
+        OBSERVER_ARGS.set(fn, args);
+    }
+    return args;
+}
+function runObservers(el) {
+    const observers = el.$observers;
+    if (!observers || typeof observers !== 'object')
+        return;
+    const last = el.__observed__ ??= {};
+    for (const name in observers) {
+        const fn = observers[name];
+        if (typeof fn !== 'function')
+            continue;
+        const values = observerArgs(fn).map(a => el[a]);
+        if (values.some(v => v === undefined || typeof v?.then === 'function'))
+            continue;
+        const prev = last[name];
+        if (prev && prev.length === values.length && prev.every((v, i) => v === values[i]))
+            continue;
+        last[name] = values;
+        try {
+            fn.apply(el, values);
+        }
+        catch (e) {
+            console.warn('[ODA] $observers.' + name + ' (' + el.localName + '):', e);
+        }
+    }
+}
+
 export function registerODA() {
     globalThis.ODA = async function ODA(prototype = {}) {
         return ODA.telemetry[prototype.is] ??= (async () => {
@@ -144,6 +185,7 @@ export function registerODA() {
                             switch (typeof prop.$attr) {
                                 case 'string':
                                     res[prop.name] = prop.$attr.toKebabCase();
+                                    break;
                                 default:
                                     res[prop.name] = prop.name.toKebabCase();
                             }
@@ -205,18 +247,21 @@ export function registerODA() {
                     }
                     async connectedCallback() {
                         installPdpDelegates(this);
+                        // Возврат после ~if/~is/переноса слота: подписки на чужие данные сняты при отключении —
+                        // геттеры пересчитаются при рендере и подпишутся заново
+                        const back = Reactor.reattach(this);
+                        if (back && this.$listeners?.resize)
+                            ODA.resizeObserver.observe(this);
                         queueMicrotask(() => {
-                            // for(let p of Object.values(this[R].props)){
-                            //     if(p.$attr || p.$public){
-                            //         let value = await this[p.name];
-                            //         setAttribute.call(this, p.attr_name, value);
-                            //     }
-                            // }
                             this.attached?.();
+                            if (back)
+                                this.render();
                         })
                     }
                     disconnectedCallback() {
                         this.detached?.();
+                        if (this.$listeners?.resize)
+                            ODA.resizeObserver.unobserve?.(this);
                         Reactor.cleanupDeps(this);
                     }
                     static get observedAttributes() {
@@ -334,6 +379,7 @@ export function registerODA() {
                             if (this.__vnode__) {
                                 this.renderChildren(wake);
                             }
+                            runObservers(this);
                             this.onRender?.();
                         });
                     }

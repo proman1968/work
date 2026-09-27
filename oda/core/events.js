@@ -25,9 +25,11 @@ export const EVENTS = {
             });
         }
         const info = { target: {}, window: {} };
-        if (target.__trackHandlers.has(handler)) {
-            __unlisten.call(target, handler);
-        }
+        // повторная регистрация того же обработчика — снять прежний pointerdown
+        const prev = target.__trackHandlers.get(handler);
+        if (prev?.down)
+            target.removeEventListener('pointerdown', prev.down);
+        info.down = pointerDown;
         target.__trackHandlers.set(handler, info);
         let detail;
         target.addEventListener('pointerdown', pointerDown);
@@ -86,9 +88,11 @@ export const EVENTS = {
         function upHandler(e) {
             window.removeEventListener('pointermove', moveHandler);
             window.removeEventListener('pointerup', upHandler);
+            window.removeEventListener('dragstart', upHandler);
             target.removeEventListener('pointerleave', leave);
             delete info.window.pointermove;
             delete info.window.pointerup;
+            delete info.window.dragstart;
             delete info.target.pointerleave;
             if (detail?.state) {
                 detail.ddx = 0;

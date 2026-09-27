@@ -511,7 +511,7 @@ ODA({is: 'chat-ribbon',
             if (dates.includes(today) && dates.length === this.dateList.length)
                 return false;
         } else {
-            delete this.$item[R]?.cache?.logs_dates;
+            this.$item.invalidate?.('logs_dates');
             dates = await this.$item.fetch('logs', { mode: 'dates' });
             // dates на сервере — по убыванию; в ленте дни — от старых к новым, не дальше сегодня
             dates = dates.slice().reverse().filter(d => d <= today);
