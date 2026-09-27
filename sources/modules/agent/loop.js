@@ -64,6 +64,12 @@ export async function runLoop(opts) {
             const system = typeof opts.system === 'function' ? await opts.system() : String(opts.system || '');
             await maybeCompact({ llm, items, host, system });
             const messages = toMessages(system, items);
+            host.noteContext?.({
+                limit: Number(llm.contextTokens) || 0,
+                system: estimateTokens(system),
+                tools: estimateTokens(schemas),
+                messages: estimateTokens(messages) - estimateTokens(system),
+            });
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
             await host.save();

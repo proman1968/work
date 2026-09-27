@@ -61,6 +61,13 @@ await send('Page.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: +w, height: +h, deviceScaleFactor: 1, mobile: false });
 await send('Page.navigate', { url });
 await sleep(+waitMs);
+// CLICK="x,y[;x,y…]" — клики мышью перед снимком (закрытые shadow root недоступны из js)
+for (const pt of String(process.env.CLICK || '').split(';').filter(Boolean)) {
+    const [x, y] = pt.split(',').map(Number);
+    for (const type of ['mousePressed', 'mouseReleased'])
+        await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+    await sleep(Number(process.env.CLICK_WAIT) || 4000);
+}
 if (js) {
     const r = await send('Runtime.evaluate', { expression: js, awaitPromise: true, returnByValue: true });
     console.log('[eval]', JSON.stringify(r.result?.result?.value ?? r.result?.exceptionDetails?.text ?? r.result).slice(0, 2000));

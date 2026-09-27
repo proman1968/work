@@ -1,16 +1,57 @@
 /**
- * Лента задачи v2: реплики, ответы агента (рассуждение + markdown + карточки вызовов),
+ * Лента задачи v2: реплики, ответы агента (рассуждение + markdown), действия (карточки вызовов),
  * подтверждения и вопросы — прямо в карточке вызова, вложенные ленты субагентов.
  * Данные — элементы body.items (см. sources/modules/agent/loop.js); стрим — shell.streams[id].
+ * Подряд идущие вызовы (без текста между ними) — одна группа «N действий»: раскрыта, пока идёт работа
+ * или нужен человек; свёрнута по завершении.
  */
 import {
     toolMeta, toolTarget, STATUS_META, fmtDuration, fmtTime, fmtTokens, modelShort,
     copyText, findShell, liveText, resultMarkdown,
 } from './util.js';
 
-const ROW_TAG = {
+const ACTIVE = ['pending', 'running', 'approval', 'waiting'];
+const COLLAPSE_FROM = 3;
+
+/** Лента → сегменты: user | assistant (текст) | steps (вызовы и рассуждения без текста) | summary | error. */
+export function segmentsOf(items, streams = {}, nested = false) {
+    const out = [];
+    let group = null;
+    (items || []).forEach((it, i) => {
+        if (!it || (nested && i === 0 && it.type === 'user'))
+            return;
+        if (it.type !== 'assistant') {
+            group = null;
+            if (['user', 'summary', 'error'].includes(it.type))
+                out.push({ kind: it.type, id: it.id, item: it });
+            return;
+        }
+        const s = streams[it.id];
+        const text = liveText(it.content, s?.content).trim();
+        const reasoning = liveText(it.reasoning, s?.reasoning).trim();
+        const tools = it.tools || [];
+        if (text) {
+            group = null;
+            out.push({ kind: 'assistant', id: it.id, item: it });
+        }
+        if (!tools.length && (text || !reasoning))
+            return;
+        if (!group) {
+            group = { kind: 'steps', id: 'g:' + it.id, entries: [] };
+            out.push(group);
+        }
+        if (!text && reasoning)
+            group.entries.push({ kind: 'think', id: it.id + ':r', item: it });
+        for (const t of tools)
+            group.entries.push({ kind: 'tool', id: t.id, tool: t, turn: it });
+    });
+    return out;
+}
+
+const SEG_TAG = {
     user: 'microchat-user',
     assistant: 'microchat-assistant',
+    steps: 'microchat-steps',
     summary: 'microchat-summary',
     error: 'microchat-error',
 };
@@ -18,17 +59,17 @@ const ROW_TAG = {
 ODA({ is: 'microchat-feed',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; gap: 14px; min-width: 0; }
+            :host { @apply --vertical; gap: 12px; min-width: 0; }
         </style>
-        <div ~for="visible" ~is="rowTag($for.item)" :data="$for.item" :nested></div>
+        <div ~for="segments" ~is="tag($for.item)" :data="$for.item.item" :group="$for.item" :nested></div>
     `,
     items: [],
     nested: false,
-    get visible() {
-        return (this.items || []).filter(i => i && ROW_TAG[i.type] && !(i.type === 'user' && this.nested && i === this.items[0]));
+    get segments() {
+        return segmentsOf(this.items, this.$pdp?.streams || {}, this.nested);
     },
-    rowTag(item) {
-        return ROW_TAG[item?.type] || 'microchat-error';
+    tag(seg) {
+        return SEG_TAG[seg?.kind] || 'microchat-error';
     },
 });
 
@@ -46,7 +87,7 @@ ODA({ is: 'microchat-user',
     imports: 'oda//button, oda//icon',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; align-items: flex-end; min-width: 0; }
+            :host { @apply --vertical; align-items: flex-end; min-width: 0; margin-top: 8px; }
             .bubble {
                 background: var(--accent-soft);
                 border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
@@ -58,7 +99,7 @@ ODA({ is: 'microchat-user',
             .att span { @apply --chip; cursor: pointer; }
             ${HOVER}
         </style>
-        <div class="bubble">{{text}}</div>
+        <div class="bubble" ~if="text">{{text}}</div>
         <div class="att" ~if="data?.attachments?.length">
             <span ~for="data.attachments" :title="$for.item.path" @tap="open($for.item.path)">
                 <oda-icon icon="carbon:attachment" :icon-size="12"></oda-icon>{{$for.item.name || $for.item.path}}
@@ -71,12 +112,13 @@ ODA({ is: 'microchat-user',
         </div>
     `,
     data: null,
+    group: null,
     nested: false,
     get text() { return String(this.data?.content || ''); },
     get time() { return fmtTime(this.data?.time); },
-    get busy() { return !!this.$pdp?.busy; },
+    get busy() { return this.$pdp?.status === 'running'; },
     copy() { copyText(this.text); },
-    open(path) { findShell(this)?.openArtifact(path); },
+    open(path) { findShell(this)?.openDoc({ kind: 'file', path }); },
     revert() { findShell(this)?.revert(this.data); },
 });
 
@@ -84,22 +126,19 @@ ODA({ is: 'microchat-assistant',
     imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; gap: 6px; min-width: 0; }
-            .reasoning {
-                @apply --vertical; border-left: 2px solid var(--subtle-border);
-                padding: 2px 0 2px 10px; font-size: small;
-            }
+            :host { @apply --vertical; gap: 4px; min-width: 0; }
+            .reasoning { @apply --vertical; border-left: 2px solid var(--subtle-border); padding: 2px 0 2px 10px; font-size: small; }
             .reasoning .head { @apply --horizontal; @apply --muted; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
             .reasoning .body { @apply --muted; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; user-select: text; }
-            .text { min-width: 0; line-height: 1.55; user-select: text; margin: -6px 0; }
+            .text { min-width: 0; line-height: 1.6; user-select: text; }
             .text[error] { color: var(--error-color); }
             .text[caret]::after { content: '▍'; animation: blink 1s steps(1) infinite; opacity: .6; }
             @keyframes blink { 50% { opacity: 0; } }
-            .tools { @apply --vertical; gap: 4px; }
+            .doc { @apply --chip; cursor: pointer; align-self: flex-start; font-size: small; padding: 3px 10px; }
+            .doc:hover { background: var(--accent-soft); }
             ${HOVER}
         </style>
-        <div ~if="toolOnly" style="margin-top: -8px;"></div>
-        <div class="reasoning" ~if="showReasoningRow">
+        <div class="reasoning" ~if="reasoning">
             <div class="head" @tap="showReasoning = !showReasoning">
                 <oda-icon :icon="thinkingNow ? 'spinners:3-dots-scale' : 'carbon:idea'" :icon-size="14"></oda-icon>
                 <span>{{thinkingNow ? 'Рассуждаю…' : 'Рассуждение'}}</span>
@@ -110,27 +149,24 @@ ODA({ is: 'microchat-assistant',
         <div class="text" ~if="text" :error="data?.error" :caret="streamingText">
             <oda-markdown-viewer vertical :value="text"></oda-markdown-viewer>
         </div>
-        <div class="tools" ~if="data?.tools?.length">
-            <microchat-tool ~for="data.tools" :data="$for.item" :turn="data"></microchat-tool>
-        </div>
         <div class="meta" ~if="text && !streamingText">
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
+            <oda-button ~if="isDoc && !nested" icon="carbon:document-view" :icon-size="14" title="Открыть в доках" @tap="openDoc"></oda-button>
             <span>{{info}}</span>
             <span ~if="data?.stopped">· остановлено</span>
         </div>
     `,
     data: null,
+    group: null,
     nested: false,
     showReasoning: false,
     get stream() { return this.$pdp?.streams?.[this.data?.id]; },
     get text() { return liveText(this.data?.content, this.stream?.content); },
     get reasoning() { return liveText(this.data?.reasoning, this.stream?.reasoning); },
     get streamingText() { return !!this.stream?.content && !this.data?.durationMs; },
-    get thinkingNow() { return !!this.stream?.reasoning && !this.text && !this.data?.durationMs; },
+    get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.data?.durationMs; },
     get reasoningOpen() { return this.showReasoning || this.thinkingNow; },
-    /** Ход только с вызовами: без строки «Рассуждение» (кроме живого) и прижат к предыдущему. */
-    get toolOnly() { return !this.text && !!this.data?.tools?.length; },
-    get showReasoningRow() { return !!this.reasoning && (!this.toolOnly || this.thinkingNow || this.showReasoning); },
+    get isDoc() { return !!this.$pdp?.docs?.some?.(d => d.key === 'reply:' + this.data?.id); },
     get info() {
         const u = this.data?.usage;
         return [
@@ -140,6 +176,79 @@ ODA({ is: 'microchat-assistant',
         ].filter(Boolean).join(' · ');
     },
     copy() { copyText(this.text); },
+    openDoc() { findShell(this)?.openDoc({ key: 'reply:' + this.data.id }); },
+});
+
+ODA({ is: 'microchat-steps',
+    imports: 'oda//icon',
+    template: /*html*/`
+        <style>
+            :host { @apply --vertical; gap: 4px; min-width: 0; }
+            .head { @apply --horizontal; @apply --muted; align-items: center; gap: 8px; font-size: small; cursor: pointer; user-select: none; padding: 2px 0; }
+            .head:hover { color: var(--content-color); }
+            .icons { @apply --horizontal; gap: 2px; }
+            .bad { color: var(--error-color); }
+            .list { @apply --vertical; gap: 4px; }
+        </style>
+        <div class="head" ~if="collapsible" @tap="toggle">
+            <oda-icon :icon="active ? 'spinners:3-dots-scale' : 'carbon:task'" :icon-size="14"></oda-icon>
+            <span>{{summary}}</span>
+            <span class="icons"><oda-icon ~for="icons" :icon="$for.item" :icon-size="12"></oda-icon></span>
+            <span class="bad" ~if="errors">· ошибок: {{errors}}</span>
+            <span ~if="duration">· {{duration}}</span>
+            <oda-icon :icon="open ? 'carbon:chevron-down' : 'carbon:chevron-right'" :icon-size="12"></oda-icon>
+        </div>
+        <div class="list" ~if="open">
+            <div ~for="entries" ~is="$for.item.kind === 'tool' ? 'microchat-tool' : 'microchat-think'" :data="$for.item.kind === 'tool' ? $for.item.tool : $for.item.item" :turn="$for.item.turn"></div>
+        </div>
+    `,
+    data: null,
+    group: null,
+    nested: false,
+    get entries() { return this.group?.entries || []; },
+    get tools() { return this.entries.filter(e => e.kind === 'tool').map(e => e.tool); },
+    get attention() { return this.tools.some(t => t.status === 'approval' || t.status === 'waiting'); },
+    get active() {
+        if (this.tools.some(t => ACTIVE.includes(t.status)))
+            return true;
+        const streams = this.$pdp?.streams || {};
+        return this.entries.some(e => e.kind === 'think' && streams[e.item.id] && !e.item.durationMs);
+    },
+    get collapsible() { return this.tools.length >= COLLAPSE_FROM; },
+    get open() {
+        if (!this.collapsible || this.attention)
+            return true;
+        const user = this.$pdp?.groupOpen?.[this.group?.id];
+        return user ?? this.active;
+    },
+    get errors() { return this.tools.filter(t => t.status === 'error').length; },
+    get duration() { return fmtDuration(this.tools.reduce((s, t) => s + (Number(t.durationMs) || 0), 0)); },
+    get icons() { return [...new Set(this.tools.map(t => toolMeta(t.name).icon))].slice(0, 6); },
+    get summary() {
+        const n = this.tools.length;
+        const w = n % 10 === 1 && n % 100 !== 11 ? 'действие' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'действия' : 'действий');
+        return (this.active ? 'Выполняю: ' : '') + n + ' ' + w;
+    },
+    toggle() { findShell(this)?.toggleGroup(this.group?.id, !this.open); },
+});
+
+ODA({ is: 'microchat-think',
+    imports: 'oda//icon',
+    template: /*html*/`
+        <style>
+            :host { @apply --horizontal; @apply --muted; align-items: flex-start; gap: 6px; font-size: small; padding: 2px 0 2px 10px; border-left: 2px solid var(--subtle-border); cursor: pointer; min-width: 0; }
+            span { white-space: pre-wrap; word-break: break-word; min-width: 0; user-select: text; }
+            span[clip] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        </style>
+        <oda-icon no-flex :icon="live ? 'spinners:3-dots-scale' : 'carbon:idea'" :icon-size="14" @tap="open = !open"></oda-icon>
+        <span flex :clip="!open && !live" @tap="open = !open">{{text}}</span>
+    `,
+    data: null,
+    turn: null,
+    open: false,
+    get stream() { return this.$pdp?.streams?.[this.data?.id]; },
+    get text() { return liveText(this.data?.reasoning, this.stream?.reasoning); },
+    get live() { return !!this.stream && !this.data?.durationMs; },
 });
 
 ODA({ is: 'microchat-tool',
@@ -319,7 +428,7 @@ ODA({ is: 'microchat-tool',
     },
     openArtifact() {
         if (this.artifactPath)
-            findShell(this)?.openArtifact(this.artifactPath);
+            findShell(this)?.openDoc({ kind: 'file', path: this.artifactPath });
         else
             this.open = !this.open;
     },

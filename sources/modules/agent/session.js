@@ -106,6 +106,7 @@ async function save(s, session) {
     s.writing = (async () => {
         do {
             s.again = false;
+            s.body.updated = Date.now();
             const text = JSON.stringify(s.body, null, 2);
             const dir = s.file.dir;
             const tmp = dir + '.tmp';
@@ -171,6 +172,8 @@ function makeHost(s, session) {
         save: () => save(s, session),
         emit: e => send(s, session, { ...e, type: 'task.delta' }),
         setTodos: todos => { body.todos = todos; },
+        /** Состав контекста последнего хода (оценка): лимит модели, system, схемы инструментов, диалог. */
+        noteContext: c => { body.context = { ...c, time: Date.now() }; },
         wait: req => {
             body.waiting = { kind: req.kind, item: req.item, call: req.call };
             setStatus(s, session, 'waiting');
