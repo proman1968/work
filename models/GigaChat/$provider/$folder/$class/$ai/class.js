@@ -5,7 +5,7 @@
  * Содержит общие настройки подключения и метаданные GigaChat.
  */
 export default {
-    icon: 'carbon:machine-learning-model',
+    icon: 'ai:gigachat',
     description: 'Провайдер GigaChat',
 
     protocol: 'gigachat',

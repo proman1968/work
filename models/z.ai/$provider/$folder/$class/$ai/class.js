@@ -4,7 +4,7 @@
  * Наследуется всеми моделями внутри models/z.ai/.
  */
 export default {
-    icon: 'carbon:machine-learning-model',
+    icon: 'carbon:cloud',
     description: 'Провайдер z.ai',
 
     protocol: 'openai',

@@ -6,7 +6,6 @@
  * Синтез: ?tts
  */
 export default {
-    icon: 'carbon:microphone',
     label: 'Piper',
 
     protocol: 'local',

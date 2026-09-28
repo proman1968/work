@@ -601,7 +601,9 @@ setTimeout(() => {
             case 'chat.delta':
             case 'chat.done':
             case 'chat.error':
-            case 'chat.clear_stream': {
+            case 'chat.clear_stream':
+            case 'task.delta':
+            case 'task.state': {
                 if(!data.path)
                     return;
                 let item = CORE.$item.ITEMS[data.path];
@@ -629,9 +631,7 @@ setTimeout(() => {
                     const LISTS = item.constructor.LISTS || CORE.$item.LISTS;
                     for(let key of LISTS){
                         delete item[key];
-                        if (item[R]?.cache)
-                            item[R].cache[key] = undefined;
-                        Reactor.reset_deps(item, key);
+                        Reactor.invalidate(item, key);
                     }
                     // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
                     // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON

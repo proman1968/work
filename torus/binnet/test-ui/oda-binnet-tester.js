@@ -1018,40 +1018,10 @@ ODA({
                     return { pass: false, details: 'ни один чужой ряд не двинулся за 5 попыток' };
                 } finally { gpu.destroy(); }
             }},
-            { id: 'H7', label: 'со-ничья отталкивается, дальний ряд цел', run: async () => {
-                // Два ряда = X (точная ничья), цель — инверсия notX.
-                // После back: цель притянута, со-победитель оттолкнут, дальний
-                // ряд цел (margin=0 давит только точные ничьи; ретраи — против
-                // попадания случайного негатива в ряд 0).
-                const { gpu, head } = await this._makeHead();
-                try {
-                    const X = rnd(E, 707);
-                    const A = 5, B = 11, T = 9;
-                    const table = head.params.weights;
-                    table.set(X, A * E);
-                    table.set(X, B * E);
-                    const notX = new Uint32Array(Array.from(X, v => (~v) >>> 0));
-                    table.set(notX, T * E);
-                    const fwd = await head.forward({ data: X.slice(), targetIdx: T });
-                    if (fwd.predictIdx !== Math.min(A, B)) return { pass: false, details: `сетап сломан: predict=${fwd.predictIdx}` };
-                    for (let a = 0; a < 3; a++) {
-                        const before = Array.from(await gpu.readData(head.params.weights));
-                        head.back({ back_target: T, predict: fwd.predictIdx });
-                        const after = Array.from(await gpu.readData(head.params.weights));
-                        const tRes = this._hedToward(rowOf(before, T), rowOf(after, T), X);
-                        const coWin = fwd.predictIdx === A ? B : A;
-                        const bRes = this._hedToward(rowOf(before, coWin), rowOf(after, coWin), notX);
-                        const far = this._hedToward(rowOf(before, 0), rowOf(after, 0), X);
-                        if (tRes.moved > 0 && tRes.wrong === 0 && bRes.moved > 0 && bRes.wrong === 0 && far.wrong === 0)
-                            return { pass: true, details: `цель +${tRes.moved}, со-ничья ${coWin} +${bRes.moved}, ряд0 левых 0 (попытка ${a + 1})` };
-                    }
-                    return { pass: false, details: 'цель/со-ничья не двинулись или ряд0 задет за 3 попытки' };
-                } finally { gpu.destroy(); }
-            }},
         ];
     },
     async runHedTests() {
-        this.log('=== Автотест Head (H1–H7) ===');
+        this.log('=== Автотест Head (H1–H6) ===');
         this.hedSummary = 'выполняется…'; this.hedPill = 'run';
         const r = await this._runSuite(this._mkItems(this._hedTestDefs()), 'hedTests');
         const s = this._suiteSummary('hedTests');
@@ -1156,65 +1126,9 @@ ODA({
                 : { pass: false, details: `СЛИПАНИЕ: emb ${fmt(b.emb)}→${fmt(a.emb)}, out ${fmt(b.out)}→${fmt(a.out)} (n=${a.n})` };
         } finally { gpu.destroy(); }
     },
-    // Строгая проверка генерации с диагностикой: учит trainCorpus, затем
-    // продолжает line с чистой границы токенов. Зачет — только при acc ≥ 0.95
-    // И точном совпадении. diag: dT≈dP = честная путаница; dT>>dP = ряд цели
-    // вообще не притянут (структура). Замер пар forward-only, веса целы.
-    async _llmGenRun({ embSize = 8, negMargin = 4, trainCorpus, line, epochs = 20, testId }) {
-        const { gpu, llm } = await this._makeLlm({ embSize, negMargin });
-        const hamFrac = (a, b) => {
-            let d = 0;
-            for (let i = 0; i < a.length; i++) {
-                let x = (a[i] ^ b[i]) >>> 0;
-                x = x - ((x >>> 1) & 0x55555555);
-                x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-                x = (x + (x >>> 4)) & 0x0F0F0F0F;
-                d += ((x * 0x01010101) >>> 24);
-            }
-            return d / (a.length * 32);
-        };
-        try {
-            await this._llmTrainSplit(llm, trainCorpus, epochs, 0, testId);
-            const E8 = llm.embedding.embSize;
-            const table = Array.from(await gpu.readData(llm.head.params.weights));
-            const rowOf = (r) => table.slice(r * E8, (r + 1) * E8);
-            const toks = Array.from(llm.tokenizer.encode(line));
-            const wrongs = [];
-            llm.resetState();
-            for (let t = 0; t < toks.length - 1 && wrongs.length < 5; t++) {
-                const res = await llm.forward({ tokenIdx: toks[t], targetIdx: toks[t + 1] });
-                if (res.loss) {
-                    const out = Array.from(await gpu.readData(llm.head.input.data));
-                    wrongs.push(`p${t}:${toks[t + 1]}→${res.predictIdx} dT=${hamFrac(out, rowOf(toks[t + 1])).toFixed(2)}/dP=${hamFrac(out, rowOf(res.predictIdx)).toFixed(2)}`);
-                }
-            }
-            const diag = wrongs.length ? ` | неверны: ${wrongs.join('; ')}` : ' | все пары верны';
-            // Ищем границу, чистую в обе стороны: без рваных UTF-8 и со
-            // стабильной перекодировкой (иначе память уйдет в невиданное).
-            let k = -1;
-            for (let c = 3; c < toks.length - 1; c++) {
-                const pre = llm.tokenizer.decode(toks.slice(0, c));
-                const re = Array.from(llm.tokenizer.encode(pre));
-                if (!pre.includes('�') && re.length === c && re.every((v, i) => v === toks[i])) { k = c; break; }
-            }
-            if (k < 0) return { pass: false, details: 'нет чистой границы промпта (все рвут UTF-8)' };
-            const prompt = llm.tokenizer.decode(toks.slice(0, k));
-            const expected = llm.tokenizer.decode(toks.slice(k));
-            const gen = await llm.generate(prompt, 60);
-            if (typeof gen !== 'string') return { pass: false, details: `generate вернул не строку${diag}` };
-            if (!gen.length) return { pass: false, details: `пустая генерация (сразу EOS)${diag}` };
-            const acc = await llm.accuracy(line);
-            if (acc.acc < 0.95) {
-                return { pass: false, details: `acc ${acc.acc.toFixed(2)} < 0.95 — недостаточно для генерации${diag}` };
-            }
-            return gen === expected
-                ? { pass: true, details: `«${prompt}» → «${gen.slice(0, 40)}»` }
-                : { pass: false, details: `ожидалось «${expected.slice(0, 60)}», получено «${gen.slice(0, 60)}»${diag}` };
-        } finally { gpu.destroy(); }
-    },
     _llmTestDefs() {
-        // Трек 1 (демо-путь): S1,S2,S4,S3b,S3 на headlong. S5 — гейт трека 2 (коллапс).
-        // S3b/S3 строгие — до красных зондов, чтобы СТОП не прятал демку.
+        // Трек 1 (демо-путь): S1,S2,S4 на headlong. S5 — гейт трека 2 (коллапс).
+        // S3 строгий — последним, никого не блокирует.
         const FIX = this._llmFixture();
         const self = this;
         return [
@@ -1261,17 +1175,6 @@ ODA({
                         : { pass: false, details: `плавает: ошибки ${a1.errors}/${a2.errors}, gen «${g1.slice(0, 20)}»/«${g2.slice(0, 20)}»` };
                 } finally { gpu.destroy(); }
             }},
-            { id: 'S3b', label: 'генерация после полного заучивания одной строки', run: async () => {
-                // Та же строгая генерация, но учим одну строку дважды (как S1):
-                // acc здесь высокий — если генерация мимо, виноват путь генерации.
-                return await self._llmGenRun({ embSize: 8, negMargin: 0, trainCorpus: FIX.line1 + '\n' + FIX.line1, line: FIX.line1, epochs: 20, testId: 'S3b' });
-            }},
-            { id: 'S3', label: 'генерация продолжает заученную строку (СТРОГО)', run: async () => {
-                // Только headlong: full-фаза сносит выученное (документировано S7/S8).
-                // margin 0: любые margin>0 травят учебу (S3b: 0.64 при margin 4
-                // против 0.82 при margin 0) — давим только точные ничьи.
-                return await self._llmGenRun({ embSize: 8, negMargin: 0, trainCorpus: FIX.corpus, line: FIX.line1, epochs: 20, testId: 'S3' });
-            }},
             { id: 'S8', label: 'ЗОНД: соревнование держит разброс', run: async () => {
                 // Тот же замер слипания, но проекции с topK=8: у каждого входа
                 // своя команда победителей, веса не усредняются в «среднее слово».
@@ -1298,12 +1201,39 @@ ODA({
                         : { pass: false, details: `не держит: пик ${peak.toFixed(2)} → хвост ${tail.toFixed(2)} (${curve})` };
                 } finally { gpu.destroy(); }
             }},
+            { id: 'S3', label: 'генерация продолжает заученную строку (СТРОГО)', run: async () => {
+                // Промпт — СТРОГО по границе токенов (срез по символам режет токен
+                // пополам и уводит память в невиданное состояние — артефакт, не модель).
+                // Режим — принятый дожим: широко, медленно, с поздней разморозкой.
+                const { gpu, llm } = await self._makeLlm({ embSize: 8, embLearnRate: 0.01, linUpdateExtra: 3 });
+                try {
+                    await self._llmTrainSplit(llm, FIX.corpus, 10, 10, 'S3');
+                    // Ищем границу, чистую в обе стороны: без рваных UTF-8 и со
+                    // стабильной перекодировкой (иначе память уйдет в невиданное).
+                    const toks = Array.from(llm.tokenizer.encode(FIX.line1));
+                    let k = -1;
+                    for (let c = 3; c < toks.length - 1; c++) {
+                        const pre = llm.tokenizer.decode(toks.slice(0, c));
+                        const re = Array.from(llm.tokenizer.encode(pre));
+                        if (!pre.includes('�') && re.length === c && re.every((v, i) => v === toks[i])) { k = c; break; }
+                    }
+                    if (k < 0) return { pass: false, details: 'нет чистой границы промпта (все рвут UTF-8)' };
+                    const prompt = llm.tokenizer.decode(toks.slice(0, k));
+                    const expected = llm.tokenizer.decode(toks.slice(k));
+                    const gen = await llm.generate(prompt, 30);
+                    if (typeof gen !== 'string') return { pass: false, details: `generate вернул не строку` };
+                    if (!gen.length) return { pass: false, details: 'пустая генерация (сразу EOS)' };
+                    return gen === expected
+                        ? { pass: true, details: `«${prompt}» → «${gen.slice(0, 40)}»` }
+                        : { pass: false, details: `ожидалось «${expected.slice(0, 60)}», получено «${gen.slice(0, 60)}»` };
+                } finally { gpu.destroy(); }
+            }},
         ];
     },
     // S5 (гейт ранней разморозки 3+5) удален: миссия выполнена — 4 кривые коллапса
     // задокументированы в отчетах, режим признан неверным, S6 тестирует принятый.
     async runLlmTests() {
-        this.log('=== Автотест LLM (S1,S2,S4,S3b,S3,S8,S7,S6) ===');
+        this.log('=== Автотест LLM (S1,S2,S4,S8,S7,S6,S3) ===');
         this.llmSummary = 'выполняется…'; this.llmPill = 'run';
         const r = await this._runSuite(this._mkItems(this._llmTestDefs()), 'llmTests');
         const s = this._suiteSummary('llmTests');

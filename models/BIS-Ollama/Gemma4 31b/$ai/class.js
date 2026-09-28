@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:gemma',
     label: 'Gemma4 31b',
 
     model: 'gemma4:31b',

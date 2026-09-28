@@ -4,11 +4,7 @@ export class Head extends BinNet {
     constructor(config = {}) {
         super(config);
         this.vocabSize = config.vocabSize || 32768; // 2 ** 15
-        this.embSize = config.embSize || 32;
-        // Порог соперников в единицах логита: ряды не-цели, отстающие от max
-        // не больше чем на margin, тоже отталкиваются (побеждает argmin среди
-        // равных — их тоже надо давить, иначе вечная чехарда). 0 = только ничьи.
-        this.negMargin = Math.max(0, Math.trunc(config.negMargin ?? 0));
+        this.embSize = config.embSize || 32;   
 
         this.params = {
             weights: this.vocabSize * this.embSize
@@ -214,55 +210,6 @@ export class Head extends BinNet {
             this.params.weights,
             this.vars,
             this.back_target
-        ]);
-
-        // Добивка соперников: все ряды-не-цели в margin от максимума тоже
-        // отталкиваются (иначе чехарда победителей). max_logit в vars цел —
-        // forward его только что посчитал; таргет-ряд пропускаем.
-        if (!this.CONFUSE) {
-            this.CONFUSE = this.gpu.compute_info(this.vocabSize * this.embSize);
-            let code = `
-                // BACK_CONFUSE Head
-                struct Vars {
-                    max_logit: i32,
-                    errors: u32,
-                    predict: u32,
-                    target_idx: u32,
-                    loss: f32,
-                    random: f32
-                }
-                fn hash(state: u32) -> u32 {
-                    var x = state;
-                    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
-                    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
-                    x = (x >> 16u) ^ x;
-                    return x;
-                }
-                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
-                @group(0) @binding(1) var<storage, read_write> weights: array<u32>;
-                @group(0) @binding(2) var<storage, read> logits: array<i32>;
-                @group(0) @binding(3) var<storage, read> vars: Vars;
-                @compute @workgroup_size(${this.CONFUSE.workgroup_size})
-                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-                    ${this.CONFUSE.idx_code_gen}
-                    const e_size = ${this.embSize}u;
-                    let r = idx / e_size;
-                    let i = idx % e_size;
-                    if (r == vars.target_idx) { return; }
-                    if (vars.max_logit - logits[r] > ${this.negMargin}) { return; }
-                    let rnd = hash(bitcast<u32>(vars.random) ^ (idx + 4177u));
-                    let mask = rnd & ((rnd >> 5u) | (rnd << 27u)) & ((rnd >> 11u) | (rnd << 21u)) & ((rnd >> 17u) | (rnd << 15u));
-                    let w_index = r * e_size + i;
-                    weights[w_index] = (weights[w_index] & ~mask) | ((~inputs[i]) & mask);
-                }
-            `;
-            this.CONFUSE.compile(code, this.id + ':BACK_CONFUSE');
-        }
-        this.CONFUSE.compute([
-            targetBuffer,
-            this.params.weights,
-            this.logits,
-            this.vars
         ]);
 
         return { predict, back_target: this.back_target };

@@ -15,6 +15,17 @@ import {
     textTemplateToExpr
 } from './compiler.js';
 
+/** Ошибка выражения шаблона — в консоль с контекстом (раньше — безымянный unhandled rejection). */
+const REPORTED = new Set();
+function bindingError(el, what, expr, e) {
+    const host = el?.host?.localName || el?.getRootNode?.()?.host?.localName || '?';
+    const key = host + '|' + what + '|' + expr + '|' + (e?.message || e);
+    if (REPORTED.has(key))
+        return;
+    REPORTED.add(key);
+    console.warn('[ODA] <' + host + '> ' + what + '="' + expr + '": ' + (e?.message || e));
+}
+
 export class VNode{
     id = VNode.counter();
     children = [];
@@ -90,7 +101,7 @@ export class VNode{
                             if(res?.then){
                                 return res.then(res=>{
                                     el.$pdp[prop_name] = res;
-                                })
+                                }).catch(e => bindingError(el, ':' + name, expr, e))
                             }
                             el.$pdp[prop_name] = res;
                         }
@@ -130,7 +141,7 @@ export class VNode{
                                 if(res?.then){
                                     return res.then(res=>{
                                         el.$pdp[name] = res;
-                                    })
+                                    }).catch(e => bindingError(el, name, expr, e))
                                 }
                                 el.$pdp[name] = res;
                             }
@@ -155,7 +166,7 @@ export class VNode{
                             queueMicrotask(()=>{
                                 el.textContent = res;
                             })
-                        })
+                        }).catch(e => bindingError(el.parentNode, '{{}}', expr, e))
                     }
                     if (el.textContent === res) return;
                     queueMicrotask(()=>{
@@ -315,28 +326,8 @@ export class VNode{
             else {
                 element = document.createElement(tag);
             }
-            switch (tag) {
-                case 'STYLE': {
-
-                } break;
-                case 'IFRAME': {
-                    element.addEventListener('load', e => {
-                        try {
-                            if (!e.target.contentDocument.ODA) {
-                                pointerDownListen(e.target.contentWindow);
-                            }
-                        }
-                        catch (e) {
-                            console.warn(e)
-                        }
-                    })
-                } break;
-                default: {
-                    if (tag.startsWith('for-') || (!this.isSvg && tag !== 'slot' && !this.isStyle && element.nodeType === 1)) {
-                        ODA.intersectionObserver.observe(element);
-                    }
-                }
-            }
+            if (tag.startsWith('for-') || (!this.isSvg && tag !== 'slot' && !this.isStyle && element.nodeType === 1))
+                ODA.intersectionObserver.observe(element);
             for (let attr in this.#attributes)
                 element.setAttribute(attr, this.#attributes[attr]);
             for (let event in this.#listeners) {

@@ -163,7 +163,7 @@ describe('save_file → history → log → on_save', () => {
         assert.equal(fs.readFileSync(current, 'utf-8'), 'hello');
 
         // 2. Снимок в history/YYYY-MM-DD, содержимое идентично текущему
-        const day = new Date().toISOString().slice(0, 10);
+        const day = new Date().toLocalDay();
         const historyDir = path.join(tmp, 'PLAIN', '.note.smoke', 'history', day);
         assert.ok(fs.existsSync(historyDir), 'папка history за сегодня');
         const snapshots = fs.readdirSync(historyDir).filter(f => f.endsWith('.smoke'));
@@ -221,7 +221,7 @@ describe('save_file → history → log → on_save', () => {
         const current = path.join(tmp, 'PLAIN', 'note.smoke');
         assert.equal(fs.readFileSync(current, 'utf-8'), 'hello v2');
 
-        const day = new Date().toISOString().slice(0, 10);
+        const day = new Date().toLocalDay();
         const historyDir = path.join(tmp, 'PLAIN', '.note.smoke', 'history', day);
         const snapshots = fs.readdirSync(historyDir).filter(f => f.endsWith('.smoke'));
         assert.equal(snapshots.length, 2, 'два снимка после двух сохранений');
@@ -238,7 +238,7 @@ describe('save_file → history → log → on_save', () => {
 });
 
 describe('лог-фасад: logs / read_log_entry / append_log_includes', () => {
-    const day = new Date().toISOString().slice(0, 10);
+    const day = new Date().toLocalDay();
 
     it('logs({mode: "dates"}) содержит сегодня', async () => {
         const dates = await WORK.logs({ mode: 'dates' });
@@ -442,7 +442,7 @@ describe('мультифайл на чистых логах: save_message / save
         const row = await WORK.save_message({ message: marker });
         assert.equal(row.content, marker);
         assert.ok(!row.path, 'без path — нет файла');
-        const bodies = await WORK.logs({ mode: 'bodies', day: new Date().toISOString().slice(0, 10) });
+        const bodies = await WORK.logs({ mode: 'bodies', day: new Date().toLocalDay() });
         assert.ok(bodies.some(r => r.content === marker), 'запись видна в logs(bodies)');
     });
 

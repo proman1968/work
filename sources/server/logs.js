@@ -8,7 +8,8 @@
 import { $item } from '../core.js';
 import { FS } from './index.js';
 
-export const today = () => new Date().toISOString().slice(0, 10);
+/** Сегодня по местному времени сервера — как папки дня при записи (save_data_file: toISOTimezoneString), не UTC. */
+export const today = () => new Date().toLocalDay();
 
 /**
  * includes из query/post: массив путей, JSON-строка или один путь.
@@ -81,7 +82,7 @@ export function resolveDays(params = {}) {
         const cur = new Date(params.from + 'T12:00:00');
         const end = new Date(to + 'T12:00:00');
         while (cur <= end) {
-            days.push(cur.toISOString().slice(0, 10));
+            days.push(cur.toLocalDay());
             cur.setDate(cur.getDate() + 1);
         }
         return days;

@@ -1,9 +1,8 @@
-import { parseFormSpec } from '/$server/$folder/$file//$task/task.js';
-
 export default {}
 
 ODA({
     is: 'item-editor-form',
+    imports: 'oda//editor-form.js',
     template: /*html*/`
     <style>
         :host {
@@ -17,21 +16,13 @@ ODA({
         }
     </style>
     <item-editor-form-field-container ~if="!spec" ~for="dataAccessNode?.children" :data-access-node="$for?.item"></item-editor-form-field-container>
-    <item-editor-form-field-container ~if="spec" ~for="specNodes" :data-access-node="$for?.item"></item-editor-form-field-container>
+    <oda-editor-form ~if="spec" :metadata="spec" :data="values"></oda-editor-form>
     `,
     dataAccessNode: null,
-    /** Мета-спека из content блока (parseFormSpec); legacy — dataAccessNode. */
+    /** Мета-спека формы: data.metadata (массив полей oda-editor-form); иначе legacy — dataAccessNode. */
     get spec() {
-        if (this._specData !== this.data) {
-            this._specData = this.data;
-            try {
-                this._specCache = parseFormSpec(this.data?.content);
-            }
-            catch {
-                this._specCache = null;
-            }
-        }
-        return this._specCache;
+        const m = this.data?.metadata;
+        return Array.isArray(m) && m.length ? m : null;
     },
     /** Значения — объект блока (общий с data.values → $pdp.result → APPROVE). */
     get values() {
@@ -41,23 +32,7 @@ ODA({
     },
     /** Снимок значений для $pdp.result/APPROVE. */
     get result() {
-        return { ...(this.values || {}) };
-    },
-    /** Адаптеры полей спеки под дерево dataAccessNode: значения — общий объект values. */
-    get specNodes() {
-        const spec = this.spec;
-        const values = this.values ?? {};
-        if (!spec || !Array.isArray(spec.fields))
-            return [];
-        return spec.fields.map(f => ({
-            id: f.id,
-            label: f.label || f.id,
-            field: { type: f.type || 'String', options: f.options || [], other: f.other || null, placeholder: f.placeholder || '', required: !!f.required },
-            children: [],
-            getValue: async () => values[f.id] ?? '',
-            setValue: v => { values[f.id] = v; },
-            peek: () => values[f.id] ?? '',
-        }));
+        return this.$('oda-editor-form')?.result || { ...(this.values || {}) };
     },
 });
 

@@ -1,0 +1,16 @@
+<meta charset="UTF-8">
+<script type="module" src="../../../oda.js"></script>
+<script type="module" src="./radio.js"></script>
+<oda-tester>
+    <oda-radio-input id="rg"></oda-radio-input>
+</oda-tester>
+<script type="module">
+    rg.meta = {
+        options: [
+            { value: 'one', label: 'Первый', desc: 'Описание первого' },
+            { value: 'two', label: 'Второй' },
+        ],
+        other: { label: 'Свой ответ' },
+    };
+    rg.value = 'one';
+</script>

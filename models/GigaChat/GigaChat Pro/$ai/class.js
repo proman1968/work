@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:gigachat',
     label: 'GigaChat Pro',
 
     model: 'GigaChat-Pro',

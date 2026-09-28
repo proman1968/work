@@ -1,34 +1,32 @@
-# work-prompt-bar — composer чата
+# work-prompt-bar — единый композер WORK
 
-## Что это
+## 1. Что это
 
-ODA-компонент строки ввода: текст, вложения, модель, effort, опционально контекст и TTS. Технически — `~/lib/prompt-bar`; прикладное — один composer для class-chat и микрочата.
+ODA-компонент ввода сообщения — один для чата класса и микрочата задачи (`.task`): поле, вложения, получатели, модель, уровень рассуждения, режим, диктовка, отправка/стоп. Технически — `~/lib/prompt-bar`.
 
-## Зачем это нужно
+## 2. Зачем это нужно
 
-Жест кнопки выполняется в баре ([`rules.md`](/rules/rules.md/~/handlers/pages/form/) B.1.3). Хост не копирует picker и не проксирует `fire('select-model')`.
+Один вид и одно поведение ввода по всей системе; хост задаёт только данные (свойства), жесты выполняет бар ([`rules.md`](/rules/rules.md/~/handlers/pages/form/) B.1.3).
 
-## Как это работает
+## 3. Как это работает
 
-- Модель: `selectModel($event)` → `WORK.showDropdown(item-tree, TITLE, e)` на нативном pointerdown; `this.model = item.path`. Лист без `chat` в `capabilities` не выбирается (image-only — агент `image`).
-- Effort: кнопка только если в `capabilities` модели есть флаг `effort`; пока список грузится — скрыта. Цикл `off/low/medium/high` → `this.effort`.
-- TTS: цикл `off/local/browser` в `this.ttsMode`.
-- Usage: кнопка-кольцо (`showUsage`) → `showStats` → `WORK.showDropdown(work-usage-panel, {}, кнопка)` — якорь-элемент, не координаты курсора (popover при нехватке места снизу открывается над якорем). Панель получает `host: this` и читает `stats` живым геттером `host.usageStats` — доехавший `maxTokens` модели обновляет открытый попап; закрытие по клику снаружи/Esc — стандартный стек popover.
-- Mic: пустая кнопка / Enter — запись; при записи textarea readonly, interim+final в `value`, таймер справа; **Esc** — отрезать последнее слово от `value` (и sync `final_transcript`), запись не стопать; стоп — без send; отправка отдельно. Beep start/end.
-- Вложения: кнопка / Ctrl+Enter — диалог; Ctrl+V картинки из буфера → `files` (имена `paste-…` для скриншотов). Текст без image — обычный paste.
-- Хост: `model` / `effort` биндит хост (два-way `::` если свойство хоста — хранилище вроде `$save`; при асинхронном источнике, как файл `.task`, — one-way `:` вниз + `@model-changed` / `@effort-changed` вверх, эхо пустого значения хост игнорирует); `::tts-mode`; `:is-build` — `success` на textarea в режиме исполнения; `:pending` — хост; `fire` только send / stop / clear / prompt-key.
+- Поле: автовысота (до 40% окна), Enter — `send`, Shift+Enter — перенос, Ctrl+Enter — выбор файлов, Esc — `stop` (если `pending`), иначе очистить (`clear`); прочие клавиши — `prompt-key` (история в чате).
+- Вложения: «+», вставка картинок из буфера (имена `paste-…`), перетаскивание файлов → `files`.
+- `ai`: пилюля модели (`WORK.showDropdown(item-tree)`, лист без `chat` в capabilities не выбирается) → `this.model`; пилюля рассуждения — только если у модели флаг `effort` → `this.effort`.
+- `modes` (`[{ id, label, icon, hint }]`) — пилюля режима → `this.mode`.
+- Хост слушает `model-changed` / `effort-changed` / `mode-changed` (или биндит `::`).
+- Диктовка — Web Speech API (кнопка только если браузер умеет); в обычном чате (не `ai`) параллельно пишется аудиофайл во вложения. Esc при записи — отрезать последнее слово.
+- `receivers` — чипы получателей (чат).
 
-## Из чего это состоит
+## 4. Из чего это состоит
 
-- [`prompt-bar.js`](/$server/$folder/lib/prompt-bar/prompt-bar.js/~/handlers/pages/form/) — `work-prompt-bar` + `work-usage-panel` (контент попапа usage)
-- `beep-start.mp3` / `beep-end.mp3` — сигнал включения и выключения записи
+- [`prompt-bar.js`](/$server/$folder/lib/prompt-bar/prompt-bar.js/~/handlers/pages/form/) — `work-prompt-bar`, `work-prompt-menu` (выпадающий выбор), `MicAudioController`.
+- `beep-start.mp3` / `beep-end.mp3` — сигнал записи.
 
-## В каком это состоянии
+## 5. В каком это состоянии
 
-- ✅ picker модели, effort, TTS внутри бара
-- ✅ хост биндит свойства, не жесты
-- ✅ Ctrl+V image → вложения
+Используется чатом класса (`$structure/…/chat`) и микрочатом задачи (`microchat-panel`). TTS и индикатор контекста из бара убраны (контекст — кольцо в шапке задачи).
 
-## Дальнейшие планы
+## 6. Дальнейшие планы
 
 - —

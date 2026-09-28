@@ -68,7 +68,19 @@
                     console.warn(err);
                 }
                 pushHandler.remove();
+                return;
             }
+            // уведомление с адресом (задача): вкладка с ним — в фокус, иначе открыть
+            const url = event.notification.data?.url;
+            if (url)
+                event.waitUntil((async () => {
+                    const target = new URL(url, self.location.origin).href;
+                    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+                    const open = wins.find(c => c.url === target);
+                    if (open)
+                        return open.focus();
+                    return self.clients.openWindow(target);
+                })());
         });
     self.addEventListener(
         'notificationclose', async (event) => {
@@ -162,6 +174,12 @@
                 }
             } break;
             default: {
+                // уведомления задач — только когда пользователь не смотрит на WORK (нет видимой вкладки в фокусе)
+                if (String(data.type || '').startsWith('task:')) {
+                    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+                    if (wins.some(c => c.visibilityState === 'visible' && c.focused))
+                        return;
+                }
                 await self.registration.showNotification(data.title || 'Внимание!', {
                     tag,
                     icon: '/icon-192.png',

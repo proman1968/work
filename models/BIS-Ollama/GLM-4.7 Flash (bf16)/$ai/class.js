@@ -5,7 +5,6 @@
  * Здесь только модельные параметры: model, maxTokens, capabilities.
  */
 export default {
-    icon: 'ai:glm',
     label: 'GLM-4.7 Flash (bf16)',
 
     model: 'glm-4.7-flash:bf16',

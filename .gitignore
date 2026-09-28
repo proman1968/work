@@ -2,10 +2,12 @@ node_modules/
 
 # Secrets and local config
 /#system/mail.json
+/#system/server.json
 /#system/vapid_keys.json
 /#system/settings.json
 /services/AI/GigaChat/$service/#system/settings.json
 .env
+**/#secret/
 
 # Local user profiles (runtime data)
 users/*/
@@ -39,3 +41,4 @@ torus/binnet/models/
 
 .vscode/tasks.json
 package-lock.json
+/#system/oauth/

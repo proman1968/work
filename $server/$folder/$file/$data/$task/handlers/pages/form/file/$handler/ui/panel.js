@@ -1,170 +1,128 @@
-import { buildUsageStats } from './usage.js';
-import { TtsController } from './tts.js';
+/**
+ * Нижняя панель задачи: единый композер WORK (work-prompt-bar из ~/lib/prompt-bar) + строка подсказки/«Продолжить».
+ * Режим, модель, уровень рассуждения — свойства бара → configure задачи.
+ * Во время вопроса агента текст — ответ, во время подтверждения — отказ с комментарием.
+ */
+import { findShell } from './util.js';
+
+export const MODES = [
+    { id: 'auto', label: 'Авто', icon: 'carbon:flash', hint: 'Рабочие данные — без вопросов; изменения системы и опасные действия — с подтверждением' },
+    { id: 'ask', label: 'Спрашивать', icon: 'carbon:locked', hint: 'Каждое действие с побочным эффектом — с вашим подтверждением' },
+    { id: 'plan', label: 'План', icon: 'carbon:view', hint: 'Только исследование и план, без изменений' },
+];
 
 ODA({ is: 'microchat-panel',
+    imports: 'oda//button, oda//icon, ~/lib//prompt-bar',
     template: /*html*/`
         <style>
-            :host {
-                @apply --vertical;
-                padding: 8px;
-            }
-            .action-bar { @apply --horizontal; gap: 6px; align-items: stretch; padding: 0 2px 6px; }
+            :host { @apply --vertical; gap: 4px; }
+            .foot { @apply --horizontal; @apply --muted; align-items: center; gap: 8px; font-size: x-small; min-height: 22px; padding: 0 8px; }
+            .go { border-radius: 999px; padding: 0 12px; height: 24px; font-size: x-small; border: 1px solid var(--subtle-border); }
         </style>
-        <div class="action-bar" ~if="!pending && actionButton?.label" horizontal>
-            <oda-button border hide-icon flex style="border-radius: 16px;"
-                :color-mode="actionButton.colorMode"
-                :label="actionButton.label"
-                @tap="sendAction(true)"></oda-button>
-            <oda-button ~if="actionButton.cancel !== false" border error-invert icon="icons:close" :icon-size="iconSize * .8" style="border-radius: 50%" 
-                @tap="sendAction(false)"></oda-button>
-        </div>
-        <work-prompt-bar :ai="true" :show-usage="true" :show-tts="true"
-            ::value ::files :pending :is-build
-            :model="data?.model" :effort="data?.effort" ::tts-mode
-            :usage-stats="usageStats"
-            ready-icon="eva:f-arrow-upward"
-            @model-changed.stop="onModelChanged" @effort-changed.stop="onEffortChanged"
+        <work-prompt-bar ai ::value ::files :pending="busy" :placeholder
+            :model="data?.model" :effort="data?.effort" :modes :mode
+            @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
             @send="send" @stop="stop"></work-prompt-bar>
+        <div class="foot">
+            <span flex>{{hint}}</span>
+            <oda-button ~if="canContinue" class="go" icon="carbon:play" :icon-size="12" label="Продолжить" @tap="resume"></oda-button>
+        </div>
     `,
-    imports: 'oda//button, ~/lib//prompt-bar',
     data: null,
-    pending: {
-        get() { return !!this.$pdp.pending; },
-        set(n) { this.$pdp.pending = n; },
-    },
     files: [],
     value: '',
-    iconSize: 24,
-    ttsMode: {
-        $def: 'off',
-        set(n) {
-            if (n === 'off') this._tts()?.cancel();
-        },
+    modes: MODES,
+    $item: null,
+    get status() { return this.$pdp?.status || this.data?.status || 'idle'; },
+    get busy() { return this.status === 'running'; },
+    get waiting() { return this.status === 'waiting' ? this.data?.waiting : null; },
+    get mode() { return this.data?.mode || 'auto'; },
+    get canContinue() {
+        return !this.busy && !this.waiting && ['stopped', 'error', 'limit'].includes(this.status) && this.data?.items?.length > 0;
     },
-    $item: {
-        $def: null,
-        set(n) {
-            n?.listen('chat.delta', e => {
-                this.pending = true;
-                this._tts().onDelta(e);
-            });
-            n?.listen('chat.done', () => this._onDone());
-        },
+    get placeholder() {
+        if (this.waiting?.kind === 'question')
+            return 'Ответьте выше или напишите свой ответ…';
+        if (this.waiting?.kind === 'approval')
+            return 'Напишите, что сделать иначе (действие будет отклонено)…';
+        return this.data?.items?.length ? 'Ответьте агенту…' : 'Что нужно сделать?';
     },
-    /** Строковый stop — APPROVE. `stop: true` (вопрос/ответ) — штатная пауза, кнопки нет. «Продолжить» только halt stop|crash. */
-    get actionButton() {
-        if (this.pending) return null;
-        const focus = this.$pdp.focusedBlock;
-        const stop = focus?.stop;
-        if (typeof stop === 'string') {
-            if (this.$pdp.streamTarget) return null;
-            return { label: stop, role: 'APPROVE', colorMode: 'success-invert' };
+    get hint() {
+        switch (this.status) {
+            case 'running': return 'Агент работает · сообщение встанет в очередь · Esc — остановить';
+            case 'waiting': return this.waiting?.kind === 'approval' ? 'Нужно ваше разрешение — выше в ленте' : 'Агент ждёт ответа — выше в ленте';
+            case 'stopped': return 'Остановлено';
+            case 'error': return 'Работа прервана ошибкой';
+            case 'limit': return 'Достигнут лимит шагов';
+            default: return 'Enter — отправить · Shift+Enter — новая строка';
         }
-        if (this.$pdp.streaming || focus?.type === 'prompt') return null;
-        if (stop === true) return null;
-        const halt = this.data?.halt;
-        if (halt !== 'stop' && halt !== 'crash') return null;
-        return { label: 'Продолжить', colorMode: 'info-invert', cancel: false, role: 'AI' };
     },
-    get userRole() {
-        return String(this.role || this.$item.role || 'USER').toUpperCase();
-    },
-    get isBuild() {
-        const m = this.data?.mode;
-        return m === 'build' || m === 'do';
-    },
-    /** form в ленте — сдача живых контролов, даже если фокус уже report */
-    get isFormAction() {
-        return !!this.$pdp.formBlock;
-    },
-    /** Источник модели/effort — файл (data), не двусторонний биндинг: эхо пустого значения от бара игнорируется */
-    onModelChanged(e) {
-        const n = e.detail?.value;
-        if (!n || !this.data || this.data.model === n) return;
-        this.data.model = n;
-        this.$item?.fetch('change_model', { model: n });
-    },
-    onEffortChanged(e) {
-        const n = e.detail?.value;
-        if (!n || !this.data || this.data.effort === n) return;
-        this.data.effort = n;
-        this.$item?.fetch('change_effort', { effort: n });
-    },
-    get usageStats() { return buildUsageStats(this.data, () => this.usageStats = undefined); },
     attached() {
-        this._focus();
+        this.focus();
     },
-    _focus() {
+    focus() {
         this.$('work-prompt-bar')?.focusInput();
     },
-    _tts() {
-        return this._ttsController ??= new TtsController(this);
+    _set(key, v) {
+        if (!v || !this.data || this.data[key] === v)
+            return;
+        this.data[key] = v;
+        this.render?.();
+        this.$item?.fetch('configure', { [key]: v });
     },
-    async sendAction(accept) {
-        const { role } = this.actionButton;
-        // снимок до pending: ~html на form сбрасывает контролы к option[0]
-        let prompt;
-        if (this.isFormAction && accept !== false)
-            prompt = JSON.stringify(this.$pdp.result || {});
-        this.pending = true;
-        await this.$item.fetch('prompt', { accept, prompt, role });
-        this._focus();
-    },
-
-    async send() {
-        if (this.pending) return;
-        const files = this.$('work-prompt-bar')?.files ?? this.files;
-        const text = String(this.value ?? '').trim();
-        if (!text && !files.length) return;
+    onModel(e) { this._set('model', e.detail?.value); },
+    onEffort(e) { this._set('effort', e.detail?.value); },
+    onMode(e) { this._set('mode', e.detail?.value); },
+    async _upload(files) {
         const owner = await Promise.resolve(this.$item.$owner);
-        const save = (typeof owner?.save_file === 'function' ? owner : this.$item);
-        const paths = [];
+        const target = typeof owner?.save_file === 'function' ? owner : this.$item;
+        const out = [];
         for (const file of files) {
             if (file.internalPath) {
-                const p = file.internalPath;
-                paths.push(p.startsWith('/') ? p : '/' + p);
+                const p = String(file.internalPath);
+                out.push({ path: p.startsWith('/') ? p : '/' + p, name: file.name });
                 continue;
             }
             if (!(file instanceof File))
                 continue;
-            const log = await save.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
+            const log = await target.save_file(file, { ignore_save_logs: true });
             const path = log?.logFullPath || log?.path;
             if (path)
-                paths.push(path.startsWith('/') ? path : '/' + path);
+                out.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
         }
-
+        return out;
+    },
+    async send() {
+        const bar = this.$('work-prompt-bar');
+        const files = bar?.files ?? this.files;
+        const text = String(this.value ?? '').trim();
+        if (!text && !files.length)
+            return;
         this.value = '';
         this.files = [];
-        this._tts().cancel();
-
-        this.pending = true;
-        const pipe = await this.$item.pipe;
-        let prompt = text;
-        let agent;
-        const mention = text.match(/^@([a-zA-Z_][\w]*)(?:\s+|$)/);
-        if (mention && pipe?.[mention[1]]?.agent) {
-            agent = mention[1];
-            prompt = text.slice(mention[0].length).trim();
-        }
-        await this.$item.fetch('prompt', {
-            prompt,
-            agent,
-            role: this.userRole,
-            includes: paths.length ? JSON.stringify(paths) : undefined,
-        });
-        this._focus();
+        const shell = findShell(this);
+        const attachments = files.length ? await this._upload(files) : [];
+        // во время работы реплика уходит в очередь (видна в ленте из body.queue), иначе — сразу в ленту
+        if (!this.busy)
+            shell?.optimisticUser(text, attachments);
+        const res = await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments }));
+        if (res?.busy)
+            shell?.toast(res.error);
+        this.focus();
+    },
+    /** Черновик из revert: текст и вложения — обратно в поле. */
+    prefill(res = {}) {
+        if (typeof res.prompt === 'string')
+            this.value = res.prompt;
+        const inc = (res.attachments || []).filter(Boolean);
+        if (inc.length)
+            this.files = inc.map(a => ({ internalPath: a.path || a, name: a.name || String(a.path || a).split('/').pop() }));
+        this.focus();
+    },
+    async resume() {
+        await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: '' }));
     },
     stop() {
-        this.pending = false;
-        if (this.$pdp) {
-            this.$pdp.streaming = false;
-            this.$pdp.streamingText = '';
-        }
-        this._tts().cancel();
         this.$item?.fetch('stop', {});
-    },
-    _onDone() {
-        this.pending = false;
-        this._tts().onDone();
     },
 });

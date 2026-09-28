@@ -247,6 +247,28 @@ ODA({ is: 'oda-markdown-viewer',
     `,
     value: String,
     _mdGen: 0,
+    /**
+     * Клик по ссылке → событие `md-link` { href } на хосте (bubbles, composed, cancelable):
+     * хост-приложение может перехватить навигацию (preventDefault). Shadow root закрыт —
+     * без события снаружи ссылку не увидеть.
+     */
+    _bindLinks(root) {
+        if (!root || root.__mdLinks)
+            return;
+        root.__mdLinks = true;
+        root.addEventListener('click', e => {
+            const a = e.target?.closest?.('a[href]');
+            if (!a || e.button !== 0)
+                return;
+            const ev = new CustomEvent('md-link', {
+                detail: { href: a.getAttribute('href'), ctrl: e.ctrlKey || e.metaKey || e.shiftKey },
+                bubbles: true, composed: true, cancelable: true,
+            });
+            this.dispatchEvent(ev);
+            if (ev.defaultPrevented)
+                e.preventDefault();
+        });
+    },
     get html(){
         if (this.value){
             const gen = ++this._mdGen;
@@ -254,6 +276,7 @@ ODA({ is: 'oda-markdown-viewer',
                 if (gen !== this._mdGen) return;
                 const root = this.$('div');
                 if (!root) return;
+                this._bindLinks(root);
                 try {
                     MathJax.texReset();
                     MathJax.typesetClear();

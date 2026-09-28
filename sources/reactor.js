@@ -187,6 +187,15 @@ if (!('fire' in EventTarget.prototype)) {
                 this.__debounces__[key] = t
             }
         },
+        /** Сбросить вычисленные значения (геттеры) и перерисовать зависимых: this.invalidate('logs', 'items'); без ключей — все. */
+        invalidate: {
+            configurable: false,
+            enumerable: false,
+            writable: false,
+            value: function (...keys) {
+                Reactor.invalidate(this, ...keys);
+            }
+        },
         init_reactive_services: {
             configurable: false,
             enumerable: false,
@@ -206,11 +215,7 @@ if (!('fire' in EventTarget.prototype)) {
                             p(this, prop.value.bind(this));
                     }
                 }
-                if (this.$observers) {
-                    for (let name in this.$observers) {
-                        this[`__observer__` + name];
-                    }
-                }
+
             }
         },
         [R]: {
@@ -351,47 +356,130 @@ export class Reactor extends EventTarget {
         return context.proxy;
     }
 
+    /**
+     * Зависимость: читатель (Reactor._collectorTarget, вычисляемый геттер _collectorKey) прочитал target[key].
+     *   target[R].deps[key]  : Map(reader → Set(readerKey))   — кого сбросить при изменении key;
+     *   reader[R].sources     : Map(source → Set(sourceKey))  — обратный индекс, чтобы отписаться при отключении;
+     *   reader[R].external    : Set(readerKey)                — геттеры читателя, зависящие от чужих данных.
+     */
     static collect_deps(target, key, actor) {
-        if (!Reactor._collectorTarget)
+        const reader = Reactor._collectorTarget;
+        if (!reader)
             return;
-        if (Reactor._collectorTarget === target && Reactor._collectorKey === key)
+        if (reader === target && Reactor._collectorKey === key)
             return;
         if (!actor)
             return;
         const deps = actor.deps;
         let keys = deps[key] ??= new Map();
-        let values = keys.get(Reactor._collectorTarget);
+        let values = keys.get(reader);
         if (!values) {
             values = new Set();
-            deps[key].set(Reactor._collectorTarget, values);
+            keys.set(reader, values);
         }
         values.add(Reactor._collectorKey);
-    }
-
-    static cleanupDeps(target) {
-        const actor = target[R];
-        if (!actor) return;
-        for (const depKey in actor.deps) {
-            const depMap = actor.deps[depKey];
-            if (!depMap) continue;
-            for (const [host, keys] of depMap) {
-                const hostActor = host[R];
-                if (!hostActor?.deps) continue;
-                for (const key of keys) {
-                    const hostDeps = hostActor.deps[key];
-                    if (hostDeps) {
-                        hostDeps.delete(target);
-                        if (!hostDeps.size)
-                            delete hostActor.deps[key];
-                    }
-                }
+        if (reader !== target) {
+            const ra = reader[R];
+            if (ra) {
+                ra.sources ??= new Map();
+                let set = ra.sources.get(target);
+                if (!set)
+                    ra.sources.set(target, set = new Set());
+                set.add(key);
+                (ra.external ??= new Set()).add(Reactor._collectorKey);
             }
         }
-        actor.deps = {};
     }
 
-    static _notifyBatch = new Set();
-    static _notifyScheduled = false;
+    /**
+     * Отключение читателя (элемент ушёл из DOM): отписаться от чужих данных и убрать себя из hosts
+     * значений, которые держит. Собственные зависимости (геттер ← свои свойства) сохраняются:
+     * элемент, вернувшийся в DOM (~if/~is/слот), продолжает обновляться. Геттеры, читавшие чужие
+     * данные, сбрасываются — при возврате пересчитаются и подпишутся заново (Reactor.reattach).
+     */
+    static cleanupDeps(target) {
+        const actor = target?.[R];
+        if (!actor)
+            return;
+        if (actor.sources) {
+            for (const [source, keys] of actor.sources) {
+                const sa = source?.[R];
+                if (!sa?.deps)
+                    continue;
+                for (const key of keys) {
+                    const map = sa.deps[key];
+                    if (!map)
+                        continue;
+                    map.delete(target);
+                    if (!map.size)
+                        delete sa.deps[key];
+                }
+            }
+            actor.sources.clear();
+        }
+        for (const value of Object.values(actor.cache)) {
+            const hosts = value?.[R]?.hosts;
+            if (hosts) {
+                const i = hosts.indexOf(target);
+                if (i >= 0)
+                    hosts.splice(i, 1);
+            }
+        }
+        if (actor.external) {
+            for (const key of actor.external)
+                Reactor._dropCache(target, key);
+            actor.external.clear();
+        }
+        actor.detached = true;
+    }
+
+    /** Возврат в DOM: снова стать host у своих значений (их внутренние изменения будят элемент). */
+    static reattach(target) {
+        const actor = target?.[R];
+        if (!actor?.detached)
+            return false;
+        actor.detached = false;
+        for (const value of Object.values(actor.cache)) {
+            const hosts = value?.[R]?.hosts;
+            if (hosts && !hosts.includes(target))
+                hosts.push(target);
+        }
+        return true;
+    }
+
+    /** Сброс кэша геттера и зависящих от него геттеров того же объекта — без уведомлений. */
+    static _dropCache(target, key, seen = new Set()) {
+        const actor = target[R];
+        if (!actor || seen.has(key))
+            return;
+        seen.add(key);
+        if (!actor.props[key]?.get?.getter)
+            return;
+        actor.cache[key] = undefined;
+        const readers = actor.deps[key]?.get(target);
+        if (readers)
+            for (const k of readers)
+                Reactor._dropCache(target, k, seen);
+    }
+
+    /**
+     * Публичный сброс вычисленного значения: геттер key пересчитается при следующем чтении,
+     * зависящие геттеры (свои и чужие) сбрасываются, владелец и hosts уведомляются.
+     * Замена прямой правки target[R].cache в приложениях.
+     */
+    static invalidate(target, ...keys) {
+        const actor = target?.[R];
+        if (!actor)
+            return;
+        if (!keys.length)
+            keys = Object.keys(actor.cache);
+        for (const key of keys) {
+            if (actor.cache[key] === undefined && !actor.deps[key])
+                continue;
+            actor.cache[key] = undefined;
+            Reactor.reset_deps(target, key);
+        }
+    }
 
     static _notifyTarget(target) {
         if (!target)
@@ -428,7 +516,7 @@ export class Reactor extends EventTarget {
             }
         }
 
-        // Уведомляем с дедупликацией — _notifyBatch гарантирует один вызов за microtask
+        // Уведомление: notify компонента троттлит рендер (один за кадр)
         this._notifyTarget(target);
         let hosts = actor.hosts;
         if (!hosts) return;
@@ -662,36 +750,47 @@ export class Reactor extends EventTarget {
 }
 
 // ===== Статические методы и утилиты =====
-Object.equal = Reactor.equal = function (a, b, recurse = 1) {
+/**
+ * Равенство для set(): примитивы — по значению; Date — по времени; функции — по тексту;
+ * объекты/массивы — поэлементно на глубину recurse (по умолчанию 1: сравниваются ключи верхнего
+ * уровня, вложенные объекты — по ссылке/Date/тексту функции). Прокси одного объекта равны.
+ * Циклы безопасны (visited). Замена прежнего глобального флага реентерабельности.
+ */
+Object.equal = Reactor.equal = function equal(a, b, recurse = 1, seen) {
     if (a === b) return true;
     if (a == null || b == null) return false;
-    if (typeof a !== 'object' || typeof b !== 'object') return false;
-
-    // Защита от реентерабельности: если equal уже выполняется,
-    // используем простое сравнение ссылок
-    if (Reactor._inEqual)
-        return a === b;
-    Reactor._inEqual = true;
+    const ta = typeof a;
+    if (ta !== typeof b) return false;
+    if (ta === 'function')
+        return a.constructor === b.constructor && a.toString() === b.toString();
+    if (ta !== 'object') return Number.isNaN(a) && Number.isNaN(b);
+    if (a[R] && a[R]?.target === b[R]?.target)
+        return true;
+    if (a instanceof Date || b instanceof Date)
+        return a instanceof Date && b instanceof Date && a.valueOf() === b.valueOf();
+    // Сущности (Reactor, DOM, классы) равны только себе: их ключи — геттеры с побочными эффектами
+    const pa = Object.getPrototypeOf(a), pb = Object.getPrototypeOf(b);
+    const plain = p => p === Object.prototype || p === Array.prototype || p === null;
+    if (!plain(pa) || !plain(pb)) return false;
+    if (recurse <= 0) return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    // Реентерабельность (геттер внутри сравнения снова зовёт equal) — по ссылке, как прежде
+    if (equal.busy && !seen) return false;
+    seen ??= new Set();
+    if (seen.has(a)) return true;
+    seen.add(a);
+    const top = !equal.busy;
+    equal.busy = true;
     try {
-        if (a[R]) {
-            if (a[R]?.target === b[R]?.target)
-                return true;
-        }
-        if (a instanceof Function && a.constructor === b.constructor)
-            return a.toString() === b.toString();
-        if (a instanceof Date && a.constructor === b.constructor)
-            return a.valueOf() === b.valueOf();
-        if (recurse > 0) {
-            const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-            for (let key of keys)
-                if (!Reactor.equal(b[key], a[key], recurse - 1))
-                    return false;
-            return true;
-        }
-        return false;
+        // отсутствующий ключ ≡ undefined (как прежде): {a:1} равно {a:1, b:undefined}
+        for (const key of new Set([...Object.keys(a), ...Object.keys(b)]))
+            if (!equal(a[key], b[key], recurse - 1, seen))
+                return false;
+        return true;
     }
     finally {
-        Reactor._inEqual = false;
+        if (top)
+            equal.busy = false;
     }
 }
 
@@ -909,6 +1008,13 @@ Array: {
 
 // ===== Расширение Date =====
 Date: {
+    /** День YYYY-MM-DD по местному времени (как папки журнала/истории на сервере), не по UTC. */
+    Object.defineProperty(Date.prototype, 'toLocalDay', {
+        enumerable: false, configurable: true,
+        value: function () {
+            return this.toISOTimezoneString().slice(0, 10);
+        }
+    });
     Object.defineProperty(Date.prototype, 'toISOTimezoneString', {
         enumerable: false, configurable: true,
         value: function () {

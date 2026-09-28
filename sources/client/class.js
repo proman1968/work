@@ -21,7 +21,7 @@ export class $class extends $folder{
             params = { day: params };
         params = {...params};
         if (!params.day && !params.from && !params.days?.length && !params.mode)
-            params.day = new Date().toISOString().slice(0, 10);
+            params.day = new Date().toLocalDay();
         return this.fetch('logs', params);
     }
     read_log_bodies(params = {}){
@@ -33,7 +33,7 @@ export class $class extends $folder{
         return this.logs({ ...params, mode: 'index' });
     }
     log_files(day){
-        day ??= new Date().toISOString().slice(0, 10);
+        day ??= new Date().toLocalDay();
         return this.get_item(`/~/logs/${day}/*.logs`);
     }
     get admins(){

@@ -18,6 +18,14 @@ import {
 import { DEV_MODE, setDevMode } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
 
+/**
+ * Ядро агента (sources/modules/agent) для слоёв дерева: class.js грузятся как data:-модули
+ * и не могут импортировать относительные пути — берут ядро отсюда.
+ */
+globalThis.WORK_AGENT ??= () => import('../modules/agent/session.js');
+globalThis.WORK_AGENT_CORE ??= () => import('../modules/agent/index.js');
+globalThis.WORK_MCP ??= () => import('../modules/agent/mcp-pool.js');
+
 /** Прототип HTTP/WS-сессии (`$server.sessions[ssid]` / `params.session`). */
 const sessionProto = {
     /** Отправить JSON только в сокеты этой сессии. */

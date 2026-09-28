@@ -12,19 +12,25 @@ export default {
 
     SCHEMA: {
         get_weather: {
-            description: 'Прогноз погоды (текущая и на завтра). Можно указать город или использовать местоположение по умолчанию.',
+            description: 'Прогноз погоды (текущая, сегодня, завтра). Место обязательно: город или координаты lat/lon (местоположение пользователя — из контекста).',
             params: {
                 type: 'object',
                 properties: {
-                    city: { type: 'string', description: 'Название города (необязательно)' },
+                    city: { type: 'string', description: 'Название города' },
+                    lat: { type: 'number', description: 'Широта (вместо города)' },
+                    lon: { type: 'number', description: 'Долгота (вместо города)' },
                 },
             },
         },
     },
 
-    /** Прогноз погоды через wttr.in */
+    /** Прогноз погоды через wttr.in. Без места — ошибка (не подставлять молча чужой город). */
     async get_weather(params = {}) {
-        const city = String(params.city || params.query || '').trim() || 'Moscow';
+        const hasCoords = params.lat != null && params.lon != null && params.lat !== '' && params.lon !== '';
+        const city = String(params.city || params.query || '').trim()
+            || (hasCoords ? Number(params.lat).toFixed(4) + ',' + Number(params.lon).toFixed(4) : '');
+        if (!city)
+            return { error: 'get_weather: укажи city или lat/lon (местоположение пользователя есть в контексте)' };
         const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
         const wttrUrl = 'https://wttr.in/' + encodeURIComponent(city) + '?format=j1&lang=ru';
         const response = await fetch(wttrUrl, {

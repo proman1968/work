@@ -28,7 +28,7 @@ export default {
             placeholder: "GIGACHAT_API_PERS"
         }]
     },
-    icon: "carbon:cloud-upload",
+    icon: "odant:logo",
     label: "odant",
     form: "editor",
     async list_remote(params = {}) {
@@ -71,5 +71,5 @@ export default {
       },
     protocol: "openai",
     baseUrl: "https://models.odant.org/v1/chat/completions",
-    apiKey: "sk-bf-b988107b-9e43-4e36-813c-940fb07313d1"
+    apiKey: "secret:odant.json"
 }

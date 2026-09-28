@@ -410,9 +410,15 @@ ODA({is: 'work-form',
                 const ext = String(this.$item?.ext || '').toLowerCase();
                 const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
                 await n.importView(is);
-                el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
-                this.controls[n.id] = el;
-                this.appendChild(el);
+                // Сеттер асинхронный: пока грузился модуль, параллельный вызов (роль, повторный $item)
+                // мог уже создать это представление — второй экземпляр не нужен.
+                el = this.controls[n.id];
+                if (!el) {
+                    el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
+                    this.controls[n.id] = el;
+                }
+                if (!el.isConnected)
+                    this.appendChild(el);
             }
             else if (!el.isConnected)
                 this.appendChild(el);

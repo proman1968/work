@@ -10,7 +10,8 @@
     "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
     "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-sync.ps1",
-    "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1"
+    "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1",
+    "test:ui": "node tests/ui/run.mjs"
   },
   "keywords": [],
   "author": "",

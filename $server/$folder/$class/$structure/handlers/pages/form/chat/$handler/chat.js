@@ -364,7 +364,8 @@ ODA({is: 'oda-chat',
                 body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
                 const taskFile = new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' });
                 this.clear();
-                await this.$pdp.$item.save_file(taskFile, params);
+                const log = await this.$pdp.$item.save_file(taskFile, params);
+                this._awaitNewTask(log?.logFullPath || log?.path);
             } else {
                 if (list.length) {
                     const formData = new FormData();
@@ -383,6 +384,25 @@ ODA({is: 'oda-chat',
             this.awaitTask = false;
         }
         this.$('#ribbon').scrollDown = true;
+    },
+    /**
+     * Новая задача сохранена: день — из пути файла (…/YYYY-MM-DD/….task), а не из часов браузера.
+     * Нет дня в ленте — добавить (chat-day раскроет карточку, пока awaitTask). Страховка: 15 с — снять ожидание.
+     */
+    _awaitNewTask(path) {
+        const day = String(path || '').match(/\/(\d{4}-\d{2}-\d{2})\/[^/]+\.task$/)?.[1];
+        const ribbon = this.$('#ribbon');
+        if (day && ribbon && !ribbon.dateList.includes(day)) {
+            ribbon.dateList = [...ribbon.dateList, day].sort();
+            ribbon.render();
+        }
+        clearTimeout(this._awaitTimer);
+        this._awaitTimer = setTimeout(() => {
+            if (!this.awaitTask)
+                return;
+            this.awaitTask = false;
+            ODA.showMessage?.('Задача создана' + (path ? ': ' + path : '') + ' — карточка не появилась в ленте, откройте из журнала');
+        }, 15000);
     },
     async location() {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -504,20 +524,22 @@ ODA({is: 'chat-ribbon',
     async refreshDates(){
         if (!this.$item)
             return false;
-        const today = new Date().toISOString().slice(0, 10);
+        // «сегодня» — по местному времени (папки журнала на сервере — по местной дате, не UTC)
+        const today = new Date().toLocalDay();
         let dates;
         if (this.dateList.length) {
-            dates = this.dateList.filter(d => d <= today);
-            if (dates.includes(today) && dates.length === this.dateList.length)
+            if (this.dateList.includes(today))
                 return false;
+            dates = [...this.dateList];
         } else {
-            delete this.$item[R]?.cache?.logs_dates;
+            this.$item.invalidate?.('logs_dates');
             dates = await this.$item.fetch('logs', { mode: 'dates' });
-            // dates на сервере — по убыванию; в ленте дни — от старых к новым, не дальше сегодня
-            dates = dates.slice().reverse().filter(d => d <= today);
+            // dates на сервере — по убыванию; в ленте дни — от старых к новым.
+            // Дни с сервера не отбрасываем: папка дня есть — есть записи (пояса браузера и сервера могут различаться)
+            dates = (Array.isArray(dates) ? dates : []).slice().reverse();
         }
         if (!dates.includes(today))
-            dates = [...dates, today];
+            dates = [...dates, today].sort();
         this.dateList = dates;
         this.render();
         return true;

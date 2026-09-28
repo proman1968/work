@@ -6,8 +6,7 @@ ODA({is: "oda-checkbox", extends: 'oda-icon', imports: 'oda//icon',
         return this.icons.unchecked;
     },
     $public: {
-        value: {
-            $type: Boolean,
+        value: {            $type: Boolean,
             set(n) {
                 if (!this.threeStates)
                     this.state = n ? 'checked' : 'unchecked';
@@ -28,6 +27,7 @@ ODA({is: "oda-checkbox", extends: 'oda-icon', imports: 'oda//icon',
                     this.state = 'unchecked';
             }
         },
+        disabled: false,
     },
     get states(){
         return this.props.state.list;
@@ -40,6 +40,7 @@ ODA({is: "oda-checkbox", extends: 'oda-icon', imports: 'oda//icon',
     $listeners: {
         tap(e) {
             e.stopPropagation();
+            if (this.disabled) return;
             if (this.threeStates) {
                 let newStateIndex = (this.states.indexOf(this.state) + 1) % 3;
                 this.state = this.states[newStateIndex];
