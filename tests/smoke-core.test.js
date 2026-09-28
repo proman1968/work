@@ -376,7 +376,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         const legacy = await mbox.get_storage({ role: 'USER' });
         assert.equal(legacy.path, zone.path, 'алиас возвращает ту же папку');
         const def = await mbox.work_zone({});
-        assert.equal(slash(def.path), metaPath + '/GUESTS', 'без роли — папка GUESTS');
+        assert.equal(slash(def.path), metaPath + '/GUEST', 'без роли — папка GUEST');
         for (const role of ['ADMIN', 'BOSS', 'GUEST']) {
             const z = await mbox.work_zone({ role });
             assert.equal(slash(z.path), metaPath + '/' + role, role + '-зона — папка ' + role + ' в мета');
@@ -403,18 +403,21 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
     });
 
-    it('GUEST видит guests и логи, но не work; пишет только в guests', async () => {
+    it('GUEST видит систему и зону GUEST, но не зону USER; пишет только в GUEST', async () => {
         const gbox = await WORK.get_item('/GUESTBOX');
-        const guests = await gbox.meta_folder._get_next_item('guests', FS.$folder);
-        const work = await gbox.meta_folder._get_next_item('work', FS.$folder);
+        const guests = await gbox.meta_folder._get_next_item('GUEST', FS.$folder);
+        const work = await gbox.meta_folder._get_next_item('USER', FS.$folder);
+        const handlers = await gbox.meta_folder._get_next_item('handlers', FS.$folder);
         const params = { session: { uid: 'u3' }, role: 'GUEST' };
 
         assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');
-        assert.equal(await gbox.canSee(guests, params), true, 'видит guests-зону');
-        assert.equal(await gbox.canSee(work, params), false, 'не видит work');
+        assert.equal(await gbox.canSee(guests, params), true, 'видит зону GUEST');
+        assert.equal(await gbox.canSee(handlers, params), true, 'видит систему точки');
+        assert.equal(await gbox.canSee(work, params), false, 'не видит зону USER');
 
-        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в guests');
-        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
+        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в GUEST');
+        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в USER');
+        assert.equal(await gbox.canWrite(handlers, params), false, 'не пишет в систему');
     });
 
     it('assertAccess бросает при отказе', async () => {

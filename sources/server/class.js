@@ -8,8 +8,13 @@ import { assertClassId } from './assert-class-id.js';
 import { safeNodeName } from './safe-node-name.js';
 import * as LOGS from './logs.js';
 import { DEV_MODE } from "../host/config.js";
+import * as POLICY from './access/policy.js';
+import * as REFS from './access/refs.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
+
+/** Кэш нормализованных ROLES по объекту DATA (DATA пересобирается при reset/init). */
+const declaredRolesCache = new WeakMap();
 
 /** id похож на имя файла (readme.md), а не на класс (MARKET, Exaone3.5 7.8b). */
 export function looksLikeFileId(id) {
@@ -26,19 +31,21 @@ export class $class extends $folder{
     static sourceUrl = import.meta.url;
     static safeNodeName = safeNodeName;
 
-    /** Роли пользователей в классе. */
+    /** Базовые роли (прикладные объявляются в `ROLES` class.js, см. declared_roles). */
     static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER', GUEST: 'GUEST' };
 
-    /** Зоны доступа внутри класса. */
-    static ZONES = { SYSTEM: 'system', MANAGEMENT: 'management', WORK: 'work', GUESTS: 'guests' };
+    /** @deprecated Зона = имя роли (папка роли в метапапке), вне зон — SYSTEM. См. access/policy.js. */
+    static ZONES = { SYSTEM: 'SYSTEM', MANAGEMENT: 'BOSS', WORK: 'USER', GUESTS: 'GUEST' };
 
-    /**Зоны доступа по ролям */
+    /** @deprecated Зона роли = папка с именем роли. */
     static ZONES_MAP = {
         [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
         [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
         [$class.ROLES.USER]: $class.ZONES.WORK,
         [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
     };
+
+    static POLICY = POLICY;
 
     /** Уровни доступа к методам. */
     static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
@@ -365,45 +372,102 @@ export class $class extends $folder{
         return session.$user?.id ?? session.uid;
     }
 
+    /**
+     * Объявленные роли точки: базовые (ADMIN, BOSS, USER, GUEST) + `ROLES` из class.js,
+     * собранного по `~` (прикладные роли — в слое своего типа или класса).
+     * @returns {Promise<Record<string, {id, key, label, scope, feed, write}>>}
+     */
+    get declared_roles() {
+        return Promise.resolve(this.init).then(() => this._declaredRolesSync());
+    }
+
+    /** declared_roles по уже собранному DATA (без init). */
+    _declaredRolesSync() {
+        const data = this.DATA;
+        if (!data || typeof data !== 'object')
+            return POLICY.normalizeRoles(null);
+        let roles = declaredRolesCache.get(data);
+        if (!roles) {
+            roles = POLICY.normalizeRoles(data.ROLES);
+            declaredRolesCache.set(data, roles);
+        }
+        return roles;
+    }
+
+    /** uid, назначенные роли локально в #security (поле key роли; для прикладных — ещё и по id роли). */
+    _roleIds(roleId, declared = this._declaredRolesSync()) {
+        const security = this.DATA?.['#security'];
+        const decl = declared[roleId];
+        if (!security || !decl)
+            return [];
+        const ids = [];
+        for (const key of new Set([decl.key, roleId])) {
+            const list = security[key];
+            if (Array.isArray(list))
+                ids.push(...list.filter(v => typeof v === 'string'));
+        }
+        return ids;
+    }
+
     /** На классе назначен хотя бы один пользователь (любая роль). */
     hasAssignments() {
-        const security = this.DATA?.['#security'];
-        if (!security)
-            return false;
-        return ['ADMINS', 'BOSSES', 'USERS', 'GUESTS']
-            .some(key => Array.isArray(security[key]) && security[key].length > 0);
+        const declared = this._declaredRolesSync();
+        return Object.keys(declared).some(id => this._roleIds(id, declared).length > 0);
     }
 
     /**
      * Получить список ролей текущего пользователя в классе.
-     * Проверяет allAdmins/allBosses (наследуемые) и users (локальные).
+     * Роли со scope=subtree (ADMIN, BOSS) наследуются от вышестоящих классов,
+     * остальные — только локальные назначения.
      * @param {object} [params]
      * @param {object} [params.session] Объект пользователя из сессии
-     * @returns {Promise<string[]>} Массив строк: 'ADMIN', 'BOSS', 'USER'
+     * @returns {Promise<string[]>} Роли по убыванию силы: 'ADMIN', 'BOSS', 'USER', 'GUEST', прикладные
      */
     async roles(params = {}) {
         const uid = $class.resolveUid(params);
         if (!uid)
             return [];
+        await this.init;
+        const declared = this._declaredRolesSync();
         const roles = [];
-        const [admins, bosses, users, guests] = await Promise.all([this.allAdmins, this.allBosses, this.users, this.guests]);
-        if (admins.some(u => u?.id === uid))
-            roles.push($class.ROLES.ADMIN);
-        if (bosses.some(u => u?.id === uid))
-            roles.push($class.ROLES.BOSS);
-        if (users.some(u => u?.id === uid))
-            roles.push($class.ROLES.USER);
-        if (guests.some(u => u?.id === uid))
-            roles.push($class.ROLES.GUEST);
-        return roles;
+        for (const id of Object.keys(declared)) {
+            if (this._roleIds(id, declared).includes(uid)) {
+                roles.push(id);
+                continue;
+            }
+            if (declared[id].scope !== 'subtree')
+                continue;
+            for (let p = this.$parent; p; p = p.$parent) {
+                if (!(p instanceof $class))
+                    continue;
+                await p.init;
+                const pd = p._declaredRolesSync();
+                if (pd[id] && p._roleIds(id, pd).includes(uid)) {
+                    roles.push(id);
+                    break;
+                }
+            }
+        }
+        return POLICY.orderRoles(roles, declared);
+    }
+
+    /** Роль назначена пользователю в этой точке (а не унаследована сверху). */
+    async hasLocalRole(params = {}, role = params.role) {
+        const uid = $class.resolveUid(params);
+        if (!uid || !role)
+            return false;
+        await this.init;
+        return this._roleIds(role).includes(uid);
     }
 
     /**
      * Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли.
-     * Имя папки = params.role || 'GUEST' (ADMIN | BOSS | USER | GUEST).
+     * Имя папки = params.role || 'GUEST' (ADMIN | BOSS | USER | GUEST | прикладная роль).
      */
     async work_zone(params = {}){
         const role = params.role || 'GUEST';
+        if (!POLICY.isRoleId(role))
+            throw new Error('work_zone: недопустимое имя роли «' + role + '»');
         return this.meta_folder._get_next_item(role, FS.$folder);
     }
     /** @deprecated используй work_zone */
@@ -414,19 +478,24 @@ export class $class extends $folder{
     /**
      * Источник логов чата для текущей роли пользователя.
      * Приоритет: params.role (выбранная в UI) → фактические роли.
-     * USER → личный кабинет ($user)
-     * ADMIN и BOSS → текущий класс
+     * feed=point (ADMIN, BOSS) → лента текущего класса (следы всех пользователей точки);
+     * feed=own (USER, прикладные) → своя лента в личном кабинете;
+     * GUEST — лента класса (кабинета может не быть), записи фильтруются до своих.
      */
     async chatSource(params = {}) {
         const uid = $class.resolveUid(params);
-        // Явно выбранная роль в UI имеет приоритет
-        if (params.role === $class.ROLES.USER)
+        const declared = await this.declared_roles;
+        const viaRole = role => {
+            if (role === $class.ROLES.GUEST || declared[role]?.feed === 'point')
+                return this.path;
             return uid ? '/USERS//' + uid : this.path;
-        if (params.role === $class.ROLES.ADMIN || params.role === $class.ROLES.BOSS || params.role === $class.ROLES.GUEST)
-            return this.path;
+        };
+        // Явно выбранная роль в UI имеет приоритет
+        if (params.role && declared[params.role])
+            return viaRole(params.role);
         // Fallback: без role — по фактическим ролям
         const roles = await this.roles(params);
-        if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS) || roles.includes($class.ROLES.GUEST))
+        if (roles.some(r => r === $class.ROLES.GUEST || declared[r]?.feed === 'point'))
             return this.path;
         return uid ? '/USERS//' + uid : this.path;
     }
@@ -629,6 +698,7 @@ export class $class extends $folder{
         if (params.message != null)
             row.content = params.message;
         const includes = LOGS.normalizeIncludes(params.includes);
+        await LOGS.assertIncludesVisible(includes, params);
         if (includes.length)
             row.includes = includes;
         if (typeof params.receivers === 'string')
@@ -683,20 +753,42 @@ export class $class extends $folder{
         const source = await this._logSource(params);
         if (source !== this)
             return source.logs(params);
+        const ownOnly = await this._feedOwnOnly(params);
         params = LOGS.normalizeQuery(params);
+        const bodies = async () => {
+            const rows = await LOGS.loadBodies(this, params);
+            return ownOnly ? rows.filter(r => POLICY.isOwnLogRow(r, ownOnly)) : rows;
+        };
         switch (params.mode || 'folder') {
             case 'dates':
                 return LOGS.datesList(this);
             case 'bodies':
-                return LOGS.loadBodies(this, params);
+                return bodies();
             case 'index':
-                return LOGS.buildIndex(await LOGS.loadBodies(this, params), params);
+                return LOGS.buildIndex(await bodies(), params);
             case 'files':
                 return this.sortItems(await LOGS.filesForDays(this, params), true, false);
             case 'folder':
             default:
                 return LOGS.dayFolder(this, params.day || LOGS.resolveDays(params)[0]);
         }
+    }
+    /**
+     * uid, если вызывающему видна только своя часть ленты точки (feed=own), иначе null.
+     * Лента точки целиком — роли с feed=point / scope=subtree, WORK ADMIN, владелец кабинета.
+     */
+    async _feedOwnOnly(params = {}) {
+        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+            return null;
+        const uid = $class.resolveUid(params);
+        if (!uid || this.id === uid)
+            return null;
+        if (globalThis.WORK && await this._isWorkAdmin(params))
+            return null;
+        const declared = await this.declared_roles;
+        const roles = await this.roles(params);
+        const full = roles.some(r => declared[r]?.feed === 'point' || declared[r]?.scope === 'subtree');
+        return full ? null : uid;
     }
     get settings(){
         if(this.meta_folder){
@@ -724,34 +816,64 @@ export class $class extends $folder{
     }
 
     /**
-     * Определить зону элемента относительно текущего класса.
-     * Обходит предков элемента внутри класса:
-     * — элемент внутри distributed $work → MANAGEMENT
-     * — элемент внутри meta $work → WORK
-     * — элемент внутри метапапки, но вне $work → SYSTEM
+     * Область элемента внутри этой точки (access/policy.js):
+     * зона роли | лента (logs) | секреты | система | элемент вложенного класса.
+     * Считается по виртуальному пути, поэтому для унаследованных по `~` файлов
+     * результат тот же, что для собственных.
+     * @param {object} item Элемент или дескриптор `{path, $class?}`
+     * @returns {{kind: string, role?: string}}
+     */
+    areaOf(item) {
+        if (!item || typeof item !== 'object' || item === this)
+            return { kind: POLICY.AREA.SYSTEM };
+        const itemClass = item.$class ?? item.$owner;
+        if (itemClass && itemClass !== this && itemClass.path !== this.path)
+            return { kind: POLICY.AREA.NESTED };
+        return POLICY.areaOfPath(item.path, this.path, Object.keys(this._declaredRolesSync()));
+    }
+
+    /**
+     * Зона элемента: имя роли для зоны, иначе SYSTEM | LOGS | SECRET | NESTED.
      */
     resolveZone(item) {
         if (!item || typeof item !== 'object')
             return null;
+        const area = this.areaOf(item);
+        return area.kind === POLICY.AREA.ZONE ? area.role : area.kind.toUpperCase();
+    }
 
-        let p = item;
-        while (p.parent && p) {
-            // Достигли класса — стоп
-            if (p instanceof $class || p === this){
-                break;
-            }
-            if (p.parent.path === this.$class.meta_folder.path) {
-                return $class.ZONES_MAP[p.id] || $class.ZONES.SYSTEM;
-            }
-            p = p.parent;
+    /** Для ленты точки при feed=own: папки ленты видны (листинг), записи — только свои. */
+    _logOwnership(item, uid) {
+        // дескриптор из RAG: {path, $class, descriptor: true, logRow}
+        if (item?.descriptor)
+            return { ownEntry: POLICY.isOwnLogRow(item.logRow, uid) };
+        if (!(item instanceof FS.$file))
+            return { logsContainer: true };
+        try {
+            const row = JSON.parse(fs.readFileSync(item.real_dir, 'utf-8'));
+            return { ownEntry: POLICY.isOwnLogRow(row, uid) };
         }
-        return $class.ZONES.SYSTEM;
+        catch {
+            return { ownEntry: false };
+        }
+    }
+
+    /** Видимость по ролям пользователя в этой точке (без ленты). */
+    _readableByRoles(item, roles, uid) {
+        if (!roles?.length)
+            return false;
+        const declared = this._declaredRolesSync();
+        const area = this.areaOf(item);
+        const opts = area.kind === POLICY.AREA.LOGS ? this._logOwnership(item, uid) : {};
+        return roles.some(r => POLICY.canRead(declared[r], area, opts));
     }
 
     /**
      * Видимость элемента (чтение).
-     * ADMIN/boss — видят всё от точки назначения вниз.
-     * USER — видит только класс назначения (без дочерних классов).
+     * scope=subtree (ADMIN, BOSS) — всё от точки назначения вниз (секреты — только ADMIN);
+     * остальные роли — система точки + своя зона (собственная и унаследованная по `~`);
+     * лента точки — роли с feed=point, остальным — только свои записи;
+     * плюс всё, на что указывают записи собственной ленты пользователя (receivers).
      */
     async canSee(item, params = {}) {
         if (DEV_MODE) return true;
@@ -771,33 +893,35 @@ export class $class extends $folder{
         // Системные элементы видны всем
         if (this._isSystemItem(item))
             return true;
-        // Класс без назначений — pass-through к родителю
         const roles = await this.roles(params);
+        // Класс без назначений — pass-through к родителю
         if (!this.hasAssignments() && !roles.length) {
             const parent = this.$parent;
-            if (parent)
-                return parent.canSee(item, params);
+            if (parent && await parent.canSee(item, params))
+                return true;
+            return this._visibleViaFeed(uid, item);
+        }
+        if (this._readableByRoles(item, roles, uid))
+            return true;
+        return this._visibleViaFeed(uid, item);
+    }
+
+    /** Показано пользователю записью в его ленте (path/includes). */
+    async _visibleViaFeed(uid, item) {
+        try {
+            return await REFS.visible(uid, item?.path);
+        }
+        catch {
             return false;
         }
-        if (!roles.length)
-            return false;
-        // ADMIN и boss видят всё от точки вниз
-        if (roles.includes($class.ROLES.ADMIN) || roles.includes($class.ROLES.BOSS))
-            return true;
-        // USER видит только свой класс
-        if (roles.includes($class.ROLES.USER))
-            return this._isSlaveVisible(item, params);
-        // GUEST видит только свою зону guests (+ логи класса для чата)
-        if (roles.includes($class.ROLES.GUEST))
-            return this._isGuestVisible(item, params);
-        return false;
     }
 
     /**
      * Право записи (требует params.role).
-     * ADMIN → SYSTEM (всё в метапапке, КРОМЕ $work)
-     * boss → MANAGEMENT (distributed $work, только класс назначения)
-     * USER → WORK (meta $work, только класс назначения)
+     * write=all (ADMIN) — всё от точки назначения вниз;
+     * остальные — только своя зона и только там, где роль назначена локально
+     * (в любом слое своей метапапки: `ROLE/`, `$folder/ROLE/`, `$folder/$class/$type/ROLE/` —
+     * выбор слоя определяет, куда провалится файл по наследованию).
      */
     async canWrite(item, params = {}) {
         if (DEV_MODE) return true;
@@ -814,14 +938,9 @@ export class $class extends $folder{
         const roles = await this.roles(params);
         if (!roles.includes(role))
             return false;
-        const zone = this.resolveZone(item);
-        const allowedZone = {
-            [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
-            [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
-            [$class.ROLES.USER]: $class.ZONES.WORK,
-            [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
-        }[role];
-        return zone === allowedZone;
+        const declared = this._declaredRolesSync();
+        const local = this._roleIds(role, declared).includes(uid);
+        return POLICY.canWrite(declared[role], this.areaOf(item), { local });
     }
 
     /**
@@ -893,23 +1012,6 @@ export class $class extends $folder{
         return this._isSystemPath(item);
     }
 
-    /** Slave видит элементы только своего класса (не дочерние). */
-    _isSlaveVisible(item, params) {
-        const itemClass = item.$class ?? item.$owner;
-        return itemClass.path === this.path;
-    }
-
-    /** Гость видит свой класс, зону guests и логи класса (чат); не видит work и системное. */
-    _isGuestVisible(item, params) {
-        if (item === this)
-            return true;
-        if (this.resolveZone(item) === $class.ZONES.GUESTS)
-            return true;
-        // Логи гостя пишутся в класс (meta_folder/logs) — нужны для чата
-        const path = item?.path ?? '';
-        return path.startsWith(this.meta_folder.path + '/logs/');
-    }
-
     /**
      * Прочитать секрет из #secret (fallback: #system). Требует ADMIN.
      * @param {object} [params]
@@ -973,14 +1075,15 @@ export class $class extends $folder{
             case $class.ROLES.GUEST:
                 return this.guests;
         }
+        if (role && (await this.declared_roles)[role])
+            return this._localRole(role);
         return this.assignedUsers;
     }
 
     /** Пользователи роли, назначенные локально в #security (без наследования и литералов). */
     _localRole(role) {
-        const key = { [$class.ROLES.ADMIN]: 'ADMINS', [$class.ROLES.BOSS]: 'BOSSES', [$class.ROLES.USER]: 'USERS', [$class.ROLES.GUEST]: 'GUESTS' }[role];
         return Promise.resolve(this.init).then(async () => {
-            const ids = this.DATA['#security']?.[key];
+            const ids = this._roleIds(role);
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
             const result = [];
@@ -1101,15 +1204,19 @@ export class $class extends $folder{
         return log;
     }
 
-    /** Все назначенные пользователи класса (объединение allAdmins + allBosses + users + guests). */
+    /** Все назначенные пользователи класса (allAdmins + allBosses + users + guests + прикладные роли). */
     get assignedUsers(){
         return Promise.all([
             Promise.resolve(this.allAdmins),
             Promise.resolve(this.allBosses),
             Promise.resolve(this.users),
             Promise.resolve(this.guests),
-        ]).then(([admins, bosses, users, guests]) => {
-            const all = [...admins, ...bosses, ...users, ...guests];
+            Promise.resolve(this.declared_roles).then(declared => Promise.all(
+                Object.keys(declared)
+                    .filter(id => !POLICY.BASE_ORDER.includes(id))
+                    .map(id => this._localRole(id)))),
+        ]).then(([admins, bosses, users, guests, custom]) => {
+            const all = [...admins, ...bosses, ...users, ...guests, ...custom.flat()];
             const seen = new Set();
             return all.filter(u => {
                 if (!u?.id || seen.has(u.id))

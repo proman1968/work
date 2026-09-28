@@ -30,6 +30,12 @@ if (process.env.WORK_WATCH !== '0') {
     watchCode($server);
 }
 
+// RAG: фоновая индексация (наблюдение за диском + сверка при старте); WORK_RAG=0 — выключить
+if (process.env.WORK_RAG !== '0') {
+    const { RAG } = await import('./modules/rag/index.js');
+    RAG.start();
+}
+
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);

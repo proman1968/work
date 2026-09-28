@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { $item } from '../core.js';
 import * as mime from "mime-types";
-import { extractor, xenova } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
@@ -30,19 +29,8 @@ function resetMergeCaches() {
     catch { /* кэши пересоберутся лениво */ }
 }
 
-/** Атомарная запись RAG index: temp + rename (не обрезать index.json при краше). */
-async function writeRagIndexAtomic(path, text) {
-    const tmp = path + '.tmp';
-    await fsp.writeFile(tmp, text, { encoding: 'utf-8' });
-    try {
-        await fsp.rename(tmp, path);
-    }
-    catch (e) {
-        // Windows: rename поверх существующего часто падает
-        await fsp.unlink(path).catch(() => {});
-        await fsp.rename(tmp, path);
-    }
-}
+/** RAG-модуль грузится лениво: ядро не тянет модель/БД, пока поиск не нужен. */
+const loadRag = () => import('../modules/rag/index.js').then(m => m.RAG);
 
 export class $folder extends $item{
     static sourceUrl = import.meta.url;
@@ -76,50 +64,6 @@ export class $folder extends $item{
         return import('data:text/javascript;base64,' + b64).then(module => module.default || module).catch(err => {
             console.error(err, script);
         });
-    }
-
-    static cosineSimilarityDense(vecA, vecB) {
-        let dot = 0, normA = 0, normB = 0;
-        const len = vecA.length;
-        for (let i = 0; i < len; i++) {
-            const a = vecA[i];
-            const b = vecB[i];
-            dot += a * b;
-            normA += a * a;
-            normB += b * b;
-        }
-        return normA && normB ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
-    }
-
-    static filterRagData(data, sensitivity = 0.5) {
-        if (!data.length) return [];
-
-        const scores = data.map(item => item.sim);
-        const temperature = 0.3 + sensitivity * 0.5;
-        const expScores = scores.map(s => Math.exp(s / temperature));
-        const sumExp = expScores.reduce((a, b) => a + b, 0);
-        const probabilities = expScores.map(e => e / sumExp);
-
-        const items = data.map((item, i) => ({
-            ...item,
-            probability: probabilities[i],
-        })).sort((a, b) => b.probability - a.probability);
-
-        const maxGroups = Math.floor(1 + sensitivity * 2);
-        const result = [items[0]];
-        const maxSim = items[0].sim;
-
-        for (let i = 1; i < items.length && result.length < maxGroups; i++) {
-            const simRatio = items[i].sim / maxSim;
-            const minSimRatio = 0.7 - sensitivity * 0.4;
-            if (simRatio >= minSimRatio) {
-                result.push(items[i]);
-            } else {
-                break;
-            }
-        }
-
-        return result;
     }
 
     GET = 'info';
@@ -322,6 +266,7 @@ export class $folder extends $item{
         if(!fs.existsSync(this.dir))
             return false;
         await fsp.rm(this.dir, {recursive: true});
+        globalThis.WORK_RAG?.invalidate?.(this.dir);
         this.parent?.reset();
         return `removed: ${this.path}`;
     }
@@ -528,272 +473,55 @@ export class $folder extends $item{
             return parent;
         return parent?.$owner;
     }
-    async clear_rag(){
-        if(this.isInherit)
-            return 'skipped isInherit: ' + this.path;
-        if(this.id === '.RAG')
-            return 'skipped .RAG: ' + this.path;
-        let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
-        let rag_folder = await rag_target_folder._get_next_item('.RAG');
-        let clear = 'checked: ' + this.path;
-        if(rag_folder) {
-            try{
-                clear = await rag_folder.delete();
-            }
-            catch(e){
-                clear = e;
-            }
-        }
-        let res = [clear];
-        let files = await rag_target_folder.children;
-        // files = files.filter(f=>{
-        //     return !WORK.exclude_for_rag.includes(f.id) && f.id !== '.RAG'
-        // });
-        let next = files.filter(file=>file.constructor !== FS.$file).map(folder => folder.clear_rag());
-        next = await Promise.all(next);
-        res.push(...next.flat())
-        return res
+    /**
+     * Сбросить RAG-индекс поддерева этой точки и поставить его на переиндексацию.
+     * @param {object} [params]
+     * @returns {Promise<object>} {removed, queued}
+     */
+    async clear_rag(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        return (await loadRag()).clear(this);
     }
-    get rag(){
-        return (async _=>{
-            if(this.id === '.RAG')
-                return {}
-            if(this.inherit_source)
-                return {};//this.inherit_source.rag;
-            if(this.isType && !this.isMetaFolder/*  && Reactor.equal(this.$owner, WORK) */)
-                return {};
-
-            let rag_target_folder = (this instanceof FS.$class)?this:this.storage_folder;
-
-
-            let rag_folder = await rag_target_folder._get_next_item('.RAG', FS.$folder);
-
-            let files = await rag_target_folder.children;
-            files = files.filter(f=>{
-                // exclude + .RAG + скрытые `.…` + isInherit (нет файла по проекции)
-                if (WORK.exclude_for_rag.includes(f.id) || f.id === '.RAG' || f.isInherit)
-                    return false;
-                if (f.id?.[0] === '.')
-                    return false;
-                return true;
-            });
-
-            const RAG = await rag_folder._get_next_item('index.json', FS.$file);
-            let body;
-            let need_save = false;
-            if (fs.existsSync(RAG.real_dir)) {
-                let raw = '';
-                try {
-                    raw = fs.readFileSync(RAG.real_dir, { encoding: 'utf-8' });
-                    body = raw.trim() ? JSON.parse(raw) : {};
-                }
-                catch (e) {
-                    // пустой/обрезанный index после краша embedding — пересобрать
-                    console.warn('[WORK] rag index.json:', RAG.real_dir, e.message);
-                    body = {};
-                    need_save = true;
-                }
-                if (!body || typeof body !== 'object' || Array.isArray(body)) {
-                    body = {};
-                    need_save = true;
-                }
-                for (let key in body) {
-                    if (!files.find(f => f.id === key) && key !== 'embedding') {
-                        delete body[key];
-                        need_save = true;
-                    }
-                }
-            }
-            else {
-                body = {};
-                rag_folder.save();
-                need_save = true;
-            }
-            for(let file of files){
-                let time = file.time;
-                let item = body[file.id];
-                if(!item || item.time < time){
-                    item = body[file.id] = await (async ()=>{
-                    try{
-                            if(file.constructor !== FS.$file){
-                                return {path: file.real_dir};
-                            }
-                            // нет физического файла (на всякий случай поверх фильтра isInherit)
-                            if (!fs.existsSync(file.real_dir) && !fs.existsSync(file.dir))
-                                return {time};
-
-                            let chunks = await extractor.extract(file);
-
-                            if(!chunks)
-                                return {time};
-                                // throw new Error('no text: '+ file.real_dir);
-                            chunks = chunks.map(ch=>{
-                                let text = ch.content
-                                let hash = 0;
-                                for (let i = 0; i < text.length; i++) {
-                                    const char = text.charCodeAt(i);
-                                    hash = ((hash << 5) - hash) + char;
-                                    hash = hash & hash; // Преобразуем в 32-битное целое
-                                }
-                                let key = Math.abs(hash).toString(16);
-                                key += '.txt';
-                                fsp.writeFile(rag_folder.real_dir + '/' + key, text, {encoding: 'utf-8'});
-                                ch.key = key;
-                                ch.size = text.length;
-                                ch.index = "chunk " + ch.metadata.chunkIndex + ' of ' + ch.metadata.totalChunks;
-                                delete ch.metadata;
-                                delete ch.content;
-                                return ch;
-                            })
-
-                            // подсчет суммы эмбеддингов всех чанков файла
-                            let embedding = chunks.reduce((res, chunk)=>{
-                                res = chunk.embedding.map((v,i)=>{
-                                    return v + (res[i] || 0);
-                                });
-                                return res;
-                            }, [])
-
-                            need_save = true;
-                            return {
-                                path: file.real_dir,
-                                time,
-                                size: file.size,
-                                embedding,
-                                chunks
-                            }
-                        }
-                        catch(e){
-                            console.warn(e.message);
-                            return {time};
-                        }
-                    })()
-                }
-
-                if(item && file.constructor !== FS.$file){ // проваливаемся за дочерними
-                    try {
-                        let child = await file.rag;
-                        let embedding = child?.embedding;
-                        if (!Reactor.equal(item.embedding, embedding)) {
-                            item.embedding = embedding;
-                            need_save = true;
-                        }
-                    }
-                    catch (e) {
-                        console.warn('[WORK] rag child:', file.path || file.id, e.message);
-                    }
-                }
-            }
-            if(need_save){
-                let embedding = Object.values(body).reduce((res, file)=>{
-                    if(file?.embedding?.length)
-                        res = file.embedding.map((v, i)=>{
-                            return v + (res[i] || 0);
-                        });
-                    return res;
-                }, [])
-
-                delete body.embedding;
-                body.embedding = embedding;
-                let text = JSON.stringify(body, null, 4);
-                await writeRagIndexAtomic(RAG.real_dir, text);
-            }
-            return body;
-        })()
+    /**
+     * Состояние RAG: очередь индексации, число документов/чанков, модель, последние ошибки.
+     * @param {object} [params]
+     * @returns {Promise<object>} Сводка индекса
+     */
+    async rag_status(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        return (await loadRag()).status();
     }
     /** @deprecated используй semantic_search */
     search(params){
         return this.semantic_search(params);
     }
     /**
-     * Семантический поиск по эмбеддингам (RAG) внутри класса.
+     * Семантический поиск (RAG) от этой точки: только то, что доступно пользователю,
+     * с приоритетом близости — сначала точка с активной ролью, затем своя лента,
+     * другие роли в точке, соседние по дереву точки.
      * @param {object} [params]
-     * @param {string} [params.prompt] Текст запроса
-     * @param {number} [params.sensitivity] Чувствительность 0–1
-     * @returns {Promise<Array>} Отсортированный массив релевантных результатов
+     * @param {string} params.prompt Текст запроса
+     * @param {number} [params.k] Сколько фрагментов вернуть (по умолчанию 8)
+     * @param {string} [params.role] Активная роль (с неё начинается поиск)
+     * @param {number} [params.rings] Насколько далеко расходиться по дереву (по умолчанию 3)
+     * @param {string|Array} [params.kinds] Виды документов: file, object, log, class
+     * @returns {Promise<{results: Array, contexts: Array, pending: number}>} Найденные фрагменты
      */
-    async semantic_search(params = {prompt: '', embedding: null, using: []}){
-        let sensitivity = params.sensitivity || .5;
-        params.embedding ??= await xenova.embedding(params.prompt);
-        params.using ??= [];
-        if(params.using.includes(this.path))
-            return;
-        params.using.push(this.path)
-
-        // if(this.inherit_source)
-        //     return this.real_source.search(params);
-
-        // let ancestors = []
-        let folders = [this];
-        if(!Reactor.equal(this.$owner, WORK)){
-            let folder = this.$folder;
-            folders.push(folder)
-            let steps = await this.type_chain;
-            for(let step of steps){
-                folder = await folder._get_next_item(step, FS.$folder);
-                if(folder){
-                    folders.push(folder);
-                }
-            }
-
-            // // folders = folders.map(f=>f.real_source);
-            // ancestors = folders.map(f=>f.ancestor)
-            // ancestors = await Promise.all(ancestors);
-            // ancestors = ancestors.filter(Boolean);
-            // ancestors = ancestors.unique();
-            // ancestors = ancestors.reduce((res, f)=>{
-            //     if(!res.find(r=>f.path.startsWith(r.path)))
-            //         res.push(f)
-            //     return res;
-            // }, [])
-        }
-
-        // folders = folders.reduce((res, f)=>{
-        //     if(!res.find(r=>f.path.startsWith(r.path)))
-        //         res.push(f)
-        //     return res;
-        // }, ancestors)
-
-        let rags = folders.map(async folder=>{
-            let rag = await folder.rag;
-            let files = Object.keys(rag).map(name => {
-                let file = rag[name];
-                let emb = file.embedding;
-                if(emb?.length){
-                    let sim = this.constructor.cosineSimilarityDense(emb, params.embedding);
-                    return {sim, path: file.path, chunks: file.chunks, name};
-                }
-            }).filter(Boolean);
-            return files;
-        })
-        rags = await Promise.all(rags);
-        rags = rags.flat();
-        rags = rags.filter(Boolean);
-        rags = this.constructor.filterRagData(rags, sensitivity);
-
-        rags = rags.map(async file => {
-            if(file.chunks){
-                file.chunks = file.chunks.map(chunk => {
-                    let sim = this.constructor.cosineSimilarityDense(chunk.embedding, params.embedding);
-                    return {sim, name: chunk.key};
-                })
-                file.chunks = file.chunks.sort((a,b)=>a.sim>b.sim?-1:1);
-                return file;
-            }
-            let folder = await WORK.get_item(file.path);
-            if(folder){
-                return folder.semantic_search(params);
-            }
-        })
-
-        rags = await Promise.all(rags);
-        rags = rags.flat();
-        rags = rags.filter(Boolean);
-        rags = rags.unique();
-
-        rags = this.constructor.filterRagData(rags, sensitivity);
-        rags = rags.sort((a,b)=>a.sim>b.sim?-1:1);
-        return rags;
+    async semantic_search(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        return (await loadRag()).search(this, params);
+    }
+    /**
+     * Структурный запрос по объектам данных ($data: .oml и др.) с теми же правами, что поиск.
+     * @param {object} [params]
+     * @param {string} [params.type] Расширение типа объектов (oml, eml, ics…)
+     * @param {object} [params.where] Условия по полям: {field: value | {eq, ne, gt, gte, lt, lte, contains}}
+     * @param {number} [params.limit] Максимум объектов (по умолчанию 50)
+     * @returns {Promise<Array>} Объекты: {path, point, role, type, fields}
+     */
+    async query_objects(params = {}){
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        return (await loadRag()).queryObjects(this, params);
     }
     /**
      * Найти элемент по имени рекурсивным обходом вглубь.
@@ -1026,6 +754,22 @@ export class $folder extends $item{
         });
     }
     async _collect_tilde(p = {}){
+        const folders = await this._tilde_layers(p);
+        let items = folders.map(f=>f.inherit_children);
+        items = await Promise.all(items);
+        items = items.flat();
+        items = items.filter(f=>!f.isType);
+        items = items.unique();
+        return items;
+    }
+    /**
+     * Папки-слои `~` в порядке сборки (корень → SELF; SELF — последний).
+     * Содержимое `~` = inherit_children этих папок; RAG строит по ним проекции точки.
+     * @param {object} [p]
+     * @param {string} [p.inherit] Остановиться на типизирующем шаге (`~$type`)
+     * @returns {Promise<Array>} Папки слоёв
+     */
+    async _tilde_layers(p = {}){
         let {inherit} = p;
         let folder = this.$folder;
         let folders = [folder];
@@ -1095,12 +839,7 @@ export class $folder extends $item{
                 folders.unshift(f);
             }
         }
-        let items = folders.map(f=>f.inherit_children);
-        items = await Promise.all(items);
-        items = items.flat();
-        items = items.filter(f=>!f.isType);
-        items = items.unique();
-        return items;
+        return folders;
     }
     /**
      * Получить информацию о структуре элемента с возможностью раскрывать дочерние.
@@ -1721,6 +1460,7 @@ export class $folder extends $item{
         const file = await this._get_next_item(filename, FS.$file);
         file.reset();
         this.reset();
+        globalThis.WORK_RAG?.invalidate?.(path);
         // Правка слоя обязана менять поведение без рестарта: сносим кэши сборки class.js
         if (params.filename === 'class.js')
             resetMergeCaches();

@@ -55,10 +55,6 @@ export class $server extends $class {
     get https(){
         return https
     }
-    get exclude_for_rag(){
-        // папки/имена верхнего уровня + все скрытые id (`.…`) режутся в folder.rag
-        return ['.git', 'node_modules', '.cursor', '.vscode'];
-    }
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'
     }

@@ -56,8 +56,9 @@ async function rolesIn(item, session) {
     if (!cls || !session || typeof cls.roles !== 'function')
         return [];
     try {
+        // ядро уже упорядочивает роли по силе (базовые, затем прикладные — CUSTOMER и т.п.)
         const roles = await cls.roles({ session });
-        return ROLE_ORDER.filter(r => roles.includes(r));
+        return [...ROLE_ORDER.filter(r => roles.includes(r)), ...roles.filter(r => !ROLE_ORDER.includes(r))];
     }
     catch {
         return [];
@@ -392,6 +393,45 @@ export const workTools = [
         },
     },
     {
+        name: 'search',
+        readonly: true,
+        description: 'Смысловой поиск (RAG) по документам, объектам данных и своей ленте — только то, что доступно пользователю; сначала место задачи, затем соседние точки организации. Для точных строк и имён — find.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Что найти, своими словами' },
+                path: { type: 'string', description: 'Точка, от которой искать (по умолчанию место задачи)' },
+                k: { type: 'integer', description: 'Сколько фрагментов (по умолчанию 8, максимум 30)' },
+                kinds: { type: 'string', description: 'Виды через запятую: file, object, log, class' },
+                rings: { type: 'integer', description: 'Насколько широко расходиться по дереву (0 — только точка; по умолчанию 3)' },
+            },
+            required: ['query'],
+        },
+        async run(args, ctx) {
+            const point = await mustItem(args.path, ctx);
+            if (Array.isArray(point))
+                throw new Error('search: укажи точку без ~ (класс или папку)');
+            const res = await callAs(point, 'semantic_search', {
+                prompt: args.query,
+                k: Math.min(30, Number(args.k) || 8),
+                kinds: args.kinds || undefined,
+                rings: args.rings,
+            }, ctx);
+            const rows = res?.results || [];
+            if (!rows.length)
+                return 'ничего не найдено' + (res?.pending ? ' (индексация ещё идёт: ' + res.pending + ' в очереди)' : '');
+            const out = rows.map((r, i) => {
+                const where = [r.kind, r.role && 'роль ' + r.role, r.point && r.point !== point.path && 'точка ' + r.point]
+                    .filter(Boolean).join(', ');
+                return (i + 1) + '. ' + r.path + (r.heading ? ' › ' + r.heading : '') + '  [' + where + ']\n'
+                    + clip(r.text, 1200);
+            });
+            if (res.pending)
+                out.push('(индексация ещё идёт: ' + res.pending + ' в очереди)');
+            return out.join('\n\n');
+        },
+    },
+    {
         name: 'write',
         risk: 'write',
         target: target('path'),
@@ -661,6 +701,6 @@ export const workTools = [
     },
 ];
 
-const READ_METHOD = /^(get_|list|read|load|info|find|search|fetch|logs|members|schema|services_schema|semantic_search|work_zone|roles|mcp_list_tools)/;
+const READ_METHOD = /^(get_|list|read|load|info|find|search|fetch|logs|members|schema|services_schema|semantic_search|query_objects|rag_status|declared_roles|work_zone|roles|mcp_list_tools)/;
 const DANGER_METHODS = new Set(['delete', 'npm', 'proxy', 'devModeToggle', 'save_secret', 'read_secret', 'clear_rag', 'send_push_notification', 'save', 'restore_from_history']);
 const BLOCKED_METHODS = new Set(['constructor', 'execute', 'reset', 'fire', 'listen', 'assertAccess', 'canSee', 'canWrite', 'user_register_start', 'user_register_process', 'user_register_finish', 'user_login_start', 'user_login_finish']);

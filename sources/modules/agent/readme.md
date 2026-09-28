@@ -26,7 +26,7 @@
 | `permissions.js` | режимы и защищённые зоны |
 | `session.js` | хост `.task` v2: `prompt`, `approve`, `stop`, `revert`, `configure`, `compact`, `getBody` |
 | `resources.js` | данные из дерева: `ai/system.md`, `ai/config.js`, `ai/agents/*.md`, `ai/skills/*.md` по слоям (пакет движка → классы от корня к месту) |
-| `tools/work.js` | `ls`, `read`, `find`, `write`, `edit`, `create_class`, `schema`, `call`, `logs`, `history`, `restore`, `delete` |
+| `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `write`, `edit`, `create_class`, `schema`, `call`, `logs`, `history`, `restore`, `delete` |
 | `tools/services.js` | `web_search`, `web_fetch`, `svc_*` (SCHEMA сервисов `/SERVICES`), `mcp_*` (инструменты MCP-серверов) |
 | `tools/meta.js` | `todo_write`, `ask_user`, `task` (субагенты), `skill`, `save_skill`, `generate_image` |
 | `mcp-pool.js` | пул stdio MCP-серверов: процесс живёт между вызовами, простой 5 мин — закрыть, падение — перезапуск при следующем вызове |

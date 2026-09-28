@@ -270,12 +270,10 @@ export class $file extends $folder{
         const data = await $file.typeData(ext);
         return data?.isDataFile ?? false;
     }
-    get rag(){
-        return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
-    }
     async delete(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
+        globalThis.WORK_RAG?.invalidate?.(this.dir);
         this.parent.reset();
         this.reset();
         return 'removed: '+ this.path;
@@ -582,10 +580,13 @@ export class $file extends $folder{
             log.receivers = params.receivers.slice();
 
         const includes = LOGS.normalizeIncludes(params.includes);
+        await LOGS.assertIncludesVisible(includes, params);
         if (includes.length)
             log.includes = includes;
         if (params.mainContext)
             log.mainContext = params.mainContext;
+        // Индекс RAG: сохранённый файл (живой и снимок) — в очередь переиндексации
+        globalThis.WORK_RAG?.invalidate?.(this.real_dir);
         if (params.ignore_save_logs) {
             log.logFullPath = this.json_model.path;
             return log;
@@ -617,3 +618,5 @@ export class $file extends $folder{
 }
 $file.type_chain = Object.create(null);
 $file.__type_data__ = Object.create(null);
+/** Извлечение текста из байтов (sniff → utf-8/html → Kreuzberg → таблицы); используется read_text и RAG. */
+$file.extractText = extractText;

@@ -1,6 +1,6 @@
 # sources/server/ — серверные классы FS
 
-Серверная объектная модель. Реальная работа с файловой системой: чтение, запись, наследование, логи, RAG.
+Серверная объектная модель. Реальная работа с файловой системой: чтение, запись, наследование, логи, доступ. RAG — отдельный модуль `sources/modules/rag` (ядро вызывает его фасад).
 
 ## Файлы
 
@@ -12,6 +12,8 @@
 - `handler.js` — `$handler extends $class`: исполняемый элемент (execute в class.js)
 - `user.js` — `$user`: пользовательская storage-сущность, online-статус
 - `server.js` — `$server`: корневой серверный `$class`, HTTP-сессии, merge `class.js`
+- `access/policy.js` — политика доступа (чистые правила): области, роли, canRead/canWrite; единая для ядра и RAG
+- `access/refs.js` — индекс лент: что открывает пользователю запись в его кабинете (`path`/`includes`)
 
 ## Ключевые механизмы
 
@@ -46,15 +48,23 @@ API элементов — это «система команд» для ИИ-а
 
 ### Поиск
 
-- `get_item` — по пути; `find_text` — по содержимому (grep); `semantic_search` — RAG-поиск **от текущего класса** (не вызывать с корня WORK из агентов; `work.search` передаёт выбранный класс)
+- `get_item` — по пути; `find_text` — по содержимому (grep); `semantic_search({prompt, k, role, rings, kinds})` — RAG-поиск **от точки** с правами пользователя (модуль `sources/modules/rag`, см. его readme); `query_objects({type, where, limit})` — структурный запрос по объектам `$data` с теми же правами; `rag_status()` / `clear_rag()` (ADMIN) — состояние и сброс индекса поддерева
 - `find_item({name, types_only})` — рекурсивный поиск элемента по имени (внутренняя позиционная форма: `find_item(name, filterFn)`)
-- RAG (`folder.rag`): не индексирует `exclude_for_rag`, скрытые `.…`, `.RAG`, `isInherit`; extract — text-ext (`task`/`md`/…) через load, kreuzberg только по whitelist (pdf/docx/png/…), иначе тихий skip; пустой/битый `.RAG/index.json` → `{}` и пересборка; запись index атомарно (`.tmp` + rename)
+- `_tilde_layers()` — папки-слои `~` (корень → SELF); `~` = их `inherit_children`, RAG строит по ним проекции точки
 
-### Роли и доступ
+### Роли и доступ (модель «Точки × Роли × Ленты», `access/policy.js`)
 
-- `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
+- **Размещение определяет наследование**, права о нём не знают: файл в `meta/ROLE/` — только эта точка, в `meta/$folder/ROLE/` — все точки ниже, в `meta/$folder/$class/$type/ROLE/` — точки типа ниже
+- **Область** элемента — первая папка после последнего `$…` виртуального пути: имя объявленной роли → зона роли; `logs` → лента точки; `#secret`/`#system` → секреты; иначе → система. Бизнес-данные — только в зонах
+- **Роли** объявляются в `ROLES` class.js (сборка по `~`): базовые ADMIN, BOSS, USER, GUEST + прикладные (`CUSTOMER` и т.п., по умолчанию как USER). Поля: `scope` (`point`|`subtree` — видит вниз по дереву), `feed` (`own`|`point` — видит ленту точки), `write` (`zone`|`all`), `key` (поле назначений в `#security`, по умолчанию `ROLE + 'S'`), `label`
+- **Чтение**: система — любой назначенной роли; зона — своей роли (собственная и унаследованная); лента точки — `feed=point` (ADMIN, BOSS), остальным — свои записи (автор/получатель); секреты — ADMIN; `scope=subtree` — всё вниз по дереву. Плюс всё, на что указывает запись в собственной ленте пользователя (`receivers` доставляют запись в кабинет — индекс лент `access/refs.js`)
+- **Запись**: ADMIN — всё вниз по дереву; остальные — только своя зона и только где роль назначена локально
+- **Вложения** (`includes` в `save_message`/`append_log_includes`/`save_file`) — только видимые автору (иначе лента стала бы обходом прав)
+- `declared_roles` — объявленные роли точки; `roles(params)` — роли пользователя (subtree-роли — с наследованием сверху); `hasLocalRole(params, role)`; `areaOf(item)` / `resolveZone(item)` — область элемента; `canSee` / `canWrite` — через политику
+- `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`, прикладные — `#security[key]`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
 - `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
-- `work_zone({role})` — папка в метапапке для `save_file` роли; имя = `role` или `GUESTS`; deprecated-алиас: `get_storage`
+- `work_zone({role})` — папка роли в метапапке для `save_file`; имя = `role` или `GUEST`; deprecated-алиас: `get_storage`
+- deprecated: `$class.ZONES` / `ZONES_MAP` (зона = имя роли)
 
 ### Описание элемента
 

@@ -7,6 +7,7 @@
  */
 import { $item } from '../core.js';
 import { FS } from './index.js';
+import * as REFS from './access/refs.js';
 
 /** Сегодня по местному времени сервера — как папки дня при записи (save_data_file: toISOTimezoneString), не UTC. */
 export const today = () => new Date().toLocalDay();
@@ -278,7 +279,7 @@ function logClassKey(storage) {
     return storage.id || storage.path || storage.dir || '';
 }
 
-async function writeLogTo(storage, log_param, written) {
+async function writeLogTo(storage, log_param, written, row) {
     if (!storage?.save_file)
         return;
     const key = logClassKey(storage);
@@ -286,7 +287,36 @@ async function writeLogTo(storage, log_param, written) {
         return;
     if (key)
         written.add(key);
-    await storage.save_file(log_param);
+    const res = await storage.save_file(log_param);
+    // Запись в ленте кабинета открывает владельцу то, на что она указывает
+    if (row && storage instanceof FS.$user) {
+        try {
+            await REFS.addRow(storage.id, row, res?.logFullPath || res?.path || '');
+        }
+        catch (e) {
+            console.warn('[logs] feed refs:', e.message);
+        }
+    }
+}
+
+/**
+ * Вложить в запись можно только то, что видит сам автор — иначе лента становится
+ * обходом прав (получатели увидят вложенное). Системные вызовы (без session / WORK) не проверяются.
+ * @param {string[]} paths Пути includes
+ * @param {object} params session, role
+ */
+export async function assertIncludesVisible(paths, params = {}) {
+    const session = params?.session;
+    if (!session || session.$user === globalThis.WORK || !paths?.length)
+        return;
+    for (const p of paths) {
+        let item = await globalThis.WORK.get_item(p);
+        if (Array.isArray(item))
+            item = item.at(-1);
+        if (!item || typeof item.assertAccess !== 'function')
+            continue;
+        await item.assertAccess({ session, role: params.role }, FS.$class.ACCESS_LEVEL.READ);
+    }
 }
 
 /**
@@ -306,12 +336,12 @@ export async function appendRow(storage, row, params = {}) {
         session: { $user: WORK }
     });
     const written = new Set();
-    await writeLogTo(storage, log_param, written);
+    await writeLogTo(storage, log_param, written, row);
 
     const authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
     if (authorCabinet && authorCabinet !== globalThis.WORK
         && logClassKey(authorCabinet) !== logClassKey(storage))
-        await writeLogTo(authorCabinet, log_param, written);
+        await writeLogTo(authorCabinet, log_param, written, row);
 
     let receivers = row.receivers;
     if (typeof receivers === 'string')
@@ -322,7 +352,7 @@ export async function appendRow(storage, row, params = {}) {
             const usersList = await globalThis.WORK.$users;
             const resolved = await Promise.all(receivers.map(uid => usersList.get_item('//' + uid)));
             for (const receiver of resolved)
-                await writeLogTo(receiver, log_param, written);
+                await writeLogTo(receiver, log_param, written, row);
         }
         row.receivers = receivers;
     }
@@ -334,6 +364,7 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
     includePaths = normalizeIncludes(includePaths);
     if (!entryPath || !includePaths.length)
         return null;
+    await assertIncludesVisible(includePaths, params);
     const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
     const shortTarget = $item.toShortPath(target);
     const days = await datesList(storage);
@@ -359,6 +390,8 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
                     session: params.session || { $user: globalThis.WORK },
                 });
                 storage.reset();
+                if (storage instanceof FS.$user)
+                    await REFS.addRow(storage.id, row, f.path).catch(() => {});
                 return row;
             }
             catch (e) {

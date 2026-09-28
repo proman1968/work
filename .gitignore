@@ -42,3 +42,6 @@ torus/binnet/models/
 .vscode/tasks.json
 package-lock.json
 /#system/oauth/
+
+# Локальные индексы сервера (доступ по лентам, RAG)
+/.index/
