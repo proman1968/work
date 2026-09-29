@@ -26,12 +26,21 @@
 | `permissions.js` | режимы и защищённые зоны |
 | `session.js` | хост `.task` v2: `prompt`, `approve`, `stop`, `revert`, `configure`, `compact`, `getBody` |
 | `resources.js` | данные из дерева: `ai/system.md`, `ai/config.js`, `ai/agents/*.md`, `ai/skills/*.md` по слоям (пакет движка → классы от корня к месту) |
-| `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `write`, `edit`, `create_class`, `schema`, `call`, `logs`, `history`, `restore`, `delete` |
+| `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `query` (объекты `$data` по полям), `access` (кто видит/меняет элемент), `assign` (роли в `#security`, ADMIN), `send` (запись в ленту с получателями: сообщение, поручение `order` со сроком, отчёт `done` с `reply_to`), `write`, `write_table` (xlsx/csv), `edit`, `create_class`, `schema`, `call`, `logs` (последние записи с id, видом, сроком), `history`, `restore`, `delete` |
+| `tools/docs.js` | `read_table` (xlsx/csv → строки), `import_objects` (строки → объекты `$data` по схеме: сопоставление колонок, типы, обязательные поля, `dry_run`; одна запись ленты на импорт), `render_doc` (шаблон docx/md/html/txt с `{{поле}}`; в docx метки, разрезанные Word, склеиваются) |
+| `tools/memory.js` | `memory` (recall/remember/forget): память места для роли — `<метапапка>/<РОЛЬ>/ai/memory.md` (права зоны), личная — `/USERS/<uid>/$user/ai/memory.md`; блок памяти входит в system основного агента (как сведения, не инструкции); секреты не сохраняются |
+| `tools/work.js` `escalate` | запрос недостающего доступа/решения ответственному: BOSS точки → вышестоящий → ADMIN; поручение из кабинета пользователя (работает и без роли в точке) |
+| `triggers.js` | триггеры на сохранение файлов: `ai/triggers/*.md` точки (системная область — ставит ADMIN): `ext`, `zone`, `as` (от чьего имени, нужна роль в точке), `mode` (`ask` по умолчанию — без побочных действий), `agent`, `notify`, `maxPerHour`; разовый запуск `runOnce`, итог — запись ленты точки получателям; содержимое файла — внешние данные; записи самого триггера новых запусков не вызывают; `WORK_TRIGGERS=0` — выключить |
+| `tools/schedule.js`, `scheduler.js` | `schedule` — запуски текущей задачи по расписанию (`at`+`days` / `every` / `once`, пояс задачи) от имени владельца: новая реплика в ту же `.task`, подтверждения ждут человека; таблица `agent_schedules` в `.index/work.db`; отозванный доступ выключает расписание; `WORK_SCHEDULE=0` — выключить |
 | `tools/services.js` | `web_search`, `web_fetch`, `svc_*` (SCHEMA сервисов `/SERVICES`), `mcp_*` (инструменты MCP-серверов) |
 | `tools/meta.js` | `todo_write`, `ask_user`, `task` (субагенты), `skill`, `save_skill`, `generate_image` |
 | `mcp-pool.js` | пул stdio MCP-серверов: процесс живёт между вызовами, простой 5 мин — закрыть, падение — перезапуск при следующем вызове |
 | `connections.js` | подключения пользователя к внешним сервисам (OAuth2 + PKCE, токен): хранение в `USERS/<uid>/$user/#secret/connections/`, обновление токенов, `/oauth/callback`; OAuth-клиент системы — `#system/oauth/<provider>.json` `{ client_id, client_secret }` |
 | `tools/connect.js` | `connections`, `connect_service` (вход — руками пользователя в карточке), `http_request` (GET — сразу, изменения — всегда с подтверждением, без «разрешить всегда»; внутренняя сеть запрещена), `disconnect_service` |
+| `system.js` | доступ к ОС/сети для корневого ADMIN, настройки `#system/os.json`, проверка путей и аудит |
+| `tools/os-files.js` | `os_ls/stat/read/find`, запись/правка/копирование/перемещение/удаление, `os_import/export` между ОС и WORK |
+| `tools/os-proc.js` | `os_info/processes/services`, управление службами и процессами, `shell`, `install_package` |
+| `tools/net.js` | `net_info/discover/scan/probe/http/candidates/register`; протоколы и коннекторы — `../lan/` |
 | `diff.js` | построчный diff для карточек правок |
 | `util.js` | id, обрезка, оценка токенов, фронтматтер |
 
@@ -46,3 +55,32 @@
 ## 6. Дальнейшие планы
 
 - HTTP MCP: переиспользовать сессию (Mcp-Session-Id) между вызовами.
+
+## ОС и локальная сеть
+
+Инструменты ОС относятся к **серверу WORK**, а не к машине браузера. Они добавляются в
+`makeTools` только для ADMIN корня, а перед выполнением права проверяются повторно.
+Узлам федерации доступ не выдаётся. Субагентам нужны явные имена/маски в `tools`
+(`os_*`, `net_*`, `shell`); `all`/`*`/`readonly` их автоматически не включают.
+
+Файловые инструменты проверяют реальные пути (в том числе junction/symlink), разрешённые
+корни и исключения; дерево WORK обслуживается обычными `ls/read/write`, а не `os_*`.
+Рекурсивная копия/перемещение/удаление проверяет потомков до операции.
+`shell` — полноценная команда с правами процесса: файловые ограничения `roots/deny`
+не являются её песочницей. Можно отключить через `shell: "off"`.
+
+Чтение ОС и поиск объявлений сети выполняются сразу. Изменения ОС подтверждаются;
+`shell`, удаление, установка пакета, управление службами и `net_scan` — каждый раз.
+`net_register` создаёт сервис в `/SERVICES/LAN`; IPP-печать, eSCL-сканирование и OData
+доступны через `svc_*` по ролям зарегистрированного класса. Описание конфигурации и
+ограничений протоколов: `sources/modules/lan/readme.md`.
+
+## Эталонные задачи (оценка качества)
+
+`tests/eval/cases.js` — задачи с проверками по фактам (вызванные инструменты, файлы, записи ленты, ответ);
+`node scripts/agent-eval.mjs [--model /MODELS/…] [--case имя] [--keep]` — прогон на настоящей модели в
+изолированной копии `$server` и `MODELS` (рабочее дерево не трогается). Итоги с ошибками инструментов —
+в `.index/eval/<время>.json`: сравнивай модели и версии промптов/инструментов до и после изменений.
+
+Проверки: `tests/system-os.test.js`, `tests/lan.test.js` (изолированные каталоги и
+эмуляторы устройств на loopback, включая сохранение результата сканирования в WORK).

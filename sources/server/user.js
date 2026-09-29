@@ -35,6 +35,9 @@ export class $user extends $class{
         // WORK_DEV снимает все проверки видимости — и доступ к кабинету тоже (как canSee/canWrite)
         if (DEV_MODE)
             return true;
+        // профили пользователей видны пользователям сервера, но не узлам сети
+        if (params?.session?.principal?.kind === 'node')
+            return false;
         return params?.session?.$user?.id;
     }
 }

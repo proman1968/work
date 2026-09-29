@@ -192,6 +192,45 @@ describe('loop: цикл tool calling', () => {
         assert.equal(items2[1].error, true);
     });
 
+    it('пустой ход (только рассуждение) — сам «дальше» со скрытой подсказкой, без ошибки в ленте', async () => {
+        const log = [];
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm: scripted([{ reasoning: 'думаю…' }, { text: 'готово' }], log), system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'done');
+        assert.equal(items.length, 2);
+        assert.equal(items[1].content, 'готово');
+        assert.match(log[1].messages.at(-1).content, /пустым/);
+    });
+
+    it('пустые ходы подряд — ошибка с причиной; в контекст модели она не идёт', async () => {
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm: scripted([{ reasoning: 'a' }, { reasoning: 'b' }, { reasoning: 'c' }]), system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'error');
+        assert.equal(items.length, 2);
+        assert.match(items[1].content, /пустой ответ.*рассуждение/);
+        assert.equal(toMessages('S', items).length, 2);
+    });
+
+    it('поток оборвался без [DONE] и finish_reason — повтор хода', async () => {
+        let n = 0;
+        const llm = {
+            name: 'mock', contextTokens: 100000,
+            async *stream() {
+                if (n++ === 0) {
+                    yield { type: 'finish', reason: null, done: false };
+                    return;
+                }
+                yield 'ok';
+                yield { type: 'finish', reason: 'stop', done: true };
+            },
+        };
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm, system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'done');
+        assert.equal(n, 2);
+        assert.equal(items[1].content, 'ok');
+    });
+
     it('сжатие: старая часть ленты → сводка, контекст начинается со сводки', async () => {
         const items = [];
         for (let k = 0; k < 6; k++) {

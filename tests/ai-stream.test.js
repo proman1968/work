@@ -90,6 +90,17 @@ describe('streamChat: нативные tool_calls', () => {
         ]);
     });
 
+    it('конец ответа: finish_reason и [DONE] — событие finish; обрыв — done:false', async () => {
+        installWork([sseLine({ choices: [{ delta: { content: 'a' }, finish_reason: 'length' }] }), 'data: [DONE]\n']);
+        let fin = (await collect(ai, { messages })).events.find(e => e.type === 'finish');
+        assert.equal(fin.reason, 'length');
+        assert.equal(fin.done, true);
+        installWork([sseLine({ choices: [{ delta: { content: 'a' } }] })]);
+        fin = (await collect(ai, { messages })).events.find(e => e.type === 'finish');
+        assert.equal(fin.reason, null);
+        assert.equal(fin.done, false);
+    });
+
     it('ошибка в SSE-потоке — исключение, а не тишина', async () => {
         installWork([sseLine({ error: { message: 'boom' } })]);
         await assert.rejects(() => collect(ai, { messages }), /boom/);

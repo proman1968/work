@@ -66,10 +66,13 @@ describe('path-syntax', () => {
     });
 
     it('fixWorkMdLinks rewrites relative markdown href to WORK form', () => {
-        const md = 'See [page](../../../../sources/page.html) please';
+        // от папки readme (…/site/$handler) шесть уровней вверх — /$server, семь — корень WORK
+        const md = 'See [page](../../../../../../sources/page.html) and [root](../../../../../../../sources/page.html) and [near](../readme.md) please';
         const base = '/$server/$folder/$class/handlers/pages/site/$handler/readme.md';
         const fixed = fixWorkMdLinks(md, base);
         assert.match(fixed, /\[page\]\(\/\$server\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
+        assert.match(fixed, /\[root\]\(\/sources\/page\.html\/~\/handlers\/pages\/form\/\)/);
+        assert.match(fixed, /\[near\]\(\/\$server\/\$folder\/\$class\/handlers\/pages\/site\/readme\.md\/~\/handlers\/pages\/form\/\)/);
     });
 
     it('fixWorkMdLinks linkifies path-like backticks and skips bare names', () => {

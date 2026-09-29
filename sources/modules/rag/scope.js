@@ -248,7 +248,10 @@ export async function buildContexts(point, params = {}) {
     let cabinet = null;
     if (uid && !system) {
         try {
-            cabinet = await WORK.get_item('/USERS//' + uid);
+            // кабинет субъекта: у узла сети — его класс в /NODES (только лента отношений)
+            cabinet = session.principal?.kind === 'node'
+                ? null
+                : await WORK.get_item('/USERS//' + uid);
             if (Array.isArray(cabinet))
                 cabinet = cabinet[0];
         }

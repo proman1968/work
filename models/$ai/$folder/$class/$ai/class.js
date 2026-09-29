@@ -227,10 +227,15 @@ export default {
             if (args != null)
                 e.args = appendFunctionArgs(e.args, args);
         };
+        // Конец ответа: finish_reason и/или [DONE]; без обоих — поток оборвался (цикл агента повторит ход).
+        let finishReason = null;
+        let sawDone = false;
         const parseLine = function* (line) {
             if (!line.startsWith('data:'))
                 return;
             const jsonStr = line.slice(5).trim();
+            if (jsonStr === '[DONE]')
+                sawDone = true;
             if (!jsonStr || jsonStr === '[DONE]')
                 return;
             let json;
@@ -242,6 +247,8 @@ export default {
             }
             if (json.error)
                 throw new Error('LLM ' + body.model + ': ' + (json.error.message || JSON.stringify(json.error)));
+            if (json.choices?.[0]?.finish_reason)
+                finishReason = String(json.choices[0].finish_reason);
             const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
             const reasoning = delta.reasoning ?? delta.reasoning_content;
             if (reasoning)
@@ -294,6 +301,7 @@ export default {
                     arguments: parseFunctionArgs(c.args),
                 })),
             };
+        yield { type: 'finish', reason: finishReason, done: sawDone, dropped: calls.filter(c => c && !c.name).length || undefined };
         })();
     },
 

@@ -99,7 +99,34 @@ ODA({
             <li ~for="llmTests"><span class="{{$for.item.cls}}">{{$for.item.mark}} {{$for.item.id}} {{$for.item.label}}</span> — {{$for.item.details}}<span ~if="$for.item.ms"> ({{$for.item.ms}}мс)</span></li>
         </ul>
     </div>
-    <div class="card" ~if="focused && !['gpu','tokenizer','embedding','linear','mamba','head','llm'].includes(focused.id)">
+    <div class="card" ~if="focused?.id === 'lab'">
+        <div class="sub">Сценарии test/experiments.js — те же, что <code>node test/bench.mjs</code>. Конфигурация модели — JSON, параметры теста — «ключ=значение».</div>
+        <div class="row" style="margin-top: 8px">
+            <b>Модель:</b>
+            <button class="btn" :style="labPreset === 'ste' ? 'background:#4d85cf;color:#fff' : ''" @tap="labSetPreset('ste')">STE (новый)</button>
+            <button class="btn" :style="labPreset === 'vote' ? 'background:#4d85cf;color:#fff' : ''" @tap="labSetPreset('vote')">Старый (голосование)</button>
+            <span class="muted">зерно</span><input type="number" style="width: 60px" ::value="labSeed">
+        </div>
+        <textarea style="width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; min-height: 60px; margin-top: 6px" ::value="labCfgText" @input="labPreset = ''"></textarea>
+        <div class="t-fail" ~if="labError">{{labError}}</div>
+        <div class="row" style="margin-top: 6px">
+            <button class="btn primary" :disabled="labRunning" @tap="labRunList(true)">▶ Быстрые (S1, S2, S6, S7)</button>
+            <button class="btn" :disabled="labRunning" @tap="labRunList(false)">▶ Все эксперименты</button>
+            <button class="btn" ~if="labRunning" style="border-color:#c33;color:#a11" @tap="labStop">■ Стоп</button>
+            <button class="btn" @tap="labCopyReport">Копировать отчет</button>
+        </div>
+        <div class="t-run" style="margin-top: 6px" ~if="labProgress">{{labProgress}}</div>
+        <table style="border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px">
+            <tr ~for="labItems" style="border-bottom: 1px solid #eee">
+                <td style="padding: 4px; vertical-align: top" class="{{$for.item.cls}}">{{$for.item.mark}}</td>
+                <td style="padding: 4px; vertical-align: top; min-width: 170px"><b>{{$for.item.id}}</b> <span class="muted">{{$for.item.time}}</span><div class="muted">{{$for.item.info}}</div></td>
+                <td style="padding: 4px; vertical-align: top"><input style="font-family: monospace; font-size: 12px; width: 230px" ::value="$for.item.params"></td>
+                <td style="padding: 4px; vertical-align: top; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word">{{$for.item.details}}<span class="muted" ~if="$for.item.sec"> · {{$for.item.sec}}с</span></td>
+                <td style="padding: 4px; vertical-align: top"><button class="btn" style="padding: 3px 10px" :disabled="labRunning" @tap="labRunOne($for.item)">▶</button></td>
+            </tr>
+        </table>
+    </div>
+    <div class="card" ~if="focused && !['gpu','tokenizer','embedding','linear','mamba','head','llm','lab'].includes(focused.id)">
         <div><b>{{focused?.label}}</b> — шаг в плане, панель появится позже.</div>
     </div>
     <div class="card">
@@ -174,12 +201,15 @@ ODA({
             { id: 'mamba', label: '5. Mamba', dot: this.tabDot('mamba') },
             { id: 'head', label: '6. Head', dot: this.tabDot('head') },
             { id: 'llm', label: '7. LLM', dot: this.tabDot('llm') },
-            { id: 'node', label: '8. Node-Dawn', disabled: true },
+            { id: 'lab', label: '8. Эксперименты', dot: this.labDot },
         ];
     },
     focused: null,
     attached() {
-        this.focused = this.tabs[0];
+        // ?tab=lab — открыть сразу нужную вкладку
+        const want = new URLSearchParams(location.search).get('tab');
+        this.focused = this.tabs.find(t => t.id === want) || this.tabs[0];
+        this._labInit().catch(e => { this.labError = e.message || String(e); });
     },
     log(msg) {
         this.logLines = [...(this.logLines || []), `[${new Date().toLocaleTimeString()}] ${msg}`];
@@ -1240,5 +1270,152 @@ ODA({
         this.llmSummary = s.text; this.llmPill = s.pill;
         this._updateOverall();
         return r;
+    },
+
+    // --- 8. Эксперименты: сценарии test/experiments.js в браузере ---
+    labPreset: 'ste',
+    labCfgText: '',
+    labSeed: 1,
+    labRunning: false,
+    labStopRequested: false,
+    labProgress: '',
+    labError: '',
+    labItems: [
+        { id: 'S1', params: '', quick: true, time: '~5с' },
+        { id: 'S2', params: '', quick: true, time: '~5с' },
+        { id: 'S6', params: '', quick: true, time: '~10с' },
+        { id: 'S7', params: '', quick: true, time: '~10с' },
+        { id: 'M1', params: 'steps=10000 maxd=8 layers=0,1', time: '~2–5 мин' },
+        { id: 'M2', params: 'steps=20000 pairs=4 layers=1', time: '~5–10 мин' },
+        { id: 'R1', params: 'epochs=8', time: '~1 мин' },
+        { id: 'R2', params: 'lines=400 epochs=6 layers=1 modes=full', time: '~5–15 мин' },
+        { id: 'G1', params: 'epochs=15 len=30', time: '~30с' },
+    ].map(d => ({ ...d, info: '', status: 'idle', mark: '○', cls: 't-idle', details: 'не запущен', sec: '' })),
+    get labDot() {
+        const items = this.labItems || [];
+        if (items.some(x => x.status === 'running')) return 'run';
+        if (items.some(x => x.status === 'fail')) return 'fail';
+        if (items.some(x => x.status === 'pass')) return 'ok';
+        return '';
+    },
+    async _labLib() {
+        if (!this._labLibPromise) {
+            this._labLibPromise = (async () => {
+                try {
+                    const [exp, gpuMod, llmMod] = await Promise.all([
+                        import('../test/experiments.js'),
+                        import('./browser-gpu.js'),
+                        import('../src/core/llm.js'),
+                    ]);
+                    return { ...exp, BrowserGpu: gpuMod.BrowserGpu, LLM: llmMod.LLM };
+                } catch (e) {
+                    this._labLibPromise = null;
+                    throw new Error('не загрузился test/experiments.js (сервер видит файл?): ' + (e.message || e));
+                }
+            })();
+        }
+        return this._labLibPromise;
+    },
+    async _labInit() {
+        const lib = await this._labLib();
+        if (!this.labCfgText) this.labCfgText = JSON.stringify(lib.DEFAULT_STE, null, 1);
+        if (!this.labItems[0].info) this.labItems = this.labItems.map(x => ({ ...x, info: lib.TEST_INFO[x.id] || '' }));
+        return lib;
+    },
+    async labSetPreset(name) {
+        const lib = await this._labInit();
+        this.labPreset = name;
+        this.labCfgText = JSON.stringify(name === 'ste' ? lib.DEFAULT_STE : {}, null, 1);
+    },
+    labStop() {
+        this.labStopRequested = true;
+        this.labProgress = 'остановка после текущего шага…';
+    },
+    _labUpdate(item, patch) {
+        Object.assign(item, patch);
+        this.labItems = [...this.labItems];
+    },
+    async labRunOne(item) {
+        if (this.labRunning) return;
+        this.labRunning = true; this.labStopRequested = false;
+        try { await this._labRun(item); }
+        finally { this.labRunning = false; this.labProgress = ''; }
+    },
+    async labRunList(quickOnly) {
+        if (this.labRunning) return;
+        this.labRunning = true; this.labStopRequested = false;
+        try {
+            const list = this.labItems.filter(x => !quickOnly || x.quick);
+            for (const item of list) {
+                if (this.labStopRequested) break;
+                await this._labRun(item);
+            }
+            const done = list.filter(x => x.status === 'pass' || x.status === 'fail');
+            this.log(`Эксперименты: ${done.filter(x => x.status === 'pass').length}/${done.length} PASS`);
+        } finally { this.labRunning = false; this.labProgress = ''; }
+    },
+    async _labRun(item) {
+        let gpu = null;
+        const t0 = performance.now();
+        this._labUpdate(item, { status: 'running', mark: '…', cls: 't-run', details: 'выполняется…', sec: '' });
+        try {
+            const lib = await this._labInit();
+            let cfg;
+            try { cfg = JSON.parse(this.labCfgText || '{}'); this.labError = ''; }
+            catch (e) { this.labError = 'ошибка JSON: ' + e.message; throw new Error(this.labError); }
+            const params = { cfg };
+            for (const part of String(item.params || '').trim().split(/\s+/).filter(Boolean)) {
+                const [k, ...v] = part.split('=');
+                params[k] = v.length ? v.join('=') : true;
+            }
+            const texts = {};
+            const loadText = async (name) => {
+                const url = new URL(`../dataset/${name === 'sample' ? 'sample.txt' : 'text_corpus.txt'}`, import.meta.url);
+                if (!texts[name]) {
+                    const r = await fetch(url);
+                    if (!r.ok) throw new Error(`не загрузился ${url.pathname}: HTTP ${r.status}`);
+                    texts[name] = await r.text();
+                }
+                return texts[name];
+            };
+            gpu = await lib.BrowserGpu.create();
+            const info = gpu.adapter.info || {};
+            this.adapterInfo = `${info.vendor || '?'} / ${info.architecture || '?'} / ${info.device || '?'} (${info.description || 'gpu'})`;
+            const tests = lib.createExperiments({
+                gpu, LLM: lib.LLM, loadText, folder: 'browser-test',
+                onProgress: (t) => {
+                    if (this.labStopRequested) throw new Error('остановлено');
+                    this.labProgress = `${item.id}: ${t}`;
+                },
+                yieldNow: () => new Promise(r => setTimeout(r, 0)),
+            });
+            this.log(`▶ ${item.id} ${item.params} | seed ${this.labSeed} | cfg ${JSON.stringify(cfg)}`);
+            const r = await lib.withSeed(Number(this.labSeed) || 1, () => tests[item.id](params));
+            const sec = ((performance.now() - t0) / 1000).toFixed(1);
+            const tps = r.tps ? ` · ${Math.round(r.tps)} ток/с` : '';
+            this._labUpdate(item, { status: r.pass ? 'pass' : 'fail', mark: r.pass ? '✓' : '✗', cls: r.pass ? 't-pass' : 't-fail', details: r.details + tps, sec });
+            this.log(`${r.pass ? 'PASS' : 'FAIL'} ${item.id}: ${r.details}${tps} (${sec}с)`);
+            if (r.chart?.length > 1) {
+                this.chartLegend = { M1: ['L=0 (без памяти)', 'L=1'], M2: ['точность n_max'], R1: ['только Head', 'вся цепочка'], R2: ['модель (acc эпохи)', 'биграмма (train)'] }[item.id] || [`${item.id} acc`];
+                this.chartData = r.chart;
+            }
+        } catch (e) {
+            const sec = ((performance.now() - t0) / 1000).toFixed(1);
+            this._labUpdate(item, { status: 'fail', mark: '✗', cls: 't-fail', details: 'исключение: ' + (e.message || e), sec });
+            this.log(`FAIL ${item.id}: ${e.stack || e.message || e}`);
+        } finally {
+            gpu?.destroy();
+        }
+    },
+    async labCopyReport() {
+        const md = [`# BinNet experiments ${new Date().toLocaleString()}`, '',
+            `Adapter: ${this.adapterInfo || '—'}`, `Seed: ${this.labSeed}`, '```json', this.labCfgText, '```', '',
+            ...this.labItems.map(x => `- [${x.status === 'pass' ? 'x' : ' '}] ${x.id}${x.params ? ' (' + x.params + ')' : ''}: ${x.details}${x.sec ? ` (${x.sec}с)` : ''}`)].join('\n');
+        try {
+            await navigator.clipboard.writeText(md);
+            this.log('Отчет экспериментов скопирован в буфер обмена');
+        } catch (e) {
+            this.log('clipboard недоступен:\n' + md);
+        }
     },
 });

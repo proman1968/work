@@ -4,18 +4,59 @@ import { DEV_MODE, HOST, CHALLENGE_TTL_MS } from './config.js';
 import { mailer } from './mail.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
+import { audit } from '../server/access/audit.js';
 
 const REGISTER_CODE_TTL_MS = 10 * 60 * 1000;
+const REGISTER_MAX_ATTEMPTS = 5;
+const REGISTER_START_INTERVAL_MS = 30 * 1000;
+const REGISTER_STARTS_PER_HOUR = 5;
+const UID_RE = /^[0-9A-F]{16}$/;
+
+/** Незавершённые входы: challengeId → { value, uid, expiresAt }. Одноразовые, со сроком. */
+const pendingLogins = new Map();
+
+/** Отправки кода по адресу: защита от почтовой бомбардировки и перебора. */
+const startsByEmail = new Map();
+
+/**
+ * uid пользователя = первые 16 hex SHA-256 от email (как на клиенте, user-profile.js).
+ * Привязка uid к адресу: код подтверждения уходит владельцу адреса, поэтому
+ * зарегистрировать ключ на чужой uid нельзя.
+ */
+export function uidOfEmail(email) {
+    return crypto.createHash('sha256').update(String(email), 'utf8').digest('hex').slice(0, 16).toUpperCase();
+}
+
+function throttleStart(session, email) {
+    const now = Date.now();
+    if (session.registration?.at && now - session.registration.at < REGISTER_START_INTERVAL_MS)
+        throw new Error('Код уже отправлен, повторите через 30 секунд');
+    const key = String(email).trim().toLowerCase();
+    const list = (startsByEmail.get(key) || []).filter(t => now - t < 3600_000);
+    if (list.length >= REGISTER_STARTS_PER_HOUR)
+        throw new Error('Слишком много запросов кода для этого адреса, попробуйте позже');
+    list.push(now);
+    startsByEmail.set(key, list);
+}
+
+function sameCode(a, b) {
+    const x = Buffer.from(String(a ?? ''));
+    const y = Buffer.from(String(b ?? ''));
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
 
 export const authMethods = {
     async user_register_start(params = {}) {
-        let { uid, email } = params.post;
-        if (!email)
+        let { uid, email } = params.post || {};
+        if (!email || typeof email !== 'string')
             throw new Error("Не указан email");
-        if (uid?.length !== 16)
+        const expected = uidOfEmail(email);
+        if (uid != null && String(uid).toUpperCase() !== expected)
             throw new Error("Неверный uid");
+        uid = expected;
         let session = params.session;
-        let code = crypto.randomInt(1000, 9999).toString();
+        throttleStart(session, email);
+        let code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
         const mailOptions = {
             from: `"ODANT-WORK" <${mailer.options.auth.user}>`,
             to: email,
@@ -32,8 +73,8 @@ export const authMethods = {
                 <p>С уважением,<br>WORK</p>
             `,
         };
-        session.check_code = code;
-        session.check_code_at = Date.now();
+        session.registration = { uid, email, code, at: Date.now(), attempts: 0 };
+        delete session.credentials;
         if (DEV_MODE) {
             console.log('[DEV] Registration code for', email, ':', code);
         }
@@ -48,16 +89,23 @@ export const authMethods = {
     },
 
     async user_register_process(params = {}) {
-        let { uid, email, name, surname, patronymic } = params.post;
+        let { name, surname, patronymic } = params.post || {};
         let { code, session } = params;
-        if (!session.check_code_at || Date.now() - session.check_code_at > REGISTER_CODE_TTL_MS) {
+        const reg = session.registration;
+        if (!reg || Date.now() - reg.at > REGISTER_CODE_TTL_MS) {
+            delete session.registration;
             throw new Error("Срок действия проверочного кода истёк");
         }
-        if (session.check_code !== code) {
+        if (++reg.attempts > REGISTER_MAX_ATTEMPTS) {
+            delete session.registration;
+            throw new Error("Превышено число попыток ввода кода, запросите новый");
+        }
+        if (!sameCode(reg.code, code)) {
+            audit('register_code_fail', { email: reg.email, attempts: reg.attempts, params });
             throw new Error("Введен неверный проверочный код");
         }
-        delete session.check_code;
-        delete session.check_code_at;
+        delete session.registration;
+        const { uid, email } = reg;
         let label = ((surname || '') + ' ' + (name || '') + ' ' + (patronymic || '')).trim() || email;
         session.credentials = {
             uid,
@@ -67,13 +115,23 @@ export const authMethods = {
             email,
             name: label || email,
             challenge: crypto.randomUUID(),
+            verified: true,
         };
         return session.credentials;
     },
 
     async user_register_finish(params = {}) {
-        let { credentials: { uid, icon, surname, name, patronymic, email, publicKey, time }, signature } = params.post;
+        let { credentials: { uid: postUid, icon, surname, name, patronymic, publicKey, time } = {}, signature } = params.post || {};
         let session = params.session;
+        // uid и email — только из проверенной кодом регистрации этой сессии
+        const verified = session.credentials?.verified ? session.credentials : null;
+        if (!verified || !UID_RE.test(verified.uid))
+            throw new Error("registration failed: адрес не подтверждён");
+        const { uid, email } = verified;
+        if (postUid != null && String(postUid).toUpperCase() !== uid)
+            throw new Error("registration failed: uid не совпадает с подтверждённым адресом");
+        if (!publicKey || !signature || time == null)
+            throw new Error("registration failed: нет ключа или подписи");
 
         let PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
         const isValid = await crypto.subtle.verify(
@@ -114,10 +172,9 @@ export const authMethods = {
         }
 
         session.credentials = { ...session.credentials, ...credentials };
-        session.$user = $user_item;
-        session.id = uid;
-        session.uid = uid;
-
+        delete session.credentials.verified;
+        $server.signIn(session, $user_item);
+        audit('register', { params, keys: Object.keys(credentials.keys).length });
 
         if (isFirstUser) {
             await ensureBootstrapAdmin(uid, params);
@@ -132,37 +189,52 @@ export const authMethods = {
 
     async user_login_start(params = {}) {
         const { uid, session, challengeId } = params;
-        if (!uid) throw new Error("uid required");
+        if (!uid || !UID_RE.test(String(uid).toUpperCase()))
+            throw new Error("uid required");
+        if (!challengeId || String(challengeId).length > 64)
+            throw new Error("challengeId required");
         let users = await WORK.$users;
         let $user = await users.get_item('//' + uid);
         if (!$user)
             throw new Error("User not registered");
         $user.reset();
         await $user.init;
-        session.credentials = $user.DATA;
-        session.$user = $user;
-        session.challenge ??= {};
+        // До проверки подписи — только ожидание входа; личность сессии не меняется.
+        // Ожидание хранится по challengeId (случайный UUID клиента), а не в сессии: параллельные запросы
+        // страницы после перезапуска могут получить разные cookie — вход от этого не рвётся.
+        const now = Date.now();
+        for (const [id, c] of pendingLogins)
+            if (now > c.expiresAt)
+                pendingLogins.delete(id);
+        const key = String(challengeId);
+        if (pendingLogins.size >= 10_000)
+            throw new Error("Слишком много незавершённых входов, повторите позже");
+        const perUid = [...pendingLogins.values()].filter(c => c.uid === $user.id).length;
+        if (perUid >= 16)
+            throw new Error("Слишком много незавершённых входов");
         const challenge = crypto.randomUUID();
-        session.challenge[challengeId] = {
-            value: challenge,
-            expiresAt: Date.now() + CHALLENGE_TTL_MS,
-        };
+        pendingLogins.set(key, { value: challenge, uid: $user.id, expiresAt: now + CHALLENGE_TTL_MS });
         return challenge;
     },
 
     async user_login_finish(params = {}) {
         const { uid, session, time, challengeId } = params;
         if (session.uid !== uid) {
-            let signature = params.post.signature;
+            let signature = params.post?.signature;
             if (!signature) throw new Error("login session break. Need signature.");
-            const challengeEntry = session.challenge?.[challengeId];
+            const challengeEntry = pendingLogins.get(String(challengeId));
             if (!challengeEntry) throw new Error("login session break. Challenge expired or missing.");
+            pendingLogins.delete(String(challengeId));
             const challengeValue = challengeEntry.value ?? challengeEntry;
-            if (challengeEntry.expiresAt && Date.now() > challengeEntry.expiresAt) {
-                delete session.challenge[challengeId];
+            if (!challengeEntry.expiresAt || Date.now() > challengeEntry.expiresAt)
                 throw new Error("login session break. Challenge expired.");
-            }
-            let publicKey = session.credentials.keys[time];
+            if (challengeEntry.uid !== uid)
+                throw new Error("login session break. Challenge issued for another user.");
+            const $user = await (await WORK.$users).get_item('//' + uid);
+            if (!$user)
+                throw new Error("User not registered");
+            await $user.init;
+            let publicKey = $user.DATA?.keys?.[time];
             if (!publicKey) throw new Error("login session break. Need publicKey.");
             let PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
             const isValid = await crypto.subtle.verify(
@@ -171,11 +243,15 @@ export const authMethods = {
                 Buffer.from(signature, "base64"),
                 new TextEncoder().encode(challengeValue)
             );
-            delete session.challenge[challengeId];
-            if (!isValid) throw new Error("login failed " + session.uid + ':' + uid);
-            session.uid = uid;
-            session.$user.online = undefined;
-            session.$user.reset();
+            if (!isValid) {
+                audit('login_fail', { uid, params });
+                throw new Error("login failed");
+            }
+            session.credentials = $user.DATA;
+            $server.signIn(session, $user);
+            audit('login', { params });
+            $user.online = undefined;
+            $user.reset();
             $server.broadcastAuthChangedToSession(session, { uid, reason: 'login' });
         }
         return "Вход выполнен";

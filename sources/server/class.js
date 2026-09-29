@@ -366,10 +366,14 @@ export class $class extends $folder{
 
     /** uid пользователя из params.session (сессия host). */
     static resolveUid(params = {}) {
-        const session = params.session;
-        if (!session?.uid)
+        const session = params?.session;
+        if (!session)
             return null;
-        return session.$user?.id ?? session.uid;
+        // Субъект сессии задаётся только после проверки (signIn / подпись узла);
+        // внутренние сессии ядра ({uid}, {uid, $user}) — по uid
+        if (session.principal?.id)
+            return session.principal.id;
+        return typeof session.uid === 'string' && session.uid ? session.uid : null;
     }
 
     /**
@@ -448,7 +452,19 @@ export class $class extends $folder{
                 }
             }
         }
+        // субъект-узел сети: только роли, допускающие узлы, и только заявленные его представителем
+        const principal = params.session?.principal;
+        if (principal?.kind === 'node') {
+            const claimed = principal.roles?.length ? new Set(principal.roles) : null;
+            return POLICY.orderRoles(roles.filter(r =>
+                (declared[r]?.principals || []).includes('node') && (!claimed || claimed.has(r))), declared);
+        }
         return POLICY.orderRoles(roles, declared);
+    }
+
+    /** Идентификатор субъекта, которым является этот класс ($user — uid, $node — id сервера). */
+    get principalId() {
+        return this.id;
     }
 
     /** Роль назначена пользователю в этой точке (а не унаследована сверху). */
@@ -485,10 +501,14 @@ export class $class extends $folder{
     async chatSource(params = {}) {
         const uid = $class.resolveUid(params);
         const declared = await this.declared_roles;
+        // кабинет субъекта: пользователь — /USERS//uid, узел сети — его класс в /NODES
+        const own = params.session?.principal?.kind === 'node'
+            ? params.session.$user?.path
+            : (uid ? '/USERS//' + uid : null);
         const viaRole = role => {
             if (role === $class.ROLES.GUEST || declared[role]?.feed === 'point')
                 return this.path;
-            return uid ? '/USERS//' + uid : this.path;
+            return own || this.path;
         };
         // Явно выбранная роль в UI имеет приоритет
         if (params.role && declared[params.role])
@@ -497,7 +517,7 @@ export class $class extends $folder{
         const roles = await this.roles(params);
         if (roles.some(r => r === $class.ROLES.GUEST || declared[r]?.feed === 'point'))
             return this.path;
-        return uid ? '/USERS//' + uid : this.path;
+        return own || this.path;
     }
     /**
      * Элемент-источник логов для текущей роли (this или $user).
@@ -571,10 +591,14 @@ export class $class extends $folder{
         return true;
     }
     async save_file(params = {}){
-        // Логи (data.logs) — системная операция: всегда в meta_folder, минуя work_zone.
+        // Лента — системная операция: всегда запись дня `<мета>/logs/ГГГГ-ММ-ДД/{время}.{автор}.logs`
+        // (одна запись — один файл: права, RAG и индекс лент работают по записям),
+        // независимо от того, объявлен ли тип $data/$logs в дереве.
         if (params.filename === 'data.logs') {
-            const folder = await this.meta_folder.getFolderToSaveFile(params);
-            return folder.save_file(params);
+            if (params.session && params.session.$user !== globalThis.WORK)
+                throw new Error(ACCESS_DENIED);
+            const folder = await this.meta_folder._get_next_item('logs', FS.$folder);
+            return folder.save_data_file(params);
         }
         const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
@@ -662,7 +686,10 @@ export class $class extends $folder{
      * @returns {Promise<Array>} Массив записей логов с содержимым
      */
     async read_log_bodies(dayOrParams = {}){
-        return LOGS.loadBodies(this, LOGS.normalizeQuery(dayOrParams));
+        const params = typeof dayOrParams === 'string' ? { day: dayOrParams } : dayOrParams;
+        const ownOnly = await this._feedOwnOnly(params);
+        const rows = await LOGS.loadBodies(this, LOGS.normalizeQuery(params));
+        return ownOnly ? rows.filter(r => POLICY.isOwnLogRow(r, ownOnly)) : rows;
     }
 
     /**
@@ -674,7 +701,29 @@ export class $class extends $folder{
      * @returns {Promise<object|null>} Запись лога или null
      */
     async read_log_entry(params = {}) {
-        return LOGS.findEntry(this, params.taskPath || params.path || params.entryPath);
+        const row = await LOGS.findEntry(this, params.taskPath || params.path || params.entryPath);
+        const ownOnly = row && await this._feedOwnOnly(params);
+        return ownOnly && !POLICY.isOwnLogRow(row, ownOnly) ? null : row;
+    }
+
+    /**
+     * Право писать в ленту точки (сообщение, поручение, отчёт): это не изменение системы,
+     * а запись в траекторию — доступно любой назначенной в точке роли и владельцу кабинета.
+     */
+    async _assertCanPost(params = {}) {
+        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+            return;
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            throw new Error(ACCESS_DENIED);
+        const node = params.session.principal?.kind === 'node';
+        if (!node && this.id === uid)
+            return;
+        if (globalThis.WORK && !node && await this._isWorkAdmin(params))
+            return;
+        if ((await this.roles(params)).length)
+            return;
+        throw new Error(ACCESS_DENIED);
     }
 
     /**
@@ -686,15 +735,24 @@ export class $class extends $folder{
      * @returns {Promise<object>} Запись лога
      */
     async save_message(params = {}) {
-        await this.assertAccess(params, $class.ACCESS_LEVEL.WRITE);
+        await this._assertCanPost(params);
         const time = Date.now();
         const row = { time };
-        if (params.sender)
-            row.sender = params.sender;
-        else if (params.session?.uid)
-            row.sender = params.session.uid;
+        // автор — только из проверенной сессии; явный sender — лишь для внутренних вызовов ядра
+        const internal = !params.session || params.session.$user === globalThis.WORK;
+        const uid = $class.resolveUid(params);
+        if (uid)
+            row.sender = uid;
+        else if (internal && params.sender)
+            row.sender = String(params.sender);
         else if (params.session?.$user === globalThis.WORK)
             row.sender = WORK.id;
+        const principal = params.session?.principal;
+        if (principal?.actor) {
+            row.actor = principal.actor;
+            if (principal.actorLabel)
+                row.actorLabel = principal.actorLabel;
+        }
         if (params.message != null)
             row.content = params.message;
         const includes = LOGS.normalizeIncludes(params.includes);
@@ -707,8 +765,16 @@ export class $class extends $folder{
             row.receivers = params.receivers.slice();
         if (params.mainContext)
             row.mainContext = params.mainContext;
+        // поручения: вид записи, срок, ответ на запись (контроль исполнения по ленте)
+        if (['message', 'order', 'done', 'reject', 'remind'].includes(params.kind))
+            row.kind = params.kind;
+        if (params.due && /^\d{4}-\d{2}-\d{2}(T[\d:.+\-Z]+)?$/.test(String(params.due)))
+            row.due = String(params.due);
+        // ссылка на запись: id вида «автор:время» (см. row.id) или WORK-путь
+        if (typeof params.reply_to === 'string' && (/^[\w.@-]{1,80}:\d{10,16}$/.test(params.reply_to) || /^\/[^\0]{1,1000}$/.test(params.reply_to)))
+            row.reply_to = params.reply_to;
         await LOGS.appendRow(this, row, params);
-        return row;
+        return { ...row, id: (row.sender || 'system') + ':' + row.time };
     }
 
     /**
@@ -734,8 +800,7 @@ export class $class extends $folder{
 
     /** @deprecated используй logs({ mode: 'index' }) */
     async log_index(params = {}){
-        params = LOGS.normalizeQuery(params);
-        return LOGS.buildIndex(await LOGS.loadBodies(this, params), params);
+        return this.logs({ ...params, mode: 'index' });
     }
 
     /**
@@ -886,7 +951,13 @@ export class $class extends $folder{
         if (!uid) {
             return this._isSystemPath(item);
         }
-        if (this.id === uid) return true;
+        if (params.session?.principal?.kind === 'node') {
+            // узел сети в своём классе реестра видит только свою ленту (отношения с нами),
+            // а не наши внутренние зоны и назначения представителей
+            if (this.principalId === uid)
+                return item === this || this.areaOf(item).kind === POLICY.AREA.LOGS;
+        }
+        else if (this.id === uid) return true;
         // WORK ADMIN видит всё
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
@@ -928,7 +999,7 @@ export class $class extends $folder{
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
-        if (this.id === uid) return true;
+        if (this.id === uid && params.session?.principal?.kind !== 'node') return true;
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
         if (this._isSystemItem(item))
@@ -940,7 +1011,10 @@ export class $class extends $folder{
             return false;
         const declared = this._declaredRolesSync();
         const local = this._roleIds(role, declared).includes(uid);
-        return POLICY.canWrite(declared[role], this.areaOf(item), { local });
+        return POLICY.canWrite(declared[role], this.areaOf(item), {
+            local,
+            executable: POLICY.isExecutablePath(item.path, this.path),
+        });
     }
 
     /**

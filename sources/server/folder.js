@@ -5,7 +5,8 @@ import * as mime from "mime-types";
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
-import { safeNodeName } from './safe-node-name.js';
+import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-node-name.js';
+import { DEV_MODE } from '../host/config.js';
 
 /**
  * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
@@ -164,25 +165,25 @@ export class $folder extends $item{
     async getFolderToSaveFile(params = {}) {
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
+        // только имя файла: путь в filename не должен влиять на выбор папки
+        const name = safeNodeName(params.filename);
+        if (!name)
+            throw new Error('Недопустимое имя сохраняемого файла');
 
-        const ext = FS.$file.fileExt(params.filename);
+        const ext = FS.$file.fileExt(name);
         if (ext && this.$class && await this.$class.is_data_type(ext))
             return this._get_next_item(ext, FS.$folder);
 
-        let folder_name = mime.contentType(params.filename);
+        // contentType('a/b') считает аргумент MIME-типом — передаём только расширение
+        let folder_name = ext ? mime.contentType(ext) : false;
         if (folder_name) {
             folder_name = folder_name.split('/')[0];
         }
 
-        if (!folder_name || folder_name === 'application') {
-            let split = params.filename.split('.');
-            if (split.length > 1) {
-                folder_name = split.pop().toLowerCase();
-            }
-            else {
-                folder_name = 'etc';
-            }
-        }
+        if (!folder_name || folder_name === 'application')
+            folder_name = ext ? ext.toLowerCase() : 'etc';
+        if (!isPlainName(folder_name) || /^[$#.]/.test(folder_name))
+            folder_name = 'etc';
 
         return this._get_next_item(folder_name, FS.$folder);
     }
@@ -450,6 +451,9 @@ export class $folder extends $item{
         })
     }
     static build(id = '', parent){
+        // элемент дерева не может указывать вверх по диску: '.'/'..' (в т.ч. в составном id 'a/b')
+        if (String(id).split('/').some(s => s === '..' || s === '.'))
+            throw new Error('Недопустимое имя элемента: ' + id);
         return parent.__items__[id] ??= (()=>{
             return new this({id}, parent);
         })()
@@ -855,7 +859,12 @@ export class $folder extends $item{
         if (!p.deep)
             return Object.assign({}, data);
         p.items ??= 'items';
+        if (!['items', 'entries', 'files', 'folders', 'children'].includes(p.items))
+            throw new Error('info: недопустимый список «' + p.items + '»');
         let items =  await this[p.items];
+        // снаружи — только видимое субъекту (вложенные уровни — тем же фильтром)
+        if (p.session)
+            items = await (await import('./access/gateway.js')).visibleOnly(items, p);
 
         if(p.mask){
             const regexpMask = p.mask
@@ -1287,38 +1296,20 @@ export class $folder extends $item{
      */
     async save_files(params = {}){
         let {post} = params;
+        if (post?.urls?.length)
+            await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
 
         let files = post?.urls?.map(async url=>{
-            url = new URL(url);
-            let options = {
-                method: 'GET',
-                hostname: url.hostname,
-                port: url.port,
-                path: url.pathname,
-            };
-            let service = (url.protocol === "https:")?$server.https:$server.http;
-            let response = await new Promise(async (resolve, reject)=>{
-                const req = service.request(options, async (res) => {
-                    let type = res.headers['content-type'];
-                    let accept_type = mime.contentType(url.pathname.split('/').pop());
-                    if(type !== accept_type){
-                        reject(`Несоответствие ожидаемого типа файла "${accept_type}" полученному "${type}"`);
-                        return;
-                    }
-
-                    const chunks = [];
-                    for await (const chunk of res) {
-                        chunks.push(chunk);
-                    }
-                    let buffer = Buffer.concat(chunks);
-
-                    let file = {buffer, name: type.replace('/', '.')};
-                    resolve(file);
-                });
-                req.on('error', reject);
-                req.end();
-            })
-            return response;
+            const { guardedGet } = await import('../host/net-guard.js');
+            const res = await guardedGet(url, { maxBytes: 100 * 1024 * 1024, timeoutMs: 60_000 });
+            const pathname = new URL(res.url).pathname;
+            const type = String(res.headers['content-type'] || '');
+            const accept_type = mime.contentType(pathname.split('/').pop());
+            if (res.status !== 200)
+                throw new Error(`Загрузка «${url}»: HTTP ${res.status}`);
+            if (type !== accept_type)
+                throw new Error(`Несоответствие ожидаемого типа файла "${accept_type}" полученному "${type}"`);
+            return { buffer: res.body, name: type.replace('/', '.') };
         }) || [];
         files = await Promise.all(files);
         if(post?.files)
@@ -1395,40 +1386,38 @@ export class $folder extends $item{
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if (!params.filename)
             throw new Error('Не указано имя сохраняемого файла');
+        await this._sanitizeWriteTarget(params);
         if (this.$class && await this.$class.is_data_type(params.filename))
             return this.save_data_file(params);
 
         // полный путь к директории сохранения
         let dir = this.dir;
-        // путь к файлу относительно this
-        let filename = params.filename
+        // подпапки относительно this: файл — элемент своей папки (история — рядом с ним, не `.a/b.x`)
+        const subfolders = params.folder ? String(params.folder).split('/').filter(Boolean) : [];
         if (params.folder) {
             dir += '/' + params.folder;
-            filename = params.folder + '/' + filename;
             // для правильной работы сохранения history и log
             delete params.folder;
         }
+        assertInside(this.dir, dir);
 
         const leafPath = dir + '/' + params.filename;
         if (!fs.existsSync(leafPath)) {
             const safe = safeNodeName(params.filename);
             if (!safe)
                 throw new Error('save_file: пустое имя файла после нормализации');
-            if (safe !== params.filename) {
-                filename = filename.endsWith(params.filename)
-                    ? filename.slice(0, -params.filename.length) + safe
-                    : safe;
-                params.filename = safe;
-            }
+            params.filename = safe;
         }
 
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
             this.parent.reset();
+            this.reset();
         }
 
         // полный путь к файлу
         const path = dir + '/' + params.filename;
+        assertInside(this.dir, path);
         if (params?.post?.path) {
             if (params?.post?.originalFilename) {
                 let isRenamed = true;
@@ -1457,7 +1446,12 @@ export class $folder extends $item{
             await fsp.writeFile(path, data, Buffer.isBuffer(data) ? undefined : params);
         }
 
-        const file = await this._get_next_item(filename, FS.$file);
+        let holder = this;
+        for (const seg of subfolders) {
+            holder = await holder._get_next_item(seg, FS.$folder);
+            holder.reset();
+        }
+        const file = await holder._get_next_item(params.filename, FS.$file);
         file.reset();
         this.reset();
         globalThis.WORK_RAG?.invalidate?.(path);
@@ -1465,6 +1459,45 @@ export class $folder extends $item{
         if (params.filename === 'class.js')
             resetMergeCaches();
         return await FS.$file.save_to_history.call(file, params);
+    }
+
+    /**
+     * Может ли автор записи создавать системные имена (`$…` типизаторы, `#…`, скрытые `.…`)
+     * и выходить за пределы зон: внутренние вызовы ядра, DEV, роли с write=all (ADMIN).
+     * Остальным такие имена запрещены — иначе в своей зоне можно создать `$handler/class.js`,
+     * который сервер исполнит при обращении.
+     */
+    async _canUseSystemNames(params = {}) {
+        const session = params?.session;
+        if (DEV_MODE || !session || session.$user === globalThis.WORK)
+            return true;
+        const owner = this.$owner || this.$class;
+        if (!owner)
+            return false;
+        if (await owner._isWorkAdmin?.(params))
+            return true;
+        const declared = await owner.declared_roles;
+        const roles = await owner.roles(params);
+        return roles.some(r => declared?.[r]?.write === 'all');
+    }
+
+    /** Нормализовать имя и подпапку записи из пользовательского ввода (params.filename / params.folder). */
+    async _sanitizeWriteTarget(params) {
+        const system = await this._canUseSystemNames(params);
+        if (!isPlainName(params.filename)) {
+            const safe = safeNodeName(params.filename);
+            if (!safe)
+                throw new Error('save_file: недопустимое имя файла');
+            params.filename = safe;
+        }
+        if (!system && /^[$#.]/.test(params.filename))
+            throw new Error('save_file: системные и скрытые имена создаёт только администратор');
+        if (params.folder != null && params.folder !== '') {
+            params.folder = safeRelPath(params.folder, { allowSystem: system });
+            if (!params.folder)
+                delete params.folder;
+        }
+        return params;
     }
 
     /** Файл данных: JSON-точка в папке расширения (она же история). */
@@ -1497,11 +1530,32 @@ export class $folder extends $item{
             ? params.dateTime.toISOTimezoneString()
             : params.dateTime.toISOString();
         params.date = stamp.slice(0, 10).split('.').toReversed().join('-');
-        const id = time + '.' + uid + '.' + parsed.ext;
         const dir = this.dir + '/' + [...parsed.folders, params.date].join('/');
+        // папка точки (logs/, oml/…) создаётся впервые — родитель должен увидеть её сразу, а не после debounce
+        const created = !fs.existsSync(this.dir);
         fs.mkdirSync(dir, { recursive: true });
-        const json = JSON.stringify(body);
-        await fsp.writeFile(dir + '/' + id, json, 'utf-8');
+        if (created)
+            this.parent?.reset();
+        // имя точки — время.автор.ext: одинаковое время (пакетный импорт, запись в ту же мс)
+        // не должно перезаписать другой объект — сдвигаем на 1 мс до свободного имени
+        let id, json;
+        for (let shift = 0; ; shift++) {
+            if (shift > 1000)
+                throw new Error('save_file: нет свободного имени файла данных');
+            body.time = time + shift;
+            id = body.time + '.' + uid + '.' + parsed.ext;
+            json = JSON.stringify(body);
+            try {
+                await fsp.writeFile(dir + '/' + id, json, { encoding: 'utf-8', flag: 'wx' });
+                break;
+            }
+            catch (e) {
+                if (e.code !== 'EEXIST')
+                    throw e;
+            }
+        }
+        params.time = body.time;
+        params.dateTime = new Date(body.time);
         params.post = json;
         params.message = json;
         let folder = this;
@@ -1523,12 +1577,15 @@ export class $folder extends $item{
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
         if(!params.filename)
             throw new Error('Не указано имя сохраняемого файла')
+        await this._sanitizeWriteTarget(params);
+        delete params.folder;
 
         if(!fs.existsSync(this.dir)){
             fs.mkdirSync(this.dir, { recursive: true });
             this.parent.reset();
         }
         let dir = this.dir + '/' + params.filename;
+        assertInside(this.dir, dir);
 
         let obj = this.write_streams[params.filename];
         if (!obj) {
@@ -1659,6 +1716,10 @@ export class $folder extends $item{
         const id = String(p.id ?? p.name ?? '').trim();
         if (!id)
             throw new Error('ensure_folder: нужен id');
+        if (!isPlainName(id))
+            throw new Error('ensure_folder: недопустимое имя папки');
+        if (/^[$#.]/.test(id) && !(await this._canUseSystemNames(p)))
+            throw new Error('ensure_folder: системные и скрытые папки создаёт только администратор');
         const folder = await this._get_next_item(id, FS.$folder);
         await folder.save();
         return folder;

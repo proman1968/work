@@ -16,6 +16,7 @@ export class BrowserGpu {
     }
 
     destroy() {
+        try { this.flush(); } catch (_) {}
         for (const buf of this.buffers.values()) { try { buf.destroy(); } catch (_) {} }
         this.buffers.clear();
         try { this.device?.destroy(); } catch (_) {}
@@ -58,21 +59,61 @@ export class BrowserGpu {
         return gb;
     }
 
+    _pipelines = new WeakMap();
+    _bindGroups = new WeakMap();
+    _bufIds = new WeakMap();
+    _nextBufId = 1;
+
     compute(compiled_shader, buffers = [], workgroups = [1, 1, 1]) {
-        const pipe = this.device.createComputePipeline({
-            layout: 'auto',
-            compute: { module: compiled_shader, entryPoint: 'main' },
-        });
-        const entries = buffers.map((b, i) => ({ binding: i, resource: { buffer: this._resolveBuffer(b) } }));
-        const bg = this.device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
-        const enc = this.device.createCommandEncoder();
-        const pass = enc.beginComputePass();
+        let pipe = this._pipelines.get(compiled_shader);
+        if (!pipe) {
+            pipe = this.device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: compiled_shader, entryPoint: 'main' },
+            });
+            this._pipelines.set(compiled_shader, pipe);
+        }
+        const gpuBuffers = buffers.map(b => this._resolveBuffer(b));
+        let groups = this._bindGroups.get(pipe);
+        if (!groups) { groups = new Map(); this._bindGroups.set(pipe, groups); }
+        const key = gpuBuffers.map(b => {
+            let id = this._bufIds.get(b);
+            if (!id) { id = this._nextBufId++; this._bufIds.set(b, id); }
+            return id;
+        }).join(',');
+        let bg = groups.get(key);
+        if (!bg) {
+            const entries = gpuBuffers.map((buffer, i) => ({ binding: i, resource: { buffer } }));
+            bg = this.device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
+            groups.set(key, bg);
+        }
+        const pass = this._getEncoder().beginComputePass();
         pass.setPipeline(pipe);
         pass.setBindGroup(0, bg);
         pass.dispatchWorkgroups(...workgroups);
         pass.end();
-        this.device.queue.submit([enc.finish()]);
         return compiled_shader;
+    }
+
+    // Пакетная отправка (как в Node WebGpu): compute/copy — в общий encoder,
+    // submit перед writeBuffer/readData, чтобы не нарушить порядок.
+    _encoder = null;
+    _pending = 0;
+    _getEncoder() {
+        if (!this._encoder) this._encoder = this.device.createCommandEncoder();
+        if (++this._pending > 512) {
+            this.flush();
+            this._encoder = this.device.createCommandEncoder();
+            this._pending = 1;
+        }
+        return this._encoder;
+    }
+    flush() {
+        if (this._encoder) {
+            this.device.queue.submit([this._encoder.finish()]);
+            this._encoder = null;
+            this._pending = 0;
+        }
     }
 
     writeData(bufferArray, options = {}) {
@@ -92,9 +133,11 @@ export class BrowserGpu {
                 : GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
             buffer = this.device.createBuffer({ size: alignSize, usage, mappedAtCreation: false, label: options.label || '' });
             this.buffers.set(bufferArray, buffer);
+            this.flush();
             this.device.queue.writeBuffer(buffer, 0, src);
             return buffer;
         }
+        this.flush();
         this.device.queue.writeBuffer(buffer, 0, bufferArray);
         return buffer;
     }
@@ -103,14 +146,13 @@ export class BrowserGpu {
         const srcBuf = this._resolveBuffer(src);
         const dstBuf = this._resolveBuffer(target);
         const n = size || srcBuf.size;
-        const enc = this.device.createCommandEncoder();
-        enc.copyBufferToBuffer(srcBuf, from, dstBuf, offset, n);
-        this.device.queue.submit([enc.finish()]);
+        this._getEncoder().copyBufferToBuffer(srcBuf, from, dstBuf, offset, n);
     }
 
     async readData(bufferArray) {
         const buffer = bufferArray instanceof GPUBuffer ? bufferArray : this.buffers.get(bufferArray);
         if (!buffer) throw new Error('browser-gpu: readable buffer not found');
+        this.flush();
         const stag = this.device.createBuffer({ size: buffer.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
         try {
             const enc = this.device.createCommandEncoder();

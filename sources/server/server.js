@@ -1,7 +1,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as mime from "mime-types";
 import * as fsp from "node:fs/promises";
 import { $class, $folder, $user } from './index.js';
@@ -17,6 +17,7 @@ import {
 } from '../host/push.js';
 import { DEV_MODE, setDevMode } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
+import { guardedGet } from "../host/net-guard.js";
 
 /**
  * Ядро агента (sources/modules/agent) для слоёв дерева: class.js грузятся как data:-модули
@@ -25,6 +26,11 @@ import { serverId } from "../host/server-id.js";
 globalThis.WORK_AGENT ??= () => import('../modules/agent/session.js');
 globalThis.WORK_AGENT_CORE ??= () => import('../modules/agent/index.js');
 globalThis.WORK_MCP ??= () => import('../modules/agent/mcp-pool.js');
+/** Коннекторы LAN для методов class.js (data:-модули не поддерживают относительные импорты). */
+globalThis.WORK_LAN ??= () => import('../modules/lan/connectors.js');
+/** Триггеры агента на сохранение файлов (ai/triggers/*.md); WORK_TRIGGERS=0 — выключить. */
+globalThis.WORK_AGENT_TRIGGERS ??= process.env.WORK_TRIGGERS === '0' ? null
+    : (file, params) => import('../modules/agent/triggers.js').then(m => m.onSave(file, params)).catch(e => console.warn('[trigger]', e.message));
 
 /** Прототип HTTP/WS-сессии (`$server.sessions[ssid]` / `params.session`). */
 const sessionProto = {
@@ -88,11 +94,19 @@ export class $server extends $class {
         types.unshift('$folder')
         return types;
     }
+    /**
+     * Получить HTML публичной страницы (превью ссылок). Только для вошедших; внутренние адреса запрещены.
+     * @param {object} params
+     * @param {string} params.url Адрес страницы (http/https)
+     * @param {boolean} [params.meta] Вернуть HTML страницы
+     * @returns {Promise<string|undefined>} HTML
+     */
     async proxy(params = {url: '', meta: false}) {
+        if (!$class.resolveUid(params) && params.session?.$user !== this)
+            throw new Error('Доступ запрещён');
         if(params.meta){
-            const result = await fetch(params.url);
-            const html = await result.text();
-            return html;
+            const res = await guardedGet(params.url, { maxBytes: 2 * 1024 * 1024, timeoutMs: 10_000 });
+            return res.body.toString('utf-8');
         }
     }
     get $folder(){
@@ -112,6 +126,9 @@ export class $server extends $class {
     }
 
     async npm(p = {module: ""}){
+        await this.assertAccess(p, $class.ACCESS_LEVEL.ADMIN);
+        if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.^~<>=*-]+)?$/i.test(String(p.module || '')))
+            throw new Error('npm: недопустимое имя пакета');
         try{
             const result = await installPackageSpawn(p.module, './node_modules', {
                 save: true
@@ -126,13 +143,29 @@ export class $server extends $class {
         return getPublicVapid(vapidKeys);
     }
     async store_push_subscription(params) {
+        this._assertPushSubject(params);
+        const endpoint = params.post?.endpoint;
+        if (typeof endpoint !== 'string' || !/^https:\/\//i.test(endpoint))
+            throw new Error('push: endpoint должен быть https');
         return storePushSubscription(params);
     }
     async remove_push_subscription(params) {
+        this._assertPushSubject(params);
         return removePushSubscription(params);
     }
     async send_push_notification(params) {
-        return sendPushNotification(params, (o) => this.remove_push_subscription(o));
+        // только вошедший пользователь (или ядро); получатели — корректные uid
+        if (!$class.resolveUid(params) && params.session?.$user !== this)
+            throw new Error('Доступ запрещён');
+        const list = typeof params.receivers === 'string' ? params.receivers.split(',') : (params.receivers || []);
+        if (list.some(r => !/^[\w.-]{1,64}$/.test(String(r?.id || r).trim())))
+            throw new Error('push: недопустимый получатель');
+        return sendPushNotification(params, (o) => this.remove_push_subscription({ ...o, session: { uid: o.session.uid } }));
+    }
+    _assertPushSubject(params) {
+        const uid = params?.session?.uid;
+        if (!uid || !/^[\w.-]{1,64}$/.test(uid))
+            throw new Error('push: требуется вход');
     }
 
     get pageHTML() {
@@ -177,18 +210,80 @@ export class $server extends $class {
         text = text.replaceAll('{title}', title);
         return text;
     }
-    static sessions = {};
-    static get_session(ssid = '') {
-        ssid ||= this.genGUID();
-        return this.sessions[ssid] ??= Object.assign(Object.create(sessionProto), { ssid, sockets: {} });
+    /** Сессии по ssid. Без прототипа: ssid из cookie не может попасть в Object.prototype. */
+    static sessions = Object.create(null);
+    /** Сессия без активности дольше этого срока (и без открытых сокетов) удаляется. */
+    static SESSION_IDLE_MS = 14 * 24 * 3600_000;
+    static #gcAt = 0;
+
+    /** Криптостойкий идентификатор сессии (192 бита). */
+    static newSessionId() {
+        return randomBytes(24).toString('base64url');
     }
+
+    /** Строка — идентификатор формата newSessionId (32 символа base64url). */
+    static isSessionId(ssid) {
+        return typeof ssid === 'string' && /^[A-Za-z0-9_-]{32}$/.test(ssid);
+    }
+
+    /**
+     * Сессия по ssid из cookie.
+     * Неизвестный ssid в формате сервера (после перезапуска сессии в памяти пропали) принимается как
+     * анонимная сессия: параллельные запросы открытой страницы попадают в одну сессию, и двухшаговый
+     * вход (login_start → login_finish) не рвётся. От фиксации защищает signIn: при входе ssid меняется.
+     * Иной ssid (не нашего формата) — новая сессия с серверным идентификатором.
+     */
+    static get_session(ssid = '') {
+        let session = ssid && Object.hasOwn(this.sessions, ssid) ? this.sessions[ssid] : null;
+        if (!session) {
+            const id = this.isSessionId(ssid) ? ssid : this.newSessionId();
+            session = this.sessions[id] = Object.assign(Object.create(sessionProto), { ssid: id, sockets: {}, created: Date.now() });
+        }
+        session.lastSeen = Date.now();
+        this.#gcSessions();
+        return session;
+    }
+
+    static #gcSessions() {
+        const now = Date.now();
+        if (now - this.#gcAt < 10 * 60_000)
+            return;
+        this.#gcAt = now;
+        for (const [id, s] of Object.entries(this.sessions)) {
+            const idle = now - (s.lastSeen || s.created || 0);
+            if (idle > this.SESSION_IDLE_MS && !Object.keys(s.sockets || {}).length)
+                delete this.sessions[id];
+        }
+    }
+
+    /**
+     * Вход в сессию после успешной проверки (подпись ключа / регистрация):
+     * субъект сессии + новый ssid (старый, известный до входа, больше не действует).
+     */
+    static signIn(session, $user) {
+        const old = session.ssid;
+        const id = this.newSessionId();
+        if (old && this.sessions[old] === session)
+            delete this.sessions[old];
+        session.ssid = id;
+        this.sessions[id] = session;
+        session.uid = $user.id;
+        session.id = $user.id;
+        session.$user = $user;
+        session.principal = Object.freeze({ kind: 'user', id: $user.id });
+        return session;
+    }
+
     static clearSessionAuth(session) {
         if (!session)
             return;
         delete session.uid;
+        delete session.id;
         delete session.$user;
+        delete session.principal;
         delete session.credentials;
         delete session.challenge;
+        delete session.registration;
     }
     /** Сброс аутентификации во всех HTTP-сессиях с данным uid. */
     static clearAllSessionsForUid(uid) {
@@ -325,6 +420,49 @@ export class $server extends $class {
     }
     static get mime(){
         return mime;
+    }
+    /**
+     * Назначения запрашивающего узла сети на нашем сервере: точки и роли (для его реестра).
+     * Доступно только подписанному запросу узла.
+     * @param {object} params
+     * @returns {Promise<Array<{point, label, role, roleLabel}>>} Назначения
+     */
+    async node_grants(params = {}) {
+        const principal = params.session?.principal;
+        if (principal?.kind !== 'node')
+            throw new Error('Доступ запрещён');
+        const store = await import('../modules/rag/store.js');
+        if (!await store.open())
+            return [];
+        const out = [];
+        for (const row of store.assignmentsOf(principal.id)) {
+            try {
+                let cls = row.class_path === '/' ? this : await this.get_item(row.class_path);
+                if (Array.isArray(cls))
+                    cls = cls[0];
+                if (!cls?.declared_roles)
+                    continue;
+                const declared = await cls.declared_roles;
+                const role = declared[row.role];
+                if (!role?.principals?.includes('node') || !cls._roleIds(row.role, declared).includes(principal.id))
+                    continue;
+                out.push({ point: cls.path || '/', label: cls.label, role: row.role, roleLabel: role.label });
+            }
+            catch { /* точка удалена */ }
+        }
+        return out;
+    }
+    /**
+     * Журнал безопасности за день: входы, отказы в доступе, действия ADMIN, запросы узлов.
+     * @param {object} [params]
+     * @param {string} [params.day] Дата YYYY-MM-DD (по умолчанию сегодня, UTC)
+     * @param {number} [params.limit] Максимум записей
+     * @returns {Promise<Array>} Записи по убыванию времени
+     */
+    async security_log(params = {}){
+        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN);
+        const { readAudit } = await import('./access/audit.js');
+        return readAudit(params.day || undefined, Math.min(5000, Number(params.limit) || 500));
     }
     async devModeToggle(params){
         await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN)

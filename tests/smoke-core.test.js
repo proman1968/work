@@ -146,6 +146,15 @@ describe('Reactor#async на сервере', () => {
     });
 });
 
+/** Записи ленты корня за сегодня (по времени): каждая — отдельный файл дня. */
+function dayRows() {
+    const dir = path.join(tmp, '$server', 'logs', new Date().toLocalDay());
+    if (!fs.existsSync(dir))
+        return [];
+    return fs.readdirSync(dir).filter(f => f.endsWith('.logs')).sort()
+        .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')));
+}
+
 describe('save_file → history → log → on_save', () => {
     it('полный цикл сохранения файла', async () => {
         globalThis.__SMOKE_ON_SAVE__ = 0;
@@ -176,10 +185,11 @@ describe('save_file → history → log → on_save', () => {
         assert.ok(log.path?.includes('/history/' + day + '/'), 'log.path указывает в history');
         assert.equal(log.ext, 'smoke');
 
-        // 4. Лог записан у ближайшего класса (WORK → $server/logs)
-        const logsFile = path.join(tmp, '$server', 'logs', 'data.logs');
-        assert.ok(fs.existsSync(logsFile), 'data.logs записан в мету класса');
-        const row = JSON.parse(fs.readFileSync(logsFile, 'utf-8'));
+        // 4. Лог — запись дня у ближайшего класса (WORK → $server/logs/ДЕНЬ/{время}.{автор}.logs)
+        const rows = dayRows();
+        const row = rows.find(r => r.path === log.path);
+        assert.ok(row, 'запись дня в мете класса указывает на снимок');
+        assert.ok(!fs.existsSync(path.join(tmp, '$server', 'logs', 'data.logs')), 'общего data.logs нет');
         assert.equal(row.ext, 'smoke');
         // Без params.message контент файла НЕ инлайнится в лог (ядро не знает имён)
         assert.equal(row.content, undefined, 'без message контент не инлайнится');
@@ -202,10 +212,7 @@ describe('save_file → history → log → on_save', () => {
             message: 'видимое сообщение',
             encoding: 'utf-8',
         });
-        const logsFile = path.join(tmp, '$server', 'logs', 'data.logs');
-        const rows = fs.readFileSync(logsFile, 'utf-8')
-            .trim().split(/\n(?=\{)/).map(s => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
-        const row = rows.reverse().find(r => r.path?.includes('anything.smoke'));
+        const row = dayRows().reverse().find(r => r.path?.includes('anything.smoke'));
         assert.ok(row, 'запись лога для anything.smoke найдена');
         assert.equal(row.content, 'видимое сообщение', 'content = params.message, а не тело файла');
     });
@@ -272,12 +279,18 @@ describe('лог-фасад: logs / read_log_entry / append_log_includes', () =>
             assert.equal(byStub.logsFilePath, target.logsFilePath);
         }
 
+        const before = dayRows().length;
         const updated = await WORK.append_log_includes({
             entryPath: target.path,
             includePaths: ['/PLAIN/extra.smoke'],
         });
         assert.ok(updated, 'append вернул обновлённую запись');
         assert.ok(updated.includes.includes('/PLAIN/extra.smoke'));
+        assert.equal(dayRows().length, before, 'запись обновлена на месте, а не продублирована');
+        // чужую запись дописать нельзя
+        await assert.rejects(WORK.append_log_includes({
+            entryPath: target.path, includePaths: ['/PLAIN/x.smoke'], session: { uid: 'stranger' },
+        }), /Доступ запрещён/);
 
         const reread = await WORK.read_log_entry({ path: target.path });
         assert.ok(reread.includes?.includes('/PLAIN/extra.smoke'), 'includes сохранены на диске');

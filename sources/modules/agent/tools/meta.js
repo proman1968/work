@@ -124,7 +124,8 @@ export const metaTools = [
                 tools: await env.makeTools(def, depth),
                 host: ctx.host,
                 depth,
-                ctx: { session: ctx.session, place: ctx.place, env },
+                // субагент работает в той же роли задачи (и тех же правах), что и основной агент
+                ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
                 maxTurns: Number(def.meta.maxTurns) || 40,
             });
             if (res.status === 'stopped')

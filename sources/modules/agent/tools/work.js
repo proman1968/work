@@ -5,6 +5,7 @@
 import { clip, isAccessDenied } from '../util.js';
 import { lineDiff } from '../diff.js';
 import { FS } from '../../../server/index.js';
+import * as GATEWAY from '../../../server/access/gateway.js';
 
 const ROLE_ORDER = ['ADMIN', 'BOSS', 'USER', 'GUEST'];
 const READ_LINES = 2000;
@@ -66,11 +67,27 @@ async function rolesIn(item, session) {
 }
 
 /**
+ * Порядок ролей для действия в item с учётом роли задачи (ctx.role — «шляпа», в которой работает
+ * пользователь): сначала она, затем другие его роли здесь. Не в роли ADMIN — никогда ADMIN и не
+ * обход «администратор WORK» (без роли): агент не расширяет права сверх выбранной роли.
+ * Без роли задачи (разовый запуск, REST) — прежний порядок: без роли, затем по силе.
+ */
+async function roleOrder(item, session, ctx) {
+    const own = await rolesIn(item, session);
+    const active = ctx?.role;
+    if (!active)
+        return [undefined, ...own];
+    if (active === 'ADMIN')
+        return [undefined, 'ADMIN', ...own.filter(r => r !== 'ADMIN')];
+    return [active, ...own.filter(r => r !== active && r !== 'ADMIN')];
+}
+
+/**
  * Вызов метода элемента с правами пользователя.
- * Ядро проверяет права по params.role: пробуем без роли (админ WORK), затем роли пользователя в классе.
+ * Ядро проверяет права по params.role; порядок перебора ролей — roleOrder (роль задачи первой).
  * params создаётся заново на каждую попытку — методы ядра мутируют аргументы.
  */
-export async function callAs(item, method, params, ctx, roleFirst) {
+export async function callAs(item, method, params, ctx, roleFirst, opts = {}) {
     const session = ctx?.session;
     const make = role => {
         const p = { ...params };
@@ -85,10 +102,15 @@ export async function callAs(item, method, params, ctx, roleFirst) {
         await item.init;
     if (typeof item?.[method] !== 'function')
         throw new Error('у ' + (item?.path || '?') + ' нет метода ' + method);
-    const roles = roleFirst ? [roleFirst] : [undefined, ...(await rolesIn(item, session))];
+    // явная роль тоже не выходит за роль задачи (кроме ADMIN-задачи)
+    if (roleFirst === 'ADMIN' && ctx?.role && ctx.role !== 'ADMIN')
+        throw new Error('Доступ запрещён: задача выполняется в роли ' + ctx.role + ', действие требует ADMIN');
+    const roles = roleFirst ? [roleFirst] : await roleOrder(item, session, ctx);
     let lastErr;
     for (const role of roles) {
         try {
+            if (opts.gateway)
+                return await GATEWAY.invoke(item, method, make(role), { transport: 'agent' });
             return await item[method](make(role));
         }
         catch (e) {
@@ -234,13 +256,14 @@ async function resolveParent(path, ctx) {
     return { parent, filename, folder: missing.join('/') || undefined, path: p };
 }
 
-async function writeFile(path, content, ctx) {
+export async function writeFile(path, content, ctx, extra = {}) {
     const { parent, filename, folder } = await resolveParent(path, ctx);
-    const params = { filename, post: Buffer.isBuffer(content) ? content : String(content ?? '') };
+    const params = { ...extra, filename, post: Buffer.isBuffer(content) ? content : String(content ?? '') };
     if (folder)
         params.folder = folder;
-    // класс пишет в рабочую зону роли: берём сильнейшую роль, где запись разрешена
-    const roles = await rolesIn(parent, ctx?.session);
+    // класс пишет в рабочую зону роли: роль задачи первой, затем другие роли пользователя здесь
+    // (не в ADMIN-задаче — без ADMIN: иначе файлы уходят в зону администратора)
+    const roles = (await roleOrder(parent, ctx?.session, ctx)).filter(Boolean);
     if (parent instanceof FS.$class && roles.length) {
         let last;
         for (const role of roles) {
@@ -274,6 +297,32 @@ export async function writeBinary(path, buffer, ctx) {
 }
 
 const target = key => args => absPath(args?.[key], null);
+
+/** Получатели по uid или ФИО (однозначное совпадение среди пользователей сервера). */
+export async function resolvePeople(list) {
+    const names = (Array.isArray(list) ? list : String(list || '').split(',')).map(s => String(s).trim()).filter(Boolean);
+    if (!names.length)
+        return [];
+    if (names.length > 50)
+        throw new Error('слишком много получателей (до 50)');
+    const users = (await (await WORK.$users)?.items) || [];
+    await Promise.all(users.map(u => u.init));
+    const out = [];
+    for (const name of names) {
+        const low = name.toLowerCase();
+        let hits = users.filter(u => u.id === name.toUpperCase());
+        if (!hits.length)
+            hits = users.filter(u => String(u.DATA?.label || u.label || '').toLowerCase() === low);
+        if (!hits.length)
+            hits = users.filter(u => String(u.DATA?.label || u.label || '').toLowerCase().includes(low));
+        if (hits.length !== 1)
+            throw new Error('получатель «' + name + '»: ' + (hits.length ? 'неоднозначно — ' + hits.map(u => (u.DATA?.label || u.id) + ' [' + u.id + ']').join(', ') : 'не найден') + ' (укажи uid)');
+        const u = hits[0];
+        if (!out.some(x => x.id === u.id))
+            out.push({ id: u.id, label: u.DATA?.label || u.label || u.id });
+    }
+    return out;
+}
 
 export const workTools = [
     {
@@ -432,6 +481,244 @@ export const workTools = [
         },
     },
     {
+        name: 'access',
+        readonly: true,
+        description: 'Права на элемент WORK: область (зона роли / система / лента / секреты), какие роли точки его читают и меняют, кто назначен на эти роли (локально и сверху), твои роли здесь. Для аудита доступа и объяснения отказов.',
+        parameters: {
+            type: 'object',
+            properties: { path: { type: 'string', description: 'WORK-путь элемента (по умолчанию место задачи)' } },
+        },
+        async run(args, ctx) {
+            const item = await mustItem(args.path, ctx);
+            const target = Array.isArray(item) ? item.at(-1) : item;
+            const point = target instanceof FS.$class ? target : classOf(target);
+            if (!point)
+                throw new Error('access: нет класса-владельца');
+            await callAs(point, 'assertAccess', {}, ctx).catch(e => { if (isAccessDenied(e)) throw e; });
+            const { POLICY } = FS.$class;
+            await point.init;
+            const declared = await point.declared_roles;
+            const area = point.areaOf(target);
+            const rows = [];
+            for (const [id, role] of Object.entries(declared)) {
+                const local = point._roleIds(id, declared).filter(u => u !== 'GUEST');
+                const inherited = [];
+                if (role.scope === 'subtree')
+                    for (let p = point.$parent; p; p = p.$parent)
+                        if (p instanceof FS.$class) {
+                            await p.init;
+                            const pd = p._declaredRolesSync();
+                            if (pd[id])
+                                inherited.push(...p._roleIds(id, pd).map(u => u + ' (из ' + (p.path || '/') + ')'));
+                        }
+                rows.push({
+                    role: id, label: role.label, scope: role.scope, feed: role.feed, write: role.write,
+                    principals: role.principals,
+                    read: POLICY.canRead(role, area, { logsContainer: !(target instanceof FS.$file) }),
+                    change: POLICY.canWrite(role, area, { local: true, executable: POLICY.isExecutablePath(target.path, point.path) }),
+                    assigned: local, inherited,
+                });
+            }
+            const open = (point.DATA?.['#security']?.USERS || []).includes('GUEST');
+            return JSON.stringify({
+                path: target.path, point: point.path || '/', area,
+                openToAll: open || undefined,
+                yourRoles: await point.roles({ session: ctx?.session }),
+                roles: rows,
+                note: 'Плюс видят: WORK ADMIN (всё), владельцы лент, в которых есть запись с этим путём (receivers). Системные пути /$server, /sources, /oda видны всем.',
+            }, null, 1);
+        },
+    },
+    {
+        name: 'assign',
+        risk: 'write',
+        target: args => absPath(String(args?.path || '') + '/class.js', null),
+        description: 'Назначить или снять пользователей (или узлы сети) на роль класса: меняет только #security собственного class.js. Роль — объявленная в точке (ADMIN, BOSS, USER, GUEST, прикладные). Требует прав администратора.',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'WORK-путь класса' },
+                role: { type: 'string', description: 'Роль (USER, BOSS, CUSTOMER…)' },
+                add: { type: 'array', items: { type: 'string' }, description: 'Кого назначить: uid, ФИО или id узла сети' },
+                remove: { type: 'array', items: { type: 'string' }, description: 'Кого снять' },
+            },
+            required: ['path', 'role'],
+        },
+        async run(args, ctx) {
+            const cls = await mustItem(args.path, ctx);
+            if (!(cls instanceof FS.$class))
+                throw new Error('assign: ' + absPath(args.path, ctx) + ' — не класс');
+            const declared = await cls.declared_roles;
+            const role = declared[String(args.role || '').toUpperCase()];
+            if (!role)
+                throw new Error('роль «' + args.role + '» не объявлена в точке; есть: ' + Object.keys(declared).join(', '));
+            const ids = async list => {
+                const out = [];
+                for (const x of list || []) {
+                    const s = String(x).trim();
+                    if (/^[0-9A-F]{15}$/i.test(s))
+                        out.push(s.toUpperCase()); // узел сети
+                    else
+                        out.push(...(await resolvePeople([s])).map(p => p.id));
+                }
+                return out;
+            };
+            const add = await ids(args.add), remove = new Set(await ids(args.remove));
+            if (!add.length && !remove.size)
+                throw new Error('assign: нужен add или remove');
+            if (add.some(u => /^[0-9A-F]{15}$/.test(u)) && !role.principals?.includes('node'))
+                throw new Error('роль ' + role.id + ' нельзя выдать узлу сети');
+            // только собственный слой (без склейки с предками — иначе наследуемое осело бы в class.js точки)
+            const own = await cls.meta_file;
+            const text = own ? await own.load({ encoding: 'utf-8', session: ctx?.session }) : '';
+            const data = text ? (await FS.$class.importScript(String(text))) || {} : {};
+            const copy = { ...data };
+            const sec = { ...(copy['#security'] || {}) };
+            const list = new Set([...(sec[role.key] || [])].filter(u => !remove.has(u)));
+            for (const u of add)
+                list.add(u);
+            sec[role.key] = [...list];
+            copy['#security'] = sec;
+            await callAs(cls.meta_folder, 'save_file', {
+                filename: 'class.js',
+                post: 'export default ' + FS.$class.toScript(copy),
+                message: 'роль ' + role.id + ': ' + [add.length ? '+' + add.join(',') : '', remove.size ? '−' + [...remove].join(',') : ''].filter(Boolean).join(' '),
+            }, ctx, 'ADMIN');
+            cls.reset();
+            return 'роль ' + role.id + ' в ' + cls.path + ': ' + (sec[role.key].join(', ') || 'никого');
+        },
+    },
+    {
+        name: 'escalate',
+        risk: 'write',
+        description: 'Запросить у ответственного то, на что не хватает прав (доступ к точке/файлу, назначение роли, решение): находит руководителя точки (BOSS), выше по дереву — вышестоящего, иначе администратора, и отправляет ему поручение из кабинета пользователя. Используй после «Доступ запрещён», вместо попыток обойти отказ.',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'К чему нужен доступ (WORK-путь)' },
+                need: { type: 'string', description: 'Что нужно: read | write | role:<РОЛЬ> | decision' },
+                reason: { type: 'string', description: 'Зачем — по-человечески, для ответственного' },
+            },
+            required: ['path', 'reason'],
+        },
+        async run(args, ctx) {
+            const uid = ctx?.session?.uid;
+            if (!uid || ctx.session.principal?.kind === 'node')
+                throw new Error('escalate: только пользователь сервера');
+            const p = absPath(args.path, ctx);
+            // ближайший класс по пути (сам элемент может быть недоступен — идём по сегментам)
+            const segs = p.split('/').filter(Boolean);
+            let point = null;
+            while (segs.length && !point) {
+                const it = await WORK.get_item('/' + segs.join('/')).catch(() => null);
+                const cls = Array.isArray(it) ? null : (it instanceof FS.$class ? it : it?.$class);
+                if (cls && cls !== WORK)
+                    point = cls;
+                segs.pop();
+            }
+            point ??= WORK;
+            await point.init;
+            const pick = async list => (await list || []).map(u => u.id).filter(id => id && id !== uid);
+            let to = await pick(point.bosses), whom = 'руководитель ' + (point.path || '/');
+            if (!to.length) { to = await pick(point.allBosses); whom = 'вышестоящий руководитель'; }
+            if (!to.length) { to = await pick(point.allAdmins); whom = 'администратор'; }
+            if (!to.length) { to = await pick(WORK.admins); whom = 'администратор WORK'; }
+            if (!to.length)
+                throw new Error('escalate: не найден ответственный за ' + (point.path || '/'));
+            let cab = await (await WORK.$users).get_item('//' + uid);
+            if (Array.isArray(cab))
+                cab = cab[0];
+            const need = String(args.need || 'read');
+            const row = await callAs(cab, 'save_message', {
+                kind: 'order',
+                receivers: to.slice(0, 5),
+                message: 'Запрос: ' + need + ' — ' + p + '\nПричина: ' + String(args.reason).slice(0, 1500)
+                    + '\n(Ответ: done — выполнено, reject — отказ.)',
+            }, ctx);
+            return 'запрос отправлен (' + whom + ': ' + to.slice(0, 5).join(', ') + '), id ' + row.id + '. Ответ придёт в ленту кабинета.';
+        },
+    },
+    {
+        name: 'send',
+        risk: 'write',
+        description: 'Записать в ленту точки сообщение или поручение и доставить его получателям (их кабинетам): текст, вложения (видимые тебе файлы WORK), срок. Поручение — kind:"order" с due; отчёт об исполнении — kind:"done" с reply_to (id поручения).',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Точка (класс), в ленту которой пишется запись; по умолчанию место задачи' },
+                message: { type: 'string', description: 'Текст' },
+                to: { type: 'array', items: { type: 'string' }, description: 'Получатели: uid или ФИО/название пользователя' },
+                kind: { type: 'string', enum: ['message', 'order', 'done', 'reject', 'remind'], description: 'Вид записи (по умолчанию message)' },
+                due: { type: 'string', description: 'Срок YYYY-MM-DD (для order/remind)' },
+                reply_to: { type: 'string', description: 'id записи, на которую это ответ (из результата send или ленты)' },
+                includes: { type: 'array', items: { type: 'string' }, description: 'WORK-пути вложений' },
+            },
+            required: ['message'],
+        },
+        async run(args, ctx) {
+            const item = await mustItem(args.path, ctx);
+            const cls = classOf(item) || item;
+            if (typeof cls.save_message !== 'function')
+                throw new Error('send: у ' + cls.path + ' нет ленты');
+            const receivers = await resolvePeople(args.to || []);
+            const row = await callAs(cls, 'save_message', {
+                message: String(args.message),
+                receivers: receivers.map(r => r.id),
+                includes: (args.includes || []).map(p => absPath(p, ctx)),
+                kind: args.kind || (args.due ? 'order' : 'message'),
+                due: args.due, reply_to: args.reply_to,
+            }, ctx);
+            return 'записано в ленту ' + cls.path + ' (id ' + row.id + ')'
+                + (receivers.length ? '; получатели: ' + receivers.map(r => r.label + ' [' + r.id + ']').join(', ') : '');
+        },
+    },
+    {
+        name: 'write_table',
+        risk: 'write',
+        target: target('path'),
+        description: 'Сохранить таблицу (отчёт) файлом WORK: .xlsx (листы) или .csv. rows — массив объектов (ключи — колонки) или массив массивов (первая строка — заголовки).',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'WORK-путь файла, например /BASE/Отчёты/продажи-2026-Q3.xlsx' },
+                rows: { type: 'array', description: 'Строки таблицы (для одного листа)', items: {} },
+                sheets: { type: 'object', description: 'Для xlsx с несколькими листами: {имяЛиста: rows}' },
+            },
+            required: ['path'],
+        },
+        async run(args, ctx) {
+            const ext = String(args.path || '').split('.').pop().toLowerCase();
+            if (!['xlsx', 'csv'].includes(ext))
+                throw new Error('write_table: расширение .xlsx или .csv');
+            const sheets = args.sheets && typeof args.sheets === 'object' ? args.sheets : { 'Лист1': args.rows };
+            const XLSX = await import('xlsx');
+            const toSheet = rows => {
+                if (!Array.isArray(rows) || !rows.length)
+                    throw new Error('write_table: пустая таблица');
+                if (rows.length > 100_000)
+                    throw new Error('write_table: больше 100 000 строк');
+                return Array.isArray(rows[0]) ? XLSX.utils.aoa_to_sheet(rows) : XLSX.utils.json_to_sheet(rows);
+            };
+            let buf;
+            if (ext === 'csv') {
+                const first = Object.values(sheets)[0];
+                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first)), 'utf-8');
+            }
+            else {
+                const wb = XLSX.utils.book_new();
+                for (const [name, rows] of Object.entries(sheets))
+                    XLSX.utils.book_append_sheet(wb, toSheet(rows), String(name).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Лист');
+                buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+            }
+            const real = await writeBinary(args.path, buf, ctx);
+            if (ctx.entry)
+                ctx.entry.path = real;
+            const req = absPath(args.path, ctx);
+            return (real !== req ? 'сохранено ' + real + ' (запрошено ' + req + '; в классе файлы ложатся в зону роли — используй этот путь)' : 'сохранено ' + real)
+                + ', ' + formatSize(buf.length);
+        },
+    },
+    {
         name: 'write',
         risk: 'write',
         target: target('path'),
@@ -455,7 +742,9 @@ export const workTools = [
                 ctx.entry.path = real;
                 ctx.entry.diff = lineDiff(typeof before === 'string' ? before : '', String(args.content));
             }
-            return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)';
+            const req = absPath(args.path, ctx);
+            return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)'
+                + (real !== req ? '; запрошено ' + req + ' — в классе файлы ложатся в зону роли, дальше используй путь ' + real : '');
         },
     },
     {
@@ -578,10 +867,14 @@ export const workTools = [
         },
         permission(args) {
             const m = String(args?.method || '');
+            const level = GATEWAY.MEMBERS[m];
             if (DANGER_METHODS.has(m))
                 return { verdict: 'ask', reason: 'метод ' + m + ' — опасная операция' };
-            if (READ_METHOD.test(m))
+            // чтение (в т.ч. security_log для ADMIN) — без вопроса; право проверит ядро
+            if (READ_METHOD.test(m) || level === GATEWAY.LEVEL.READ)
                 return { verdict: 'allow' };
+            if (level === GATEWAY.LEVEL.ADMIN)
+                return { verdict: 'ask', reason: 'метод ' + m + ' — операция администратора' };
             return null;
         },
         async run(args, ctx) {
@@ -592,8 +885,12 @@ export const workTools = [
             if (Array.isArray(item))
                 throw new Error('путь дал несколько элементов — уточни');
             await item.init;
+            // те же правила, что для HTTP: только объявленные методы, уровень доступа до вызова
+            const member = GATEWAY.resolveMember(item, m);
+            if (!member || member.level === GATEWAY.LEVEL.PUBLIC)
+                throw new Error('метод ' + m + ' недоступен агенту');
             const a = args.args && typeof args.args === 'object' ? args.args : {};
-            const res = await callAs(item, m, a, ctx);
+            const res = await callAs(item, m, a, ctx, undefined, { gateway: true });
             if (res && typeof res === 'object' && typeof res.pipe === 'function')
                 return '[поток данных — используй read]';
             if (res && typeof res === 'object' && res.path && res.constructor?.name?.startsWith?.('$'))
@@ -613,6 +910,7 @@ export const workTools = [
                 from: { type: 'string', description: 'Начало диапазона YYYY-MM-DD' },
                 to: { type: 'string', description: 'Конец диапазона YYYY-MM-DD' },
                 dates: { type: 'boolean', description: 'Только список дат с записями' },
+                limit: { type: 'integer', description: 'Сколько последних записей показать (по умолчанию 200, максимум 1000)' },
             },
         },
         async run(args, ctx) {
@@ -630,10 +928,48 @@ export const workTools = [
             const list = Array.isArray(rows) ? rows : (rows?.items || rows?.rows || []);
             if (!list.length)
                 return 'записей нет' + (args.day ? ' за ' + args.day : '') + ' (попробуй dates:true)';
-            return list.slice(-200).map(r => {
+            // журнал отсортирован от новых к старым: берём последние события, выводим по времени
+            const limit = Math.min(1000, Math.max(1, Number(args.limit) || 200));
+            const shown = list.slice(0, limit).reverse();
+            const head = list.length > limit
+                ? 'показаны последние ' + limit + ' из ' + list.length + ' записей (сузь период или увеличь limit)\n'
+                : 'записей: ' + list.length + '\n';
+            return head + shown.map(r => {
                 const t = r.time ? new Date(r.time).toISOString().replace('T', ' ').slice(0, 16) : '';
-                return [t, r.sender, r.ext ? '[' + r.ext + ']' : '', r.path || '', r.content ? '— ' + clip(String(r.content), 300) : ''].filter(Boolean).join(' ');
+                const who = r.actor ? r.sender + ' (' + r.actor + ')' : r.sender;
+                const to = r.receivers?.length ? '→ ' + [].concat(r.receivers).join(',') : '';
+                const meta = [r.kind && r.kind !== 'message' ? r.kind : '', r.due ? 'срок ' + r.due : '', r.reply_to ? 'на ' + r.reply_to : '']
+                    .filter(Boolean).join(', ');
+                const id = r.sender && r.time ? '#' + r.sender + ':' + r.time : '';
+                return [t, id, who, to, meta ? '{' + meta + '}' : '', r.ext ? '[' + r.ext + ']' : '', r.path || '', r.content ? '— ' + clip(String(r.content), 300) : ''].filter(Boolean).join(' ');
             }).join('\n');
+        },
+    },
+    {
+        name: 'query',
+        readonly: true,
+        description: 'Структурный запрос к объектам данных ($data: .oml, .eml, .ics, .task…) с правами пользователя: фильтр по полям, до 500 объектов. Для подсчётов, отчётов, выборок. Смысловой поиск — search.',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Точка, от которой искать (по умолчанию место задачи)' },
+                type: { type: 'string', description: 'Расширение типа объектов: oml, eml, ics, task…' },
+                where: { type: 'object', description: 'Условия по полям: {поле: значение} или {поле: {eq|ne|gt|gte|lt|lte|contains|in: …}}' },
+                limit: { type: 'integer', description: 'Максимум объектов (по умолчанию 100, до 500)' },
+                rings: { type: 'integer', description: 'Насколько широко по дереву (0 — только точка; по умолчанию 3)' },
+            },
+        },
+        async run(args, ctx) {
+            const point = await mustItem(args.path, ctx);
+            if (Array.isArray(point))
+                throw new Error('query: укажи точку без ~');
+            const rows = await callAs(point, 'query_objects', {
+                type: args.type, where: args.where, rings: args.rings,
+                limit: Math.min(500, Number(args.limit) || 100),
+            }, ctx);
+            if (!rows?.length)
+                return 'объектов не найдено (индекс мог ещё не обработать данные — call rag_status)';
+            return JSON.stringify(rows, null, 1);
         },
     },
     {
@@ -701,6 +1037,6 @@ export const workTools = [
     },
 ];
 
-const READ_METHOD = /^(get_|list|read|load|info|find|search|fetch|logs|members|schema|services_schema|semantic_search|query_objects|rag_status|declared_roles|work_zone|roles|mcp_list_tools)/;
+const READ_METHOD = /^(get_|list|read|load|info|find|search|fetch|logs|members|schema|services_schema|semantic_search|query_objects|rag_status|declared_roles|work_zone|roles|mcp_list_tools|security_log|network_graph|assignedUsers|allAdmins|allBosses)/;
 const DANGER_METHODS = new Set(['delete', 'npm', 'proxy', 'devModeToggle', 'save_secret', 'read_secret', 'clear_rag', 'send_push_notification', 'save', 'restore_from_history']);
 const BLOCKED_METHODS = new Set(['constructor', 'execute', 'reset', 'fire', 'listen', 'assertAccess', 'canSee', 'canWrite', 'user_register_start', 'user_register_process', 'user_register_finish', 'user_login_start', 'user_login_finish']);

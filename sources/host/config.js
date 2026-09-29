@@ -20,6 +20,13 @@ export const LOCAL_ORIGIN = `http://${HOST}:${PORT}`;
 /** Challenge TTL for login/register (ms). */
 export const CHALLENGE_TTL_MS = config.CHALLENGE_TTL_MS ?? (Number(process.env.WORK_CHALLENGE_TTL_MS) || 5 * 60 * 1000);
 
+/** Лимит тела запроса без multipart (JSON/текст/бинарь), байт. */
+export const MAX_BODY_BYTES = config.MAX_BODY_BYTES ?? (Number(process.env.WORK_MAX_BODY_BYTES) || 64 * 1024 * 1024);
+/** Лимит загружаемых файлов multipart за запрос, байт. */
+export const MAX_UPLOAD_BYTES = config.MAX_UPLOAD_BYTES ?? (Number(process.env.WORK_MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024);
+/** Публичный адрес сервера в сети WORK (https://host), для карточки узла. */
+export const PUBLIC_ORIGIN = config.PUBLIC_ORIGIN ?? (process.env.WORK_PUBLIC_ORIGIN || '');
+
 /** Optional API token for genApi (AI services). */
 export const GEN_API_TOKEN = config.GEN_API_TOKEN ?? (process.env.WORK_GEN_API_TOKEN || '');
 

@@ -30,11 +30,28 @@ export function onWebSocketConnect(ws, request) {
     session.sockets[wsid] = { ws, events: [] };
     ws.send(JSON.stringify({ type: 'connect', wsid }));
     notifyUserOnline(session);
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
         try {
             let str = new TextDecoder('utf-8').decode(message);
             let events = JSON.parse(str);
-            session.sockets[wsid].events.add(...events);
+            if (!Array.isArray(events))
+                return;
+            const { assertPathProps, canRead } = await import('../server/access/gateway.js');
+            // подписка на события пути — только если путь виден субъекту сессии
+            for (const path of events.slice(0, 200)) {
+                if (typeof path !== 'string' || path.length > 2048)
+                    continue;
+                try {
+                    assertPathProps(path);
+                    let item = await globalThis.WORK.get_item(path);
+                    if (Array.isArray(item))
+                        item = item.at(-1);
+                    if (!item || !(await canRead(item, { session })))
+                        continue;
+                    session.sockets[wsid]?.events.add(path);
+                }
+                catch { /* нет пути или доступа — не подписываем */ }
+            }
         }
         catch (e) {
             console.error(e);

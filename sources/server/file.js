@@ -565,6 +565,13 @@ export class $file extends $folder{
             log.sender = params.session.uid;
         else if (params.session?.$user === globalThis.WORK)
             log.sender = WORK.id;
+        // представитель узла сети: кто конкретно действовал от имени узла
+        const principal = params.session?.principal;
+        if (principal?.actor) {
+            log.actor = principal.actor;
+            if (principal.actorLabel)
+                log.actorLabel = principal.actorLabel;
+        }
         // Инлайн текста — только через params.message (ядро не знает имён файлов).
         if (params.message != null)
             log.content = params.message;
@@ -595,6 +602,8 @@ export class $file extends $folder{
         await LOGS.appendRow(owner, log, params);
         params.logFullPath = this.json_model.path;
         params.logPath = this.short;
+        // триггеры агента (ai/triggers/*.md точки) — фоном, сохранение не ждёт
+        globalThis.WORK_AGENT_TRIGGERS?.(this, params);
         if (!params.skip_file_handler) {
             queueMicrotask(async () => {
                 try {

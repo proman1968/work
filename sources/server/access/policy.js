@@ -28,11 +28,14 @@ export const AREA = Object.freeze({
  * key — поле назначений в `#security` (массив uid).
  */
 export const BASE_ROLES = Object.freeze({
-    ADMIN: Object.freeze({ id: 'ADMIN', key: 'ADMINS', label: 'Администратор', scope: 'subtree', feed: 'point', write: 'all' }),
-    BOSS: Object.freeze({ id: 'BOSS', key: 'BOSSES', label: 'Руководитель', scope: 'subtree', feed: 'point', write: 'zone' }),
-    USER: Object.freeze({ id: 'USER', key: 'USERS', label: 'Исполнитель', scope: 'point', feed: 'own', write: 'zone' }),
-    GUEST: Object.freeze({ id: 'GUEST', key: 'GUESTS', label: 'Гость', scope: 'point', feed: 'own', write: 'zone' }),
+    ADMIN: Object.freeze({ id: 'ADMIN', key: 'ADMINS', label: 'Администратор', scope: 'subtree', feed: 'point', write: 'all', principals: Object.freeze(['user']) }),
+    BOSS: Object.freeze({ id: 'BOSS', key: 'BOSSES', label: 'Руководитель', scope: 'subtree', feed: 'point', write: 'zone', principals: Object.freeze(['user']) }),
+    USER: Object.freeze({ id: 'USER', key: 'USERS', label: 'Исполнитель', scope: 'point', feed: 'own', write: 'zone', principals: Object.freeze(['user', 'node']) }),
+    GUEST: Object.freeze({ id: 'GUEST', key: 'GUESTS', label: 'Гость', scope: 'point', feed: 'own', write: 'zone', principals: Object.freeze(['user', 'node']) }),
 });
+
+/** Виды субъектов: пользователь этого сервера | узел сети WORK (другой сервер и его представители). */
+export const PRINCIPALS = Object.freeze(['user', 'node']);
 
 /** Порядок ролей «по силе»: базовые, затем прикладные в порядке объявления. */
 export const BASE_ORDER = Object.freeze(['ADMIN', 'BOSS', 'USER', 'GUEST']);
@@ -61,15 +64,21 @@ export function normalizeRoles(declared) {
     for (const [id, raw] of Object.entries(declared)) {
         if (!isRoleId(id) || raw == null || raw === false)
             continue;
-        const base = out[id] || { id, key: id + 'S', label: id, scope: 'point', feed: 'own', write: 'zone' };
+        const base = out[id] || { id, key: id + 'S', label: id, scope: 'point', feed: 'own', write: 'zone', principals: PRINCIPALS };
         const r = typeof raw === 'object' ? raw : {};
+        let principals = Array.isArray(r.principals) ? r.principals.filter(p => PRINCIPALS.includes(p)) : base.principals;
+        // узел сети никогда не получает write=all
+        const write = WRITES.has(r.write) ? r.write : base.write;
+        if (write === 'all')
+            principals = principals.filter(p => p !== 'node');
         out[id] = Object.freeze({
             id,
             key: typeof r.key === 'string' && r.key ? r.key : base.key,
             label: typeof r.label === 'string' && r.label ? r.label : base.label,
             scope: SCOPES.has(r.scope) ? r.scope : base.scope,
             feed: FEEDS.has(r.feed) ? r.feed : base.feed,
-            write: WRITES.has(r.write) ? r.write : base.write,
+            write,
+            principals: Object.freeze([...principals]),
         });
     }
     return out;
@@ -173,9 +182,20 @@ export function canWrite(role, area, opts = {}) {
         return false;
     if (role.write === 'all')
         return true;
-    if (role.write === 'none' || !opts.local)
+    if (role.write === 'none' || !opts.local || opts.executable)
         return false;
     return area.kind === AREA.ZONE && area.role === role.id;
+}
+
+/**
+ * Путь исполняемый/системный: class.js (сервер импортирует его как модуль),
+ * сегменты `#…` (секреты, настройки). Писать такие пути может только write=all.
+ * Сегменты `$…` отдельно не нужны: после них область пересчитывается и становится системой.
+ */
+export function isExecutablePath(path, pointPath = '') {
+    const segs = tildeSegments(path, pointPath);
+    const name = String(path || '').split('/').pop();
+    return name === 'class.js' || segs.some(s => s[0] === '#');
 }
 
 /** Запись ленты принадлежит пользователю: автор или получатель. */

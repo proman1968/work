@@ -73,10 +73,40 @@ export class LLM extends BinNet {
             let counter = 0;
             let errors = 0;
             for (let i = 0; i < lines.length; i++) {
+                if (i % 10 === 0) {
+                    opts.onLine?.(i, lines.length);
+                    await opts.yieldNow?.();
+                }
                 this.resetState(); // новая строка — чистый контекст
                 let tokens = this.tokenizer.encode(lines[i].trim());
                 if (tokens.length < 2) continue;
 
+                if (this.ste && !headOnly && (opts.bptt ?? true)) {
+                    counter += tokens.length - 1;
+                    await this.trainSequence(Array.from(tokens), { bpttK: opts.bpttK });
+                    const ec = this.head.errorCount;
+                    errors += (await this.gpu.readData(ec))[0];
+                    ec[0] = 0;
+                    this.write(ec);
+                    continue;
+                }
+                if (this.ste) {
+                    // Без чтения с GPU на каждом токене: ошибки считаются на GPU
+                    const seed = this.gpu.stepSeed ??= this.write(new Uint32Array(1), 'step_seed', 'uniform');
+                    for (let t = 0; t < tokens.length - 1; t++) {
+                        counter++;
+                        seed[0] = Math.trunc(BinNet.max32 * Math.random());
+                        this.write(seed);
+                        await this.forward({ tokenIdx: tokens[t], targetIdx: tokens[t + 1], noRead: true });
+                        if (headOnly) await this.head.back({ back_target: tokens[t + 1] });
+                        else await this.back({ back_target: tokens[t + 1] });
+                    }
+                    const ec = this.head.errorCount;
+                    errors += (await this.gpu.readData(ec))[0];
+                    ec[0] = 0;
+                    this.write(ec);
+                    continue;
+                }
                 // Честный сдвиг: по текущему токену предсказываем СЛЕДУЮЩИЙ
                 for (let t = 0; t < tokens.length - 1; t++) {
                     counter++;
@@ -100,6 +130,73 @@ export class LLM extends BinNet {
         return { addedTokens: all_add, history };
     }
 
+    // STE + обратный проход через время (усеченный окнами по bpttK шагов).
+    // tokens — массив id; mask[t] — учить ли предсказание tokens[t+1] (по умолчанию все).
+    // Forward окна со снимками шагов → Head учится на каждом шаге сразу →
+    // назад по окну: слои сверху вниз с переносом градиента по памяти, затем Embedding.
+    async trainSequence(tokens, opts = {}) {
+        const K = opts.bpttK ?? this.bpttK ?? 64;
+        const mask = opts.mask;
+        const T = tokens.length - 1;
+        if (T < 1) return;
+        const nBits = this.head.embSize * 32;
+        const bytes = nBits * 4;
+        const gpu = this.gpu;
+        const seed = gpu.stepSeed ??= this.write(new Uint32Array(1), 'step_seed', 'uniform');
+        if (!this._seqBufs || this._seqK < K) {
+            this._seqK = K;
+            this._seqBufs = {
+                hist: gpu.device.createBuffer({ size: bytes * K, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, label: 'LLM grad history' }),
+                zero: this.write(new Float32Array(nBits), 'grad_zero'),
+                top: this.write(new Float32Array(nBits), 'grad_top'),
+            };
+        }
+        const { hist, zero, top } = this._seqBufs;
+        const E = this.embedding;
+        const setToken = (tok) => {
+            E.FWD.offsets[0] = tok * E.embSize;
+            this.write(E.FWD.offsets);
+        };
+
+        this.resetState();
+        for (let w = 0; w < T; w += K) {
+            const n = Math.min(K, T - w);
+            for (let i = 0; i < n; i++) {
+                const t = w + i;
+                seed[0] = Math.trunc(BinNet.max32 * Math.random());
+                this.write(seed);
+                await this.forward({ tokenIdx: tokens[t], targetIdx: tokens[t + 1], noRead: true });
+                for (const layer of this.layers) layer.saveStep(i, K);
+                const learn = !mask || mask[t];
+                if (learn) await this.head.back({ back_target: tokens[t + 1] });
+                if (!this.layers.length) {
+                    if (learn) await E.back({ grad: this.head.gIn });
+                    continue;
+                }
+                gpu.copy(learn ? this.head.gIn : zero, hist, i * bytes, 0, bytes);
+            }
+            if (!this.layers.length) continue;
+
+            // Назад по окну
+            for (const layer of this.layers) layer.resetCarry();
+            for (let i = n - 1; i >= 0; i--) {
+                seed[0] = Math.trunc(BinNet.max32 * Math.random());
+                this.write(seed);
+                gpu.copy(hist, top, 0, i * bytes, bytes);
+                let g = top;
+                for (let l = this.layers.length - 1; l >= 0; l--) {
+                    this.layers[l].restoreStep(i);
+                    g = (await this.layers[l].backSte({ grad: g }, { bptt: true })).grad;
+                }
+                setToken(tokens[w + i]);
+                await E.back({ grad: g });
+            }
+            // Рекуррентное состояние продолжает течь в следующее окно — восстанавливать
+            // не нужно: forward последнего шага окна оставил его как есть, а restoreStep
+            // трогает только снимки (state/convDelay не входят в снимок).
+        }
+    }
+
     // Совместимость со старым main.js: раньше была отдельная trainEmbedding
     async trainEmbedding(text_corpus, opts = {}) {
         return this.train(text_corpus, opts);
@@ -116,9 +213,12 @@ export class LLM extends BinNet {
             if (tokens.length < 2) continue;
             for (let t = 0; t < tokens.length - 1; t++) {
                 counter++;
-                let result = await this.forward({ tokenIdx: tokens[t], targetIdx: tokens[t + 1] });
-                if (result.loss) errors++;
+                await this.forward({ tokenIdx: tokens[t], targetIdx: tokens[t + 1], noRead: true });
             }
+            const ec = this.head.errorCount;
+            errors += (await this.gpu.readData(ec))[0];
+            ec[0] = 0;
+            this.write(ec);
         }
         return { tokens: counter, errors, acc: counter ? 1 - errors / counter : 0 };
     }

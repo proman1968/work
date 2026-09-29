@@ -240,6 +240,18 @@ function makeHost(s, session) {
     };
 }
 
+/** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null. */
+export function taskRole(file) {
+    try {
+        const point = file.$owner || file.$class;
+        const area = point?.areaOf?.(file);
+        return area?.kind === 'zone' ? area.role : null;
+    }
+    catch {
+        return null;
+    }
+}
+
 /** Запуск петли (фоном). Возвращает сразу; ход работы — событиями и сохранениями. */
 function start(s, session, file) {
     const body = s.body;
@@ -251,7 +263,9 @@ function start(s, session, file) {
     s.running = (async () => {
         try {
             const place = file.$class || file.$owner || null;
-            const env = await createEnv({ place, session, host, tz: body.tz, location: body.location });
+            // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
+            body.role = taskRole(file) || body.role;
+            const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role });
             const model = body.model || await env.defaultModel();
             body.model = model;
             const llm = await llmFor(model);
@@ -261,7 +275,7 @@ function start(s, session, file) {
                 items: body.items,
                 tools: await env.makeTools(),
                 host,
-                ctx: { session, place, env },
+                ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
                 loadImage: env.loadImage,
                 effort: body.effort,
                 maxTurns: Number(env.config.maxTurns) || undefined,

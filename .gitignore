@@ -4,7 +4,10 @@ node_modules/
 /#system/mail.json
 /#system/server.json
 /#system/vapid_keys.json
+/#system/node-key.json
 /#system/settings.json
+/#system/os.json
+/#system/lan/
 /services/AI/GigaChat/$service/#system/settings.json
 .env
 **/#secret/
@@ -43,5 +46,5 @@ torus/binnet/models/
 package-lock.json
 /#system/oauth/
 
-# Локальные индексы сервера (доступ по лентам, RAG)
+# пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ (пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ, RAG)
 /.index/

@@ -36,6 +36,12 @@ if (process.env.WORK_RAG !== '0') {
     RAG.start();
 }
 
+// Расписание задач агента (запуски .task по времени от имени владельца); WORK_SCHEDULE=0 — выключить
+if (process.env.WORK_SCHEDULE !== '0') {
+    const { startScheduler } = await import('./modules/agent/scheduler.js');
+    startScheduler();
+}
+
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);

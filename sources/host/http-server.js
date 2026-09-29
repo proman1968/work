@@ -7,9 +7,58 @@ import * as zlib from 'node:zlib';
 import { pipeline, Readable } from 'node:stream';
 import multiparty from 'multiparty';
 import { createHash } from 'node:crypto';
-import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE } from './config.js';
+import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE, MAX_BODY_BYTES, MAX_UPLOAD_BYTES } from './config.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
+import * as GATEWAY from '../server/access/gateway.js';
+import { audit } from '../server/access/audit.js';
+
+/** Активное содержимое из пользовательских зон (html/svg/xml/js) — в песочнице: нельзя исполнить на нашем домене. */
+const ACTIVE_TYPE = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)/i;
+const SYSTEM_PREFIX = /^\/(\$server|sources|oda)(\/|$)/;
+/** Песочница пользовательского HTML: без allow-same-origin — уникальный непрозрачный источник. */
+export const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads';
+
+function isLoopback(request) {
+    const a = String(request.socket?.remoteAddress || '');
+    return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
+function isSecure(request) {
+    return !!request.socket?.encrypted || String(request.headers?.['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+}
+
+/** Cookie сессии: HttpOnly, SameSite=Lax (не уходит с кросс-сайтовыми POST/подзапросами), Secure по TLS. */
+function sessionCookie(session, request) {
+    return `ssid=${session.ssid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${30 * 24 * 3600}` + (isSecure(request) ? '; Secure' : '');
+}
+
+/** Файл пользовательских данных (не системный код/UI) — отдаётся с sandbox для активных типов. */
+function isUserContent(item) {
+    const path = String(item?.path || '');
+    if (SYSTEM_PREFIX.test(path))
+        return false;
+    try {
+        const owner = item.$owner || item.$class;
+        const kind = owner?.areaOf?.(item)?.kind;
+        return kind !== 'system';
+    }
+    catch {
+        return true;
+    }
+}
+
+async function readBody(request, limit) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of request) {
+        size += chunk.length;
+        if (size > limit)
+            throw new Error('Тело запроса больше допустимого размера');
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+}
 
 const COMPRESS_MAX = 256 * 1024;
 const STATIC_CACHE = 'must-revalidate, public, max-age=3600';
@@ -89,9 +138,8 @@ function sendErrorResponse(response, error) {
     }
     try {
         response.writeHead(400, {
-            'Content-Type': 'text/html',
-            mode: 'no-cors',
-            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Content-Type-Options': 'nosniff',
         });
         response.end(error?.toString?.() ?? String(error));
     }
@@ -117,6 +165,7 @@ export function startServers(requestHandler) {
         console.log('Server running at http://localhost:8001/torus/binnet/test-ui/index.html');
         console.log('Server running at http://localhost:8001/oda/components/layouts/editor-form/index.html');
         console.log('Server running at http://localhost:8001/oda/components/table/index.html');
+        console.log('Server running at http://localhost:8001/torus/binnet/test-ui/index.html?tab=lab');
     });
 
     let httpsServer;
@@ -164,38 +213,10 @@ function requestBody(params, request) {
     return params.post ?? request?.post;
 }
 
-function resolveClassMethod(item, method, params, request) {
-    const post = requestBody(params, request);
-    // Обход цепочки прототипов через Object.getPrototypeOf (не __proto__,
-    // который может перехватываться Reactor-прокси)
-    let prop;
-    let t = item;
-    while (t && !prop) {
-        prop = Object.getOwnPropertyDescriptor(t, method);
-        t = Object.getPrototypeOf(t);
-    }
-    if (prop) {
-        if (prop.value) {
-            if (typeof prop.value === 'function')
-                return prop.value.call(item, params, post);
-            return prop.value;
-        }
-        else if (prop.get)
-            return prop.get.call(item);
-        else if (prop.set && post)
-            return prop.set.call(item, post);
-    }
-    // Fallback: попытка прямого доступа (для Reactor-прокси)
-    try {
-        const handler = item[method];
-        if (handler !== undefined) {
-            if (typeof handler === 'function')
-                return handler.call(item, params, post);
-            return handler;
-        }
-    } catch {}
-}
-
+/**
+ * Вызов метода элемента из HTTP — только через шлюз доступа (access/gateway.js):
+ * объявленные методы/геттеры, проверка уровня до вызова, CSRF для изменений, без сеттеров.
+ */
 export function execItemMethod(item, method, params, request) {
     if (!(item instanceof CORE.$folder))
         return item;
@@ -204,15 +225,11 @@ export function execItemMethod(item, method, params, request) {
     if (!method)
         return item;
 
-    const runMethod = async () => {
-        const classResult = resolveClassMethod(item, method, params, request);
-        if (classResult !== undefined)
-            return classResult;
-
-        throw new Error(`Unknown method "${method}" for:<br>${item.path}`);
-    };
-
-    return runMethod();
+    return GATEWAY.invoke(item, method, params, {
+        transport: 'http',
+        request,
+        post: requestBody(params, request),
+    });
 }
 
 export function createRequestHandler() {
@@ -220,10 +237,33 @@ export function createRequestHandler() {
 
     let item;
     try {
+        // DEV отключает проверки прав — только для запросов с этой же машины
+        if (DEV_MODE && !isLoopback(request)) {
+            response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+            response.end('WORK_DEV: доступ только с localhost');
+            return;
+        }
+        // CORS не разрешён: предзапросы с чужих сайтов получают пустой ответ без разрешений
+        if (request.method === 'OPTIONS') {
+            response.writeHead(204, { 'X-Content-Type-Options': 'nosniff' });
+            response.end();
+            return;
+        }
         const cookies = parseCookies(request);
-        let session = $server.get_session(cookies.ssid);
+        let session;
+        // Подписанный запрос узла сети WORK — эфемерная сессия субъекта-узла (без cookie)
+        if (request.headers['work-signature']) {
+            const { verifyNodeRequest } = await import('../modules/nodes/inbound.js');
+            session = await verifyNodeRequest(request);
+        }
+        else {
+            session = $server.get_session(cookies.ssid);
+            session.ip = request.socket?.remoteAddress;
+        }
         const url = new URL(`https://${request.headers.host || HOST}` + request.url);
         let path = decodeURIComponent(url.pathname);
+        if (path.includes('\0'))
+            throw new Error('Недопустимый путь');
 
         // Возврат со страницы входа провайдера (OAuth подключения агента) — до разбора дерева
         if (path === '/oauth/callback') {
@@ -234,8 +274,16 @@ export function createRequestHandler() {
             return;
         }
 
-        // console.log(request.url)
+        // Публичная карточка узла сети WORK (ключ, адрес, объявленные роли, известные узлы)
+        if (path === '/.well-known/work-node') {
+            const { wellKnown } = await import('../modules/nodes/identity.js');
+            response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+            response.end(JSON.stringify(await wellKnown()));
+            return;
+        }
 
+        // шаги `@свойство` — только разрешённые на чтение члены
+        GATEWAY.assertPathProps(path);
         item = await WORK.get_item(path, 0, undefined, { session });
 
         const { method, params } = Array.from(url.searchParams).reduce(
@@ -257,9 +305,12 @@ export function createRequestHandler() {
 
 
 
-        // подписка сокета на изменения пути (reset → {path}); статика UI (модули, стили, иконки) — не данные
-        if (!STATIC_PATH.test(path))
-            session.sockets[request.headers['x-work-wsid']]?.events?.add(path);
+        // подписка сокета на изменения пути (reset → {path}) — после успешного ответа (доступ проверен);
+        // статика UI (модули, стили, иконки) — не данные
+        const subscribe = () => {
+            if (!STATIC_PATH.test(path))
+                session.sockets?.[request.headers['x-work-wsid']]?.events?.add(path);
+        };
         params.session = session;
         if (item === undefined){
             if(!path.includes('/@')){
@@ -286,13 +337,7 @@ export function createRequestHandler() {
         if (Array.isArray(item)) {
             let items = await Promise.all(item);
             if (items.length > 0) {
-                let _items = [];
-                for (const i of items) {
-                    const hasAccess = i.allowAccess ? await i.allowAccess(params) : true;
-                    if (hasAccess) {
-                        _items.push(i);
-                    }
-                }
+                const _items = await GATEWAY.visibleOnly(items, params);
                 if (_items.length === 0) {
                     throw new Error('Нет доступа.')
                 }
@@ -330,8 +375,11 @@ export function createRequestHandler() {
                     response.end();
                     return;
                 }
-                let range = request.headers.range;
+                let range = item.constructor === CORE.$file && request.method === 'GET' && isFileBodyMethod(method)
+                    ? request.headers.range : undefined;
                 if(range){
+                    // частичная отдача — те же права, что у download
+                    await item.assertAccess(params, CORE.$class.ACCESS_LEVEL.READ);
                     const fileSize = item.size;
                     const parts = range.replace(/bytes=/, "").split("-");
                     const start = parseInt(parts[0], 10);
@@ -359,7 +407,7 @@ export function createRequestHandler() {
                         const contentType = (request.headers['content-type'] || '').split(';')[0];
                         if (contentType === 'multipart/form-data') {
                             const promise = new Promise((resolve , reject) => {
-                                var form = new multiparty.Form();
+                                var form = new multiparty.Form({ maxFilesSize: MAX_UPLOAD_BYTES, maxFieldsSize: 20 * 1024 * 1024 });
                                 form.parse(request, (err, fields, files)=>{
                                     if (err) {
                                         reject(err);
@@ -396,16 +444,8 @@ export function createRequestHandler() {
                             await promise;
                         }
                         else {
-                            let chunks = [];
-                            try {
-                                for await (let chunk of request) {
-                                    chunks.push(chunk);
-                                }
-                            }
-                            catch (e) {
-                                console.error(e)
-                            }
-                            params.post = parsePostBody(Buffer.concat(chunks), contentType);
+                            const body = request.rawBody ?? await readBody(request, MAX_BODY_BYTES);
+                            params.post = parsePostBody(body, contentType);
                             request.post = params.post;
                         }
                     }
@@ -434,22 +474,14 @@ export function createRequestHandler() {
             result = await result;
 
 
-        if (Array.isArray(result)) {
-            const res = []
-            for (const i of result) {
-                if (i instanceof CORE.$class) {
-                    const hasAccess = await i.allowAccess(params);
-                    if (!hasAccess) {
-                        continue;
-                    }
-                }
-                res.push(i);
-            }
-            result = res;
-        }
+        if (Array.isArray(result))
+            result = await GATEWAY.visibleOnly(result, params);
+        else if (result instanceof CORE.$folder && result !== item && !(await GATEWAY.canRead(result, params)))
+            throw new Error('Нет доступа');
 
         const isFilePayload = item?.constructor === CORE.$file && (!method || method === 'load' || method === 'script' || method === 'download');
-        const header = { "Access-Control-Allow-Origin": "*", "mode": 'no-cors', "Content-Type": "application/json" };
+        const header = { "Content-Type": "application/json", "X-Content-Type-Options": "nosniff" };
+        subscribe();
         // if (method === 'load_icon') {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';
         // }
@@ -477,6 +509,13 @@ export function createRequestHandler() {
                 }
                 else
                     header["Content-Type"] = 'text/plain';
+                // пользовательское активное содержимое (html/svg/js из зон) — в песочнице без allow-same-origin:
+                // скрипты работают (презентации, отчёты), но в изолированном источнике — без доступа
+                // к окну WORK, cookie сессии и API от имени пользователя
+                if (ACTIVE_TYPE.test(header["Content-Type"]) && isUserContent(item)) {
+                    header['Content-Security-Policy'] = SANDBOX_CSP;
+                    header['Cache-Control'] = 'no-cache';
+                }
 
                 // ETag/304: повторная загрузка модулей и файлов — без тела
                 const etag = request.method === 'GET' ? etagOf(item, result) : null;
@@ -498,8 +537,8 @@ export function createRequestHandler() {
                 const packed = createBodyEncoder(request.headers['accept-encoding'] || '', size);
                 if (packed) {
                     header["Content-Encoding"] = packed.encoding;
-                    if (!cookies.ssid)
-                        header['Set-Cookie'] = `ssid=${session.ssid}; HttpOnly; Path=/`;
+                    if (!session.ephemeral && cookies.ssid !== session.ssid)
+                        header['Set-Cookie'] = sessionCookie(session, request);
                     response.writeHead(200, header);
                     const source = result?.pipe ? result : Readable.from(result);
                     pipeline(source, packed.stream, response, onError);
@@ -530,8 +569,8 @@ export function createRequestHandler() {
         else{
             result = result?.toString?.();
         }
-        if (!cookies.ssid) {
-            header['Set-Cookie'] = `ssid=${session.ssid}; HttpOnly; Path=/`;
+        if (!session.ephemeral && cookies.ssid !== session.ssid) {
+            header['Set-Cookie'] = sessionCookie(session, request);
         }
 
         if (result){

@@ -24,14 +24,14 @@ async function distributedDataJsDir(storage) {
     return dir.replace(/^\./, '');
 }
 
-describe('$class.resolveDistributedFolder', () => {
+describe('$class.$distr_folder', () => {
     it('matches _collect_tilde axis ($folder of class + type_chain)', async () => {
         globalThis.WORK = new $server();
         const item = await WORK.get_item('/SERVICES');
         assert.ok(item instanceof $class);
         assert.equal(item.type, '$service');
 
-        const resolved = await item.resolveDistributedFolder();
+        const resolved = await item.$distr_folder;
         const expected = await expectedDistributedFolder(item);
         assert.equal(resolved.path, expected.path);
         // Ось — inherit-прокси: $folder класса (якорь — метапапка) + шаги type_chain.
@@ -43,12 +43,12 @@ describe('$class.resolveDistributedFolder', () => {
         globalThis.WORK = new $server();
         const item = await WORK.get_item('/SERVICES');
 
-        const resolved = await item.resolveDistributedFolder();
+        const resolved = await item.$distr_folder;
         const distDataDir = await distributedDataJsDir(item);
         assert.equal(
             distDataDir,
             resolved.real_dir.replace(/^\./, ''),
-            'resolveDistributedFolder must point to the folder whose class.js is in ~/ merge',
+            '$distr_folder must point to the folder whose class.js is in ~/ merge',
         );
     });
 
@@ -56,7 +56,7 @@ describe('$class.resolveDistributedFolder', () => {
         globalThis.WORK = new $server();
         const item = await WORK.get_item('/SERVICES');
 
-        const resolved = await item.resolveDistributedFolder();
+        const resolved = await item.$distr_folder;
         const wrongShortcut = item.meta_folder.path + '/$class/$service';
         assert.notEqual(resolved.path, wrongShortcut);
     });

@@ -6,6 +6,8 @@ export class Embedding extends BinNet {
         this.vocabSize = config.vocabSize || 65536;
         this.embSize = config.embSize || 256; // Количество u32-блоков на токен
         this.learnRate = config.embLearnRate ?? 0.1; // доля несовпадающих бит, тянущихся к цели за шаг
+        this.steLrEmb = config.steLrEmb ?? this.steLr;
+        this.steInit = config.steInitEmb ?? this.steInit;
         this.params = { // параметры изначально указываются в виде размера Uint32Array
             embeddings: this.vocabSize * this.embSize
         }
@@ -55,7 +57,35 @@ export class Embedding extends BinNet {
         return Object.assign({}, input, {src: this, data: this.output, target: this.target});  
     }    
 
+    // Строка tokenIdx: счетчики -= lr · dL/d(бит)
+    backSte(data = {}) {
+        this.ensureCounters(this.params.embeddings);
+        if (!this.BACK_STE) {
+            this.BACK_STE = this.gpu.compute_info(this.embSize);
+            this.BACK_STE.compile(`
+                // BACK Embedding STE
+                struct Offsets { output: u32, targets: u32 }
+                @group(0) @binding(0) var<storage, read> grad: array<f32>;
+                @group(0) @binding(1) var<storage, read_write> weights: array<u32>;
+                @group(0) @binding(2) var<storage, read_write> counters: array<i32>;
+                @group(0) @binding(3) var<uniform> offsets: Offsets;
+                @group(0) @binding(4) var<uniform> seed: u32;
+                @compute @workgroup_size(${this.BACK_STE.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${this.BACK_STE.idx_code_gen}
+                    let k = idx;
+                    let widx = idx + offsets.output;
+                    ${BinNet.steWordUpdate({ lr: this.steLrEmb, cmax: this.steCmax, grad: 'grad[k * 32u + b]', salt: this.steSalt })}
+                    weights[widx] = word;
+                }
+                ${BinNet.STE_WGSL}
+            `, this.id + ':BACK_STE');
+        }
+        this.BACK_STE.compute([data.grad, this.params.embeddings, this.counters, this.FWD.offsets, this.steSeed()]);
+    }
+
     back(data = {}) {
+        if (this.ste) return this.backSte(data);
         // Цель обучения ряда — back_target, пришедший сверху (MambaLayer/Head),
         // а НЕ собственный выход forward (раньше diff был всегда 0 — веса были заморожены).
         let incoming = data?.back_target ?? data;

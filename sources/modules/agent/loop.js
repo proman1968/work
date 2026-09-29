@@ -28,7 +28,10 @@ export const RESULT_MAX = 24000;
 export const OLD_RESULT_MAX = 1500;
 export const KEEP_FULL_TURNS = 6;
 export const STREAM_RETRIES = 2;
+export const EMPTY_RETRIES = 2;
 export const COMPACT_AT = 0.72;
+/** Скрытая подсказка после пустого хода (только в messages, в ленту не пишется). */
+export const EMPTY_NUDGE = '[Система] Твой предыдущий ответ был пустым: ни текста, ни вызова инструмента. Продолжай работу — вызови нужный инструмент или напиши итоговый ответ пользователю.';
 
 /**
  * Выполнить агента до ответа без вызовов инструментов (или стопа/лимита).
@@ -54,6 +57,7 @@ export async function runLoop(opts) {
             if (entry.status === 'approved')
                 await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
         await recoverInterrupted(items, host);
+        let empty = 0;
         for (let turn = 0; ; turn++) {
             throwIfStopped(host.signal);
             if (turn >= maxTurns) {
@@ -65,6 +69,8 @@ export async function runLoop(opts) {
             await maybeCompact({ llm, items, host, system });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
+            if (empty)
+                messages.push({ role: 'user', content: EMPTY_NUDGE });
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
                 system: estimateTokens(system),
@@ -82,14 +88,22 @@ export async function runLoop(opts) {
                     continue;
                 }
                 if (!it.content.trim()) {
+                    // пустой ход (только рассуждение / обрыв без ошибки) — сами делаем «дальше»
+                    if (it.finish !== 'length' && empty < EMPTY_RETRIES) {
+                        empty++;
+                        items.splice(items.indexOf(it), 1);
+                        await host.save();
+                        continue;
+                    }
                     it.error = true;
-                    it.content = 'Модель вернула пустой ответ.';
+                    it.content = emptyReason(it);
                     await host.save();
                     return { status: 'error', content: it.content };
                 }
                 await host.save();
                 return { status: 'done', content: it.content };
             }
+            empty = 0;
             it.tools = calls.map(c => ({ id: c.id || genId(), name: c.name, args: c.arguments || {}, status: 'pending' }));
             await host.save();
             await runCalls({ it, byName, host, llm, opts });
@@ -178,6 +192,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
     const t0 = Date.now();
     for (let attempt = 0; ; attempt++) {
         let calls = [];
+        let finish = null;
         try {
             for await (const ch of llm.stream({ messages, tools: schemas, signal: host.signal, effort })) {
                 if (host.signal?.aborted)
@@ -194,11 +209,18 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                     it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens };
                 else if (ch?.type === 'tool_calls')
                     calls = ch.calls || [];
+                else if (ch?.type === 'finish')
+                    finish = ch;
             }
             if (host.signal?.aborted) {
                 it.stopped = true;
                 throw new StopError();
             }
+            if (finish?.reason)
+                it.finish = String(finish.reason);
+            // соединение закрылось без [DONE] и без finish_reason — обрыв, а не ответ
+            if (finish && !finish.done && !finish.reason && !calls.length && !it.content && !it.reasoning)
+                throw new Error('поток ответа оборвался');
             it.content = stripThink(it.content).replace(/^\s+/, '').replace(/\s+$/, '');
             it.durationMs = Date.now() - t0;
             return calls;
@@ -221,6 +243,17 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
             throw Object.assign(new Error(String(e.message || e)), { reported: true });
         }
     }
+}
+
+/** Текст ошибки пустого ответа: что именно пришло от модели. */
+function emptyReason(it) {
+    if (it.finish === 'length')
+        return 'Ответ модели обрезан лимитом длины (maxOutput) до появления текста. Увеличьте maxOutput модели или напишите «дальше».';
+    const why = [
+        it.reasoning ? 'было только рассуждение' : '',
+        it.finish && it.finish !== 'stop' ? 'finish_reason: ' + it.finish : '',
+    ].filter(Boolean).join(', ');
+    return 'Модель вернула пустой ответ' + (why ? ' (' + why + ')' : '') + '. Напишите «дальше», чтобы продолжить.';
 }
 
 /** <think>…</think> в content (модели без отдельного reasoning-канала). */
@@ -403,6 +436,9 @@ export function toMessages(system, items, images = null) {
             case 'assistant': {
                 const old = ai++ < fullFrom;
                 const tools = (it.tools || []).filter(t => t && t.name);
+                // наши сообщения об ошибке — не реплика модели, в контекст не идут
+                if (it.error && !tools.length)
+                    break;
                 const msg = { role: 'assistant', content: it.content || '' };
                 if (tools.length)
                     msg.tool_calls = tools.map(t => ({
