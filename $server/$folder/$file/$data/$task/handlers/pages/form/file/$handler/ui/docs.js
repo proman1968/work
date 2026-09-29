@@ -5,7 +5,7 @@
  *   computeStats(body)  — статистика сессии для вкладки «Контекст».
  */
 
-const FILE_TOOLS = { write: 'carbon:document-add', edit: 'carbon:edit', generate_image: 'carbon:image', save_skill: 'carbon:skill-level' };
+const FILE_TOOLS = { write: 'carbon:document-add', edit: 'carbon:edit', write_table: 'carbon:table', generate_image: 'carbon:image', save_skill: 'carbon:skill-level' };
 const REPORT_MIN = 700;
 
 function basename(p) {
@@ -42,19 +42,26 @@ export function collectDocs(items) {
         docs.push(d);
     };
     const walkFiles = (list, nested) => {
+        const artifacts = new Map();
         for (const it of list || []) {
             if (it?.type !== 'assistant')
                 continue;
             for (const t of it.tools || []) {
-                if (FILE_TOOLS[t.name] && t.status === 'ok' && t.path)
-                    put({ key: 'file:' + t.path, kind: 'file', path: t.path, title: basename(t.path), icon: FILE_TOOLS[t.name], time: it.time, source: t.id });
+                if (t.status === 'ok' && ['write', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
+                    artifacts.set(t.path, t.snapshot || null);
+                if (FILE_TOOLS[t.name] && t.status === 'ok' && t.path) {
+                    const snapshot = t.snapshot;
+                    put({ key: 'file:' + (snapshot || t.id), kind: snapshot ? 'file' : 'text',
+                        ...(snapshot ? { path: snapshot } : { text: 'Снимок этой версии не сохранён в задаче.' }),
+                        title: basename(t.path), icon: FILE_TOOLS[t.name], time: it.time, source: t.id });
+                }
                 if (t.name === 'task' && t.status === 'ok' && t.result && !nested)
                     put({ key: 'agent:' + t.id, kind: 'text', text: String(t.result), title: t.args?.description || plainTitle(t.result), icon: 'carbon:bot', time: it.time, source: t.id, subtitle: 'отчёт субагента ' + (t.agent || t.args?.agent || '') });
                 if (Array.isArray(t.items))
                     walkFiles(t.items, true);
             }
             if (!nested && !it.error && isReport(it.content))
-                put({ key: 'reply:' + it.id, kind: 'text', text: String(it.content), title: plainTitle(it.content), icon: 'carbon:document', time: it.time, source: it.id, subtitle: 'ответ агента' });
+                put({ key: 'reply:' + it.id, kind: 'text', text: String(it.content), artifacts: new Map(artifacts), title: plainTitle(it.content), icon: 'carbon:document', time: it.time, source: it.id, subtitle: 'ответ агента' });
         }
     };
     walkFiles(items, false);

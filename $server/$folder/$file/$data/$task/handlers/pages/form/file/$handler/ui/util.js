@@ -189,29 +189,36 @@ const TRAIL = /[.,;:!?)»"'…]+$/;
  * `/путь` в бэктиках и голые /КЛАСС/… пути в тексте → [путь](/путь/~/handlers/pages/form/);
  * markdown-ссылки на абсолютные пути → WORK-формат. Блоки кода, внешние URL — без изменений.
  */
-export function linkifyWork(md) {
+export function linkifyWork(md, artifacts = new Map()) {
     const src = String(md ?? '');
     if (!src || !src.includes('/'))
         return src;
     const parts = src.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$))/);
-    return parts.map((part, i) => i % 2 ? part : linkifySegment(part)).join('');
+    return parts.map((part, i) => i % 2 ? part : linkifySegment(part, artifacts)).join('');
 }
 
-function linkifySegment(text) {
+function linkifySegment(text, artifacts) {
     const keep = [];
     const hold = s => '\u0000' + (keep.push(s) - 1) + '\u0000';
+    const artifact = path => {
+        if (!artifacts.has(path))
+            return null;
+        const name = path.split('/').pop();
+        const snapshot = artifacts.get(path);
+        return snapshot ? '[' + name + '](' + workHref(snapshot) + ')' : name;
+    };
     // готовые ссылки: абсолютный путь → WORK-формат
     text = text.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, label, href) => {
         let h = href;
         try { h = decodeURI(href); } catch { /* как есть */ }
-        return hold(isWorkPath(h) ? '[' + label + '](' + workHref(h) + ')' : m);
+        return hold(artifact(h) ?? (isWorkPath(h) ? '[' + label + '](' + workHref(h) + ')' : m));
     });
     text = text.replace(/https?:\/\/[^\s)\]]+/g, m => hold(m));
     text = text.replace(/<[^>\n]+>/g, m => hold(m));
     // `путь` в бэктиках
     text = text.replace(/`([^`\n]+)`/g, (m, code) => {
         const c = code.trim();
-        return hold(isWorkPath(c) ? '[`' + c + '`](' + workHref(c) + ')' : m);
+        return hold(artifact(c) ?? (isWorkPath(c) ? '[`' + c + '`](' + workHref(c) + ')' : m));
     });
     // голые пути в тексте
     text = text.replace(/(^|[\s(«"'])(\/[^\s`'"«»()\[\]<>]+)/g, (m, pre, raw) => {
@@ -219,7 +226,7 @@ function linkifySegment(text) {
         const path = tail ? raw.slice(0, -tail.length) : raw;
         if (!isWorkPath(path, true))
             return m;
-        return pre + hold('[' + path + '](' + workHref(path) + ')') + tail;
+        return pre + hold(artifact(path) ?? ('[' + path + '](' + workHref(path) + ')')) + tail;
     });
     return text.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[+n]);
 }

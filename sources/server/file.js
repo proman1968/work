@@ -538,11 +538,35 @@ export class $file extends $folder{
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
         // Обычный файл: снимок в storage/.history. Логи (.logs) пишутся как файл данных в meta/logs/DAY/.
-        let dir = this.storage_folder.dir + '/history/' + params.date;
-        fs.mkdirSync(dir, { recursive: true });
-        let id = params.time + '.' + uid + '.' + this.ext;
+        let dir, id, reserved;
+        // Даже два сохранения одним автором в одну миллисекунду должны иметь разные снимки.
+        // 'wx' резервирует имя атомарно и не даёт параллельной записи перезаписать снимок.
+        for (;;) {
+            dir = this.storage_folder.dir + '/history/' + params.date;
+            fs.mkdirSync(dir, { recursive: true });
+            id = params.time + '.' + uid + '.' + this.ext;
+            try {
+                reserved = await fsp.open(dir + '/' + id, 'wx');
+                await reserved.close();
+                break;
+            }
+            catch (e) {
+                if (e.code !== 'EEXIST')
+                    throw e;
+                params.time++;
+                params.dateTime = new Date(params.time);
+                const date = params.dateTime.toISOTimezoneString();
+                params.date = date.slice(0, 10).split('.').toReversed().join('-');
+            }
+        }
         dir += '/' + id;
-        await fsp.copyFile(this.dir, dir);
+        try {
+            await fsp.copyFile(this.dir, dir);
+        }
+        catch (e) {
+            await fsp.rm(dir, { force: true });
+            throw e;
+        }
         let history = await this.storage_folder._get_next_item('history', FS.$folder);
         let data_history = await history._get_next_item(params.date, FS.$folder);
 

@@ -274,10 +274,10 @@ ODA({ is: 'microchat-doc',
     get isMarkdown() { return this.ext === 'md'; },
     get url() { return fileUrl(this.path) + '?_=' + this.bust; },
     get text() { return this.isFile ? this.fileText : String(this.doc?.text || ''); },
-    get md() { return linkifyWork(this.text); },
+    get md() { return linkifyWork(this.text, this.doc?.artifacts || new Map()); },
     get subtitle() {
         if (this.isFile)
-            return this.path;
+            return ['Снимок файла', fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
         return [this.doc?.subtitle, fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
     },
     async loadText() {
@@ -303,7 +303,7 @@ ODA({ is: 'microchat-doc',
     copy() { copyText(this.text); },
     fileName() {
         const base = String(this.doc?.title || 'документ').replace(/[\\/:*?"<>|\n]+/g, ' ').trim().slice(0, 60) || 'документ';
-        return this.isFile ? this.path.split('/').pop() : base + '.md';
+        return this.isFile ? base : base + '.md';
     },
     download() {
         if (this.isFile && (this.isImage || this.isPage || !this.text)) {

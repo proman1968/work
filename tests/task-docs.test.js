@@ -2,15 +2,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectDocs, computeStats, isReport } from '../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import { segmentsOf } from '../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/segments.js';
 
 const long = '# Отчёт по оборудованию\n\n' + 'строка отчёта\n'.repeat(80);
 const items = [
     { id: 'u', type: 'user', content: 'сделай', time: 1 },
     { id: 'a1', type: 'assistant', time: 2, usage: { prompt: 1000, completion: 50, total: 1050 }, tools: [
-        { id: 't1', name: 'write', status: 'ok', path: '/BASE/doc/r.md', args: { path: '/BASE/doc/r.md' } },
+        { id: 't1', name: 'write', status: 'ok', path: '/BASE/doc/r.md', snapshot: '/BASE/doc/.r.md/history/2026-09-29/100.X.md', args: { path: '/BASE/doc/r.md' } },
         { id: 't2', name: 'write', status: 'error', path: '/BASE/doc/bad.md' },
         { id: 't3', name: 'task', status: 'ok', agent: 'explore', args: { description: 'Осмотр' }, result: 'итог субагента', items: [
-            { id: 's', type: 'assistant', tools: [{ id: 's1', name: 'edit', status: 'ok', path: '/BASE/x.md' }] },
+            { id: 's', type: 'assistant', tools: [{ id: 's1', name: 'edit', status: 'ok', path: '/BASE/x.md', snapshot: '/BASE/.x.md/history/2026-09-29/101.X.md' }] },
         ] },
     ] },
     { id: 'a2', type: 'assistant', time: 3, content: long, usage: { prompt: 2000, completion: 300, total: 2300 } },
@@ -20,14 +21,17 @@ const items = [
 describe('доки задачи', () => {
     it('файлы (и из субагентов), отчёты субагентов, развёрнутые ответы; ошибки и короткое — нет', () => {
         const docs = collectDocs(items);
-        assert.deepEqual(docs.map(d => d.key), ['file:/BASE/doc/r.md', 'agent:t3', 'file:/BASE/x.md', 'reply:a2']);
+        assert.deepEqual(docs.map(d => d.key), ['file:/BASE/doc/.r.md/history/2026-09-29/100.X.md', 'agent:t3', 'file:/BASE/.x.md/history/2026-09-29/101.X.md', 'reply:a2']);
+        assert.equal(docs[0].title, 'r.md');
+        assert.equal(docs[0].path, items[1].tools[0].snapshot);
         assert.equal(docs[3].title, 'Отчёт по оборудованию');
         assert.ok(!isReport('коротко'));
     });
 
     it('повторная запись того же файла — один док', () => {
-        const again = [...items, { id: 'a4', type: 'assistant', time: 5, tools: [{ id: 't9', name: 'edit', status: 'ok', path: '/BASE/doc/r.md' }] }];
-        assert.equal(collectDocs(again).filter(d => d.path === '/BASE/doc/r.md').length, 1);
+        const again = [...items, { id: 'a4', type: 'assistant', time: 5, tools: [{ id: 't9', name: 'edit', status: 'ok', path: '/BASE/doc/r.md', snapshot: '/BASE/doc/.r.md/history/2026-09-29/200.X.md' }] }];
+        assert.equal(collectDocs(again).filter(d => d.title === 'r.md').length, 2);
+        assert.equal(collectDocs([{ type: 'assistant', tools: [{ id: 'old', name: 'write', status: 'ok', path: '/BASE/old.md' }] }])[0].kind, 'text');
     });
 });
 
@@ -45,6 +49,23 @@ describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
         assert.ok(out.includes('и/или 1/2'));
         assert.ok(out.includes('```\n/BASE/в/коде\n```'));
         assert.ok(isWorkPath('/sources/core.js') && !isWorkPath('/sources/core.js', true) && !isWorkPath('/day'));
+    });
+    it('ответ задачи показывает имя, но открывает снимок на момент ответа, а не живой файл', () => {
+        const path = '/USERS/X/$user/USER/text/презентация.html';
+        const first = '/USERS/X/$user/USER/text/.презентация.html/history/2026-09-29/100.X.html';
+        const second = '/USERS/X/$user/USER/text/.презентация.html/history/2026-09-29/200.X.html';
+        const turns = [
+            { id: 'w1', type: 'assistant', tools: [{ name: 'write', status: 'ok', path, snapshot: first }] },
+            { id: 'a1', type: 'assistant', content: 'Где лежит `' + path + '`' },
+            { id: 'w2', type: 'assistant', tools: [{ name: 'write', status: 'ok', path, snapshot: second }] },
+            { id: 'a2', type: 'assistant', content: 'Где лежит `' + path + '`' },
+        ];
+        const [a1, a2] = segmentsOf(turns).filter(s => s.kind === 'assistant');
+        assert.equal(linkifyWork(a1.item.content, a1.artifacts), 'Где лежит [презентация.html](' + encodeURI(first + '/~/handlers/pages/form/') + ')');
+        assert.equal(linkifyWork(a2.item.content, a2.artifacts), 'Где лежит [презентация.html](' + encodeURI(second + '/~/handlers/pages/form/') + ')');
+        assert.equal(linkifyWork('[отчёт](' + path + ')', a1.artifacts), '[презентация.html](' + encodeURI(first + '/~/handlers/pages/form/') + ')');
+        assert.equal(linkifyWork('Файл ' + path + '.', a1.artifacts), 'Файл [презентация.html](' + encodeURI(first + '/~/handlers/pages/form/') + ').');
+        assert.equal(linkifyWork('`' + path + '`', new Map([[path, null]])), 'презентация.html');
     });
 });
 

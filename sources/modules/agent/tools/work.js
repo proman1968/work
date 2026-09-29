@@ -293,6 +293,8 @@ function realPathOf(log, fallback) {
 /** Записать бинарный файл (картинка и т.п.) → фактический путь. */
 export async function writeBinary(path, buffer, ctx) {
     const log = await writeFile(path, buffer, ctx);
+    if (ctx?.entry)
+        ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
     return realPathOf(log, absPath(path, ctx));
 }
 
@@ -740,6 +742,7 @@ export const workTools = [
             const real = realPathOf(log, absPath(args.path, ctx));
             if (ctx.entry) {
                 ctx.entry.path = real;
+                ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
                 ctx.entry.diff = lineDiff(typeof before === 'string' ? before : '', String(args.content));
             }
             const req = absPath(args.path, ctx);
@@ -780,9 +783,10 @@ export const workTools = [
                 throw new Error('old_string встречается ' + count + ' раз — добавь контекста для однозначности или replace_all:true');
             const after = args.replace_all ? text.split(oldS).join(String(args.new_string)) : text.replace(oldS, () => String(args.new_string));
             const out = before.includes('\r\n') ? after.replace(/\n/g, '\r\n') : after;
-            await callAs(file, 'save', { post: out }, ctx);
+            const log = await callAs(file, 'save', { post: out }, ctx);
             if (ctx.entry) {
                 ctx.entry.path = file.path;
+                ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
                 ctx.entry.diff = lineDiff(text, after);
             }
             return 'изменён ' + file.path + ' (замен: ' + (args.replace_all ? count : 1) + ')';

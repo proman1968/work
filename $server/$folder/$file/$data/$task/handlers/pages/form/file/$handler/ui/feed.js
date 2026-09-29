@@ -9,44 +9,11 @@ import {
     toolMeta, toolTarget, STATUS_META, fmtDuration, fmtTime, fmtTokens, modelShort,
     copyText, findShell, liveText, resultMarkdown, linkifyWork, isWorkPath,
 } from './util.js';
+import { segmentsOf } from './segments.js';
+export { segmentsOf } from './segments.js';
 
 const ACTIVE = ['pending', 'running', 'approval', 'waiting'];
 const COLLAPSE_FROM = 3;
-
-/** Лента → сегменты: user | assistant (текст) | steps (вызовы и рассуждения без текста) | summary | error. */
-export function segmentsOf(items, streams = {}, nested = false) {
-    const out = [];
-    let group = null;
-    (items || []).forEach((it, i) => {
-        if (!it || (nested && i === 0 && it.type === 'user'))
-            return;
-        if (it.type !== 'assistant') {
-            group = null;
-            if (['user', 'summary', 'error'].includes(it.type))
-                out.push({ kind: it.type, id: it.id, item: it });
-            return;
-        }
-        const s = streams[it.id];
-        const text = liveText(it.content, s?.content).trim();
-        const reasoning = liveText(it.reasoning, s?.reasoning).trim();
-        const tools = it.tools || [];
-        if (text) {
-            group = null;
-            out.push({ kind: 'assistant', id: it.id, item: it });
-        }
-        if (!tools.length && (text || !reasoning))
-            return;
-        if (!group) {
-            group = { kind: 'steps', id: 'g:' + it.id, entries: [] };
-            out.push(group);
-        }
-        if (!text && reasoning)
-            group.entries.push({ kind: 'think', id: it.id + ':r', item: it });
-        for (const t of tools)
-            group.entries.push({ kind: 'tool', id: t.id, tool: t, turn: it });
-    });
-    return out;
-}
 
 const SEG_TAG = {
     user: 'microchat-user',
@@ -61,7 +28,7 @@ ODA({ is: 'microchat-feed',
         <style>
             :host { @apply --vertical; gap: 12px; min-width: 0; }
         </style>
-        <div ~for="segments" ~is="tag($for.item)" :data="$for.item.item" :group="$for.item" :nested></div>
+        <div ~for="segments" ~is="tag($for.item)" :data="$for.item.item" :group="$for.item" :artifacts="$for.item.artifacts" :nested></div>
     `,
     items: [],
     nested: false,
@@ -166,13 +133,14 @@ ODA({ is: 'microchat-assistant',
     `,
     data: null,
     group: null,
+    artifacts: null,
     nested: false,
     showReasoning: false,
     get stream() { return this.$pdp?.streams?.[this.data?.id]; },
     get text() { return liveText(this.data?.content, this.stream?.content); },
     get reasoning() { return liveText(this.data?.reasoning, this.stream?.reasoning); },
     /** Стрим — как есть (ссылки дорисуются по завершении), готовый ответ — с WORK-ссылками. */
-    get md() { return this.streamingText ? this.text : linkifyWork(this.text); },
+    get md() { return this.streamingText ? this.text : linkifyWork(this.text, this.artifacts || new Map()); },
     get streamingText() { return !!this.stream?.content && !this.data?.durationMs; },
     get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.data?.durationMs; },
     get reasoningOpen() { return this.showReasoning || this.thinkingNow; },

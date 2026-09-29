@@ -291,9 +291,15 @@ describe('инструменты WORK на песочнице', () => {
         const out = await tool('write').run({ path: '/BOX/doc/new.md', content: 'альфа\nбета\nбета\n' }, c);
         assert.match(out, /создан/);
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/new.md')));
+        assert.match(c.entry.snapshot, /\/\.new\.md\/history\/[^/]+\/[^/]+\.md$/);
+        assert.equal(await tool('read').run({ path: c.entry.snapshot }, ctx()).then(s => s.includes('альфа')), true);
         await assert.rejects(() => tool('edit').run({ path: '/BOX/doc/new.md', old_string: 'бета', new_string: 'гамма' }, ctx()), /2 раз/);
+        await new Promise(r => setTimeout(r, 5));
         const c2 = ctx();
         await tool('edit').run({ path: '/BOX/doc/new.md', old_string: 'альфа', new_string: 'АЛЬФА' }, c2);
+        assert.notEqual(c.entry.snapshot, c2.entry.snapshot);
+        assert.match(await tool('read').run({ path: c.entry.snapshot }, ctx()), /альфа/);
+        assert.doesNotMatch(await tool('read').run({ path: c.entry.snapshot }, ctx()), /АЛЬФА/);
         assert.equal(fs.readFileSync(path.join(tmp, 'BOX/doc/new.md'), 'utf-8'), 'АЛЬФА\nбета\nбета\n');
         assert.equal(c2.entry.diff.added, 1);
         assert.equal(c2.entry.diff.removed, 1);
@@ -303,6 +309,16 @@ describe('инструменты WORK на песочнице', () => {
     it('write во вложенную несуществующую папку', async () => {
         await tool('write').run({ path: '/BOX/doc/sub/deep.txt', content: 'x' }, ctx());
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/sub/deep.txt')));
+    });
+
+    it('два сохранения одного файла в одну миллисекунду не перезаписывают снимок', async () => {
+        const folder = await WORK.get_item('/BOX/doc');
+        const time = Date.now();
+        const first = await folder.save_file({ filename: 'collision.md', post: 'первая версия', time });
+        const second = await folder.save_file({ filename: 'collision.md', post: 'вторая версия', time });
+        assert.notEqual(first.path, second.path);
+        assert.match(await tool('read').run({ path: first.path }, ctx()), /первая версия/);
+        assert.match(await tool('read').run({ path: second.path }, ctx()), /вторая версия/);
     });
 
     it('create_class / find по имени и тексту / schema / call', async () => {
