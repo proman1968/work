@@ -1,13 +1,13 @@
 /**
  * Документы и таблицы:
  *   read_table     — строки xlsx/csv файла WORK как объекты (заголовки — ключи);
- *   import_objects — строки → объекты данных ($data) класса по схеме METADATA.FIELDS;
+ *   import_objects — строки → объекты (.data) класса по схеме METADATA.FIELDS;
  *   render_doc     — документ из шаблона (docx / md / html / txt) с полями {{имя}}.
  * Все чтения и записи — с правами пользователя (callAs).
  */
 import AdmZip from 'adm-zip';
 import { FS } from '../../../server/index.js';
-import { getItem, callAs, writeBinary, writeFile, absPath } from './work.js';
+import { getItem, callAs, writeBinary, absPath } from './work.js';
 
 const IMPORT_MAX = 1000;
 
@@ -46,12 +46,19 @@ async function tableRows(file, ctx, sheet) {
     return { sheet: name, sheets: wb.SheetNames, rows };
 }
 
-/** Поля объектов типа ext в классе (схема со всеми слоями наследования). */
+/** Поля объектов типа ext в классе: схема `.data` — из METADATA.FIELDS класса,
+ * старых типов — из типа (со всеми слоями наследования). */
 async function fieldsOf(cls, ext) {
+    await cls.init;
     const types = await cls.data_types;
     const type = (types || []).find(t => t.id === '$' + ext);
     if (!type)
         throw new Error('в ' + cls.path + ' нет типа данных $' + ext + '; есть: ' + (types || []).map(t => t.id).join(', '));
+    if (ext === 'data') {
+        const own = cls.DATA?.METADATA?.FIELDS;
+        if (Array.isArray(own) && own.length)
+            return own;
+    }
     return Array.isArray(type.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
 }
 
@@ -147,12 +154,12 @@ export const docTools = [
         name: 'import_objects',
         risk: 'write',
         target: args => absPath(args?.path, null),
-        description: 'Создать объекты данных ($data: .oml и др.) в классе из строк таблицы: map — колонка → поле схемы (METADATA.FIELDS); значения приводятся к типам полей; обязательные поля проверяются. dry_run — только проверка без записи. До 1000 объектов за вызов.',
+        description: 'Создать объекты (.data) в классе из строк таблицы: map — колонка → поле схемы (METADATA.FIELDS); значения приводятся к типам полей; обязательные поля проверяются. dry_run — только проверка без записи. До 1000 объектов за вызов.',
         parameters: {
             type: 'object',
             properties: {
                 path: { type: 'string', description: 'Класс, в котором создать объекты' },
-                type: { type: 'string', description: 'Тип объектов (расширение): oml, …' },
+                type: { type: 'string', description: 'Тип объектов: data' },
                 source: { type: 'string', description: 'WORK-путь таблицы (или передай rows)' },
                 sheet: { type: 'string' },
                 rows: { type: 'array', items: { type: 'object' }, description: 'Строки, если не из файла' },
@@ -213,8 +220,8 @@ export const docTools = [
                     break;
                 try {
                     const safe = p.name.replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 120) || ext;
-                    // запись в зону роли пользователя (как write); одна запись ленты на весь импорт — ниже
-                    const log = await writeFile(cls.path + '/' + safe + '.' + ext, JSON.stringify(p.obj), ctx, { ignore_save_logs: true });
+                    // объект в общей зоне DATA через метод-владелец (одна запись ленты на весь импорт — ниже)
+                    const log = await callAs(cls, 'create_object', { filename: safe + '.' + ext, type: ext, post: JSON.stringify(p.obj), ignore_save_logs: true }, ctx);
                     written.push(log?.logFullPath || log?.path);
                 }
                 catch (e) {
@@ -233,7 +240,7 @@ export const docTools = [
         name: 'render_doc',
         risk: 'write',
         target: args => absPath(args?.path, null),
-        description: 'Документ из шаблона WORK: docx, md, html или txt с метками {{поле}} (вложенные — {{клиент.имя}}). Данные — data или объект data_path (.oml). Результат — новый файл path.',
+        description: 'Документ из шаблона WORK: docx, md, html или txt с метками {{поле}} (вложенные — {{клиент.имя}}). Данные — data или объект data_path (.data). Результат — новый файл path.',
         parameters: {
             type: 'object',
             properties: {

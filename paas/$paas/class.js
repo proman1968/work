@@ -2,7 +2,7 @@ export default {
     page: 'paas',
     icon: 'icons:account-balance-wallet',
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: 'status',
             type: 'String',
             placeholder: 'в процессе создания | работает | остановлен',

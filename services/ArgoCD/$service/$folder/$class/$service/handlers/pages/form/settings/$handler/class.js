@@ -92,7 +92,9 @@ export default {
     async attached() {
         const body = await this.$item.body;
         this._body = body;
-        const schema = (Array.isArray(body?.METADATA?.FIELDS) ? body.METADATA.FIELDS : null)
+        const schema = (Array.isArray(body?.METADATA?.STATIC) && body.METADATA.STATIC.length ? body.METADATA.STATIC : null)
+            || (Array.isArray(body?.METADATA?.FIELDS) ? body.METADATA.FIELDS : null)
+            || (Array.isArray(this.$item?.METADATA?.STATIC) && this.$item.METADATA.STATIC.length ? this.$item.METADATA.STATIC : null)
             || (Array.isArray(this.$item?.METADATA?.FIELDS) ? this.$item.METADATA.FIELDS : [])
             || [];
         this.fields = (Array.isArray(schema) ? schema : []).map(f => ({

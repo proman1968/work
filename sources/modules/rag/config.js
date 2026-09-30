@@ -16,7 +16,7 @@ export const CONFIG = {
     maxTextChars: 400_000,
     /** Корневые папки и имена, которые не индексируются никогда. */
     excludeRoots: ['node_modules', 'sources', 'oda', 'tests', 'scripts', 'torus'],
-    excludeNames: ['node_modules', '#secret', '#system', '.git', '.svn', '.index', '.RAG', '.cursor', '.vscode'],
+    excludeNames: ['node_modules', '#secret', '#system', 'INDEX', '.git', '.svn', '.index', '.RAG', '.cursor', '.vscode'],
     /** Текст, извлекаемый как есть. */
     textExts: ['md', 'markdown', 'txt', 'csv', 'tsv', 'yaml', 'yml', 'skill', 'ai', 'chat', 'rst', 'adoc'],
     /** Документы, извлекаемые Kreuzberg / разбором таблиц. */
@@ -25,7 +25,7 @@ export const CONFIG = {
     codeExts: ['js', 'mjs', 'ts', 'mts', 'css', 'json', 'xml', 'py'],
     indexCode: process.env.WORK_RAG_CODE === '1',
     /** Базовые типы файлов данных ($server/$folder/$file/$data/$…) — пополняются при обходе. */
-    dataExts: ['oml', 'eml', 'ics', 'call', 'task', 'logs'],
+    dataExts: ['data', 'eml', 'ics', 'call', 'task', 'logs'],
     /** Поиск. */
     search: {
         k: 8,

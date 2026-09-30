@@ -297,7 +297,12 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     }
     if (entry.args?.raw && Object.keys(entry.args).length === 1) {
         entry.status = 'error';
-        entry.error = 'Аргументы не разобраны как JSON: ' + clip(entry.args.raw, 300);
+        const raw = String(entry.args.raw);
+        entry.error = 'Аргументы вызова не разобраны как JSON (' + raw.length + ' символов'
+            + (it.finish === 'length' ? ', ответ модели достиг лимита длины' : '')
+            + '). Возможно, длинный content обрезан или нарушено экранирование. '
+            + 'Повтори коротким вызовом; большой файл создавай через write и дополняй небольшими частями через append. Фрагмент: '
+            + clip(raw, 300);
         await host.save();
         return;
     }

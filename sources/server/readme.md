@@ -8,7 +8,7 @@
 - `folder.js` — `$folder`: дерево элементов, `children`, `get_item`, `tilde`, `info`, `save_file` (новое имя — `safeNodeName`), `find_text`, `get_schema`, `services_schema`
 - `class.js` — `$class`: `class.js`, merge/diff, logs, secrets, metadata, `save_message`; `create` нормализует id через `safeNodeName` (тег `$ai` → поле `model`)
 - `safe-node-name.js` — имя сегмента пути = имя на диске (без `:` `/` `\`)
-- `file.js` — `$file`: load/read_text/save/edit, history, RAG, триггеры `on_save`
+- `file.js` — `$file`: load/read_text/save/edit, history, RAG, триггеры `on_save` (типа и собственного класса: `<мета>/triggers/<имя>/$trigger/`)
 - `handler.js` — `$handler extends $class`: исполняемый элемент (execute в class.js)
 - `user.js` — `$user`: пользовательская storage-сущность, online-статус
 - `server.js` — `$server`: корневой серверный `$class`, HTTP-сессии, merge `class.js`
@@ -24,7 +24,7 @@
 - **`get_schema()`** — схема методов для ИИ-агента (прототип + функции экземпляра после `init`, включая `$method`)
 - **`services_schema()`** — реестр внешних сервисов (`SERVICES/`): свод `SCHEMA + capabilities` провайдеров для discovery агентами (подробно — `SERVICES/readme.md`)
 - **`static sourceUrl = import.meta.url`** — для парсинга JSDoc из исходника
-- **`save_file` → `save_to_history`** — обычный файл: живая копия + снимок в `history/` + лог. **Файл данных** (у `$file/$ext` есть `METADATA`): точка `ext/…/YYYY-MM-DD/{time}.{uid}.{ext}`, `name` в JSON, `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`. Новое имя обычного файла — `safeNodeName`
+- **`save_file` → `save_to_history`** — обычный файл: живая копия в зоне роли + снимок в `history/` + лог. **Объект** (расширение из `DATA_EXTS`, сейчас `.data`): точка `DATA/YYYY-MM-DD/{time}.{uid}.{ext}` (адрес вычисляется из id), `name` из тела (иначе stem пути), `time` из корня тела (иначе `params.time` / now), лог без копии в `history/`; пишут методы-владельцы (`create/update/delete_object`, прямая запись — только ADMIN); поля проверяются по `METADATA.FIELDS`. Остальные файлы данных (`$file/$ext` с `METADATA`: `.eml`, `.ics`, `.task`) — пока в зоне роли. Новое имя обычного файла — `safeNodeName`
 
 ## Словарь API (канон имён)
 
@@ -58,10 +58,10 @@ API элементов — это «система команд» для ИИ-а
 ### Роли и доступ (модель «Точки × Роли × Ленты», `access/policy.js`)
 
 - **Размещение определяет наследование**, права о нём не знают: файл в `meta/ROLE/` — только эта точка, в `meta/$folder/ROLE/` — все точки ниже, в `meta/$folder/$class/$type/ROLE/` — точки типа ниже
-- **Область** элемента — первая папка после последнего `$…` виртуального пути: имя объявленной роли → зона роли; `logs` → лента точки; `#secret`/`#system` → секреты; иначе → система. Бизнес-данные — только в зонах
+- **Область** элемента — первая папка после последнего `$…` виртуального пути: имя объявленной роли → зона роли; `DATA` → объекты (общая зона точки); `INDEX` → производные агрегаты; `logs` → лента точки; `#secret`/`#system` → секреты; иначе → система. Документы ролей — в зонах (`$structure`); объекты `.data` — в `DATA`; `DATA`/`INDEX`/`logs` ролью не объявить (`RESERVED_ZONE_NAMES`)
 - **Роли** объявляются в `ROLES` class.js (сборка по `~`): базовые ADMIN, BOSS, USER, GUEST + прикладные (`CUSTOMER` и т.п., по умолчанию как USER). Поля: `scope` (`point`|`subtree` — видит вниз по дереву), `feed` (`own`|`point` — видит ленту точки), `write` (`zone`|`all`), `key` (поле назначений в `#security`, по умолчанию `ROLE + 'S'`), `label`
-- **Чтение**: система — любой назначенной роли; зона — своей роли (собственная и унаследованная); лента точки — `feed=point` (ADMIN, BOSS), остальным — свои записи (автор/получатель); секреты — ADMIN; `scope=subtree` — всё вниз по дереву. Плюс всё, на что указывает запись в собственной ленте пользователя (`receivers` доставляют запись в кабинет — индекс лент `access/refs.js`)
-- **Запись**: ADMIN — всё вниз по дереву; остальные — только своя зона и только где роль назначена локально
+- **Чтение**: система, `DATA`, `INDEX` — любой назначенной роли (видимость класса — через `canSee`); зона — своей роли (собственная и унаследованная); лента точки — `feed=point` (ADMIN, BOSS), остальным — свои записи (автор/получатель); секреты — ADMIN; `scope=subtree` — всё вниз по дереву. Плюс всё, на что указывает запись в собственной ленте пользователя (`receivers` доставляют запись в кабинет — индекс лент `access/refs.js`)
+- **Запись**: ADMIN — всё вниз по дереву; остальные — только своя зона и только где роль назначена локально; `DATA`/`INDEX` напрямую — только ADMIN, остальные пишут объекты через метод-владелец `create_object` (ADMIN или USER с локальным назначением)
 - **Вложения** (`includes` в `save_message`/`append_log_includes`/`save_file`) — только видимые автору (иначе лента стала бы обходом прав)
 - **Исполняемое и системное**: `class.js`, сегменты `$…` (типизаторы — сервер импортирует их class.js), `#…`, скрытые `.…` создаёт/меняет только роль с `write: 'all'`; имена и `params.folder` нормализуются (`safeRelPath`), итоговый путь проверяется «внутри папки» (`assertInside`); элемент с id `.`/`..` не создаётся
 - **Субъекты** (`principals`): `user` — пользователь сервера, `node` — узел сети WORK (другой сервер, действующий через своего представителя). ADMIN/BOSS и роли с `write: 'all'` узлам не выдаются; узел получает только роли, заявленные его представителем в подписанном запросе; в своём классе реестра узел видит только ленту отношений. В записях логов от узла — `sender` = id узла, `actor` = `uid@узел`
@@ -69,7 +69,8 @@ API элементов — это «система команд» для ИИ-а
 - `declared_roles` — объявленные роли точки; `roles(params)` — роли пользователя (subtree-роли — с наследованием сверху); `hasLocalRole(params, role)`; `areaOf(item)` / `resolveZone(item)` — область элемента; `canSee` / `canWrite` — через политику
 - `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`, прикладные — `#security[key]`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
 - `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
-- `work_zone({role})` — папка роли в метапапке для `save_file`; имя = `role` или `GUEST`; deprecated-алиас: `get_storage`
+- `work_zone({role})` — папка роли в метапапке для `save_file`; имя = `role` или `GUEST`; `DATA`/`INDEX`/`logs` отклоняются; deprecated-алиас: `get_storage`
+- `data_zone()` — общая зона `DATA` метапапки для объектов; `DATA_EXTS` (`['data']`) — расширения объектов общей зоны; `is_data_zone_type(ext)`; `create/update/delete/read_object({id, …})`, `query`, `split` — API объектов (в шлюзе: запись — WRITE, чтение — READ)
 - deprecated: `$class.ZONES` / `ZONES_MAP` (зона = имя роли)
 
 ### Описание элемента
@@ -86,14 +87,20 @@ API элементов — это «система команд» для ИИ-а
 | `save({ post })` | `$class` | сохранить `class.js` (слои) |
 | `save({ post })` | `$file` | перезаписать содержимое этого файла |
 | `edit({ post })` | `$file` | точечная правка SEARCH/REPLACE; deprecated-алиас: `edit_file` |
-| `save_file({ filename, post })` | `$folder`/`$class` | обычный файл → history + лог; файл данных (`METADATA`) → точка в папке ext + лог |
+| `save_file({ filename, post })` | `$folder`/`$class` | обычный файл → зона роли, history + лог; объект (`DATA_EXTS`) → `DATA/<дата>/` + лог; остальные файлы данных (`METADATA`) → зона роли, точка в папке ext + лог |
+| `create_object({filename\|name, post\|body})` | `$class` | метод-владелец: новый объект в `DATA` (ADMIN или USER с локальным назначением; только в листе); `name` из тела, поля — по `METADATA.FIELDS` |
+| `update_object({id, post\|body, restore?})` | `$class` | новая версия на месте (имя файла стабильно), прежняя — в `.{leaf}/history/`; удалённый — только с `restore: true` |
+| `delete_object({filename\|name})` | `$class` | отметка `deleted` (файл остаётся, версия — в историю) |
+| `read_object({filename\|name})` | `$class` | текущая версия объекта |
+| `query({where, from?, to?, ext?, include_deleted?, limit?, order?})` | `$class` | выборка по поддереву того же типа из файлов (не индекса), только пакеты дней из периода; `where`: равенство, `[...]` как $in, `{gte,lte,gt,lt,ne,eq,in,like}` |
+| `split({child})` | `$class` | перенос `DATA` в пустого потомка того же типа (создаёт его); только write=all; факт — `save_message` |
 | `save_files` | `$folder` | батч файлов + одна `save_message` |
 | `save_message({ message, includes })` | `$class` | чистая лог-запись без файла |
 | `ensure_folder({ id })` | `$folder` | создать дочернюю папку по имени |
 
 ### Логи ($class, внутренности — `logs.js`)
 
-- `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`. Журнал: `<meta>/logs/YYYY-MM-DD/{time}.{uid}.logs` (файл данных, не `.data.logs/history`)
+- `logs({mode})` — единая точка чтения: `folder` (папка дня, default) | `bodies` | `index` | `files` | `dates`. Журнал: `<meta>/logs/YYYY-MM-DD/{time}.{uid}.logs` (файл данных, не `.data.logs/history`). `feed: 'point'` — общая лента класса (почта): чтение из журнала класса без фильтра «только свои» (только `mode: 'dates'` или `ext` из типов данных класса), запись — без копии в кабинет автора
 - `read_log_entry({path})` — одна запись по stub `.logs` или связанному `row.path`
 - `append_log_includes({entryPath, includePaths})` — дописать includes записи
 - deprecated-алиасы: `logs_dates`, `log_files`, `read_log_bodies`, `log_index`, `appendLogIncludes`

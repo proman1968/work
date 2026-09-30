@@ -516,9 +516,9 @@ export class $folder extends $item{
         return (await loadRag()).search(this, params);
     }
     /**
-     * Структурный запрос по объектам данных ($data: .oml и др.) с теми же правами, что поиск.
+     * Структурный запрос по объектам данных (.data и др.) с теми же правами, что поиск.
      * @param {object} [params]
-     * @param {string} [params.type] Расширение типа объектов (oml, eml, ics…)
+     * @param {string} [params.type] Расширение типа объектов (data, eml, ics…)
      * @param {object} [params.where] Условия по полям: {field: value | {eq, ne, gt, gte, lt, lte, contains}}
      * @param {number} [params.limit] Максимум объектов (по умолчанию 50)
      * @returns {Promise<Array>} Объекты: {path, point, role, type, fields}
@@ -908,11 +908,26 @@ export class $folder extends $item{
     get _triggers(){
         return new AsyncPromise(async () => {
             const triggers = await this.get_item('~/triggers/*');
-            return triggers?.reduce((res, item) => {
+            const res = triggers?.reduce((res, item) => {
                 res[item.id] = item;
                 item.$context = this;
                 return res;
             }, {}) || {};
+            // файлы: плюс триггеры собственного класса-владельца
+            // (`<мета>/triggers/<имя>/$trigger/`): цепочка ~ файла его пропускает
+            if (this instanceof FS.$file) {
+                try {
+                    const own = await this.$owner?.meta_folder?.get_item('triggers/*');
+                    for (const t of Array.isArray(own) ? own : (own ? [own] : [])) {
+                        if (t?.id && !res[t.id]) {
+                            res[t.id] = t;
+                            t.$context = this;
+                        }
+                    }
+                }
+                catch { /* нет триггеров у класса */ }
+            }
+            return res;
         });
     }
     /** Каталог `$method`: `~/methods/*`. Прикладная `~/ai` — только дети-`$method`, не `~/ai/*`. */
@@ -1511,7 +1526,7 @@ export class $folder extends $item{
         if (!parsed.ext)
             throw new Error('save_file: файл данных без расширения');
         const body = await readDataPost(params.post);
-        body.name = parsed.name;
+        body.name ??= parsed.name;
         const time = dataFileTime(body, params);
         body.time = time;
         params.time = time;
@@ -1531,7 +1546,7 @@ export class $folder extends $item{
             : params.dateTime.toISOString();
         params.date = stamp.slice(0, 10).split('.').toReversed().join('-');
         const dir = this.dir + '/' + [...parsed.folders, params.date].join('/');
-        // папка точки (logs/, oml/…) создаётся впервые — родитель должен увидеть её сразу, а не после debounce
+        // папка точки (logs/, data/…) создаётся впервые — родитель должен увидеть её сразу, а не после debounce
         const created = !fs.existsSync(this.dir);
         fs.mkdirSync(dir, { recursive: true });
         if (created)

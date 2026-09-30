@@ -105,6 +105,8 @@ export async function sendOutboxEml(box, data) {
         subject: json.subject || '(без темы)',
         text: json.body || '',
         html: json.html || undefined,
+        inReplyTo: json.inReplyTo || undefined,
+        references: json.inReplyTo || undefined,
     });
 }
 

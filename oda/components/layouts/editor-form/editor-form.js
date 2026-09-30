@@ -93,10 +93,11 @@ function cleanField(f, seen) {
  * Канонические поля из metadata. Входы:
  * - массив полей
  * - { title, fields: [...] } (parseFormSpec / normalizeFormSpec)
- * - { FIELDS: [...] } / объект с METADATA (встроенный стандарт: METADATA: { FIELDS })
- * - map { key: descriptor } (id = key)
+ * - { FIELDS: [...] } / { STATIC: [...] } / объект с METADATA
+ *   (встроенный стандарт: METADATA: { STATIC — свойства класса, FIELDS — поля объектов }).
+ * kind: 'auto' (STATIC при наличии, иначе FIELDS) | 'static' | 'fields'.
  */
-export function normalizeEditorFields(meta) {
+export function normalizeEditorFields(meta, kind = 'auto') {
     let title = '';
     let list = [];
     if (Array.isArray(meta)) {
@@ -106,11 +107,19 @@ export function normalizeEditorFields(meta) {
         title = String(meta.title || meta.label || '');
         if (Array.isArray(meta.fields))
             list = meta.fields;
+        else if (Array.isArray(meta.STATIC) && (kind !== 'fields') && (kind === 'static' || meta.STATIC.length || !Array.isArray(meta.FIELDS)))
+            list = meta.STATIC;
         else if (Array.isArray(meta.FIELDS))
             list = meta.FIELDS;
         else if (meta.METADATA && typeof meta.METADATA === 'object') {
             const md = meta.METADATA;
-            if (Array.isArray(md.FIELDS))
+            if (kind === 'static')
+                list = Array.isArray(md.STATIC) ? md.STATIC : (Array.isArray(md.FIELDS) ? md.FIELDS : []);
+            else if (kind === 'fields')
+                list = Array.isArray(md.FIELDS) ? md.FIELDS : [];
+            else if (Array.isArray(md.STATIC) && md.STATIC.length)
+                list = md.STATIC;
+            else if (Array.isArray(md.FIELDS))
                 list = md.FIELDS;
             else if (Array.isArray(md.fields))
                 list = md.fields;

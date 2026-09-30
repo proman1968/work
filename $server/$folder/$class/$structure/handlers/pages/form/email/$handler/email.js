@@ -23,6 +23,9 @@ export default {
     },
 }
 
+const NO_MAILBOX = 'Сначала настройте почтовый ящик в настройках формы';
+const EMPTY_DRAFT = () => ({ from: '', to: '', subject: '', body: '', inReplyTo: '' });
+
 function accountAddresses(mailboxes = {}) {
     const result = [];
     for (const [key, box] of Object.entries(mailboxes || {})) {
@@ -33,19 +36,18 @@ function accountAddresses(mailboxes = {}) {
     return result;
 }
 
-function asItemArray(value) {
-    if (value == null)
-        return [];
-    if (Array.isArray(value))
+function parseJson(value) {
+    if (value && typeof value === 'object')
         return value;
-    return [value];
-}
-
-function dayKeyFromEntry(entry) {
-    if (entry?.name)
-        return String(entry.name);
-    const parts = String(entry?.path || '').split('/').filter(Boolean);
-    return parts.pop() || '';
+    if (typeof value !== 'string' || !value)
+        return null;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    }
+    catch {
+        return null;
+    }
 }
 
 function formatMailDate(value) {
@@ -54,7 +56,7 @@ function formatMailDate(value) {
     const d = new Date(value);
     if (Number.isNaN(d.getTime()))
         return String(value);
-    return d.toLocaleString([], {
+    return d.toLocaleString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
         hour: '2-digit',
@@ -62,8 +64,55 @@ function formatMailDate(value) {
     });
 }
 
-function defaultEmlJson({ from, to, subject, body, address, status = 'pending' }) {
-    return {
+function newUid() {
+    if (globalThis.crypto?.randomUUID)
+        return crypto.randomUUID();
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+/** Адрес из «Имя <a@b>» или «a@b». */
+function bareAddress(value) {
+    const s = String(value || '').trim();
+    const m = s.match(/<([^>]+)>/);
+    return (m ? m[1] : s).trim();
+}
+
+/** Проверка поля «Кому»: непустое, каждый адрес похож на e-mail. */
+function validateRecipients(to) {
+    const list = String(to || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    if (!list.length)
+        throw new Error('Укажите получателя');
+    const bad = list.filter(a => !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(bareAddress(a)));
+    if (bad.length)
+        throw new Error('Некорректный адрес: ' + bad.join(', '));
+    return list.join(', ');
+}
+
+function htmlToText(html) {
+    try {
+        return new DOMParser().parseFromString(html, 'text/html').body?.textContent || '';
+    }
+    catch {
+        return '';
+    }
+}
+
+function quoteBody(msg) {
+    const text = msg.body || htmlToText(msg.html || '');
+    const quoted = String(text).split(/\r?\n/).map(line => '> ' + line).join('\n');
+    return `\n\n${msg.dateLabel || ''}, ${msg.from || ''} пишет:\n${quoted}`;
+}
+
+/** Документ для iframe sandbox: без скриптов, ссылки — в новой вкладке. */
+function htmlDocument(html) {
+    return '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">'
+        + '<style>body{margin:0;font-family:sans-serif;word-wrap:break-word;}img{max-width:100%;height:auto;}</style>'
+        + '</head><body>' + String(html || '') + '</body></html>';
+}
+
+function defaultEmlJson({ uid, from, to, subject, body, address, inReplyTo, status = 'pending' }) {
+    const json = {
+        uid,
         subject: subject || '(без темы)',
         from: from || '',
         to: to || '',
@@ -73,6 +122,58 @@ function defaultEmlJson({ from, to, subject, body, address, status = 'pending' }
         status,
         box: 'outbox',
         mailbox: address || '',
+    };
+    if (inReplyTo)
+        json.inReplyTo = inReplyTo;
+    return json;
+}
+
+/** Метаданные письма для message лога (список строится без чтения тел). */
+function emlMeta(json) {
+    return {
+        uid: json.uid || '',
+        subject: json.subject || '',
+        from: json.from || '',
+        to: json.to || '',
+        date: json.date || '',
+        box: json.box || '',
+        mailbox: json.mailbox || '',
+        status: json.status || '',
+    };
+}
+
+/** Строка лога → письмо списка. Старые записи без box в message — чтение файла (legacy). */
+async function rowToMessage(row) {
+    let meta = parseJson(row.content) || {};
+    if (!meta.box) {
+        try {
+            const res = await fetch(row.path);
+            const json = parseJson(await res.text());
+            if (!json?.box)
+                return null;
+            meta = json;
+        }
+        catch {
+            return null;
+        }
+    }
+    const date = meta.date || row.time || '';
+    return {
+        path: row.path,
+        uid: meta.uid || '',
+        subject: meta.subject || '(без темы)',
+        from: meta.from || '',
+        to: meta.to || '',
+        date,
+        status: meta.status || '',
+        error: meta.error || '',
+        box: meta.box,
+        address: meta.mailbox || '',
+        messageId: meta.messageId || '',
+        body: null,
+        html: null,
+        dateLabel: formatMailDate(date),
+        sortTime: date ? new Date(date).getTime() : (row.time || 0),
     };
 }
 
@@ -101,18 +202,21 @@ ODA({
                 width: 220px;
                 min-width: 180px;
                 @apply --light;
-                border-right: 1px solid var(--border-color);
+                border-right: 1px solid var(--subtle-border);
             }
             .accounts-toolbar {
-                padding: 6px 8px;
-                gap: 4px;
+                padding: 6px var(--space-m);
+                gap: var(--space-s);
                 @apply --header;
                 align-items: center;
             }
             .account-item {
-                padding: 10px 8px 10px 12px;
+                padding: 10px var(--space-m) 10px 12px;
                 cursor: pointer;
-                border-bottom: 1px solid var(--border-color);
+                border-bottom: 1px solid var(--subtle-border);
+            }
+            .account-item:not([info-invert]):hover {
+                @apply --hover;
             }
             .account-title {
                 font-weight: 500;
@@ -122,29 +226,36 @@ ODA({
             }
             .account-sub {
                 font-size: x-small;
+                @apply --muted;
+            }
+            /* на инвертированной плашке приглушённый цвет темы нечитаем — следуем цвету плашки */
+            [info-invert] .account-sub {
+                color: inherit;
+                fill: inherit;
                 opacity: .75;
             }
             .editor {
-                padding: 12px 16px;
-                gap: 8px;
+                padding: 12px var(--space-l);
+                gap: var(--space-m);
                 overflow: auto;
             }
             fieldset {
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
-                padding: 8px 12px;
+                border: 1px solid var(--subtle-border);
+                border-radius: var(--radius-s);
+                padding: var(--space-s) var(--space-m);
                 margin: 0;
             }
             legend {
-                font-size: small;
-                padding: 0 4px;
+                font-size: x-small;
+                padding: 0 var(--space-s);
             }
             input {
                 border: none;
                 outline: none;
                 background: transparent;
+                color: inherit;
                 width: 100%;
-                padding: 4px 0;
+                padding: var(--space-s) 0;
                 box-sizing: border-box;
                 font: inherit;
             }
@@ -157,7 +268,7 @@ ODA({
             }
             .empty {
                 padding: 24px;
-                opacity: .6;
+                @apply --muted;
                 text-align: center;
             }
         </style>
@@ -274,87 +385,195 @@ ODA({
     ],
     selected: null,
     mode: 'idle',
-    draft: { to: '', subject: '', body: '' },
-    get _settings() {
-        return this.$item?.fetch('read_secret', { filename: 'email.json' });
+    draft: EMPTY_DRAFT(),
+    accounts: [],
+    _settings: null,
+    /** Зарегистрированные колонки (oda-mailbox) — для перезагрузки по changed. */
+    _mailboxRegistry() {
+        return this._mailboxes ??= new Set();
     },
-    _watch: null,
-    _datesEpoch: 0,
-    get accounts() {
-        return Promise.resolve(this._settings).then(_settings => {
-            return accountAddresses(_settings?.mailboxes);
-        });
+    attached() {
+        this.loadSettings();
+        this._onChanged ??= () => this.debounce('email-reload', () => this.reload(), 150);
+        this._watch();
     },
-    async attached() {
-        this.async(() => {
-            this.init();
-        });
+    detached() {
+        for (const src of this._watched || [])
+            src?.unlisten?.('changed', this._onChanged);
+        this._watched = null;
     },
-    async init() {
-        this.bumpDates();
-        if (this._watch)
+    async _watch() {
+        if (this._watched || !this.$item)
             return;
-        const onChanged = () => this.debounce('email-dates', () => this.bumpDates(), 150);
-        this.$item?.listen?.('changed', onChanged);
-        this._watch = true;
+        this._watched = [this.$item];
+        try {
+            const history = await this.$item.get_item('/~/logs');
+            if (history)
+                this._watched.push(history);
+        }
+        catch { /* нет логов */ }
+        for (const src of this._watched)
+            src?.listen?.('changed', this._onChanged);
     },
     async loadSettings() {
-        this._settings = await this.$item.fetch('read_secret', { filename: 'email.json' });
+        try {
+            this._settings = await this.$item?.fetch('read_secret', { filename: 'email.json' });
+        }
+        catch {
+            this._settings = null;
+        }
+        this.accounts = accountAddresses(this._settings?.mailboxes);
+        return this._settings;
     },
-    bumpDates() {
-        this._datesEpoch = (this._datesEpoch || 0) + 1;
-        this.render();
+    /** Даты с логами, по убыванию. Общие для всех колонок. */
+    loadDates() {
+        return this._datesPromise ??= Promise.resolve(this.$item?.logs({ mode: 'dates' }))
+            .then(list => (Array.isArray(list) ? list : [])
+                .map(String)
+                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+                .sort((a, b) => b.localeCompare(a)))
+            .catch(() => []);
+    },
+    /** Письма дня (все ящики), одна загрузка на форму; исходящие — последняя версия по uid. */
+    dayMessages(day) {
+        const cache = this._dayCache ??= new Map();
+        if (!cache.has(day)) {
+
+
+
+            cache.set(day, (async () => {
+                const rows = await this.$item.logs({ mode: 'bodies', day, ext: 'eml' });
+                const seen = new Set();
+                const list = [];
+                // rows — по убыванию time: первая строка uid — актуальная версия
+                for (const row of rows || []) {
+                    const msg = await rowToMessage(row);
+                    if (!msg)
+                        continue;
+                    const key = msg.uid ? 'uid:' + msg.uid : 'path:' + msg.path;
+                    if (seen.has(key))
+                        continue;
+                    seen.add(key);
+                    list.push(msg);
+                }
+                list.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
+                return list;
+            })().catch(e => {
+                console.warn('[email] day', day, e);
+                cache.delete(day);
+                return [];
+            }));
+        }
+        return cache.get(day);
+    },
+    reload() {
+        this._datesPromise = null;
+        this._dayCache?.clear();
+        for (const mb of this._mailboxRegistry())
+            mb.reload();
     },
     async fetchRefresh() {
-        await this.$pdp.$handler.fetch('refresh');
+        try {
+            await this.$pdp.$handler.fetch('refresh');
+        }
+        catch (e) {
+            ODA.showMessage(e.message || String(e));
+        }
         await this.loadSettings();
-        this.bumpDates();
+        this.reload();
     },
-    selectMessage(row) {
-        this.selected = row;
+    async selectMessage(msg) {
+        this.selected = msg;
         this.mode = 'view';
-        this.render();
+        if (msg.body != null)
+            return;
+        try {
+            const res = await fetch(msg.path);
+            const json = parseJson(await res.text()) || {};
+            this.selected = {
+                ...msg,
+                body: json.body || '',
+                html: json.html || '',
+                messageId: msg.messageId || json.messageId || '',
+                error: msg.error || json.error || '',
+            };
+        }
+        catch (e) {
+            console.error(e);
+            ODA.showMessage(e.message);
+            this.selected = { ...msg, body: e.message, html: '' };
+        }
     },
-    async createEmail() {
-        const accounts = await this.accounts;
-        const address = accounts[0];
-        if (!address) {
-            alert('Сначала настройте почтовый ящик (⚙)');
+    async createEmail(draft = {}) {
+        if (!this.accounts.length)
+            await this.loadSettings();
+        if (!this.accounts.length) {
+            ODA.showMessage(NO_MAILBOX);
             return;
         }
+        this.draft = { ...EMPTY_DRAFT(), from: this.accounts[0], ...draft };
         this.selected = null;
-        this.draft = { to: '', subject: '', body: '' };
         this.mode = 'compose';
-        this.render();
+    },
+    async reply() {
+        const msg = this.selected;
+        if (!msg)
+            return;
+        if (msg.body == null)
+            await this.selectMessage(msg);
+        const src = this.selected;
+        const subject = /^re:/i.test(src.subject || '') ? src.subject : 'Re: ' + (src.subject || '');
+        const to = src.box === 'outbox' ? src.to : src.from;
+        const from = this.accounts.includes(src.address) ? src.address : undefined;
+        await this.createEmail({
+            to,
+            subject,
+            body: quoteBody(src),
+            inReplyTo: src.messageId || '',
+            ...(from ? { from } : {}),
+        });
+    },
+    setFrom(address) {
+        this.draft.from = address;
     },
     async sendDraft() {
-        const accounts = await this.accounts;
-        const address = accounts[0];
+        const address = this.draft.from || this.accounts[0];
         if (!address) {
-            alert('Сначала настройте почтовый ящик (⚙)');
+            ODA.showMessage(NO_MAILBOX);
             return;
         }
-        const settings = this._settings || await this.$item.fetch('read_secret', { filename: 'email.json' });
+        let to;
+        try {
+            to = validateRecipients(this.draft.to);
+        }
+        catch (e) {
+            ODA.showMessage(e.message);
+            return;
+        }
+        const settings = this._settings || await this.loadSettings();
         const box = settings?.mailboxes?.[address];
         const eml = defaultEmlJson({
+            uid: newUid(),
             from: box?.auth?.user || address,
-            to: this.draft.to,
+            to,
             subject: this.draft.subject,
             body: this.draft.body,
             address,
+            inReplyTo: this.draft.inReplyTo,
             status: 'pending',
         });
         try {
             await this.$item.save_file(new File([JSON.stringify(eml)], 'outbound.eml', { type: 'application/json' }), {
                 encoding: 'utf-8',
                 folder: address,
+                message: JSON.stringify(emlMeta(eml)),
             });
             this.mode = 'idle';
-            this.draft = { to: '', subject: '', body: '' };
-            this.bumpDates();
+            this.draft = EMPTY_DRAFT();
+            this.reload();
         }
         catch (e) {
-            alert(e.message);
+            ODA.showMessage(e.message);
         }
     },
 });
@@ -366,11 +585,11 @@ ODA({
             :host {
                 min-width: 240px;
                 overflow: hidden;
-                border-bottom: 1px solid var(--border-color);
+                border-bottom: 1px solid var(--subtle-border);
             }
             .box-title {
                 @apply --header;
-                padding: 8px 12px;
+                padding: var(--space-m) 12px;
                 font-weight: 600;
                 font-size: small;
                 text-transform: uppercase;
@@ -381,44 +600,33 @@ ODA({
             }
             .empty {
                 padding: 12px;
-                opacity: .6;
+                @apply --muted;
                 font-size: small;
             }
         </style>
         <div class="box-title">{{box?.label || box?.id}}</div>
         <div class="days" vertical flex>
-            <email-day ~for="dates" :day="$for.item" :box-id="box?.id"></email-day>
+            <email-day ~for="dates" :day="$for.item" :box-id="box?.id" :first="$for.index === 0"></email-day>
             <div ~if="!dates.length" class="empty">Нет писем</div>
         </div>
     `,
     box: null,
-    dayPaths: {},
-    get dates() {
-        return Object.keys(this.dayPaths).sort((a, b) => b.localeCompare(a));
+    dates: [],
+    // имена реестров разные: $pdp сначала ищет свойство на самом узле
+    _dayRegistry() {
+        return this._days ??= new Set();
     },
     attached() {
-        this.refreshDayPaths();
+        this.$pdp?._mailboxRegistry?.().add(this);
+        this.reload();
     },
-    async refreshDayPaths() {
-        const item = this.$pdp.$item;
-        if (!item)
-            return;
-        const map = Object.create(null);
-        try {
-            let entries = await item.get_item('/~/logs/*');
-            entries = asItemArray(await Promise.resolve(entries));
-            for (const entry of entries) {
-                const day = dayKeyFromEntry(entry);
-                const path = entry?.path;
-                if (!day || !path || !/^\d{4}-\d{2}-\d{2}$/.test(day))
-                    continue;
-                (map[day] ??= []).push(path);
-            }
-        }
-        catch { /* нет логов аккаунта */ }
-
-        this.dayPaths = map;
-        this.render();
+    detached() {
+        this.$pdp?._mailboxRegistry?.().delete(this);
+    },
+    async reload() {
+        this.dates = await this.$pdp.loadDates();
+        for (const day of this._dayRegistry())
+            day.reload();
     },
 });
 
@@ -431,27 +639,36 @@ ODA({
                 @apply --vertical;
                 @apply --no-flex;
             }
+            :host([hidden-day]) {
+                display: none;
+            }
             .day-header {
                 cursor: pointer;
                 padding: 6px 10px;
                 align-items: center;
-                gap: 4px;
+                gap: var(--space-s);
                 font-size: small;
-                opacity: .85;
+            }
+            /* раскрытый день — цвета плашки --accent-invert, приглушаем только свёрнутые */
+            .day-header:not([accent-invert]) {
+                @apply --muted;
             }
             .msg-list {
                 gap: 2px;
-                padding: 0 4px 6px;
+                padding: 0 var(--space-s) 6px;
             }
             .msg-item {
                 display: grid;
                 grid-template-columns: 1fr auto;
                 grid-template-rows: auto auto;
-                gap: 2px 8px;
-                padding: 8px 10px;
+                gap: 2px var(--space-m);
+                padding: var(--space-m) 10px;
                 cursor: pointer;
-                border-radius: 4px;
+                border-radius: var(--radius-s);
                 margin: 0 2px;
+            }
+            .msg-item:not([info-invert]):hover {
+                @apply --hover;
             }
             .msg-subject {
                 font-weight: 500;
@@ -463,13 +680,13 @@ ODA({
             }
             .msg-date {
                 font-size: x-small;
-                opacity: .7;
+                @apply --muted;
                 white-space: nowrap;
                 justify-self: end;
             }
             .msg-from, .msg-to {
                 font-size: x-small;
-                opacity: .75;
+                @apply --muted;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
@@ -479,145 +696,89 @@ ODA({
                 justify-self: end;
                 text-align: right;
             }
+            /* на инвертированной плашке приглушённый цвет темы нечитаем — следуем цвету плашки */
+            [info-invert] .msg-date,
+            [info-invert] .msg-from,
+            [info-invert] .msg-to {
+                color: inherit;
+                fill: inherit;
+                opacity: .75;
+            }
+            .empty {
+                padding: var(--space-s) 12px var(--space-m);
+                @apply --muted;
+                font-size: x-small;
+            }
         </style>
-        <div class="day-header" horizontal :accent="expanded" @tap="expanded = !expanded">
+        <div class="day-header" horizontal :accent-invert="expanded" @tap="expanded = !expanded">
             <span flex>{{label}}</span>
             <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
         </div>
         <div class="msg-list" vertical ~if="expanded">
-            <div ~for="items" class="msg-item"
+            <div ~for="messages" class="msg-item"
                 :info-invert="selectedPath === $for.item.path"
-                @tap="$pdp?.selectMessage?.($for.item)">
+                @tap="$pdp.selectMessage($for.item)">
                 <div class="msg-subject">{{$for.item.subject}}</div>
-                <div class="msg-date">{{$for.item.dateLabel}}</div>
+                <div class="msg-date">{{$for.item.status === 'failed' ? 'ошибка' : $for.item.dateLabel}}</div>
                 <div class="msg-from">От: {{$for.item.from}}</div>
                 <div class="msg-to">Кому: {{$for.item.to}}</div>
             </div>
+            <div ~if="loaded && !messages.length" class="empty">Нет писем</div>
         </div>
     `,
-    day: {
-        $def: '',
-        set(n) {
-            if (this.isFirst)
-                this.expanded = true;
-        }
-    },
+    day: '',
     boxId: '',
     messages: [],
-    _loading: false,
-    _loadedFor: '',
-    get selectedPath() {
-        return this.$pdp?.selected?.path || '';
-    },
-    get expanderIcon() {
-        return this.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right';
-    },
-    get isFirst() {
-        const dates = this.$pdp?.dates;
-        return Array.isArray(dates) && dates[0] === this.day;
+    loaded: false,
+    first: {
+        $def: false,
+        set(n) {
+            if (n)
+                this.expanded = true;
+        }
     },
     expanded: {
         $def: false,
         $attr: true,
         set(n) {
             if (n)
-                this.async(() => this.loadMessages());
+                this.reload();
         },
+    },
+    get selectedPath() {
+        return this.$pdp?.selected?.path || '';
+    },
+    get expanderIcon() {
+        return this.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right';
     },
     get label() {
         const date = new Date(this.day + 'T12:00:00');
         if (Number.isNaN(date.getTime()))
             return this.day;
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString('ru-RU', {
             weekday: 'short',
             year: 'numeric',
             month: 'long',
             day: 'numeric',
         });
     },
-    get items() {
+    attached() {
+        this.$pdp?._dayRegistry?.().add(this);
         if (this.expanded)
-            this.async(() => this.loadMessages());
-        return this.messages;
+            this.reload();
     },
-    async loadMessages() {
+    detached() {
+        this.$pdp?._dayRegistry?.().delete(this);
+    },
+    async reload() {
         if (!this.expanded || !this.day || !this.boxId)
             return;
-        const key = this.day + '|' + this.boxId + '|' + (this.$pdp?._datesEpoch ?? 0);
-        if (this._loading || this._loadedFor === key)
+        const day = this.day, boxId = this.boxId;
+        const list = await this.$pdp.dayMessages(day);
+        if (day !== this.day || boxId !== this.boxId)
             return;
-        this._loading = true;
-        try {
-            const item = this.$pdp?.$item;
-            const paths = this.$pdp?.dayPaths?.[this.day] || [];
-            if (!item || !paths.length) {
-                this.messages = [];
-                this._loadedFor = key;
-                this.render();
-                return;
-            }
-            const rows = [];
-            const seen = new Set();
-            for (const folderPath of paths) {
-                try {
-                    let files = await WORK.get_item(folderPath + '/*');
-                    files = asItemArray(await Promise.resolve(files));
-                    files = await Promise.all(files.map(f => Promise.resolve(f)));
-                    for (const file of files) {
-                        if (!file || typeof file.load !== 'function')
-                            continue;
-                        let row;
-                        try {
-                            const raw = await file.load();
-                            row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                        }
-                        catch {
-                            continue;
-                        }
-                        if (!row?.path)
-                            continue;
-                        if (seen.has(row.path))
-                            continue;
-                        seen.add(row.path);
-                        try {
-                            const res = await fetch(row.path);
-                            const raw = await res.text();
-                            const json = JSON.parse(raw);
-                            if (!json.box || json.box !== this.boxId)
-                                continue;
-                            const dateValue = json.date || row.time || '';
-                            rows.push({
-                                path: row.path,
-                                subject: json.subject || '(без темы)',
-                                from: json.from || '',
-                                to: json.to || '',
-                                date: dateValue,
-                                body: json.body ?? '',
-                                html: json.html || '',
-                                status: json.status || '',
-                                box: json.box,
-                                address: json.mailbox || '',
-                                dateLabel: formatMailDate(dateValue),
-                                sortTime: dateValue ? new Date(dateValue).getTime() : (row.time || 0),
-                            });
-                        }
-                        catch { /* не JSON / старый формат — пропуск */ }
-                    }
-                }
-                catch { /* нет файлов в папке дня */ }
-            }
-            rows.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
-            this.messages = rows;
-            this._loadedFor = key;
-            this.render();
-        }
-        finally {
-            this._loading = false;
-        }
-    },
-    attached() {
-        if (this.expanded)
-            this.async(() => this.loadMessages());
+        this.messages = list.filter(m => m.box === boxId);
+        this.loaded = true;
     },
 });
 
@@ -630,23 +791,24 @@ ODA({
                 @apply --vertical;
                 @apply --flex;
                 overflow: hidden;
-                padding: 12px 16px;
-                gap: 8px;
+                padding: 12px var(--space-l);
+                gap: var(--space-m);
             }
             fieldset {
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
-                padding: 6px 10px;
+                border: 1px solid var(--subtle-border);
+                border-radius: var(--radius-s);
+                padding: var(--space-s) var(--space-m);
                 margin: 0;
             }
             legend {
                 font-size: x-small;
-                padding: 0 4px;
+                padding: 0 var(--space-s);
             }
-            input, textarea {
+            input, textarea, select {
                 border: none;
                 outline: none;
                 background: transparent;
+                color: inherit;
                 width: 100%;
                 box-sizing: border-box;
                 font: inherit;
@@ -658,33 +820,44 @@ ODA({
             .idle {
                 align-items: center;
                 justify-content: center;
-                opacity: .6;
+                @apply --muted;
                 padding: 24px;
             }
             .msg-meta {
                 font-size: small;
-                opacity: .8;
+                @apply --muted;
+            }
+            .msg-error {
+                font-size: small;
+                color: var(--error-color);
             }
             .toolbar {
-                gap: 8px;
+                gap: var(--space-m);
                 align-items: center;
                 justify-content: flex-end;
             }
             .view-body {
                 white-space: pre-wrap;
                 overflow: auto;
-                padding: 8px 0;
+                padding: var(--space-m) 0;
             }
             .view-html {
-                overflow: auto;
-                padding: 8px 0;
-            }
-            .view-html img {
-                max-width: 100%;
+                border: 1px solid var(--subtle-border);
+                border-radius: var(--radius-s);
+                box-sizing: border-box;
+                width: 100%;
+                /* намеренно белый в обеих темах: чужая вёрстка писем рассчитана на светлый фон */
+                background: white;
             }
         </style>
         <div ~if="mode === 'idle'" class="idle" flex>Выберите письмо</div>
-        <div ~if="mode === 'compose'" vertical flex>
+        <div ~if="mode === 'compose'" vertical flex style="gap: 8px;">
+            <fieldset>
+                <legend>От</legend>
+                <select @change="(e) => $pdp.setFrom(e.target.value)">
+                    <option ~for="accounts" :value="$for.item" :selected="$for.item === draft.from">{{$for.item}}</option>
+                </select>
+            </fieldset>
             <fieldset>
                 <legend>Кому</legend>
                 <input placeholder="recipient@example.com" ::value="draft.to">
@@ -693,66 +866,34 @@ ODA({
                 <legend>Тема</legend>
                 <input placeholder="Тема письма" ::value="draft.subject">
             </fieldset>
-            <fieldset flex>
+            <fieldset flex vertical>
                 <legend>Текст</legend>
                 <textarea ::value="draft.body" flex></textarea>
             </fieldset>
             <div class="toolbar" horizontal>
-                <oda-button icon="icons:send" @tap="$pdp.sendDraft" title="Отправить">Отправить</oda-button>
+                <oda-button icon="icons:send" @tap="$pdp.sendDraft()" title="Отправить">Отправить</oda-button>
             </div>
         </div>
-        <div ~if="mode === 'view'" vertical flex>
-            <strong>{{view.subject}}</strong>
-            <span class="msg-meta">От: {{view.from}}</span>
-            <span class="msg-meta">Кому: {{view.to}}</span>
-            <span ~if="view.status" class="msg-meta">Статус: {{view.status}}</span>
-            <div class="view-html" flex ~html="view.html" ~if="view.html"></div>
-            <div class="view-body" flex ~if="!view.html">{{view.body}}</div>
+        <div ~if="mode === 'view' && selected" vertical flex style="gap: 4px;">
+            <div horizontal class="toolbar">
+                <strong flex>{{selected.subject}}</strong>
+                <oda-button icon="icons:reply" @tap="$pdp.reply()" title="Ответить">Ответить</oda-button>
+            </div>
+            <span class="msg-meta">От: {{selected.from}}</span>
+            <span class="msg-meta">Кому: {{selected.to}}</span>
+            <span ~if="selected.status" class="msg-meta">Статус: {{statusLabel}}</span>
+            <span ~if="selected.error" class="msg-error">{{selected.error}}</span>
+            <iframe ~if="selected.html" class="view-html" flex sandbox="allow-popups allow-popups-to-escape-sandbox" :srcdoc="htmlDoc"></iframe>
+            <div class="view-body" flex ~if="!selected.html">{{selected.body ?? 'Загрузка…'}}</div>
         </div>
     `,
-    get mode() {
-        return this.$pdp?.mode || 'idle';
+    // selected / draft / accounts — у формы (через $pdp); свои одноимённые свойства перекрыли бы их
+    mode: 'idle',
+    get statusLabel() {
+        const s = this.$pdp.selected?.status || '';
+        return { pending: 'отправляется', sent: 'отправлено', failed: 'ошибка отправки' }[s] || s;
     },
-    get draft() {
-        return this.$pdp?.draft || { to: '', subject: '', body: '' };
-    },
-    get view() {
-        const row = this.$pdp?.selected;
-        if (!row)
-            return { subject: '', from: '', to: '', body: '', html: '', status: '' };
-        if (row.body == null)
-            this.async(() => this._ensureBody());
-        return {
-            subject: row.subject || '(без темы)',
-            from: row.from || '',
-            to: row.to || '',
-            body: row.body ?? '',
-            html: row.html || '',
-            status: row.status || '',
-        };
-    },
-    async _ensureBody() {
-        const row = this.$pdp?.selected;
-        if (this.$pdp?.mode !== 'view' || !row || row.body != null)
-            return;
-        try {
-            const res = await fetch(row.path);
-            const raw = await res.text();
-            const json = JSON.parse(raw);
-            row.body = json.body || '';
-            row.html = json.html || '';
-            row.subject = json.subject || row.subject;
-            row.from = json.from || row.from;
-            row.to = json.to || row.to;
-            row.status = json.status || '';
-        }
-        catch (e) {
-            console.error(e);
-            ODA.showMessage(e.message);
-            row.body = e.message;
-        }
-        finally {
-            this.view = row;
-        }
+    get htmlDoc() {
+        return htmlDocument(this.$pdp.selected?.html);
     },
 });

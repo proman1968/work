@@ -19,7 +19,7 @@ export function segmentsOf(items, streams = {}, nested = false) {
         const reasoning = liveText(it.reasoning, s?.reasoning).trim();
         const tools = it.tools || [];
         for (const t of tools)
-            if (t.status === 'ok' && ['write', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
+            if (t.status === 'ok' && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
                 artifacts.set(t.path, t.snapshot || null);
         if (text) {
             group = null;

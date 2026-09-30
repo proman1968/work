@@ -410,15 +410,23 @@ ODA({is: 'oda-chat',
         return JSON.stringify(pos ? { lat: pos.lat, lon: pos.lon, tz } : { tz });
     },
     _geo() {
-        if (this._geoFix) return this._geoFix;
+        // Удачная позиция живёт 30 минут; неудача не кешируется — следующий send пробует снова.
+        if (this._geoFix && Date.now() - (this._geoFix.at || 0) < 30 * 60 * 1000)
+            return this._geoFix;
+        this._geoFix = null;
         if (!navigator.geolocation) return null;
         return this._geoWait ??= new Promise(resolve => {
             navigator.geolocation.getCurrentPosition(
                 p => {
-                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
+                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude, at: Date.now() };
+                    this._geoWait = null;
                     resolve(this._geoFix);
                 },
-                () => resolve(null),
+                err => {
+                    this._geoWait = null;
+                    console.warn('[chat] геопозиция недоступна:', err?.message || err);
+                    resolve(null);
+                },
                 { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
             );
         });

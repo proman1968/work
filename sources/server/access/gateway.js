@@ -53,6 +53,8 @@ export const MEMBERS = Object.freeze({
     append_log_includes: L.WRITE, save: L.WRITE, edit: L.WRITE, edit_file: L.WRITE,
     ensure_folder: L.WRITE, create: L.WRITE, write_to_stream: L.WRITE, close_write_stream: L.WRITE,
     restore_from_history: L.WRITE, store_push_subscription: L.WRITE,
+    create_object: L.WRITE, update_object: L.WRITE, delete_object: L.WRITE, split: L.WRITE,
+    read_object: L.READ, query: L.READ,
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, devModeToggle: L.ADMIN, read_secret: L.ADMIN,

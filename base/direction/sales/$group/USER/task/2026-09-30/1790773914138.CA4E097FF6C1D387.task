@@ -1,0 +1,77 @@
+{
+  "name": "какая завтра погода",
+  "created": 1790773914004,
+  "items": [
+    {
+      "id": "5ecc7d79-9140-4441-ae30-a7c5b672d8b3",
+      "type": "user",
+      "time": 1790773915207,
+      "content": "какая завтра погода"
+    },
+    {
+      "id": "a1d2d97e-4b63-418c-ab99-e2b382c8d4f0",
+      "type": "assistant",
+      "content": "",
+      "time": 1790773917227,
+      "model": "/MODELS/odant/Qwen3.8 27b",
+      "reasoning": "The user is asking about tomorrow's weather. I need to know their location. The context says \"Europe/Moscow\" timezone, so I'll assume Moscow. Let me check the weather service.\n",
+      "usage": {
+        "prompt": 10846,
+        "completion": 73,
+        "total": 10919
+      },
+      "finish": "tool_calls",
+      "durationMs": 6079,
+      "tools": [
+        {
+          "id": "chatcmpl-tool-b23558e03db878c5",
+          "name": "svc_Weather_get_weather",
+          "args": {
+            "city": "Москва"
+          },
+          "status": "ok",
+          "result": "{\n  \"source\": \"wttr.in\",\n  \"city\": \"Москва\",\n  \"current\": {\n    \"temp\": \"16°C\",\n    \"feels\": \"12°C\",\n    \"desc\": \"Солнечно\",\n    \"humidity\": \"44%\",\n    \"wind\": \"10 км/ч\"\n  },\n  \"today\": {\n    \"min\": \"9°C\",\n    \"max\": \"16°C\",\n    \"desc\": \"Облачно\"\n  },\n  \"tomorrow\": {\n    \"temp\": \"11°C\",\n    \"min\": \"8°C\",\n    \"max\": \"14°C\",\n    \"desc\": \"Облачно\"\n  }\n}",
+          "durationMs": 695
+        }
+      ]
+    },
+    {
+      "id": "d9071edc-1e83-4a27-91e9-ca7479830613",
+      "type": "assistant",
+      "content": "Завтра (31 сентября) в **Москве**:\n\n- 🌥️ Облачно\n- 🌡️ От **+8°C** до **+14°C** (ощущается около +11°C)\n\nЕсли вы в другом городе — скажите, уточню.",
+      "time": 1790773924204,
+      "model": "/MODELS/odant/Qwen3.8 27b",
+      "reasoning": "Пользователь спросил про погоду завтра. Я предположил Москву — но это допущение. Лучше уточнить город, но пока дать ответ для Москвы с оговоркой.\n",
+      "usage": {
+        "prompt": 11062,
+        "completion": 105,
+        "total": 11167
+      },
+      "finish": "stop",
+      "durationMs": 5650
+    }
+  ],
+  "model": "/MODELS/odant/Qwen3.8 27b",
+  "effort": "low",
+  "time": 1790773914138,
+  "version": 2,
+  "type": "task",
+  "todos": [],
+  "allowed": [],
+  "mode": "auto",
+  "status": "idle",
+  "title": "какая завтра погода",
+  "location": {
+    "tz": "Europe/Moscow"
+  },
+  "tz": "Europe/Moscow",
+  "role": "USER",
+  "context": {
+    "limit": 262144,
+    "system": 3870,
+    "tools": 7259,
+    "messages": 295,
+    "time": 1790773924204
+  },
+  "updated": 1790773929881
+}

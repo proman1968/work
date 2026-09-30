@@ -67,8 +67,8 @@ export default{
         for (const tab of types) {
             if (!tab?.isChanged)
                 continue;
-            const fields = CORE.$class.fieldsList(tab.DATA?.METADATA?.FIELDS);
-            const overlay = { METADATA: { FIELDS: fields } };
+            const fields = CORE.$class.fieldsList(tab.DATA?.METADATA?.STATIC ?? tab.DATA?.METADATA?.FIELDS);
+            const overlay = { METADATA: { STATIC: fields } };
             const script = 'export default ' + this.$item.constructor.toScript(overlay);
             await tab.fetch('save_file', { filename: 'class.js' }, script);
             tab.isChanged = false;

@@ -16,7 +16,6 @@
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
-    label: 'Модели ИИ',
     /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
     $public: {
         maxTokens: 4096,   // лимит контекста (usage / info)
@@ -25,7 +24,7 @@ export default {
         effort: '',
     },
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: 'protocol',
             type: 'String',
             placeholder: 'openai | anthropic | gigachat | custom',

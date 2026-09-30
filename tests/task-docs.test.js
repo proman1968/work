@@ -57,7 +57,7 @@ describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
         const turns = [
             { id: 'w1', type: 'assistant', tools: [{ name: 'write', status: 'ok', path, snapshot: first }] },
             { id: 'a1', type: 'assistant', content: 'Где лежит `' + path + '`' },
-            { id: 'w2', type: 'assistant', tools: [{ name: 'write', status: 'ok', path, snapshot: second }] },
+            { id: 'w2', type: 'assistant', tools: [{ name: 'append', status: 'ok', path, snapshot: second }] },
             { id: 'a2', type: 'assistant', content: 'Где лежит `' + path + '`' },
         ];
         const [a1, a2] = segmentsOf(turns).filter(s => s.kind === 'assistant');

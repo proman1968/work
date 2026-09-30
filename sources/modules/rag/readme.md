@@ -25,7 +25,7 @@
 - **По событиям**: `save_file` / `$file.save` / `delete` ядра → `globalThis.WORK_RAG.invalidate(path)`;
   внешние правки — `fs.watch` корня (дебаунс 1 с); при старте — сверка диска и индекса (через 15 с).
 - **Виды**: `file` — md/txt/office/pdf (код — только при `WORK_RAG_CODE=1`); `object` — файлы данных
-  (`.oml`, `.eml`, `.ics`, `.task`…): карточка «Поле: значение» по `METADATA.FIELDS` класса-владельца
+  (`.data`, `.eml`, `.ics`, `.task`…): карточка «Поле: значение» по `METADATA.FIELDS` класса-владельца
   со всеми слоями, поле `rag: false` не индексируется; `log` — одна запись ленты; `class` — карточка класса
   (label, тип, описание, поля) + назначения ролей из `#security`.
 - **Не индексируются**: `node_modules`, `sources`, `oda`, `tests`, `scripts`, `#secret`, `#system`, скрытые `.…`

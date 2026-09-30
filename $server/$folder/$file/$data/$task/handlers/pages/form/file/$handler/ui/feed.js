@@ -2,8 +2,9 @@
  * Лента задачи v2: реплики, ответы агента (рассуждение + markdown), действия (карточки вызовов),
  * подтверждения и вопросы — прямо в карточке вызова, вложенные ленты субагентов.
  * Данные — элементы body.items (см. sources/modules/agent/loop.js); стрим — shell.streams[id].
- * Подряд идущие вызовы (без текста между ними) — одна группа «N действий»: раскрыта, пока идёт работа
- * или нужен человек; свёрнута по завершении.
+ * Группы вызовов и карточки субагентов по умолчанию свёрнуты (как в OpenCode/Claude Code):
+ * работа видна строкой статуса («Выполняю: N действий», спиннер), раскрытие — только по тапу,
+ * выбор пользователя переживает обновления. Сразу раскрываются только вопросы и подтверждения.
  */
 import {
     toolMeta, toolTarget, STATUS_META, fmtDuration, fmtTime, fmtTokens, modelShort,
@@ -193,11 +194,14 @@ ODA({ is: 'microchat-steps',
         return this.entries.some(e => e.kind === 'think' && streams[e.item.id] && !e.item.durationMs);
     },
     get collapsible() { return this.tools.length >= COLLAPSE_FROM; },
+    /** Свёрнуто по умолчанию (прогресс — строкой «Выполняю: N действий»); раскрывают тап и attention. */
     get open() {
-        if (!this.collapsible || this.attention)
+        if (this.attention)
+            return true;
+        if (!this.collapsible)
             return true;
         const user = this.$pdp?.groupOpen?.[this.group?.id];
-        return user ?? this.active;
+        return user ?? false;
     },
     get errors() { return this.tools.filter(t => t.status === 'error').length; },
     get duration() { return fmtDuration(this.tools.reduce((s, t) => s + (Number(t.durationMs) || 0), 0)); },
@@ -353,7 +357,7 @@ ODA({ is: 'microchat-tool',
                 <oda-markdown-viewer vertical :value="resultMd"></oda-markdown-viewer>
             </div>
         </div>
-        <div class="sub" ~if="data?.items?.length && (open || live)">
+        <div class="sub" ~if="data?.items?.length && open">
             <microchat-feed :items="data.items" nested></microchat-feed>
         </div>
     `,
@@ -407,7 +411,6 @@ ODA({ is: 'microchat-tool',
         win?.close();
         this.connectMsg = res?.ok ? 'Подключено.' : (res?.error || 'Не удалось подключить');
     },
-    get live() { return this.data?.status === 'running' || this.data?.status === 'pending'; },
     get attention() { return this.isApproval || this.isQuestion; },
     get options() { return Array.isArray(this.data?.args?.options) ? this.data.args.options.map(String) : []; },
     get multiple() { return !!this.data?.args?.multiple; },

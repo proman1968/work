@@ -109,6 +109,17 @@ after(async () => {
 });
 
 describe('loop: цикл tool calling', () => {
+    it('битый длинный JSON аргументов объясняет обрезку и советует append', async () => {
+        const items = [{ id: 'u', type: 'user', content: 'html' }];
+        await runLoop({ llm: scripted([
+            { calls: [{ name: 'write', args: { raw: '{"path":"/BOX/doc/x.html","content":"' + 'x'.repeat(2000) } }] },
+            { text: 'попробую частями' },
+        ]), system: 'S', items, tools: workTools, host: mkHost() });
+        const call = items.find(i => i.tools)?.tools[0];
+        assert.equal(call.status, 'error');
+        assert.match(call.error, /20\d\d символов/);
+        assert.match(call.error, /append/);
+    });
     it('ответ без инструментов — done, стрим дельт, usage', async () => {
         const items = [{ id: 'u', type: 'user', content: 'привет' }];
         const host = mkHost();
@@ -311,6 +322,17 @@ describe('инструменты WORK на песочнице', () => {
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/sub/deep.txt')));
     });
 
+    it('write + append: большой HTML пишется частями, каждый шаг остаётся в истории', async () => {
+        const first = ctx(), second = ctx();
+        await tool('write').run({ path: '/BOX/doc/slides.html', content: '<html>\n' }, first);
+        await tool('append').run({ path: first.entry.path, content: '<section>Слайд 1</section>\n' }, second);
+        assert.equal(fs.readFileSync(path.join(tmp, 'BOX/doc/slides.html'), 'utf-8'), '<html>\n<section>Слайд 1</section>\n');
+        assert.notEqual(first.entry.snapshot, second.entry.snapshot);
+        const old = await WORK.get_item(first.entry.snapshot);
+        assert.equal(await old.load({ encoding: 'utf-8' }), '<html>\n');
+        await assert.rejects(() => tool('append').run({ path: '/BOX/doc/missing.html', content: 'x' }, ctx()), /не найдено/);
+    });
+
     it('два сохранения одного файла в одну миллисекунду не перезаписывают снимок', async () => {
         const folder = await WORK.get_item('/BOX/doc');
         const time = Date.now();
@@ -348,6 +370,42 @@ describe('окружение: слои ai/, system, навыки, субаген
         const tools = await env.makeTools(env.agents.get('explore'), 1);
         assert.ok(tools.every(t => t.readonly || t.name === 'task'));
         assert.equal(await env.defaultModel(), '/MODELS/mock');
+    });
+
+    it('геопозиция в system: координаты → город; без координат — запрет выводить город из tz', async () => {
+        const place = await WORK.get_item('/BOX');
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = async () => ({ ok: true, json: async () => ({ address: { city: 'Рязань', state: 'Рязанская область', country: 'Россия' } }) });
+        try {
+            const withGeo = await (await createEnv({ place, host: { mode: 'auto' }, location: { lat: 54.6281, lon: 39.7457, tz: 'Europe/Moscow' } })).makeSystem();
+            assert.match(withGeo, /Рязань/);
+            assert.match(withGeo, /54\.6281, 39\.7457/);
+        }
+        finally {
+            globalThis.fetch = realFetch;
+        }
+        const noGeo = await (await createEnv({ place, host: { mode: 'auto' }, location: { tz: 'Europe/Moscow' } })).makeSystem();
+        assert.match(noGeo, /Местоположение пользователя неизвестно/);
+        assert.match(noGeo, /Не выводи город из часового пояса/);
+        assert.doesNotMatch(noGeo, /Местоположение пользователя: \d/);
+    });
+
+    it('роль USER в system: запрет искать os_/net_ и поручать их субагенту', async () => {
+        const place = await WORK.get_item('/BOX');
+        const sys = await (await createEnv({ place, host: { mode: 'auto' }, role: 'USER' })).makeSystem();
+        assert.match(sys, /запустить в роли ADMIN/);
+        assert.match(sys, /os_\*\/net_\*\/shell у тебя нет в списке/);
+        assert.match(sys, /не поручай такую работу субагенту/);
+    });
+
+    it('субагент в роли USER не получает net_/os_/shell сверх набора (делегирование не эскалирует)', async () => {
+        const place = await WORK.get_item('/BOX');
+        const env = await createEnv({ place, host: { mode: 'auto' }, role: 'USER' });
+        const tools = await env.makeTools({ name: 'it-admin', meta: { tools: 'os_*, net_*, shell, ls, read, find, write, access, call' } }, 1);
+        assert.ok(!tools.some(t => t.name.startsWith('net_') || t.name.startsWith('os_') || t.name === 'shell'));
+        assert.ok(tools.some(t => t.name === 'ls'));
+        const { metaTools } = await import('../sources/modules/agent/tools/meta.js');
+        assert.match(metaTools.find(t => t.name === 'task').description, /той же роли задачи/);
     });
 
     it('субагент task: своя лента внутри вызова, отчёт — результат', async () => {

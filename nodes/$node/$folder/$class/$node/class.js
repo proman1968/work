@@ -1,7 +1,7 @@
 export default {
     icon: "carbon:network-enterprise",
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: "host_id",
             label: "ID сервера",
             type: "String"

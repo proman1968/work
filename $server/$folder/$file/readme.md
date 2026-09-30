@@ -7,7 +7,7 @@
 - `class.js` — конфигурация базового типа файла
 - `$task/` — ИИ-задача (`ai.task`, PDCA/PIPE, preview)
 - `$prompt/` — файлы промптов
-- `$txt/`, `$md/`, `$eml/`, `$ics/`, `$msg/` — типы по расширениям
+- `$txt/`, `$md/`, `$html/`, `$eml/`, `$ics/`, `$msg/` — типы по расширениям
 - `$ics` — событие календаря: `when` + `METADATA.FIELDS`; файл данных
 - `$image/`, `$video/`, `$audio/` — медиа-типы
 - `$office/` — документы Office
@@ -25,7 +25,7 @@
 
 ## Файлы данных
 
-У типа `$file/$ext` есть `METADATA` в `class.js` — **файл данных** (не живая копия + `history/`). `save_file`: папка = расширение; каталоги из пути; день и id — `time` в корне JSON (иначе `params.time` / сейчас); имя на диске `{time}.{uid}.{ext}`; поле `name` = stem пути. Лог.path = этот файл. `$logs` — тот же закон: журнал класса в `logs/YYYY-MM-DD/`, не `.data.logs/history`.
+Объект (`.data`, схема — `METADATA.FIELDS` класса-владельца) — **не живая копия + `history/`**: `save_file` через `create_object` кладёт точку в общую зону `DATA/ext/…/YYYY-MM-DD/`; день и id — `time` в корне JSON (иначе `params.time` / сейчас); имя на диске `{time}.{uid}.data`; поле `name` = stem пути. Лог.path = этот файл. Остальные типы данных (`$file/$data/$ext`: `.eml`, `.ics`, `.task`) — пока в зоне роли. `$logs` — тот же закон: журнал класса в `logs/YYYY-MM-DD/`, не `.data.logs/history`.
 
 ## История и триггеры
 

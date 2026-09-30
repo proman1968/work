@@ -7,6 +7,7 @@
  *    У любого файла — собственного или унаследованного — есть область внутри точки:
  *    первая папка после последнего типизирующего сегмента (`$…`) виртуального пути.
  *  - Область: имя объявленной роли → зона этой роли; `logs` → лента точки;
+ *    `DATA` → объекты (пишет только API класса); `INDEX` → производные агрегаты;
  *    `#secret` / `#system` → секреты; всё остальное → система.
  *  - Роль определяет охват и права: scope (point|subtree), feed (own|point), write (zone|all).
  *  - Лента определяет, что пользователю показали (индекс лент — access/refs.js).
@@ -17,10 +18,17 @@ export const AREA = Object.freeze({
     SYSTEM: 'system',
     ZONE: 'zone',
     LOGS: 'logs',
+    /** Объекты `.data`: читает видевший класс, пишет API класса или write=all. */
+    DATA: 'data',
+    /** Производные агрегаты: читаются через методы, пересобираются из DATA. */
+    INDEX: 'index',
     SECRET: 'secret',
     /** Элемент вложенного класса — оценивается политикой этого класса. */
     NESTED: 'nested',
 });
+
+/** Системные имена папок метапапки: ролью их объявить нельзя, зону не образуют. */
+export const RESERVED_ZONE_NAMES = Object.freeze(['DATA', 'INDEX', 'logs']);
 
 /**
  * Базовые роли. Прикладные роли объявляются в `ROLES` class.js слоя типа/класса
@@ -63,6 +71,8 @@ export function normalizeRoles(declared) {
         return out;
     for (const [id, raw] of Object.entries(declared)) {
         if (!isRoleId(id) || raw == null || raw === false)
+            continue;
+        if (RESERVED_ZONE_NAMES.includes(id))
             continue;
         const base = out[id] || { id, key: id + 'S', label: id, scope: 'point', feed: 'own', write: 'zone', principals: PRINCIPALS };
         const r = typeof raw === 'object' ? raw : {};
@@ -110,6 +120,10 @@ export function areaOfSegments(segments, roleIds) {
         return { kind: AREA.SYSTEM };
     if (first === 'logs')
         return { kind: AREA.LOGS };
+    if (first === 'DATA')
+        return { kind: AREA.DATA };
+    if (first === 'INDEX')
+        return { kind: AREA.INDEX };
     if (first === '#secret' || first === '#system')
         return { kind: AREA.SECRET };
     const ids = roleIds instanceof Set ? roleIds : new Set(roleIds || []);
@@ -158,6 +172,8 @@ export function canRead(role, area, opts = {}) {
         return true;
     switch (area.kind) {
         case AREA.SYSTEM:
+        case AREA.DATA:
+        case AREA.INDEX:
             return true;
         case AREA.ZONE:
             return area.role === role.id;
@@ -172,6 +188,8 @@ export function canRead(role, area, opts = {}) {
 
 /**
  * Право записи области ролью.
+ * DATA/INDEX пишет только write=all (ADMIN) напрямую; остальные — через API класса
+ * (create_object и т.п.), который сам проверяет права и пишет под системной сессией.
  * @param {object} role Нормализованное объявление роли
  * @param {{kind, role?}} area
  * @param {object} [opts]

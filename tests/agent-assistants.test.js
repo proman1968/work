@@ -49,14 +49,12 @@ before(async () => {
             write('$server/$folder/$class/ai/' + dir + '/' + f, fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai', dir, f), 'utf-8'));
     for (const [uid, label] of [[ADMIN, 'Админ Главный'], [BOSS, 'Сидоров Босс'], [IVAN, 'Иванов Иван'], [PETR, 'Иванова Пётр']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['${BOSS}'], USERS: ['${IVAN}'] } }`);
-    write('ORG/$class/USER/work.md', 'рабочее');
-    // справочник товаров: тип объектов $oml с полями (наследуется из базового $data)
-    write('$server/$folder/$file/$data/$oml/class.js', `export default { label: 'Объекты', METADATA: { FIELDS: [
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['${BOSS}'], USERS: ['${IVAN}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp', required: true },
         { id: 'code', label: 'Код', required: true }, { id: 'price', label: 'Цена', type: 'Number' },
         { id: 'active', type: 'Boolean' },
     ] } }`);
+    write('ORG/$class/USER/work.md', 'рабочее');
     write('ORG/$class/USER/tpl/letter.md', 'Уважаемый {{client.name}}! Счёт №{{number}} на {{sum}} руб.');
     write('ORG/$class/BOSS/plan.md', 'план');
     process.chdir(tmp);
@@ -165,17 +163,17 @@ describe('документы и таблицы', () => {
         assert.deepEqual(table.columns, ['Наименование', 'Код', 'Цена', 'Активен']);
 
         const map = { 'Наименование': 'name', 'Код': 'code', 'Цена': 'price', 'Активен': 'active' };
-        const bad = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'oml', source: src, map: { 'Наименование': 'name' } }, as(PETR)));
+        const bad = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map: { 'Наименование': 'name' } }, as(PETR)));
         assert.equal(bad.written, 0, 'без обязательного code — не пишем');
         assert.equal(bad.errors[0].missing[0], 'code');
-        const dry = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'oml', source: src, map, dry_run: true }, as(PETR)));
+        const dry = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map, dry_run: true }, as(PETR)));
         assert.equal(dry.valid, 3);
         assert.deepEqual(dry.sample[0], { name: 'Молоко', code: 'A1', price: 89.9, active: true });
-        const res = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'oml', source: src, map }, as(PETR)));
+        const res = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map }, as(PETR)));
         assert.equal(res.written, 3, JSON.stringify(res.failed));
-        const files = fs.readdirSync(path.join(tmp, 'ORG/$class/USER/oml'), { recursive: true }).filter(f => String(f).endsWith('.oml'));
+        const files = fs.readdirSync(path.join(tmp, 'ORG/$class/DATA'), { recursive: true }).filter(f => String(f).endsWith('.data'));
         assert.equal(files.length, 3, 'два «Хлеба» в одну мс — разные объекты');
-        const bodies = files.map(f => JSON.parse(fs.readFileSync(path.join(tmp, 'ORG/$class/USER/oml', f), 'utf-8')));
+        const bodies = files.map(f => JSON.parse(fs.readFileSync(path.join(tmp, 'ORG/$class/DATA', f), 'utf-8')));
         assert.deepEqual(bodies.map(b => b.code).sort(), ['A1', 'A2', 'A3']);
         await assert.rejects(tool('import_objects').run({ path: '/ORG', type: 'nope', rows: [{}] }, as(PETR)), /нет типа данных \$nope/);
     });

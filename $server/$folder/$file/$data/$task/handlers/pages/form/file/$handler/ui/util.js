@@ -5,6 +5,7 @@ export const TOOL_META = {
     read: { label: 'Чтение', icon: 'carbon:document' },
     find: { label: 'Поиск', icon: 'carbon:search' },
     write: { label: 'Запись', icon: 'carbon:document-add' },
+    append: { label: 'Дополнение', icon: 'carbon:document-add' },
     edit: { label: 'Правка', icon: 'carbon:edit' },
     create_class: { label: 'Новый класс', icon: 'carbon:tree-view-alt' },
     schema: { label: 'Методы', icon: 'carbon:api' },

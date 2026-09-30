@@ -16,7 +16,7 @@ export default {
     description: 'Внешние сервисы и коннекторы',
 
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: 'baseUrl',
             type: 'String',
             placeholder: 'https://example.com',

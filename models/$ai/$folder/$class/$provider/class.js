@@ -9,7 +9,7 @@ export default {
     label: 'Провайдер ИИ',
     form: 'editor',
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: 'protocol',
             type: 'String',
             placeholder: 'openai | anthropic | gigachat | ollama | local | custom',

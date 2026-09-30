@@ -1,7 +1,7 @@
 /**
  * Документы индекса по физическому пути (`/BASE/$class/USER/text/a.md`):
  *  - file   — извлечённый текст (md/txt/office/pdf; код — по CONFIG.indexCode);
- *  - object — карточка файла данных ($data: .oml, .eml, .ics…) по схеме METADATA.FIELDS
+ *  - object — карточка объекта (.data) по схеме METADATA.FIELDS
  *             класса-владельца (со всеми слоями наследования); поле `rag: false` не индексируется;
  *  - log    — одна запись ленты (.logs): content + вложения, отправитель/получатели в meta;
  *  - class  — карточка класса из его class.js: label, тип, описание, поля; назначения ролей.
@@ -223,10 +223,18 @@ async function readObject(p, disk) {
     let typeLabel = ext;
     try {
         const cls = await classItem(classDirOfSafe(p));
-        const types = cls ? await cls.data_types : [];
-        const type = (types || []).find(t => t.id === '$' + ext);
-        fields = Array.isArray(type?.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
-        typeLabel = type?.DATA?.label || ext;
+        // схема объекта `.data` — METADATA.FIELDS класса-владельца (слияние по ~);
+        // схемы старых типов ($file/$data/$ext) — из типа, как раньше
+        const own = ext === 'data' ? cls?.DATA?.METADATA?.FIELDS : null;
+        if (Array.isArray(own) && own.length) {
+            fields = own;
+        }
+        else {
+            const types = cls ? await cls.data_types : [];
+            const type = (types || []).find(t => t.id === '$' + ext);
+            fields = Array.isArray(type?.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
+            typeLabel = type?.DATA?.label || ext;
+        }
     }
     catch { /* без схемы — по ключам */ }
     const hidden = new Set(fields.filter(f => f?.rag === false || f?.secret).map(f => f.id));

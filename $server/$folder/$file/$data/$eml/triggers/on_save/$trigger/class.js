@@ -34,7 +34,8 @@ export default {
         const { readEmailSettings } = emailSettings;
 
         const json = parseJsonEml(params.post ?? '');
-        if (json.status === 'sent')
+        // итоговые статусы пишет сам триггер — повторно не обрабатываем (защита от рекурсии)
+        if (json.status === 'sent' || json.status === 'failed')
             return true;
 
         // Разбор ящика и настроек
@@ -51,8 +52,8 @@ export default {
         // SMTP не настроен — failed
         if (!box?.smtp?.host) {
             console.warn(`[${filename}]`, 'SMTP не настроен');
-            // markJsonStatus(json, 'failed', { error: 'SMTP не настроен' });
-            // await saveOutboxOnMailbox(storage, address, JSON.stringify(json), params);
+            markJsonStatus(json, 'failed', { error: 'SMTP не настроен' });
+            await saveOutboxOnMailbox(storage, address, json, params);
             return true;
         }
 
@@ -60,23 +61,38 @@ export default {
         try {
             await sendOutboxEml(box, json);
             markJsonStatus(json, 'sent');
-            await saveOutboxOnMailbox(storage, address, JSON.stringify(json), params);
         }
         catch (err) {
             console.warn(`[${filename}]`, err.message);
-            // markJsonStatus(json, 'failed', { error: err.message });
-            // await saveOutboxOnMailbox(storage, address, JSON.stringify(json), params);
+            markJsonStatus(json, 'failed', { error: err.message || String(err) });
         }
+        await saveOutboxOnMailbox(storage, address, json, params);
         return true;
     },
 };
 
-async function saveOutboxOnMailbox(storage, folder, post, params) {
+/** Новая версия outbound.eml с итоговым статусом; message — метаданные для списка писем. */
+async function saveOutboxOnMailbox(storage, folder, json, params) {
+    const message = {
+        uid: json.uid || '',
+        subject: json.subject || '',
+        from: json.from || '',
+        to: json.to || '',
+        date: json.date || '',
+        box: json.box || 'outbox',
+        mailbox: json.mailbox || folder || '',
+        status: json.status || '',
+    };
+    if (json.error)
+        message.error = json.error;
     return storage.save_file({
         filename: params.filename,
         folder,
         encoding: 'utf-8',
         session: params.session,
-        post,
+        // почта общая — лог только в журнал класса
+        feed: 'point',
+        message: JSON.stringify(message),
+        post: JSON.stringify(json),
     });
 }

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { $item } from '../core.js';
 import * as mime from "mime-types";
 import { FS } from './index.js';
@@ -16,6 +17,72 @@ const ACCESS_DENIED = 'Доступ запрещён';
 /** Кэш нормализованных ROLES по объекту DATA (DATA пересобирается при reset/init). */
 const declaredRolesCache = new WeakMap();
 
+/** День пакета DATA из штампа времени: YYYY-MM-DD (папки дня при записи). */
+function _dataDay(time) {
+    const dt = new Date(Number(time));
+    const s = typeof dt.toISOTimezoneString === 'function' ? dt.toISOTimezoneString() : dt.toISOString();
+    return String(s).slice(0, 10);
+}
+
+/** Привести значение к типу поля (как импорт: число/булево; остальное как есть). */
+function coerceDataValue(value, type, id) {
+    const t = String(type || '').toLowerCase();
+    if (/number|int|float|money|decimal/.test(t)) {
+        const n = Number(String(value).replace(/\s/g, '').replace(',', '.'));
+        if (!Number.isFinite(n))
+            throw new Error('поле «' + id + '» — не число: ' + value);
+        return n;
+    }
+    if (/bool/.test(t))
+        return /^(1|да|true|yes|y|истина)$/i.test(String(value).trim());
+    return value;
+}
+/** Фильтр where по телу объекта: равенство, [..] как $in, {gte,lte,gt,lt,ne,eq,in,like}. */
+function matchDataWhere(body, where) {
+    if (!where || typeof where !== 'object')
+        return true;
+    for (const [f, c] of Object.entries(where)) {
+        const v = body?.[f];
+        if (c != null && typeof c === 'object' && !Array.isArray(c)) {
+            for (const [op, arg] of Object.entries(c)) {
+                if (op === 'gte' && !(v >= arg)) return false;
+                else if (op === 'lte' && !(v <= arg)) return false;
+                else if (op === 'gt' && !(v > arg)) return false;
+                else if (op === 'lt' && !(v < arg)) return false;
+                else if (op === 'ne' && !(v !== arg)) return false;
+                else if (op === 'eq' && !(v === arg)) return false;
+                else if (op === 'in' && !(Array.isArray(arg) && arg.includes(v))) return false;
+                else if (op === 'like' && !String(v ?? '').toLowerCase().includes(String(arg).toLowerCase())) return false;
+            }
+        }
+        else if (Array.isArray(c)) {
+            if (!c.includes(v)) return false;
+        }
+        else if (v !== c) return false;
+    }
+    return true;
+}
+/** Есть ли файлы объектов под папкой (история `.…` не считается). */
+async function _hasDataFiles(dir) {
+    const stack = [dir];
+    while (stack.length) {
+        const cur = stack.pop();
+        let entries;
+        try {
+            entries = await fsp.readdir(cur, { withFileTypes: true });
+        }
+        catch { continue; }
+        for (const e of entries) {
+            if (e.name.startsWith('.'))
+                continue;
+            if (e.isDirectory())
+                stack.push(path.join(cur, e.name));
+            else if (e.isFile())
+                return true;
+        }
+    }
+    return false;
+}
 /** id похож на имя файла (readme.md), а не на класс (MARKET, Exaone3.5 7.8b). */
 export function looksLikeFileId(id) {
     const s = String(id ?? '').trim();
@@ -72,9 +139,7 @@ export class $class extends $folder{
         return this.meta_folder.size;
     }
     get METADATA(){
-        return this.DATA.METADATA ?? {
-            FIELDS: []
-        }
+        return Object.assign({ FIELDS: [], STATIC: [] }, this.DATA?.METADATA || {})
     }
     static validateVarName(name) {
         const commonReservedWords = ['break','case','catch','continue','debugger','default','delete','do','else','finally','for','function','if','in','instanceof','new','return','switch','this','throw','try','typeof','var','void','while','with','class','const','export','extends','import','super','implements','interface','let','package','private','protected','public','static','yield','null','true','false','NaN','Infinity','undefined'];
@@ -479,10 +544,11 @@ export class $class extends $folder{
     /**
      * Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли.
      * Имя папки = params.role || 'GUEST' (ADMIN | BOSS | USER | GUEST | прикладная роль).
+     * DATA/INDEX/logs — не роли: их зоной не объявить.
      */
     async work_zone(params = {}){
         const role = params.role || 'GUEST';
-        if (!POLICY.isRoleId(role))
+        if (!POLICY.isRoleId(role) || POLICY.RESERVED_ZONE_NAMES.includes(role))
             throw new Error('work_zone: недопустимое имя роли «' + role + '»');
         return this.meta_folder._get_next_item(role, FS.$folder);
     }
@@ -600,14 +666,414 @@ export class $class extends $folder{
             const folder = await this.meta_folder._get_next_item('logs', FS.$folder);
             return folder.save_data_file(params);
         }
+        // Объекты общей зоны — в <мета>/DATA/<дата>/, а не в зону роли.
+        // Прямая запись доступна только write=all (ADMIN, см. POLICY.canWrite);
+        // остальные пишут через метод-владелец create_object.
+        if (params.filename && await this.is_data_zone_type(params.filename)) {
+            const storage = await this.data_zone(params);
+            return storage.save_file(params);
+        }
         const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.save_file(params);
     }
     async get_write_stream(params) {
+        if (params.filename && await this.is_data_zone_type(params.filename)) {
+            const storage = await this.data_zone(params);
+            return storage.get_write_stream(params);
+        }
         const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);
         return folder.get_write_stream(params);
+    }
+    /** Расширения объектов, живущие в общей зоне DATA (не в зонах ролей).
+     * Почта/календарь/задачи (.eml/.ics/.task/.call) остаются в зонах ролей
+     * до миграции их читателей — см. docs/storage-architecture.md. */
+    static DATA_EXTS = ['data'];
+    /** Расширение (или имя файла) — объект общей зоны DATA этого класса? */
+    async is_data_zone_type(extOrName) {
+        const ext = FS.$file.fileExt(extOrName)
+            || String(extOrName || '').replace(/^\$/, '').toLowerCase();
+        if (!ext || !this.constructor.DATA_EXTS.includes(ext))
+            return false;
+        return this.is_data_type(extOrName);
+    }
+    /** Общая зона DATA метапапки: объекты всех ролей. */
+    async data_zone(params = {}) {
+        return this.meta_folder._get_next_item('DATA', FS.$folder);
+    }
+    /**
+     * Создать объект в общей зоне DATA. Метод-владелец для записи объектов:
+     * ADMIN (write=all, локально или сверху) — всё; USER с локальным назначением
+     * в точке — свои объекты; остальные — только чтение.
+     * Прямая запись в DATA через save_file доступна только write=all.
+     * @param {object} [params] {filename | name, type | ext, post | body, session}
+     */
+    async create_object(params = {}) {
+        await this._assertDataWrite(params);
+        await this._assertLeaf();
+        const ext = String(params.type || params.ext || FS.$file.fileExt(params.filename || '') || 'data')
+            .replace(/^\$/, '').toLowerCase();
+        if (!this.constructor.DATA_EXTS.includes(ext) || !(await this.is_data_type('x.' + ext)))
+            throw new Error('create_object: нет типа данных $' + ext);
+        const stem = String(params.filename || params.name || 'obj').split('/').pop().replace(/\.[a-z0-9]+$/i, '').trim() || 'obj';
+        const body = this._validateObject(this._readDataBody(params.post ?? params.body));
+        body.name ??= stem;
+        const zone = await this.data_zone(params);
+        return zone.save_data_file({ ...params, filename: stem + '.' + ext, post: body });
+    }
+    /**
+     * Право писать объекты точки (create/update/delete): системная сессия,
+     * ADMIN (write=all, локально или сверху) или USER с локальным назначением.
+     * @returns {Promise<string>} uid автора
+     */
+    async _assertDataWrite(params = {}) {
+        if (params.session?.$user === globalThis.WORK)
+            return globalThis.WORK?.id || 'system';
+        const uid = this.constructor.resolveUid(params);
+        if (!uid || !(await this.canSee(this, params)))
+            throw new Error(ACCESS_DENIED);
+        const roles = await this.roles(params);
+        const declared = this._declaredRolesSync();
+        const ok = roles.some(r => {
+            const d = declared[r];
+            if (!d)
+                return false;
+            if (d.write === 'all')
+                return true;
+            return d.write === 'zone' && r === 'USER' && this._roleIds(r, declared).includes(uid);
+        });
+        if (!ok)
+            throw new Error(ACCESS_DENIED);
+        return uid;
+    }
+    /** Тело объекта из params.post|body: объект — как есть, строка — JSON. */
+    _readDataBody(post) {
+        if (post && typeof post === 'object' && !Buffer.isBuffer(post) && post.path == null)
+            return { ...post };
+        if (typeof post === 'string' && post.trim()) {
+            const obj = JSON.parse(post);
+            if (obj && typeof obj === 'object' && !Array.isArray(obj))
+                return { ...obj };
+        }
+        throw new Error('тело объекта — JSON-объект');
+    }
+    /**
+     * Прочитать объект по id `{time}.{uid}` (адрес вычисляется из id: DATA/день/файл).
+     * @returns {Promise<{abs, leaf, stem, ext, date, body}|null>}
+     */
+    async _readById(id, ext = 'data') {
+        let stem = String(id ?? '').split('/').pop().trim();
+        if (stem.endsWith('.' + ext))
+            stem = stem.slice(0, -(ext.length + 1));
+        const time = Number(stem.split('.')[0]);
+        if (!stem || !Number.isFinite(time))
+            return null;
+        const date = _dataDay(time);
+        const abs = this.meta_folder.dir + '/DATA/' + date + '/' + stem + '.' + ext;
+        if (!fs.existsSync(abs))
+            return null;
+        let body;
+        try {
+            body = JSON.parse(await fsp.readFile(abs, 'utf-8'));
+        }
+        catch { return null; }
+        return { abs, leaf: stem + '.' + ext, stem, ext, date, body };
+    }
+    /**
+     * Проверить тело объекта по METADATA.FIELDS класса: обязательные поля,
+     * приведение типов (число/булево). Лишние поля разрешены.
+     */
+    _validateObject(body) {
+        const fields = (this.METADATA?.FIELDS || []).filter(f => f?.id);
+        for (const f of fields) {
+            // name/time ставит хранилище — обязательность не проверяем
+            if ((f.id === 'name' || f.id === 'time') && (body[f.id] == null || body[f.id] === ''))
+                continue;
+            if (f.required && (body[f.id] == null || body[f.id] === ''))
+                throw new Error('нет обязательного поля «' + f.id + '»');
+        }
+        for (const f of fields) {
+            if (body[f.id] == null || body[f.id] === '')
+                continue;
+            body[f.id] = coerceDataValue(body[f.id], f.type, f.id);
+        }
+        return body;
+    }
+    /** Собственные дочерние классы того же типа (без унаследованных). */
+    async _ownSameTypeChildren() {
+        let entries;
+        try {
+            entries = await fsp.readdir(this.real_dir, { withFileTypes: true });
+        }
+        catch { return []; }
+        const out = [];
+        for (const e of entries) {
+            if (!e.isDirectory() || e.name.startsWith('.') || e.name.startsWith('$'))
+                continue;
+            let item;
+            try {
+                item = await globalThis.WORK.get_item(this.path + '/' + e.name);
+            }
+            catch { continue; }
+            const cls = Array.isArray(item) ? item.at(-1) : item;
+            if (cls instanceof FS.$class && cls.type === this.type)
+                out.push(cls);
+        }
+        return out;
+    }
+    /** Объекты — только в листьях: нет однотипных детей. */
+    async _assertLeaf() {
+        const kids = await this._ownSameTypeChildren();
+        if (kids.length)
+            throw new Error('объекты — только в листьях: есть дочерние классы (' + kids.map(k => k.id).join(', ') + ')');
+    }
+    /**
+     * Убрать текущую версию объекта в историю: `.{leaf}/history/<дата>/{now}.{uid}.data`.
+     * @returns {Promise<{time, date}>} Метка снимка
+     */
+    async _archiveDataVersion(found, prevText, uid) {
+        const now = Date.now();
+        const dt = new Date(now);
+        const stamp = typeof dt.toISOTimezoneString === 'function' ? dt.toISOTimezoneString() : dt.toISOString();
+        const date = stamp.slice(0, 10).split('.').toReversed().join('-');
+        const hdir = path.join(path.dirname(found.abs), '.' + found.leaf, 'history', date);
+        fs.mkdirSync(hdir, { recursive: true });
+        let t = now;
+        for (let i = 0; i < 1000; i++, t++) {
+            try {
+                await fsp.writeFile(path.join(hdir, t + '.' + uid + '.' + found.ext), prevText, { encoding: 'utf-8', flag: 'wx' });
+                break;
+            }
+            catch (e) {
+                if (e.code !== 'EEXIST')
+                    throw e;
+            }
+        }
+        return { time: t, date };
+    }
+    /**
+     * Записать лог-факт о файле объекта (создание/правка/удаление) и сбросить кэши.
+     * @returns {Promise<object>} Строка лога (logFullPath — путь файла)
+     */
+    async _logDataFile(found, json, params, uid) {
+        const zone = await this.data_zone();
+        const folder = await zone._get_next_item(found.date, FS.$folder);
+        const file = await folder._get_next_item(found.leaf, FS.$file);
+        const now = Date.now();
+        const session = params.session?.$user === globalThis.WORK ? params.session : {
+            uid,
+            $user: params.session?.$user || params.session,
+            ...(params.session?.principal ? { principal: params.session.principal } : {}),
+        };
+        const res = await FS.$file.save_to_log.call(file, {
+            ...params,
+            post: json,
+            message: json,
+            time: now,
+            dateTime: new Date(now),
+            session,
+        });
+        folder.reset();
+        zone.reset();
+        this.reset();
+        return res;
+    }
+    /**
+     * Править объект: новая версия на месте (имя файла стабильно — ссылки `{time}.{uid}` не рвутся),
+     * прежняя — в историю. Удалённый правится только с `restore: true`.
+     * @param {object} [params] {filename | name, post | body, restore?, session}
+     */
+    async update_object(params = {}) {
+        const uid = await this._assertDataWrite(params);
+        const ext = String(params.type || params.ext || 'data')
+            .replace(/^\$/, '').toLowerCase();
+        if (!this.constructor.DATA_EXTS.includes(ext))
+            throw new Error('update_object: только объекты DATA (сейчас: ' + this.constructor.DATA_EXTS.join(', ') + ')');
+        const found = await this._readById(params.id, ext);
+        if (!found)
+            throw new Error('update_object: нет объекта ' + params.id);
+        if (found.body.deleted && !params.restore)
+            throw new Error('update_object: объект удалён (restore: true — восстановить)');
+        const patch = this._readDataBody(params.post ?? params.body);
+        const body = this._validateObject({ ...found.body, ...patch, time: found.body.time });
+        if (params.restore) {
+            delete body.deleted;
+            delete body.deleted_at;
+        }
+        const json = JSON.stringify(body);
+        await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
+        await fsp.writeFile(found.abs, json, 'utf-8');
+        return this._logDataFile(found, json, params, uid);
+    }
+    /**
+     * Удалить объект: отметка `deleted` (файл физически остаётся, прежняя версия — в истории).
+     * @param {object} [params] {filename | name, session}
+     */
+    async delete_object(params = {}) {
+        const uid = await this._assertDataWrite(params);
+        const ext = String(params.type || params.ext || 'data')
+            .replace(/^\$/, '').toLowerCase();
+        if (!this.constructor.DATA_EXTS.includes(ext))
+            throw new Error('delete_object: только объекты DATA (сейчас: ' + this.constructor.DATA_EXTS.join(', ') + ')');
+        const found = await this._readById(params.id, ext);
+        if (!found)
+            throw new Error('delete_object: нет объекта ' + params.id);
+        if (found.body.deleted)
+            throw new Error('delete_object: объект уже удалён');
+        const body = { ...found.body, deleted: true, deleted_at: Date.now() };
+        const json = JSON.stringify(body);
+        await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
+        await fsp.writeFile(found.abs, json, 'utf-8');
+        return this._logDataFile(found, json, params, uid);
+    }
+    /**
+     * Прочитать текущую версию объекта (включая удалённый — по флагу `deleted` в теле).
+     * @param {object} [params] {filename | name, session}
+     */
+    async read_object(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const ext = String(params.type || params.ext || 'data')
+            .replace(/^\$/, '').toLowerCase();
+        const found = await this._readById(params.id, ext);
+        if (!found)
+            throw new Error('read_object: нет объекта ' + params.id);
+        return { path: found.abs, name: found.body?.name ?? found.stem, body: found.body };
+    }
+    /**
+     * Выборка объектов поддерева того же типа (сам класс + потомки): источник правды — файлы,
+     * не индекс. Открываются только пакеты дней из [from, to]. Удалённые скрыты без `include_deleted`.
+     * @param {object} [params] {where, from?, to?, ext?, include_deleted?, limit?, order?, session}
+     */
+    async query(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const ext = String(params.ext || params.type || 'data').replace(/^\$/, '').toLowerCase();
+        const limit = Math.max(1, Math.min(500, Number(params.limit) || 50));
+        const desc = String(params.order || 'desc').toLowerCase() !== 'asc';
+        const dayOf = (v) => {
+            const t = new Date(v).getTime();
+            return Number.isFinite(t) ? _dataDay(t) : null;
+        };
+        const from = params.from != null ? dayOf(params.from) : null;
+        const to = params.to != null ? dayOf(params.to) : null;
+        const out = [];
+        for (const pt of await this._subtreeDataPoints(params)) {
+            const root = pt.dataDir;
+            if (!fs.existsSync(root))
+                continue;
+            for (const d of await fsp.readdir(root, { withFileTypes: true })) {
+                if (!d.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(d.name))
+                    continue;
+                if ((from && d.name < from) || (to && d.name > to))
+                    continue;
+                for (const leaf of await fsp.readdir(path.join(root, d.name))) {
+                    if (!leaf.endsWith('.' + ext))
+                        continue;
+                    let body;
+                    try {
+                        body = JSON.parse(await fsp.readFile(path.join(root, d.name, leaf), 'utf-8'));
+                    }
+                    catch { continue; }
+                    if (body?.deleted && !params.include_deleted)
+                        continue;
+                    if (!matchDataWhere(body, params.where))
+                        continue;
+                    out.push({ point: pt.path, path: pt.virtual + '/' + d.name + '/' + leaf, name: body?.name ?? leaf.slice(0, -(ext.length + 1)), time: body?.time ?? 0, body });
+                }
+            }
+        }
+        out.sort((a, b) => desc ? b.time - a.time : a.time - b.time);
+        return out.slice(0, limit);
+    }
+    /**
+     * Точки поддерева того же типа с зоной DATA: сам класс + потомки.
+     * Спуск — только по дочерним классам того же типа (зоны ролей, logs, history не читаются).
+     * @returns {Promise<Array<{cls, path, virtual, dataDir}>>}
+     */
+    async _subtreeDataPoints(params = {}) {
+        const pts = [];
+        const seen = new Set();
+        const push = async (cls) => {
+            if (!cls || seen.has(cls.path))
+                return;
+            seen.add(cls.path);
+            if (!(await cls.canSee(cls, params)))
+                return;
+            pts.push({
+                cls,
+                path: cls.path,
+                virtual: cls.path + '/' + cls.meta_folder.id + '/DATA',
+                dataDir: cls.meta_folder.dir + '/DATA',
+            });
+        };
+        await push(this);
+        const walk = async (cls) => {
+            for (const kid of await cls._ownSameTypeChildren()) {
+                await push(kid);
+                await walk(kid);
+            }
+        };
+        await walk(this);
+        return pts;
+    }
+    /**
+     * Разделить класс: перенести DATA в существующий пустой дочерний класс того же типа.
+     * После split у класса нет объектов — можно строить поддерево. Только write=all.
+     * @param {object} [params] {child (id или путь), session}
+     */
+    async split(params = {}) {
+        if (params.session?.$user !== globalThis.WORK) {
+            const uid = this.constructor.resolveUid(params);
+            const roles = uid ? await this.roles(params) : [];
+            const declared = this._declaredRolesSync();
+            if (!roles.some(r => declared[r]?.write === 'all'))
+                throw new Error(ACCESS_DENIED);
+        }
+        const target = String(params.child ?? params.to ?? '').trim();
+        if (!target)
+            throw new Error('split: укажи child (id или путь класса)');
+        let cls = await globalThis.WORK.get_item(target.startsWith('/') ? target : this.path + '/' + target)
+            .catch(() => null);
+        if (Array.isArray(cls))
+            cls = cls.at(-1);
+        if (!cls) {
+            // потомка нет — создаём того же типа (leaf-правило здесь не действует:
+            // DATA сразу переезжает в нового потомка)
+            if (target.startsWith('/') || target.includes('/'))
+                throw new Error('split: нет класса ' + target);
+            const id = safeNodeName(target);
+            if (!id)
+                throw new Error('split: пустое имя класса');
+            const ctor = FS[this.type] || FS.$class;
+            await this._createClass(id, this.type, ctor, `export default {\n    label: '${target}'\n}`, { ...params, ignore_save_logs: true });
+            cls = await globalThis.WORK.get_item(this.path + '/' + id);
+            if (Array.isArray(cls))
+                cls = cls.at(-1);
+        }
+        if (!(cls instanceof FS.$class))
+            throw new Error('split: нет класса ' + target);
+        if (cls.path === this.path)
+            throw new Error('split: это тот же класс');
+        if (!cls.path.startsWith(this.path + '/'))
+            throw new Error('split: ' + cls.path + ' — не потомок');
+        if (cls.type !== this.type)
+            throw new Error('split: тип ' + cls.type + ' ≠ ' + this.type);
+        const src = this.meta_folder.dir + '/DATA';
+        if (!fs.existsSync(src))
+            throw new Error('split: в классе нет DATA');
+        const dst = cls.meta_folder.dir + '/DATA';
+        if (fs.existsSync(dst)) {
+            if (await _hasDataFiles(dst))
+                throw new Error('split: в ' + cls.path + ' уже есть DATA');
+            fs.rmSync(dst, { recursive: true, force: true });
+        }
+        fs.mkdirSync(cls.meta_folder.dir, { recursive: true });
+        fs.renameSync(src, dst);
+        this.reset();
+        cls.reset();
+        globalThis.WORK_RAG?.invalidate?.(src);
+        globalThis.WORK_RAG?.invalidate?.(dst);
+        return this.save_message({ message: 'split: DATA → ' + cls.path, session: params.session });
     }
     get type(){
         return this.meta_folder.id;
@@ -617,16 +1083,19 @@ export class $class extends $folder{
     }
 
     /**
-     * Типы файлов данных класса: дети `$folder/$file/$data` (через children, не inherit_children).
+     * Типы файлов данных класса: сам `$folder/$file/$data` (единый тип `.data`)
+     * плюс дети `$folder/$file/$data/*` (почта, календарь, задачи — до их выноса).
      * Builder и save_file смотрят сюда, не в глобальный `$file.isDataFile`.
      */
     get data_types() {
-        return this.meta_folder.get_item('$folder/$file/$data/*')
-            .then(async list => {
-                const types = (Array.isArray(list) ? list : []).filter(f => f.isType);
-                await Promise.all(types.map(t => t.init));
-                return types;
-            });
+        return (async () => {
+            const self = await this.meta_folder.get_item('$folder/$file/$data').catch(() => null);
+            const list = await this.meta_folder.get_item('$folder/$file/$data/*');
+            const all = [...(self ? [self] : []), ...(Array.isArray(list) ? list : [])];
+            const types = all.filter(f => f && f.isType);
+            await Promise.all(types.map(t => t.init));
+            return types;
+        })();
     }
 
     /** Расширение (или имя файла) — файл данных этого класса? */
@@ -882,7 +1351,7 @@ export class $class extends $folder{
 
     /**
      * Область элемента внутри этой точки (access/policy.js):
-     * зона роли | лента (logs) | секреты | система | элемент вложенного класса.
+     * зона роли | DATA | INDEX | лента (logs) | секреты | система | элемент вложенного класса.
      * Считается по виртуальному пути, поэтому для унаследованных по `~` файлов
      * результат тот же, что для собственных.
      * @param {object} item Элемент или дескриптор `{path, $class?}`
@@ -898,7 +1367,7 @@ export class $class extends $folder{
     }
 
     /**
-     * Зона элемента: имя роли для зоны, иначе SYSTEM | LOGS | SECRET | NESTED.
+     * Зона элемента: имя роли для зоны, иначе SYSTEM | DATA | INDEX | LOGS | SECRET | NESTED.
      */
     resolveZone(item) {
         if (!item || typeof item !== 'object')
@@ -1256,7 +1725,23 @@ export class $class extends $folder{
                 throw new Error('create: model «' + modelKey + '» уже у ' + (dup.path || dup.id));
         }
 
+        // Инвариант листа: у класса с объектами DATA нельзя создать дочерний класс
+        // того же типа — сначала split (перенос DATA в потомка). Иначе объекты «переедут»
+        // молча, как в старой версии ODANT.
+        if (type === this.type) {
+            const dataDir = this.meta_folder.dir + '/DATA';
+            if (fs.existsSync(dataDir) && await _hasDataFiles(dataDir))
+                throw new Error('create: в классе есть объекты DATA — сначала split в дочерний класс');
+        }
+
         const ctor = FS[type] || FS.$class;
+        return this._createClass(id, type, ctor, post, p);
+    }
+    /**
+     * Физическое создание класса (без проверок доступа и инвариантов — их делает вызывающий:
+     * create() или split()). Не вызывать извне напрямую.
+     */
+    async _createClass(id, type, ctor, post, p = {}) {
         const item = await this._get_next_item(id, ctor);
         // meta = type, до обращения к meta_folder: иначе constructor.name ($class) mkdir лишнюю $
         const typeDir = item.real_dir + '/' + type;

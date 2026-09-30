@@ -72,6 +72,11 @@ describe('streamChat SSE: рваные чанки собираются без п
 });
 
 describe('streamChat: нативные tool_calls', () => {
+    it('явный maxOutput задаёт лимит ответа, а не размер контекста', async () => {
+        installWork(['data: [DONE]\n']);
+        await collect(ai, { messages, maxOutput: 8192 });
+        assert.equal(lastBody.max_tokens, 8192);
+    });
     it('параллельные вызовы собираются по index, отдаются одним событием', async () => {
         installWork([
             sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'ls', arguments: '{"pa' } }] } }] }),

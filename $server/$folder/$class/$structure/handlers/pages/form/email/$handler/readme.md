@@ -2,7 +2,7 @@
 
 ## 1. Что это
 
-Page-handler почты класса: три колонки (входящие / исходящие / корзина) и просмотр или написание письма. Письмо — файл `.eml` + запись лога с `ext: 'eml'`.
+Page-handler почты класса: три колонки (входящие / исходящие / корзина) и просмотр, написание или ответ на письмо. Письмо — JSON в `.eml` + запись лога с `ext: 'eml'`.
 
 ## 2. Зачем это нужно
 
@@ -10,26 +10,29 @@ Page-handler почты класса: три колонки (входящие / 
 
 ## 3. Как это работает
 
-- Колонки — `boxes`: `inbox` | `outbox` | `trash`. Строка списка — лог с `ext: 'eml'`, отфильтрованный по пути `/message/.<address>/(inbox|outbox|trash).eml`.
-- Дни — `logs({ mode: 'dates' })`. Письма дня — `logs({ mode: 'bodies', day, ext: 'eml' })` при раскрытии дня. Живое обновление — `listen('changed')` на папке `history`.
-- Метаданные списка — `content` лога `{ subject, from, to, date }`. Тело — лениво: `WORK.get_item(row.path)` + `load()`, разбор RFC822 только в режиме просмотра.
-- Написать — `outbound.eml` в `folder: <address>` (первый ящик из настроек) с тем же `message`, что у IMAP. Триггер `$eml` / `on_save` отправляет SMTP, если базовое имя файла `outbound.eml`.
-- Обновить — `$handler.fetch('refresh')`. Настройки — `read_secret` / `save_secret` (`email.json`), диалог `oda-email-settings`.
+- Колонки — `boxes`: `inbox` | `outbox` | `trash`. Письмо попадает в колонку по полю `box`.
+- Дни — `logs({ mode: 'dates' })`, одна загрузка на форму. Письма дня — `logs({ mode: 'bodies', day, ext: 'eml' })` при раскрытии дня, кэш общий для трёх колонок.
+- Метаданные списка — `message` лога `{ uid, subject, from, to, date, box, mailbox, status, messageId }`. Старые записи без `box` в `message` читаются из файла (legacy).
+- Тело — лениво при открытии (`fetch(row.path)`). HTML показывается в `<iframe sandbox>` без скриптов.
+- Написать — поле «От» (список ящиков, по умолчанию первый), проверка «Кому», `outbound.eml` в `folder: <address>` с `uid`. Триггер `$eml` / `on_save` отправляет и сохраняет новую версию со `status: sent | failed` (+ `error`); в «Исходящих» — последняя версия по `uid`.
+- Ответить — `Re: тема`, «Кому» = отправитель, «От» = ящик письма, цитата тела, `inReplyTo` = `messageId`.
+- Живое обновление — `listen('changed')` на `$item` и папке логов, отписка в `detached`.
+- Обновить — `$handler.fetch('refresh')`. Настройки — `showSettings` (общий тулбар handler), `read_secret` / `save_secret` (`email.json`).
 
 ## 4. Из чего это состоит
 
-- [`$handler/class.js`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/class.js/~/handlers/pages/form/) — оболочка (`item-email`), форма, колонки, день, просмотр/compose, диалог ящиков
+- [`$handler/email.js`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js/~/handlers/pages/form/) — форма, колонки, день, просмотр/compose/ответ, диалог ящиков
+- [`$handler/class.js`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/class.js/~/handlers/pages/form/) — `showSettings`
 - [`refresh`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/methods/refresh/$method/class.js/~/handlers/pages/form/) — IMAP-синхронизация в `.eml` + лог
-- [`on_save (.eml)`](/$server/$folder/$file/$eml/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — SMTP для `outbound.eml`
+- [`on_save (.eml)`](/$server/$folder/$file/$data/$eml/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — SMTP для `outbound.eml`
 
 ## 5. В каком это состоянии
 
-- ✅ три колонки, дни из `logs({ mode: 'dates' })`, письма дня из `logs({ mode: 'bodies', ext: 'eml' })`
-- ✅ compose → `outbound.eml` с `message` в логе; SMTP-триггер на `outbound.eml`
+- ✅ три колонки, загрузка через `logs`, изолированный HTML
+- ✅ compose с выбором ящика, ответ, статусы `pending` / `sent` / `failed`
 - ✅ настройки ящиков в `#secret/email.json`
-- ❌ выбор ящика (берётся первый), multipart/HTML, вложения
-- ❌ IMAP-папки кроме inbox/outbox/trash в колонках не показываются
+- ❌ вложения, IMAP-папки кроме inbox/outbox/trash
 
 ## 6. Дальнейшие планы
 
-- Канон ящиков и маппинг IMAP-папок на inbox / outbox / trash
+- Вложения, пересылка, пометка прочитанных

@@ -12,13 +12,14 @@ export default {
 
     SCHEMA: {
         get_weather: {
-            description: 'Прогноз погоды (текущая, сегодня, завтра). Место обязательно: город или координаты lat/lon (местоположение пользователя — из контекста).',
+            description: 'Прогноз погоды (текущая, сегодня, завтра). Место обязательно: город или координаты lat/lon (местоположение пользователя — из контекста). У каждого дня в ответе есть date (YYYY-MM-DD) — называй дату из ответа, не выдумывай; нужный день можно запросить параметром date.',
             params: {
                 type: 'object',
                 properties: {
                     city: { type: 'string', description: 'Название города' },
                     lat: { type: 'number', description: 'Широта (вместо города)' },
                     lon: { type: 'number', description: 'Долгота (вместо города)' },
+                    date: { type: 'string', description: 'День YYYY-MM-DD — вернуть его данные полем day (доступны сегодня + 2 дня вперёд)' },
                 },
             },
         },
@@ -42,9 +43,13 @@ export default {
 
         const data = await response.json();
         const current = data.current_condition?.[0] || {};
-        const today = data.weather?.[0] || {};
-        const tomorrow = data.weather?.[1] || {};
-        return {
+        const dayOf = w => w?.avgtempC ? {
+            date: w.date || null,
+            min: w.mintempC + '°C',
+            max: w.maxtempC + '°C',
+            desc: w.hourly?.[4]?.lang_ru?.[0]?.value || '',
+        } : null;
+        const res = {
             source: 'wttr.in',
             city,
             current: {
@@ -54,17 +59,19 @@ export default {
                 humidity: current.humidity + '%',
                 wind: current.windspeedKmph + ' км/ч',
             },
-            today: today.avgtempC ? {
-                min: today.mintempC + '°C',
-                max: today.maxtempC + '°C',
-                desc: today.hourly?.[4]?.lang_ru?.[0]?.value || '',
-            } : null,
-            tomorrow: tomorrow.avgtempC ? {
-                temp: tomorrow.avgtempC + '°C',
-                min: tomorrow.mintempC + '°C',
-                max: tomorrow.maxtempC + '°C',
-                desc: tomorrow.hourly?.[4]?.lang_ru?.[0]?.value || '',
+            today: dayOf(data.weather?.[0]),
+            tomorrow: data.weather?.[1]?.avgtempC ? {
+                ...dayOf(data.weather[1]),
+                temp: data.weather[1].avgtempC + '°C',
             } : null,
         };
+        const want = String(params.date || '').trim();
+        if (want) {
+            const hit = (data.weather || []).find(w => w?.date === want);
+            res.day = dayOf(hit);
+            if (!res.day)
+                res.dayError = 'нет данных на ' + want + ' (доступно: ' + (data.weather || []).map(w => w?.date).filter(Boolean).join(', ') + ')';
+        }
+        return res;
     },
 };

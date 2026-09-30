@@ -724,7 +724,7 @@ export const workTools = [
         name: 'write',
         risk: 'write',
         target: target('path'),
-        description: 'Создать или целиком перезаписать файл. Файл в классе попадает в рабочую зону твоей роли; прежняя версия остаётся в истории. Для точечной правки существующего файла используй edit.',
+        description: 'Создать или целиком перезаписать файл. Файл в классе попадает в рабочую зону твоей роли; прежняя версия остаётся в истории. Большой HTML/текст не помещай в один вызов: создай начало через write и добавляй части через append. Для точечной правки существующего файла используй edit.',
         parameters: {
             type: 'object',
             properties: {
@@ -748,6 +748,36 @@ export const workTools = [
             const req = absPath(args.path, ctx);
             return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)'
                 + (real !== req ? '; запрошено ' + req + ' — в классе файлы ложатся в зону роли, дальше используй путь ' + real : '');
+        },
+    },
+    {
+        name: 'append',
+        risk: 'write',
+        target: target('path'),
+        description: 'Добавить текст в конец существующего файла WORK. Для больших файлов: сначала write с началом, затем append частями по несколько тысяч символов. Используй фактический путь, возвращённый write. Каждый вызов сохраняет снимок в истории.',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Фактический WORK-путь файла из результата write' },
+                content: { type: 'string', description: 'Следующая часть текста, без повторения уже записанного' },
+            },
+            required: ['path', 'content'],
+        },
+        async run(args, ctx) {
+            const file = await mustItem(args.path, ctx);
+            if (Array.isArray(file) || isContainer(file))
+                throw new Error('append — только для существующего файла; ' + absPath(args.path, ctx) + ' не файл');
+            const before = await callAs(file, 'load', { encoding: 'utf-8' }, ctx);
+            if (typeof before !== 'string')
+                throw new Error('append — файл не текстовый');
+            const chunk = String(args.content);
+            const log = await callAs(file, 'save', { post: before + chunk }, ctx);
+            if (ctx.entry) {
+                ctx.entry.path = file.path;
+                ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
+                ctx.entry.diff = lineDiff(before, before + chunk);
+            }
+            return 'добавлено ' + chunk.length + ' символов в ' + file.path + ' (всего ' + (before.length + chunk.length) + ')';
         },
     },
     {
@@ -952,12 +982,12 @@ export const workTools = [
     {
         name: 'query',
         readonly: true,
-        description: 'Структурный запрос к объектам данных ($data: .oml, .eml, .ics, .task…) с правами пользователя: фильтр по полям, до 500 объектов. Для подсчётов, отчётов, выборок. Смысловой поиск — search.',
+        description: 'Структурный запрос к объектам данных (.data, .eml, .ics, .task…) с правами пользователя: фильтр по полям, до 500 объектов. Для подсчётов, отчётов, выборок. Смысловой поиск — search.',
         parameters: {
             type: 'object',
             properties: {
                 path: { type: 'string', description: 'Точка, от которой искать (по умолчанию место задачи)' },
-                type: { type: 'string', description: 'Расширение типа объектов: oml, eml, ics, task…' },
+                type: { type: 'string', description: 'Расширение типа объектов: data, eml, ics, task…' },
                 where: { type: 'object', description: 'Условия по полям: {поле: значение} или {поле: {eq|ne|gt|gte|lt|lte|contains|in: …}}' },
                 limit: { type: 'integer', description: 'Максимум объектов (по умолчанию 100, до 500)' },
                 rings: { type: 'integer', description: 'Насколько широко по дереву (0 — только точка; по умолчанию 3)' },

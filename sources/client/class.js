@@ -58,7 +58,7 @@ export class $class extends $folder{
         const url = (this.short || '/') + '?load' + `&version=${this.__version}`;
         return import(url).then(module => module?.default ?? {}).catch(err => {
             console.warn('[WORK] class ?load:', url, err?.message || err);
-            return { METADATA: { FIELDS: [] } };
+            return { METADATA: { FIELDS: [], STATIC: [] } };
         });
     }
     get body(){
@@ -79,7 +79,7 @@ export class $class extends $folder{
             return body.METADATA;
         })
     }
-    /** METADATA.FIELDS — массив полей; обёртка {id, fields} больше не канон. */
+    /** METADATA.STATIC — свойства класса; fallback FIELDS для файлов до миграции. */
     static fieldsList(fields) {
         if (Array.isArray(fields))
             return fields;
@@ -87,11 +87,14 @@ export class $class extends $folder{
             return fields.fields;
         return [];
     }
+    static staticList(meta) {
+        return this.fieldsList(meta?.STATIC?.length ? meta.STATIC : meta?.FIELDS);
+    }
     get $fields(){
         return Promise.resolve(this.metadata).then(meta => {
             meta ??= {};
-            meta.FIELDS = this.constructor.fieldsList(meta.FIELDS);
-            return new CORE.$field({ id: 'FIELDS', fields: meta.FIELDS }, this);
+            const list = this.constructor.staticList(meta);
+            return new CORE.$field({ id: 'STATIC', fields: list }, this);
         })
     }
     async execute(...params){

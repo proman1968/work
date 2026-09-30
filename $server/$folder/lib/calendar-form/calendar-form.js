@@ -44,8 +44,8 @@ ODA({
                 overflow: auto;
             }
             fieldset {
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
+                border: 1px solid var(--subtle-border);
+                border-radius: var(--radius-s);
                 padding: 2px 8px;
                 margin: 0px;
                 min-width: 0px;
@@ -53,11 +53,13 @@ ODA({
             legend {
                 font-size: small;
                 padding: 0px 4px;
+                color: var(--muted-color);
             }
             input, textarea {
                 border: none;
                 outline: none;
                 background-color: transparent;
+                color: inherit;
                 font-family: inherit;
                 font-size: inherit;
                 width: 100%;
@@ -77,8 +79,8 @@ ODA({
             }
             .box {
                 padding: 4px;
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
+                border: 1px solid var(--subtle-border);
+                border-radius: var(--radius-m);
             }
             .all-day-toggle {
                 align-items: center;
@@ -87,32 +89,36 @@ ODA({
         </style>
         <div ~for="events" class="box" light>
             <fieldset>
-                <legend>Title</legend>
+                <legend>Название</legend>
                 <input id="summary" :value="$for.item.summary || ''" autofocus @input="(e) => on_input(e, $for.index)">
             </fieldset>
             <label class="all-day-toggle" horizontal>
                 <oda-checkbox :value="$for.item.allDay" @value-changed="(e) => on_all_day(e, $for.index)"></oda-checkbox>
-                <span>All day</span>
+                <span>Весь день</span>
             </label>
             <div class="row">
                 <fieldset>
-                    <legend>Start</legend>
+                    <legend>Начало</legend>
                     <input id="start" type="datetime-local" :value="toDatetimeLocalInput($for.item.start)" @input="(e) => on_input(e, $for.index)">
                 </fieldset>
                 <fieldset>
-                    <legend>End</legend>
+                    <legend>Окончание</legend>
                     <input id="end" type="datetime-local" :value="toDatetimeLocalInput($for.item.end)" @input="(e) => on_input(e, $for.index)">
                 </fieldset>
             </div>
             <fieldset>
-                <legend>Location</legend>
+                <legend>Место</legend>
                 <input id="location" :value="$for.item.location || ''" @input="(e) => on_input(e, $for.index)">
             </fieldset>
             <fieldset>
-                <legend>Description</legend>
+                <legend>Описание</legend>
                 <textarea id="description" :value="$for.item.description || ''" @input="(e) => on_input(e, $for.index)"></textarea>
             </fieldset>
         </div>
+        <label ~if="canCancel" class="all-day-toggle" horizontal>
+            <oda-checkbox ::value="cancelled"></oda-checkbox>
+            <span>Отменить встречу</span>
+        </label>
     `,
     /** Offset-ISO / Date → value for datetime-local input (no zone) */
     toDatetimeLocalInput(date) {
@@ -132,7 +138,7 @@ ODA({
             start = bounds.start;
             end = bounds.end;
         }
-        return {
+        const result = {
             summary: ev.summary ?? '',
             location: ev.location ?? '',
             description: ev.description ?? '',
@@ -140,6 +146,11 @@ ODA({
             end,
             allDay
         };
+        // служебные поля встречи не теряем при правке
+        for (const key of ['uid', 'status', 'time'])
+            if (ev[key] != null)
+                result[key] = ev[key];
+        return result;
     },
     on_input(e, i) {
         e.stopPropagation();
@@ -173,6 +184,9 @@ ODA({
         }
     },
     events: undefined,
+    /** Показать флажок отмены (только правка существующей встречи из календаря) */
+    canCancel: false,
+    cancelled: false,
     // body: {
     //     $def: '',
     //     set(n) {
@@ -183,7 +197,10 @@ ODA({
     set $item(n) {
         if (n) {
             this.async(async () => {
-                const content = await n.load();
+                let content = await n.load();
+                if (typeof content === 'string')
+                    content = JSON.parse(content);
+                this.cancelled = content?.status === 'cancelled';
                 this.events = [content];
             })
         }

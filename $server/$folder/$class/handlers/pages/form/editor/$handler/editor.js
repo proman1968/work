@@ -17,7 +17,7 @@ export default {
     dataAccessNode: null,
     async attached() {
         const node = await this.$item.dataAccessRoot
-        this.dataAccessNode = node.children.find(n => n.field.id === 'FIELDS');
+        this.dataAccessNode = node.children.find(n => n.field.id === 'STATIC') || node.children.find(n => n.field.id === 'FIELDS');
         this.body = await node.getDataRoot();
     }
 };

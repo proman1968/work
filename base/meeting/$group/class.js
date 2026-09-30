@@ -8,7 +8,7 @@ export default {
       },
     label: "Конференция",
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: "asd",
             type: "String"
         },{

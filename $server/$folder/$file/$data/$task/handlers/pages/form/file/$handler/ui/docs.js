@@ -5,7 +5,7 @@
  *   computeStats(body)  — статистика сессии для вкладки «Контекст».
  */
 
-const FILE_TOOLS = { write: 'carbon:document-add', edit: 'carbon:edit', write_table: 'carbon:table', generate_image: 'carbon:image', save_skill: 'carbon:skill-level' };
+const FILE_TOOLS = { write: 'carbon:document-add', append: 'carbon:document-add', edit: 'carbon:edit', write_table: 'carbon:table', generate_image: 'carbon:image', save_skill: 'carbon:skill-level' };
 const REPORT_MIN = 700;
 
 function basename(p) {
@@ -47,7 +47,7 @@ export function collectDocs(items) {
             if (it?.type !== 'assistant')
                 continue;
             for (const t of it.tools || []) {
-                if (t.status === 'ok' && ['write', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
+                if (t.status === 'ok' && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
                     artifacts.set(t.path, t.snapshot || null);
                 if (FILE_TOOLS[t.name] && t.status === 'ok' && t.path) {
                     const snapshot = t.snapshot;

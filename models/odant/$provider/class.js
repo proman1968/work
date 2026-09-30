@@ -1,6 +1,6 @@
 export default {
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: "protocol",
             type: "String",
             placeholder: "openai | anthropic | gigachat | ollama | local | custom",

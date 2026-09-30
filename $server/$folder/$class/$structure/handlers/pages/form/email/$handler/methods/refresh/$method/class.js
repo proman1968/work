@@ -175,11 +175,15 @@ async function syncMailboxFolder(client, storage, {
                     folder: imapPath,
                     address,
                 });
+                // метаданные для списка писем — форма не читает тела ради box
                 const meta = {
                     subject: json.subject,
                     from: json.from,
                     to: json.to,
                     date,
+                    box,
+                    mailbox: address,
+                    messageId: json.messageId,
                 };
                 await storage.save_file({
                     filename,
@@ -188,6 +192,8 @@ async function syncMailboxFolder(client, storage, {
                     message: JSON.stringify(meta),
                     post: JSON.stringify(json),
                     time,
+                    // почта общая — лог только в журнал класса
+                    feed: 'point',
                     session,
                     role,
                 });
