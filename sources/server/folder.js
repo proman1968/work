@@ -114,7 +114,7 @@ export class $folder extends $item{
     /**
      * Сборка DATA из цепочки class.js.
      * Обычные папки без типа — без init.
-     * Типизаторы `$file/$data/$ext`: mergeFiles по real_dir
+     * Типизаторы `$file/$ext`: mergeFiles по real_dir
      *   `$data/class.js` → `$ext/class.js` (inherit_ancestor) → own overlay.
      * Own overlay без inherit_source (физический class.js) иначе теряет icon/label прототипа.
      * Без inherit(..., this): у всех слоёв id `class.js`, inherit схлопнет в один слот.
@@ -429,7 +429,7 @@ export class $folder extends $item{
             get label(){
                 return this.DATA?.label || this.name;
             },
-            /** Схема полей типизатора (`$file/$data/$ics` и т.п.) — в info для builder. */
+            /** Схема полей типизатора (`$file/$ics` и т.п.) — в info для builder. */
             get METADATA(){
                 return this.DATA?.METADATA;
             },
@@ -1584,6 +1584,7 @@ export class $folder extends $item{
         const res = await FS.$file.save_to_log.call(file, params);
         folder.reset();
         this.reset();
+        res.id = body.time + '.' + uid;
         return res;
     }
 

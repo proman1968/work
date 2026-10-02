@@ -34,6 +34,7 @@ export const MEMBERS = Object.freeze({
     logs: L.READ, logs_dates: L.READ, log_files: L.READ, read_log_bodies: L.READ,
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
+    data_access: L.READ, index: L.READ, link_tree: L.READ,
     // геттеры (свойства и списки)
     size: L.READ, METADATA: L.READ, type: L.READ, type_chain: L.READ, label: L.READ, icon: L.READ,
     id: L.READ, name: L.READ, path: L.READ, short: L.READ, online: L.READ, lastModified: L.READ,
@@ -53,8 +54,8 @@ export const MEMBERS = Object.freeze({
     append_log_includes: L.WRITE, save: L.WRITE, edit: L.WRITE, edit_file: L.WRITE,
     ensure_folder: L.WRITE, create: L.WRITE, write_to_stream: L.WRITE, close_write_stream: L.WRITE,
     restore_from_history: L.WRITE, store_push_subscription: L.WRITE,
-    create_object: L.WRITE, update_object: L.WRITE, delete_object: L.WRITE, split: L.WRITE,
-    read_object: L.READ, query: L.READ,
+    create_object: L.WRITE, update_object: L.WRITE, delete_object: L.WRITE, split: L.WRITE, rebuild_index: L.WRITE,
+    read_object: L.READ, query: L.READ, read_link: L.READ,
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, devModeToggle: L.ADMIN, read_secret: L.ADMIN,
@@ -66,7 +67,7 @@ const DENY = new Set([
     'constructor', 'prototype', '__proto__', 'then', 'toJSON', 'valueOf', 'toString', 'hasOwnProperty',
     'init', 'inherit', 'importScript', 'execute', 'assertAccess', 'canSee', 'canWrite', 'allowAccess',
     'areaOf', 'resolveZone', 'fire', 'listen', 'unlisten', 'debounce', 'async', 'DATA', 'ACCESS',
-    'signIn', 'get_session', 'sessions', 'settings', 'fs', 'fsp', 'https', 'mime',
+    'signIn', 'get_session', 'sessions', 'settings', 'fs', 'fsp', 'http', 'https', 'mime',
     'real_dir', 'real_source', 'dir', 'write_streams', 'keys', 'credentials', 'pageHTML', 'testerHTML',
     'principalId', 'isRegistry',
 ]);

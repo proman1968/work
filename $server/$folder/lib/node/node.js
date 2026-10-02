@@ -1,4 +1,5 @@
 /** «?» только у строки дерева (`oda-tree-node`): readme.md в storage_folder, не файл. */
+import { isLinkNode } from '../tree/link-nodes.js';
 function mayShowReadme($item) {
     if (!$item) return false;
     // $file extends $folder на клиенте — файлы исключаем явно
@@ -33,6 +34,10 @@ export default {
                 white-space: nowrap !important;
                 cursor: pointer;
                 padding: 2px 4px;
+            }
+            label.link{
+                text-decoration: underline;
+                font-weight: normal;
             }
             .stat{
                 white-space: nowrap;
@@ -82,12 +87,12 @@ export default {
         <div horizontal flex style="align-items: center;">
             <div vertical flex>
                 <div horizontal flex>
-                    <label :bold="$item instanceof CORE.$class" ~show="!hideLabel">{{label}}</label>
+                    <label :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : ''" ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                     <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" icon-size="24" @tap.stop="openReadme" title="readme.md"></oda-icon>
                     <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
-                <item-users icon-size="16" ~if="showUsers && isClass" ~show="hasUsers" ::has-users role="USER" :$item :select-mode="false"></item-users>
+                <item-users icon-size="16" ~if="showUsers && isClass && !isLink" ~show="hasUsers" ::has-users role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
@@ -138,12 +143,21 @@ export default {
         }
         h?.parentElement?.fire('close');
     },
+    /** Узел-ссылка рабочего места — только через isLinkNode (см. link-nodes.js):
+     * прямое чтение `$item.isLink` у настоящих элементов дёргает `_onEmpty`. */
+    get isLink() {
+        return isLinkNode(this.$item);
+    },
     get showBoss(){
+        if(this.isLink)
+            return false;
         if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
             return Promise.resolve(this.$item?.bosses).then(list => !!(list?.length));
         }
     },
     get status(){
+        if(this.isLink)
+            return '';
         if(this.$item.constructor === CORE.$class)
             return this.$item.status;
         return ''
@@ -187,6 +201,8 @@ export default {
         }
     },
     get iconSize(){
+        if(this.isLink)
+            return 24;
         if(!this.showStatus)
             return 24;
         if(this.$item){

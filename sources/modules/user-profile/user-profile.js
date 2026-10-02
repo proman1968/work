@@ -193,6 +193,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
         switch (this.state?.name) {
             case 'ok': {
                 await WORK.showConfirm('Выйти из учётной записи?');
+                await WORK.removeCurrentPushSubscription?.();
                 await WORK.fetch("/", 'user_exit', {}, this.params);
                 this.params.uid = undefined;
                 WORK.uid = '';

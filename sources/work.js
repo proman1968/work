@@ -24,6 +24,12 @@ attachWebSocket(httpServer, httpsServer);
 
 await WORK.children;
 
+// Незавершённые задачи и продолжимых субагентов поднимаем фоном, с ограничением параллелизма.
+if (process.env.WORK_RECOVER !== '0') {
+    const { recoverTasks } = await import('./modules/agent/recovery.js');
+    recoverTasks().catch(e => console.warn('[agent recovery]', e.message));
+}
+
 // правки кода на диске (SVN update, редактор) — сброс кэшей сборки без рестарта
 if (process.env.WORK_WATCH !== '0') {
     const { watchCode } = await import('./host/watch.js');

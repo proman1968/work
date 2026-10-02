@@ -3,8 +3,9 @@
  *
  * Тело файла (JSON):
  *   { type:'task', version:2, name, title, created, model, effort, mode:'auto'|'ask'|'plan',
- *     status:'idle'|'running'|'waiting'|'stopped'|'error'|'limit',
+ *     status:'idle'|'running'|'waiting'|'needs_review'|'stopped'|'error'|'limit',
  *     items:[…лента, см. loop.js…], todos:[{content,status}], allowed:[имена инструментов],
++ *     results:[{snapshot,title,time}] — файлы-результаты, отмеченные publish для общей ленты,
  *     waiting?:{ kind:'approval'|'question', item, call } }
  *
  * Состояние выполнения — в памяти процесса по файлу: AbortController, ожидания человека,
@@ -48,6 +49,7 @@ export function normalizeBody(raw) {
     body.items ??= [];
     body.todos ??= [];
     body.allowed ??= [];
+    body.results ??= [];
     if (!MODES.includes(body.mode))
         body.mode = body.mode === 'build' || body.mode === 'do' ? 'auto' : 'auto';
     body.status ??= 'idle';
@@ -171,7 +173,7 @@ async function pushNotify(s, session, kind, text) {
     const uid = session?.uid;
     if (!uid || process.env.WORK_TEST)
         return;
-    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой' }[kind] || 'Задача';
+    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
     const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
     const path = String(s.file.path || '');
     const url = encodeURI(path + '/~/handlers//form/index.html');
@@ -182,9 +184,9 @@ async function pushNotify(s, session, kind, text) {
             message: {
                 type: 'task:' + path, tag: 'task:' + path, title,
                 body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
-                data: { url, kind: 'task' },
-                requireInteraction: kind === 'waiting',
-                renotify: kind === 'waiting',
+                data: { url, kind: 'task', state: kind, task: path },
+                requireInteraction: kind === 'waiting' || kind === 'review',
+                renotify: kind === 'waiting' || kind === 'review',
             },
         }, removePushSubscription);
     }
@@ -196,6 +198,59 @@ async function pushNotify(s, session, kind, text) {
 function lastAnswer(body) {
     const it = [...(body.items || [])].reverse().find(i => i.type === 'assistant' && i.content && !i.error);
     return String(it?.content || '').split('\n').find(l => l.trim()) || '';
+}
+
+/** Перезапуск: продолжать только при отсутствии исполнявшейся изменяющей операции. */
+function uncertainCalls(items) {
+    const out = [];
+    for (const item of items || []) {
+        for (const t of item.tools || []) {
+            if (t.status === 'running' && !SAFE_RECOVERY_TOOLS.has(t.name))
+                out.push(t);
+            out.push(...uncertainCalls(t.items));
+        }
+    }
+    return out;
+}
+
+const SAFE_RECOVERY_TOOLS = new Set([
+    'ls', 'read', 'find', 'search', 'query', 'access', 'schema', 'logs', 'history',
+    'read_table', 'web_search', 'web_fetch', 'connections', 'skill', 'todo_write',
+]);
+
+/** Вызывается восстановителем после рестарта; ожидающие вопросы не перезапускаются. */
+export async function recover(file, session) {
+    const s = stateOf(file);
+    const body = await getBody(file);
+    if (s.running)
+        return { status: 'already-running' };
+    if (body.status === 'waiting' && body.waiting) {
+        const call = findCall(body.items, body.waiting.call)?.entry;
+        if (call) {
+            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name);
+            return { status: 'waiting' };
+        }
+        body.status = 'needs_review';
+        await save(s, session);
+        pushNotify(s, session, 'review', 'Не найден ожидающий вызов после перезапуска. Откройте задачу.');
+        return { status: 'needs_review' };
+    }
+    if (body.status !== 'running')
+        return { status: 'skip' };
+    const uncertain = uncertainCalls(body.items);
+    if (uncertain.length) {
+        for (const t of uncertain)
+            t.status = 'interrupted';
+        body.status = 'needs_review';
+        body.items.push({ id: genId(), type: 'error', time: Date.now(),
+            content: 'Сервер перезапущен во время действия ' + uncertain.map(t => t.name).join(', ')
+                + '. Результат неизвестен: действие НЕ повторено автоматически. Проверьте результат и продолжите задачу вручную.' });
+        await save(s, session);
+        pushNotify(s, session, 'review', 'Результат действия неизвестен — нужна проверка.');
+        return { status: 'needs_review' };
+    }
+    start(s, session, file);
+    return { status: 'resumed' };
 }
 
 function makeHost(s, session) {
@@ -240,6 +295,45 @@ function makeHost(s, session) {
     };
 }
 
+/** Набор результатов задачи (publish): добавление, снятие, чтение. Сохраняется сразу. */
+export async function addTaskResult(file, res, session) {
+    const s = stateOf(file);
+    const body = await getBody(file);
+    body.results ??= [];
+    if (res?.remove)
+        body.results = body.results.filter(r => r.snapshot !== res.snapshot);
+    else if (res?.snapshot && !body.results.some(r => r.snapshot === res.snapshot))
+        body.results.push({ snapshot: res.snapshot, title: res.title || null, time: Date.now() });
+    await save(s, session);
+    return body.results;
+}
+
+/** При успешном завершении: выбранные результаты — в includes записи задачи (все копии). */
+export async function publishTaskResults(file, session) {
+    const body = stateOf(file).body;
+    const snaps = [...new Set((body?.results || []).map(r => r?.snapshot).filter(Boolean))];
+    if (!snaps.length)
+        return 0;
+    const storages = [];
+    const owner = file.$owner || file.$parent;
+    if (owner && typeof owner.append_log_includes === 'function')
+        storages.push(owner);
+    const cab = session?.$user;
+    if (cab && cab !== owner && typeof cab.append_log_includes === 'function')
+        storages.push(cab);
+    let n = 0;
+    for (const st of storages) {
+        try {
+            if (await st.append_log_includes({ entryPath: file.path, includePaths: snaps, session }))
+                n++;
+        }
+        catch (e) {
+            console.warn('[task publish]', st.path, e.message);
+        }
+    }
+    return n;
+}
+
 /** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null. */
 export function taskRole(file) {
     try {
@@ -266,19 +360,24 @@ function start(s, session, file) {
             // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
             body.role = taskRole(file) || body.role;
             const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role });
-            const model = body.model || await env.defaultModel();
+            const def = body.childAgent ? env.agents.get(body.childAgent) : null;
+            if (body.childAgent && !def)
+                throw new Error('субагент «' + body.childAgent + '» больше не доступен в этой точке');
+            const depth = Math.max(0, Number(body.childDepth) || 0);
+            const model = body.model || def?.meta.model || await env.defaultModel();
             body.model = model;
             const llm = await llmFor(model);
             const res = await runLoop({
                 llm,
-                system: () => env.makeSystem(),
+                system: () => env.makeSystem(def),
                 items: body.items,
-                tools: await env.makeTools(),
+                tools: await env.makeTools(def, depth),
                 host,
+                depth,
                 ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
                 loadImage: env.loadImage,
                 effort: body.effort,
-                maxTurns: Number(env.config.maxTurns) || undefined,
+                maxTurns: Number(def?.meta.maxTurns || env.config.maxTurns) || undefined,
             });
             body.status = res.status === 'done' ? 'idle' : res.status;
         }
@@ -307,6 +406,8 @@ function start(s, session, file) {
             s.running = null;
             send(s, session, { type: 'task.state', status: body.status });
             send(s, session, { type: 'chat.done' });
+            if (!aborted && body.status === 'idle')
+                await publishTaskResults(file, session).catch(e => console.warn('[task publish]', e?.message || e));
             if (!aborted && body.status === 'error')
                 pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
             else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
@@ -377,6 +478,8 @@ export async function prompt(file, params = {}) {
         await save(s, session);
         return { ok: true, queued: true };
     }
+    if (body.status === 'needs_review' && !text)
+        return { ok: false, error: 'Сначала проверьте результат прерванного действия и напишите его в ответе; пустое «продолжить» недоступно.' };
     if (body.waiting) {
         // ожидание пережило рестарт: текст — ответ на вопрос или отказ с комментарием
         const w = body.waiting;
@@ -397,6 +500,21 @@ export async function prompt(file, params = {}) {
         body.model = params.model;
     start(s, session, file);
     return { ok: true };
+}
+
+/** Сообщение продолжимому агенту: вопрос человеку не подменяем ответом другого агента. */
+export async function message(file, params = {}) {
+    const s = stateOf(file);
+    const body = await getBody(file);
+    const text = String(params.prompt || '').trim();
+    if (!text)
+        throw new Error('нужен текст сообщения');
+    if (s.running || body.waiting || body.status === 'needs_review') {
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true });
+        await save(s, params.session);
+        return { ok: true, queued: true };
+    }
+    return prompt(file, params);
 }
 
 /** Аргументы HTTP: query + тело POST (JSON-строка или объект). Query побеждает. */

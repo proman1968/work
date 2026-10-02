@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CONFIG } from './config.js';
+import { FS } from '../../server/index.js';
 
 const dataExts = new Set(CONFIG.dataExts);
 const textExts = new Set(CONFIG.textExts);
@@ -18,7 +19,7 @@ const codeExts = new Set(CONFIG.codeExts);
 const excludeNames = new Set(CONFIG.excludeNames);
 const excludeRoots = new Set(CONFIG.excludeRoots);
 
-/** Добавить расширение файла данных (найдено `$data/$ext` при обходе). */
+/** Добавить расширение-точки (тип `$file/$ext` с point: true, найден при обходе). */
 export function addDataExt(ext) {
     if (ext && ext !== 'logs')
         dataExts.add(String(ext).toLowerCase());
@@ -224,16 +225,15 @@ async function readObject(p, disk) {
     try {
         const cls = await classItem(classDirOfSafe(p));
         // схема объекта `.data` — METADATA.FIELDS класса-владельца (слияние по ~);
-        // схемы старых типов ($file/$data/$ext) — из типа, как раньше
+        // схемы точечных типов ($file/$ext с point: true) — из типа
         const own = ext === 'data' ? cls?.DATA?.METADATA?.FIELDS : null;
         if (Array.isArray(own) && own.length) {
             fields = own;
         }
         else {
-            const types = cls ? await cls.data_types : [];
-            const type = (types || []).find(t => t.id === '$' + ext);
-            fields = Array.isArray(type?.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
-            typeLabel = type?.DATA?.label || ext;
+            const td = await FS.$file.typeData(ext).catch(() => null);
+            fields = Array.isArray(td?.METADATA?.FIELDS) ? td.METADATA.FIELDS : [];
+            typeLabel = td?.label || ext;
         }
     }
     catch { /* без схемы — по ключам */ }

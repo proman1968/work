@@ -1,8 +1,8 @@
 /** Проекции ленты .task для UI: доки и статистика контекста, группировка действий. */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectDocs, computeStats, isReport } from '../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/docs.js';
-import { segmentsOf } from '../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/segments.js';
+import { collectDocs, computeStats, isReport } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import { segmentsOf } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/segments.js';
 
 const long = '# Отчёт по оборудованию\n\n' + 'строка отчёта\n'.repeat(80);
 const items = [
@@ -33,10 +33,17 @@ describe('доки задачи', () => {
         assert.equal(collectDocs(again).filter(d => d.title === 'r.md').length, 2);
         assert.equal(collectDocs([{ type: 'assistant', tools: [{ id: 'old', name: 'write', status: 'ok', path: '/BASE/old.md' }] }])[0].kind, 'text');
     });
+
+    it('опубликованные помечаются для общей ленты', () => {
+        const docs = collectDocs(items, ['/BASE/doc/.r.md/history/2026-09-29/100.X.md']);
+        assert.equal(docs[0].published, true);
+        assert.equal(docs.find(d => d.key === 'file:/BASE/.x.md/history/2026-09-29/101.X.md').published, undefined);
+        assert.ok(collectDocs(items).every(d => d.published === undefined));
+    });
 });
 
 describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
-    const { linkifyWork, isWorkPath } = await import('../$server/$folder/$file/$data/$task/handlers/pages/form/file/$handler/ui/util.js');
+    const { linkifyWork, isWorkPath, attachmentName } = await import('../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js');
     it('бэктики, голые пути, готовые ссылки → WORK-формат; код, URL и не-пути — без изменений', () => {
         const md = 'Где лежит: `/USERS/X/$user/ADMIN/text/сапёр.html`. См. /BASE/doc, а также [отчёт](/BASE/doc/r.md).\n'
             + 'Внешняя https://example.com/BASE/x и `npm i` и и/или 1/2.\n```\n/BASE/в/коде\n```';
@@ -66,6 +73,14 @@ describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
         assert.equal(linkifyWork('[отчёт](' + path + ')', a1.artifacts), '[презентация.html](' + encodeURI(first + '/~/handlers/pages/form/') + ')');
         assert.equal(linkifyWork('Файл ' + path + '.', a1.artifacts), 'Файл [презентация.html](' + encodeURI(first + '/~/handlers/pages/form/') + ').');
         assert.equal(linkifyWork('`' + path + '`', new Map([[path, null]])), 'презентация.html');
+    });
+    it('старые вложения с именем снимка показывают исходное имя, сохраняя путь на историю', () => {
+        const path = '/BASE/direction/sales/$group/USER/xlsx/.себестоимость июнь.xlsx/history/2026-10-01/1790840736106.CA4E097FF6C1D387.xlsx';
+        assert.equal(attachmentName({ path, name: '1790840736106.CA4E097FF6C1D387.xlsx' }), 'себестоимость июнь.xlsx');
+        assert.equal(attachmentName({ path, name: 'Мой отчёт.xlsx' }), 'Мой отчёт.xlsx');
+        assert.equal(attachmentName({ path }), 'себестоимость июнь.xlsx');
+        assert.equal(attachmentName({ path: '/BASE/обычный.xlsx' }), 'обычный.xlsx');
+        assert.equal(attachmentName('/BASE/doc/.документ.md/history/2026-10-01/123.X.md'), 'документ.md');
     });
 });
 

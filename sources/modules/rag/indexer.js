@@ -189,6 +189,17 @@ async function walk(root, cb) {
             for (const e of entries)
                 if (e.isDirectory() && e.name[0] === '$')
                     addDataExt(e.name.slice(1));
+        if (base === '$file')
+            for (const e of entries) {
+                if (!e.isDirectory() || e.name[0] !== '$' || e.name === '$data')
+                    continue;
+                try {
+                    const cls = await fsp.readFile((diskOf(dir) || '.') + '/' + e.name + '/class.js', 'utf-8');
+                    if (/point\s*:\s*true/.test(cls))
+                        addDataExt(e.name.slice(1));
+                }
+                catch { /* нет class.js */ }
+            }
         for (const e of entries) {
             const p = dir + '/' + e.name;
             if (isExcluded(p))

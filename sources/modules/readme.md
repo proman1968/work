@@ -8,7 +8,7 @@
 
 - `ai-schema.js` — построение схемы методов элемента для ИИ-агента (`buildAiSchema`)
 - `embeddings/` — embeddings/RAG (Xenova, kreuzberg)
-- `tts/` — Piper (:8003, default local) и Qwen3-TTS (:8002); модели [`/MODELS/Local/Piper`](/MODELS/Local/Piper/~/handlers/pages/form/), [`/MODELS/Local/Qwen3-TTS`](/MODELS/Local/Qwen3-TTS/~/handlers/pages/form/)
+- локальные модели лежат в [`/MODELS/Local/`](/MODELS/Local/~/handlers/pages/form/) (провайдер `Local`, протокол `local` или OpenAI-совместимый endpoint);
 - `call/` — WebRTC-звонки
 - `user-profile/` — клиентский UI профиля пользователя
 

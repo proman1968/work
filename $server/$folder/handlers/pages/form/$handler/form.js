@@ -245,6 +245,16 @@ ODA({is: 'work-form',
                     v.label = ext.toUpperCase();
                 }
             }
+            // Форма objects — только классам с полями объектов (у групп и служебных её нет)
+            if (views.some(v => v.id === 'objects')) {
+                try {
+                    const body = await this.$item?.body;
+                    const fields = body?.METADATA?.FIELDS;
+                    if (!Array.isArray(fields) || !fields.length)
+                        views = views.filter(v => v.id !== 'objects');
+                }
+                catch { /* при ошибке оставляем как есть */ }
+            }
             this.formViews = views;
             this.render();
         } catch (err) {

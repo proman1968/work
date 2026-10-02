@@ -58,6 +58,9 @@ export class $server extends $class {
     get fsp(){
         return fsp
     }
+    get http(){
+        return http
+    }
     get https(){
         return https
     }
@@ -414,6 +417,9 @@ export class $server extends $class {
         let data = fs.readFileSync(mata_folder.dir + '/#system/settings.json', {encoding: 'utf-8'});
         data = JSON.parse(data)
         return data;
+    }
+    static get http(){
+        return http;
     }
     static get https(){
         return https;

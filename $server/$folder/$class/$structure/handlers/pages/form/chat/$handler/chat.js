@@ -340,7 +340,7 @@ ODA({is: 'oda-chat',
                 params.location = await this.location();
                 params.prompt = text;
                 if (list.length) {
-                    const paths = [];
+                    const attachments = [];
                     for (const file of list) {
                         const log = await this.$pdp.$item.save_file(file, {
                             encoding: params.encoding,
@@ -348,10 +348,13 @@ ODA({is: 'oda-chat',
                         });
                         const path = log?.logFullPath || log?.path;
                         if (path)
-                            paths.push(path.startsWith('/') ? path : '/' + path);
+                            attachments.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
                     }
-                    if (paths.length)
-                        params.includes = JSON.stringify(paths);
+                    if (attachments.length) {
+                        // Журнал принимает только пути; задаче дополнительно нужны имена исходных файлов.
+                        params.includes = JSON.stringify(attachments.map(a => a.path));
+                        params.attachments = JSON.stringify(attachments);
+                    }
                 }
                 const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
                 const body = {
@@ -665,6 +668,9 @@ ODA({is: 'chat-day',
                 try {
                     const raw = await f.load();
                     const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    // Записи файлов из контекста задачи — только внутри её карточки, не отдельными карточками.
+                    if (row?.mainContext)
+                        continue;
                     if (row?.path)
                         key = row.path;
                 }
@@ -759,6 +765,13 @@ ODA({is: 'chat-day',
             try {
                 let file = await folder.get_item('/' + initiator, 'info');
                 if (file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) {
+                    try {
+                        const raw = await file.load?.();
+                        const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        if (row?.mainContext)
+                            return;
+                    }
+                    catch { /* не разобрали — показываем как раньше */ }
                     if (!this.logItems.some(i => i.id === file.id)) {
                         this.logItems.push(file);
                         this._scrollRibbonDown();

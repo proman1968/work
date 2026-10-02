@@ -24,7 +24,7 @@ Page-handler почты класса: три колонки (входящие / 
 - [`$handler/email.js`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js/~/handlers/pages/form/) — форма, колонки, день, просмотр/compose/ответ, диалог ящиков
 - [`$handler/class.js`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/class.js/~/handlers/pages/form/) — `showSettings`
 - [`refresh`](/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/methods/refresh/$method/class.js/~/handlers/pages/form/) — IMAP-синхронизация в `.eml` + лог
-- [`on_save (.eml)`](/$server/$folder/$file/$data/$eml/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — SMTP для `outbound.eml`
+- [`on_save (.eml)`](/$server/$folder/$file/$eml/triggers/on_save/$trigger/class.js/~/handlers/pages/form/) — SMTP для `outbound.eml`
 
 ## 5. В каком это состоянии
 

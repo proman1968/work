@@ -261,7 +261,7 @@ WORK.showConfirm = function (textContent = 'Подтвердить?', params = {
     const el = ODA.createElement('p', {textContent, style: 'margin: 1em;'});
     return WORK.showDialog(el, {
         allowClose: true,
-        TITLE: { label: 'Подтверждение', allowClose: true },
+        TITLE: { label: 'Подтверждение' },
         OK: { label: 'Да', icon: 'icons:check' },
         CANCEL: { label: 'Нет', icon: 'icons:close' },
         ...params
@@ -462,6 +462,8 @@ WORK.login = async function(){
         let KEY = secure.getItem('KEY');
         let uid = WORK.credentials?.uid;
         if(uid && KEY){
+            if (WORK.uid && WORK.uid !== uid)
+                await WORK.removeCurrentPushSubscription?.();
             let challengeId = crypto.randomUUID();
             const challenge = await WORK.fetch("/", 'user_login_start', { uid, challengeId});
             KEY = Uint8Array.from(atob(KEY), c => c.charCodeAt(0));
@@ -474,6 +476,8 @@ WORK.login = async function(){
             WORK.notifyAuth?.({ uid, reason: 'login' });
             return res;
         }
+        if (WORK.uid)
+            await WORK.removeCurrentPushSubscription?.();
         WORK.uid = '';
         WORK.USER = undefined;
         await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
@@ -502,6 +506,18 @@ WORK.storePushSubscription = function (subscription) {
 WORK.removePushSubscription = function (subscription) {
     return WORK.fetch("/", 'remove_push_subscription', {}, subscription);
 }
+/** Перед выходом убрать подписку у прежнего uid, иначе следующий пользователь получит его push. */
+WORK.removeCurrentPushSubscription = async function () {
+    if (!WORK.uid || !navigator.serviceWorker || typeof Notification === 'undefined' || Notification.permission !== 'granted')
+        return;
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub)
+            await WORK.removePushSubscription(sub);
+    }
+    catch (e) { console.warn('[push] unsubscribe user', e); }
+};
 WORK.urlBase64ToUint8Array = function(base64String){
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding)
@@ -662,39 +678,41 @@ WORK.top = (() => {
     return top;
 })();
 if (WORK.top === window) {
-    setTimeout(async () => {
-        const swRegistration = await navigator.serviceWorker.register('/sw.js');
-        await navigator.serviceWorker.ready;
-        const pushPermission = await WORK.requestNotificationPermission();
-        if (pushPermission) {
-            try {
-                const vapidPublicKey = await WORK.getPublicVapid();
-                let pushSubscription = await swRegistration.pushManager.getSubscription();
-                const subscriptionIsValid = (() => {
-                    if (pushSubscription) {
-                        return (!pushSubscription.expirationTime || Date.now() < pushSubscription.expirationTime) &&
-                            WORK.arrayBufferToBase64(pushSubscription.options.applicationServerKey) === vapidPublicKey
-                    }
-                    return false;
-                })();
-                if(!subscriptionIsValid){
-                    if(pushSubscription){
-                        await WORK.removePushSubscription(pushSubscription);
-                        await pushSubscription.unsubscribe();
-                    }
-                    pushSubscription = await swRegistration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: WORK.urlBase64ToUint8Array(vapidPublicKey)
-                    });
-                    await WORK.storePushSubscription(pushSubscription);
-                }
+    /** Кнопка в задаче вызывает с user gesture; при входе уже выданное разрешение переиспользуется. */
+    WORK.enableTaskNotifications = async function (ask = true) {
+        if (!WORK.uid || !navigator.serviceWorker || typeof Notification === 'undefined')
+            return false;
+        // Запрашиваем разрешение до первого await — браузер требует прямого пользовательского действия.
+        const permission = ask ? await WORK.requestNotificationPermission() : Notification.permission === 'granted';
+        if (!permission)
+            return false;
+        try {
+            const reg = await navigator.serviceWorker.register('/sw.js');
+            const vapid = await WORK.getPublicVapid();
+            let subscription = await reg.pushManager.getSubscription();
+            const valid = subscription && (!subscription.expirationTime || Date.now() < subscription.expirationTime)
+                && subscription.options?.applicationServerKey
+                && WORK.arrayBufferToBase64(subscription.options.applicationServerKey) === vapid;
+            if (!valid) {
+                if (subscription)
+                    await subscription.unsubscribe();
+                subscription = await reg.pushManager.subscribe({ userVisibleOnly: true,
+                    applicationServerKey: WORK.urlBase64ToUint8Array(vapid) });
             }
-            catch (err) {
-                console.warn(err);
-            }
+            // Даже действующую подписку привязываем к текущему uid после входа/рестарта.
+            await WORK.storePushSubscription(subscription);
+            return true;
         }
+        catch (err) { console.warn('[push] subscription', err); return false; }
+    };
+    setTimeout(() => {
+        WORK.enableTaskNotifications(false);
         RTCCaller.init();
     }, 3000);
+    WORK.authEvents?.addEventListener('auth', e => {
+        if (e.detail?.uid)
+            WORK.enableTaskNotifications(false);
+    });
 }
 let _renderCanvas = null;
 function getRenderCanvas()  {

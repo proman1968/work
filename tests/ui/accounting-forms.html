@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Accounting forms UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Формы учёта в настоящем браузере (tests/ui/run.mjs).
+ * Проверяет то, что мимо node-тестов с заглушками прошло трижды:
+ * текст ячеек списка (без [object Object]), вызовы сохранения и показ ошибки.
+ */
+import '/oda/oda.js';
+import objectsProto from '/$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js';
+import postingsProto from '/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(80);
+    return el;
+}
+const text = el => el?.textContent?.trim();
+const allText = el => el?.textContent || '';
+
+await ODA(cloneProto(objectsProto, 'test-objects'));
+await ODA(cloneProto(postingsProto, 'test-postings'));
+await ODA({ is: 'test-getter-for',
+    template: `<div class="g" ~for="derived">{{$for.item}}</div>`,
+    items: [],
+    get derived() { return (this.items || []).map(x => 'v' + x); },
+});
+
+/** Копия прототипа с сохранением геттеров/сеттеров (spread их убивает). */
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    proto.imports = undefined;
+    return proto;
+}
+
+await test('фреймворк: геттер в ~for обновляется', async () => {
+    const el = await mount('test-getter-for');
+    el.items = [1, 2];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.g').length === 2),
+        'gdivs=' + el.__shadowRoot__.querySelectorAll('div.g').length
+        + ' html=' + (el.__shadowRoot__?.innerHTML || '').slice(0, 500));
+    eq([...el.__shadowRoot__.querySelectorAll('div.g')].map(text).join(','), 'v1,v2');
+    el.remove();
+});
+
+await ODA({ is: 'test-for-attrs',
+    template: `<div class="r" ~for="items" ~class="{on: $for.item === sel}" @tap="picked = $for.item">{{$for.item}}</div>`,
+    items: [], sel: null, picked: null,
+});
+await ODA({ is: 'test-for-getter-attrs',
+    template: `<div class="r" ~for="derived" ~class="{on: $for.item === sel}" @tap="picked = $for.item">{{$for.item}}</div>`,
+    items: [], sel: null, picked: null,
+    get derived() { return (this.items || []).map(x => 'v' + x); },
+});
+await ODA({ is: 'test-for-nested',
+    template: `<div class="r" ~for="rows"><span class="c" ~for="$for.item.cells">[{{$for.$for.item}}]</span></div>`,
+    rows: [],
+});
+await ODA({ is: 'test-optional',
+    template: `<div class="r" ~for="items" ~class="{on: $for.item.id === sel?.id}">{{$for.item.name}}</div>`,
+    items: [], sel: null,
+});
+await ODA({ is: 'test-objects-row',
+    template: `<div ~for="displayRows" class="row" ~class="{selected: $for.item.id === editing?.id}" @tap="select($for.item)"><span class="c" ~for="$for.item.cells">[{{$for.$for.item}}]</span></div>`,
+    rows: [], columns: [], names: {}, editing: null,
+    get displayRows() {
+        return (this.rows || []).map(r => ({ id: r.id, cells: (this.columns || []).map(c => this.cellText(r, c)) }));
+    },
+    cellText(row, col) {
+        const v = row?.[col?.id];
+        if (col?.type === 'Link' && v)
+            return this.names[v] || v;
+        return v ?? '';
+    },
+    select(row) { this.picked = row?.id; },
+    picked: null,
+});
+await ODA({ is: 'test-tap-method',
+    template: `<div class="r" ~for="items" @tap="choose($for.item)">{{$for.item}}:{{picked}}</div>`,
+    items: [], picked: '-',
+    choose(v) { this.picked = v; },
+});
+
+await test('фреймворк: ~for + ~class + @tap на одном элементе', async () => {
+    const el = await mount('test-for-attrs');
+    el.items = ['a', 'b'];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r').length === 2),
+        'rows=' + el.__shadowRoot__.querySelectorAll('div.r').length
+        + ' html=' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
+    eq([...el.__shadowRoot__.querySelectorAll('div.r')].map(text).join(','), 'a,b');
+    el.sel = 'b';
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r.on').length === 1), 'выделение');
+    el.__shadowRoot__.querySelectorAll('div.r')[0].click();
+    await tick();
+    eq(el.picked, 'a', 'клик');
+    el.remove();
+});
+
+await test('фреймворк: геттер + ~for + ~class + @tap', async () => {
+    const el = await mount('test-for-getter-attrs');
+    el.items = [1, 2];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r').length === 2),
+        'rows=' + el.__shadowRoot__.querySelectorAll('div.r').length
+        + ' html=' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
+    el.remove();
+});
+
+await test('фреймворк: вложенный ~for строк', async () => {
+    const el = await mount('test-for-nested');
+    el.rows = [{ cells: ['a', 'b'] }, { cells: ['c'] }];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r').length === 2), 'строки');
+    eq([...el.__shadowRoot__.querySelectorAll('span.c')].map(text).join(','), '[a],[b],[c]');
+    el.remove();
+});
+
+await test('фреймворк: ?. в выражении ~class', async () => {
+    const el = await mount('test-optional');
+    el.items = [{ id: 1, name: 'a' }];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r').length === 1),
+        'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 500));
+    el.remove();
+});
+
+await test('objects без $item: данные вручную', async () => {
+    const el = await mount('test-objects');
+    el.columns = [{ id: 'name' }, { id: 'client', type: 'Link' }];
+    el.names = { '9.Y': 'Альфа' };
+    el.rows = [{ id: '1.X', name: 'Продажа', client: '9.Y' }];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head)').length === 1),
+        'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
+    el.remove();
+});
+
+await test('objects с висящим fetch: данные вручную', async () => {
+    const $item = {
+        body: new Promise(() => {}),
+        fetch: () => new Promise(() => {}),
+    };
+    const el = await mount('test-objects', { $item });
+    el.columns = [{ id: 'name' }];
+    el.rows = [{ id: '1.X', name: 'Продажа' }];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head)').length === 1),
+        'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
+    el.remove();
+});
+
+await test('копия строки objects', async () => {
+    const el = await mount('test-objects-row');
+    el.columns = [{ id: 'name' }, { id: 'client', type: 'Link' }];
+    el.names = { '9.Y': 'Альфа' };
+    el.rows = [{ id: '1.X', name: 'Продажа', client: '9.Y' }];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.row').length === 1),
+        'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
+    eq([...el.__shadowRoot__.querySelectorAll('span.c')].map(text).join(','), '[Продажа],[Альфа]');
+    el.__shadowRoot__.querySelector('div.row').click();
+    await tick(80);
+    eq(el.picked, '1.X', 'выбор');
+    el.remove();
+});
+
+await test('фреймворк: @tap с методом', async () => {
+    const el = await mount('test-tap-method');
+    el.items = ['x'];
+    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.r').length === 1), 'строка');
+    el.__shadowRoot__.querySelector('div.r').click();
+    await tick(80);
+    eq(el.picked, 'x', 'выбор');
+    el.remove();
+});
+
+const FIELDS = [
+    { id: 'name', label: 'Название' },
+    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/CATALOGS/C' },
+];
+function mockItem(calls, handlers, fields) {
+    return {
+        body: Promise.resolve({ label: 'Операции', METADATA: { FIELDS: fields || FIELDS } }),
+        fetch: async (method, params, post) => {
+            calls.push({ method, params, post });
+            return handlers[method] ? handlers[method](params, post) : null;
+        },
+    };
+}
+
+await test('objects: шапка и ячейки — текст, без [object Object]', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [
+            { id: '1.X', name: 'Продажа', client: '9.Y' },
+            { id: '2.X', name: 'Оплата', client: '' },
+        ] }),
+        read_link: () => ({ id: '9.Y', name: 'Альфа' }),
+    });
+    const el = await mount('test-objects', { $item });
+    const qsa = (sel) => el.__shadowRoot__?.querySelectorAll(sel)?.length || 0;
+    const html = () => {
+        const root = el.__shadowRoot__;
+        const all = [...root.querySelectorAll('*')].map(e => {
+            const cn = e.className && typeof e.className === 'string' ? e.className.split(' ').join('.') : '';
+            return e.nodeName.toLowerCase() + (cn ? '.' + cn : '');
+        }).join(' ');
+        return 'displayRows=' + JSON.stringify(el.displayRows) + ' tree=' + all.slice(0, 700);
+    };
+    assert(await until(() => qsa('.row.head div.cell') === 2), 'шапка: ' + html());
+    eq([...el.__shadowRoot__.querySelectorAll('.row.head div.cell')].map(text).join('|'), 'Название|Клиент');
+    assert(await until(() => qsa('div.list div.row:not(.head)') === 2), 'строки: ' + html());
+    const cells = [...el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head) div.cell')].map(text);
+    eq(cells.join('|'), 'Продажа|Альфа|Оплата|');
+    assert(!allText(el).includes('[object Object]'), 'нет [object Object]');
+    el.remove();
+});
+
+await test('objects: сохранить шлёт тело третьим аргументом, ошибка видна', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [] }),
+        create_object: (params, post) => ({ id: '3.X', path: '/p/3.X' }),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => el.$$('.row.head').length), 'шапка');
+    el.create();
+    el.editing = { name: 'Новая' };
+    await el.save();
+    const sent = calls.find(c => c.method === 'create_object');
+    assert(sent, 'create_object вызван');
+    eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая' }));
+    assert(el.editing === null, 'редактор закрыт');
+    el.create();
+    el.editing = { name: 'Плохая' };
+    $item.fetch = async (method, params, post) => {
+        calls.push({ method, params, post });
+        if (method === 'index')
+            return { rows: [] };
+        throw new Error('сервер отказал: нет обязательного поля');
+    };
+    await el.save();
+    assert(await until(() => text(el.$('.error')).includes('сервер отказал')), 'ошибка показана: ' + text(el.$('.error')));
+    el.remove();
+});
+
+await test('objects: правка шлёт только поля схемы', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
+        read_object: () => ({ body: { name: 'Старая', client: '', posted: { entry: 'e' }, deleted: false } }),
+        update_object: () => ({}),
+    });
+    const el = await mount('test-objects', { $item });
+    const qsa = (sel) => el.__shadowRoot__?.querySelectorAll(sel)?.length || 0;
+    assert(await until(() => qsa('div.list div.row:not(.head)') === 1), 'строка');
+    await el.select({ id: '1.X' });
+    assert(await until(() => el.editing?.id === '1.X'), 'редактирование');
+    el.editing = { ...el.editing, name: 'Новая' };
+    await el.save();
+    const sent = calls.find(c => c.method === 'update_object');
+    assert(sent, 'update_object вызван');
+    eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая', client: '' }));
+    el.remove();
+});
+
+await test('postings: ячейки аналитик — текст, итоги и сальдо', async () => {
+    const calls = [];
+    const $item = {
+        body: Promise.resolve({ METADATA: { FIELDS: [
+            { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/CATALOGS/C', analytic: true },
+        ] } }),
+        fetch: async (method, params, post) => {
+            calls.push({ method, params, post });
+            if (method === 'query')
+                return [
+                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/REGISTER/90' } },
+                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/REGISTER/51' } },
+                ];
+            if (method === 'read_link')
+                return { id: '9.Y', name: 'Альфа' };
+            return null;
+        },
+    };
+    const el = await mount('test-postings', { $item });
+    const rows = () => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
+    const html = () => 'rows=' + rows().length;
+    assert(await until(() => rows().length === 2), 'две проводки: ' + html());
+    assert(!allText(el).includes('[object Object]'), 'нет [object Object]');
+    const first = rows()[0].textContent;
+    assert(first.includes('Альфа'), 'имя аналитики: ' + first);
+    assert(el.$('.row.total').textContent.includes('300'), 'сальдо 300: ' + el.$('.row.total').textContent);
+    const q = calls.find(c => c.method === 'query');
+    assert(q && typeof q.params.where === 'string' || !q.params.where, 'where — строка или пуст');
+    el.remove();
+});
+
+await test('postings: остаток на начало и нарастающий', async () => {
+    const calls = [];
+    const $item = {
+        body: Promise.resolve({ METADATA: {
+            FIELDS: [
+                { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/CATALOGS/C', analytic: true },
+            ],
+            INDEXES: [{ id: 'turnover', kind: 'turnover', by: ['counterparty'] }],
+        } }),
+        fetch: async (method, params, post) => {
+            calls.push({ method, params, post });
+            if (method === 'query')
+                return [
+                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/REGISTER/90' } },
+                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/REGISTER/51' } },
+                ];
+            if (method === 'index')
+                return { def: 'turnover', kind: 'turnover', total: { debit: 200, credit: 0 } };
+            if (method === 'read_link')
+                return { id: '9.Y', name: 'Альфа' };
+            return null;
+        },
+    };
+    const el = await mount('test-postings', { $item });
+    const rows = () => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
+    assert(await until(() => rows().length === 2), 'две проводки');
+    eq(el.hasOpening, false, 'без периода остатка нет');
+    el.from = '2026-02-01';
+    await el.reload();
+    assert(await until(() => el.hasOpening === true), 'остаток загружен');
+    const ix = calls.find(c => c.method === 'index');
+    assert(ix && ix.params.id === 'turnover', 'индекс оборотов');
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(ix.params.to) && ix.params.to < '2026-02-01', 'день до from: ' + ix.params.to);
+    const bar = () => [...el.__shadowRoot__.querySelectorAll('div.bar')].map(text).join('|');
+    assert(await until(() => bar().includes('200')), 'начало 200: ' + bar());
+    const cells = rows().map(r => r.textContent);
+    assert(cells[0].includes('1200'), 'нарастающий 1200: ' + cells[0]);
+    assert(cells[1].includes('500'), 'нарастающий 500: ' + cells[1]);
+    assert(el.__shadowRoot__.querySelector('div.row.total').textContent.includes('500'), 'конец 500');
+    el.remove();
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

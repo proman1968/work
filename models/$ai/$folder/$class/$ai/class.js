@@ -6,7 +6,8 @@
  *
  * METADATA — поля провайдера/модели.
  * streamChat — стриминговый чат на экземпляре модели (this = модель).
- * HTTPS — через WORK.https (DATA грузится как data: URL, top-level import node:* нельзя).
+ * HTTPS — через WORK.https, локальный HTTP (Ollama) — через WORK.http
+ * (DATA грузится как data: URL, top-level import node:* нельзя).
  *
  * this — экземпляр модели:
  *   protocol, baseUrl, authUrl, apiKey, token, scope, model, maxTokens,
@@ -179,11 +180,12 @@ export default {
 
         const headers = await getAuthHeaders(ai);
         const url = new URL(ai.baseUrl);
+        const transport = transportFor(url);
 
         const res = await new Promise((resolve, reject) => {
-            const req = WORK.https.request({
+            const req = transport.request({
                 hostname: url.hostname,
-                port: url.port || 443,
+                port: url.port || (url.protocol === 'http:' ? 80 : 443),
                 path: url.pathname + url.search,
                 method: 'POST',
                 agent: isGigachat ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
@@ -201,7 +203,9 @@ export default {
             });
             req.on('error', reject);
             // Простой сокета (нет байтов) дольше idleMs — обрыв, а не вечное ожидание.
-            const idleMs = Number(options.idleMs) > 0 ? Number(options.idleMs) : 180000;
+            // Локальным CPU-моделям (первый ход — обработка промпта минутами) idleMs задаёт сама модель.
+            const idleMs = Number(options.idleMs) > 0 ? Number(options.idleMs)
+                : (Number(ai.idleMs) > 0 ? Number(ai.idleMs) : 180000);
             req.setTimeout?.(idleMs, () => req.destroy(new Error('LLM ' + body.model + ': нет ответа ' + Math.round(idleMs / 1000) + 'с')));
             // Стоп пользователя: abort сразу рвёт соединение (не ждём следующего чанка).
             const signal = options.signal;
@@ -724,15 +728,16 @@ export async function resolveKey(ai, raw) {
     throw new Error('ключ модели: нет секрета ' + filename + ' (#secret/' + filename + ' у модели или провайдера)');
 }
 
-/** POST JSON по HTTPS (generateImage). timeoutMs — долгая генерация картинки. */
+/** POST JSON по HTTP/HTTPS (generateImage). timeoutMs — долгая генерация картинки. */
 function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
     const url = new URL(urlStr);
+    const transport = transportFor(url);
     const insecure = ai?.protocol === 'gigachat';
     const payload = JSON.stringify(body || {});
     return new Promise((resolve, reject) => {
-        const req = WORK.https.request({
+        const req = transport.request({
             hostname: url.hostname,
-            port: url.port || 443,
+            port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'POST',
             agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
@@ -763,6 +768,23 @@ function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
         req.write(payload);
         req.end();
     });
+}
+
+/**
+ * HTTP/HTTPS-транспорт: локальные endpoint'ы (Ollama http://127.0.0.1:11434) —
+ * через WORK.http, облачные API — через WORK.https.
+ * До этого здесь был только WORK.https: любой http-baseUrl (локальный сервер
+ * модели) падал с `SSL wrong version number`.
+ * @param {URL} url
+ * @returns {object} node:http или node:https
+ */
+function transportFor(url) {
+    if (String(url.protocol || '').toLowerCase() === 'http:') {
+        if (WORK.http)
+            return WORK.http;
+        throw new Error('локальный http-endpoint недоступен: нет WORK.http (' + url.href + ')');
+    }
+    return WORK.https;
 }
 
 /** Ответ Ollama /api/generate или OpenAI /v1/images/generations → { mime, base64 }. */
@@ -801,14 +823,15 @@ function pickGeneratedImage(data) {
     return { mime, base64: b64 };
 }
 
-/** GET JSON по HTTPS (list_remote и т.п.). */
+/** GET JSON по HTTP/HTTPS (list_remote и т.п.). */
 function httpsGetJson(urlStr, headers, ai) {
     const url = new URL(urlStr);
+    const transport = transportFor(url);
     const insecure = ai?.protocol === 'gigachat';
     return new Promise((resolve, reject) => {
-        const req = WORK.https.request({
+        const req = transport.request({
             hostname: url.hostname,
-            port: url.port || 443,
+            port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'GET',
             agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,

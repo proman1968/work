@@ -68,6 +68,7 @@ API элементов — это «система команд» для ИИ-а
 - **Методы снаружи** — только через шлюз (`access/gateway.js`); новый публичный метод ядра нужно добавить в `MEMBERS` с уровнем, метод class.js — объявить `ACCESS: {имя: 'public'|'user'|'read'|'call'|'write'|'admin'}` (по умолчанию `call`)
 - `declared_roles` — объявленные роли точки; `roles(params)` — роли пользователя (subtree-роли — с наследованием сверху); `hasLocalRole(params, role)`; `areaOf(item)` / `resolveZone(item)` — область элемента; `canSee` / `canWrite` — через политику
 - `members({role, inherited})` — назначенные пользователи класса (роли — массивы `#security.ADMINS`/`BOSSES`/`USERS`/`GUESTS`, прикладные — `#security[key]`); ролевые геттеры `admins`/`bosses`/`users`/`guests` — локальные назначения, `allAdmins`/`allBosses` — включая вышестоящие классы, `assignedUsers` — реактивные обёртки для UI
+- `LINKS` в `class.js` группы (`$group`): `[{ id: '/ПУТЬ', access: 'read'|'write' }]` — ссылки рабочего места на прикладные классы (на всё поддерево); реестр `access/links.js`, сброс при `save()` группы; `data_access(params)` — `'admin'`| `'write'`| `'read'`| `null` (назначения плюс ссылки, кроме структурных типов); `canSee`/`canWrite`/`_assertDataWrite`/`split`/`rebuild_index` учитывают ссылки
 - `assertAccess(params, level)` — проверка доступа, бросает при отказе; deprecated-алиас: `allowAccess`
 - `work_zone({role})` — папка роли в метапапке для `save_file`; имя = `role` или `GUEST`; `DATA`/`INDEX`/`logs` отклоняются; deprecated-алиас: `get_storage`
 - `data_zone()` — общая зона `DATA` метапапки для объектов; `DATA_EXTS` (`['data']`) — расширения объектов общей зоны; `is_data_zone_type(ext)`; `create/update/delete/read_object({id, …})`, `query`, `split` — API объектов (в шлюзе: запись — WRITE, чтение — READ)
@@ -84,7 +85,7 @@ API элементов — это «система команд» для ИИ-а
 | Имя | Где | Смысл |
 |---|---|---|
 | `save()` | `$folder` | mkdir этой папки |
-| `save({ post })` | `$class` | сохранить `class.js` (слои) |
+| `save({ post })` | `$class` | сохранить `class.js` (слои); `METADATA.FIELDS`/`INDEXES`/`POSTINGS` наследуются однотипными потомками через `$distr_folder` (кроме `to_inherit: false`) |
 | `save({ post })` | `$file` | перезаписать содержимое этого файла |
 | `edit({ post })` | `$file` | точечная правка SEARCH/REPLACE; deprecated-алиас: `edit_file` |
 | `save_file({ filename, post })` | `$folder`/`$class` | обычный файл → зона роли, history + лог; объект (`DATA_EXTS`) → `DATA/<дата>/` + лог; остальные файлы данных (`METADATA`) → зона роли, точка в папке ext + лог |

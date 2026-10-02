@@ -11,6 +11,7 @@ import * as LOGS from './logs.js';
 import { DEV_MODE } from "../host/config.js";
 import * as POLICY from './access/policy.js';
 import * as REFS from './access/refs.js';
+import * as LINKS from './access/links.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -36,6 +37,18 @@ function coerceDataValue(value, type, id) {
     if (/bool/.test(t))
         return /^(1|да|true|yes|y|истина)$/i.test(String(value).trim());
     return value;
+}
+/** Фильтр where из HTTP приходит JSON-строкой — разобрать; мусор — в null. */
+function _parseWhere(where) {
+    if (where == null || typeof where === 'object')
+        return where || null;
+    if (typeof where !== 'string')
+        return null;
+    try {
+        const obj = JSON.parse(where);
+        return obj && typeof obj === 'object' ? obj : null;
+    }
+    catch { return null; }
 }
 /** Фильтр where по телу объекта: равенство, [..] как $in, {gte,lte,gt,lt,ne,eq,in,like}. */
 function matchDataWhere(body, where) {
@@ -92,6 +105,87 @@ export function looksLikeFileId(id) {
     if (/\s/.test(s))
         return false;
     return /\.[A-Za-z][A-Za-z0-9]{0,15}$/.test(s);
+}
+
+/** Хеш описания индекса (смена описания — пересборка). */
+function _indexHash(def) {
+    const s = JSON.stringify(def && typeof def === 'object' ? { ...def, builtAt: undefined } : def);
+    let h = 5381;
+    for (let i = 0; i < s.length; i++)
+        h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h.toString(16);
+}
+
+/** Ключ строки индекса по полям by (массив → JSON, разбор без коллизий). */
+function _indexKey(def, body) {
+    return JSON.stringify((def.by || []).map(f => body?.[f] ?? ''));
+}
+
+/** Разобрать ключ строки в значения полей by. */
+function _indexKeyParts(def, key) {
+    try {
+        const parts = JSON.parse(key);
+        if (Array.isArray(parts))
+            return parts;
+    }
+    catch { /* старый формат */ }
+    return [key];
+}
+
+/** Строка мер для тела объекта: {count} или суммы полей. */
+function _measureRow(def, body) {
+    const m = {};
+    const measures = def.measures && typeof def.measures === 'object' ? def.measures : { count: 'count' };
+    for (const [k, op] of Object.entries(measures)) {
+        if (op === 'count')
+            m[k] = 1;
+        else if (op === 'sum')
+            m[k] = Number(body?.[k]) || 0;
+    }
+    return m;
+}
+
+/** Сложить строки мер (sign=+1/-1). Нулевые строки вычищаются. */
+function _addRows(into, key, row, sign) {
+    const cur = into[key] || {};
+    for (const [k, v] of Object.entries(row)) {
+        const n = (Number(cur[k]) || 0) + sign * (Number(v) || 0);
+        if (n)
+            cur[k] = n;
+        else
+            delete cur[k];
+    }
+    if (Object.keys(cur).length)
+        into[key] = cur;
+    else
+        delete into[key];
+    return into;
+}
+
+/** Очередь записи по файлу индекса (один процесс — цепочки промисов). */
+const _indexLocks = new Map();
+async function _lockedJson(abs, fn) {
+    const prev = _indexLocks.get(abs) || Promise.resolve();
+    let release;
+    const cur = new Promise(r => { release = r; });
+    _indexLocks.set(abs, prev.then(() => cur));
+    await prev;
+    try {
+        let doc = {};
+        try {
+            doc = JSON.parse(await fsp.readFile(abs, 'utf-8'));
+        }
+        catch { /* нет файла */ }
+        const next = await fn(doc && typeof doc === 'object' ? doc : {});
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        await fsp.writeFile(abs, JSON.stringify(next), 'utf-8');
+        return next;
+    }
+    finally {
+        release();
+        if (_indexLocks.get(abs) === cur)
+            _indexLocks.delete(abs);
+    }
 }
 
 export class $class extends $folder{
@@ -306,7 +400,20 @@ export class $class extends $folder{
     static _trimFunc(text){
         return text?.split('\n').map(s=>s.trim()).join('\n');
     }
-    static separateInheritData(data) {
+    /**
+     * Разделить входящий class.js на собственную часть (meta/class.js)
+     * и наследуемую однотипными потомками ($distr_folder/class.js).
+     * Явные флаги: to_inherit:true — только в inherit; false — только в self.
+     * Без флагов в inherit уходит только явно помеченное, КРОМЕ содержимого
+     * METADATA.FIELDS/INDEXES/POSTINGS: схема и правила наследуются всегда
+     * (кроме явного отказа) — и остаются в self тоже.
+     * @param {object|Array} data Входящий class.js
+     * @param {boolean|'schema'} [dflt] Поведение потомков без флагов: false — только self;
+     * true — в inherit целиком и в self; 'schema' — как true для FIELDS/INDEXES/POSTINGS.
+     */
+    static separateInheritData(data, dflt = false) {
+        const nonEmpty = (v) => Array.isArray(v) ? v.length > 0
+            : (v && (typeof v !== 'object' || Object.keys(v).length > 0));
         if (Array.isArray(data)) {
             const selfData = [];
             const inheritData = [];
@@ -316,14 +423,13 @@ export class $class extends $folder{
                     selfData.push(item);
                     continue;
                 }
-                const [selfItem, inheritItem, itemHasInherit] = this.separateInheritData(item);
-                if (item?.to_inherit === true) {
+                const [selfItem, inheritItem, itemHasInherit] = this.separateInheritData(item, false);
+                if (item?.to_inherit === true || dflt === true) {
                     inheritData.push(item);
                     hasInherit = true;
                 }
                 else if (itemHasInherit && inheritItem != null) {
-                    if (Array.isArray(inheritItem) ? inheritItem.length
-                        : (inheritItem && typeof inheritItem === 'object' && Object.keys(inheritItem).length)) {
+                    if (nonEmpty(inheritItem)) {
                         const packed = item?.id != null && typeof inheritItem === 'object' && !Array.isArray(inheritItem)
                             ? Object.assign({ id: item.id }, inheritItem)
                             : inheritItem;
@@ -332,8 +438,7 @@ export class $class extends $folder{
                     }
                 }
                 if (item?.to_inherit !== true && selfItem != null) {
-                    if (Array.isArray(selfItem) ? selfItem.length
-                        : (selfItem && (typeof selfItem !== 'object' || Object.keys(selfItem).length))) {
+                    if (nonEmpty(selfItem)) {
                         selfData.push(selfItem);
                     }
                 }
@@ -344,6 +449,7 @@ export class $class extends $folder{
             const selfData = {};
             const inheritData = {};
             let hasInherit = false;
+            const schemaKeys = dflt === 'schema' ? new Set(['FIELDS', 'INDEXES', 'POSTINGS']) : null;
             for (const key of Object.keys(data)) {
                 const desc = Object.getOwnPropertyDescriptor(data, key);
                 if (desc.get || desc.set) {
@@ -355,21 +461,20 @@ export class $class extends $folder{
                     selfData[key] = value;
                     continue;
                 }
-                const [selfValue, inheritValue, valueHasInherit] = this.separateInheritData(value);
-                if (value?.to_inherit === true) {
+                const childDflt = dflt === true || schemaKeys?.has(key) ? true : false;
+                const [selfValue, inheritValue, valueHasInherit] = this.separateInheritData(value, childDflt);
+                if (value?.to_inherit === true || dflt === true) {
                     inheritData[key] = value;
                     hasInherit = true;
                 }
                 else if (valueHasInherit && inheritValue != null) {
-                    if (Array.isArray(inheritValue) ? inheritValue.length
-                        : (inheritValue && typeof inheritValue === 'object' && Object.keys(inheritValue).length)) {
+                    if (nonEmpty(inheritValue)) {
                         inheritData[key] = inheritValue;
                         hasInherit = true;
                     }
                 }
                 if (value?.to_inherit !== true && selfValue != null) {
-                    if (Array.isArray(selfValue) ? selfValue.length
-                        : (typeof selfValue !== 'object' || Object.keys(selfValue).length)) {
+                    if (nonEmpty(selfValue)) {
                         selfData[key] = selfValue;
                     }
                 }
@@ -653,13 +758,15 @@ export class $class extends $folder{
 
         this.reset();
         this.DATA = await this.import();
+        if (this.type === '$group')
+            LINKS.reset();
 
         return true;
     }
     async save_file(params = {}){
         // Лента — системная операция: всегда запись дня `<мета>/logs/ГГГГ-ММ-ДД/{время}.{автор}.logs`
         // (одна запись — один файл: права, RAG и индекс лент работают по записям),
-        // независимо от того, объявлен ли тип $data/$logs в дереве.
+        // независимо от того, объявлен ли тип $file/$logs в дереве.
         if (params.filename === 'data.logs') {
             if (params.session && params.session.$user !== globalThis.WORK)
                 throw new Error(ACCESS_DENIED);
@@ -717,14 +824,95 @@ export class $class extends $folder{
         if (!this.constructor.DATA_EXTS.includes(ext) || !(await this.is_data_type('x.' + ext)))
             throw new Error('create_object: нет типа данных $' + ext);
         const stem = String(params.filename || params.name || 'obj').split('/').pop().replace(/\.[a-z0-9]+$/i, '').trim() || 'obj';
-        const body = this._validateObject(this._readDataBody(params.post ?? params.body));
+        const body = await this._validateObject(this._readDataBody(params.post ?? params.body));
         body.name ??= stem;
+        await this._checkUnique(this._indexDefs(), body, null);
         const zone = await this.data_zone(params);
-        return zone.save_data_file({ ...params, filename: stem + '.' + ext, post: body });
+        const res = await zone.save_data_file({ ...params, filename: stem + '.' + ext, post: body });
+        await this._indexWrite(null, { ...body, time: res.time }, res.id);
+        return res;
     }
     /**
-     * Право писать объекты точки (create/update/delete): системная сессия,
-     * ADMIN (write=all, локально или сверху) или USER с локальным назначением.
+     * Доступ пользователя к классу ('admin'|'write'|'read'|null): прямые назначения
+     * плюс ссылки рабочих мест (LINKS) для прикладных классов.
+     */
+    async data_access(params = {}) {
+        return LINKS.dataAccess(this, params);
+    }
+    /**
+     * Цепочки ссылок рабочего места для дерева: LINKS группы и их предки
+     * до корня типа (вниз и вбок — ничего). Клиент зеркалит структуру.
+     * @param {object} [params]
+     * @returns {Promise<Array>} [{path, label, icon, type, access, children}]
+     */
+    async link_tree(params = {}) {
+        if (this.type !== '$group')
+            return [];
+        await this.init;
+        const raw = Array.isArray(this.DATA?.LINKS) ? this.DATA.LINKS : [];
+        const roles = await this.roles(params).catch(() => []);
+        const admin = roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
+        if (!roles.length && !admin)
+            return [];
+        const rank = { read: 1, write: 2, admin: 3 };
+        const eff = new Map();
+        for (const l of raw) {
+            const id = String(l?.id || '').trim();
+            const access = String(l?.access || '').trim();
+            if (!id.startsWith('/') || (access !== 'read' && access !== 'write'))
+                continue;
+            const level = admin ? (access === 'write' ? 'admin' : 'read')
+                : roles.includes('USER') ? access : 'read';
+            if ((rank[level] || 0) > (rank[eff.get(id)] || 0))
+                eff.set(id, level);
+        }
+        const byPath = new Map();
+        const roots = [];
+        for (const [id, level] of eff) {
+            const segs = id.split('/').filter(Boolean);
+            let prefix = '', parent = null;
+            segs.forEach((seg, i) => {
+                prefix += '/' + seg;
+                let n = byPath.get(prefix);
+                if (!n) {
+                    n = { path: prefix, label: seg, icon: '', type: '', access: 'read', children: [] };
+                    byPath.set(prefix, n);
+                    if (parent)
+                        parent.children.push(n);
+                    else
+                        roots.push(n);
+                }
+                if (i === segs.length - 1 && (rank[level] || 0) > (rank[n.access] || 0))
+                    n.access = level;
+                parent = n;
+            });
+        }
+        // Подписи метками классов (внутренний обход — без проверок доступа,
+        // читать цепочку разрешено самим фактом членства в группе).
+        for (const n of byPath.values()) {
+            try {
+                let t = await globalThis.WORK.get_item(n.path);
+                if (Array.isArray(t))
+                    t = t.at(-1);
+                if (!t)
+                    continue;
+                await t.init;
+                n.label = t.DATA?.label || t.name || n.label;
+                n.icon = t.DATA?.icon || '';
+                n.type = t.type || '';
+            }
+            catch { /* сегмент как есть */ }
+        }
+        const sort = (arr) => {
+            arr.sort((a, b) => String(a.label).localeCompare(String(b.label), 'ru'));
+            arr.forEach(n => sort(n.children));
+        };
+        sort(roots);
+        return roots;
+    }
+    /**
+     * Право писать объекты точки (create/update/delete): системная сессия
+     * или доступ уровня write/admin (назначения либо ссылки рабочих мест).
      * @returns {Promise<string>} uid автора
      */
     async _assertDataWrite(params = {}) {
@@ -733,17 +921,8 @@ export class $class extends $folder{
         const uid = this.constructor.resolveUid(params);
         if (!uid || !(await this.canSee(this, params)))
             throw new Error(ACCESS_DENIED);
-        const roles = await this.roles(params);
-        const declared = this._declaredRolesSync();
-        const ok = roles.some(r => {
-            const d = declared[r];
-            if (!d)
-                return false;
-            if (d.write === 'all')
-                return true;
-            return d.write === 'zone' && r === 'USER' && this._roleIds(r, declared).includes(uid);
-        });
-        if (!ok)
+        const level = await this.data_access(params);
+        if (level !== 'write' && level !== 'admin')
             throw new Error(ACCESS_DENIED);
         return uid;
     }
@@ -782,9 +961,10 @@ export class $class extends $folder{
     }
     /**
      * Проверить тело объекта по METADATA.FIELDS класса: обязательные поля,
-     * приведение типов (число/булево). Лишние поля разрешены.
+     * приведение типов (число/булево), ссылки Link на объекты справочников.
+     * Лишние поля разрешены.
      */
-    _validateObject(body) {
+    async _validateObject(body) {
         const fields = (this.METADATA?.FIELDS || []).filter(f => f?.id);
         for (const f of fields) {
             // name/time ставит хранилище — обязательность не проверяем
@@ -798,7 +978,60 @@ export class $class extends $folder{
                 continue;
             body[f.id] = coerceDataValue(body[f.id], f.type, f.id);
         }
+        for (const f of fields.filter(f => f.type === 'Link' && f.catalog)) {
+            const v = body[f.id];
+            if (v == null || v === '')
+                continue;
+            if (!(await this.constructor._linkExists(f.catalog, String(v))))
+                throw new Error('поле «' + f.id + '»: нет объекта ' + v + ' в ' + f.catalog);
+        }
         return body;
+    }
+    /**
+     * Есть ли объект с id в справочнике (или его подклассах).
+     * @param {string} catalogPath Путь класса справочника
+     * @param {string} id id объекта `{time}.{uid}`
+     */
+    static async _linkExists(catalogPath, id) {
+        let cat;
+        try {
+            cat = await globalThis.WORK.get_item(catalogPath);
+        }
+        catch { return false; }
+        if (Array.isArray(cat))
+            cat = cat.at(-1);
+        if (!(cat instanceof FS.$class))
+            return false;
+        const sys = { session: { $user: globalThis.WORK }, skipAccess: true };
+        for (const pt of await cat._subtreeDataPoints(sys)) {
+            if (await pt.cls._readById(id))
+                return true;
+        }
+        return false;
+    }
+    /**
+     * Прочитать объект справочника для показа ссылки: `{ id, name, path }`.
+     * @param {object} [params] {catalog, id, session}
+     */
+    async read_link(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const catalogPath = String(params.catalog || '');
+        const id = String(params.id || '');
+        if (!catalogPath || !id)
+            throw new Error('read_link: нужны catalog и id');
+        let cat = await globalThis.WORK.get_item(catalogPath);
+        if (Array.isArray(cat))
+            cat = cat.at(-1);
+        if (!(cat instanceof FS.$class))
+            throw new Error('read_link: нет справочника ' + catalogPath);
+        if (!(await cat.canSee(cat, params)))
+            throw new Error(ACCESS_DENIED);
+        for (const pt of await cat._subtreeDataPoints(params)) {
+            const found = await pt.cls._readById(id);
+            if (found)
+                return { id: found.stem, name: found.body?.name ?? found.stem, path: pt.path + '/' + found.leaf };
+        }
+        throw new Error('read_link: нет объекта ' + id);
     }
     /** Собственные дочерние классы того же типа (без унаследованных). */
     async _ownSameTypeChildren() {
@@ -896,14 +1129,16 @@ export class $class extends $folder{
         if (found.body.deleted && !params.restore)
             throw new Error('update_object: объект удалён (restore: true — восстановить)');
         const patch = this._readDataBody(params.post ?? params.body);
-        const body = this._validateObject({ ...found.body, ...patch, time: found.body.time });
+        const body = await this._validateObject({ ...found.body, ...patch, time: found.body.time });
         if (params.restore) {
             delete body.deleted;
             delete body.deleted_at;
         }
+        await this._checkUnique(this._indexDefs(), body, found.stem);
         const json = JSON.stringify(body);
         await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
         await fsp.writeFile(found.abs, json, 'utf-8');
+        await this._indexWrite(found.body, body, found.stem);
         return this._logDataFile(found, json, params, uid);
     }
     /**
@@ -925,6 +1160,7 @@ export class $class extends $folder{
         const json = JSON.stringify(body);
         await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
         await fsp.writeFile(found.abs, json, 'utf-8');
+        await this._indexWrite(found.body, body, found.stem);
         return this._logDataFile(found, json, params, uid);
     }
     /**
@@ -956,6 +1192,7 @@ export class $class extends $folder{
         };
         const from = params.from != null ? dayOf(params.from) : null;
         const to = params.to != null ? dayOf(params.to) : null;
+        const where = _parseWhere(params.where);
         const out = [];
         for (const pt of await this._subtreeDataPoints(params)) {
             const root = pt.dataDir;
@@ -976,7 +1213,7 @@ export class $class extends $folder{
                     catch { continue; }
                     if (body?.deleted && !params.include_deleted)
                         continue;
-                    if (!matchDataWhere(body, params.where))
+                    if (!matchDataWhere(body, where))
                         continue;
                     out.push({ point: pt.path, path: pt.virtual + '/' + d.name + '/' + leaf, name: body?.name ?? leaf.slice(0, -(ext.length + 1)), time: body?.time ?? 0, body });
                 }
@@ -986,8 +1223,493 @@ export class $class extends $folder{
         return out.slice(0, limit);
     }
     /**
+     * Суммы числовых полей объектов поддерева за период — прямо из файлов (без индекса и лимита).
+     * Для внутренних отчётов, когда у класса нет подходящего индекса. Доступ проверяет вызывающий.
+     * @param {object} [params] {from?, to?, fields?: ['debit','credit'], ext?}
+     * @returns {Promise<Record<string, number>>}
+     */
+    async _sumData(params = {}) {
+        const ext = String(params.ext || 'data').replace(/^\$/, '').toLowerCase();
+        const fields = Array.isArray(params.fields) && params.fields.length ? params.fields : ['debit', 'credit'];
+        const dayOf = (v) => {
+            const t = new Date(v).getTime();
+            return Number.isFinite(t) ? _dataDay(t) : null;
+        };
+        const from = params.from != null ? dayOf(params.from) : null;
+        const to = params.to != null ? dayOf(params.to) : null;
+        const sums = Object.fromEntries(fields.map(f => [f, 0]));
+        for (const pt of await this._subtreeDataPoints({ skipAccess: true })) {
+            if (!fs.existsSync(pt.dataDir))
+                continue;
+            for (const d of await fsp.readdir(pt.dataDir, { withFileTypes: true })) {
+                if (!d.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(d.name))
+                    continue;
+                if ((from && d.name < from) || (to && d.name > to))
+                    continue;
+                for (const leaf of await fsp.readdir(path.join(pt.dataDir, d.name))) {
+                    if (!leaf.endsWith('.' + ext))
+                        continue;
+                    let body;
+                    try {
+                        body = JSON.parse(await fsp.readFile(path.join(pt.dataDir, d.name, leaf), 'utf-8'));
+                    }
+                    catch { continue; }
+                    if (body?.deleted)
+                        continue;
+                    for (const f of fields)
+                        sums[f] += Number(body?.[f]) || 0;
+                }
+            }
+        }
+        return sums;
+    }
+    /**
+     * Прочитать индекс: turnover/state/table/lookup — из файлов;
+     * balance — сальдо на дату (сумма оборотов с начала истории).
+     * @param {object} [params] {id, from?, to?|at?, where?, group?, limit?, session}
+     */
+    async index(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        // Предок по ссылке виден как страница (grants SYSTEM), но его INDEX —
+        // агрегат всего поддерева с чужими ветками. Итоги — только при data_access
+        // (назначения + ссылки вниз); обходы ядра — как в assertAccess.
+        if (params?.session && !DEV_MODE && params.session?.$user !== globalThis.WORK
+            && !(await this._isWorkAdmin(params).catch(() => false))
+            && !this.DATA?.['#security']?.USERS?.includes('GUEST')) {
+            if ((await this.data_access(params).catch(() => null)) == null)
+                throw new Error(ACCESS_DENIED);
+        }
+        const defs = this._indexDefs();
+        const def = defs.find(d => d.id === params.id);
+        if (!def)
+            throw new Error('index: нет индекса «' + params.id + '» (есть: ' + defs.map(d => d.id).join(', ') + ')');
+        await this._assertIndexFresh(def);
+        const limit = Math.max(1, Math.min(2000, Number(params.limit) || 500));
+        const where = _parseWhere(params.where);
+        if (def.kind === 'balance') {
+            const target = defs.find(d => d.id === (def.from || 'turnover'));
+            if (!target || target.kind === 'balance')
+                throw new Error('index: balance без оборотов (from: ' + (def.from || 'turnover') + ')');
+            const at = params.at ?? params.to ?? Date.now();
+            const rows = await this._readTurnover(target, null, _dataDay(new Date(at).getTime()), where, params.group);
+            return { def: def.id, kind: 'balance', at, ...this._packRows(target, rows, params.group, limit) };
+        }
+        if (def.kind === 'turnover' || def.kind === 'state') {
+            const dayOf = (v) => {
+                const t = new Date(v).getTime();
+                return Number.isFinite(t) ? _dataDay(t) : null;
+            };
+            const rows = def.kind === 'state'
+                ? await this._readState(def, where, params.group)
+                : await this._readTurnover(def, params.from != null ? dayOf(params.from) : null, params.to != null ? dayOf(params.to) : null, where, params.group);
+            return { def: def.id, kind: def.kind, ...this._packRows(def, rows, params.group, limit) };
+        }
+        if (def.kind === 'table') {
+            const dayOf = (v) => {
+                const t = new Date(v).getTime();
+                return Number.isFinite(t) ? _dataDay(t) : null;
+            };
+            const rows = await this._readTable(def, params.from != null ? dayOf(params.from) : null, params.to != null ? dayOf(params.to) : null, where);
+            rows.sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
+            return { def: def.id, kind: 'table', rows: rows.slice(0, limit), total: { count: rows.length }, truncated: rows.length > limit };
+        }
+        if (def.kind === 'lookup') {
+            const rows = await this._readLookup(def, where);
+            return { def: def.id, kind: 'lookup', rows: rows.slice(0, limit), total: { count: rows.length }, truncated: rows.length > limit };
+        }
+        throw new Error('index: вид «' + def.kind + '» — этап 5б');
+    }
+    /** Собрать строки в ответ: фильтр where, группировка, total. */
+    _packRows(def, rows, group, limit) {
+        let list = Object.entries(rows).map(([key, measures]) => ({
+            key,
+            fields: Object.fromEntries((def.by || []).map((f, i) => [f, _indexKeyParts(def, key)[i] ?? ''])),
+            ...measures,
+        }));
+        if (group && Array.isArray(group) && group.length) {
+            const by = (def.by || []).filter(f => group.includes(f));
+            const merged = {};
+            for (const r of list) {
+                const key = JSON.stringify(by.map(f => r.fields[f] ?? ''));
+                merged[key] = merged[key] || { key, fields: Object.fromEntries(by.map(f => [f, r.fields[f] ?? ''])), };
+                for (const [k, v] of Object.entries(r)) {
+                    if (k === 'key' || k === 'fields')
+                        continue;
+                    merged[key][k] = (Number(merged[key][k]) || 0) + (Number(v) || 0);
+                }
+            }
+            list = Object.values(merged);
+        }
+        list.sort((a, b) => String(a.key) < String(b.key) ? -1 : 1);
+        const total = {};
+        for (const r of list)
+            for (const [k, v] of Object.entries(r)) {
+                if (k === 'key' || k === 'fields')
+                    continue;
+                total[k] = (Number(total[k]) || 0) + (Number(v) || 0);
+            }
+        return { rows: list.slice(0, limit), total, truncated: list.length > limit };
+    }
+    /** Файлы пирамиды turnover, покрывающие [from, to] (дни — YYYY-MM-DD или null). */
+    async _indexPieces(def, from, to) {
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        if (!fs.existsSync(dir))
+            return { years: [], months: [], days: [] };
+        const years = new Set(), months = new Set(), days = new Set();
+        for (const f of await fsp.readdir(dir)) {
+            let m = f.match(/^(\d{4})\.json$/);
+            if (m) {
+                years.add(m[1]);
+                continue;
+            }
+            m = f.match(/^(\d{4}-\d{2})\.json$/);
+            if (m) {
+                months.add(m[1]);
+                continue;
+            }
+            m = f.match(/^(\d{4}-\d{2}-\d{2})\.json$/);
+            if (m)
+                days.add(m[1]);
+        }
+        // кусок берётся целиком, только если лежит внутри периода; иначе спуск к более мелким
+        // (год → месяцы → дни): иначе частично пересекающийся год/месяц завышал бы итог
+        const within = (a, b) => (from == null || a >= from) && (to == null || b <= to);
+        const lastDay = (ym) => String(new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate()).padStart(2, '0');
+        const take = { years: [], months: [], days: [] };
+        for (const y of years) {
+            if (within(y + '-01-01', y + '-12-31'))
+                take.years.push(y);
+        }
+        const coveredYear = (m) => take.years.includes(m.slice(0, 4));
+        for (const m of months) {
+            if (coveredYear(m))
+                continue;
+            if (within(m + '-01', m + '-' + lastDay(m)))
+                take.months.push(m);
+        }
+        const coveredMonth = (d) => coveredYear(d.slice(0, 4)) || take.months.includes(d.slice(0, 7));
+        for (const d of days) {
+            if (coveredMonth(d))
+                continue;
+            if (within(d, d))
+                take.days.push(d);
+        }
+        return take;
+    }
+    /** Сумма оборотов по кускам пирамиды. */
+    async _readTurnover(def, from, to, where, group) {
+        const take = await this._indexPieces(def, from, to);
+        const rows = {};
+        const load = async (name) => {
+            let doc;
+            try {
+                doc = JSON.parse(await fsp.readFile(this._indexFile(def, name), 'utf-8'));
+            }
+            catch { return; }
+            for (const [key, row] of Object.entries(doc))
+                _addRows(rows, key, row, +1);
+        };
+        for (const y of take.years)
+            await load(y);
+        for (const m of take.months)
+            await load(m);
+        for (const d of take.days)
+            await load(d);
+        if (!where && !group)
+            return rows;
+        const byOnly = {};
+        if (where && typeof where === 'object') {
+            for (const [f, c] of Object.entries(where)) {
+                if ((def.by || []).includes(f))
+                    byOnly[f] = c;
+            }
+        }
+        const out = {};
+        for (const [key, row] of Object.entries(rows)) {
+            const probe = Object.fromEntries((def.by || []).map((f, i) => [f, _indexKeyParts(def, key)[i] ?? '']));
+            if (!matchDataWhere(probe, byOnly))
+                continue;
+            _addRows(out, key, row, +1);
+        }
+        return out;
+    }
+    /** Текущее состояние: один файл. */
+    async _readState(def, where, group) {
+        let doc = {};
+        try {
+            doc = JSON.parse(await fsp.readFile(this._indexFile(def, 'current'), 'utf-8'));
+        }
+        catch { /* пусто */ }
+        if (!where)
+            return doc;
+        const out = {};
+        for (const [key, row] of Object.entries(doc)) {
+            const probe = { ...row, ...Object.fromEntries((def.by || []).map((f, i) => [f, _indexKeyParts(def, key)[i] ?? ''])) };
+            if (matchDataWhere(probe, where))
+                out[key] = row;
+        }
+        return out;
+    }
+    /** Плоский список строк таблицы за период. */
+    async _readTable(def, from, to, where) {
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        const rows = [];
+        if (!fs.existsSync(dir))
+            return rows;
+        for (const f of await fsp.readdir(dir)) {
+            const m = f.match(/^(\d{4}-\d{2}-\d{2})\.json$/);
+            if (!m)
+                continue;
+            if ((from && m[1] < from) || (to && m[1] > to))
+                continue;
+            let doc;
+            try {
+                doc = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf-8'));
+            }
+            catch { continue; }
+            for (const row of Object.values(doc)) {
+                if (row && typeof row === 'object' && !matchDataWhere(row, where))
+                    continue;
+                rows.push(row);
+            }
+        }
+        return rows;
+    }
+    /** Пары ключ→id за всю историю индекса. */
+    async _readLookup(def, where) {
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        const rows = [];
+        if (!fs.existsSync(dir))
+            return rows;
+        for (const f of await fsp.readdir(dir)) {
+            if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+                continue;
+            let doc;
+            try {
+                doc = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf-8'));
+            }
+            catch { continue; }
+            for (const [key, v] of Object.entries(doc)) {
+                const ids = Array.isArray(v) ? v : [v];
+                const row = { key, ids };
+                if (where && !matchDataWhere(row, where))
+                    continue;
+                rows.push(row);
+            }
+        }
+        rows.sort((a, b) => String(a.key) < String(b.key) ? -1 : 1);
+        return rows;
+    }
+    /**
+     * Пересобрать индекс из файлов (лист — из DATA, узел — суммой детей снизу вверх).
+     * Только write=all. После смены описания — обязательно.
+     */
+    async rebuild_index(params = {}) {
+        if (params.session?.$user !== globalThis.WORK && await this.data_access(params) !== 'admin')
+            throw new Error(ACCESS_DENIED);
+        const def = this._indexDefs().find(d => d.id === params.id);
+        if (!def)
+            throw new Error('rebuild_index: нет индекса «' + params.id + '»');
+        if (def.kind === 'balance')
+            return { def: def.id, kind: 'balance', rebuilt: false, note: 'у сальдо нет файлов' };
+        const kids = await this._ownSameTypeChildren();
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        if (kids.length) {
+            for (const kid of kids)
+                await kid.rebuild_index({ ...params });
+            fs.rmSync(dir, { recursive: true, force: true });
+            for (const kid of kids)
+                await this._mergeChildIndex(def, kid);
+        }
+        else {
+            fs.rmSync(dir, { recursive: true, force: true });
+            await this._replayOwnData(def);
+        }
+        await this._indexMeta(def, true);
+        this.reset();
+        return { def: def.id, kind: def.kind, rebuilt: true };
+    }
+    /** Пересчитать индекс листа из собственной DATA по дням, затем свернуть месяцы и годы. */
+    async _replayOwnData(def) {
+        const root = this.meta_folder.dir + '/DATA';
+        const days = {};
+        if (fs.existsSync(root)) {
+            for (const d of await fsp.readdir(root, { withFileTypes: true })) {
+                if (!d.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(d.name))
+                    continue;
+                for (const leaf of await fsp.readdir(path.join(root, d.name))) {
+                    if (!leaf.endsWith('.data'))
+                        continue;
+                    let body;
+                    try {
+                        body = JSON.parse(await fsp.readFile(path.join(root, d.name, leaf), 'utf-8'));
+                    }
+                    catch { continue; }
+                    (days[d.name] = days[d.name] || []).push({ leaf, body });
+                }
+            }
+        }
+        const idOf = (leaf) => leaf.endsWith('.data') ? leaf.slice(0, -'.data'.length) : leaf;
+        if (def.kind === 'table' || def.kind === 'lookup') {
+            for (const [day, bodies] of Object.entries(days)) {
+                const doc = {};
+                for (const { leaf, body } of bodies) {
+                    if (body?.deleted)
+                        continue;
+                    if (def.kind === 'table') {
+                        const row = { id: idOf(leaf), time: body.time };
+                        const fields = Array.isArray(def.fields) && def.fields.length ? def.fields
+                            : (this.METADATA?.FIELDS || []).filter(f => f?.id && !f.secret).map(f => f.id);
+                        for (const fid of fields) {
+                            if (fid !== 'id' && fid !== 'time' && body[fid] !== undefined)
+                                row[fid] = body[fid];
+                        }
+                        doc[idOf(leaf)] = row;
+                    }
+                    else {
+                        const key = String(body[def.key] ?? '');
+                        if (!key)
+                            continue;
+                        const oid = idOf(leaf);
+                        if (def.unique)
+                            doc[key] = oid;
+                        else
+                            doc[key] = [...(Array.isArray(doc[key]) ? doc[key] : []), oid].filter((x, i, a) => a.indexOf(x) === i);
+                    }
+                }
+                if (Object.keys(doc).length) {
+                    fs.mkdirSync(path.dirname(this._indexFile(def, day)), { recursive: true });
+                    await fsp.writeFile(this._indexFile(def, day), JSON.stringify(doc), 'utf-8');
+                }
+            }
+            return;
+        }
+        if (def.kind === 'turnover' || def.kind === 'state') {
+            const doc = {};
+            for (const pairs of Object.values(days)) {
+                for (const { body } of pairs) {
+                    const c = this._indexContrib(def, body);
+                    if (!c)
+                        continue;
+                    const key = _indexKey(def, c);
+                    _addRows(doc, key, _measureRow(def, c), +1);
+                    if (def.kind === 'turnover') {
+                        const day = _dataDay(c.time ?? Date.now());
+                        const dayDoc = {};
+                        _addRows(dayDoc, key, _measureRow(def, c), +1);
+                        const abs = this._indexFile(def, day);
+                        let prev = {};
+                        try {
+                            prev = JSON.parse(await fsp.readFile(abs, 'utf-8'));
+                        }
+                        catch { /* новый день */ }
+                        _addRows(prev, key, _measureRow(def, c), +1);
+                        fs.mkdirSync(path.dirname(abs), { recursive: true });
+                        await fsp.writeFile(abs, JSON.stringify(prev), 'utf-8');
+                    }
+                }
+            }
+            if (def.kind === 'state') {
+                if (Object.keys(doc).length) {
+                    fs.mkdirSync(path.dirname(this._indexFile(def, 'current')), { recursive: true });
+                    await fsp.writeFile(this._indexFile(def, 'current'), JSON.stringify(doc), 'utf-8');
+                }
+                return;
+            }
+            await this._rollupIndex(def);
+            return;
+        }
+        throw new Error('rebuild_index: вид «' + def.kind + '» — этап 5б');
+    }
+    /** Свернуть месяцы из дней, годы из месяцев (turnover). */
+    async _rollupIndex(def) {
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        if (!fs.existsSync(dir))
+            return;
+        const months = {};
+        for (const f of await fsp.readdir(dir)) {
+            const m = f.match(/^(\d{4}-\d{2}-\d{2})\.json$/);
+            if (!m)
+                continue;
+            let doc;
+            try {
+                doc = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf-8'));
+            }
+            catch { continue; }
+            const month = m[1].slice(0, 7);
+            months[month] = months[month] || {};
+            for (const [key, row] of Object.entries(doc))
+                _addRows(months[month], key, row, +1);
+        }
+        for (const [month, doc] of Object.entries(months))
+            await fsp.writeFile(path.join(dir, month + '.json'), JSON.stringify(doc), 'utf-8');
+        const years = {};
+        for (const [month, doc] of Object.entries(months)) {
+            const y = month.slice(0, 4);
+            years[y] = years[y] || {};
+            for (const [key, row] of Object.entries(doc))
+                _addRows(years[y], key, row, +1);
+        }
+        for (const [y, doc] of Object.entries(years))
+            await fsp.writeFile(path.join(dir, y + '.json'), JSON.stringify(doc), 'utf-8');
+    }
+    /** Влить индекс ребёнка в свой (суммы — сложить, таблицы/ключи — объединить). */
+    async _mergeChildIndex(def, kid) {
+        const src = kid.meta_folder.dir + '/INDEX/' + def.id;
+        if (!fs.existsSync(src))
+            return;
+        if (def.kind === 'turnover' || def.kind === 'state') {
+            for (const f of await fsp.readdir(src)) {
+                if (!/\.json$/.test(f) || f === '.meta.json')
+                    continue;
+                let doc;
+                try {
+                    doc = JSON.parse(await fsp.readFile(path.join(src, f), 'utf-8'));
+                }
+                catch { continue; }
+                const abs = path.join(this.meta_folder.dir + '/INDEX/' + def.id, f);
+                await _lockedJson(abs, prev => {
+                    for (const [key, row] of Object.entries(doc))
+                        _addRows(prev, key, row, +1);
+                    return prev;
+                });
+            }
+            return;
+        }
+        if (def.kind === 'table' || def.kind === 'lookup') {
+            for (const f of await fsp.readdir(src)) {
+                if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+                    continue;
+                let doc;
+                try {
+                    doc = JSON.parse(await fsp.readFile(path.join(src, f), 'utf-8'));
+                }
+                catch { continue; }
+                const abs = path.join(this.meta_folder.dir + '/INDEX/' + def.id, f);
+                await _lockedJson(abs, prev => {
+                    for (const [key, v] of Object.entries(doc)) {
+                        if (def.kind === 'table') {
+                            prev[key] = v;
+                        }
+                        else {
+                            const cur = Array.isArray(prev[key]) ? prev[key] : (prev[key] != null ? [prev[key]] : []);
+                            const add = Array.isArray(v) ? v : [v];
+                            prev[key] = [...new Set([...cur, ...add])];
+                            if (def.unique)
+                                prev[key] = prev[key][0];
+                        }
+                    }
+                    return prev;
+                });
+            }
+            return;
+        }
+        throw new Error('rebuild_index: вид «' + def.kind + '» — этап 5б');
+    }
+    /**
      * Точки поддерева того же типа с зоной DATA: сам класс + потомки.
      * Спуск — только по дочерним классам того же типа (зоны ролей, logs, history не читаются).
+     * @param {object} [params] сессия; {skipAccess: true} — только для внутренних проверок ядра
      * @returns {Promise<Array<{cls, path, virtual, dataDir}>>}
      */
     async _subtreeDataPoints(params = {}) {
@@ -997,7 +1719,7 @@ export class $class extends $folder{
             if (!cls || seen.has(cls.path))
                 return;
             seen.add(cls.path);
-            if (!(await cls.canSee(cls, params)))
+            if (!params.skipAccess && !(await cls.canSee(cls, params)))
                 return;
             pts.push({
                 cls,
@@ -1022,13 +1744,8 @@ export class $class extends $folder{
      * @param {object} [params] {child (id или путь), session}
      */
     async split(params = {}) {
-        if (params.session?.$user !== globalThis.WORK) {
-            const uid = this.constructor.resolveUid(params);
-            const roles = uid ? await this.roles(params) : [];
-            const declared = this._declaredRolesSync();
-            if (!roles.some(r => declared[r]?.write === 'all'))
-                throw new Error(ACCESS_DENIED);
-        }
+        if (params.session?.$user !== globalThis.WORK && await this.data_access(params) !== 'admin')
+            throw new Error(ACCESS_DENIED);
         const target = String(params.child ?? params.to ?? '').trim();
         if (!target)
             throw new Error('split: укажи child (id или путь класса)');
@@ -1073,7 +1790,205 @@ export class $class extends $folder{
         cls.reset();
         globalThis.WORK_RAG?.invalidate?.(src);
         globalThis.WORK_RAG?.invalidate?.(dst);
+        for (const def of cls._indexDefs()) {
+            if (def.kind === 'balance')
+                continue;
+            await cls.rebuild_index({ ...params, id: def.id });
+        }
+        for (const def of this._indexDefs()) {
+            if (def.kind === 'balance')
+                continue;
+            await this.rebuild_index({ ...params, id: def.id });
+        }
         return this.save_message({ message: 'split: DATA → ' + cls.path, session: params.session });
+    }
+    // ---------- INDEX ----------
+    /**
+     * Описания индексов точки: системный `table` + METADATA.INDEXES (слияние по id).
+     * Виды: turnover (обороты, пирамида день→месяц→год), state (текущее, current.json),
+     * table (плоский список по дням), lookup (ключ→id), balance (вид без файлов, из оборотов).
+     * cascade/stats — этап 5б.
+     */
+    _indexDefs() {
+        const map = new Map([['table', { id: 'table', kind: 'table' }]]);
+        for (const d of this.METADATA?.INDEXES || []) {
+            if (!d || !d.id)
+                continue;
+            if (d.off) {
+                map.delete(d.id);
+                continue;
+            }
+            map.set(d.id, { kind: 'turnover', by: [], ...d });
+        }
+        const out = [...map.values()];
+        for (const d of out) {
+            if (!['turnover', 'state', 'table', 'lookup', 'balance'].includes(d.kind))
+                throw new Error('индекс «' + d.id + '»: вид «' + d.kind + '» — этап 5б (cascade/stats)');
+            if (d.by != null && !Array.isArray(d.by))
+                throw new Error('индекс «' + d.id + '»: by — массив полей');
+            if (d.kind === 'lookup' && !d.key)
+                throw new Error('индекс «' + d.id + '»: lookup без key');
+        }
+        return out;
+    }
+    /** Путь файла индекса: `<мета>/INDEX/<id>/<день|месяц|год|current>.json`, meta — `.meta.json`. */
+    _indexFile(def, name) {
+        return this.meta_folder.dir + '/INDEX/' + def.id + '/' + (name === '.meta' ? '.meta.json' : name + '.json');
+    }
+    /** Мета индекса (вид, хеш описания). write — записать заново. */
+    async _indexMeta(def, write) {
+        const abs = this._indexFile(def, '.meta');
+        if (!write) {
+            try {
+                return JSON.parse(await fsp.readFile(abs, 'utf-8'));
+            }
+            catch { return null; }
+        }
+        const meta = { kind: def.kind, defHash: _indexHash(def), by: def.by || [], builtAt: Date.now() };
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        await fsp.writeFile(abs, JSON.stringify(meta), 'utf-8');
+        return meta;
+    }
+    /** Описание индекса не менялось после сборки (иначе — rebuild_index). */
+    async _assertIndexFresh(def) {
+        const meta = await this._indexMeta(def, false);
+        if (meta && meta.defHash && meta.defHash !== _indexHash(def))
+            throw new Error('индекс «' + def.id + '» устарел (описание изменилось): rebuild_index');
+    }
+    /** Вклад тела в индекс (null — тело не участвует: нет, удалено или мимо where). */
+    _indexContrib(def, body) {
+        if (!body || body.deleted)
+            return null;
+        if (def.kind === 'table' || def.kind === 'lookup' || def.kind === 'balance')
+            return body;
+        if (!matchDataWhere(body, def.where))
+            return null;
+        return body;
+    }
+    /**
+     * Применить вклад тела к файлам индекса класса (без подъёма к предкам).
+     * turnover — день/месяц/год; state — current.json; table/lookup — файл дня.
+     */
+    async _applyIndexOne(def, body, sign) {
+        const day = _dataDay(body.time ?? Date.now());
+        if (def.kind === 'turnover') {
+            const key = _indexKey(def, body);
+            const row = _measureRow(def, body);
+            for (const name of [day, day.slice(0, 7), day.slice(0, 4)])
+                await _lockedJson(this._indexFile(def, name), doc => _addRows(doc, key, row, sign));
+        }
+        else if (def.kind === 'state') {
+            const key = _indexKey(def, body);
+            const row = _measureRow(def, body);
+            await _lockedJson(this._indexFile(def, 'current'), doc => _addRows(doc, key, row, sign));
+        }
+        else if (def.kind === 'table') {
+            const fields = Array.isArray(def.fields) && def.fields.length ? def.fields
+                : (this.METADATA?.FIELDS || []).filter(f => f?.id && !f.secret).map(f => f.id);
+            const row = { id: body._id, time: body.time };
+            for (const fid of fields) {
+                if (fid !== 'id' && fid !== 'time' && body[fid] !== undefined)
+                    row[fid] = body[fid];
+            }
+            await _lockedJson(this._indexFile(def, day), doc => {
+                if (sign > 0)
+                    doc[body._id] = row;
+                else if (doc[body._id])
+                    delete doc[body._id];
+                return doc;
+            });
+        }
+        else if (def.kind === 'lookup') {
+            const key = String(body[def.key] ?? '');
+            if (!key)
+                return;
+            await _lockedJson(this._indexFile(def, day), doc => {
+                if (sign > 0) {
+                    if (def.unique)
+                        doc[key] = body._id;
+                    else {
+                        const arr = Array.isArray(doc[key]) ? doc[key] : (doc[key] != null ? [doc[key]] : []);
+                        if (!arr.includes(body._id))
+                            arr.push(body._id);
+                        doc[key] = arr;
+                    }
+                }
+                else if (doc[key] !== undefined) {
+                    if (def.unique) {
+                        if (doc[key] === body._id)
+                            delete doc[key];
+                    }
+                    else {
+                        const arr = (Array.isArray(doc[key]) ? doc[key] : [doc[key]]).filter(x => x !== body._id);
+                        if (arr.length)
+                            doc[key] = arr;
+                        else
+                            delete doc[key];
+                    }
+                }
+                return doc;
+            });
+        }
+    }
+    /** Найти ключ lookup в файлах дней класса → id (первое совпадение). */
+    async _lookupKey(def, key) {
+        const dir = this.meta_folder.dir + '/INDEX/' + def.id;
+        if (!fs.existsSync(dir))
+            return null;
+        for (const f of await fsp.readdir(dir)) {
+            if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+                continue;
+            let doc;
+            try {
+                doc = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf-8'));
+            }
+            catch { continue; }
+            const v = doc?.[key];
+            if (v == null)
+                continue;
+            return Array.isArray(v) ? v[0] ?? null : v;
+        }
+        return null;
+    }
+    /** Проверка unique lookup до записи объекта. */
+    async _checkUnique(defs, body, id) {
+        for (const def of defs) {
+            if (def.kind !== 'lookup' || !def.unique || !body || body.deleted)
+                continue;
+            const key = String(body[def.key] ?? '');
+            if (!key)
+                continue;
+            const dup = await this._lookupKey(def, key);
+            if (dup != null && dup !== id)
+                throw new Error('дубль ключа «' + key + '» в индексе «' + def.id + '»');
+        }
+    }
+    /**
+     * Обновить индексы точки и предков того же типа (пока описание индекса совпадает).
+     * before — прежнее тело (null при создании), after — новое (deleted при удалении).
+     */
+    async _indexWrite(before, after, id) {
+        const defs = this._indexDefs();
+        await this._checkUnique(defs, after, id);
+        for (const def of defs) {
+            if (def.kind === 'balance')
+                continue;
+            const b = before && this._indexContrib(def, before) ? { ...before, _id: id } : null;
+            const a = after && this._indexContrib(def, after) ? { ...after, _id: id } : null;
+            if (b)
+                await this._applyIndexOne(def, b, -1);
+            if (a)
+                await this._applyIndexOne(def, a, +1);
+            for (let p = this.$parent; p && p instanceof FS.$class && p.type === this.type; p = p.$parent) {
+                const pd = p._indexDefs().find(d => d.id === def.id);
+                if (!pd || _indexHash(pd) !== _indexHash(def))
+                    break;
+                if (b)
+                    await p._applyIndexOne(def, b, -1);
+                if (a)
+                    await p._applyIndexOne(def, a, +1);
+            }
+        }
     }
     get type(){
         return this.meta_folder.id;
@@ -1083,8 +1998,9 @@ export class $class extends $folder{
     }
 
     /**
-     * Типы файлов данных класса: сам `$folder/$file/$data` (единый тип `.data`)
-     * плюс дети `$folder/$file/$data/*` (почта, календарь, задачи — до их выноса).
+     * Типы файлов данных класса: сам `$folder/$file/$data` (единый тип `.data`).
+     * Точечные типы (`point: true` в `$file/$ext/class.js`: почта, календарь,
+     * звонки, задачи, логи) резолвятся глобально, см. is_data_type.
      * Builder и save_file смотрят сюда, не в глобальный `$file.isDataFile`.
      */
     get data_types() {
@@ -1106,7 +2022,14 @@ export class $class extends $folder{
             return false;
         const types = await this.data_types;
         const id = '$' + ext;
-        return (types || []).some(t => t.id === id);
+        if ((types || []).some(t => t.id === id))
+            return true;
+        // точечный тип ($file/$ext с point: true) — тот же способ записи
+        try {
+            const td = await FS.$file.typeData(ext);
+            return td?.point === true;
+        }
+        catch { return false; }
     }
 
     get meta_folder(){
@@ -1434,6 +2357,9 @@ export class $class extends $folder{
         if (this._isSystemItem(item))
             return true;
         const roles = await this.roles(params);
+        // Ссылки рабочих мест — доступ к прикладным классам (до pass-through и ленты)
+        if (await LINKS.grants(this, item, params))
+            return true;
         // Класс без назначений — pass-through к родителю
         if (!this.hasAssignments() && !roles.length) {
             const parent = this.$parent;
@@ -1480,10 +2406,12 @@ export class $class extends $folder{
             return false;
         const declared = this._declaredRolesSync();
         const local = this._roleIds(role, declared).includes(uid);
-        return POLICY.canWrite(declared[role], this.areaOf(item), {
+        if (POLICY.canWrite(declared[role], this.areaOf(item), {
             local,
             executable: POLICY.isExecutablePath(item.path, this.path),
-        });
+        }))
+            return true;
+        return LINKS.grantsWrite(this, params);
     }
 
     /**

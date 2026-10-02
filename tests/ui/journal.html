@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Journal UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Журнал проводок в настоящем браузере (tests/ui/run.mjs):
+ * строки по парам текстом, фильтры уходят в fetch, ошибка видна,
+ * клик открывает форму счёта/операции.
+ */
+import '/oda/oda.js';
+import journalProto from '/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(80);
+    return el;
+}
+const text = el => el?.textContent?.trim();
+
+/** Копия прототипа с сохранением геттеров/сеттеров (spread их убивает). */
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    proto.imports = undefined;
+    return proto;
+}
+
+await ODA(cloneProto(journalProto, 'test-journal'));
+
+const ROWS = [
+    { entry: 'e1', rule: 'main', time: 1788000000000, source: '/OPERATIONS/SALE/o2', op: 'Счёт 2',
+        debit_account: '/REGISTER/62', debit_label: 'Расчёты',
+        credit_account: '/REGISTER/90', credit_label: 'Продажи',
+        sum: 500, storno: true, n: 4 },
+    { entry: 'e0', rule: 'main', time: 1787900000000, source: '/OPERATIONS/SALE/o1', op: 'Счёт 1',
+        debit_account: '/REGISTER/62', debit_label: 'Расчёты',
+        credit_account: '/REGISTER/90', credit_label: 'Продажи',
+        sum: 1000, storno: false, n: 2 },
+];
+function stubItem(calls, rows) {
+    return {
+        fetch: async (method, params) => {
+            calls.push({ method, params });
+            if (method === 'journal')
+                return rows;
+            return null;
+        },
+    };
+}
+const dataRows = (el) => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
+
+await test('journal: шапка и строки текстом, сторно помечено', async () => {
+    const calls = [];
+    const el = await mount('test-journal', { $item: stubItem(calls, ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'две строки');
+    const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
+    eq(head, 'Дата|Операция|Дебет|Кредит|Сумма|Статус');
+    const first = dataRows(el)[0].textContent;
+    assert(first.includes('Счёт 2'), 'операция: ' + first);
+    assert(first.includes('Расчёты'), 'дебет: ' + first);
+    assert(first.includes('Продажи'), 'кредит: ' + first);
+    assert(first.includes('500'), 'сумма: ' + first);
+    assert(first.includes('сторно'), 'статус: ' + first);
+    assert(!el.__shadowRoot__.textContent.includes('[object Object]'), 'без [object Object]');
+    assert(el.__shadowRoot__.querySelector('div.row.total').textContent.includes('1500'), 'итог');
+    el.remove();
+});
+
+await test('journal: фильтры уходят в fetch, ошибка видна', async () => {
+    const calls = [];
+    const el = await mount('test-journal', { $item: stubItem(calls, ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'строки');
+    el.from = '2026-01-01';
+    el.account = '/REGISTER/62';
+    el.source = 'SALE';
+    await el.reload();
+    const sent = calls.at(-1);
+    eq(sent.method, 'journal');
+    eq(sent.params.from, '2026-01-01');
+    eq(sent.params.account, '/REGISTER/62');
+    eq(sent.params.source, 'SALE');
+    el.remove();
+    const bad = await mount('test-journal', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
+    assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
+    bad.remove();
+});
+
+await test('journal: клик открывает форму счёта/операции', async () => {
+    const calls = [];
+    const el = await mount('test-journal', { $item: stubItem(calls, ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'строки');
+    const got = [], opened = [];
+    const prevWork = window.WORK, prevExec = window.execute;
+    window.WORK = { get_item: async (p) => { got.push(p); return { path: p }; } };
+    window.execute = (t) => opened.push(t.path || t);
+    try {
+        const cells = dataRows(el)[0].querySelectorAll('div.cell.link');
+        eq(cells.length, 3);
+        cells[0].click();
+        await tick(80);
+        eq(got.join(','), '/OPERATIONS/SALE/o2');
+        eq(opened.join(','), '/OPERATIONS/SALE/o2');
+        cells[1].click();
+        await tick(80);
+        eq(got.at(-1), '/REGISTER/62');
+    }
+    finally {
+        window.WORK = prevWork;
+        window.execute = prevExec;
+    }
+    el.remove();
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

@@ -25,7 +25,7 @@
 
 ## Файлы данных
 
-Объект (`.data`, схема — `METADATA.FIELDS` класса-владельца) — **не живая копия + `history/`**: `save_file` через `create_object` кладёт точку в общую зону `DATA/ext/…/YYYY-MM-DD/`; день и id — `time` в корне JSON (иначе `params.time` / сейчас); имя на диске `{time}.{uid}.data`; поле `name` = stem пути. Лог.path = этот файл. Остальные типы данных (`$file/$data/$ext`: `.eml`, `.ics`, `.task`) — пока в зоне роли. `$logs` — тот же закон: журнал класса в `logs/YYYY-MM-DD/`, не `.data.logs/history`.
+Объект (`.data`, схема — `METADATA.FIELDS` класса-владельца) — **не живая копия + `history/`**: `save_file` через `create_object` кладёт точку в общую зону `DATA/ext/…/YYYY-MM-DD/`; день и id — `time` в корне JSON (иначе `params.time` / сейчас); имя на диске `{time}.{uid}.data`; поле `name` = stem пути. Лог.path = этот файл. Остальные точечные типы (`$file/$ext` с `point: true`: `.eml`, `.ics`, `.task`) — пока в зоне роли. `$logs` — тот же закон: журнал класса в `logs/YYYY-MM-DD/`, не `.data.logs/history`.
 
 ## История и триггеры
 

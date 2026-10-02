@@ -1,0 +1,3 @@
+export default { label: 'Продажа', '#security': { USERS: ['CA4E097FF6C1D387'] },
+    METADATA: { FIELDS: [{ id: 'name', label: 'Название' }, { id: 'time', type: 'timestamp' }, { id: 'client', type: 'Link', catalog: '/CATALOGS/КОНТРАГЕНТЫ', required: true, label: 'Клиент' }, { id: 'sum', type: 'Number', required: true, label: 'Сумма' }], POSTINGS: [{ id: 'main', amount: 'sum',
+        debit: { account: '/REGISTER/62', analytics: { counterparty: 'client' } }, credit: { account: '/REGISTER/90' } }] } }

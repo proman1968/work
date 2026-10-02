@@ -9,6 +9,45 @@ import { ENGINE_AI } from '../resources.js';
 const TODO_STATUS = ['pending', 'in_progress', 'completed'];
 export const MAX_DEPTH = 2;
 
+/** Снимки, созданные записями этой задачи (включая вложенные ленты субагентов). */
+function collectSnapshots(items, out = []) {
+    for (const it of items || []) {
+        if (it?.type !== 'assistant') {
+            out.push(...collectSnapshots(it?.items, []));
+            continue;
+        }
+        for (const t of it.tools || []) {
+            if (t?.status === 'ok' && t?.snapshot && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name))
+                out.push({ snapshot: t.snapshot, title: t.path ? String(t.path).split('/').pop() : null });
+            if (Array.isArray(t?.items))
+                collectSnapshots(t.items, out);
+        }
+    }
+    return out;
+}
+
+function formatResults(results) {
+    const list = Array.isArray(results) ? results : [];
+    if (!list.length)
+        return 'результаты не отмечены';
+    return list.map((r, i) => (i + 1) + '. ' + (r.title || r.snapshot) + '\n   ' + r.snapshot).join('\n');
+}
+
+/** Продолжимый ребёнок доступен только из своей родительской задачи под тем же пользователем. */
+async function ownedChild(path, ctx) {
+    if (!ctx.task?.path || !ctx.session?.uid)
+        throw new Error('продолжимый агент доступен только из задачи пользователя');
+    const child = await getItem(path, ctx);
+    if (!child || Array.isArray(child) || !String(child.path).endsWith('.task'))
+        throw new Error('дочерняя задача не найдена: ' + path);
+    await callAs(child, 'assertAccess', {}, ctx, ctx.role);
+    const core = await import('../session.js');
+    const body = await core.getBody(child);
+    if (body.parentTask !== ctx.task.path || body.ownerUid !== ctx.session.uid || (ctx.role && core.taskRole(child) !== ctx.role))
+        throw new Error('задача не принадлежит этому агенту и роли');
+    return { child, body, core };
+}
+
 export const metaTools = [
     {
         name: 'todo_write',
@@ -138,6 +177,117 @@ export const metaTools = [
         },
     },
     {
+        name: 'agent_start',
+        risk: 'write',
+        description: 'Запустить продолжимого субагента в отдельной .task: сразу вернуть путь. Он переживает перезапуск и принимает agent_message. Роль и права — те же, что у родителя; для короткого разового поручения используй task.',
+        parameters: { type: 'object', properties: {
+            agent: { type: 'string', description: 'Имя агента из списка «Субагенты»' },
+            prompt: { type: 'string', description: 'Самодостаточное поручение' },
+            description: { type: 'string', description: 'Название задачи для человека' },
+        }, required: ['agent', 'prompt'] },
+        async run(args, ctx) {
+            if (!ctx.task?.path || !ctx.session?.uid || !ctx.role)
+                throw new Error('agent_start: нужна задача в зоне выбранной роли пользователя');
+            const depth = (ctx.depth || 0) + 1;
+            if (depth > MAX_DEPTH)
+                throw new Error('превышена глубина делегирования');
+            const def = ctx.env.agents.get(String(args.agent));
+            if (!def)
+                throw new Error('нет субагента «' + args.agent + '»');
+            if (!(await ctx.env.makeTools(def, depth)).length)
+                throw new Error('субагенту в этой роли недоступны инструменты');
+            const point = ctx.env.place;
+            if (!point || typeof point.save_file !== 'function')
+                throw new Error('нет рабочей точки для дочерней задачи');
+            const name = String(args.description || args.agent).slice(0, 80);
+            const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle',
+                parentTask: ctx.task.path, ownerUid: ctx.session.uid, childAgent: def.name, childDepth: depth,
+                model: def.meta.model || ctx.llm.name, role: ctx.role };
+            // skip_file_handler: не запускать триггер одновременно с явным prompt ниже.
+            const log = await callAs(point, 'save_file', {
+                filename: name.replace(/[<>:"/\\|?*\r\n]/g, ' ').trim() + '.task',
+                post: JSON.stringify(body), skip_file_handler: true,
+            }, ctx, ctx.role);
+            const path = log?.logFullPath || log?.path;
+            if (!path)
+                throw new Error('сохранение дочерней задачи не вернуло путь');
+            const child = await getItem(path, ctx);
+            if (!child || Array.isArray(child))
+                throw new Error('дочерняя задача создана, но пока не найдена: ' + path);
+            const core = await import('../session.js');
+            await core.prompt(child, { session: ctx.session, prompt: String(args.prompt) });
+            ctx.entry.path = path;
+            return 'Продолжимый агент ' + def.name + ' запущен: ' + path + '. Следить: agent_status; уточнить: agent_message; остановить: agent_stop.';
+        },
+    },
+    {
+        name: 'agent_status', readonly: true,
+        description: 'Статус и последний ответ своего продолжимого субагента по пути из agent_start.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        async run(args, ctx) {
+            const { child, body, core } = await ownedChild(args.path, ctx);
+            const last = [...body.items].reverse().find(i => i.type === 'assistant' && i.content);
+            return { path: child.path, status: core.isRunning(child) ? 'running' : body.status,
+                waiting: body.waiting || null, last: last?.content || '', updated: body.updated };
+        },
+    },
+    {
+        name: 'agent_message', risk: 'write',
+        description: 'Отправить сообщение своему продолжимому субагенту. Во время работы оно ставится в очередь; ожидание вопроса не подменяется ответом родителя.',
+        parameters: { type: 'object', properties: { path: { type: 'string' }, prompt: { type: 'string' } }, required: ['path', 'prompt'] },
+        async run(args, ctx) {
+            const { child, core } = await ownedChild(args.path, ctx);
+            const res = await core.message(child, { session: ctx.session, prompt: String(args.prompt) });
+            return res.queued ? 'сообщение поставлено в очередь ' + child.path : 'сообщение передано ' + child.path;
+        },
+    },
+    {
+        name: 'agent_stop', risk: 'danger',
+        description: 'Остановить своего продолжимого субагента; его собственная задача и история останутся доступны.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        async run(args, ctx) {
+            const { child, core } = await ownedChild(args.path, ctx);
+            await core.stop(child, { session: ctx.session });
+            return 'субагент остановлен: ' + child.path;
+        },
+    },
+    {
+        name: 'publish',
+        risk: 'write',
+        description: 'Отметить файл-результат задачи для общей ленты. В чате останется только карточка задачи с выбранным, промежуточные версии не шумят. Передай snapshot из результата write/append/edit (путь .../history/...), несколько файлов — несколько вызовов. Убрать: action remove. Посмотреть набор: action list.',
+        parameters: {
+            type: 'object',
+            properties: {
+                snapshot: { type: 'string', description: 'WORK-путь снимка из результата записи' },
+                title: { type: 'string', description: 'Название для ленты (по умолчанию — имя файла)' },
+                action: { type: 'string', enum: ['add', 'remove', 'list'], description: 'По умолчанию add' },
+            },
+        },
+        async run(args, ctx) {
+            if (!ctx?.task?.path)
+                throw new Error('publish — только внутри задачи');
+            const core = await import('../session.js');
+            const action = args?.action || 'add';
+            if (action === 'list')
+                return formatResults(await core.getBody(ctx.task).then(b => b.results || []));
+            const snapshot = String(args?.snapshot || '').trim();
+            if (!snapshot)
+                throw new Error('publish: нужен snapshot из результата write/append/edit');
+            if (action === 'remove')
+                return formatResults(await core.addTaskResult(ctx.task, { snapshot, remove: true }, ctx.session));
+            const known = collectSnapshots((await core.getBody(ctx.task)).items);
+            const hit = known.find(s => s.snapshot === snapshot);
+            if (!hit)
+                throw new Error('publish: снимок не из этой задачи — передай snapshot из результата записи (write/append/edit), а не живой путь файла');
+            const item = await getItem(snapshot, ctx).catch(() => null);
+            if (!item || Array.isArray(item))
+                throw new Error('publish: снимок не найден: ' + snapshot);
+            const results = await core.addTaskResult(ctx.task,
+                { snapshot, title: args?.title || hit.title }, ctx.session);
+            return 'опубликовано (' + results.length + '):\n' + formatResults(results);
+        },
+    },
+    {
         name: 'skill',
         readonly: true,
         description: 'Загрузить навык (проверенный рецепт) по имени из списка «Навыки» и следовать ему.',
@@ -187,6 +337,8 @@ export const metaTools = [
                 where = folder.path + '/ai/skills/' + name + '.md';
             }
             const params = { folder: args.scope === 'global' ? 'skills' : 'ai/skills', filename: name + '.md', post };
+            if (ctx?.task?.path)
+                params.mainContext = ctx.task.path;
             await callAs(folder, 'save_file', params, ctx);
             ctx.entry.path = where;
             ctx.env.skills.set(name, { name, meta: { name, description: args.description }, body: String(args.content), path: where, scope: args.scope || 'place' });

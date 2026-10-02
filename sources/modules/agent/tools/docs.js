@@ -2,14 +2,109 @@
  * Документы и таблицы:
  *   read_table     — строки xlsx/csv файла WORK как объекты (заголовки — ключи);
  *   import_objects — строки → объекты (.data) класса по схеме METADATA.FIELDS;
- *   render_doc     — документ из шаблона (docx / md / html / txt) с полями {{имя}}.
+ *   render_doc     — документ из шаблона (docx / md / html / txt) с полями {{имя}};
+ *   export_pdf     — настоящий PDF из HTML-документа WORK (headless-браузер сервера).
  * Все чтения и записи — с правами пользователя (callAs).
  */
 import AdmZip from 'adm-zip';
+import fsp from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { FS } from '../../../server/index.js';
 import { getItem, callAs, writeBinary, absPath } from './work.js';
+import { run } from '../system.js';
 
 const IMPORT_MAX = 1000;
+const PDF_SOURCE_MAX = 5 * 1024 * 1024;
+const PDF_RENDER_TIMEOUT = 60000;
+
+/** Кандидаты headless-браузера для рендера PDF по платформам. */
+const PDF_BROWSER_CANDIDATES = {
+    win32: [
+        'C:/Program Files/Google/Chrome/Application/chrome.exe',
+        'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+        'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    ],
+    darwin: [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ],
+    linux: ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'],
+};
+
+/**
+ * Headless-браузер для export_pdf: WORK_PDF_BROWSER, иначе первый найденный.
+ * existsFn — для тестов.
+ */
+export function findPdfBrowser(env = process.env, platform = process.platform, existsFn = null) {
+    const custom = String(env?.WORK_PDF_BROWSER || '').trim();
+    const exists = existsFn || existsSync;
+    if (custom) {
+        if (!exists(custom))
+            throw new Error('export_pdf: WORK_PDF_BROWSER не найден: ' + custom);
+        return custom;
+    }
+    for (const p of PDF_BROWSER_CANDIDATES[platform] || []) {
+        try {
+            if (exists(p))
+                return p;
+        }
+        catch { /* следующий */ }
+    }
+    return null;
+}
+
+/**
+ * HTML-файл → PDF через headless-браузер. Сеть при рендере заблокирована
+ * (мёртвый прокси + без DNS), поэтому документ должен быть самодостаточным.
+ */
+let pdfProfileSeq = 0;
+
+export async function renderPdf(htmlFile, pdfFile, { browser, timeoutMs = PDF_RENDER_TIMEOUT, signal, profileDir } = {}) {
+    const exe = browser || findPdfBrowser();
+    if (!exe)
+        throw new Error('export_pdf: браузер для рендера PDF не найден (Chrome/Edge). Укажите WORK_PDF_BROWSER=путь к chrome.exe/msedge.exe или установите браузер.');
+    // Изолированный профиль на каждый рендер: без него процесс при открытом браузере
+    // молча передаёт команду уже запущенному экземпляру и выходит за ~30 мс без PDF.
+    const profile = profileDir
+        || path.join(path.dirname(pdfFile), 'profile-' + process.pid + '-' + (++pdfProfileSeq) + '-' + Date.now().toString(36));
+    const url = pathToFileURL(htmlFile).href;
+    const r = await run(exe, [
+        '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+        '--user-data-dir=' + profile,
+        '--print-to-pdf=' + pdfFile, '--print-to-pdf-no-header',
+        '--proxy-server=http://127.0.0.1:9', '--host-resolver-rules=MAP * ~NOTFOUND',
+        url,
+    ], { timeout: timeoutMs, signal });
+    if (r.timedOut)
+        throw new Error('export_pdf: таймаут рендера PDF');
+    const buf = await waitPdf(pdfFile, signal);
+    if (!buf)
+        throw new Error('export_pdf: браузер не создал PDF (код ' + r.code + ')'
+            + (r.stderr ? ': ' + String(r.stderr).trim().slice(-500) : '')
+            + '. Проверьте установку Chrome/Edge или задайте WORK_PDF_BROWSER.');
+    return buf;
+}
+
+/** Дождаться сброса PDF на диск: процесс иногда выходит раньше flush. */
+async function waitPdf(pdfFile, signal, deadlineMs = 5000) {
+    const t0 = Date.now();
+    for (;;) {
+        if (signal?.aborted)
+            return null;
+        try {
+            const buf = await fsp.readFile(pdfFile);
+            if (buf.length >= 100 && buf.subarray(0, 5).equals(Buffer.from('%PDF-')))
+                return buf;
+        }
+        catch { /* файла ещё нет */ }
+        if (Date.now() - t0 > deadlineMs)
+            return null;
+        await new Promise(r => setTimeout(r, 100));
+    }
+}
 
 async function fileAt(path, ctx) {
     let item = await getItem(path, ctx);
@@ -47,19 +142,21 @@ async function tableRows(file, ctx, sheet) {
 }
 
 /** Поля объектов типа ext в классе: схема `.data` — из METADATA.FIELDS класса,
- * старых типов — из типа (со всеми слоями наследования). */
+ * точечных типов ($file/$ext) — из типа. */
 async function fieldsOf(cls, ext) {
     await cls.init;
-    const types = await cls.data_types;
-    const type = (types || []).find(t => t.id === '$' + ext);
-    if (!type)
-        throw new Error('в ' + cls.path + ' нет типа данных $' + ext + '; есть: ' + (types || []).map(t => t.id).join(', '));
     if (ext === 'data') {
         const own = cls.DATA?.METADATA?.FIELDS;
         if (Array.isArray(own) && own.length)
             return own;
+        const types = await cls.data_types;
+        const type = (types || []).find(t => t.id === '$data');
+        return Array.isArray(type?.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
     }
-    return Array.isArray(type.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
+    const td = await FS.$file.typeData(ext).catch(() => null);
+    if (!td)
+        throw new Error('в ' + cls.path + ' нет типа данных $' + ext);
+    return Array.isArray(td.METADATA?.FIELDS) ? td.METADATA.FIELDS : [];
 }
 
 function coerce(value, type) {
@@ -282,6 +379,47 @@ export const docTools = [
             if (ctx.entry)
                 ctx.entry.path = real;
             return savedNote(absPath(args.path, ctx), real) + (missing.size ? '; не заполнены поля: ' + [...missing].join(', ') : '');
+        },
+    },
+    {
+        name: 'export_pdf',
+        risk: 'write',
+        target: args => absPath(args?.path, null),
+        description: 'Сохранить HTML-документ WORK как настоящий PDF: source — путь .html/.htm, path — путь результата .pdf. Формат страницы задай в HTML (@page { size: A4 }). Внешние сетевые ресурсы при рендере заблокированы — верстай самодостаточно (инлайн-CSS, системные шрифты). Проверь результат через read.',
+        parameters: {
+            type: 'object',
+            properties: {
+                source: { type: 'string', description: 'WORK-путь HTML-документа' },
+                path: { type: 'string', description: 'WORK-путь результата .pdf' },
+            },
+            required: ['source', 'path'],
+        },
+        async run(args, ctx) {
+            const src = await fileAt(args.source, ctx);
+            const sext = String(src.ext || '').toLowerCase();
+            if (!['html', 'htm'].includes(sext))
+                throw new Error('export_pdf: источник — .html/.htm (сейчас .' + (sext || '?') + ')');
+            if (String(args.path).split('.').pop().toLowerCase() !== 'pdf')
+                throw new Error('export_pdf: результат — .pdf');
+            const html = String(await callAs(src, 'load', { encoding: 'utf-8' }, ctx));
+            if (!html.trim())
+                throw new Error('export_pdf: пустой источник');
+            if (html.length > PDF_SOURCE_MAX)
+                throw new Error('export_pdf: источник больше 5 МБ — упрости документ');
+            const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-pdf-'));
+            try {
+                const htmlFile = path.join(dir, 'doc.html');
+                const pdfFile = path.join(dir, 'doc.pdf');
+                await fsp.writeFile(htmlFile, html, 'utf-8');
+                const buf = await renderPdf(htmlFile, pdfFile, { signal: ctx?.signal });
+                const real = await writeBinary(args.path, buf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ', PDF ' + (buf.length / 1024).toFixed(1) + ' КБ';
+            }
+            finally {
+                await fsp.rm(dir, { recursive: true, force: true });
+            }
         },
     },
 ];

@@ -29,7 +29,7 @@ ODA({ is: 'x' });`;
         const layers = [
             './$server/$folder/class.js',
             './$server/$folder/$file/class.js',
-            './$server/$folder/$file/$data/$task/class.js',
+            './$server/$folder/$file/$task/class.js',
         ].map(p => fs.readFileSync(p, 'utf8'));
         const merged = layers.reduce((acc, code) => MERGE.mergeScripts(acc, code));
         const data = await CORE.$folder.importScript(merged);

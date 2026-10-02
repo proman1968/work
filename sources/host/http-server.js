@@ -19,6 +19,16 @@ const SYSTEM_PREFIX = /^\/(\$server|sources|oda)(\/|$)/;
 /** Песочница пользовательского HTML: без allow-same-origin — уникальный непрозрачный источник. */
 export const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads';
 
+/**
+ * Свернуть одноимённые совпадения `~` в один элемент: контейнеры представлений
+ * (`handlers/pages/form/` из distributive с видами внутри) тоже зовутся `form`,
+ * но хендлерами не являются. Брать последний настоящий $handler, иначе страница
+ * формы получает $folder без importView. Без хендлеров — как раньше (.last).
+ */
+export function pickTildeSingle(items) {
+    return (items || []).filter(f => f?.type === '$handler').last ?? items.last;
+}
+
 function isLoopback(request) {
     const a = String(request.socket?.remoteAddress || '');
     return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
@@ -343,7 +353,7 @@ export function createRequestHandler() {
                 items = _items;
             }
             if (path.includes('~') && items.map(f => f.id).unique().length === 1) {
-                item = items.last;
+                item = pickTildeSingle(items);
                 // readme.md из ~ читается сборкой (сырой вид, load, script — одна сборка);
                 // остальное как раньше: mergeFiles без метода, иначе штатный разбор ниже.
                 if (item.constructor === CORE.$file && items[0]?.id === 'readme.md' && isFileBodyMethod(method)) {

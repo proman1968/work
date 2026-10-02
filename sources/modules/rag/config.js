@@ -24,7 +24,7 @@ export const CONFIG = {
     /** Код и конфигурация — выключено по умолчанию (агенту по коду — find/read). */
     codeExts: ['js', 'mjs', 'ts', 'mts', 'css', 'json', 'xml', 'py'],
     indexCode: process.env.WORK_RAG_CODE === '1',
-    /** Базовые типы файлов данных ($server/$folder/$file/$data/$…) — пополняются при обходе. */
+    /** Базовые расширения-точки ($server/$folder/$file/$ext с point: true) — пополняются при обходе. */
     dataExts: ['data', 'eml', 'ics', 'call', 'task', 'logs'],
     /** Поиск. */
     search: {

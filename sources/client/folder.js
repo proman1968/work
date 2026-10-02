@@ -75,11 +75,11 @@ export class $folder extends $item {
     }
     /** Роли текущего пользователя в данном классе (через серверный метод roles). */
     get roles() {
-        return this.fetch('roles').then(roles => Array.isArray(roles) ? roles : []);
+        return Promise.resolve(this.fetch('roles')).then(roles => Array.isArray(roles) ? roles : []);
     }
     /** Проверка роли администратора. */
     get isAdmin() {
-        return this.roles.then(roles => roles.includes('ADMIN'));
+        return Promise.resolve(this.roles).then(roles => roles.includes('ADMIN'));
     }
     get expanded() {
         return false

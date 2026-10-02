@@ -174,10 +174,13 @@
                 }
             } break;
             default: {
-                // уведомления задач — только когда пользователь не смотрит на WORK (нет видимой вкладки в фокусе)
+                // Вопрос/разрешение/ошибка требуют внимания даже при открытой другой вкладке WORK.
+                // Завершение подавляем только когда пользователь уже смотрит именно эту задачу.
                 if (String(data.type || '').startsWith('task:')) {
                     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-                    if (wins.some(c => c.visibilityState === 'visible' && c.focused))
+                    const target = data.data?.url && new URL(data.data.url, self.location.origin).pathname;
+                    if (data.data?.state === 'done' && target && wins.some(c => c.visibilityState === 'visible' && c.focused
+                        && new URL(c.url).pathname === target))
                         return;
                 }
                 await self.registration.showNotification(data.title || 'Внимание!', {

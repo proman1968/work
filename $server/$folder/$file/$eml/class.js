@@ -1,0 +1,17 @@
+/** $eml — письмо. */
+export default {
+    icon: 'carbon:email',
+    label: 'Письма',
+    contentType: 'application/json',
+    point: true,
+    METADATA: {
+        FIELDS: [
+            { id: 'subject' },
+            { id: 'date', type: 'date' },//time
+            { id: 'from' },
+            { id: 'to' },
+            { id: 'body' },
+            { id: 'html' },
+        ],
+    },
+}

@@ -259,6 +259,10 @@ async function resolveParent(path, ctx) {
 export async function writeFile(path, content, ctx, extra = {}) {
     const { parent, filename, folder } = await resolveParent(path, ctx);
     const params = { ...extra, filename, post: Buffer.isBuffer(content) ? content : String(content ?? '') };
+    // Файлы, созданные инструментами задачи, принадлежат её контексту: в общей ленте
+    // показываются только опубликованные через publish результаты, а не каждая версия.
+    if (params.mainContext == null && ctx?.task?.path)
+        params.mainContext = ctx.task.path;
     if (folder)
         params.folder = folder;
     // класс пишет в рабочую зону роли: роль задачи первой, затем другие роли пользователя здесь
@@ -771,7 +775,10 @@ export const workTools = [
             if (typeof before !== 'string')
                 throw new Error('append — файл не текстовый');
             const chunk = String(args.content);
-            const log = await callAs(file, 'save', { post: before + chunk }, ctx);
+            const saveParams = { post: before + chunk };
+            if (ctx?.task?.path)
+                saveParams.mainContext = ctx.task.path;
+            const log = await callAs(file, 'save', saveParams, ctx);
             if (ctx.entry) {
                 ctx.entry.path = file.path;
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
@@ -813,7 +820,10 @@ export const workTools = [
                 throw new Error('old_string встречается ' + count + ' раз — добавь контекста для однозначности или replace_all:true');
             const after = args.replace_all ? text.split(oldS).join(String(args.new_string)) : text.replace(oldS, () => String(args.new_string));
             const out = before.includes('\r\n') ? after.replace(/\n/g, '\r\n') : after;
-            const log = await callAs(file, 'save', { post: out }, ctx);
+            const saveParams = { post: out };
+            if (ctx?.task?.path)
+                saveParams.mainContext = ctx.task.path;
+            const log = await callAs(file, 'save', saveParams, ctx);
             if (ctx.entry) {
                 ctx.entry.path = file.path;
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;

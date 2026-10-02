@@ -19,14 +19,15 @@
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/REGISTER/$register/$folder/$class/$account/class.js/~/handlers/pages/form/) — предок: icon, label, `METADATA.FIELDS` (`label`, `icon`)
+- [`class.js`](/REGISTER/$register/$folder/$class/$account/class.js/~/handlers/pages/form/) — предок: icon, label, `METADATA.STATIC` (`label`, `icon`), `METADATA.FIELDS` проводки (`source`, `entry`, `rule`, `corr_account`, `debit`, `credit`, `qty_in`, `qty_out`, `storno`)
 - [`readme.md`](/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — базовый документ типа (этот файл)
 
 ## 5. В каком это состоянии
 
 - ✅ тип `$account` в meta журнала
 - ✅ счета плана — дерево `$account`
-- 🔧 проводки по счетам
+- ✅ поля проводки в типе (наследуются счетами)
+- 🔧 аналитики счетов, проводки по счетам
 
 ## 6. Дальнейшие планы
 

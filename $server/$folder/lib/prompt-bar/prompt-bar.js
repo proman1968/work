@@ -134,7 +134,7 @@ ODA({ is: 'work-prompt-bar',
                 <span class="timer" ~if="recording">⏺ {{timer}}</span>
                 <oda-button class="icon-btn" ~if="speech" :rec="recording" :icon="recording ? 'carbon:stop-filled' : 'carbon:microphone'" :icon-size="18"
                     :title="recording ? 'Остановить диктовку' : 'Диктовка'" @tap="toggleMic"></oda-button>
-                <button class="send" :disabled="!canSend && !pending" :title="stopMode ? 'Остановить (Esc)' : (pending ? 'Отправить в очередь (Enter)' : 'Отправить (Enter)')" @tap="onSendTap">
+                <button class="send" :disabled="!canSend && !pending && !recording" :title="recording ? 'Остановить запись и отправить (Enter)' : (stopMode ? 'Остановить (Esc)' : (pending ? 'Отправить в очередь (Enter)' : 'Отправить (Enter)'))" @tap="onSendTap">
                     <oda-icon :icon="stopMode ? 'carbon:stop-filled' : 'carbon:arrow-up'" :icon-size="18"></oda-icon>
                 </button>
             </div>
@@ -212,7 +212,7 @@ ODA({ is: 'work-prompt-bar',
     },
     /** Идёт работа и поле пусто — кнопка «стоп»; есть текст — отправка (хост может поставить в очередь). */
     get stopMode() {
-        return this.pending && !this.canSend;
+        return this.pending && !this.recording && !this.canSend;
     },
     get speech() {
         return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -317,7 +317,7 @@ ODA({ is: 'work-prompt-bar',
         }
         if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing) {
             e.preventDefault();
-            if (this.canSend)
+            if (this.canSend || this.recording)
                 this.onSendTap();
             return;
         }
@@ -346,12 +346,29 @@ ODA({ is: 'work-prompt-bar',
         this._mic().toggle();
     },
     onSendTap() {
+        if (this._sendPending)
+            return;
+        if (this.recording)
+            return this._sendAfterStop();
         if (this.stopMode) {
             this.fire('stop');
             return;
         }
-        if (this.recording)
-            this._mic().stop();
+        if (!this.canSend)
+            return;
+        this.fire('send');
+    },
+    /** Send во время записи: остановить диктовку, дождаться финала и отправить один раз. */
+    async _sendAfterStop() {
+        if (this._sendPending)
+            return;
+        this._sendPending = true;
+        try {
+            await this._mic().stopAndFlush();
+        }
+        finally {
+            this._sendPending = false;
+        }
         if (!this.canSend)
             return;
         this.fire('send');
@@ -432,6 +449,7 @@ class MicAudioController {
             }
             this.recognition.start();
             this.recognizing = true;
+            this._armFlush();
             this.bar.recording = true;
             this.bar.value = '';
             this._beep('start');
@@ -448,13 +466,17 @@ class MicAudioController {
                 chunks.push(e.data);
                 if (this.mediaRecorder.state !== 'inactive') return;
                 this.bar.files = [...this.bar.files, this._makeFile(chunks)];
-                this.bar.value = (this.final_transcript || '').trim();
+                this._mediaDone = true;
+                this._maybeResolveFlush();
             };
             this.mediaRecorder.start();
         }).catch(e => console.warn('[mic]', e.message));
     }
     /** Только стоп записи — без send; текст остаётся в поле для правки. */
     stop() {
+        // На момент тапа последний фрагмент нередко ещё interim. Не заменять видимый
+        // пользователю текст на final_transcript до асинхронного onresult/onend.
+        this._textAtStop = String(this.bar.value || '').trim();
         this.recognizing = false;
         try { this.recognition?.stop(); } catch {}
         clearInterval(this.timerInterval);
@@ -467,8 +489,41 @@ class MicAudioController {
             this.bar.focusInput();
             return;
         }
-        this.bar.value = (this.final_transcript || '').trim();
         this.bar.focusInput();
+    }
+    /** Остановить запись и дождаться финала транскрипта (и аудиофайла) — для отправки одним тапом. */
+    stopAndFlush() {
+        this.stop();
+        // Отсчёт начинается после остановки, а не при старте записи: иначе
+        // при диктовке дольше 3 секунд Promise уже завершён до нажатия Send.
+        if (this._flushResolve && !this._flushTimer)
+            this._flushTimer = setTimeout(() => this._resolveFlush(), 3000);
+        return this._flushed || Promise.resolve();
+    }
+    /** Взвести ожидание финала: конец recognition + (вне ИИ) дописанный аудиофайл; страховка — 3с. */
+    _armFlush() {
+        this._recEnded = false;
+        this._mediaDone = false;
+        clearTimeout(this._flushTimer);
+        this._flushTimer = null;
+        this._flushed = new Promise(r => this._flushResolve = r);
+    }
+    _resolveFlush() {
+        if (!this._flushResolve)
+            return;
+        if (!String(this.bar.value || '').trim())
+            this.bar.value = this._textAtStop || (this.final_transcript || '').trim();
+        this._flushResolve();
+        this._flushResolve = null;
+        clearTimeout(this._flushTimer);
+        this._flushTimer = null;
+    }
+    _maybeResolveFlush() {
+        if (!this._flushResolve || !this._recEnded)
+            return;
+        if (!this.bar.ai && !this._mediaDone)
+            return;
+        this._resolveFlush();
     }
     /** Esc при записи: последнее слово из value; final = value, interim сброс. */
     undoLastWord() {
@@ -495,7 +550,15 @@ class MicAudioController {
         this.recognition.lang = 'ru-RU';
         this.recognition.onerror = ({ error }) => console.error(error);
         this.recognition.onend = () => {
-            if (!this.recognizing) return;
+            if (!this.recognizing) {
+                this._recEnded = true;
+                // Если при stop() браузер не выдал финальный onresult, используем
+                // interim, который уже был показан в поле до остановки.
+                if (!String(this.bar.value || '').trim())
+                    this.bar.value = this._textAtStop || (this.final_transcript || '').trim();
+                this._maybeResolveFlush();
+                return;
+            }
             try { this.recognition.start(); } catch {}
         };
         this.recognition.onresult = e => {
@@ -549,3 +612,5 @@ class MicAudioController {
         return new File([blob], 'record.mp3', { type: blob.type, lastModified: Date.now() });
     }
 }
+
+export { MicAudioController };

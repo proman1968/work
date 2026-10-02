@@ -41,7 +41,7 @@ before(async () => {
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     // типы файлов данных проекта: лента (.logs) — запись дня, а не обычный файл
-    for (const rel of ['$server/$folder/$file/$data/class.js', '$server/$folder/$file/$data/$logs/class.js'])
+    for (const rel of ['$server/$folder/$file/$data/class.js', '$server/$folder/$file/$logs/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
     // пакет движка: настоящие субагенты и навыки проекта
     for (const dir of ['agents', 'skills'])

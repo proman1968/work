@@ -1,3 +1,5 @@
+import { bindLinkTree } from './link-nodes.js';
+
 function applyTreeFilters(items, host) {
     items = items || [];
     if (host.hideSystem)
@@ -358,8 +360,56 @@ ODA({is: 'oda-tree-node',
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }
+            // ссылки рабочего места: цепочки link_tree группы.
+            // Сервер отдаёт структуру (LINKS + предки до корня типа),
+            // клиент лишь привязывает настоящие элементы (все уровни кликабельны),
+            // дети узла — только цепочка. Кэш на узел, сброс — по 'changed' ниже.
+            try {
+                if (this.$item?.type === '$group' && Array.isArray(items)) {
+                    if (this._linkTreeFor !== this.$item) {
+                        this._linkTree = null;
+                        this._linkTreeFor = this.$item;
+                    }
+                    this._linkTree ??= (async () => {
+                        try {
+                            const raw = await WORK.fetch(this.$item.short || '/', 'link_tree', {});
+                            return await bindLinkTree(raw, (p) => WORK.get_item(p));
+                        }
+                        catch {
+                            // Старый сервер без link_tree — плоские листья как раньше.
+                            const out = [];
+                            try {
+                                const body = await this.$item.body;
+                                const links = Array.isArray(body?.LINKS) ? body.LINKS : [];
+                                for (const l of links) {
+                                    const id = String(l?.id || '').trim();
+                                    if (!id.startsWith('/'))
+                                        continue;
+                                    let t;
+                                    try {
+                                        t = await WORK.get_item(id);
+                                    }
+                                    catch { continue; }
+                                    if (Array.isArray(t))
+                                        t = t.at(-1);
+                                    if (t)
+                                        out.push(t);
+                                }
+                            }
+                            catch { /* без ссылок */ }
+                            return out;
+                        }
+                    })();
+                    const paths = new Set(items.map(x => x.path));
+                    const extra = (await this._linkTree).filter(t => t && !paths.has(t.path));
+                    if (extra.length)
+                        items = [...items, ...extra];
+                }
+            }
+            catch { /* без ссылок */ }
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
+                    this._linkTree = null;
                     this.$item.expanded = true;
                     if(e.detail.value){
                         let item = (await this.items)?.find(f=>f.id === e.detail.value);

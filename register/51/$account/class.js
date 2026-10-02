@@ -1,0 +1,1 @@
+export default { label: 'Расчётный счёт', icon: 'carbon:wallet' }

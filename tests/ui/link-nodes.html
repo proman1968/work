@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Link nodes UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Привязка цепочек ссылок (tests/ui/run.mjs): серверный link_tree зеркалится
+ * в виртуальные узлы — все уровни кликабельны (прототип настоящего элемента),
+ * дети — только цепочка, недоступное — узкий plain-фолбэк.
+ */
+import { bindLinkTree, isLinkNode } from '/$server/$folder/lib/tree/link-nodes.js';
+import nodeProto from '/$server/$folder/lib/node/node.js';
+
+globalThis.CORE ??= { $class: class {}, $handler: class {}, $user: class {}, $file: class {} };
+/** Прокси как Reactor: отсутствующее свойство → _onEmpty (шпион + truthy до ответа). */
+function reactiveFake(target, spy) {
+    return new Proxy(target, {
+        get(t, key) {
+            if (key in t)
+                return t[key];
+            spy.push(String(key));
+            return Promise.resolve(true);
+        },
+    });
+}
+const getterOf = (name) => Object.getOwnPropertyDescriptor(nodeProto, name).get;
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+
+const RAW = [
+    { path: '/OPERATIONS', label: 'Операции', icon: 'i-ops', type: '$folder', access: 'read', children: [
+        { path: '/OPERATIONS/Платежи', label: 'Платежи', icon: 'i-pay', type: '$operation', access: 'read', children: [
+            { path: '/OPERATIONS/Платежи/Поставщику', label: 'Поставщику', icon: 'i-sup', type: '$operation', access: 'write', children: [] },
+        ] },
+    ] },
+    { path: '/MISSING/Нет', label: 'Нет', icon: '', type: '', access: 'read', children: [] },
+];
+function fakeStore() {
+    const map = {
+        '/OPERATIONS': { path: '/OPERATIONS', label: 'Операции', icon: 'i-ops', items: ['ЧУЖОЕ'] },
+        '/OPERATIONS/Платежи': { path: '/OPERATIONS/Платежи', label: 'Платежи', icon: 'i-pay', items: ['ЧУЖОЕ'] },
+        '/OPERATIONS/Платежи/Поставщику': { path: '/OPERATIONS/Платежи/Поставщику', label: 'Поставщику', icon: 'i-sup', items: ['ОБЪЕКТЫ'] },
+    };
+    return async (p) => {
+        if (p === '/MISSING/Нет')
+            return null;
+        const r = map[p];
+        if (!r)
+            throw new Error('нет: ' + p);
+        return r;
+    };
+}
+
+await test('ветки привязаны, дети — только цепочка', async () => {
+    const roots = await bindLinkTree(RAW, fakeStore());
+    eq(roots.length, 2);
+    const ops = roots[0];
+    eq(ops.isLink, true);
+    eq(ops.isLinkLeaf, false);
+    eq(ops.label, 'Операции');
+    eq(ops.items.length, 1);
+    eq(ops.items[0].path, '/OPERATIONS/Платежи');
+    eq(ops.items[0].items.length, 1);
+    const leaf = ops.items[0].items[0];
+    eq(leaf.path, '/OPERATIONS/Платежи/Поставщику');
+    eq(leaf.isLinkLeaf, true);
+    eq(Array.isArray(leaf.items) && leaf.items.length, 0);
+    assert(!JSON.stringify(ops).includes('ЧУЖОЕ'), 'боковое скрыто');
+});
+
+await test('недоступный узел — узкий фолбэк с подписью сервера', async () => {
+    const roots = await bindLinkTree(RAW, fakeStore());
+    const fb = roots[1];
+    eq(fb.isLink, true);
+    eq(fb.noLinkTarget, true);
+    eq(fb.label, 'Нет');
+    eq(fb.path, '/MISSING/Нет');
+    assert(!(fb instanceof Function), 'plain-объект');
+});
+
+await test('своя идентичность: фокус не склеивается с настоящим узлом', async () => {
+    const roots = await bindLinkTree(RAW, fakeStore());
+    const leaf = roots[0].items[0].items[0];
+    leaf.expanded = true;
+    const again = await bindLinkTree(RAW, fakeStore());
+    eq(again[0].items[0].items[0].expanded, undefined);
+});
+
+await test('isLinkNode не дёргает _onEmpty настоящих элементов', async () => {
+    const spy = [];
+    const real = reactiveFake(Object.assign(Object.create(CORE.$class.prototype),
+        { path: '/OPERATIONS', label: 'Операции' }), spy);
+    eq(isLinkNode(real), false);
+    eq(isLinkNode(null), false);
+    eq(isLinkNode({}), false);
+    assert(!spy.includes('isLink'), 'запросов @isLink нет: ' + spy.join(','));
+    // Механизм поломки: прямое чтение отсутствующего свойства врёт truthy.
+    assert(!!real.isLink === true, 'прямое чтение врёт truthy');
+    assert(spy.includes('isLink'), 'механизм воспроизведён');
+});
+
+await test('геттеры item-node: класс как раньше, ссылка узкая', async () => {
+    const spy = [];
+    const raw = Object.assign(Object.create(CORE.$class.prototype),
+        { path: '/OPERATIONS', label: 'Операции', icon: 'i', bosses: Promise.resolve([]), status: 'ok' });
+    const real = reactiveFake(raw, spy);
+    const roots = await bindLinkTree(
+        [{ path: '/OPERATIONS', label: 'Операции', icon: 'i', type: '', access: 'read', children: [] }],
+        async () => raw);
+    const link = roots[0];
+    eq(isLinkNode(link), true);
+    // Хост как компонент: геттеры прототипа (isLink, iconSize, …) видны через цепочку.
+    const host = (over) => Object.assign(Object.create(nodeProto), { showStatus: false, showUsers: false }, over);
+    const g = (name, h) => getterOf(name).call(h);
+    eq(g('isLink', host({ $item: real })), false);
+    eq(g('isLink', host({ $item: link })), true);
+    eq(g('iconSize', host({ $item: real, showStatus: true })), 48);
+    eq(g('iconSize', host({ $item: link, showStatus: true })), 24);
+    eq(await g('showBoss', host({ $item: real })), false);
+    eq(g('showBoss', host({ $item: link })), false);
+    eq(g('status', host({ $item: real })), 'ok');
+    eq(g('status', host({ $item: link })), '');
+    assert(!spy.includes('isLink'), 'геттеры не читают isLink: ' + spy.join(','));
+});
+
+await test('шаблон item-node без прямого чтения isLink', async () => {
+    assert(!nodeProto.template.includes('$item?.isLink'), 'нет $item?.isLink');
+    assert(!nodeProto.template.includes('$item.isLink'), 'нет $item.isLink');
+    assert(nodeProto.template.includes('!isLink'), 'гейт isLink');
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

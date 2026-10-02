@@ -5,12 +5,13 @@ import '/oda/components/inputs/datetime/datetime.js';
 import '/oda/components/inputs/select/select.js';
 import '/oda/components/inputs/radio/radio.js';
 import '/oda/components/inputs/table/table.js';
+import '/oda/components/inputs/link/link.js';
 import '/oda/components/inputs/numeric/numeric.js';
 import '/oda/components/checkbox/checkbox.js';
 import '/oda/components/icon/icon.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
-export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table'];
+export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link'];
 
 /** Тип поля -> тег редактора. Number/Boolean — существующие oda-компоненты. */
 const EDITORS = {
@@ -23,6 +24,7 @@ const EDITORS = {
     Select: 'oda-select-input',
     Radio: 'oda-radio-input',
     Table: 'oda-table-input',
+    Link: 'oda-link-input',
 };
 
 export function editorForType(type) {
@@ -46,6 +48,10 @@ function cleanField(f, seen) {
     };
     if (f.disabled === true)
         field.disabled = true;
+    if (typeof f.catalog === 'string' && f.catalog.trim())
+        field.catalog = f.catalog.trim();
+    if (f.analytic === true)
+        field.analytic = true;
     if (type === 'Select' || type === 'Radio') {
         const options = Array.isArray(f.options) ? f.options : [];
         field.options = options

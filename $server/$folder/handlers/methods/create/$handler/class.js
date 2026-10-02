@@ -1,9 +1,25 @@
+// Очистка имени создаваемого item'а: недопустимые символы → '_', схлопывание и обрезка '_'
+const sanitizeName = (name = '') => String(name)
+    .replace(/[<>:"|?*]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+
+const EMPTY_NAME_ERROR = 'Имя пустое или состоит только из недопустимых символов';
+
 export default {
     icon: 'icons:add',
     access: 'c',
     async execute(filter) {
         const $context = await this.$item.$context;
-        const props = { $item: $context, name: 'new', message: `Введите имя создаваемого item'а и выберите тип`, filter };
+        const props = {
+            $item: $context,
+            name: 'new',
+            message: `Введите имя создаваемого item'а и выберите тип`,
+            filter,
+            'name-changed': (e) => {
+                e.target.parentElement.enable = !e.target.validity
+            },
+        };
         if (filter) {
             props.type = $context.type;
         }
@@ -15,10 +31,24 @@ export default {
                 el.parentElement.close('upload');
             }
         };
-        const result = await WORK.showDialog(el, { $item: this, TITLE: { deep: 1 }, BUTTONS: [upload] });
+        const params = {
+            $item: this,
+            TITLE: { deep: 1 },
+            BUTTONS: [upload],
+            OK: {
+                label: 'Ok',
+                icon: 'icons:check',
+                result: 'ok',
+                infoInvert: true,
+            }
+        }
+        const result = await WORK.showDialog(el, params);
         if (result === 'ok') {
+            // страховка: Enter в popover не учитывает disabled кнопки
+            if (el.validity)
+                throw new Error(el.validity);
             const type = el.type || '';
-            const name = el.name;
+            const name = el.cleanName;
             if (type.startsWith('$') && type !== '$file' && type !== '$folder') {
                 const $class = await $context.$class;
                 const $owner = await $context.$owner;
@@ -29,8 +59,7 @@ export default {
                 );
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
-                const id = name.replace(/[<>:"|?*]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-                return owner.create({ type, id, label: name });
+                return owner.create({ type, id: name, label: el.name });
             }
             if (type === '$folder') {
                 return $context.ensure_folder({ id: name });
@@ -46,12 +75,12 @@ export default {
                     const ext_tmp = await ext_folder?._get_next_item('template.' + ext);
                     if (ext_tmp)
                         post = WORK.fs.readFileSync('.' + ext_tmp.path);
-                } catch { /* empty */ }
+                } catch { /* шаблона нет — создаём пустой файл */ }
             }
             return $context.save_file(new File([post ?? ''], fullName));
         } else if (result === 'upload') {
             const fileDialog = await ODA.showFileDialog({ multiple: true });
-            let files = Array.from(fileDialog).map(f => {
+            const files = Array.from(fileDialog).map(f => {
                 let n = f.name;
                 let i = n.lastIndexOf('/');
                 if (i > 0) {
@@ -64,60 +93,173 @@ export default {
                 }
                 return f;
             });
-            const formData = new FormData();
-            files.forEach((file) => {
-                formData.append('file', file, file.name);
-            });
             return $context.save_files({ post: { files }, session: WORK });
         }
     }
 }
+
+const itemsSelector = 'folders';
+
+// Загрузка дерева типов по пути
+const fetchTypes = (path, deep = 4) =>
+    WORK.fetch(location.origin + path, '', { deep, items: itemsSelector, mask: '$*' });
+
+// Вынесение расширений файлов в отдельный узел 'ext'
+const prepareFiles = (files) => {
+    const children = files[itemsSelector];
+    files.isCategory = children.length > 0;
+    const ext = { id: 'ext', extensions: [] };
+    let i = 0;
+    while (i < children.length) {
+        const f = children[i];
+        if (f[itemsSelector]?.length) {
+            prepareFiles(f);
+            i++;
+        } else {
+            children.splice(i, 1);
+            ext.extensions.push(f);
+        }
+    }
+    if (ext.extensions.length) {
+        children.unshift(ext);
+    }
+};
+
+// Иконка типа из его class.js (значение поля icon: '...')
+const getIcon = async ($item) => {
+    const fallback = ($item?.path?.includes('$class') || $item?.isCustom) ? 'bootstrap:database' : '';
+    if (!$item?.path)
+        return fallback;
+    let data;
+    try {
+        data = await WORK.get_item($item.path + '/class.js', 'load');
+    } catch {
+        return fallback;
+    }
+    if (typeof data !== 'string' || !data.includes('icon:'))
+        return fallback;
+    const match = data.match(/icon:[^'"]*(['"])(.*?)\1/s);
+    return match ? match[2] : '';
+};
+
+// Типизированный родитель: на клиенте $parent не сериализуется (нет в $public),
+// идём через gateway-геттер — точная серверная семантика.
+const safeParent = async ($item) => {
+    try {
+        return await $item?.fetch?.('$parent');
+    } catch {
+        return null;
+    }
+};
+
+const isCustomLevel = (level) => {
+    const type = level?.type;
+    if (!type || type[0] !== '$' || type === '$folder' || type === '$file')
+        return false;
+    return !!(level.isCustom ?? level?.DATA?.isCustom);
+};
+
+// Типы, объявленные в $folder/$class кастомного узла и его кастомных предков.
+// Ближний уровень перекрывает дальний (как ~). Только свои объявления:
+// унаследованные по ~ (isInherit) не предлагаются.
+const collectDeclaredTypes = async ($ctx) => {
+    const declared = new Map();
+    const seen = new Set();
+    let level = $ctx;
+    if (level?.type === '$folder' || level?.type === '$file')
+        level = await safeParent(level);
+    while (isCustomLevel(level) && level.path && !seen.has(level.path)) {
+        seen.add(level.path);
+        try {
+            const node = await fetchTypes(level.path + '/' + level.type + '/$folder/$class', 1);
+            for (const t of node?.[itemsSelector] || []) {
+                if (!t || !t.id || t.id[0] !== '$' || t.isInherit || declared.has(t.id))
+                    continue;
+                declared.set(t.id, { id: t.id, path: t.path, isCustom: true, icon: t.icon });
+            }
+        }
+        catch { /* на уровне нет своих объявлений — идём выше */ }
+        level = await safeParent(level);
+    }
+    // собственный тип контекста — после объявлений: ближнее перекрывает дальнее
+    const ownType = $ctx?.type;
+    if (ownType && ownType[0] === '$' && ownType !== '$folder' && ownType !== '$file'
+            && !declared.has(ownType)) {
+        declared.set(ownType, {
+            id: ownType,
+            path: $ctx.path + '/' + ownType,
+            isCustom: true,
+            icon: $ctx.icon
+        });
+    }
+    const types = [...declared.values()];
+    await Promise.all(types.map(async t => {
+        t.icon ||= await getIcon(t);
+    }));
+    return types;
+};
 
 ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
-                padding-bottom: 8px;
+                gap: 8px;
+                padding: 8px 16px 12px;
             }
-            input {
-                border: none;
-                min-width: 0;
-                background-color: transparent;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                font-family: inherit;
-                font-size: inherit;
-                outline: none;
-                padding: 4px 0px;
-                @apply --flex;
-            }
-            input:invalid {
-                color: red;
+            .message {
+                padding: 8px 0;
             }
             fieldset {
-                margin: 2px 8px 2px 8px;
-                border-radius: 4px;
-                border: 1px solid var(--dark-background);
-                min-width: 0px;
+                @apply --horizontal;
                 align-items: center;
-
-                oda-icon {
-                    cursor: pointer;
-                }
+                gap: 6px;
+                margin: 0;
+                min-width: 0;
+                padding: 4px 12px 6px;
+                border: 1px solid var(--subtle-border, var(--border-color));
+                border-radius: var(--radius-m, 10px);
+                transition: border-color .15s;
+            }
+            fieldset:focus-within:not([invalid]) {
+                border-color: color-mix(in oklch, var(--accent-color) 55%, var(--subtle-border, transparent));
+            }
+            fieldset[invalid] {
+                border-color: var(--error-color);
             }
             legend {
                 font-size: small;
-                padding: 0px 8px;
+                padding: 0 6px;
+                color: var(--muted-color, inherit);
+            }
+            input {
+                @apply --flex;
+                min-width: 0;
+                padding: 4px 0;
+                border: none;
+                outline: none;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .chevron {
+                cursor: pointer;
+                border-radius: 50%;
+                transition: background .15s;
+            }
+            .chevron:hover {
+                background: var(--accent-soft);
             }
             .validity {
-                @apply --error;
-                padding: 4px;
+                color: var(--error-color);
                 font-size: small;
+                padding: 0 4px;
             }
         </style>
-        <label ~if="message" ~html="message" light style="padding: 16px;"></label>
-        <fieldset class="horizontal flex">
+        <label ~if="message" ~html="message" class="message"></label>
+        <fieldset class="flex" :invalid="_dirty && !!validity">
             <legend>Name:</legend>
             <input
                 id="nameInput"
@@ -132,10 +274,10 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 @focus="_focus"
             >
         </fieldset>
-        <fieldset id="select-type" class="horizontal flex">
+        <fieldset id="select-type" class="flex">
             <legend>Type:</legend>
             <type-node flex :row="typeRow" title="Выберите тип создаваемого item'а" @tap="_selectType"></type-node>
-            <oda-icon icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
+            <oda-icon class="chevron" icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
         </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
     `,
@@ -144,6 +286,12 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
     _inputName(e) {
         this._dirty = true;
         this.name = e.target.value;
+    },
+    get cleanName() {
+        return sanitizeName(this.name);
+    },
+    get validity() {
+        return this.cleanName ? '' : EMPTY_NAME_ERROR;
     },
     get typeRow() {
         const selected = this._selectedTypeRow;
@@ -162,48 +310,21 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         return { id: '$' + type, icon: 'files-color:s-' + type };
     },
     _selectedTypeRow: undefined,
-    async _selectType(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        // const $item = await WORK.fetch(location.origin + '/$server/$folder', '', { deep: 4, items: 'folders', mask:'$*' });
-        // Подготовка dataSet
-        const itemsSelector = 'folders';
-        let items;
-
-        // вынесение расширений в отдельный узел
-        const prepareFiles = (files) => {
-            const children = files[itemsSelector];
-            files.isCategory = children.length > 0;
-            const ext = { id: 'ext', extensions: [] };
-            let i = 0;
-            while (i < children.length) {
-                const f = children[i];
-                if (f[itemsSelector]?.length) {
-                    prepareFiles(f);
-                    i++;
-                } else {
-                    children.splice(i, 1);
-                    ext.extensions.push(f);
-                }
-            }
-            if (ext.extensions.length) {
-                children.unshift(ext);
-            }
-        }
-
-        const response = await fetch(origin + '?system_types');
-        const system_types = await response.text();
+    // Фильтр дерева типов: убирает системные, проставляет иконки и категории
+    async _makeTypeFilter() {
+        const response = await fetch(location.origin + '?system_types');
+        const text = await response.text();
+        const systemTypes = new Set(text.split(',').map(s => s.trim()).filter(Boolean));
         const filterItems = async (items) => {
             if (!items)
                 return;
             let i = 0;
             while (i < items.length) {
                 const item = items[i];
-                if (system_types.includes(item.id)) { // убрать системные
+                if (systemTypes.has(item.id)) { // убрать системные
                     items.splice(i, 1);
                     continue;
                 }
-
                 if (item.id === '$file') {
                     prepareFiles(item);
                 }
@@ -221,109 +342,61 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 }
                 i++;
             }
-        }
-
-        const getIcon = async ($item) => {
-            try {
-                let icon_idx = -1;
-                let data = null;
-                if ($item.path) {
-                    try {
-                        data = await WORK.get_item($item.path + '/class.js', 'load');
-
-                        icon_idx = data.indexOf('icon:');
-                    }
-                    catch {
-
-                    }
-                }
-                if (!~icon_idx) {
-                    if ($item.path.includes('$class') || $item.isCustom)
-                        return 'bootstrap:database';
-                    else
-                        return '';
-                }
-                const apos = data.indexOf('\'', icon_idx + 5);
-                const quot = data.indexOf('"',  icon_idx + 5);
-                if (!~apos && !~quot)
-                    return '';
-                let start, end;
-                if (apos < quot && ~apos || !~quot) {
-                    start = apos + 1;
-                    end   = data.indexOf('\'', start);
-                }
-                else {
-                    start = quot + 1;
-                    end   = data.indexOf('"',  start);
-                }
-                return data.substring(start, end);
-            }
-            catch (ex) {
-                console.warn('On getIcon', ex);
-            }
-            return '';
         };
-
-        let hideTops = 0;
-        let hideRoots = 2;
+        return { filterItems };
+    },
+    async _buildItems() {
+        const { filterItems } = await this._makeTypeFilter();
         const $folder = { id: '$folder', icon: 'fontawesome:r-folder' };
         if (this.filter) {
-            //hideRoots = 1;
-            let url = null;
+            let path = null;
             switch (this.filter) {
-                case '$base': {
-                    url = location.origin + '/$server/$folder/$class/$structure';
-                } break;
+                case '$base':
+                    path = '/$server/$folder/$class/$structure';
+                    break;
                 case '$role':
-                case '$group': {
-                    url = location.origin + '/$server/$folder/$class/$structure/$role';
-                } break;
+                case '$group':
+                    path = '/$server/$folder/$class/$structure/$role';
+                    break;
             }
-            if (url === null) {
-                throw new Error();
-            }
-            const $item = await WORK.fetch(url, '', { deep: 4, items: itemsSelector, mask: '$*' });
-            items = [$item];
+            if (path === null)
+                throw new Error(`create: неизвестный filter «${this.filter}»`);
+            const items = [await fetchTypes(path)];
             await filterItems(items);
+            return items;
         }
-        else if (this.$item.type === '$folder' || (this.$item.type === '$file')) {
+        if (this.$item.type === '$folder' || this.$item.type === '$file') {
             // в файле только папки и файлы
-            const $file = await WORK.fetch(location.origin + '/$server/$folder/$file', '', { deep: 4, items: itemsSelector, mask: '$*' })
+            const $file = await fetchTypes('/$server/$folder/$file');
             prepareFiles($file);
             $folder[itemsSelector] = [$file];
-
-            items = [$folder];
+            return [$folder];
         }
-        else if (this.$item.isCustom) {
-            // в custom'ых item'ах только папки и custom'ные типы
-            let $custom = (this.$item.type === '$folder') ? await this.$item.$parent : this.$item;
-            while (true) {
-                const $parent = await $custom.$parent;
-                if ($parent.type === $custom.type) {
-                    $custom = $parent;
-                }
-                else {
-                    break;
-                }
+        if (this.$item.isCustom) {
+            // в custom'ых item'ах — папка и типы, объявленные в $folder/$class
+            // узла и его кастомных предков (ближний уровень перекрывает дальний)
+            const customTypes = await collectDeclaredTypes(this.$item);
+            if (customTypes.length) {
+                $folder[itemsSelector] = customTypes;
+                return [$folder];
             }
-            const $type = { id: $custom.type, path: $custom.path + '/' + $custom.type, isCustom: true };
-            $type.icon = await getIcon($type);
-            $folder[itemsSelector] = [$type];
-
-            items = [$folder];
+            // объявления не нашлись — полное дерево
         }
-        else {
-            items = [await WORK.fetch(location.origin + '/$server/$folder', '', { deep: 4, items: itemsSelector, mask: '$*' })];
-
-            await filterItems(items);
-        }
+        const items = [await fetchTypes('/$server/$folder')];
+        await filterItems(items);
+        return items;
+    },
+    async _selectType(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const items = await this._buildItems();
         const menu = ODA.createElement('oda-tree',
             {
-                itemsSelector: 'folders',
+                itemsSelector,
                 items,
                 nodeTemplate: 'type-node',
-                hideTops,
-                hideRoots,
+                hideTops: 0,
+                hideRoots: 2,
                 execute(item) {
                     this.parentElement.close(item);
                 }
@@ -353,14 +426,6 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         name: '',
         type: {
             $def: '$folder',
-            //$save: true
-        }
-    },
-    customName: '',
-    validity: {
-        set(n) {
-            const input = this.$('#nameInput');
-            input.setCustomValidity(n);
         }
     },
     async attached() {
