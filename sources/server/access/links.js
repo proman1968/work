@@ -37,7 +37,12 @@ async function collect() {
         }
         catch { continue; }
         for (const e of entries) {
-            if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name))
+            if (!e.isDirectory() || e.name.startsWith('.'))
+                continue;
+            // DATA/INDEX пропускаем только как зону внутри метапапки ($тип/DATA):
+            // корневой класс /DATA сканируется наравне с остальными
+            if (SKIP_DIRS.has(e.name)
+                && (e.name !== 'DATA' && e.name !== 'INDEX' || rel.split('/').some(s => s.startsWith('$'))))
                 continue;
             const sub = rel ? rel + '/' + e.name : e.name;
             if (e.name === '$group') {

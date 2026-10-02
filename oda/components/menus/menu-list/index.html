@@ -1,0 +1,20 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-menu-list</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./menu-list.js"></script>
+<script type="module" src="/oda/components/button/button.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m);">
+    <oda-menu-list id="list" border style="width: 18em;"></oda-menu-list>
+    <oda-button id="openMenu" label="ODA.showMenu" border></oda-button>
+    <span id="out"></span>
+</div>
+<script type="module">
+    const items = [{ label: 'Первый', icon: 'icons:home', value: 1 }, { label: 'Второй', hint: 'подсказка', value: 2 }, { label: 'Третий', group: 'Группа', value: 3 }, { label: 'Недоступно', disabled: true, value: 4 }];
+    await customElements.whenDefined('oda-menu-list');
+    list.items = items;
+    list.value = 2;
+    openMenu.addEventListener('click', e => ODA.showMenu({ items, value: 2 }, e.currentTarget).then(v => out.textContent = 'выбрано: ' + JSON.stringify(v), () => out.textContent = 'отмена'));
+</script>

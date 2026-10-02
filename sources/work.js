@@ -30,6 +30,14 @@ if (process.env.WORK_RECOVER !== '0') {
     recoverTasks().catch(e => console.warn('[agent recovery]', e.message));
 }
 
+// прогрев дерева классов в фоне: первый вход не платит холодную сборку; WORK_PREWARM=0 — выключить
+if (process.env.WORK_PREWARM !== '0') {
+    import('./host/prewarm.js')
+        .then(m => m.prewarm(WORK))
+        .then(r => process.env.WORK_PREWARM_LOG && console.log('[prewarm]', r.classes, 'классов,', r.ms, 'мс'))
+        .catch(e => console.warn('[prewarm]', e.message));
+}
+
 // правки кода на диске (SVN update, редактор) — сброс кэшей сборки без рестарта
 if (process.env.WORK_WATCH !== '0') {
     const { watchCode } = await import('./host/watch.js');

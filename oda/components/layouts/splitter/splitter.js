@@ -19,7 +19,7 @@ ODA({
                 width: 100%;
             }
             :host(:hover) {
-                background-color: black;
+                background-color: var(--accent-color);
                 @apply --shadow;
             }
             :host([vertical])::after, :host([horizontal])::after, :host([vertical])::before, :host([horizontal])::before,
@@ -63,6 +63,9 @@ ODA({
         pointerdown(e) { this._startDragging(e) }
     },
     _checkSize(v) {
+        // доля в процентах: min / max (px) не применяются
+        if (this.percent)
+            return Math.min(100, Math.max(0, v));
         if (this.min && v < this.min)
             v = this.min;
         if (this.max && v > this.max)
@@ -149,7 +152,7 @@ ODA({
         }
     },
     _stopDragging(e) {
-        if (this._pointerId) {
+        if (this._pointerId != null) {
             this.releasePointerCapture(this._pointerId);
             this._pointerId = null;
         }

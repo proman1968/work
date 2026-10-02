@@ -16,7 +16,7 @@ ODA({is: 'oda-table-header',
                 max-width: {{autoWidth?'100%':'auto'}};
             }
         </style>
-        <oda-table-header-cell class="cell" draggable="true" :auto-width ~for="cols"></oda-table-header-cell>
+        <oda-table-header-cell class="cell" draggable="true" :auto-width ~for="cols" :column="$for.item"></oda-table-header-cell>
     `,
     get table(){
         return this.host;
@@ -159,10 +159,10 @@ ODA({is: 'oda-table-header-cell',
                 width: 3px;
                 box-sizing: border-box;
                 border-color: var(--dark-background);
-                height: 100%;;
+                height: 100%;
             }
             .splitter:hover{
-                border-color: red;
+                border-color: var(--error-color);
             }
             div{
                 overflow: hidden;
@@ -236,11 +236,11 @@ ODA({is: 'oda-table-header-cell',
                     </div>
                 </div>
             </div>
-            <div :draggable="(!column.width).toString()" :disabled="column.width" no-flex class="splitter" @dragstart.stop></div>
+            <div :draggable="(!column.width).toString()" :disabled="column.width" no-flex class="splitter" @dragstart.stop @dblclick.stop="table.fitColumn(column)"></div>
          </div>
 
         <div flex horizontal dark ~show="hasChildren && expanded" style="box-sizing: border-box">
-            <oda-table-header-cell draggable="true" ~for="column?.items" flex auto-width></oda-table-header-cell>
+            <oda-table-header-cell draggable="true" ~for="column?.items" :column="$for.item" flex auto-width></oda-table-header-cell>
         </div>
     `,
     '@attributes':{
@@ -248,7 +248,8 @@ ODA({is: 'oda-table-header-cell',
             $attr: true,
             $type: Boolean,
             get(){
-                return this.column?.flex ?? this.$pdp.autoWidth;
+                // до привязки колонки — не растягивать (ширина измеряется и сохраняется)
+                return this.column ? (this.column.flex ?? this.autoWidth) : false;
             }
         }
     },
@@ -256,13 +257,13 @@ ODA({is: 'oda-table-header-cell',
         return this.column?.showColumnTools || this.table.showColumnTools;
     },
     get name(){
-        return this.column.name;
+        return this.column?.name;
     },
     get showTools(){
         return !!this.name && !this.expanded;
     },
     get treeMode(){
-        return this.column.treeMode;
+        return this.column?.treeMode;
     },
     get buttons(){
         let buttons = [];
@@ -367,7 +368,7 @@ ODA({is: 'oda-table-header-cell',
         label: {
             $type: String,
             get(){
-                return this.column.label || this.column.name
+                return this.column?.label || this.column?.name || ""
             }
         }
     },
@@ -379,7 +380,7 @@ ODA({is: 'oda-table-header-cell',
         $attr: true,
     },
     get minWidth(){
-        if (this.column.width)
+        if (this.column?.width)
             return this.column.width;
         let min = this.$pdp.iconSize * 2;
         const calculate = (col)=>{
@@ -399,10 +400,10 @@ ODA({is: 'oda-table-header-cell',
         return calculate(this.column);
     },
     get maxWidth(){
-        return this.column.width || 2000;
+        return this.column?.width || 2000;
     },
     get realWidth(){
-        return this.column.width || this.width;
+        return this.column?.width || this.width;
     },
     _onDragstart(e) {
         utils.drag.type = 'column-resize';
@@ -425,6 +426,15 @@ ODA({is: 'oda-table-header-cell',
     get $saveKey(){
         return this.name || '';
     },
+    /** состояние сохраняется только у именованных колонок (служебная хвостовая колонка — без ключа) */
+    saveToLocalStorage(key, value){
+        if (this.column?.name)
+            ODA.LocalStorage.create(this._savePath).setItem(key, value);
+    },
+    loadFromLocalStorage(key){
+        if (this.column?.name)
+            return ODA.LocalStorage.create(this._savePath).getItem(key);
+    },
     get path(){
         if(this.host.is === 'oda-table-header-cell')
             return this.host.path + '\n' + '  '.repeat(this.host.path.split('\n').length) + this.label;
@@ -437,11 +447,22 @@ ODA({is: 'oda-table-header-cell',
             this.$pdp.visible_columns = undefined;
         }
     },
-    autoWidth: true,
+    autoWidth: false,
+    /** колонка ячейки заголовка (биндинг из ~for); ячейка — её $element */
     column: {
-        get(){
-            this.$for.item.$element = this;
-            return this.$for.item;
+        $type: Object,
+        set(column){
+            if (column && column.$element !== this) {
+                column.$element = this;
+                // ячейка ~for могла служить другой колонке: состояние — из сохранённого для этой колонки
+                // после сброса зависимых (ключ сохранения — имя новой колонки)
+                queueMicrotask(() => {
+                    this.width = this.loadFromLocalStorage('width') ?? 100;
+                    this.sortOrder = this.loadFromLocalStorage('sortOrder') ?? 0;
+                    this.expanded = this.loadFromLocalStorage('expanded') ?? !!column.expanded;
+                    this.table?.invalidate('visible_columns', 'col_styles', 'groups');
+                });
+            }
         }
     },
     sortOrder: {
@@ -456,7 +477,7 @@ ODA({is: 'oda-table-header-cell',
         return '';
     },
     setSort(e) {
-        if (!this.table.allowSort || !this.column.name) return;
+        if (!this.table.allowSort || !this.column?.name) return;
         if (this.sortOrder > 0) {
             this.sortOrder = -this.sortOrder;
         }
@@ -517,24 +538,22 @@ ODA({is: 'oda-table-header-cell',
         }
     },
     _onContextmenu(e){
-        this.showContextMenu({
-            anchor: e,
-            title: 'Column menu',
-            style:{
-                left: 'anchor(left)',
-                positionArea: 'end'
-            },
-            items: [{label: 'asfasdf', icon: 'icons:error', execute: (e)=>{
-
-            }, items:[
-                {label: 1},
-                {label: 2}
-            ]}]
-        })
+        e.preventDefault();
+        const t = this.table;
+        ODA.showMenu({ title: this.label, items: [
+            { label: 'По возрастанию', icon: 'icons:arrow-back:90', execute: () => t.sortBy(this.column, 1) },
+            { label: 'По убыванию', icon: 'icons:arrow-back:270', execute: () => t.sortBy(this.column, -1) },
+            { label: 'Без сортировки', icon: 'icons:close', execute: () => t.sortBy(this.column, 0) },
+            { label: 'Ширина по содержимому', icon: 'icons:settings-overscan', execute: () => t.fitColumn(this.column) },
+            { label: 'Скрыть колонку', icon: 'icons:visibility-off', execute: () => { this.hidden = true; t.visible_columns = undefined; } }
+        ] }, e).catch(() => {});
     },
     $listeners:{
         resize(e){
-            this.width = Math.round(this.getBoundingClientRect().width);
+            // измеренная ширина нужна только растягиваемой колонке; иначе ширина задаётся (перетаскивание, по содержимому)
+            if (this.flex)
+                this.width = Math.round(this.getBoundingClientRect().width);
+            this.table?.invalidate('col_styles');
         },
         dragstart(e){
             e.stopPropagation();
@@ -542,7 +561,6 @@ ODA({is: 'oda-table-header-cell',
             e.dataTransfer.effectAllowed = "all";
             this.dragging  = true;
             this.style.zIndex = 5;
-            this.$pdp.raised = true;
             this.$pdp.state = 'info';
             let order = -1;
             this.host.setAttribute('drop-reciver', '');
@@ -561,7 +579,6 @@ ODA({is: 'oda-table-header-cell',
                 el.dragging  = false;
                 el.style.zIndex = el.fix?2:0;
                 el.style.transform = '';
-                el.$pdp.raised = false;
                 el.$pdp.state = false;
                 el._has_next = undefined;
             }

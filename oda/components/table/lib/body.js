@@ -51,7 +51,7 @@ ODA({is: 'oda-table-row',
                 border: none !important;
             }
             .cell:focus{
-                outline: 1px dotted blue;
+                outline: 1px solid var(--focused-color);
                 outline-offset: -1px;
             }                
         </style>
@@ -73,7 +73,7 @@ ODA({is: 'oda-table-row',
                 this.$pdp.table.fire('before-collapse', this.row);
                 this.row.expanded = n;
                 if(this.row.isRaised){
-                    this.$pdp.scrollToTop(this.column?.row.source);
+                    this.$pdp.scrollToTop(this.row.source);
                 }
                 queueMicrotask(()=>{
                     this.$pdp.table.fire('after-collapse', this.row);
@@ -168,6 +168,10 @@ ODA({is: 'oda-table-row',
     $listeners:{
         tap(e){
             this.$pdp.focusedRow = this.row;
+        },
+        dblclick(e){
+            this.$pdp.focusedRow = this.row;
+            this.$pdp.table.rowPanelOpen = true;
         }
     }
 })
@@ -220,7 +224,19 @@ ODA({is:'oda-table-cell',
             }
             oda-icon{
                 cursor: pointer;
-            }   
+            }
+            .text {
+                align-self: center;
+                padding: 0 var(--space-s);
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+            .control {
+                flex: 1;
+                min-width: 0;
+                align-self: center;
+            }
             label{
                 margin: 4px;
             } 
@@ -247,10 +263,13 @@ ODA({is:'oda-table-cell',
             <oda-icon ~if="showExpander" :transparent="!row?.items?.length" icon="icons:chevron-right" 
                 :rotate="(row?.expanded)?90:0" @tap.stop="host.expanded = !host.expanded"></oda-icon>
             <span disabled ~if="subCount" style="align-self: end; font-size: xx-small; position: absolute; right: 0px;">{{subCount}}</span>
-            <oda-checkbox ~if="showCheckbox && row" class="checkbox" ::state="row.checked"></oda-checkbox>
+            <oda-checkbox ~if="showCheckbox && row" class="checkbox" :state="row.checked" @state-changed.stop="$pdp.table.setChecked(row, $event.detail.value)"></oda-checkbox>
             
         </div>
-        <span ~is="$pdp.cellTemplate" :$item="value" ~html="value"></span>
+        <div class="control" @value-changed.stop="$event.target.matches(':focus-within') && $pdp.table.setCell(row, column, $event.detail.value)">
+            <div ~if="control" ~is="control" class="control" :field="cellField" :value :row :column :readonly="!editable" borderless dense></div>
+        </div>
+        <span ~if="!control" class="text">{{text}}</span>
     `,
     colLines:{
         $def: false,
@@ -267,7 +286,7 @@ ODA({is:'oda-table-cell',
             if(this.isRaised){
                 e.stopPropagation();
                 e.preventDefault();
-                this.$pdp.scrollToTop(this.column?.row.source, true);
+                this.$pdp.scrollToTop(this.column?.row?.source, true);
             }
         },
         down(e) {
@@ -298,20 +317,20 @@ ODA({is:'oda-table-cell',
                         container.scrollTop = Math.max(0, container.scrollTop - rowHeight);
                         return;
                     }
-                    const targetCell = prevRow?.querySelector(`oda-table-cell[col="${this.colId}"]`);
+                    const targetCell = prevRow?.$$?.('oda-table-cell')[this.$for.index];
                     if (targetCell) targetCell.focus();
                 },
                 ArrowDown: () => {
                     const nextRow = currentRow.nextElementSibling;
                     const currentBottom = currentRow.offsetTop + rowHeight;
-                    const visibleBottom = this.$pdp.bodyHeight;
+                    const visibleBottom = container.clientHeight;
                     
                     if (currentBottom > visibleBottom - rowHeight && 
                         this.$pdp.screenTopRowIndex + this.$pdp.screenRowCount < this.$pdp.rowCount) {
                         container.scrollTop += rowHeight;
                         return;
                     }
-                    const targetCell = nextRow?.querySelector(`oda-table-cell[col="${this.colId}"]`);
+                    const targetCell = nextRow?.$$?.('oda-table-cell')[this.$for.index];
                     if (targetCell) targetCell.focus();
                 },
                 Space: (e) => {
@@ -319,6 +338,7 @@ ODA({is:'oda-table-cell',
                 },
                 Enter: (e) => {
                     this.$pdp.focusedRow = this.row;
+                    this.$pdp.table.rowPanelOpen = true;
                 }
             };
 
@@ -378,6 +398,24 @@ ODA({is:'oda-table-cell',
     },
     get value(){
         return this.col_name && this.$pdp.row?.[this.col_name];
+    },
+    get row(){
+        return this.$pdp.row;
+    },
+    /** описание поля ячейки: колонка ← строка ($fields['*']) ← ячейка ($fields[имя колонки]) */
+    get cellField(){
+        return this.isGroup || this.isRaised || !this.column || !this.row ? undefined : this.$pdp.table.cellField(this.row, this.column);
+    },
+    /** контрол ячейки по карте таблицы; без карты и шаблона — текст */
+    get control(){
+        return this.cellField && this.$pdp.table.cellControl(this.cellField);
+    },
+    get editable(){
+        return this.$pdp.table.editable && !this.cellField?.readonly && !this.row?.readonly;
+    },
+    get text(){
+        const v = this.value;
+        return v === undefined || v === null ? '' : typeof v === 'object' ? (v.label ?? v.name ?? '') : String(v);
     },
     part:{
         $attr: true,

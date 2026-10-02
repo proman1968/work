@@ -53,7 +53,7 @@ ODA({is: 'oda-code-editor',
         </style>
         <div @keydown style="min-height: 100%; font-size: large;"></div>
     `,
-    on_keydown(e) {
+    _onKeydown(e) {
         e.stopPropagation();
     },
     get lineHeight(){
@@ -265,7 +265,7 @@ ODA({is: 'oda-code-editor',
 
         this.editor.session.on('change', (e) => {
             this.checkBreakpoints(e);
-            this['#value'] = undefined;
+            this.invalidate('value');
             this.isChanged = this.value !== this.src;
             this.fire('change', this.editor?.getValue() || '');
         });

@@ -1,4 +1,19 @@
-import { bindLinkTree } from './link-nodes.js';
+import { bindLinkTree, isLinkNode } from './link-nodes.js';
+
+/**
+ * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
+ * или он неприменим: ссылки и группы достраивают детей на клиенте, фильтры дерева отсекают часть.
+ */
+export function knownHasItems(it, pdp = {}) {
+    if (!it || isLinkNode(it) || it.type === '$group' || it.type === '$server')
+        return undefined;
+    if (pdp.hideSystem || pdp.hideFiles || pdp.onlyClasses || pdp.itemsSelector !== 'items')
+        return undefined;
+    // __version — реактивная зависимость: после события changed флаг удаляется и пересчитывается по items
+    it.__version;
+    const v = it.DATA?.hasItems;
+    return typeof v === 'boolean' ? v : undefined;
+}
 
 function applyTreeFilters(items, host) {
     items = items || [];
@@ -12,57 +27,11 @@ function applyTreeFilters(items, host) {
 }
 
 export default {
-    template: /*html*/`
-        <style>
-            :host {
-                @apply --vertical;
-                overflow: hidden;
-            }
-            input {
-                margin: auto;
-                padding: 2px 0px 2px 8px;
-                width: 0px;
-                border: none;
-                outline: none;
-            }
-            .search {
-                margin: 2px 8px;
-                border-radius: 16px;
-                overflow: hidden;
-                min-height: 30px;
-                align-items: center;
-            }
-            oda-icon {
-                scale: .7;
-                opacity: .5;
-            }
-            oda-button {
-                padding: 4px;
-            }
-        </style>
-        <div ~if="allowSearch" raised horizontal style="padding:5px; align-items: center; z-index:3; position: sticky; top: 0px;">
-            <div class="search" raised horizontal flex content>
-                <input autofocus  id="site-search" content type="search" placeholder="Search" flex/>
-                <oda-icon @tap="$('input').focus()" :icon-size icon="icons:search"></oda-icon>
-            </div>
-        </div>
-        <div vertical flex style="overflow: auto;">
-            <div vertical style="overflow: visible;">
-                <oda-tree-node :show-tools :menu-mode :show-users :show-status ~is="nodeTemplate" :hide-tops :hide-roots ~for='items'></oda-tree-node>
-            </div>
-        </div>
-    `,
-    showUsers: false,
-    showSize: false,
-    showStatus: false,
-    get expanderIconSize(){
-        return ODA.states?.mobileMode ? this.iconSize * 1.5 : this.iconSize;
-    },
+    imports: 'oda//tree',
+    extends: 'oda-tree',
+    /** строки и поиск — из базового шаблона; узлы — системные (item-node, $item) */
     nodeTemplate: 'oda-tree-node',
-    itemsSelector: 'items',
-    get tree() {
-        return this;
-    },
+    itemTemplate: 'oda-tree-node',
     expandAll: false,
     $public: {
         allowCategories: false,
@@ -81,13 +50,16 @@ export default {
             $def: 'handlers',
             $list: ['tools', 'handlers', 'both']
         },
+        /** фильтры системных типов */
         hideSystem: false,
         hideFiles: false,
         onlyClasses: false, // только CORE.$class (site-navigation)
     },
-    items: [],
-    get step() {
-        return (this.iconSize || 24) / 2;
+    showUsers: false,
+    showSize: false,
+    showStatus: false,
+    get expanderIconSize(){
+        return ODA.states?.mobileMode ? this.iconSize * 1.5 : this.iconSize;
     },
     $item: {
         async set(n) {
@@ -96,6 +68,7 @@ export default {
                     this.isChanged = true;
                     this.render();
                 })
+                await this.prefetch(n);
                 await this.getItems(n, 1)
                 this.items = [n];
             }
@@ -104,94 +77,54 @@ export default {
             }
         }
     },
+    /** Глубина первого слоя дерева одним запросом info (вглубь — по классам); 0 — выключить. */
+    prefetchDeep: 3,
+    /**
+     * Первый слой дерева одним запросом: info точки входа на prefetchDeep уровней.
+     * Вложенные списки раскладываются по элементам (__bind), у нижнего уровня — hasItems:
+     * @items уходит только при раскрытии глубже предзагруженного.
+     */
+    async prefetch($item) {
+        if (!this.prefetchDeep || this.itemsSelector !== 'items' || !$item?.fetch)
+            return;
+        if (Array.isArray($item[R]?.cache?.items))
+            return;
+        try {
+            const res = await WORK.fetch(location.origin + ($item.short || '/'), 'info', { deep: this.prefetchDeep, branch: 'classes' });
+            if (!Array.isArray(res?.items))
+                return;
+            $item.items = WORK.__bind(res.items);
+            if (typeof res.hasItems === 'boolean' && $item.DATA)
+                $item.DATA.hasItems = res.hasItems;
+        }
+        catch { /* как раньше — по @items */ }
+    },
+    /** предзагрузка дочерних $item с системными фильтрами */
     async getItems($item, deep = 0) {
+        // дети уже известны или их нет — заранее не грузим (стрелка — по hasItems, список — при раскрытии)
+        if (deep < 1 && typeof $item?.DATA?.hasItems === 'boolean' && !Array.isArray($item[R]?.cache?.[this.itemsSelector]))
+            return;
         let items = applyTreeFilters(await $item?.[this.itemsSelector], this);
+        // тот же фильтр, что у узла (oda-tree-node.items): неадмину корень показывает только классы —
+        // иначе предзагрузка тянет @items скрытых узлов (node_modules, USERS, файлов корня)
+        if ($item?.type === '$server' && items instanceof Array && !(await $item.isAdmin))
+            items = items.filter(f => f instanceof CORE.$class);
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
             }
         }
     },
-    async getLastChild($item) {
-        let focusedItem = $item;
-        let children = await focusedItem?.[this.itemsSelector];
-        while (children?.length) {
-            focusedItem = children.last;
-            children = await focusedItem?.[this.itemsSelector];
-        }
-        return focusedItem;
+    /** навигация базового дерева — по $item */
+    nodeOf(nodeComp) {
+        return nodeComp?.$item;
     },
-    async up(e) {
-        if (this.focusedItem === null) {
-            this.focusedItem = await this.getLastChild(this.$item);
-            //this.focusedNode = this.$('div div oda-tree-node:last-child');
-            return;
-        }
-
-        if (this.focusedNode === null) {
-            console.warn('this.focusedNode === null')
-            return;
-        }
-
-        if (this.focusedItem === this.$item.items.first) {
-            this.focusedItem = await this.getLastChild(this.$item);
-            return;
-        }
-
-        const host = this.focusedNode.host;
-        if (this.focusedItem === host.$item.items.first) {
-            this.focusedItem = host.$item;
-        }
-        else {
-            const items = host.$item.items;
-            this.focusedItem = items[items.indexOf(this.focusedItem) - 1];
-        }
+    rootItems() {
+        return this.$item ? [this.$item] : [];
     },
-    async down(e) {
-        if (this.focusedItem === null) {
-            this.focusedItem = this.$item.items.first;
-            //this.focusedNode = this.$('div div oda-tree-node:first-child');
-            return;
-        }
-
-        if (this.focusedNode === null) {
-            console.warn('this.focusedNode === null')
-            return;
-        }
-
-        let host = (this.focusedItem === this.$item.items.last) ? this : this.focusedNode.host;
-        if (this.focusedItem === host.$item.items.last) {
-            const children = await this.focusedItem?.[this.itemsSelector];
-            if (children.length) {
-                this.focusedItem = children[0];
-                return;
-            }
-
-            if (host.$item === this.$item.items.last) {
-                this.focusedItem = this.$item.items.first;
-                return;
-            }
-
-            let $item = this.focusedItem;
-            let idx = host.$item.items.indexOf($item);
-            while (idx === (host.$item.items.length - 1)) {
-                $item = host.$item;
-                if (host.$item === this.$item.items.last) {
-                    this.focusedItem = this.$item.items.first;
-                    return;
-                }
-                host = host.host;
-                idx = host.$item.items.indexOf($item);
-            }
-            this.focusedItem = host.$item.items[idx + 1];
-        }
-        else {
-            this.focusedItem = host.$item.items[host.$item.items.indexOf(this.focusedItem) + 1];
-        }
+    async nodeChildren(node) {
+        return applyTreeFilters(Array.isArray(node?.[this.itemsSelector]) ? node[this.itemsSelector] : [], this);
     },
-    focusedItem: null,
-    focusedNode: null,
-    checkedItems: [],
 }
 ODA({is: 'oda-tree-node',
     imports: 'oda//icon, ~/lib//node',
@@ -209,6 +142,15 @@ ODA({is: 'oda-tree-node',
                 overflow: hidden;
                 top: 0px;
                 position: sticky;
+                border-radius: var(--radius-s);
+            }
+            .node:hover {
+                background: var(--accent-soft);
+            }
+            .node.focused {
+                background: var(--accent-soft);
+                outline: 2px solid var(--accent-color);
+                outline-offset: -2px;
             }
             .sub-nodes {
                 @apply --vertical;
@@ -223,25 +165,25 @@ ODA({is: 'oda-tree-node',
             .step {
                 width: {{hideTops>0?0:$pdp.step}}px;
                 @apply --no-flex;
-                border-right: 1px dotted silver;
+                border-right: 1px dotted var(--border-color);
             }
             oda-icon {
                 order: {{$pdp.expanderOrder}};
             }
             [category]{
-                font-size: xx-small;
+                font-size: var(--font-size-xs);
                 @apply --dark;
             }
             [category]>item-node{
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused}" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-            <item-node :expanded :info-invert="isFocused" auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
+            <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
         </div>
-        <div horizontal flex ~if="expanded" style="min-height: 1px;">
+        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
                 <oda-tree-node :show-status :show-users ~is="nodeTemplate" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
@@ -295,6 +237,23 @@ ODA({is: 'oda-tree-node',
     },
     get rootNode() {
         return this.host === this.$pdp.tree;
+    },
+    hidden: {
+        $def: false,
+        $attr: true,
+        /** скрыт поиском: ни сам, ни синхронно доступные потомки не совпали */
+        get() {
+            const f = String(this.$pdp.filter || '').toLowerCase();
+            if (!f)
+                return false;
+            return !this._deepMatch(this.$item, f);
+        }
+    },
+    _deepMatch(item, f) {
+        if (String(item?.label || item?.id || '').toLowerCase().includes(f))
+            return true;
+        const kids = item?.[this.$pdp.itemsSelector];
+        return Array.isArray(kids) && kids.some(k => this._deepMatch(k, f));
     },
     $public: {
         hideTops: {
@@ -417,14 +376,24 @@ ODA({is: 'oda-tree-node',
                             this.$pdp.tree.focusedItem = item;
                     }
                 })
-            }, {ones: true})
+            }, {once: true})
             return items;
         })
+    },
+    /**
+     * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
+     * или он неприменим (ссылки и группы достраивают детей на клиенте, фильтры дерева отсекают часть).
+     */
+    get knownHasItems() {
+        return knownHasItems(this.$item, this.$pdp);
     },
     get expanderIcon() {
         let icon = 'icons:chevron-right';
         if (this.expanded)
             icon += ':90'
+        const known = this.knownHasItems;
+        if (known !== undefined)
+            return known ? icon : '';
         return Promise.resolve(this.items).then(items => items?.length ? icon : '');
     },
     iconChecked: 'icons:check-box',

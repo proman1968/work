@@ -207,6 +207,10 @@ ODA({ is: 'oda-jupyter', imports: 'oda//code-editor, oda//button',
     get jupyter() {
         return this;
     },
+    /** Выбор URL js-файла ячейки; приложение переопределяет (выбор из своего хранилища). */
+    async selectFileUrl(e, cell) {
+        return ODA.showPrompt('URL файла (*.js)', { value: cell.url || '' });
+    },
     output_data: [],
     tabindex: {
         $def: 0,
@@ -993,30 +997,6 @@ ODA({ is: 'oda-jupyter-divider',
     }
 })
 
-ODA({ is: 'item-tree-jupyter', imports: '~/lib//tree.js', extends: 'this, item-tree',
-    template: `
-        <div horizontal flex style="min-width: 240px; border-bottom: 1px solid var(--dark-2);">
-            <input flex ::value />
-            <oda-button icon="icons:delete" @tap="clearUrl"></oda-button>
-            <oda-button icon="icons:check" @tap="isOk"></oda-button>
-        </div>
-    `,
-    get value() {
-        return this.cell.url || '';
-    },
-    set value(v) {
-        this.cell.url = v;
-    },
-    cell: undefined,
-    clearUrl() {
-        this.cell.url = '';
-    },
-    isOk() {
-        this.cell.url = this.value;
-        this.parentElement.close();
-    }
-})
-
 ODA({ is: 'oda-jupyter-toolbar', // imports: 'oda/tools/containers/containers, oda/tools/property-grid/property-grid',
     template:/* html */ `
         <style>
@@ -1051,23 +1031,7 @@ ODA({ is: 'oda-jupyter-toolbar', // imports: 'oda/tools/containers/containers, o
         </div>
     `,
     async setURL(e) {
-        const currentTarget = e.currentTarget;
-        const $root = await WORK.get_item('/root/doc');
-        const menu = ODA.createElement('item-tree-jupyter',
-            {
-                $item:  $root,
-                hideTops: 1,
-                hideRoots: 2,
-                cell: this.cell,
-                execute(item) {
-                    this.parentElement.close(item);
-                }
-            }
-        )
-        const item = await WORK.showDropdown(menu, { TITLE: { label: 'Select file - *.js' } }, currentTarget);
-        if (item) {
-            this.cell.url = item.url;
-        }
+        this.cell.url = await this.$pdp.jupyter.selectFileUrl(e, this.cell);
     },
     get iconEye() {
         return this.cell.hideCode ? 'bootstrap:eye-slash' : 'bootstrap:eye';
@@ -1111,9 +1075,6 @@ ODA({ is: 'oda-jupyter-toolbar', // imports: 'oda/tools/containers/containers, o
         }, 10)
     },
     control: null,
-    showSettings(e) {
-        ODA.showDropdown('oda-property-grid', { inspectedObject: this.control, filterByFlags: '' }, { minWidth: '480px', parent: e.target, anchor: 'top-right', align: 'left', title: 'Settings', hideCancelButton: true })
-    },
     get isCopiedCell() {
         let cells = JSON.parse(top._jupyterCellData || '[]');
         return cells.find(i => i.metadata.id === this.cell.metadata.id);

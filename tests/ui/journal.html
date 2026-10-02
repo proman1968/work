@@ -9,7 +9,7 @@
  * клик открывает форму счёта/операции.
  */
 import '/oda/oda.js';
-import journalProto from '/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js';
+import journalProto from '/DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js';
 
 const results = [];
 window.__results = results;
@@ -65,13 +65,13 @@ function cloneProto(src, is) {
 await ODA(cloneProto(journalProto, 'test-journal'));
 
 const ROWS = [
-    { entry: 'e1', rule: 'main', time: 1788000000000, source: '/OPERATIONS/SALE/o2', op: 'Счёт 2',
-        debit_account: '/REGISTER/62', debit_label: 'Расчёты',
-        credit_account: '/REGISTER/90', credit_label: 'Продажи',
+    { entry: 'e1', rule: 'main', time: 1788000000000, source: '/DATA/OPERATIONS/SALE/o2', op: 'Счёт 2',
+        debit_account: '/DATA/REGISTER/62', debit_label: 'Расчёты',
+        credit_account: '/DATA/REGISTER/90', credit_label: 'Продажи',
         sum: 500, storno: true, n: 4 },
-    { entry: 'e0', rule: 'main', time: 1787900000000, source: '/OPERATIONS/SALE/o1', op: 'Счёт 1',
-        debit_account: '/REGISTER/62', debit_label: 'Расчёты',
-        credit_account: '/REGISTER/90', credit_label: 'Продажи',
+    { entry: 'e0', rule: 'main', time: 1787900000000, source: '/DATA/OPERATIONS/SALE/o1', op: 'Счёт 1',
+        debit_account: '/DATA/REGISTER/62', debit_label: 'Расчёты',
+        credit_account: '/DATA/REGISTER/90', credit_label: 'Продажи',
         sum: 1000, storno: false, n: 2 },
 ];
 function stubItem(calls, rows) {
@@ -108,13 +108,13 @@ await test('journal: фильтры уходят в fetch, ошибка видн
     const el = await mount('test-journal', { $item: stubItem(calls, ROWS) });
     assert(await until(() => dataRows(el).length === 2), 'строки');
     el.from = '2026-01-01';
-    el.account = '/REGISTER/62';
+    el.account = '/DATA/REGISTER/62';
     el.source = 'SALE';
     await el.reload();
     const sent = calls.at(-1);
     eq(sent.method, 'journal');
     eq(sent.params.from, '2026-01-01');
-    eq(sent.params.account, '/REGISTER/62');
+    eq(sent.params.account, '/DATA/REGISTER/62');
     eq(sent.params.source, 'SALE');
     el.remove();
     const bad = await mount('test-journal', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
@@ -135,11 +135,11 @@ await test('journal: клик открывает форму счёта/опер�
         eq(cells.length, 3);
         cells[0].click();
         await tick(80);
-        eq(got.join(','), '/OPERATIONS/SALE/o2');
-        eq(opened.join(','), '/OPERATIONS/SALE/o2');
+        eq(got.join(','), '/DATA/OPERATIONS/SALE/o2');
+        eq(opened.join(','), '/DATA/OPERATIONS/SALE/o2');
         cells[1].click();
         await tick(80);
-        eq(got.at(-1), '/REGISTER/62');
+        eq(got.at(-1), '/DATA/REGISTER/62');
     }
     finally {
         window.WORK = prevWork;

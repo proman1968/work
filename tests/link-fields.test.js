@@ -30,18 +30,18 @@ before(async () => {
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] } }`);
-    write('CATALOGS/ITEMS/$class/class.js', `export default { label: 'Товары', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] } }`);
+    write('DATA/CATALOGS/ITEMS/$class/class.js', `export default { label: 'Товары', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
-    write('CATALOGS/TREE/$class/class.js', `export default { label: 'Дерево', '#security': { USERS: ['${USER1}'] } }`);
-    write('CATALOGS/TREE/SUB/$class/class.js', `export default { label: 'Ветка', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/TREE/$class/class.js', `export default { label: 'Дерево', '#security': { USERS: ['${USER1}'] } }`);
+    write('DATA/CATALOGS/TREE/SUB/$class/class.js', `export default { label: 'Ветка', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
-    write('OPERATIONS/$class/class.js', `export default { label: 'Операции', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/OPERATIONS/$class/class.js', `export default { label: 'Операции', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
-        { id: 'ref', type: 'Link', catalog: '/CATALOGS/ITEMS', label: 'Ссылка' },
-        { id: 'sub', type: 'Link', catalog: '/CATALOGS/TREE', label: 'Ветка' },
+        { id: 'ref', type: 'Link', catalog: '/DATA/CATALOGS/ITEMS', label: 'Ссылка' },
+        { id: 'sub', type: 'Link', catalog: '/DATA/CATALOGS/TREE', label: 'Ветка' },
     ] } }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
@@ -58,10 +58,10 @@ describe('поле Link', () => {
     let itemId, subId;
 
     it('create: ссылка на объект проходит, на мусор — нет', async () => {
-        const items = await WORK.get_item('/CATALOGS/ITEMS');
+        const items = await WORK.get_item('/DATA/CATALOGS/ITEMS');
         const r = await items.create_object({ filename: 't1.data', post: { name: 'Товар' }, ...as(USER1) });
         itemId = r.id;
-        const ops = await WORK.get_item('/OPERATIONS');
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
         const ok = await ops.create_object({ filename: 'o1.data', post: { name: 'Оп', ref: itemId }, ...as(USER1) });
         assert.ok(ok.id);
         await assert.rejects(
@@ -72,20 +72,20 @@ describe('поле Link', () => {
     });
 
     it('ссылка на объект подкласса проходит', async () => {
-        const sub = await WORK.get_item('/CATALOGS/TREE/SUB');
+        const sub = await WORK.get_item('/DATA/CATALOGS/TREE/SUB');
         const r = await sub.create_object({ filename: 's1.data', post: { name: 'Подтовар' }, ...as(USER1) });
         subId = r.id;
-        const ops = await WORK.get_item('/OPERATIONS');
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
         const ok = await ops.create_object({ filename: 'o4.data', post: { name: 'Оп4', sub: subId }, ...as(USER1) });
         assert.ok(ok.id);
     });
 
     it('read_link возвращает имя', async () => {
-        const ops = await WORK.get_item('/OPERATIONS');
-        const one = await ops.read_link({ catalog: '/CATALOGS/ITEMS', id: itemId, ...as(USER1) });
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
+        const one = await ops.read_link({ catalog: '/DATA/CATALOGS/ITEMS', id: itemId, ...as(USER1) });
         assert.equal(one.name, 'Товар');
         assert.equal(one.id, itemId);
-        await assert.rejects(ops.read_link({ catalog: '/CATALOGS/ITEMS', id: '1.NOPE', ...as(USER1) }), /нет объекта/);
+        await assert.rejects(ops.read_link({ catalog: '/DATA/CATALOGS/ITEMS', id: '1.NOPE', ...as(USER1) }), /нет объекта/);
         await assert.rejects(ops.read_link({ catalog: '/NOPE', id: itemId, ...as(USER1) }), /нет справочника/);
     });
 });

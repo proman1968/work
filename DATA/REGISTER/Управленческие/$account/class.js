@@ -1,0 +1,1 @@
+export default { label: 'Управленческие', icon: 'carbon:wallet', '#security': { USERS: ['CA4E097FF6C1D387'] } }

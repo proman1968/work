@@ -30,6 +30,20 @@ function resetMergeCaches() {
     catch { /* кэши пересоберутся лениво */ }
 }
 
+/**
+ * Подписка сокета (путь запроса клиента) затронута сбросом элемента `key`:
+ * сам элемент (`/X`) или его собственное свойство-список (`/X/@items`). Потомков (`/X/Y/@items`)
+ * сброс X не меняет — им придёт своё событие; раньше уведомлялись все по префиксу и
+ * клиенты перезапрашивали деревья целиком.
+ */
+export function isSubscribedTo(event, key) {
+    if (event === key)
+        return true;
+    if (!event.startsWith(key + '/@'))
+        return false;
+    return !event.slice(key.length + 2).includes('/');
+}
+
 /** RAG-модуль грузится лениво: ядро не тянет модель/БД, пока поиск не нужен. */
 const loadRag = () => import('../modules/rag/index.js').then(m => m.RAG);
 
@@ -789,15 +803,17 @@ export class $folder extends $item{
         }
 
         if (!inherit && this.meta_folder) {
-            // Корень типа: meta предка того же type ИЛИ meta/$folder/$class/<type> у предка
-            // другого type (как $register → $account, $provider → $ai).
-            let typeRoot = null;
+            // Корни типа: meta КАЖДОГО предка того же type (от дальнего к ближнему) —
+            // схема накапливается по цепочке (Бухгалтерские → Платежи → … → лист),
+            // плюс meta/$folder/$class/<type> у предка другого type
+            // (как $register → $account, $provider → $ai).
+            const typeRoots = [];
             const crossDomains = [];
             for (let p = this.$parent; p; p = p.$parent) {
                 if (!(p instanceof FS.$class) || !p.meta_folder)
                     continue;
                 if (p.type === this.type)
-                    typeRoot = p.meta_folder;
+                    typeRoots.unshift(p.meta_folder);
                 else {
                     try {
                         const declared = await p.meta_folder.get_item('$folder/$class/' + this.type);
@@ -807,7 +823,9 @@ export class $folder extends $item{
                     catch { /* нет объявления типа у предка */ }
                 }
             }
-            if (typeRoot && typeRoot !== this.meta_folder) {
+            for (const typeRoot of typeRoots) {
+                if (typeRoot === this.meta_folder)
+                    continue;
                 let domain = typeRoot.$folder;
                 if (domain) {
                     folders.add(domain);
@@ -851,13 +869,19 @@ export class $folder extends $item{
      * @param {number} [p.deep] Глубина вложенности
      * @param {string} [p.mask] Фильтр по имени с * и ?
      * @param {string} [p.items] Тип элементов: items/files/folders
-     * @returns {Promise<object>} Данные элемента и (опц.) дочерние
+     * @param {string} [p.branch] 'classes' — вглубь только по классам (папки и файлы — одним уровнем)
+     * @returns {Promise<object>} Данные элемента и (опц.) дочерние; у вложенных — `hasItems`
+     *   (есть ли у элемента дети: дереву не нужен отдельный `@items` ради стрелки раскрытия)
      */
     async info(p = {deep: 0}){
-        p.deep = +p.deep;
+        p.deep = +p.deep || 0;
         let data = await this.json_model;
-        if (!p.deep)
-            return Object.assign({}, data);
+        if (!p.deep) {
+            data = Object.assign({}, data);
+            if (p.hasItems === true)
+                data.hasItems = await this._hasItems(p.items);
+            return data;
+        }
         p.items ??= 'items';
         if (!['items', 'entries', 'files', 'folders', 'children'].includes(p.items))
             throw new Error('info: недопустимый список «' + p.items + '»');
@@ -876,11 +900,22 @@ export class $folder extends $item{
                 return regexp.test(i.id);
             });
         }
+        const own = items.length > 0;
         p = Object.assign({}, p);
         p.deep--;
-        items = items.map(i=>i.info(p));
+        p.hasItems = true;
+        const flat = Object.assign({}, p, {deep: 0});
+        items = items.map(i => (p.branch === 'classes' && !(i instanceof FS.$class)) ? i.info(flat) : i.info(p));
         items = await Promise.all(items);
-        return Object.assign({}, data, {[p.items]:items});
+        return Object.assign({}, data, {[p.items]: items, hasItems: own});
+    }
+    /** Есть ли у элемента дети в списке `list` (по умолчанию items — бизнес-вид дерева). */
+    async _hasItems(list = 'items'){
+        try {
+            const items = await this[list];
+            return Array.isArray(items) && items.length > 0;
+        }
+        catch { return false; }
     }
 
     get $class(){
@@ -1666,7 +1701,7 @@ export class $folder extends $item{
         for(let session of Object.values($server.sessions)){
             for(let id in session.sockets){
                 let socket = session.sockets[id];
-                let list = socket.events.filter(e=>e.startsWith(key));
+                let list = socket.events.filter(e=>isSubscribedTo(e, key));
                 if(list.length) // todo возможно надо посылать события всем в списке
                     socket.ws.send(JSON.stringify({path: key, initiator: initiator?.id}));
             }

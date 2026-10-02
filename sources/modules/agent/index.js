@@ -10,6 +10,7 @@ import { workTools } from './tools/work.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
 import { connectTools } from './tools/connect.js';
+import { browseTools } from './tools/browse.js';
 import { osFileTools } from './tools/os-files.js';
 import { osProcTools } from './tools/os-proc.js';
 import { netTools } from './tools/net.js';
@@ -149,7 +150,7 @@ export async function createEnv({ place, session, host, tz, location, role } = {
         },
         /** Инструменты агента (def — субагент или undefined для основного). */
         async makeTools(def, depth = 0) {
-            let all = [...workTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);

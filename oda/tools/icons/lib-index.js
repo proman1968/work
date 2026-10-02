@@ -5,6 +5,9 @@
  * в symbol (старый селектор только g[id] молча отдавал пустоту).
  * Заменяет несуществующий серверный метод `svg_icons_list`.
  */
+/** Имена SVG-библиотек в lib/svg (статический манифест: библиотека не зависит от серверного листинга папок). */
+export const ICON_LIBS = ['ai', 'av', 'aws', 'bootstrap', 'box', 'bpmn', 'brands', 'carbon', 'communication', 'cryptocolor', 'cryptocurrency', 'device', 'editor', 'enterprise', 'eva', 'files-color', 'files', 'flags', 'flatcolor', 'fontawesome', 'games', 'hardware', 'iconoir', 'icons', 'image', 'industry-buildings', 'lineawesome', 'loaders', 'logos', 'maps', 'material', 'notification', 'odant', 'office-set', 'phone', 'shopping', 'social-media', 'social', 'space-sci-fi', 'spinners', 'symbols', 'tools', 'travel-and-tourism', 'unicon', 'vscode', 'weather'];
+
 const parser = new DOMParser();
 const jobs = Object.create(null);
 

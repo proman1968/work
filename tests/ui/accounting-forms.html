@@ -10,7 +10,7 @@
  */
 import '/oda/oda.js';
 import objectsProto from '/$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js';
-import postingsProto from '/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
+import postingsProto from '/DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
 
 const results = [];
 window.__results = results;
@@ -209,7 +209,7 @@ await test('фреймворк: @tap с методом', async () => {
 
 const FIELDS = [
     { id: 'name', label: 'Название' },
-    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/CATALOGS/C' },
+    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/DATA/CATALOGS/C' },
 ];
 function mockItem(calls, handlers, fields) {
     return {
@@ -301,14 +301,14 @@ await test('postings: ячейки аналитик — текст, итоги �
     const calls = [];
     const $item = {
         body: Promise.resolve({ METADATA: { FIELDS: [
-            { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/CATALOGS/C', analytic: true },
+            { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/DATA/CATALOGS/C', analytic: true },
         ] } }),
         fetch: async (method, params, post) => {
             calls.push({ method, params, post });
             if (method === 'query')
                 return [
-                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/REGISTER/90' } },
-                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/REGISTER/51' } },
+                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/DATA/REGISTER/90' } },
+                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/DATA/REGISTER/51' } },
                 ];
             if (method === 'read_link')
                 return { id: '9.Y', name: 'Альфа' };
@@ -333,7 +333,7 @@ await test('postings: остаток на начало и нарастающий
     const $item = {
         body: Promise.resolve({ METADATA: {
             FIELDS: [
-                { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/CATALOGS/C', analytic: true },
+                { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/DATA/CATALOGS/C', analytic: true },
             ],
             INDEXES: [{ id: 'turnover', kind: 'turnover', by: ['counterparty'] }],
         } }),
@@ -341,8 +341,8 @@ await test('postings: остаток на начало и нарастающий
             calls.push({ method, params, post });
             if (method === 'query')
                 return [
-                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/REGISTER/90' } },
-                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/REGISTER/51' } },
+                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/DATA/REGISTER/90' } },
+                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/DATA/REGISTER/51' } },
                 ];
             if (method === 'index')
                 return { def: 'turnover', kind: 'turnover', total: { debit: 200, credit: 0 } };

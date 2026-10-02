@@ -38,19 +38,19 @@ before(async () => {
     write('BASE/direction/sales/$group/class.js', `export default { label: 'Продажи',
         '#security': { USERS: ['${USER1}'] },
         LINKS: [
-            { id: '/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
-            { id: '/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },
-            { id: '/CATALOGS/Контрагенты/Поставщики', access: 'write' },
-            { id: '/REGISTER/62', access: 'read' },
+            { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
+            { id: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },
+            { id: '/DATA/CATALOGS/Контрагенты/Поставщики', access: 'write' },
+            { id: '/DATA/REGISTER/62', access: 'read' },
         ] }`);
-    write('OPERATIONS/Финансы/$operation/class.js', `export default { label: 'Финансы' }`);
-    write('OPERATIONS/Финансы/Платежи/$operation/class.js', `export default { label: 'Платежи' }`);
-    write('OPERATIONS/Финансы/Платежи/Поставщик/$operation/class.js', `export default { label: 'Поставщик', ${FIELDS} }`);
-    write('OPERATIONS/Финансы/Платежи/Покупатель/$operation/class.js', `export default { label: 'Покупатель', ${FIELDS} }`);
-    write('OPERATIONS/Финансы/Зарплата/$operation/class.js', `export default { label: 'Зарплата', ${FIELDS} }`);
-    write('CATALOGS/Контрагенты/$catalog/class.js', `export default { label: 'Контрагенты' }`);
-    write('CATALOGS/Контрагенты/Поставщики/$catalog/class.js', `export default { label: 'Поставщики', ${FIELDS} }`);
-    write('REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
+    write('DATA/OPERATIONS/Финансы/$operation/class.js', `export default { label: 'Финансы' }`);
+    write('DATA/OPERATIONS/Финансы/Платежи/$operation/class.js', `export default { label: 'Платежи' }`);
+    write('DATA/OPERATIONS/Финансы/Платежи/Поставщик/$operation/class.js', `export default { label: 'Поставщик', ${FIELDS} }`);
+    write('DATA/OPERATIONS/Финансы/Платежи/Покупатель/$operation/class.js', `export default { label: 'Покупатель', ${FIELDS} }`);
+    write('DATA/OPERATIONS/Финансы/Зарплата/$operation/class.js', `export default { label: 'Зарплата', ${FIELDS} }`);
+    write('DATA/CATALOGS/Контрагенты/$catalog/class.js', `export default { label: 'Контрагенты' }`);
+    write('DATA/CATALOGS/Контрагенты/Поставщики/$catalog/class.js', `export default { label: 'Поставщики', ${FIELDS} }`);
+    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -70,65 +70,68 @@ describe('link_tree', () => {
     it('трие: общие префиксы слиты, вбок — ничего, подписи из class.js', async () => {
         const sales = await WORK.get_item('/BASE/direction/sales');
         const tree = await sales.link_tree(as(USER1));
-        assert.deepEqual(tree.map(t => t.path), ['/CATALOGS', '/OPERATIONS', '/REGISTER']);
-        const ops = tree.find(t => t.path === '/OPERATIONS');
+        assert.deepEqual(tree.map(t => t.path), ['/DATA']);
+        const data = tree[0];
+        assert.deepEqual(data.children.map(t => t.path), ['/DATA/CATALOGS', '/DATA/OPERATIONS', '/DATA/REGISTER']);
+        const ops = data.children.find(t => t.path === '/DATA/OPERATIONS');
         assert.deepEqual(chain(ops), {
-            path: '/OPERATIONS', label: 'OPERATIONS', access: 'read',
+            path: '/DATA/OPERATIONS', label: 'OPERATIONS', access: 'read',
             children: [{
-                path: '/OPERATIONS/Финансы', label: 'Финансы', access: 'read',
+                path: '/DATA/OPERATIONS/Финансы', label: 'Финансы', access: 'read',
                 children: [{
-                    path: '/OPERATIONS/Финансы/Платежи', label: 'Платежи', access: 'read',
+                    path: '/DATA/OPERATIONS/Финансы/Платежи', label: 'Платежи', access: 'read',
                     children: [
-                        { path: '/OPERATIONS/Финансы/Платежи/Покупатель', label: 'Покупатель', access: 'write', children: [] },
-                        { path: '/OPERATIONS/Финансы/Платежи/Поставщик', label: 'Поставщик', access: 'write', children: [] },
+                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', label: 'Покупатель', access: 'write', children: [] },
+                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', label: 'Поставщик', access: 'write', children: [] },
                     ],
                 }],
             }],
         });
-        const cat = tree.find(t => t.path === '/CATALOGS');
-        assert.equal(cat.children[0].path, '/CATALOGS/Контрагенты');
-        assert.equal(cat.children[0].children[0].path, '/CATALOGS/Контрагенты/Поставщики');
-        const reg = tree.find(t => t.path === '/REGISTER');
-        assert.equal(reg.children[0].path, '/REGISTER/62');
+        const cat = data.children.find(t => t.path === '/DATA/CATALOGS');
+        assert.equal(cat.children[0].path, '/DATA/CATALOGS/Контрагенты');
+        assert.equal(cat.children[0].children[0].path, '/DATA/CATALOGS/Контрагенты/Поставщики');
+        const reg = data.children.find(t => t.path === '/DATA/REGISTER');
+        assert.equal(reg.children[0].path, '/DATA/REGISTER/62');
         assert.equal(reg.children[0].access, 'read');
     });
 
     it('шлюз отдаёт link_tree члену группы, чужому — запрет', async () => {
         const sales = await WORK.get_item('/BASE/direction/sales');
         const tree = await invoke(sales, 'link_tree', as(USER1));
-        assert.equal(tree.length, 3);
+        assert.equal(tree.length, 1);
+        assert.equal(tree[0].path, '/DATA');
         await assert.rejects(invoke(sales, 'link_tree', as(NOBODY)), /Доступ запрещён/);
         assert.deepEqual(await sales.link_tree(as(NOBODY)), []);
-        const ops = await WORK.get_item('/OPERATIONS/Финансы');
+        const ops = await WORK.get_item('/DATA/OPERATIONS/Финансы');
         assert.deepEqual(await ops.link_tree(as(USER1)), []);
     });
 
     it('предок виден как страница, но data_access пуст; боковой — невидим', async () => {
-        const fin = await WORK.get_item('/OPERATIONS/Финансы');
+        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
         assert.equal(await fin.canSee(fin, as(USER1)), true);
         assert.equal(await fin.data_access(as(USER1)), null);
-        const pay = await WORK.get_item('/OPERATIONS/Финансы/Платежи/Поставщик');
+        const pay = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
         assert.equal(await pay.data_access(as(USER1)), 'write');
-        const zar = await WORK.get_item('/OPERATIONS/Финансы/Зарплата');
+        const zar = await WORK.get_item('/DATA/OPERATIONS/Финансы/Зарплата');
         assert.equal(await zar.canSee(zar, as(USER1)), false);
         assert.equal(await zar.data_access(as(USER1)), null);
     });
 
     it('query предка показывает только связанные ветки, боковая запрещена', async () => {
-        const sup = await WORK.get_item('/OPERATIONS/Финансы/Платежи/Поставщик');
+        const sup = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
         await sup.create_object({ filename: 'op.data', post: { name: 'Плата' }, ...as(USER1) });
-        const fin = await WORK.get_item('/OPERATIONS/Финансы');
+        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
         const rows = await fin.query(as(USER1));
         assert.equal(rows.length, 1);
         assert.ok(rows[0].point.includes('Поставщик'));
-        const zar = await WORK.get_item('/OPERATIONS/Финансы/Зарплата');
+        const zar = await WORK.get_item('/DATA/OPERATIONS/Финансы/Зарплата');
         await assert.rejects(zar.query(as(USER1)), /Доступ запрещён/);
     });
 
     it('index предка запрещён (агрегат с чужими ветками), у листа — штатная ошибка', async () => {
-        const fin = await WORK.get_item('/OPERATIONS/Финансы');
+        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
         await assert.rejects(fin.index({ id: 'x', ...as(USER1) }), /Доступ запрещён/);
-        const sup = await WORK.get_item('/OPERATIONS/Финансы/Платежи/Поставщик');
+        const sup = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
         await assert.rejects(sup.index({ id: 'x', ...as(USER1) }), /нет индекса/);
     });
 });

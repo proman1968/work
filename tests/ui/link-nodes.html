@@ -4,26 +4,14 @@
 <body>
 <script type="module">
 /**
- * Привязка цепочек ссылок (tests/ui/run.mjs): серверный link_tree зеркалится
- * в виртуальные узлы — все уровни кликабельны (прототип настоящего элемента),
- * дети — только цепочка, недоступное — узкий plain-фолбэк.
+ * Узлы-ссылки рабочего места (tests/ui/run.mjs) на настоящих реактивных элементах:
+ * ссылка — отдельный экземпляр того же класса, запись в неё (isLink, items, expanded)
+ * и Reactor.activate не проваливаются в настоящий класс.
  */
+await import('/sources/client.js');
+import { Reactor } from '/sources/reactor.js';
 import { bindLinkTree, isLinkNode } from '/$server/$folder/lib/tree/link-nodes.js';
 import nodeProto from '/$server/$folder/lib/node/node.js';
-
-globalThis.CORE ??= { $class: class {}, $handler: class {}, $user: class {}, $file: class {} };
-/** Прокси как Reactor: отсутствующее свойство → _onEmpty (шпион + truthy до ответа). */
-function reactiveFake(target, spy) {
-    return new Proxy(target, {
-        get(t, key) {
-            if (key in t)
-                return t[key];
-            spy.push(String(key));
-            return Promise.resolve(true);
-        },
-    });
-}
-const getterOf = (name) => Object.getOwnPropertyDescriptor(nodeProto, name).get;
 
 const results = [];
 window.__results = results;
@@ -44,50 +32,86 @@ function eq(a, b, msg) {
     if (a !== b)
         throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
 }
+const getterOf = (name) => Object.getOwnPropertyDescriptor(nodeProto, name).get;
 
+/** Настоящий элемент как в приложении: WORK.__bind (свой реактивный контекст). */
+function realItem(path, label, items) {
+    return WORK.__bind({ path, id: path.split('/').pop(), type: '$class', label, icon: 'i-' + label, items });
+}
 const RAW = [
-    { path: '/OPERATIONS', label: 'Операции', icon: 'i-ops', type: '$folder', access: 'read', children: [
-        { path: '/OPERATIONS/Платежи', label: 'Платежи', icon: 'i-pay', type: '$operation', access: 'read', children: [
-            { path: '/OPERATIONS/Платежи/Поставщику', label: 'Поставщику', icon: 'i-sup', type: '$operation', access: 'write', children: [] },
-        ] },
+    { path: '/LNK/Платежи', label: 'Платежи', icon: 'i-pay', type: '$operation', access: 'read', children: [
+        { path: '/LNK/Платежи/Поставщику', label: 'Поставщику', icon: 'i-sup', type: '$operation', access: 'write', children: [] },
     ] },
     { path: '/MISSING/Нет', label: 'Нет', icon: '', type: '', access: 'read', children: [] },
 ];
-function fakeStore() {
-    const map = {
-        '/OPERATIONS': { path: '/OPERATIONS', label: 'Операции', icon: 'i-ops', items: ['ЧУЖОЕ'] },
-        '/OPERATIONS/Платежи': { path: '/OPERATIONS/Платежи', label: 'Платежи', icon: 'i-pay', items: ['ЧУЖОЕ'] },
-        '/OPERATIONS/Платежи/Поставщику': { path: '/OPERATIONS/Платежи/Поставщику', label: 'Поставщику', icon: 'i-sup', items: ['ОБЪЕКТЫ'] },
-    };
-    return async (p) => {
+function fakeStore(prefix) {
+    const pay = realItem(prefix + '/Платежи', 'Платежи', [{ path: prefix + '/Платежи/Настоящий', id: 'Настоящий', type: '$class', label: 'Настоящий' }]);
+    const sup = realItem(prefix + '/Платежи/Поставщику', 'Поставщику');
+    return { pay, sup, get: async (p) => {
         if (p === '/MISSING/Нет')
             return null;
-        const r = map[p];
-        if (!r)
-            throw new Error('нет: ' + p);
-        return r;
-    };
+        if (p === prefix + '/Платежи')
+            return pay;
+        if (p === prefix + '/Платежи/Поставщику')
+            return sup;
+        throw new Error('нет: ' + p);
+    } };
 }
 
+await test('ссылка — отдельный экземпляр: запись не проваливается в класс', async () => {
+    const s = fakeStore('/T1');
+    const roots = await bindLinkTree(RAW.map(r => ({ ...r, path: r.path.replace('/LNK', '/T1'), children: r.children.map(c => ({ ...c, path: c.path.replace('/LNK', '/T1') })) })), s.get);
+    const link = roots[0];
+    assert(link !== s.pay, 'не сам класс');
+    eq(Reactor.activate(link), link, 'активация стабильна');
+    eq(isLinkNode(link), true);
+    eq(isLinkNode(s.pay), false);
+    assert(!('isLink' in s.pay), 'у класса нет isLink');
+    assert(!('isLinkLeaf' in s.pay), 'у класса нет isLinkLeaf');
+    // дети класса — свои, а не цепочка
+    eq(s.pay[R].cache.items.map(i => i.path).join(','), '/T1/Платежи/Настоящий');
+    eq(link.items.map(i => i.path).join(','), '/T1/Платежи/Поставщику');
+    // раскрытие ссылки не трогает класс
+    link.expanded = true;
+    eq(link.expanded, true);
+    eq(s.pay.expanded, false);
+    // фокус на ссылке не подсвечивает класс
+    const focusedItem = link;
+    assert(focusedItem !== s.pay, 'фокус — ссылка');
+    assert(!('isLink' in s.sup), 'лист класса чист');
+});
+
+await test('ссылка открывает форму класса: путь, подпись, fetch', async () => {
+    const s = fakeStore('/T2');
+    const roots = await bindLinkTree(RAW.map(r => ({ ...r, path: r.path.replace('/LNK', '/T2'), children: r.children.map(c => ({ ...c, path: c.path.replace('/LNK', '/T2') })) })), s.get);
+    const link = roots[0].items[0];
+    eq(link.path, '/T2/Платежи/Поставщику');
+    eq(link.short, s.sup.short);
+    eq(link.label, 'Поставщику');
+    eq(link.icon, s.sup.icon);
+    eq(typeof link.fetch, 'function');
+    eq(typeof link.execute, 'function');
+    eq(isLinkNode(link), true);
+});
+
 await test('ветки привязаны, дети — только цепочка', async () => {
-    const roots = await bindLinkTree(RAW, fakeStore());
+    const s = fakeStore('/T3');
+    const roots = await bindLinkTree(RAW.map(r => ({ ...r, path: r.path.replace('/LNK', '/T3'), children: r.children.map(c => ({ ...c, path: c.path.replace('/LNK', '/T3') })) })), s.get);
     eq(roots.length, 2);
     const ops = roots[0];
-    eq(ops.isLink, true);
     eq(ops.isLinkLeaf, false);
-    eq(ops.label, 'Операции');
+    eq(ops.label, 'Платежи');
     eq(ops.items.length, 1);
-    eq(ops.items[0].path, '/OPERATIONS/Платежи');
-    eq(ops.items[0].items.length, 1);
-    const leaf = ops.items[0].items[0];
-    eq(leaf.path, '/OPERATIONS/Платежи/Поставщику');
+    const leaf = ops.items[0];
+    eq(leaf.path, '/T3/Платежи/Поставщику');
     eq(leaf.isLinkLeaf, true);
     eq(Array.isArray(leaf.items) && leaf.items.length, 0);
-    assert(!JSON.stringify(ops).includes('ЧУЖОЕ'), 'боковое скрыто');
+    assert(!JSON.stringify(ops).includes('Настоящий'), 'боковое скрыто');
 });
 
 await test('недоступный узел — узкий фолбэк с подписью сервера', async () => {
-    const roots = await bindLinkTree(RAW, fakeStore());
+    const s = fakeStore('/T4');
+    const roots = await bindLinkTree(RAW, s.get);
     const fb = roots[1];
     eq(fb.isLink, true);
     eq(fb.noLinkTarget, true);
@@ -96,49 +120,41 @@ await test('недоступный узел — узкий фолбэк с по�
     assert(!(fb instanceof Function), 'plain-объект');
 });
 
-await test('своя идентичность: фокус не склеивается с настоящим узлом', async () => {
-    const roots = await bindLinkTree(RAW, fakeStore());
-    const leaf = roots[0].items[0].items[0];
-    leaf.expanded = true;
-    const again = await bindLinkTree(RAW, fakeStore());
-    eq(again[0].items[0].items[0].expanded, undefined);
+await test('повторная привязка — новый экземпляр без старого состояния', async () => {
+    const s = fakeStore('/T5');
+    const raw = RAW.map(r => ({ ...r, path: r.path.replace('/LNK', '/T5'), children: r.children.map(c => ({ ...c, path: c.path.replace('/LNK', '/T5') })) }));
+    const first = (await bindLinkTree(raw, s.get))[0];
+    first.expanded = true;
+    const again = (await bindLinkTree(raw, s.get))[0];
+    assert(again !== first, 'новый экземпляр');
+    eq(again.expanded, false, 'раскрытие не унаследовано');
+    eq(s.pay.expanded, false, 'класс не тронут');
 });
 
 await test('isLinkNode не дёргает _onEmpty настоящих элементов', async () => {
-    const spy = [];
-    const real = reactiveFake(Object.assign(Object.create(CORE.$class.prototype),
-        { path: '/OPERATIONS', label: 'Операции' }), spy);
+    const real = realItem('/T6/Класс', 'Класс');
+    // любое чтение отсутствующего свойства у bound-элемента ушло бы в fetch/_onEmpty
     eq(isLinkNode(real), false);
     eq(isLinkNode(null), false);
     eq(isLinkNode({}), false);
-    assert(!spy.includes('isLink'), 'запросов @isLink нет: ' + spy.join(','));
-    // Механизм поломки: прямое чтение отсутствующего свойства врёт truthy.
-    assert(!!real.isLink === true, 'прямое чтение врёт truthy');
-    assert(spy.includes('isLink'), 'механизм воспроизведён');
 });
 
 await test('геттеры item-node: класс как раньше, ссылка узкая', async () => {
-    const spy = [];
-    const raw = Object.assign(Object.create(CORE.$class.prototype),
-        { path: '/OPERATIONS', label: 'Операции', icon: 'i', bosses: Promise.resolve([]), status: 'ok' });
-    const real = reactiveFake(raw, spy);
-    const roots = await bindLinkTree(
-        [{ path: '/OPERATIONS', label: 'Операции', icon: 'i', type: '', access: 'read', children: [] }],
-        async () => raw);
-    const link = roots[0];
+    const s = fakeStore('/T7');
+    const raw = RAW.map(r => ({ ...r, path: r.path.replace('/LNK', '/T7'), children: r.children.map(c => ({ ...c, path: c.path.replace('/LNK', '/T7') })) }));
+    const link = (await bindLinkTree(raw, s.get))[0].items[0];
     eq(isLinkNode(link), true);
     // Хост как компонент: геттеры прототипа (isLink, iconSize, …) видны через цепочку.
     const host = (over) => Object.assign(Object.create(nodeProto), { showStatus: false, showUsers: false }, over);
     const g = (name, h) => getterOf(name).call(h);
-    eq(g('isLink', host({ $item: real })), false);
+    eq(g('isLink', host({ $item: s.sup })), false);
     eq(g('isLink', host({ $item: link })), true);
-    eq(g('iconSize', host({ $item: real, showStatus: true })), 48);
+    eq(g('iconSize', host({ $item: s.sup, showStatus: true })), 48);
     eq(g('iconSize', host({ $item: link, showStatus: true })), 24);
-    eq(await g('showBoss', host({ $item: real })), false);
-    eq(g('showBoss', host({ $item: link })), false);
-    eq(g('status', host({ $item: real })), 'ok');
+    assert(!Object.getOwnPropertyDescriptor(nodeProto, 'showBoss'), 'пользователей в строке дерева больше нет');
+    assert(!nodeProto.template.includes('item-users'), 'шаблон без item-users');
     eq(g('status', host({ $item: link })), '');
-    assert(!spy.includes('isLink'), 'геттеры не читают isLink: ' + spy.join(','));
+    assert(!('isLink' in s.sup) && !('isLink' in s.pay), 'классы чистые');
 });
 
 await test('шаблон item-node без прямого чтения isLink', async () => {

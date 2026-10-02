@@ -1,6 +1,6 @@
 ODA({
     is: 'oda-tester',
-    imports: 'oda//app-layout, oda//property-grid, oda//mobile, oda//all-containers',
+    imports: 'oda//app-layout, /oda/components/structure/property-grid/property-grid.js, /oda/tools/tester/device-preview/device-preview.js',
     extends: 'oda-app-layout',
     template: /*html*/`
     <app-layout-toolbar class="header" slot="header">
@@ -13,7 +13,7 @@ ODA({
         <span class="flex" slot="header-center" style="font-weight: bold; font-size: large; text-align: center">{{label}}</span>
      </app-layout-toolbar>
     <slot style="display: none" @slotchange="onSlot" class="flex"></slot>
-    <oda-property-grid group-expanding-mode="all" slot="right-panel" :label :inspected="component"></oda-property-grid>
+    <oda-property-grid slot="right-panel" :inspected="component"></oda-property-grid>
     <div ~is="focused?.is" slot="main" :component class="flex" style="width: 100%; height: 100%;"></div>
     `,
     attached() {
@@ -38,8 +38,7 @@ ODA({
         },
         views: [
             { icon: 'enterprise:computer-screen', is: 'oda-tester-container' },
-            { icon: 'device:devices', is: 'oda-mobile' },
-            { icon: 'icons:settings-overscan', is: 'oda-all-containers' },
+            { icon: 'device:devices', is: 'oda-device-preview' },
         ],
         focused: {
             get() {

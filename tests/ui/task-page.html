@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Task page UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Карточка вызова microchat-tool (tests/ui/run.mjs):
+ * open_page раскрывает iframe сразу (entry.page появляется только после подтверждения),
+ * показан хост и полный URL, песочница без allow-top-navigation;
+ * ссылки signup/docs карточки подключения ведут в тот же предпросмотр.
+ */
+await import('/sources/client.js');
+await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/feed.js');
+await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/dock.js');
+await ODA.waitReg('microchat-tool');
+await ODA.waitReg('microchat-doc');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function tick(n = 5) {
+    for (let i = 0; i < n; i++)
+        await new Promise(r => setTimeout(r, 50));
+}
+async function waitFor(fn, what) {
+    for (let i = 0; i < 60; i++) {
+        try {
+            const v = fn();
+            if (v)
+                return v;
+        }
+        catch { /* ещё не отрисовалось */ }
+        await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('не дождались: ' + what);
+}
+function mount(data) {
+    const el = document.createElement('microchat-tool');
+    el.data = data;
+    document.body.appendChild(el);
+    return el;
+}
+const frameOf = el => el.$$('iframe')[0] || null;
+async function waitFrame(el) {
+    return waitFor(() => frameOf(el), 'iframe');
+}
+const opened = [];
+window.open = (u, t) => { opened.push([u, t]); return null; };
+
+const pageEntry = {
+    id: 'c1', name: 'open_page', status: 'ok', durationMs: 20,
+    args: { url: 'https://example.com/', reason: 'проверка' },
+    page: { url: 'https://example.com/', host: 'example.com' },
+    result: 'Предпросмотр предложен человеку.',
+};
+
+await test('open_page: iframe раскрыт сразу, src и песочница', async () => {
+    const el = mount(pageEntry);
+    try {
+        const frame = await waitFrame(el);
+        eq(frame.getAttribute('src'), 'https://example.com/');
+        const sb = frame.getAttribute('sandbox') || '';
+        assert(sb.includes('allow-scripts') && sb.includes('allow-forms'), 'песочница: ' + sb);
+        assert(!sb.includes('allow-top-navigation'), 'топ-навигация запрещена: ' + sb);
+    }
+    finally {
+        el.remove();
+    }
+});
+
+await test('open_page: хост и полный URL видны', async () => {
+    const el = mount(pageEntry);
+    try {
+        await waitFrame(el);
+        const text = el.$$('.why, .url').map(e => e.textContent).join('\n');
+        assert(text.includes('example.com'), 'хост: ' + text);
+        assert(text.includes('https://example.com/'), 'полный URL: ' + text);
+    }
+    finally {
+        el.remove();
+    }
+});
+
+await test('open_page: скрытие убирает iframe, новая вкладка открывает URL', async () => {
+    const el = mount(pageEntry);
+    try {
+        await waitFrame(el);
+        el.pageOpen = false;
+        await tick();
+        eq(frameOf(el), null, 'iframe убран');
+        opened.length = 0;
+        el.openExternal();
+        eq(opened.length, 1, 'window.open вызван');
+        eq(opened[0][0], 'https://example.com/');
+    }
+    finally {
+        el.remove();
+    }
+});
+
+const connectEntry = {
+    id: 'c2', name: 'connect_service', status: 'waiting',
+    args: { provider: 'token', name: 'luma' },
+    connect: {
+        name: 'luma', provider: 'token', label: 'API по токену', reason: 'видео',
+        base_url: 'https://api.example.com/v1',
+        signup: 'https://example.com/signup', docs: 'https://example.com/docs',
+    },
+};
+
+await test('connect: ссылки signup/docs с хостами', async () => {
+    const el = mount(connectEntry);
+    try {
+        const text = await waitFor(() => {
+            const t = el.$$('.why').map(e => e.textContent).join('\n');
+            return t.includes('example.com') ? t : null;
+        }, 'ссылки');
+        assert(text.includes('Регистрация'), 'подпись регистрации: ' + text);
+        assert(text.includes('Документация API'), 'подпись документации: ' + text);
+    }
+    finally {
+        el.remove();
+    }
+});
+
+await test('connect: signup раскрывается в тот же предпросмотр', async () => {
+    const el = mount(connectEntry);
+    try {
+        await waitFor(() => el.$$('.lnk').length ? true : null, 'карточка');
+        eq(frameOf(el), null, 'фрейма нет до раскрытия');
+        el.signupOpen = true;
+        const frame = await waitFor(() => frameOf(el), 'signup iframe');
+        eq(frame.getAttribute('src'), 'https://example.com/signup');
+    }
+    finally {
+        el.remove();
+    }
+});
+
+await test('doc: видеоснимок — <video> с controls, без текстовой загрузки', async () => {
+    const el = document.createElement('microchat-doc');
+    el.doc = {
+        kind: 'file',
+        path: '/USERS/X/$user/USER/video/.video.mp4/history/2026-10-02/1790944526939.X.mp4',
+        title: 'video.mp4', icon: 'carbon:video', time: 1,
+    };
+    document.body.appendChild(el);
+    try {
+        const video = await waitFor(() => el.$$('video')[0] || null, 'video');
+        assert(video.hasAttribute('controls'), 'controls');
+        assert(video.getAttribute('src').includes('.mp4'), 'src: ' + video.getAttribute('src'));
+        eq(el.fileText, '', 'бинарь как текст не грузим');
+        eq(el.$$('pre').length, 0, 'пре с текстом нет');
+    }
+    finally {
+        el.remove();
+    }
+});
+
+await test('doc: длинный текстовый отчёт отрисовывается, а не пусто', async () => {
+    const el = document.createElement('microchat-doc');
+    const text = '# Итог\n\n' + 'Готово: видео создано через GenAPI. '.repeat(30);
+    el.doc = { kind: 'text', text, title: 'Отчёт', time: 1 };
+    document.body.appendChild(el);
+    try {
+        const viewer = await waitFor(() => el.$$('oda-markdown-viewer')[0] || null, 'markdown');
+        assert((viewer.getAttribute('value') || viewer.value || '').includes('Готово'), 'текст в просмотрщике');
+    }
+    finally {
+        el.remove();
+    }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

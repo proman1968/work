@@ -1,0 +1,52 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контролы ввода</title>
+<script type="module" src="/oda/oda.js"></script>
+<style>html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}html,body{height:100%;}body{margin:0;visibility:hidden;display:flex;flex-direction:column;}</style>
+<script type="module" src="/oda/components/button/button.js"></script>
+<style>
+    .side { gap: var(--space-xs); padding: var(--space-m); overflow: auto; width: 15em; min-height: 0; min-height: 0; flex: none; }
+    .side p { margin: 0 0 var(--space-s); font-size: var(--font-size-s); opacity: .75; }
+    .side oda-button { justify-content: flex-start; }
+    iframe { border: none; background: var(--content-background); min-width: 0; min-height: 0; }
+</style>
+<div horizontal flex style="overflow: hidden; min-height: 0;">
+    <div class="side" vertical no-flex border-right>
+        <b>Контролы ввода</b>
+        <p>Строчные поля и блочные блоки с единым контрактом value + field.</p>
+        <oda-button allow-toggle toggle-group="nav" toggled data-src="./input/index.html" label="input"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./block/index.html" label="block"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./text/index.html" label="text"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./numeric/index.html" label="numeric"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./date/index.html" label="date"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./checkbox/index.html" label="checkbox"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./toggle/index.html" label="toggle"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./range/index.html" label="range"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./color/index.html" label="color"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./rating/index.html" label="rating"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./otp/index.html" label="otp"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./select/index.html" label="select"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./radio/index.html" label="radio"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./segmented/index.html" label="segmented"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./combobox/index.html" label="combobox"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./tags/index.html" label="tags"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./file/index.html" label="file"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./icon-picker/index.html" label="icon-picker"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./textarea/index.html" label="textarea"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./markdown-input/index.html" label="markdown-input"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./code-input/index.html" label="code-input"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./media/index.html" label="media"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./gallery/index.html" label="gallery"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./files/index.html" label="files"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./links/index.html" label="links"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./list/index.html" label="list"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./table-input/index.html" label="table-input"></oda-button>
+    </div>
+    <iframe id="demo" flex src="./input/index.html"></iframe>
+</div>
+<script type="module">
+    await customElements.whenDefined('oda-button');
+    for (const b of document.querySelectorAll('oda-button[data-src]'))
+        b.addEventListener('click', () => document.querySelector('#demo').src = b.dataset.src);
+</script>

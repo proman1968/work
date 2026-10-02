@@ -1,6 +1,158 @@
-<meta charset="utf-8">
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ODA Playground</title>
-<script type="module" src="/sources/client.js"></script>
-<script type="module" src="/oda/tools/playground/playground.js"></script>
-<oda-playground></oda-playground>
+<title>ODA — библиотека компонентов</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="/oda/components/layouts/app-layout/app-layout.js"></script>
+<script type="module" src="/oda/components/tree/tree.js"></script>
+<script type="module" src="/oda/components/table/table.js"></script>
+<script type="module" src="/oda/components/icon/icon.js"></script>
+<script type="module" src="/oda/components/inputs/text/text.js"></script>
+<script type="module" src="/oda/components/editors/markdown/markdown-viewer/markdown-viewer.js"></script>
+<style>
+    html, body { height: 100%; }
+    oda-app-layout { height: 100%; }
+    .brand { align-items: center; gap: var(--space-m); padding: var(--space-s) var(--space-m); }
+    .brand h1 { font-size: var(--font-size-l); margin: 0; }
+    .brand p { margin: 0; font-size: var(--font-size-s); opacity: .75; }
+    oda-tree { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+    .desc { flex: 1; min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--subtle-border); }
+    .desc-head { padding: var(--space-m); gap: var(--space-xs); border-bottom: 1px solid var(--subtle-border); }
+    .desc-head code { font-family: var(--font-mono); font-size: var(--font-size-s); }
+    .desc-head .imp { font-size: var(--font-size-xs); opacity: .75; word-break: break-all; }
+    oda-markdown-viewer { padding: var(--space-m); min-height: 0; }
+    iframe { border: none; background: var(--content-background); }
+    .overview-bar { align-items: center; gap: var(--space-m); padding: var(--space-s) var(--space-m); }
+</style>
+<oda-app-layout>
+    <div class="brand" slot="header" horizontal header>
+        <oda-icon icon="icons:apps" icon-size="32"></oda-icon>
+        <div vertical>
+            <h1>ODA — библиотека компонентов</h1>
+            <p>Контролы ввода, формы, таблицы, окна и раскладки с единым контрактом</p>
+        </div>
+    </div>
+    <oda-tree slot="left-panel" id="nav" allow-focus label="Разделы" icon="icons:folder"></oda-tree>
+    <div slot="main" vertical flex style="overflow: hidden; min-height: 0;">
+        <div class="overview-bar" id="searchbar" horizontal no-flex header>
+            <oda-text-input id="search" flex placeholder="Поиск компонента…" clearable></oda-text-input>
+        </div>
+        <oda-table id="grid" flex show-header allow-focus col-lines row-lines auto-fit style="min-height: 0;"></oda-table>
+        <iframe id="demo" flex style="display: none;"></iframe>
+    </div>
+    <div class="desc" slot="right-panel" vertical flex label="Описание" icon="icons:info"></div>
+        <div class="desc-head" vertical no-flex>
+            <code id="tag"></code>
+            <div class="imp" id="imp"></div>
+        </div>
+        <oda-markdown-viewer id="doc" flex></oda-markdown-viewer>
+    </div>
+</oda-app-layout>
+<script type="module">
+    const C = (cat, tag, title, demo, readme, imp) => ({ id: tag, tag, cat, title, demo, readme, imp });
+    const COMPONENTS = [
+        C('Контролы ввода', 'oda-input', 'База строчных полей', '/oda/components/inputs/input/index.html', '/oda/components/inputs/input/readme.md', 'oda//input'),
+        C('Контролы ввода', 'oda-block-input', 'База блочных полей', '/oda/components/inputs/block/index.html', '/oda/components/inputs/block/readme.md', 'oda//block'),
+        C('Контролы ввода', 'oda-text-input', 'Текст, пароль, e-mail, url, телефон, поиск', '/oda/components/inputs/text/index.html', '/oda/components/inputs/text/readme.md', 'oda//text'),
+        C('Контролы ввода', 'oda-numeric-input', 'Число с локальным форматом', '/oda/components/inputs/numeric/index.html', '/oda/components/inputs/numeric/readme.md', 'oda//numeric'),
+        C('Контролы ввода', 'oda-date-input', 'Дата и время', '/oda/components/inputs/date/index.html', '/oda/components/inputs/date/readme.md', 'oda//date'),
+        C('Контролы ввода', 'oda-checkbox', 'Флажок', '/oda/components/inputs/checkbox/index.html', '/oda/components/inputs/checkbox/readme.md', 'oda//checkbox'),
+        C('Контролы ввода', 'oda-toggle', 'Переключатель', '/oda/components/inputs/toggle/index.html', '/oda/components/inputs/toggle/readme.md', 'oda//toggle'),
+        C('Контролы ввода', 'oda-range-input', 'Ползунок', '/oda/components/inputs/range/index.html', '/oda/components/inputs/range/readme.md', 'oda//range'),
+        C('Контролы ввода', 'oda-color-input', 'Цвет', '/oda/components/inputs/color/index.html', '/oda/components/inputs/color/readme.md', 'oda//color'),
+        C('Контролы ввода', 'oda-rating-input', 'Оценка звёздами', '/oda/components/inputs/rating/index.html', '/oda/components/inputs/rating/readme.md', 'oda//rating'),
+        C('Контролы ввода', 'oda-otp-input', 'Одноразовый код', '/oda/components/inputs/otp/index.html', '/oda/components/inputs/otp/readme.md', 'oda//otp'),
+        C('Контролы ввода', 'oda-select-input', 'Выбор из списка', '/oda/components/inputs/select/index.html', '/oda/components/inputs/select/readme.md', 'oda//select'),
+        C('Контролы ввода', 'oda-radio-input', 'Группа radio', '/oda/components/inputs/radio/index.html', '/oda/components/inputs/radio/readme.md', 'oda//radio'),
+        C('Контролы ввода', 'oda-segmented-input', 'Сегменты', '/oda/components/inputs/segmented/index.html', '/oda/components/inputs/segmented/readme.md', 'oda//segmented'),
+        C('Контролы ввода', 'oda-combobox-input', 'Ввод с подсказками', '/oda/components/inputs/combobox/index.html', '/oda/components/inputs/combobox/readme.md', 'oda//combobox'),
+        C('Контролы ввода', 'oda-tags-input', 'Метки чипами', '/oda/components/inputs/tags/index.html', '/oda/components/inputs/tags/readme.md', 'oda//tags'),
+        C('Контролы ввода', 'oda-file-input', 'Файл', '/oda/components/inputs/file/index.html', '/oda/components/inputs/file/readme.md', 'oda//file'),
+        C('Контролы ввода', 'oda-icon-picker-input', 'Иконка', '/oda/components/inputs/icon-picker/index.html', '/oda/components/inputs/icon-picker/readme.md', 'oda//icon-picker'),
+        C('Контролы ввода', 'oda-textarea-input', 'Многострочный текст', '/oda/components/inputs/textarea/index.html', '/oda/components/inputs/textarea/readme.md', 'oda//textarea'),
+        C('Контролы ввода', 'oda-markdown-input', 'Markdown', '/oda/components/inputs/markdown-input/index.html', '/oda/components/inputs/markdown-input/readme.md', 'oda//markdown-input'),
+        C('Контролы ввода', 'oda-code-input', 'Исходный код', '/oda/components/inputs/code-input/index.html', '/oda/components/inputs/code-input/readme.md', 'oda//code-input'),
+        C('Контролы ввода', 'oda-image-input', 'Изображение, видео, аудио', '/oda/components/inputs/media/index.html', '/oda/components/inputs/media/readme.md', 'oda//media'),
+        C('Контролы ввода', 'oda-gallery-input', 'Галерея', '/oda/components/inputs/gallery/index.html', '/oda/components/inputs/gallery/readme.md', 'oda//gallery'),
+        C('Контролы ввода', 'oda-files-input', 'Файлы', '/oda/components/inputs/files/index.html', '/oda/components/inputs/files/readme.md', 'oda//files'),
+        C('Контролы ввода', 'oda-links-input', 'Ссылки', '/oda/components/inputs/links/index.html', '/oda/components/inputs/links/readme.md', 'oda//links'),
+        C('Контролы ввода', 'oda-list-input', 'Список строк', '/oda/components/inputs/list/index.html', '/oda/components/inputs/list/readme.md', 'oda//list'),
+        C('Контролы ввода', 'oda-table-input', 'Таблица', '/oda/components/inputs/table-input/index.html', '/oda/components/inputs/table-input/readme.md', 'oda//table-input'),
+        C('Формы', 'oda-form', 'Иерархическая форма', '/oda/components/structure/form/index.html', '/oda/components/structure/form/readme.md', 'oda//form'),
+        C('Формы', 'oda-property-grid', 'Инспектор свойств', '/oda/components/structure/property-grid/index.html', '/oda/components/structure/property-grid/readme.md', 'oda//property-grid'),
+        C('Таблицы', 'oda-table', 'Таблица и data-grid', '/oda/components/table/index.html', '/oda/components/table/readme.md', 'oda//table'),
+        C('Деревья', 'oda-tree', 'Дерево', '/oda/components/tree/index.html', '/oda/components/tree/readme.md', 'oda//tree'),
+        C('Окна', 'oda-popover', 'Всплывающие окна ODA.show*', '/oda/components/containers/popover/index.html', '/oda/components/containers/popover/readme.md', 'oda//containers'),
+        C('Меню', 'oda-menu-list', 'Список пунктов меню', '/oda/components/menus/menu-list/index.html', '/oda/components/menus/menu-list/readme.md', 'oda//menu-list'),
+        C('Меню', 'oda-menu', 'Контекстное меню', '/oda/components/menus/menu/index.html', '/oda/components/menus/menu/readme.md', 'oda//menu'),
+        C('База', 'oda-button', 'Кнопка', '/oda/components/button/index.html', '/oda/components/button/readme.md', 'oda//button'),
+        C('База', 'oda-icon', 'Иконка', '/oda/components/icon/index.html', '/oda/components/icon/readme.md', 'oda//icon'),
+        C('Редакторы', 'oda-code-editor', 'Редактор кода (Ace)', '/oda/components/editors/code-editor/index.html', '/oda/components/editors/code-editor/readme.md', 'oda//code-editor'),
+        C('Редакторы', 'oda-markdown-viewer', 'Просмотр markdown', '/oda/components/editors/markdown/index.html', '/oda/components/editors/markdown/readme.md', 'oda//markdown'),
+        C('Раскладки', 'oda-app-layout', 'Каркас приложения', '/oda/components/layouts/app-layout/index.html', '/oda/components/layouts/app-layout/readme.md', 'oda//app-layout'),
+        C('Раскладки', 'oda-splitter', 'Разделитель', '/oda/components/layouts/splitter/index.html', '/oda/components/layouts/splitter/readme.md', 'oda//splitter'),
+        C('Раскладки', 'oda-tabs', 'Вкладки', '/oda/components/layouts/tabs/index.html', '/oda/components/layouts/tabs/readme.md', 'oda//tabs'),
+        C('Инструменты', 'oda-icons-test', 'Браузер иконок', '/oda/tools/icons/index.html', '/oda/tools/icons/readme.md', 'oda//icons-test'),
+        C('Инструменты', 'oda-tester', 'Стенд компонентов', '/oda/tools/tester/index.html', '/oda/tools/tester/readme.md', 'oda//tester'),
+        C('Инструменты', 'oda-jupyter', 'Ноутбук', '/oda/tools/jupyter/index.html', '/oda/tools/jupyter/readme.md', 'oda//jupyter'),
+    ];
+    await customElements.whenDefined('oda-tree');
+    await customElements.whenDefined('oda-table');
+    const cats = {};
+    for (const c of COMPONENTS)
+        (cats[c.cat] ??= []).push(c);
+    nav.items = [{ id: 'Обзор', overview: true }, ...Object.entries(cats).map(([id, items]) => ({ id, expanded: true, items }))];
+    grid.columns = [
+        { name: 'tag', label: 'Тег', width: 200 },
+        { name: 'cat', label: 'Раздел', width: 150 },
+        { name: 'title', label: 'Назначение', width: 380 }
+    ];
+    grid.dataSet = COMPONENTS;
+    function showOverview(on) {
+        demo.style.display = on ? 'none' : '';
+        grid.style.display = on ? '' : 'none';
+        searchbar.style.display = on ? '' : 'none';
+    }
+    async function select(c, save = true) {
+        if (!c?.tag)
+            return;
+        if (save)
+            location.hash = '#/' + c.tag;
+        showOverview(false);
+        demo.src = c.demo;
+        tag.textContent = c.tag;
+        imp.textContent = 'imports: \'' + c.imp + '\' · ' + c.title;
+        try {
+            doc.value = await (await fetch(c.readme)).text();
+        }
+        catch {
+            doc.value = 'Описание недоступно.';
+        }
+    }
+    // выбор в дереве и таблице — реактивными событиями свойств
+    nav.addEventListener('focused-item-changed', e => {
+        const item = e.detail.value;
+        if (!item)
+            return;
+        if (item.overview) {
+            showOverview(true);
+            return;
+        }
+        select(COMPONENTS.find(c => c.tag === item.tag));
+    });
+    grid.addEventListener('focused-row-changed', e => {
+        if (e.detail.value?.tag)
+            select(e.detail.value);
+    });
+    search.addEventListener('value-changed', e => grid.filter = e.detail.value);
+    showOverview(true);
+    const initial = COMPONENTS.find(c => '#/' + c.tag === location.hash);
+    if (initial)
+        select(initial, false);
+    else {
+        tag.textContent = COMPONENTS[2].tag;
+        imp.textContent = 'imports: \'' + COMPONENTS[2].imp + '\' · ' + COMPONENTS[2].title;
+        fetch(COMPONENTS[2].readme).then(r => r.text()).then(t => doc.value = t).catch(() => doc.value = 'Описание недоступно.');
+    }
+</script>

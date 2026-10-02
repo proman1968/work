@@ -32,8 +32,8 @@ before(async () => {
     write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
-    copy('REGISTER/$register/class.js');
-    copy('REGISTER/$register/$folder/$class/$account/class.js');
+    copy('DATA/REGISTER/$register/class.js');
+    copy('DATA/REGISTER/$register/$folder/$class/$account/class.js');
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -47,9 +47,9 @@ after(async () => {
 
 describe('типы учёта', () => {
     it('счёт наследует поля проводки из типа $account', async () => {
-        const reg = await WORK.get_item('/REGISTER');
+        const reg = await WORK.get_item('/DATA/REGISTER');
         await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты с покупателями', icon: 'carbon:wallet' }`, ...as(ADMIN) });
-        const acc = await WORK.get_item('/REGISTER/62');
+        const acc = await WORK.get_item('/DATA/REGISTER/62');
         assert.equal(acc.type, '$account');
         const ids = (acc.METADATA?.FIELDS || []).map(f => f.id);
         for (const f of ['source', 'entry', 'rule', 'corr_account', 'debit', 'credit', 'qty_in', 'qty_out', 'storno'])

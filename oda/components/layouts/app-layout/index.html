@@ -1,4 +1,6 @@
 <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--<oda-tester>-->
     <oda-test-layout></oda-test-layout>
@@ -9,13 +11,13 @@
     ODA({is:'oda-test-layout', imports:'oda//app-layout', extends:'oda-app-layout',
         template: /*html*/`
                  <app-layout-toolbar slot="header">
-             <oda-button icon="class" slot="header-left">header left toolbar</oda-button>
+             <oda-button icon="icons:star" slot="header-left">header left toolbar</oda-button>
         </app-layout-toolbar>
         <oda-button icon="icons:warning" slot="header"></oda-button>
         <app-layout-toolbar slot="top">
-            <oda-button icon="class" slot="top-left">left toolbar</oda-button>
-            <oda-button icon="class" slot="top-right">right toolbar</oda-button>
-            <oda-button icon="class" slot="top-center">center toolbar</oda-button>
+            <oda-button icon="icons:star" slot="top-left">left toolbar</oda-button>
+            <oda-button icon="icons:star" slot="top-right">right toolbar</oda-button>
+            <oda-button icon="icons:star" slot="top-center">center toolbar</oda-button>
         </app-layout-toolbar>
 
         <div slot="top">TOP qw erpiqwerop iqwpeopoqweirpqpowporq ikqwep wepp oeqpiqwer
@@ -23,10 +25,10 @@
         </div>
         <input slot="top" value="100">
         <div slot="top-left">TOP-LEFT</div>
-        <iframe slot="main" src="../../grids/table/index.html">MAIN</iframe>
+        <iframe slot="main" src="/oda/components/table/index.html">MAIN</iframe>
         <div slot="bottom">BOTTOM</div>
         <div  icon="odant:class" title="ПППП"  slot="left-panel">ссссс</div>
-        <iframe  slot="left-panel" bar-opened label="надпись" src="../../../_sandbox/simple/index.html">LEFT1</iframe>
+        <iframe  slot="left-panel" bar-opened label="надпись" src="/oda/components/inputs/text/index.html">LEFT1</iframe>
         <div  style="font-weight: bolder; color: red;" :slot="mySlot">LEFT2</div>
         <div slot="left-panel">LEFT3</div>
         <div slot="right-panel">RIGHT</div>

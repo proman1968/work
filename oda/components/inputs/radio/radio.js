@@ -1,82 +1,107 @@
-ODA({is: 'oda-radio-input',
+/**
+ * oda-radio-input — выбор одного варианта группой нативных radio: подпись и пояснение (description) варианта.
+ * inline — варианты в ряд; allowOther — вариант «Своё значение» с текстовым полем.
+ */
+import '/oda/components/inputs/input/input.js';
+
+let uid = 0;
+
+ODA({
+    is: 'oda-radio-input',
+    extends: 'oda-options-input',
     template: /*html*/`
-    <style>
-        :host {
-            @apply --vertical;
-            @apply --flex;
-            gap: 8px;
-        }
-        label.card {
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 10px 12px;
-            cursor: pointer;
-        }
-        label.card:has(> input[type="radio"]:checked) {
-            border-width: 2px;
-            padding: 9px 11px;
-        }
-        label.card input { flex-shrink: 0; margin-top: 2px; }
-        label.card input:disabled ~ span { opacity: .5; }
-        label.card .desc {
-            display: block;
-            font-size: small;
-            opacity: 0.7;
-        }
-        input.other-text {
-            @apply --flex;
-            min-width: 0;
-            box-sizing: border-box;
-            padding: 6px 8px;
-            font: inherit;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-        }
-    </style>
-    <label class="card" ~for="options">
-        <input type="radio" :name="groupName" :value="$for.item.value" :disabled :checked="isChecked($for.item.value)" @change="value = $for.item.value">
-        <span><b>{{$for.item.label}}</b><span class="desc" ~if="$for.item.desc">{{$for.item.desc}}</span></span>
-    </label>
-    <label class="card" ~if="other">
-        <input type="radio" :name="groupName" value="custom" :disabled :checked="isOtherChecked" @change="value = otherText || ''">
-        <span><b>{{otherLabel}}</b><input class="other-text" type="text" :placeholder="otherLabel" :disabled :value="otherText" @input="value = $this.value"></span>
-    </label>
+        <style>
+            :host {
+                @apply --vertical;
+                align-items: stretch;
+                border-color: transparent;
+                background: transparent;
+                padding: 0;
+                gap: var(--space-xs);
+                cursor: default;
+            }
+            :host(:hover), :host(:focus-within) {
+                border-color: transparent;
+                box-shadow: none;
+            }
+            :host([locked]) {
+                background: transparent;
+            }
+            :host([inline]) {
+                @apply --horizontal;
+                flex-wrap: wrap;
+            }
+            .option {
+                @apply --horizontal;
+                align-items: baseline;
+                gap: var(--space-s);
+                padding: var(--space-s) var(--space-m);
+                border: 1px solid transparent;
+                border-radius: var(--control-radius);
+                cursor: pointer;
+            }
+            .option:hover {
+                background: var(--subtle-background);
+            }
+            .option.checked {
+                background: var(--accent-soft);
+                border-color: var(--accent-color);
+            }
+            .option:focus-within {
+                outline: 2px solid var(--focus-ring-color);
+                outline-offset: 1px;
+            }
+            .option.off {
+                @apply --disabled;
+            }
+            .description {
+                @apply --muted;
+                font-size: var(--font-size-s);
+            }
+            .other {
+                @apply --control;
+            }
+        </style>
+        <label ~for="options" class="option" ~class="{checked: isChecked($for.item), off: !!$for.item.disabled}">
+            <input type="radio" :name="groupName" :checked="isChecked($for.item)" :disabled="disabled || isReadonly || !!$for.item.disabled"
+                @change="value = $for.item.value">
+            <div vertical>
+                <span>{{$for.item.label}}</span>
+                <span class="description" ~if="$for.item.description || $for.item.desc">{{$for.item.description || $for.item.desc}}</span>
+            </div>
+        </label>
+        <label ~if="otherAllowed" class="option" ~class="{checked: otherActive}">
+            <input type="radio" :name="groupName" :checked="otherActive" :disabled="disabled || isReadonly" @change="pickOther()">
+            <input ~show="otherActive" flex class="control other" :value="isOther ? value : ''" placeholder="Своё значение"
+                :readonly="isReadonly" :disabled @input="value = $this.value">
+            <span ~if="!otherActive">Своё значение</span>
+        </label>
     `,
-    value: '',
-    meta: null,
-    get options() {
-        return this.meta?.options || [];
+    $public: {
+        /** варианты в ряд */
+        inline: {
+            $def: false,
+            $attr: true
+        },
     },
-    get other() {
-        return this.meta?.other;
+    groupName: {
+        $def: '',
+        get() {
+            return 'oda-radio-' + (++uid);
+        }
     },
-    get otherLabel() {
-        return this.other?.label || 'Свой ответ';
+    otherMode: false,
+    get otherAllowed() {
+        return this.allowOther;
     },
-    get disabled() {
-        return !!this.meta?.disabled;
+    get otherActive() {
+        return this.otherAllowed && (this.isOther || this.otherMode && this.isEmpty);
     },
-    get groupName() {
-        return 'rg-' + this.__id__;
+    pickOther() {
+        this.otherMode = true;
+        this.value = '';
     },
-    isChecked(value) {
-        return String(this.value ?? '') === String(value ?? '');
-    },
-    get isOtherChecked() {
-        if (!this.other)
-            return false;
-        const v = String(this.value ?? '');
-        if (!v)
-            return false;
-        return !(this.options || []).some(o => String(o.value) === v);
-    },
-    get otherText() {
-        const v = String(this.value ?? '');
-        if (!v)
-            return '';
-        return (this.options || []).some(o => String(o.value) === v) ? '' : v;
-    },
+    isChecked(o) {
+        return !this.otherActive && !this.isEmpty && String(this.value) === String(o.value);
+    }
 });

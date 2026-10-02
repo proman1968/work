@@ -1,7 +1,11 @@
 /** Проекции ленты .task для UI: доки и статистика контекста, группировка действий. */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectDocs, computeStats, isReport } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import { collectDocs, computeStats, stableDocs, activityOf, ACTIVITY_STALL_S } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
 import { segmentsOf } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/segments.js';
 
 const long = '# Отчёт по оборудованию\n\n' + 'строка отчёта\n'.repeat(80);
@@ -19,19 +23,37 @@ const items = [
 ];
 
 describe('доки задачи', () => {
-    it('файлы (и из субагентов), отчёты субагентов, развёрнутые ответы; ошибки и короткое — нет', () => {
+    it('файлы (и из субагентов), отчёты субагентов; реплики доками не становятся', () => {
         const docs = collectDocs(items);
-        assert.deepEqual(docs.map(d => d.key), ['file:/BASE/doc/.r.md/history/2026-09-29/100.X.md', 'agent:t3', 'file:/BASE/.x.md/history/2026-09-29/101.X.md', 'reply:a2']);
+        assert.deepEqual(docs.map(d => d.key), ['file:/BASE/doc/.r.md/history/2026-09-29/100.X.md', 'agent:t3', 'file:/BASE/.x.md/history/2026-09-29/101.X.md']);
         assert.equal(docs[0].title, 'r.md');
         assert.equal(docs[0].path, items[1].tools[0].snapshot);
-        assert.equal(docs[3].title, 'Отчёт по оборудованию');
-        assert.ok(!isReport('коротко'));
+        assert.ok(!docs.some(d => d.key.startsWith('reply:')), 'длинный ответ a2 — не док');
     });
 
     it('повторная запись того же файла — один док', () => {
         const again = [...items, { id: 'a4', type: 'assistant', time: 5, tools: [{ id: 't9', name: 'edit', status: 'ok', path: '/BASE/doc/r.md', snapshot: '/BASE/doc/.r.md/history/2026-09-29/200.X.md' }] }];
         assert.equal(collectDocs(again).filter(d => d.title === 'r.md').length, 2);
         assert.equal(collectDocs([{ type: 'assistant', tools: [{ id: 'old', name: 'write', status: 'ok', path: '/BASE/old.md' }] }])[0].kind, 'text');
+    });
+
+    it('форма реальной видео-задачи: только видеофайл, без вкладок-реплик', () => {
+        const snap = '/USERS/X/$user/USER/video/.video.mp4/history/2026-10-02/1790944526939.X.mp4';
+        const лента = [
+            { id: 'u1', type: 'user', content: 'сгенерируй видео', time: 1 },
+            { id: 'a1', type: 'assistant', time: 2, content: 'Итог:\n\n' + 'Видео создано через GenAPI. '.repeat(60) },
+            { id: 'a2', type: 'assistant', time: 3, content: 'Теперь запрос принят корректно. '.repeat(60) },
+            { id: 'a3', type: 'assistant', time: 4, tools: [{
+                id: 'c1', name: 'call', status: 'ok',
+                args: { path: '/USERS/X', method: 'save_files', args: {} },
+                result: JSON.stringify({ content: 'Видео', includes: [snap] }),
+            }] },
+            { id: 'a4', type: 'assistant', time: 5, content: 'Готово! ' + 'Видео сохранено в WORK. '.repeat(60) },
+        ];
+        const docs = collectDocs(лента);
+        assert.deepEqual(docs.map(d => d.key), ['file:' + snap]);
+        assert.equal(docs[0].title, 'video.mp4');
+        assert.equal(docs[0].icon, 'carbon:video');
     });
 
     it('опубликованные помечаются для общей ленты', () => {
@@ -81,6 +103,112 @@ describe('WORK-ссылки в markdown (rules.md 1.1.1)', async () => {
         assert.equal(attachmentName({ path }), 'себестоимость июнь.xlsx');
         assert.equal(attachmentName({ path: '/BASE/обычный.xlsx' }), 'обычный.xlsx');
         assert.equal(attachmentName('/BASE/doc/.документ.md/history/2026-10-01/123.X.md'), 'документ.md');
+    });
+});
+
+describe('вложения через call → save_files', () => {
+    const SNAP = '/USERS/X/$user/USER/video/.video.mp4/history/2026-10-02/1790944526939.X.mp4';
+    const callEntry = (over = {}) => ({
+        id: 'c1', name: 'call', status: 'ok',
+        args: { path: '/USERS/X', method: 'save_files', args: {} },
+        result: JSON.stringify({ content: 'Видео', includes: [SNAP] }),
+        ...over,
+    });
+
+    it('callSnapshots/snapshotName: только снимки из save_files', async () => {
+        const { callSnapshots, snapshotName } = await import('../sources/modules/agent/util.js');
+        assert.deepEqual(callSnapshots(callEntry()), [SNAP]);
+        assert.equal(snapshotName(SNAP), 'video.mp4');
+        assert.equal(snapshotName('/BASE/live/doc.md'), 'doc.md');
+        assert.deepEqual(callSnapshots(callEntry({ status: 'error' })), []);
+        assert.deepEqual(callSnapshots(callEntry({ args: { method: 'read' } })), []);
+        assert.deepEqual(callSnapshots(callEntry({ result: 'не json' })), []);
+        assert.deepEqual(callSnapshots(callEntry({ result: JSON.stringify({ includes: ['/BASE/live.md'] }) })), []);
+        assert.deepEqual(callSnapshots(callEntry({ result: JSON.stringify({}) })), []);
+    });
+
+    it('collectDocs: снимок из includes — файл-док с именем и иконкой видео', () => {
+        const docs = collectDocs([{ id: 'a', type: 'assistant', time: 7, tools: [callEntry()] }]);
+        assert.equal(docs.length, 1);
+        assert.equal(docs[0].key, 'file:' + SNAP);
+        assert.equal(docs[0].kind, 'file');
+        assert.equal(docs[0].path, SNAP);
+        assert.equal(docs[0].title, 'video.mp4');
+        assert.equal(docs[0].icon, 'carbon:video');
+        assert.equal(docs[0].source, 'c1');
+    });
+
+    it('collectDocs: дубль снимка не двоится, чужой статус не берём', () => {
+        const items = [{ id: 'a', type: 'assistant', time: 7, tools: [callEntry(), callEntry({ id: 'c2' })] }];
+        assert.equal(collectDocs(items).length, 1);
+        assert.equal(collectDocs([{ id: 'a', type: 'assistant', tools: [callEntry({ status: 'denied' })] }]).length, 0);
+    });
+});
+
+describe('импорты UI-модуля задачи', () => {
+    it('docs.js без родительских относительных импортов (ломают ~ наследника)', () => {
+        const src = fs.readFileSync(path.join(ROOT, '$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js'), 'utf-8');
+        // статические родительские импорты запрещены; допустим лишь guarded-фолбэк для Node-тестов
+        assert.doesNotMatch(src, /(^|\n)\s*import\s+[^'"]*from\s+['"]\.\.\//);
+        assert.match(src, /await import\(['"]\/sources\//);
+    });
+});
+
+describe('стабильность доков между обновлениями', () => {
+    it('тот же набор — те же объекты и та же ссылка', () => {
+        const a = collectDocs(items);
+        const again = collectDocs(items);
+        assert.notEqual(a, again, 'свежая сборка — новый массив');
+        const { docs, changed } = stableDocs(a, again);
+        assert.equal(changed, false);
+        assert.equal(docs, a);
+    });
+
+    it('новый док добавляется, старые объекты живут, поля обновляются на месте', () => {
+        const a = collectDocs(items);
+        const more = [...items, { id: 'a4', type: 'assistant', time: 5, tools: [{ id: 't9', name: 'edit', status: 'ok', path: '/BASE/doc/r.md', snapshot: '/BASE/doc/.r.md/history/2026-09-29/200.X.md' }] }];
+        const b = collectDocs(more);
+        const { docs, changed } = stableDocs(a, b);
+        assert.equal(changed, true);
+        assert.equal(docs.length, a.length + 1);
+        assert.equal(docs[0], a[0], 'прежний объект переиспользован');
+    });
+
+    it('исчезнувший док — новый массив без него', () => {
+        const a = collectDocs(items);
+        const { docs, changed } = stableDocs(a, collectDocs([]));
+        assert.equal(changed, true);
+        assert.deepEqual(docs, []);
+    });
+});
+
+describe('строка активности агента', () => {
+    const T0 = 1790948152753000;
+    it('не running — тихо', () => {
+        assert.equal(activityOf({ status: 'idle', items: [], streams: {} }), null);
+    });
+    it('виден текст с кареткой — тихо', () => {
+        const items = [{ id: 'a', type: 'assistant' }];
+        assert.equal(activityOf({ status: 'running', items, streams: { a: { content: 'Привет' } }, nowMs: T0, lastDeltaMs: T0 }), null);
+    });
+    it('выполняется инструмент — его имя', () => {
+        const items = [{ id: 'a', type: 'assistant', tools: [{ name: 'call', status: 'running' }] }];
+        assert.equal(activityOf({ status: 'running', items, streams: {}, nowMs: T0, lastDeltaMs: T0 }).text, 'Выполняю: Вызов…');
+    });
+    it('только рассуждение — «Думаю»', () => {
+        const items = [{ id: 'a', type: 'assistant' }];
+        assert.equal(activityOf({ status: 'running', items, streams: { a: { reasoning: 'хм' } }, nowMs: T0, lastDeltaMs: T0 }).text, 'Думаю…');
+    });
+    it('тишина — «Жду ответ», секунды после 5с', () => {
+        const items = [{ id: 'a', type: 'assistant' }];
+        assert.equal(activityOf({ status: 'running', items, streams: {}, nowMs: T0, lastDeltaMs: T0 }).text, 'Жду ответ…');
+        assert.equal(activityOf({ status: 'running', items, streams: {}, nowMs: T0 + 30000, lastDeltaMs: T0 }).text, 'Жду ответ… 30 с');
+    });
+    it('долгая тишина — подсказка про Esc', () => {
+        const items = [{ id: 'a', type: 'assistant' }];
+        const r = activityOf({ status: 'running', items, streams: {}, nowMs: T0 + (ACTIVITY_STALL_S + 5) * 1000, lastDeltaMs: T0 });
+        assert.equal(r.kind, 'stalled');
+        assert.match(r.text, /Нет ответа уже 125 с/);
     });
 });
 

@@ -30,18 +30,18 @@ const CATALOG = `METADATA: { FIELDS: [
     { id: 'name', required: true }, { id: 'time', type: 'timestamp' }, { id: 'inn' },
 ] }`;
 const ACC62 = `METADATA: {
-    FIELDS: [{ id: 'counterparty', type: 'Link', catalog: '/CATALOGS/CLIENTS', analytic: true }],
+    FIELDS: [{ id: 'counterparty', type: 'Link', catalog: '/DATA/CATALOGS/CLIENTS', analytic: true }],
     INDEXES: [{ id: 'turnover', kind: 'turnover', by: ['counterparty'], measures: { debit: 'sum', credit: 'sum' } }],
 }`;
 const SALE = `METADATA: {
     FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
-        { id: 'client', type: 'Link', catalog: '/CATALOGS/CLIENTS', required: true },
+        { id: 'client', type: 'Link', catalog: '/DATA/CATALOGS/CLIENTS', required: true },
         { id: 'sum', type: 'Number', required: true },
     ],
     POSTINGS: [{ id: 'main', amount: 'sum',
-        debit: { account: '/REGISTER/62', analytics: { counterparty: 'client' } },
-        credit: { account: '/REGISTER/90' } }],
+        debit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'client' } },
+        credit: { account: '/DATA/REGISTER/90' } }],
 }`;
 
 before(async () => {
@@ -53,19 +53,19 @@ before(async () => {
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    copy('REGISTER/$register/class.js');
-    copy('REGISTER/$register/$folder/$class/$account/class.js');
-    copy('OPERATIONS/$operation/class.js');
-    copy('OPERATIONS/$operation/$folder/$class/$operation/class.js');
-    write('CATALOGS/$class/class.js', `export default { label: 'Справочники' }`);
-    write('CATALOGS/CLIENTS/$class/class.js', `export default { label: 'Клиенты', '#security': { USERS: ['${USER1}'] }, ${CATALOG} }`);
+    copy('DATA/REGISTER/$register/class.js');
+    copy('DATA/REGISTER/$register/$folder/$class/$account/class.js');
+    copy('DATA/OPERATIONS/$operation/class.js');
+    copy('DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js');
+    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники' }`);
+    write('DATA/CATALOGS/CLIENTS/$class/class.js', `export default { label: 'Клиенты', '#security': { USERS: ['${USER1}'] }, ${CATALOG} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
-    const reg = await WORK.get_item('/REGISTER');
+    const reg = await WORK.get_item('/DATA/REGISTER');
     const admin = as(ADMIN);
     await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', icon: 'carbon:wallet', '#security': { USERS: ['${USER1}'] }, ${ACC62} }`, ...admin });
     await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', icon: 'carbon:wallet', '#security': { USERS: ['${USER1}'] } }`, ...admin });
-    const ops = await WORK.get_item('/OPERATIONS');
+    const ops = await WORK.get_item('/DATA/OPERATIONS');
     await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USERS: ['${USER1}'] }, ${SALE} }`, ...admin });
 });
 
@@ -80,14 +80,14 @@ describe('разноска', () => {
     let clientId, opId;
 
     it('post: две проводки с общим entry, posted в операции', async () => {
-        const clients = await WORK.get_item('/CATALOGS/CLIENTS');
+        const clients = await WORK.get_item('/DATA/CATALOGS/CLIENTS');
         clientId = (await clients.create_object({ filename: 'a.data', post: { name: 'Альфа', inn: '1' }, ...as(USER1) })).id;
-        const sale = await WORK.get_item('/OPERATIONS/SALE');
+        const sale = await WORK.get_item('/DATA/OPERATIONS/SALE');
         opId = (await sale.create_object({ filename: 's1.data', post: { name: 'Счёт 1', client: clientId, sum: 1000 }, ...as(USER1) })).id;
         const res = await sale.post({ id: opId, ...as(USER1) });
         assert.match(String(res?.message || JSON.stringify(res)), /Проведено/);
-        const acc62 = await WORK.get_item('/REGISTER/62');
-        const acc90 = await WORK.get_item('/REGISTER/90');
+        const acc62 = await WORK.get_item('/DATA/REGISTER/62');
+        const acc90 = await WORK.get_item('/DATA/REGISTER/90');
         const d = await acc62.query({ ...as(USER1) });
         const c = await acc90.query({ ...as(USER1) });
         assert.equal(d.length, 1);
@@ -97,8 +97,8 @@ describe('разноска', () => {
         assert.equal(d[0].body.counterparty, clientId);
         assert.equal(c[0].body.credit, 1000);
         assert.equal(d[0].body.entry, c[0].body.entry);
-        assert.equal(c[0].body.corr_account, '/REGISTER/62');
-        assert.equal(d[0].body.source, '/OPERATIONS/SALE/' + opId);
+        assert.equal(c[0].body.corr_account, '/DATA/REGISTER/62');
+        assert.equal(d[0].body.source, '/DATA/OPERATIONS/SALE/' + opId);
         const op = await sale.read_object({ id: opId, ...as(USER1) });
         assert.equal(op.body.posted.records.length, 2);
         const t = await acc62.index({ id: 'turnover', ...as(USER1) });
@@ -106,10 +106,10 @@ describe('разноска', () => {
     });
 
     it('повторный post — сторно старых и новые записи', async () => {
-        const sale = await WORK.get_item('/OPERATIONS/SALE');
+        const sale = await WORK.get_item('/DATA/OPERATIONS/SALE');
         await sale.update_object({ id: opId, post: { sum: 1200 }, ...as(USER1) });
         await sale.post({ id: opId, ...as(USER1) });
-        const acc62 = await WORK.get_item('/REGISTER/62');
+        const acc62 = await WORK.get_item('/DATA/REGISTER/62');
         const all = await acc62.query({ order: 'asc', ...as(USER1) });
         assert.equal(all.length, 3, 'исходная + сторно + новая');
         assert.ok(all.some(x => x.body.storno && x.body.debit === -1000));
@@ -118,13 +118,13 @@ describe('разноска', () => {
     });
 
     it('unpost replace удаляет записи', async () => {
-        const sale = await WORK.get_item('/OPERATIONS/SALE');
+        const sale = await WORK.get_item('/DATA/OPERATIONS/SALE');
         const before = (await sale.read_object({ id: opId, ...as(USER1) })).body.posted.records;
         assert.equal(before.length, 2);
         const r = await sale.unpost({ id: opId, mode: 'replace', ...as(USER1) });
         assert.deepEqual(r, { unposted: true, mode: 'replace' });
-        const acc62 = await WORK.get_item('/REGISTER/62');
-        for (const ref of before.filter(p => p.startsWith('/REGISTER/62/'))) {
+        const acc62 = await WORK.get_item('/DATA/REGISTER/62');
+        for (const ref of before.filter(p => p.startsWith('/DATA/REGISTER/62/'))) {
             const rec = await acc62.read_object({ id: ref.split('/').pop(), ...as(USER1) });
             assert.equal(rec.body.deleted, true, 'текущая запись помечена');
         }
@@ -133,17 +133,17 @@ describe('разноска', () => {
     });
 
     it('post без счёта — ошибка и компенсация', async () => {
-        const ops = await WORK.get_item('/OPERATIONS');
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
         await ops.create({ id: 'BAD', type: '$operation', post: `export default { label: 'Битый', '#security': { USERS: ['${USER1}'] },
-            METADATA: { FIELDS: [{ id: 'name' }, { id: 'time' }, { id: 'client', type: 'Link', catalog: '/CATALOGS/CLIENTS' }, { id: 'sum', type: 'Number' }],
+            METADATA: { FIELDS: [{ id: 'name' }, { id: 'time' }, { id: 'client', type: 'Link', catalog: '/DATA/CATALOGS/CLIENTS' }, { id: 'sum', type: 'Number' }],
             POSTINGS: [{ id: 'main', amount: 'sum',
-                debit: { account: '/REGISTER/62', analytics: { counterparty: 'client' } },
-                credit: { account: '/REGISTER/99' } }] } }`, ...as(ADMIN) });
-        const bad = await WORK.get_item('/OPERATIONS/BAD');
+                debit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'client' } },
+                credit: { account: '/DATA/REGISTER/99' } }] } }`, ...as(ADMIN) });
+        const bad = await WORK.get_item('/DATA/OPERATIONS/BAD');
         const opId2 = (await bad.create_object({ filename: 'b.data', post: { name: 'Б', client: clientId, sum: 5 }, ...as(USER1) })).id;
         await assert.rejects(bad.post({ id: opId2, ...as(USER1) }), /нет счёта/);
-        const acc62 = await WORK.get_item('/REGISTER/62');
+        const acc62 = await WORK.get_item('/DATA/REGISTER/62');
         const all = await acc62.query({ include_deleted: true, ...as(USER1) });
-        assert.ok(!all.some(x => x.body.source === '/OPERATIONS/BAD/' + opId2 && !x.body.deleted), 'частичная запись убрана');
+        assert.ok(!all.some(x => x.body.source === '/DATA/OPERATIONS/BAD/' + opId2 && !x.body.deleted), 'частичная запись убрана');
     });
 });

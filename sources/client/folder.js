@@ -226,8 +226,16 @@ export class $folder extends $item {
     _onEmpty(key, params = {}) {
         if (key[0] === '#')
             return undefined;
+        // отладка: сколько раз какое свойство ушло на сервер (WORK.emptyHits; tests/perf/tree-load.mjs)
+        if (WORK.DEV_MODE)
+            (WORK.emptyHits ??= {})[key] = (WORK.emptyHits[key] || 0) + 1;
         let fn = (params = {}) => {
             if (this[R].cache[key] !== undefined) return this[R].cache[key];
+            // дети — через info с глубиной 1: у каждого ребёнка приходит hasItems,
+            // и дереву не нужен отдельный @items ради стрелки раскрытия
+            if (key === 'items' && this.type !== '$file' && !String(this.short).includes('~'))
+                return WORK.fetch(location.origin + (this.short || '/'), 'info', { ...params, deep: 1 })
+                    .then(r => Array.isArray(r?.items) ? r.items : []);
             let path;
             switch (key) {
                 case 'entries':

@@ -11,6 +11,21 @@ const ROLE_ORDER = ['ADMIN', 'BOSS', 'USER', 'GUEST'];
 const READ_LINES = 2000;
 const LINE_MAX = 2000;
 
+/**
+ * Методы записи, которые из .task всегда идут с mainContext задачи:
+ * промежуточные записи остаются в журнале для аудита, но не становятся
+ * отдельными карточками общей ленты. Значение из аргументов модели
+ * не подменяет путь задачи.
+ */
+export const TASK_WRITE_METHODS = new Set(['save_message', 'save_files', 'save_file', 'save', 'edit', 'append']);
+
+/** Принудительно привязать запись к задаче (для универсального call). */
+export function forceTaskContext(method, args, ctx) {
+    if (ctx?.task?.path && TASK_WRITE_METHODS.has(String(method || '')))
+        args.mainContext = ctx.task.path;
+    return args;
+}
+
 /** Абсолютный WORK-путь: относительный — от места задачи. */
 export function absPath(p, ctx) {
     let s = String(p ?? '').trim().replace(/\\/g, '/');
@@ -934,6 +949,7 @@ export const workTools = [
             if (!member || member.level === GATEWAY.LEVEL.PUBLIC)
                 throw new Error('метод ' + m + ' недоступен агенту');
             const a = args.args && typeof args.args === 'object' ? args.args : {};
+            forceTaskContext(m, a, ctx);
             const res = await callAs(item, m, a, ctx, undefined, { gateway: true });
             if (res && typeof res === 'object' && typeof res.pipe === 'function')
                 return '[поток данных — используй read]';

@@ -13,9 +13,9 @@ const node = (path, type) => ({ path, id: 'form', type });
 describe('pickTildeSingle', () => {
     it('последний $handler, а не хвостовой контейнер distributive', () => {
         const items = [
-            node('/REGISTER/62/$account/$folder/handlers/pages/form', '$handler'),
-            node('/REGISTER/62/$account/$folder/$class/handlers/pages/form', '$handler'),
-            node('/REGISTER/62/$account/$folder/$class/$account/handlers/pages/form', '$folder'),
+            node('/DATA/REGISTER/62/$account/$folder/handlers/pages/form', '$handler'),
+            node('/DATA/REGISTER/62/$account/$folder/$class/handlers/pages/form', '$handler'),
+            node('/DATA/REGISTER/62/$account/$folder/$class/$account/handlers/pages/form', '$folder'),
         ];
         assert.equal(pickTildeSingle(items), items[1]);
     });

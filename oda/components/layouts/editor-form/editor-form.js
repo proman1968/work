@@ -1,13 +1,12 @@
 import '/oda/components/inputs/text/text.js';
 import '/oda/components/inputs/textarea/textarea.js';
 import '/oda/components/inputs/date/date.js';
-import '/oda/components/inputs/datetime/datetime.js';
 import '/oda/components/inputs/select/select.js';
 import '/oda/components/inputs/radio/radio.js';
-import '/oda/components/inputs/table/table.js';
+import '/oda/components/inputs/table-input/table-input.js';
 import '/oda/components/inputs/link/link.js';
 import '/oda/components/inputs/numeric/numeric.js';
-import '/oda/components/checkbox/checkbox.js';
+import '/oda/components/inputs/checkbox/checkbox.js';
 import '/oda/components/icon/icon.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
@@ -19,7 +18,7 @@ const EDITORS = {
     Text: 'oda-textarea-input',
     Number: 'oda-numeric-input',
     Date: 'oda-date-input',
-    DateTime: 'oda-datetime-input',
+    DateTime: 'oda-date-input',
     Boolean: 'oda-checkbox',
     Select: 'oda-select-input',
     Radio: 'oda-radio-input',
@@ -235,7 +234,7 @@ ODA({is: 'oda-editor-form-field',
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
         <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
         <div class="editor-box">
-            <div ~is="editor" ::value="data[field.id]" :meta="field" :disabled="field.disabled"></div>
+            <div ~is="editor" ::value="data[field.id]" :field :meta="field" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
                 <oda-editor-form-field ~for="children" :field="$for.item" :data></oda-editor-form-field>
             </div>

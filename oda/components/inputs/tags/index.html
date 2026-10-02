@@ -1,0 +1,18 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tags</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./tags.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em; overflow: auto;">
+<oda-tags-input id="r1" placeholder="Метки: Enter или запятая"></oda-tags-input>
+<oda-tags-input id="r2"></oda-tags-input>
+<oda-tags-input id="r3" readonly></oda-tags-input>
+</div>
+<script type="module">
+    const items = [{ value: 'a', label: 'Первый', icon: 'icons:home', description: 'пояснение варианта' }, { value: 'b', label: 'Второй', icon: 'icons:star' }, { value: 'c', label: 'Третий', disabled: true }];
+    for (const el of document.querySelectorAll('[id^=r]')) el.items = items;
+    r2.value = r2.localName === 'oda-tags-input' || r2.multiple ? ['a', 'свой'] : r2.value;
+    r3.value = r3.localName === 'oda-tags-input' ? ['a', 'b'] : r3.value;
+</script>

@@ -20,7 +20,7 @@ description: Когда применять — одной фразой
 
 | Навык | Назначение |
 |---|---|
-| [`register-accounts`](register-accounts.md) | типовые счета отчётности в журнале `/REGISTER` |
+| [`register-accounts`](register-accounts.md) | типовые счета отчётности в журнале `/DATA/REGISTER` |
 | [`google-calendar`](google-calendar.md) | события Google Календаря пользователя |
 | [`summarize-feed`](summarize-feed.md) | сводка «что произошло» в точке за период |
 | [`delegate-task`](delegate-task.md) | поручение через ленту с получателем, сроком и контролем |
@@ -34,6 +34,7 @@ description: Когда применять — одной фразой
 | [`lan-inventory`](lan-inventory.md) | инвентаризация локальной сети и регистрация устройств |
 | [`node-connect`](node-connect.md) | подключение сервера-партнёра сети WORK |
 | [`printer-setup`](printer-setup.md) | подключение сетевого принтера, печать документов |
+| [`external-signup`](external-signup.md) | показать сайт человеку, регистрация и подключение внешнего API по токену |
 | [`scan-to-work`](scan-to-work.md) | скан документа сразу в зону роли точки |
 | [`backup-check`](backup-check.md) | проверка резервных копий и места на дисках (ADMIN) |
 | [`email-mailbox`](email-mailbox.md) | разбор почтового ящика точки, черновики ответов |

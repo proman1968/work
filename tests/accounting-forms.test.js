@@ -11,7 +11,7 @@ globalThis.ODA = (def) => { defs.push(def); return def; };
 globalThis.WORK = {};
 
 const objects = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js')).default;
-const postings = (await import('../REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
+const postings = (await import('../DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
 await import('../oda/components/inputs/link/link.js');
 
 function host(proto, calls, extra = {}) {
@@ -33,7 +33,7 @@ function host(proto, calls, extra = {}) {
 
 const FIELDS = [
     { id: 'name', label: 'Название' },
-    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/CATALOGS/C' },
+    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/DATA/CATALOGS/C' },
 ];
 
 describe('форма объектов', () => {
@@ -104,7 +104,7 @@ describe('форма объектов', () => {
 
 describe('форма проводок', () => {
     const AFIELDS = [
-        { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/CATALOGS/C', analytic: true },
+        { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/DATA/CATALOGS/C', analytic: true },
         { id: 'debit', label: 'Дебет', type: 'Number' },
     ];
 
@@ -115,7 +115,7 @@ describe('форма проводок', () => {
             fetch: (method, params) => {
                 calls.push({ method, params });
                 if (method === 'query')
-                    return [{ body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/REGISTER/90' } }];
+                    return [{ body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/DATA/REGISTER/90' } }];
                 if (method === 'read_link')
                     return { id: '9.Y', name: 'Альфа' };
                 return null;

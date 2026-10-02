@@ -30,6 +30,7 @@ export const TOOL_META = {
     connect_service: { label: 'Подключение', icon: 'carbon:connect' },
     disconnect_service: { label: 'Отключение', icon: 'carbon:connect' },
     http_request: { label: 'Запрос API', icon: 'carbon:http' },
+    open_page: { label: 'Страница', icon: 'carbon:application-web' },
 };
 
 export function toolMeta(name) {
@@ -54,6 +55,8 @@ export function toolTarget(t) {
         return (a.agent ? a.agent + ': ' : '') + (a.description || a.prompt || '');
     if (t?.name === 'http_request')
         return String(a.method || 'GET').toUpperCase() + ' ' + (a.connection ? a.connection + ': ' : '') + String(a.url || '');
+    if (t?.name === 'open_page')
+        return String(t?.page?.host || a.url || '');
     if (t?.name === 'connect_service')
         return (t.connect?.label || a.provider || '') + (a.scopes?.length ? ' · ' + a.scopes.join(', ') : '');
     if (t?.name === 'todo_write')

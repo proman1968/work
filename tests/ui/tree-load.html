@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Tree load UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Лишние запросы строки дерева (tests/ui/run.mjs): роли и «?» берутся из данных элемента,
+ * пользователи — из общего списка /USERS, предзагрузка не трогает скрытые узлы.
+ */
+await import('/sources/client.js');
+const nodeProto = (await import('/$server/$folder/lib/node/node.js')).default;
+const treeModule = await import('/$server/$folder/lib/tree/tree.js');
+const treeProto = treeModule.default;
+const { knownHasItems } = treeModule;
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (JSON.stringify(a) !== JSON.stringify(b))
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+const getter = (proto, name) => Object.getOwnPropertyDescriptor(proto, name).get;
+
+await test('usersByIds: общий список, добор по одному только недостающих', async () => {
+    const calls = [];
+    const prev = { users: WORK._users, get_item: WORK.get_item };
+    WORK._users = Promise.resolve([{ id: 'a', n: 1 }, { id: 'c', n: 3 }]);
+    WORK.get_item = async (p) => { calls.push(p); return { id: p.split('/').pop() }; };
+    try {
+        const got = await WORK.usersByIds(['c', 'b', 'a']);
+        eq(got.map(u => u.id), ['c', 'b', 'a'], 'порядок как в ids');
+        eq(calls, ['/USERS//b'], 'добор только b');
+        eq(await WORK.usersByIds([]), [], 'пусто');
+        eq(calls.length, 1, 'для пустых ids запросов нет');
+    }
+    finally {
+        WORK._users = prev.users;
+        WORK.get_item = prev.get_item;
+    }
+});
+
+await test('$class.users/bosses: из roleIds без запроса, без roleIds — прежний fetch', async () => {
+    const fetched = [];
+    const prevUsers = WORK._users;
+    WORK._users = Promise.resolve([{ id: 'u1' }, { id: 'b1' }]);
+    try {
+        const proto = CORE.$class.prototype;
+        const withIds = {
+            DATA: { roleIds: { ADMIN: [], BOSS: ['b1'], USER: ['u1'], GUEST: [] } },
+            fetch: (m) => { fetched.push(m); return Promise.resolve([]); },
+            _roleUsers: proto._roleUsers,
+        };
+        eq((await getter(proto, 'users').call(withIds)).map(u => u.id), ['u1']);
+        eq((await getter(proto, 'bosses').call(withIds)).map(u => u.id), ['b1']);
+        eq(await getter(proto, 'admins').call(withIds), []);
+        eq(fetched, [], 'запросов нет');
+        const legacy = { DATA: {}, fetch: (m) => { fetched.push(m); return Promise.resolve(['x']); }, _roleUsers: proto._roleUsers };
+        eq(await getter(proto, 'users').call(legacy), ['x']);
+        eq(fetched, ['users'], 'нет roleIds — прежний запрос');
+    }
+    finally {
+        WORK._users = prevUsers;
+    }
+});
+
+await test('item-node: знака «?» в строке больше нет', async () => {
+    assert(!nodeProto.template.includes('readme-help'), 'нет иконки');
+    assert(!nodeProto.template.includes('openReadme'), 'нет клика');
+    assert(!Object.getOwnPropertyDescriptor(nodeProto, 'hasReadme'), 'нет геттера');
+    assert(!Object.getOwnPropertyDescriptor(nodeProto, 'readmeItem'), 'нет поиска файла');
+});
+
+await test('tree.getItems: неадмину у корня предзагрузка только классов', async () => {
+    const asked = [];
+    const mk = (id, cls) => {
+        const o = Object.create(cls ? CORE.$class.prototype : CORE.$file.prototype);
+        Object.defineProperty(o, 'id', { value: id });
+        Object.defineProperty(o, 'items', { get() { asked.push(id); return Promise.resolve([]); } });
+        return o;
+    };
+    const root = { type: '$server', isAdmin: Promise.resolve(false), items: Promise.resolve([mk('BASE', true), mk('config.json', false), mk('USERS', true)]) };
+    const tree = { itemsSelector: 'items', getItems: treeProto.getItems };
+    await treeProto.getItems.call(tree, root, 1);
+    eq(asked.sort(), ['BASE', 'USERS'], 'файл корня не запрашивался');
+    asked.length = 0;
+    root.isAdmin = Promise.resolve(true);
+    await treeProto.getItems.call(tree, root, 1);
+    eq(asked.sort(), ['BASE', 'USERS', 'config.json'], 'админу — всё как раньше');
+});
+
+await test('__bind: пустой список из ответа — знание «детей нет», а не повод для @items', async () => {
+    const item = WORK.__bind({ path: '/T1', id: 'T1', type: '$class', items: [], hasItems: false });
+    assert(Array.isArray(item[R].cache.items), 'items в кэше');
+    eq(item[R].cache.items.length, 0);
+    const deep = WORK.__bind({ path: '/T2', id: 'T2', type: '$class', items: [
+        { path: '/T2/A', id: 'A', type: '$class', items: [{ path: '/T2/A/B', id: 'B', type: '$class', hasItems: true }] },
+    ] });
+    const a = deep[R].cache.items[0];
+    eq(a.path, '/T2/A');
+    eq(a[R].cache.items[0].path, '/T2/A/B', 'вложенный уровень разложен');
+    eq(a[R].cache.items[0].DATA.hasItems, true);
+});
+
+await test('_onEmpty(items): один info с глубиной 1, дети приходят с hasItems', async () => {
+    const calls = [];
+    const prev = WORK.fetch;
+    WORK.fetch = async (url, method, params) => {
+        calls.push({ url, method, params });
+        return { path: '/T3', items: [{ path: '/T3/X', id: 'X', type: '$class', hasItems: false }] };
+    };
+    try {
+        const item = WORK.__bind({ path: '/T3', id: 'T3', type: '$class' });
+        const items = await item.items;
+        eq(calls.length, 1);
+        eq(calls[0].method, 'info');
+        eq(calls[0].params.deep, 1);
+        assert(calls[0].url.endsWith('/T3'), calls[0].url);
+        eq(items.map(i => i.path), ['/T3/X']);
+        eq(items[0].DATA.hasItems, false);
+    }
+    finally {
+        WORK.fetch = prev;
+    }
+});
+
+await test('стрелка по hasItems без чтения items; группы, ссылки и фильтры — по items', async () => {
+    const pdp = { itemsSelector: 'items' };
+    const mk = (data, type = '$class') => WORK.__bind({ path: '/K/' + Math.random(), id: 'k', type, ...data });
+    eq(knownHasItems(mk({ hasItems: true }), pdp), true);
+    eq(knownHasItems(mk({ hasItems: false }), pdp), false);
+    eq(knownHasItems(mk({}), pdp), undefined, 'без флага — неизвестно');
+    eq(knownHasItems(mk({ hasItems: false }, '$group'), pdp), undefined, 'группа достраивает ссылки');
+    eq(knownHasItems(mk({ hasItems: false }), { ...pdp, onlyClasses: true }), undefined, 'фильтр дерева');
+    const link = Object.create(mk({ hasItems: false }));
+    link.isLink = true;
+    eq(knownHasItems(link, pdp), undefined, 'ссылка');
+    const item = mk({ hasItems: false });
+    delete item.DATA.hasItems;
+    eq(knownHasItems(item, pdp), undefined, 'после changed флаг снят — снова по items');
+});
+
+await test('getItems: узлы с флагом не догружаются заранее, загруженные — проходятся', async () => {
+    const asked = [];
+    const mk = (id, data, items) => {
+        const o = { id, DATA: data, [R]: { cache: items ? { items } : {} } };
+        Object.defineProperty(o, 'items', { get() { asked.push(id); return Promise.resolve(items || []); } });
+        return o;
+    };
+    const leafKnown = mk('known', { hasItems: true });
+    const leafEmpty = mk('empty', { hasItems: false });
+    const leafLegacy = mk('legacy', {});
+    const root = mk('root', { hasItems: true }, [leafKnown, leafEmpty, leafLegacy]);
+    const tree = { itemsSelector: 'items', getItems: treeProto.getItems };
+    await treeProto.getItems.call(tree, root, 1);
+    eq(asked.sort(), ['legacy', 'root'], 'запросы только у корня и узла без флага');
+});
+
+await test('prefetch: info точки входа с глубиной, списки разложены, повтор не шлёт запрос', async () => {
+    const calls = [];
+    const prev = WORK.fetch;
+    WORK.fetch = async (url, method, params) => {
+        calls.push({ method, params });
+        return { path: '/P', hasItems: true, items: [{ path: '/P/A', id: 'A', type: '$class', hasItems: true, items: [{ path: '/P/A/B', id: 'B', type: '$class', hasItems: false }] }] };
+    };
+    try {
+        const item = WORK.__bind({ path: '/P', id: 'P', type: '$class' });
+        const tree = { prefetchDeep: 3, itemsSelector: 'items' };
+        await treeProto.prefetch.call(tree, item);
+        eq(calls.length, 1);
+        eq(calls[0].method, 'info');
+        eq(calls[0].params.deep, 3);
+        eq(calls[0].params.branch, 'classes');
+        eq(item[R].cache.items.map(i => i.path), ['/P/A']);
+        eq(item[R].cache.items[0][R].cache.items[0].DATA.hasItems, false);
+        await treeProto.prefetch.call(tree, item);
+        eq(calls.length, 1, 'уже загружено — без запроса');
+        await treeProto.prefetch.call({ prefetchDeep: 0, itemsSelector: 'items' }, WORK.__bind({ path: '/P2', id: 'P2', type: '$class' }));
+        eq(calls.length, 1, 'prefetchDeep 0 — выключено');
+    }
+    finally {
+        WORK.fetch = prev;
+    }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

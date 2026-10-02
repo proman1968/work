@@ -354,6 +354,45 @@ describe('инструменты WORK на песочнице', () => {
         assert.ok(plain.every(r => !r.mainContext));
     });
 
+    it('call на методы записи из задачи принудительно ставит mainContext', async () => {
+        const readLogRows = () => {
+            const out = [];
+            const walk = dir => {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory())
+                        walk(p);
+                    else if (e.name.endsWith('.logs')) {
+                        try {
+                            out.push(JSON.parse(fs.readFileSync(p, 'utf-8')));
+                        }
+                        catch { /* не строка лога */ }
+                    }
+                }
+            };
+            walk(tmp);
+            return out;
+        };
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const taskCtx = () => ({ entry: {}, place: null, task: { path: '/BOX/task/42.task' }, session: actor, role: 'USER' });
+        const plainCtx = () => ({ entry: {}, place: null, session: actor, role: 'USER' });
+        const call = tool('call');
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'черновик агента' } }, taskCtx());
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'подмена', mainContext: '/ELSEWHERE/x.task' } }, taskCtx());
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'без задачи' } }, plainCtx());
+        const rows = readLogRows().filter(r => ['черновик агента', 'подмена', 'без задачи'].includes(r.content));
+        // appendRow зеркалит запись в кабинет автора — проверяем по группам, а не штучно
+        const byContent = c => rows.filter(r => r.content === c);
+        assert.ok(byContent('черновик агента').length >= 1);
+        assert.ok(byContent('черновик агента').every(r => r.mainContext === '/BOX/task/42.task'));
+        assert.ok(byContent('подмена').every(r => r.mainContext === '/BOX/task/42.task'), 'подмена mainContext отклонена');
+        assert.ok(byContent('без задачи').every(r => !r.mainContext));
+        // чтение через call не трогаем
+        const schema = await call.run({ path: '/BOX', method: 'get_schema', args: {} }, taskCtx());
+        assert.ok(schema && typeof schema === 'object' && !('mainContext' in schema));
+    });
+
     it('write во вложенную несуществующую папку', async () => {
         await tool('write').run({ path: '/BOX/doc/sub/deep.txt', content: 'x' }, ctx());
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/sub/deep.txt')));

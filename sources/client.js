@@ -1,4 +1,5 @@
 import "../oda/oda.js";
+import "../oda/components/containers/containers.js";
 import * as CORE from "./client/index.js";
 import { Reactor } from "./reactor.js";
 import { RTCCaller } from "./modules/call/call.js";
@@ -232,7 +233,9 @@ WORK.__bind = function (data, path = '') {
             }
             for (let list of CORE.$item.LISTS) {
                 let items = data[list];
-                if (items?.length) {
+                // пустой список из ответа — тоже знание (детей нет): без этого дерево
+                // перезапрашивало бы @items у каждого пустого узла
+                if (Array.isArray(items)) {
                     item[list] = WORK.__bind(items);
                 }
             }
@@ -244,151 +247,12 @@ WORK.__bind = function (data, path = '') {
 
 
 
-WORK.showModal = function (el, params = {}) {
-    params.popoverType = 'modal';
-    return WORK.showPopover(el, params);
-}
-WORK.showDialog = function (el, params = {}) {
-    params.popoverType = 'dialog';
-    return WORK.showPopover(el, params);
-}
-WORK.showMenu = function (params = {}, e) {
-    params.popoverType = 'menu';
-    params.menu ??= ODA.createComponent('item-menu', params);
-    return WORK.showPopover(params.menu, params, e);
-}
-WORK.showConfirm = function (textContent = 'Подтвердить?', params = {}) {
-    const el = ODA.createElement('p', {textContent, style: 'margin: 1em;'});
-    return WORK.showDialog(el, {
-        allowClose: true,
-        TITLE: { label: 'Подтверждение' },
-        OK: { label: 'Да', icon: 'icons:check' },
-        CANCEL: { label: 'Нет', icon: 'icons:close' },
-        ...params
-    });
-}
-
-WORK.showDropdown = function (el, params = {}, e) {
-    params.popoverType = 'dropdown';
-    return WORK.showPopover(el, params, e);
-}
-
-/** Типизированная ошибка отмены popover (отличается от реальной ошибки через instanceof). */
-WORK.CancelError = class WORK_CancelError extends Error {}
-
-/** Стек открытых pop в порядке открытия. */
-WORK.popovers = [];
-/** WeakMap pop -> {resolve, reject} — резолверы промисов showPopover. */
-WORK.popoverResolvers = new WeakMap();
-
-/** Единый путь закрытия pop: результат -> resolve, отмена -> reject(CancelError). */
-WORK.closePopup = function (pop, result) {
-    const idx = WORK.popovers.indexOf(pop);
-    if (idx === -1)
-        return;
-    for (let i = WORK.popovers.length - 1; i > idx; i--) {
-        if (WORK.popovers[i].popoverType === 'modal')
-            break;
-        WORK.closePopup(WORK.popovers[i]);
-    }
-    WORK.popovers.splice(idx, 1);
-    const resolver = WORK.popoverResolvers.get(pop);
-    WORK.popoverResolvers.delete(pop);
-    pop.remove();
-    if (!resolver)
-        return;
-    if (result)
-        resolver.resolve(result);
-    else
-        resolver.reject(new WORK.CancelError());
-}
-
-/** Закрывает с отменой pop сверху стека до stopIdx (не включая его); модалы не трогает. */
-WORK.dismissTo = function (stopIdx) {
-    for (let i = WORK.popovers.length - 1; i > stopIdx; i--) {
-        if (WORK.popovers[i].popoverType === 'modal')
-            break;
-        WORK.closePopup(WORK.popovers[i]);
-    }
-}
-
-/** Закрывает с отменой все не-модальные pop сверху стека. */
-WORK.dismissToModal = function () {
-    WORK.dismissTo(-1);
-}
-
-/** Закрывает с отменой все pop поверх заданного; сам pop и контекст модала не трогает. */
-WORK.dismissAbove = function (pop) {
-    const idx = WORK.popovers.indexOf(pop);
-    if (idx !== -1)
-        WORK.dismissTo(idx);
-}
-
-/** Возвращает pop (элемент с атрибутом popover), внутри которого находится target, или null. */
-WORK.findPopover = function (target) {
-    let h = target;
-    while (h && h.nodeType === 1 && !h.hasAttribute?.('popover'))
-        h = h.host || h.parentElement;
-    return h;
-}
-
-WORK._closeFrames ??= new WeakSet();
-WORK._bindCloseFrames = function () {
-    for (let i = 0; i < window.frames.length; i++) {
-        const frame = window.frames[i];
-        if (WORK._closeFrames.has(frame))
-            continue;
-        WORK._closeFrames.add(frame);
-        frame.addEventListener('pointerdown', () => WORK.dismissToModal());
-    }
-}
-
-/** Не-top окна слушают клики во всех предках до window.top, чтобы закрывать свои pop. */
-WORK._bindParentClose = function () {
-    if (WORK._parentCloseBound)
-        return;
-    WORK._parentCloseBound = true;
-    const targets = [];
-    let t = window.parent;
-    while (t && t !== window) {
-        targets.push(t);
-        if (t === window.top)
-            break;
-        try { t = t.parent; }
-        catch { break; }
-    }
-    for (let t of targets) {
-        try {
-            t.document.addEventListener('pointerdown', () => WORK.dismissToModal());
-        } catch {}
-    }
-}
-
-WORK.showPopover = function (el, params = {}, e) {
-    return new Promise((resolve, reject) => {
-        const pop = ODA.createComponent('item-popover', params);
-        if (params.popoverType === 'menu' || params.popoverType === 'dropdown') {
-            const src = e?.target ?? (e?.nodeType === 1 ? e : null);
-            if (!WORK.findPopover(src))
-                WORK.dismissToModal();
-        }
-        pop.setAttribute('popover', 'manual');
-        pop.position = e;
-        pop.control = el;
-        WORK.popovers.push(pop);
-        WORK.popoverResolvers.set(pop, { resolve, reject });
-        pop.listen('close', ev => WORK.closePopup(pop, ev.detail?.value), { once: true });
-        pop.listen('beforetoggle', ev => {
-            if (ev.newState === 'closed')
-                WORK.closePopup(pop);
-        });
-        WORK._bindCloseFrames();
-        window.document.body.appendChild(pop);
-        try { pop.showPopover(); }
-        catch (e) { WORK.closePopup(pop); }
-        pop.async?.(() => pop._show?.());
-    })
-}
+// Всплывающие окна — ODA (oda/components/containers): WORK подставляет свою оболочку item-popover и меню item-menu
+ODA.popoverTag = 'item-popover';
+ODA.menuTag = 'item-menu';
+for (const name of ['showPopover', 'showModal', 'showDialog', 'showMenu', 'showConfirm', 'showDropdown', 'showPrompt',
+    'CancelError', 'popovers', 'popoverResolvers', 'closePopup', 'dismissTo', 'dismissToModal', 'dismissAbove', 'findPopover'])
+    WORK[name] = ODA[name];
 WORK.clearSessionCache = function () {
     for (const item of Object.values(CORE.$item.ITEMS)) {
         Reactor.cleanupDeps(item);
@@ -538,22 +402,6 @@ WORK.arrayBufferToBase64 = function(buffer) {
     }
     return window.btoa(binary);
 }
-window.addEventListener('pointerdown', e => {
-    if (!WORK.popovers?.length)
-        return;
-    const pop = WORK.findPopover(e.target);
-    if (pop) {
-        WORK.dismissAbove(pop);
-        return;
-    }
-    WORK.dismissToModal();
-})
-
-/** Отмены popover не считаются ошибками приложения — не шумим в консоль. */
-window.addEventListener('unhandledrejection', e => {
-    if (e.reason instanceof WORK.CancelError)
-        e.preventDefault();
-})
 
 
 
@@ -649,9 +497,22 @@ setTimeout(() => {
                         delete item[key];
                         Reactor.invalidate(item, key);
                     }
+                    // «есть дети» мог устареть (создан/удалён потомок) — дерево перепроверит по items
+                    if (item.DATA)
+                        delete item.DATA.hasItems;
                     // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
                     // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON
                     item.increaseVersion();
+                    // роли пользователей приходят в данных элемента (roleIds): подтянуть свежие и сбросить списки
+                    if (item.DATA?.roleIds && !(item instanceof CORE.$user) && !WORK._roleRefresh.has(item)) {
+                        WORK._roleRefresh.add(item);
+                        item.fetch('info').then(() => {
+                            for (const key of ['admins', 'bosses', 'users', 'guests']) {
+                                delete item[key];
+                                Reactor.invalidate(item, key);
+                            }
+                        }).catch(() => { }).finally(() => WORK._roleRefresh.delete(item));
+                    }
                     item.fire('changed', data);
                 }
             }
@@ -872,6 +733,28 @@ WORK.renderSVG = async (svg) => {
     img.src = dataUrl;
     return promise;
 }
+/** Элементы, у которых идёт обновление ролей (не читать произвольные свойства реактивного элемента — это запрос на сервер). */
+WORK._roleRefresh = new WeakSet();
+/** Пользователи по uid: общий список /USERS (один запрос), недостающих — добор по одному. */
+WORK.usersByIds = async function (ids) {
+    if (!ids?.length)
+        return [];
+    let all = [];
+    try {
+        all = (await WORK.users) || [];
+    }
+    catch { all = []; }
+    const byId = new Map(all.map(u => [u.id, u]));
+    const out = [];
+    for (const id of ids) {
+        let u = byId.get(id);
+        if (!u)
+            u = await WORK.get_item('/USERS//' + id);
+        if (u)
+            out.push(u);
+    }
+    return out;
+}
 Object.defineProperty(WORK, 'users', {
     get(){ //todo надо сбрасывать при появлении новых пользователей на сервере
         return WORK._users ??= new AsyncPromise(async _=>{
@@ -884,4 +767,3 @@ Object.defineProperty(WORK, 'users', {
 
 
 new WebSocketEvents();
-WORK._bindParentClose();

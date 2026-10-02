@@ -1,6 +1,34 @@
 <meta charset="UTF-8">
-<script type="module" src="../../../oda.js"></script>
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-textarea-input</title>
+<script type="module" src="/oda/oda.js"></script>
 <script type="module" src="./textarea.js"></script>
-<oda-tester>
-    <oda-textarea-input value="многострочный текст" placeholder="Введите текст"></oda-textarea-input>
-</oda-tester>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em; overflow: auto;">
+    <oda-textarea-input id="t1"></oda-textarea-input>
+    <oda-textarea-input id="t2" placeholder="Пустое поле: введите текст"></oda-textarea-input>
+    <oda-textarea-input id="t3" required></oda-textarea-input>
+    <oda-textarea-input id="t4" readonly></oda-textarea-input>
+    <oda-textarea-input id="t5" disabled></oda-textarea-input>
+    <oda-textarea-input id="t6" collapsed></oda-textarea-input>
+    <oda-textarea-input id="t7"></oda-textarea-input>
+    <div muted id="out"></div>
+</div>
+<script type="module">
+    const text = 'Первая строка описания задачи\nВторая строка — длинная, чтобы проверить перенос слов внутри поля без горизонтальной прокрутки и без white-space: pre.\n\nЧетвёртая строка.';
+    t1.field = { id: 'descr', label: 'Описание', placeholder: 'Опишите задачу' };
+    t1.value = text;
+    t2.field = { id: 'note', label: 'Заметка' };
+    t3.field = { id: 'reason', label: 'Причина (обязательное)' };
+    t3.validate();
+    t4.field = { id: 'ro', label: 'Только чтение' };
+    t4.value = text;
+    t5.field = { id: 'off', label: 'Отключено' };
+    t5.value = 'отключено';
+    t6.field = { id: 'col', label: 'Свёрнутое' };
+    t6.value = text;
+    // старый потребитель (editor-form / table-input): :meta, без заголовка
+    t7.meta = { placeholder: 'placeholder из meta (без заголовка)' };
+    t1.addEventListener('value-changed', e => out.textContent = 'value-changed: ' + JSON.stringify(e.detail.value));
+</script>

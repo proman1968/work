@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>ODA components UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * UI-тесты библиотеки компонентов ODA (tests/ui/run.mjs): контракт контролов ввода, форма, таблица, всплывающие окна.
+ * Результат — window.__results / window.__done.
+ */
+import '/oda/oda.js';
+import { CONTROLS } from '/oda/components/structure/controls.js';
+import '/oda/components/table/table.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 60) => new Promise(r => setTimeout(r, ms));
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function eq(a, b, msg) {
+    if (JSON.stringify(a) !== JSON.stringify(b))
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick();
+    return el;
+}
+
+await test('контролы карты регистрируются и принимают value', async () => {
+    for (const tag of new Set(Object.values(CONTROLS))) {
+        const el = await mount(tag);
+        eq(typeof el.validate, 'function', tag + ': validate');
+        el.remove();
+    }
+});
+
+await test('oda-text-input: ввод → value-changed, required → ошибка после validate()', async () => {
+    const el = await mount('oda-text-input', { required: true });
+    let got;
+    el.addEventListener('value-changed', e => got = e.detail.value);
+    eq(el.validate(), false, 'пустое обязательное');
+    const input = el.$('.control');
+    input.value = 'abc';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    eq(got, 'abc');
+    eq(el.validate(), true, 'заполнено');
+    el.remove();
+});
+
+await test('oda-checkbox: state и value синхронны, три состояния', async () => {
+    const el = await mount('oda-checkbox', { threeStates: true });
+    el.$('input').click();
+    await tick();
+    eq([el.state, el.value], ['checked', true]);
+    el.$('input').click();
+    await tick();
+    eq(el.state, 'indeterminate');
+    el.remove();
+});
+
+await test('oda-form: поля, запись в data, ленивые дочерние поля', async () => {
+    let loads = 0;
+    const form = await mount('oda-form', {
+        controls: CONTROLS,
+        getFields: f => f.id === 'self' ? (loads++, [{ id: 'name' }, { id: 'self', label: 'Снова' }]) : f.fields,
+        data: { name: 'a' },
+        fields: [{ id: 'name', required: true }, { id: 'self', label: 'Самоссылка' }]
+    });
+    await tick(300);
+    const input = form.$$('oda-form-field')[0].$('.control').$('input');
+    input.value = 'b';
+    input.dispatchEvent(new Event('input'));
+    await tick(200);
+    eq(form.data.name, 'b', 'запись в data');
+    // раскрыт только первый уровень: дочерние поля вложенной самоссылки не строятся до раскрытия
+    eq(loads <= 2, true, 'загрузок поля: ' + loads);
+    form.remove();
+});
+
+await test('oda-form + oda-table-input: события ячеек не портят массив строк', async () => {
+    const form = await mount('oda-form', {
+        controls: CONTROLS,
+        data: { items: [{ name: 'a', qty: 2 }] },
+        fields: [{ id: 'items', type: 'table', columns: [{ id: 'name', type: 'string' }, { id: 'qty', type: 'number' }] }]
+    });
+    await tick(500);
+    eq(Array.isArray(form.data.items), true, 'items остался массивом');
+    eq(form.data.items.length, 1, 'строки на месте');
+    form.remove();
+});
+
+await test('oda-table: сортировка, фильтр, каскадная отметка', async () => {
+    const table = await mount('oda-table', {
+        allowCheck: 'double',
+        columns: [{ name: 'title', treeMode: true }, { name: 'n' }],
+        dataSet: [{ title: 'b', n: 2, expanded: true, items: [{ title: 'b1' }, { title: 'b2' }] }, { title: 'a', n: 1 }]
+    });
+    await tick(300);
+    table.sortBy(table.columns[0], 1);
+    await tick(200);
+    eq(table.sortedItems.map(r => r.title), ['a', 'b', 'b1', 'b2'], 'сортировка');
+    table.sortBy(table.columns[0], 0);
+    table.filter = 'b2';
+    await tick(200);
+    eq(table.sortedItems.map(r => r.title), ['b', 'b2'], 'фильтр с предками');
+    table.filter = '';
+    table.setChecked(table.dataSet[0].items[0], 'checked');
+    eq(table.dataSet[0].checked, 'indeterminate', 'родитель');
+    table.remove();
+});
+
+await test('ODA.showConfirm: OK → результат, клик вне → отмена', async () => {
+    let p = ODA.showConfirm('?');
+    await tick(400);
+    ODA.popovers.at(-1).ok();
+    eq(await p, 'ok');
+    p = ODA.showConfirm('?');
+    await tick(300);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    eq(await p.then(() => 'ok', e => e instanceof ODA.CancelError), true);
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

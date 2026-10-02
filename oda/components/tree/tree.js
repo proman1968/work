@@ -1,16 +1,27 @@
+/** связь «дескриптор колонки -> ячейка заголовка» (без мутации данных колонок) */
+const CELL_CTL = new WeakMap();
+
 ODA({is: 'oda-tree', imports: 'oda//icon',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
                 overflow: hidden;
             }
         </style>
         <style>{{cells_style}}</style>
+        <div ~if="allowSearch" no-flex horizontal style="padding: var(--space-xs) var(--space-s); align-items: center; position: sticky; top: 0; z-index: 3;">
+            <input flex type="search" placeholder="Поиск" ::value="filter" style="border: none; outline: none; background: transparent; color: inherit; font: inherit; min-width: 0;">
+            <oda-icon no-flex icon="icons:search" :icon-size="18"></oda-icon>
+        </div>
         <div vertical flex style="overflow: auto;">
             <oda-tree-header dark :columns ~if=showHeader></oda-tree-header>
             <div vertical style="overflow: visible;">
-                <oda-tree-item :filter ~is="itemTemplate" flex :node-template :hide-tops :hide-roots ~for='items' :row="$for?.item"></oda-tree-item>
+                <oda-tree-item :filter ~is="itemTemplate" flex :node-template :hide-tops :hide-roots :show-tools :menu-mode :show-users :show-size :show-status ~for='items' :row="$for?.item"></oda-tree-item>
             </div>
         </div>
     `,
@@ -28,7 +39,7 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
     get cells(){
         const extract_cells = (columns)=>{
             return columns.reduce((res, col)=>{
-                if(col.control?.expanded && col.items?.length){
+                if(CELL_CTL.get(col)?.expanded && col.items?.length){
                     res.push(...extract_cells(col.items))
                 }
                 else{
@@ -41,17 +52,13 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
     },
     get cells_style(){
         const cells = this.cells;
-        let cached = this[R].cache.cells_widths;
-        if (!cached || cached.cols !== this.columns || cached.length !== cells.length) {
-            cached = this[R].cache.cells_widths = {
-                cols: this.columns,
-                length: cells.length,
-                widths: cells.map(col => col.control?.getBoundingClientRect().width || 200)
-            };
+        // Замеры кешируются (getBoundingClientRect вне кэша = layout-thrashing).
+        // Поле обычное, не [R].cache: сброс — через invalidate в resize ниже.
+        if (!this._cellsWidths || this._cellsWidths.length !== cells.length) {
+            this._cellsWidths = cells.map(col => CELL_CTL.get(col)?.getBoundingClientRect?.().width || 200);
         }
-        const widths = cached.widths;
-        return cells.map((col, idx)=>{
-            const width = widths[idx];
+        return cells.map((_, idx)=>{
+            const width = this._cellsWidths[idx];
             return `*::part(cell-${idx}){
     max-width: ${width}px;
     min-width: ${width}px;
@@ -60,13 +67,9 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
         }).join('\n');
     },
     $listeners: {
-        // Замеры кешируются (getBoundingClientRect вне кэша = layout-thrashing):
-        // сброс — по resize/wake, рендер по ним же идёт штатным путём ядра.
         resize() {
-            delete this[R].cache.cells_widths;
-        },
-        wake() {
-            delete this[R].cache.cells_widths;
+            this._cellsWidths = undefined;
+            this.invalidate('cells_style');
         }
     },
     $public: {
@@ -82,7 +85,11 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
         },
         allowSearch: false,
         showTools:  false,
+        showUsers: false,
+        showStatus: false,
     },
+    menuMode: 'tools',
+    showSize: true,
     items: [],
     get step() {
         return (this.iconSize || 24) / 2;
@@ -95,82 +102,77 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
             }
         }
     },
-    async getLastChild(item) {
-        let focusedItem = item;
-        let children = await focusedItem?.[this.itemsSelector];
-        while (children?.length) {
-            focusedItem = children.last;
-            children = await focusedItem?.[this.itemsSelector];
-        }
-        return focusedItem;
+    /** дети узла навигации (массив; Promise и мусор → []) */
+    async nodeChildren(node) {
+        const kids = await node?.[this.itemsSelector];
+        return Array.isArray(kids) ? kids : [];
     },
-    async up(e) {
-        if (this.focusedItem === null) {
-            this.focusedItem = await this.getLastChild(this.row);
-            //this.focusedNode = this.$('div div oda-tree-node:last-child');
-            return;
-        }
-
-        if (this.focusedNode === null) {
-            console.warn('this.focusedNode === null')
-            return;
-        }
-
-        if (this.focusedItem === this.row[this.itemsSelector].first) {
-            this.focusedItem = await this.getLastChild(this.row);
-            return;
-        }
-
-        const host = this.focusedNode.host;
-        if (this.focusedItem === host.row[this.itemsSelector].first) {
-            this.focusedItem = host.row;
-        }
-        else {
-            const items = host.row[this.itemsSelector];
-            this.focusedItem = items[items.indexOf(this.focusedItem) - 1];
-        }
+    /** узлы верхнего уровня для навигации */
+    rootItems() {
+        return Array.isArray(this.items) ? this.items : [];
     },
-    async down(e) {
-        if (this.focusedItem === null) {
-            this.focusedItem = this.row[this.itemsSelector].first;
-            //this.focusedNode = this.$('div div oda-tree-node:first-child');
+    /** компонент узла -> данные узла */
+    nodeOf(nodeComp) {
+        return nodeComp?.row;
+    },
+    /** узел раскрыт */
+    isOpen(node) {
+        return !!node?.expanded;
+    },
+    async getLastChild(node) {
+        let item = node;
+        let children = await this.nodeChildren(item);
+        while (children.length) {
+            item = children[children.length - 1];
+            children = await this.nodeChildren(item);
+        }
+        return item;
+    },
+    async _siblings() {
+        const host = this.focusedNode?.host;
+        const parent = host ? this.nodeOf(host) : undefined;
+        const list = parent ? await this.nodeChildren(parent) : await this.rootItems();
+        return { list, index: list.indexOf(this.focusedItem) };
+    },
+    async up() {
+        if (!this.focusedItem) {
+            const roots = await this.rootItems();
+            this.focusedItem = await this.getLastChild(roots[roots.length - 1]);
             return;
         }
-
-        if (this.focusedNode === null) {
-            console.warn('this.focusedNode === null')
+        const { list, index } = await this._siblings();
+        if (index > 0) {
+            this.focusedItem = await this.getLastChild(list[index - 1]);
             return;
         }
-
-        let host = (this.focusedItem === this.row[this.itemsSelector].last) ? this : this.focusedNode.host;
-        if (this.focusedItem === host.row[this.itemsSelector].last) {
-            const children = await this.focusedItem?.[this.itemsSelector];
-            if (children.length) {
-                this.focusedItem = children[0];
+        const host = this.focusedNode?.host;
+        const parent = host ? this.nodeOf(host) : undefined;
+        this.focusedItem = parent ?? list[list.length - 1];
+    },
+    async down() {
+        if (!this.focusedItem) {
+            this.focusedItem = (await this.rootItems())[0];
+            return;
+        }
+        const kids = await this.nodeChildren(this.focusedItem);
+        if (kids.length && this.isOpen(this.focusedItem)) {
+            this.focusedItem = kids[0];
+            return;
+        }
+        let comp = this.focusedNode, item = this.focusedItem;
+        while (comp) {
+            const host = comp.host;
+            const parent = host ? this.nodeOf(host) : undefined;
+            const list = parent ? await this.nodeChildren(parent) : await this.rootItems();
+            const i = list.indexOf(item);
+            if (i > -1 && i < list.length - 1) {
+                this.focusedItem = list[i + 1];
                 return;
             }
-
-            if (host.row[this.itemsSelector] === this.row[this.itemsSelector].last) {
-                this.focusedItem = this.row[this.itemsSelector].first;
-                return;
-            }
-
-            let row = this.focusedItem;
-            let idx = host.row[this.itemsSelector].indexOf(row);
-            while (idx === (host.row[this.itemsSelector].length - 1)) {
-                row = host.row;
-                if (host.row === this.row[this.itemsSelector].last) {
-                    this.focusedItem = this.row[this.itemsSelector].first;
-                    return;
-                }
-                host = host.host;
-                idx = host.row[this.itemsSelector].indexOf(row);
-            }
-            this.focusedItem = host.row[this.itemsSelector][idx + 1];
+            item = parent;
+            comp = host;
         }
-        else {
-            this.focusedItem = host.row[this.itemsSelector][row[this.itemsSelector].items.indexOf(this.focusedItem) + 1];
-        }
+        this.focusedItem = (await this.rootItems())[0];
     },
     iconSize: 24,
     focusedItem: null,
@@ -301,7 +303,8 @@ ODA({is: 'oda-tree-header-cell',
     },
     get column(){
         if(this.$for?.item){
-            this.$for.item.control = this;
+            // связь «колонка -> ячейка заголовка» — в WeakMap, не мутацией данных
+            CELL_CTL.set(this.$for.item, this);
             return this.$for.item;
         }
     },
@@ -331,7 +334,16 @@ ODA({is: 'oda-tree-item',
                 overflow: hidden;
                 top: 0px;
                 position: sticky;
+                border-radius: var(--radius-s);
                 border-bottom: {{columns.length?'1px solid var(--header-background)':'none'}};
+            }
+            .row:hover {
+                background: var(--accent-soft);
+            }
+            .row.focused {
+                background: var(--accent-soft);
+                outline: 2px solid var(--accent-color);
+                outline-offset: -2px;
             }
             .sub-nodes {
                 @apply --vertical;
@@ -350,7 +362,7 @@ ODA({is: 'oda-tree-item',
                 order: {{$pdp.expanderOrder}};
             }
             [category]{
-                font-size: xx-small;
+                font-size: var(--font-size-xs);
                 @apply --header;
             }
             .node{
@@ -364,52 +376,51 @@ ODA({is: 'oda-tree-item',
             span{
                 margin: 4px;
                 overflow: hidden;
+                white-space: nowrap;
                 text-overflow: ellipsis;
             }
         </style>
 
-        <div  :draggable ~if="hideTops<1" class='row' :light="isFocused" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = row" @dragstart>
+        <div  :draggable ~if="hideTops<1" class='row' ~class="{focused: isFocused}" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = row" @dragstart>
             <oda-icon ~if="useExpander" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-            <div flex class="node" :info-invert="isFocused">
+            <div flex class="node">
                 <span :title="label" flex ~is="nodeTemplate" :row :expanded :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode @tap="setItemFocus">{{label}}</span>
             </div>
             <div horizontal style="height: 100%;" ~if="!isCategory">
                 <oda-tree-cell ~for="$pdp.cells"  ~is="$for?.item?.template || 'oda-tree-cell'" :part="'cell-' + $for?.index" :row :col="$for?.item"></oda-tree-cell>
             </div>
         </div>
-        <div horizontal flex ~if="expanded" style="min-height: 1px;">
+        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
-                <oda-tree-item  :filter :show-tools :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :row="$for?.item" :menu-mode></oda-tree-item>
+                <oda-tree-item  :show-tools :show-users :show-size :show-status :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :row="$for?.item" :menu-mode></oda-tree-item>
             </div>
         </div>
     `,
     get expanderIconSize(){
         return ODA.states.mobileMode ? this.iconSize * 2 : this.iconSize;
     },
-    _onResize(e){
-        let height = e.target.offsetHeight;
-        this.debounce('sub_resize', ()=>{
-            if(height>1)
-                this.hidden = false;
-            else if(this.filter.length)
-                this.hidden = true;
-
-        })
-    },
     get useExpander(){
         return this.hideRoots<1;
     },
-    hidden:{
+    hidden: {
         $def: false,
         $attr: true,
-    },
-    filter: {
-        $def: '',
-        set(n){
-            this.hidden = false;
+        /** скрыт поиском: ни сам, ни синхронно доступные потомки не совпали */
+        get() {
+            const f = String(this.$pdp.filter || '').toLowerCase();
+            if (!f)
+                return false;
+            return !this._deepMatch(this.row, f);
         }
+    },
+    filter: '',
+    _deepMatch(row, f) {
+        if (String(row?.label ?? row?.id ?? '').toLowerCase().includes(f))
+            return true;
+        const kids = row?.[this.$pdp.itemsSelector];
+        return Array.isArray(kids) && kids.some(k => this._deepMatch(k, f));
     },
     get draggable(){
         return this.$pdp.allowDrag?'true':false;
@@ -423,7 +434,7 @@ ODA({is: 'oda-tree-item',
     get label(){
         return this.row.id || ''
     },
-    get coumns(){
+    get columns(){
         return this.$pdp.columns;
     },
     iconSize: 24,
@@ -519,7 +530,7 @@ ODA({is: 'oda-tree-item',
                             this.$pdp.tree.focusedItem = item;
                     }
                 })
-            }, {ones: true})
+            }, {once: true})
             return items;
         })
     },
@@ -572,112 +583,4 @@ ODA({is: 'oda-tree-cell',
     row: null,
     col: null
 
-})
-
-ODA({is: 'tree-editor',
-    descriptor: {}
-})
-ODA({is: 'tree-string-editor', extends: 'tree-editor',
-    template:/* html */`
-        <style>
-            :host{
-                @apply --vertical;
-                overflow: hidden;
-            }
-            input{
-                border: none;
-                padding: 4px;
-            }
-        </style>
-        <input flex ::value="descriptor.value" @keypress>
-    `,
-    _onKeypress(e){
-        if(e.keyCode === 13){
-            e.target.blur();
-        }
-    }
-})
-ODA({is: 'tree-boolean-editor',
-    template:/* html */`
-        <style>
-            :host{
-                @apply --vertical;
-                overflow: hidden;
-            }
-            input{
-                border: none;
-                padding: 4px;
-            }
-        </style>
-        <input type="checkbox" flex ::checked="descriptor.value">
-    `
-})
-ODA({is: 'tree-dropdown-editor', extends: 'tree-editor',
-    template:/* html */`
-        <style>
-            :host{
-                @apply --vertical;
-                overflow: hidden;
-                position: relative;
-            }
-            select{
-                padding: 4px;
-                border: none;
-                outline: none;
-            }
-            input{
-                border: none;
-                margin: 2px;
-                outline: none;
-            }
-            .input{
-                position: absolute;
-                top: 0px;
-                left: 0px;
-                height: 100%;
-                right: 1em;
-            }
-        </style>
-        <select flex id="selector" ::value="descriptor.value">
-            <option ~for="this.descriptor.list" :value="getItemValue($for.item)" ~html="String(getItemValue($for.item))"></option>
-        </select>
-        <div vertical class="input">
-            <input flex ::value="descriptor.value">
-        <div>
-    `,
-    getItemValue(item){
-        return item?.id || item
-    }
-})
-
-ODA({is: 'tree-icon-selector', imports: 'oda/tools//icons-tree', extends: 'tree-editor',
-    template:/* html */`
-        <style>
-            :host{
-                @apply --horizontal;
-                overflow: hidden;
-                position: relative;
-                align-items: center;
-            }
-
-            input{
-                border: none;
-                outline: none;
-                padding: 4px;
-                width: 0px;
-            }
-
-        </style>
-        <oda-icon no-flex :icon="descriptor.value"></oda-icon>
-        <input flex ::value="descriptor.value">
-        <oda-icon no-flex icon="icons:chevron-right:90" @tap="showTree"></oda-icon>
-    `,
-    showTree(e){
-        let el = ODA.createComponent('oda-icons-tree');
-        this.appendChild(el);
-        el.addEventListener('value-changed', e=>{
-            this.descriptor.value = e.detail.value;
-        })
-        WORK.showDropdown(el, {}, this);
-    }
 })

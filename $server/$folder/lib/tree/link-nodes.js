@@ -1,16 +1,68 @@
 /**
- * Виртуальные узлы ссылок рабочего места (без зависимостей — тестируется в браузере).
+ * Виртуальные узлы ссылок рабочего места (тестируется в браузере).
  * Серверный link_tree отдаёт структуру [{path, label, icon, type, access, children}],
  * клиент привязывает настоящие элементы, чтобы все уровни были кликабельны,
  * а дети — только цепочка (вниз и вбок ничего не показываем).
+ *
+ * Ссылка — это НЕ сам класс, а его прокси: отдельный экземпляр того же клиентского
+ * класса с копией DATA (без списков) и собственным реактивным контекстом.
+ * Наследование через Object.create(real) запрещено: запись (isLink, items, expanded)
+ * и Reactor.activate проваливаются в настоящий класс через прототип-прокси.
  */
+import { Reactor } from '/sources/reactor.js';
 
-/** Привязать дерево ссылок: ветки — Object.create(real), недоступное — plain-фолбэк. */
+/** Привязать дерево ссылок: ветки — отдельные экземпляры, недоступное — plain-фолбэк. */
 export async function bindLinkTree(nodes, getItem) {
     const out = [];
     for (const n of nodes || [])
         out.push(await bindLinkNode(n, getItem));
     return out;
+}
+
+/** Копия DATA настоящего элемента для ссылки: всё, кроме списков (они — его, не её). */
+function linkData(real) {
+    const skip = new Set(real?.constructor?.LISTS || []);
+    skip.add('hasItems');
+    const data = {};
+    for (const [k, v] of Object.entries(real?.DATA || {}))
+        if (!skip.has(k))
+            data[k] = v;
+    return data;
+}
+
+function makeLinkNode(real, kids) {
+    const link = new real.constructor(linkData(real));
+    Object.defineProperty(link, 'isLink', { value: true, enumerable: true });
+    Object.defineProperty(link, 'isLinkLeaf', { value: !kids.length, enumerable: true });
+    Object.defineProperty(link, 'items', { value: kids, writable: true, configurable: true, enumerable: true });
+    return Reactor.activate(link);
+}
+
+async function bindLinkNode(n, getItem) {
+    const kids = [];
+    for (const c of n?.children || [])
+        kids.push(await bindLinkNode(c, getItem));
+    let real = null;
+    try {
+        real = await getItem(n.path);
+    }
+    catch { real = null; }
+    if (Array.isArray(real))
+        real = real.at(-1);
+    if (real)
+        return makeLinkNode(real, kids);
+    return {
+        id: String(n.path || '').split('/').pop() || n.path,
+        path: n.path,
+        label: n.label,
+        icon: n.icon || 'files:file',
+        type: n.type || '$folder',
+        isLink: true,
+        isLinkLeaf: !kids.length,
+        noLinkTarget: true,
+        items: kids,
+        expanded: false,
+    };
 }
 
 /**
@@ -29,38 +81,4 @@ export function isLinkNode(item) {
         return item.isLink === true;
     }
     catch { return false; }
-}
-
-async function bindLinkNode(n, getItem) {
-    const kids = [];
-    for (const c of n?.children || [])
-        kids.push(await bindLinkNode(c, getItem));
-    let real = null;
-    try {
-        real = await getItem(n.path);
-    }
-    catch { real = null; }
-    if (Array.isArray(real))
-        real = real.at(-1);
-    if (real) {
-        // Своя идентичность (фокус/раскрытие не склеиваются с настоящим узлом),
-        // остальное — прототипом: страницы и обработчики как у класса.
-        const w = Object.create(real);
-        w.isLink = true;
-        w.isLinkLeaf = !kids.length;
-        w.items = kids;
-        return w;
-    }
-    return {
-        id: String(n.path || '').split('/').pop() || n.path,
-        path: n.path,
-        label: n.label,
-        icon: n.icon || 'files:file',
-        type: n.type || '$folder',
-        isLink: true,
-        isLinkLeaf: !kids.length,
-        noLinkTarget: true,
-        items: kids,
-        expanded: false,
-    };
 }

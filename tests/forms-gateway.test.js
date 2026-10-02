@@ -34,7 +34,7 @@ before(async () => {
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
     process.chdir(tmp);
@@ -52,13 +52,13 @@ describe('формы через шлюз', () => {
     let id;
 
     it('index открыт снаружи (было «Доступ запрещён»)', async () => {
-        const cat = await WORK.get_item('/CATALOGS');
+        const cat = await WORK.get_item('/DATA/CATALOGS');
         const res = await invoke(cat, 'index', { id: 'table', session: sessionOf(USER1) }, http);
         assert.ok(Array.isArray(res.rows));
     });
 
     it('create/update/read/delete телом POST в params.post', async () => {
-        const cat = await WORK.get_item('/CATALOGS');
+        const cat = await WORK.get_item('/DATA/CATALOGS');
         const created = await invoke(cat, 'create_object', { post: { name: 'Альфа' }, session: sessionOf(USER1) }, http);
         assert.ok(created.id);
         id = created.id;
@@ -70,7 +70,7 @@ describe('формы через шлюз', () => {
     });
 
     it('query с where строкой фильтрует', async () => {
-        const cat = await WORK.get_item('/CATALOGS');
+        const cat = await WORK.get_item('/DATA/CATALOGS');
         const all = await invoke(cat, 'query', { session: sessionOf(USER1) }, http);
         assert.equal(all.length, 1);
         const none = await invoke(cat, 'query', { where: JSON.stringify({ name: 'Нетакого' }), session: sessionOf(USER1) }, http);
@@ -80,8 +80,8 @@ describe('формы через шлюз', () => {
     });
 
     it('read_link и удаление через шлюз', async () => {
-        const cat = await WORK.get_item('/CATALOGS');
-        const one = await invoke(cat, 'read_link', { catalog: '/CATALOGS', id, session: sessionOf(USER1) }, http);
+        const cat = await WORK.get_item('/DATA/CATALOGS');
+        const one = await invoke(cat, 'read_link', { catalog: '/DATA/CATALOGS', id, session: sessionOf(USER1) }, http);
         assert.equal(one.name, 'Бета');
         await invoke(cat, 'delete_object', { id, session: sessionOf(USER1) }, http);
         const gone = await invoke(cat, 'query', { session: sessionOf(USER1) }, http);

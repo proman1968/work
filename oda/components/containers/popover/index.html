@@ -1,0 +1,26 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-popover</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="/oda/components/containers/containers.js"></script>
+<script type="module" src="/oda/components/button/button.js"></script>
+<div horizontal style="padding: var(--space-l); gap: var(--space-m); flex-wrap: wrap;">
+    <oda-button id="btn-confirm" label="ODA.showConfirm" border></oda-button>
+    <oda-button id="btn-prompt" label="ODA.showPrompt" border></oda-button>
+    <oda-button id="btn-dialog" label="ODA.showDialog" border></oda-button>
+    <oda-button id="btn-menu" label="ODA.showMenu" border></oda-button>
+    <oda-button id="btn-dropdown" label="ODA.showDropdown" border></oda-button>
+    <span id="out" style="color: var(--muted-color);"></span>
+</div>
+<script type="module">
+    const $ = s => document.querySelector(s);
+    const show = p => p.then(r => $('#out').textContent = 'результат: ' + JSON.stringify(r), () => $('#out').textContent = 'отмена');
+    $('#btn-confirm').addEventListener('click', () => show(ODA.showConfirm('Удалить элемент?')));
+    $('#btn-prompt').addEventListener('click', () => show(ODA.showPrompt('Имя', { value: 'Новый' })));
+    $('#btn-dialog').addEventListener('click', () => show(ODA.showDialog(ODA.createElement('p', { textContent: 'Содержимое диалога', style: 'margin: var(--space-l)' }),
+        { TITLE: { label: 'Диалог', icon: 'icons:info' }, allowClose: true, BUTTONS: [{ label: 'Ещё', icon: 'icons:add' }] })));
+    $('#btn-menu').addEventListener('click', e => show(ODA.showMenu({ items: [{ label: 'Открыть', icon: 'icons:open-in-new', value: 'open' }, { label: 'Удалить', icon: 'icons:delete', value: 'del', group: 'Опасно' }] }, e.currentTarget)));
+    $('#btn-dropdown').addEventListener('click', e => show(ODA.showDropdown(ODA.createElement('div', { textContent: 'Произвольное содержимое у якоря', style: 'padding: var(--space-l)' }), {}, e.currentTarget)));
+</script>

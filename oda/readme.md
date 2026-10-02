@@ -22,14 +22,15 @@
 
 - `oda.js` — точка входа: Node-помощники (`host`, `$for`, `$pdp`, `render`), `ODA.LocalStorage`, уведомления.
 - `core/` — `component.js` (реестр, жизненный цикл), `vnode.js` (шаблон, рендер), `directives.js`, `events.js` (алиасы `tap`…, жест `track`), `compiler.js`, `observers.js`, `shared.js`.
-- `components/` — кнопки, иконки, деревья, таблицы, редакторы (markdown, код), поля ввода, раскладки.
-- `tools/` — стили, иконки, jupyter, property-grid, tester.
+- `components/` — библиотека универсальных компонентов (реестр и соглашения — `components/readme.md`): контролы ввода, формы, таблица, дерево, всплывающие окна (`ODA.show*`), меню, кнопки, иконки, редакторы, раскладки.
+- `tools/` — стили (тема, токены, миксины), иконки, стенд `oda-tester`, jupyter.
+- `index.html` — каталог демо библиотеки.
 
 ## 5. В каком это состоянии
 
-Работает. Тесты Reactor — `tests/reactor.test.js`; UI-тесты в браузере — `tests/ui` (`npm run test:ui`).
+Работает. Тесты Reactor — `tests/reactor.test.js`; UI-тесты в браузере — `tests/ui` (`oda-core.html`, `oda-components.html`; `npm run test:ui`).
 
 ## 6. Дальнейшие планы
 
 - Синхронная оценка привязок (сейчас каждая `:prop`/`{{}}` — async-функция).
-- `oda/tools/containers` — удалить или починить (`ODA.import` не существует).
+- Реализовать `$keyBindings` в ядре или убрать из компонентов (объявлен, не работает).

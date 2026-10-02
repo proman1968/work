@@ -139,7 +139,7 @@ ODA({is: 'oda-tabs', imports: 'oda//button',
             let drag_start = pos - drag.pointer;
             drag.index = undefined;
             for (let el of drag.item.parentElement.children){
-                if (el[REACTOR].sleep) continue;
+                if (el[R].states.sleep) continue;
                 let el_pos = this.__is_vertical?el.offsetTop:el.offsetLeft - this.__scrollPos;
                 if (el === drag.item)
                     el.style.transform = tr + `(${delta}px)`;
@@ -528,7 +528,7 @@ ODA({
             this.host.items.splice(this.index, 1);
             this.host.items.splice(idx, 0, this.item);
             if (this.focused) {
-                this.host.index = this.host.items.indexOf(this.item);
+                this.host.focusedIndex = this.host.items.indexOf(this.item);
             }
             this.host.render(); //todo лишний render
         }

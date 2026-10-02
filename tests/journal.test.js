@@ -33,7 +33,7 @@ const SALE = `METADATA: {
         { id: 'sum', type: 'Number', required: true },
     ],
     POSTINGS: [{ id: 'main', amount: 'sum',
-        debit: { account: '/REGISTER/62' }, credit: { account: '/REGISTER/90' } }],
+        debit: { account: '/DATA/REGISTER/62' }, credit: { account: '/DATA/REGISTER/90' } }],
 }`;
 
 before(async () => {
@@ -45,20 +45,20 @@ before(async () => {
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Бухгалтер'], [NOBODY, 'Чужой']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    copy('REGISTER/$register/class.js');
-    copy('REGISTER/$register/$folder/$class/$account/class.js');
-    copy('REGISTER/$register/$folder/$class/$register/class.js');
-    copy('OPERATIONS/$operation/class.js');
-    copy('OPERATIONS/$operation/$folder/$class/$operation/class.js');
+    copy('DATA/REGISTER/$register/class.js');
+    copy('DATA/REGISTER/$register/$folder/$class/$account/class.js');
+    copy('DATA/REGISTER/$register/$folder/$class/$register/class.js');
+    copy('DATA/OPERATIONS/$operation/class.js');
+    copy('DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js');
     process.chdir(tmp);
     globalThis.WORK = new $server();
-    const reg = await WORK.get_item('/REGISTER');
+    const reg = await WORK.get_item('/DATA/REGISTER');
     const admin = as(ADMIN);
     await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', '#security': { USERS: ['${USER1}'] } }`, ...admin });
     await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', '#security': { USERS: ['${USER1}'] } }`, ...admin });
-    const ops = await WORK.get_item('/OPERATIONS');
+    const ops = await WORK.get_item('/DATA/OPERATIONS');
     await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USERS: ['${USER1}'] }, ${SALE} }`, ...admin });
-    const sale = await WORK.get_item('/OPERATIONS/SALE');
+    const sale = await WORK.get_item('/DATA/OPERATIONS/SALE');
     const o1 = await sale.create_object({ filename: 's1.data', post: { name: 'Счёт 1', sum: 1000 }, ...as(USER1) });
     await sale.post({ id: o1.id, ...as(USER1) });
     const o2 = await sale.create_object({ filename: 's2.data', post: { name: 'Счёт 2', sum: 500 }, ...as(USER1) });
@@ -75,12 +75,12 @@ after(async () => {
 
 describe('журнал', () => {
     it('строки по парам: счета, суммы, операция, сторно', async () => {
-        const reg = await WORK.get_item('/REGISTER');
+        const reg = await WORK.get_item('/DATA/REGISTER');
         const rows = await reg.journal(as(USER1));
         assert.equal(rows.length, 2);
         const [first, second] = rows;
-        assert.equal(first.debit_account, '/REGISTER/62');
-        assert.equal(first.credit_account, '/REGISTER/90');
+        assert.equal(first.debit_account, '/DATA/REGISTER/62');
+        assert.equal(first.credit_account, '/DATA/REGISTER/90');
         assert.equal(first.debit_label, 'Расчёты');
         assert.equal(first.op, 'Счёт 2');
         assert.equal(first.sum, 500);
@@ -93,17 +93,17 @@ describe('журнал', () => {
     });
 
     it('фильтры: счёт, операция, лимит', async () => {
-        const reg = await WORK.get_item('/REGISTER');
-        assert.equal((await reg.journal({ account: '/REGISTER/62', ...as(USER1) })).length, 2);
-        assert.equal((await reg.journal({ account: '/REGISTER/90', ...as(USER1) })).length, 2);
-        assert.equal((await reg.journal({ account: '/REGISTER/99', ...as(USER1) })).length, 0);
+        const reg = await WORK.get_item('/DATA/REGISTER');
+        assert.equal((await reg.journal({ account: '/DATA/REGISTER/62', ...as(USER1) })).length, 2);
+        assert.equal((await reg.journal({ account: '/DATA/REGISTER/90', ...as(USER1) })).length, 2);
+        assert.equal((await reg.journal({ account: '/DATA/REGISTER/99', ...as(USER1) })).length, 0);
         assert.equal((await reg.journal({ source: 'SALE', ...as(USER1) })).length, 2);
         assert.equal((await reg.journal({ source: 'XXX', ...as(USER1) })).length, 0);
         assert.equal((await reg.journal({ limit: 1, ...as(USER1) })).length, 1);
     });
 
     it('фильтр периода', async () => {
-        const reg = await WORK.get_item('/REGISTER');
+        const reg = await WORK.get_item('/DATA/REGISTER');
         const all = await reg.journal(as(USER1));
         assert.ok(all.length > 0);
         const day = new Date(all[0].time);
@@ -114,7 +114,7 @@ describe('журнал', () => {
     });
 
     it('чужому — пусто напрямую и запрет через шлюз', async () => {
-        const reg = await WORK.get_item('/REGISTER');
+        const reg = await WORK.get_item('/DATA/REGISTER');
         assert.deepEqual(await reg.journal(as(NOBODY)), []);
         await assert.rejects(invoke(reg, 'journal', as(NOBODY)), /Доступ запрещён/);
         const rows = await invoke(reg, 'journal', as(USER1));

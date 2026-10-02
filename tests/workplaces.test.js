@@ -35,12 +35,12 @@ before(async () => {
     write('BASE/direction/sales/$group/class.js', `export default { label: 'Продажи',
         '#security': { USERS: ['${USER1}'] },
         LINKS: [
-            { id: '/OPERATIONS', access: 'write' },
-            { id: '/REGISTER/62', access: 'read' },
+            { id: '/DATA/OPERATIONS', access: 'write' },
+            { id: '/DATA/REGISTER/62', access: 'read' },
         ] }`);
-    write('OPERATIONS/$class/class.js', `export default { label: 'Операции', ${FIELDS} }`);
-    write('REGISTER/$register/class.js', `export default { label: 'Журнал' }`);
-    write('REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
+    write('DATA/OPERATIONS/$class/class.js', `export default { label: 'Операции', ${FIELDS} }`);
+    write('DATA/REGISTER/$register/class.js', `export default { label: 'Журнал' }`);
+    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
     write('OTHER/$class/class.js', `export default { label: 'Чужой класс', ${FIELDS} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
@@ -55,8 +55,8 @@ after(async () => {
 
 describe('рабочие места', () => {
     it('data_access: write/read/null по ссылкам', async () => {
-        const ops = await WORK.get_item('/OPERATIONS');
-        const acc = await WORK.get_item('/REGISTER/62');
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
+        const acc = await WORK.get_item('/DATA/REGISTER/62');
         const other = await WORK.get_item('/OTHER');
         assert.equal(await ops.data_access(as(USER1)), 'write');
         assert.equal(await acc.data_access(as(USER1)), 'read');
@@ -66,8 +66,8 @@ describe('рабочие места', () => {
     });
 
     it('write-ссылка: создание объектов, read-ссылка: только чтение', async () => {
-        const ops = await WORK.get_item('/OPERATIONS');
-        const acc = await WORK.get_item('/REGISTER/62');
+        const ops = await WORK.get_item('/DATA/OPERATIONS');
+        const acc = await WORK.get_item('/DATA/REGISTER/62');
         const r = await ops.create_object({ filename: 'op.data', post: { name: 'Продажа' }, ...as(USER1) });
         assert.ok(r.id);
         await assert.rejects(acc.create_object({ filename: 'p.data', post: { name: 'Проводка' }, ...as(USER1) }), /Доступ запрещён/);
@@ -78,11 +78,11 @@ describe('рабочие места', () => {
 
     it('смена LINKS через save сразу меняет права', async () => {
         const sales = await WORK.get_item('/BASE/direction/sales');
-        const acc = await WORK.get_item('/REGISTER/62');
+        const acc = await WORK.get_item('/DATA/REGISTER/62');
         await assert.rejects(acc.create_object({ filename: 'x.data', post: { name: 'x' }, ...as(USER1) }), /Доступ запрещён/);
         await sales.save({ post: `{ label: 'Продажи', '#security': { USERS: ['${USER1}'] }, LINKS: [
-            { id: '/OPERATIONS', access: 'write' },
-            { id: '/REGISTER/62', access: 'write' },
+            { id: '/DATA/OPERATIONS', access: 'write' },
+            { id: '/DATA/REGISTER/62', access: 'write' },
         ] }`, ...as(ADMIN) });
         assert.equal(await acc.data_access(as(USER1)), 'write');
         const r = await acc.create_object({ filename: 'x.data', post: { name: 'x' }, ...as(USER1) });

@@ -254,6 +254,12 @@ Element:{
         return rect;
     }
 }
+// Всплывающие окна — модуль containers грузится при первом вызове и заменяет эти заглушки
+for (const name of ['showPopover', 'showModal', 'showDialog', 'showDropdown', 'showMenu', 'showConfirm', 'showPrompt'])
+    ODA[name] ??= async (...args) => {
+        await import('/oda/components/containers/containers.js');
+        return globalThis.ODA[name](...args);
+    };
 ODA.showFileDialog = ({ accept = '*', multiple }) => {
     return new Promise(resolve => {
         const fialog = document.createElement('input');

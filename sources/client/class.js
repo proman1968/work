@@ -36,11 +36,22 @@ export class $class extends $folder{
         day ??= new Date().toLocalDay();
         return this.get_item(`/~/logs/${day}/*.logs`);
     }
+    /**
+     * Пользователи роли: сервер кладёт uid ролей в данные элемента (`roleIds`), поэтому строка дерева
+     * не ходит за `?users`/`?bosses` — берёт готовых пользователей из общего списка /USERS.
+     * Нет `roleIds` (старый ответ) — прежний запрос.
+     */
+    _roleUsers(role, method) {
+        const ids = this.DATA?.roleIds?.[role];
+        if (!Array.isArray(ids))
+            return this.fetch(method);
+        return Promise.resolve(WORK.usersByIds(ids));
+    }
     get admins(){
-        return this.fetch('admins');
+        return this._roleUsers('ADMIN', 'admins');
     }
     get bosses(){
-        return this.fetch('bosses');
+        return this._roleUsers('BOSS', 'bosses');
     }
     get allAdmins(){
         return this.fetch('allAdmins');
@@ -49,10 +60,10 @@ export class $class extends $folder{
         return this.fetch('allBosses');
     }
     get users(){
-        return this.fetch('users');
+        return this._roleUsers('USER', 'users');
     }
     get guests(){
-        return this.fetch('guests');
+        return this._roleUsers('GUEST', 'guests');
     }
     import(){
         const url = (this.short || '/') + '?load' + `&version=${this.__version}`;

@@ -9,7 +9,7 @@
 import './ui/feed.js';
 import './ui/panel.js';
 import './ui/dock.js';
-import { collectDocs, computeStats } from './ui/docs.js';
+import { collectDocs, computeStats, stableDocs, activityOf } from './ui/docs.js';
 import { pathOfWorkHref, workHref, extOf } from './ui/util.js';
 
 /**
@@ -64,8 +64,8 @@ export default {
                         <span>Агент работает в этом классе с вашими правами: исследует, создаёт и меняет файлы и классы, вызывает сервисы.</span>
                     </div>
                     <microchat-feed :items="feedItems"></microchat-feed>
-                    <div class="working" ~if="showWorking">
-                        <oda-icon icon="spinners:3-dots-scale" :icon-size="16"></oda-icon><span>Работаю…</span>
+                    <div class="working" ~if="activity">
+                        <oda-icon icon="spinners:3-dots-scale" :icon-size="16"></oda-icon><span>{{activity.text}}</span>
                     </div>
                 </div>
             </div>
@@ -101,8 +101,10 @@ export default {
             n?.listen('task.delta', e => this._onDelta(e.detail?.value));
             n?.listen('task.state', e => {
                 const s = e.detail?.value?.status;
-                if (s)
+                if (s) {
                     this.status = s;
+                    this._lastDelta = Date.now();
+                }
             });
             n?.listen('chat.done', () => this._reload());
             this._reload();
@@ -136,6 +138,11 @@ export default {
         if (this.closable)
             this.async(() => this.fire('own-header'));
         this._ro ??= new ResizeObserver(() => this._stick());
+        // тикер строки активности: пока running — раз в секунду обновляем «Жду ответ… N с»
+        this._activityTimer ??= setInterval(() => {
+            if (this.status === 'running')
+                this._clock = Date.now();
+        }, 1000);
         this.async(() => {
             const col = this.$('.col');
             if (col)
@@ -145,6 +152,8 @@ export default {
     detached() {
         this.removeEventListener('md-link', onMdLink);
         this._ro?.disconnect();
+        clearInterval(this._activityTimer);
+        this._activityTimer = null;
         this._formHeader?.remove();
         this._formHeader = null;
     },
@@ -175,7 +184,13 @@ export default {
         for (const x of this.extraDocs)
             if (!list.some(d => d.key === x.key))
                 list.push(x);
-        return list;
+        // тот же набор — те же объекты: вкладки и iframe/video не пересоздаются и не моргают
+        const { docs } = stableDocs(this._docsList, list);
+        this._docsList = docs;
+        // вкладка исчезнувшего дока (например, бывшей реплики) — обратно на «Контекст», иначе пустая панель
+        if (this.dockTab !== 'context' && !docs.some(d => d.key === this.dockTab))
+            this.dockTab = 'context';
+        return docs;
     },
     get stats() {
         const m = this.data?.model || '';
@@ -196,15 +211,8 @@ export default {
         }
         catch { /* нет модели */ }
     },
-    get showWorking() {
-        if (this.status !== 'running')
-            return false;
-        const last = this.items[this.items.length - 1];
-        if (!last || last.type !== 'assistant')
-            return true;
-        const s = this.streams[last.id];
-        const running = (last.tools || []).some(t => t.status === 'running' || t.status === 'pending');
-        return !s && !last.content && !running;
+    get activity() {
+        return activityOf({ status: this.status, items: this.items, streams: this.streams, nowMs: this._clock || Date.now(), lastDeltaMs: this._lastDelta });
     },
     get showTodos() {
         const t = this.data?.todos;
@@ -216,6 +224,7 @@ export default {
         const cur = this.streams[d.item] || {};
         const field = d.field === 'reasoning' ? 'reasoning' : 'content';
         this.streams = { ...this.streams, [d.item]: { ...cur, [field]: (cur[field] || '') + d.token } };
+        this._lastDelta = Date.now();
         if (this.status !== 'running')
             this.status = 'running';
         this._stick();
@@ -245,6 +254,7 @@ export default {
                         const before = this._docKeys;
                         this.data = data;
                         this.status = data.status || 'idle';
+                        this._lastDelta = Date.now();
                         this._noticeDocs(before);
                         this._stick();
                         tries = 0;

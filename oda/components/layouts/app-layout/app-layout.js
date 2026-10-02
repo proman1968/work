@@ -9,9 +9,14 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
             .main {
                 overflow: hidden;
                 justify-content: space-around;
+                min-height: 0;
+            }
+            .print-flow {
+                min-height: 0;
             }
             ::slotted(*) {
                 @apply --flex;
+                min-height: 0;
             }
             .title {
                 transition: margin-top 0.3s ease-in-out;
@@ -147,6 +152,7 @@ ODA({is: 'app-layout-drawer',
         <style>
             :host {
                 max-width: 100%;
+                min-height: 0;
                 @apply --no-flex;
                 @apply --content;
                 position: relative;
@@ -189,10 +195,10 @@ ODA({is: 'app-layout-drawer',
 
         <div :vertical="mobile" :horizontal="!mobile" ~show="!mobile || !closed" class="drawer" flex>
             <app-tabs accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
-            <div horizontal header flex style="overflow: hidden;">
-                <div flex vertical style="overflow: hidden;" ~show="!closed">
+            <div horizontal header flex style="overflow: hidden; min-height: 0;">
+                <div flex vertical style="overflow: auto; min-height: 0;" ~show="!closed">
                     <slot name="title" horizontal></slot>
-                    <slot id="slot" @slotchange="_onSlotchange" flex vertical></slot>
+                    <slot id="slot" @slotchange="_onSlotchange" flex vertical style="min-height: 0;"></slot>
                 </div>
             </div>
         </div>

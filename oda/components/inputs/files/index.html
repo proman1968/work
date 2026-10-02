@@ -1,0 +1,15 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>files</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./files.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 40em; overflow: auto;">
+<oda-files-input id="a" field='{"label":"Вложения"}'></oda-files-input>
+<oda-files-input field='{"label":"Пусто"}'></oda-files-input>
+<oda-files-input id="b" readonly field='{"label":"Только чтение"}'></oda-files-input>
+</div>
+<script type="module">
+a.value = b.value = [{ name: 'отчёт.pdf', size: 245760, type: 'application/pdf' }, { name: 'logo.png', size: 5120, type: 'image/png', url: '/oda/tools/icons/icon.png' }];
+</script>

@@ -12,6 +12,7 @@ import { fmtNum, fmtDate } from './docs.js';
 
 const IMAGE = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 const PAGE = ['html', 'htm', 'pdf'];
+const VIDEO = ['mp4', 'webm'];
 
 const STATUS = {
     idle: { label: 'Готово', icon: 'carbon:checkmark' },
@@ -240,6 +241,7 @@ ODA({ is: 'microchat-doc',
             iframe { border: none; width: 100%; height: 100%; background: white; }
             .img { @apply --vertical; align-items: center; justify-content: center; padding: 16px; }
             .img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-s); }
+            video { width: 100%; max-height: 100%; background: #000; border-radius: var(--radius-s); }
             .md { padding: 14px 20px; user-select: text; line-height: 1.6; }
             pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
             .empty { @apply --muted; padding: 24px; text-align: center; }
@@ -258,9 +260,10 @@ ODA({ is: 'microchat-doc',
         <div class="body" flex vertical>
             <iframe flex ~if="isPage" :src="url"></iframe>
             <div class="img" flex ~if="isImage"><img :src="url"></div>
+            <video flex controls preload="metadata" ~if="isVideo" :src="url"></video>
             <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
-            <pre ~if="!isPage && !isImage && !isMarkdown && text">{{text}}</pre>
-            <div class="empty" ~if="!isPage && !isImage && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
+            <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && text">{{text}}</pre>
+            <div class="empty" ~if="!isPage && !isImage && !isVideo && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
         </div>
     `,
     doc: {
@@ -281,6 +284,7 @@ ODA({ is: 'microchat-doc',
     get ext() { return this.isFile ? extOf(this.path) : 'md'; },
     get isImage() { return IMAGE.includes(this.ext); },
     get isPage() { return PAGE.includes(this.ext); },
+    get isVideo() { return VIDEO.includes(this.ext); },
     get isMarkdown() { return this.ext === 'md'; },
     get url() { return fileUrl(this.path) + '?_=' + this.bust; },
     get text() { return this.isFile ? this.fileText : String(this.doc?.text || ''); },
@@ -291,7 +295,7 @@ ODA({ is: 'microchat-doc',
         return [this.doc?.subtitle, fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
     },
     async loadText() {
-        if (!this.isFile || this.isImage || this.isPage)
+        if (!this.isFile || this.isImage || this.isPage || this.isVideo)
             return;
         this.loading = true;
         try {
@@ -316,7 +320,7 @@ ODA({ is: 'microchat-doc',
         return this.isFile ? base : base + '.md';
     },
     download() {
-        if (this.isFile && (this.isImage || this.isPage || !this.text)) {
+        if (this.isFile && (this.isImage || this.isPage || this.isVideo || !this.text)) {
             const a = document.createElement('a');
             a.href = fileUrl(this.path);
             a.download = this.fileName();

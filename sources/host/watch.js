@@ -8,10 +8,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FS } from '../server/index.js';
 
-const ROOTS = ['$server', 'sources', 'oda', 'MODELS', 'SERVICES', 'BASE', 'REGISTER', 'MARKET', 'PAAS', 'NODES', 'CATALOGS', 'OPERATIONS', 'SUPPORT'];
+const ROOTS = ['$server', 'sources', 'oda', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT'];
+// DATA/INDEX — данные и производные агрегаты: их каждая запись объекта/проводки пишет в *.json,
+// и без этого исключения сброс кэшей поднимался бы на каждую проводку (холодные запросы у всех клиентов).
+// Но это только зона внутри метапапки ($тип/DATA, $тип/INDEX): корневой класс /DATA под правило не попадает.
 const IGNORE = /(^|[\\/])(node_modules|history|logs|\.RAG|\.git|\.svn|#secret|#system)([\\/]|$)|\.tmp$/;
+const ZONE_DATA = /(^|[\\/])\$[^\\/]+[\\/](DATA|INDEX)([\\/]|$)/;
 const CODE = /\.(m?js|md|json|css|html)$/i;
 const DEBOUNCE_MS = 150;
+
+/** Правка кода/текста слоёв (а не данные, индексы, история, секреты) — стоит сбрасывать кэши. */
+export function isCodeChange(rel) {
+    if (ZONE_DATA.test(rel))
+        return false;
+    return !IGNORE.test(rel) && CODE.test(rel);
+}
 
 const pending = new Set();
 let timer = null;
@@ -54,7 +65,7 @@ export function watchCode($server) {
                 if (!name)
                     return;
                 const rel = path.join(root, String(name));
-                if (IGNORE.test(rel) || !CODE.test(rel))
+                if (!isCodeChange(rel))
                     return;
                 pending.add(rel);
                 clearTimeout(timer);

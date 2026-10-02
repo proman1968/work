@@ -1,17 +1,4 @@
-/** «?» только у строки дерева (`oda-tree-node`): readme.md в storage_folder, не файл. */
 import { isLinkNode } from '../tree/link-nodes.js';
-function mayShowReadme($item) {
-    if (!$item) return false;
-    // $file extends $folder на клиенте — файлы исключаем явно
-    if ($item.constructor === CORE.$file || $item.type === '$file') return false;
-    return true;
-}
-function findReadme(items) {
-    return Array.isArray(items) ? items.find(f => /^readme\.md$/i.test(f.id)) : undefined;
-}
-function inTreeNode(node) {
-    return (node?.host || node?.parentElement)?.localName === 'oda-tree-node';
-}
 
 export default {
     imports: '~/lib//icon, ~/lib//users',
@@ -74,35 +61,23 @@ export default {
                 white-space: nowrap;
                 align-self: center;
             }
-            .readme-help{
-                @apply --no-flex;
-                opacity: .55;
-                margin-left: 2px;
-                cursor: pointer;
-            }
-            .readme-help:hover{
-                opacity: 1;
-            }
         </style>
         <div horizontal flex style="align-items: center;">
             <div vertical flex>
                 <div horizontal flex>
-                    <label :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : ''" ~show="!hideLabel">{{label}}</label>
+                    <label flex :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : ''" ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
-                    <oda-icon class="readme-help" ~if="hasReadme" icon="icons:help" icon-size="24" @tap.stop="openReadme" title="readme.md"></oda-icon>
-                    <item-users icon-size="16" no-flex ~if="showBoss" role="BOSS" :$item :select-mode="false"></item-users>
                 </div>
-                <item-users icon-size="16" ~if="showUsers && isClass && !isLink" ~show="hasUsers" ::has-users role="USER" :$item :select-mode="false"></item-users>
             </div>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
         </div>
     `,
     showSize: false,
+    // пользователи в строке дерева не показываются (шум и запросы на каждую строку); свойство оставлено для совместимости биндов
     showUsers: false,
     hideLabel: false,
     hideHistoryTime: false,
-    hasUsers: { $type: Boolean },
     get historyTime() {
         if (this.hideHistoryTime)
             return '';
@@ -114,46 +89,10 @@ export default {
             return '';
         return parse.call(CORE.$file || this.$item.constructor, path)?.dateTime || '';
     },
-    get readmeItem() {
-        if (!inTreeNode(this) || !mayShowReadme(this.$item)) return undefined;
-        const item = this.$item;
-        return Promise.resolve(item.storage_folder).then(storage =>
-            Promise.resolve((storage || item).items).then(findReadme)
-        );
-    },
-    get hasReadme() {
-        if (!inTreeNode(this)) return false;
-        Promise.resolve(this.readmeItem).then(r => {
-            this.hasReadme = !!r || null;
-        });
-        return null;
-    },
-    async openReadme(e) {
-        e?.stopPropagation?.();
-        const readme = await this.readmeItem;
-        if (!readme) return;
-        readme.$context = this.topHost?.$item;
-        if (typeof readme.execute === 'function')
-            await readme.execute();
-        else if (window.execute)
-            await window.execute(Reactor.activate(readme));
-        let h = this;
-        while (h && h.localName !== 'item-menu') {
-            h = h.host || h.parentElement;
-        }
-        h?.parentElement?.fire('close');
-    },
     /** Узел-ссылка рабочего места — только через isLinkNode (см. link-nodes.js):
      * прямое чтение `$item.isLink` у настоящих элементов дёргает `_onEmpty`. */
     get isLink() {
         return isLinkNode(this.$item);
-    },
-    get showBoss(){
-        if(this.isLink)
-            return false;
-        if(this.$item instanceof CORE.$class && !(this.$item instanceof CORE.$user)){
-            return Promise.resolve(this.$item?.bosses).then(list => !!(list?.length));
-        }
     },
     get status(){
         if(this.isLink)

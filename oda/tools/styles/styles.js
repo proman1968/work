@@ -51,35 +51,32 @@ let style = /*css*/`
     --info-color: light-dark(var(--info-2), var(--info-1));
 
 
-    --focused-color: blue;
-
     --accent-color: light-dark(var(--main-color), var(--main-color-invert));
 
     --accent-back: light-dark(var(--main-color-invert), var(--main-color));
 
+    /* фокус — от акцента темы (раньше литерал blue) */
+    --focused-color: var(--accent-color);
+
     --bar-background: var(--content-background);
     --stroke-color: light-dark(transparent, transparent);
 
+    /* рамка — от цвета текста темы (раньше чёрная/белая) */
+    --border-color: color-mix(in oklch, var(--content-color) 20%, transparent);
 
-    --border-color: light-dark(black, white);
-    
-    --shadow-color: light-dark(rgba(0,0,0,.2), rgba(255,255,255,.2));
+    --shadow-color: light-dark(oklch(from var(--main-color) .2 .03 h / .2), oklch(0 0 0 / .5));
 
+    /* статусы — фиксированные тона (зелёный/красный/оранжевый), яркость по схеме */
+    --success-color: light-dark(oklch(.5 .14 150), oklch(.85 .12 150));
+    --success-background: light-dark(oklch(.96 .04 150), oklch(.38 .09 150));
 
+    --error-color: light-dark(oklch(.52 .2 27), oklch(.85 .11 27));
+    --error-background: light-dark(oklch(.96 .03 27), oklch(.4 .13 27));
 
+    --warning-color: light-dark(oklch(.55 .14 65), oklch(.88 .12 80));
+    --warning-background: light-dark(oklch(.96 .05 85), oklch(.42 .09 65));
 
-
-    --success-color: light-dark(green, white);
-    --success-background: light-dark(white, green);
-    
-    --error-color: light-dark(red, yellow);
-    --error-background: light-dark(yellow, red);
-
-    --warning-color: light-dark(orange, wheat);
-    --warning-background: light-dark(wheat, orange);
-    
-    
-    --disabled-color: light-dark(silver, silver);
+    --disabled-color: color-mix(in oklch, var(--content-color) 40%, transparent);
 
     --selected-color: light-dark(var(--light-1), var(--light-2));
     --selected-background: light-dark(var(--light-2), var(--light-1));
@@ -91,9 +88,9 @@ let style = /*css*/`
 
 /* Современные токены: радиусы, приглушённый текст, тонкие поверхности и рамки — всё от --main-color/ролей */
 :root {
-    --radius-s: 6px;
-    --radius-m: 10px;
-    --radius-l: 16px;
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 20px;
     --space-s: 4px;
     --space-m: 8px;
     --space-l: 16px;
@@ -103,9 +100,77 @@ let style = /*css*/`
     --subtle-border: color-mix(in oklch, var(--content-color) 14%, transparent);
     --code-background: color-mix(in oklch, var(--content-color) 7%, var(--content-background));
     --accent-soft: color-mix(in oklch, var(--accent-color) 12%, var(--content-background));
-    --success-soft: color-mix(in oklch, green 14%, var(--content-background));
-    --error-soft: color-mix(in oklch, red 12%, var(--content-background));
-    --warning-soft: color-mix(in oklch, orange 16%, var(--content-background));
+    --success-soft: color-mix(in oklch, var(--success-color) 14%, var(--content-background));
+    --error-soft: color-mix(in oklch, var(--error-color) 12%, var(--content-background));
+    --warning-soft: color-mix(in oklch, var(--warning-color) 16%, var(--content-background));
+}
+/* Шкалы и контролы: единые скругления, отступы, шрифт, высота полей, фокус, тени, анимация */
+:root {
+    color-scheme: light dark;
+    accent-color: var(--accent-color);
+    caret-color: var(--accent-color);
+
+    --radius-xs: 3px;
+    --radius-xl: 24px;
+    --radius-round: 999px;
+    --space-xs: 2px;
+    --space-xl: 24px;
+
+    --font-size-xs: x-small;
+    --font-size-s: small;
+    --font-size-m: medium;
+    --font-size-l: large;
+    --line-height: 1.4;
+
+    --control-height: 2.25em;
+    --control-padding: var(--space-s) var(--space-m);
+    --control-radius: 8px;
+    --control-background: var(--content-background);
+    --control-color: var(--content-color);
+    --control-border-color: var(--subtle-border);
+    --control-border-hover: color-mix(in oklch, var(--content-color) 32%, transparent);
+    --control-border-focus: var(--accent-color);
+
+    --focus-ring-width: 2px;
+    --focus-ring-offset: 1px;
+    --focus-ring-color: color-mix(in oklch, var(--accent-color) 70%, transparent);
+
+    --elevation-1: 0 1px 2px var(--shadow-color);
+    --elevation-2: 0 2px 6px var(--shadow-color), 0 1px 2px var(--shadow-color);
+    --elevation-3: 0 12px 32px -12px var(--shadow-color), 0 2px 8px -2px var(--shadow-color);
+
+    --duration-fast: 120ms;
+    --duration: 200ms;
+    --easing: cubic-bezier(.2, 0, 0, 1);
+}
+:root {
+    /* рамка поля ввода; состояния (:hover/:focus-within/[invalid]/[disabled]) — в oda-input */
+    --control: {
+        box-sizing: border-box;
+        min-height: var(--control-height);
+        padding: var(--control-padding);
+        border: 1px solid var(--control-border-color);
+        border-radius: var(--control-radius);
+        background-color: var(--control-background);
+        color: var(--control-color);
+        font: inherit;
+        transition: border-color var(--duration-fast) var(--easing), box-shadow var(--duration-fast) var(--easing);
+    };
+    --focus-ring: {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    };
+}
+:where(:focus-visible) {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
 }
 :root {
     --card: {
@@ -212,11 +277,6 @@ let style = /*css*/`
         display: flex;
         flex-direction: column;
     };
-    --border:{
-        border: 1px solid;
-        box-sizing: border-box;
-    };
-
     --toolbar:{
         @apply --horizontal;
         align-items: center;
@@ -306,13 +366,21 @@ html {
         box-shadow: none !important;
     }
 }
-input{
+input, select, textarea{
     background-color: var(--content-background);
     color: var(--content-color);
 }
-input::placeholder{
+input::placeholder, textarea::placeholder{
     color: inherit;
     opacity: .5;
+}
+option, optgroup{
+    background-color: var(--content-background);
+    color: var(--content-color);
+}
+button{
+    font: inherit;
+    color: inherit;
 }
 
 ::part(error){
@@ -329,8 +397,8 @@ input::placeholder{
     width: 0px;
     height: 0px;
     border: 4px solid transparent;
-    border-left: 4px solid red;
-    border-top: 4px solid red;
+    border-left: 4px solid var(--error-color);
+    border-top: 4px solid var(--error-color);
 }
 body{
     display: flex;
@@ -346,6 +414,11 @@ body{
 [hidden]{
     display: none !important;
 }
+/* ODA складывает распределённые узлы внутрь <slot> как fallback-контент:
+   голый слот прозрачен для раскладки, слоты с классами (vertical/flex/…) работают как обычно */
+slot {
+    display: contents;
+}
 [direction='vertical']{
         display: flex;
         flex-direction: column;
@@ -358,7 +431,7 @@ body{
 
 :root {
     --shadow: {
-        box-shadow: 0 8px 10px 1px var(--shadow-color), 0 3px 14px 2px var(--shadow-color), 0 5px 5px -3px var(--shadow-color);
+        box-shadow: 0 12px 32px -12px var(--shadow-color), 0 2px 8px -2px var(--shadow-color);
     };
 
     --shadow-transition: {
@@ -523,9 +596,7 @@ body[context-menu-show] *:not(oda-context-menu){
 
 :root{
     --hover: {
-         filter: brightness(.95) !important;
-         outline: 1px dotted var(--dark-background);
-         outline-offset: -1px;
+         filter: brightness(.96) !important;
 
     };
     --active: {
@@ -566,9 +637,7 @@ body[context-menu-show] *:not(oda-context-menu){
     };
 }
 [hoverable]:hover{
-    filter: brightness(.95) !important;
-    outline: 1px dotted var(--dark-background);
-    outline-offset: -1px;
+    filter: brightness(.96) !important;
 }
 .focused:after, *[focused]:after{
     content: "";
@@ -747,7 +816,7 @@ function extractCSSRules (style){
     return result.join('\n');
 }
 /** Миксины только для @apply (без глобальных [attr]/.class правил): не используются атрибутами в шаблонах. */
-const APPLY_ONLY = new Set(['cover', 'hover', 'shadow-transition', 'error-before', 'help-after', 'font-150', 'user-select', 'boxed', 'heading', 'text-shadow', 'text-shadow-black']);
+const APPLY_ONLY = new Set(['control', 'focus-ring', 'cover', 'hover', 'shadow-transition', 'error-before', 'help-after', 'font-150', 'user-select', 'boxed', 'heading', 'text-shadow', 'text-shadow-black']);
 const WARNED = new Set();
 function applyStyleMixins (styleText) {
     styleText = styleText.replace(COMMENT_REG_EXP, '');

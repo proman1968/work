@@ -1,0 +1,28 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-markdown-input</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./markdown-input.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em; overflow: auto;">
+    <oda-markdown-input id="m1"></oda-markdown-input>
+    <oda-markdown-input id="m2" editing></oda-markdown-input>
+    <oda-markdown-input id="m3" placeholder="Пока ничего не написано"></oda-markdown-input>
+    <oda-markdown-input id="m4" readonly></oda-markdown-input>
+    <oda-markdown-input id="m5" collapsed></oda-markdown-input>
+    <div muted id="out"></div>
+</div>
+<script type="module">
+    const md = '# План релиза\n\nСписок задач:\n\n- **интерфейс** — блочные контролы\n- `код` и [ссылка](https://example.com)\n\n> Цитата для проверки стилей.';
+    m1.field = { id: 'plan', label: 'План' };
+    m1.value = md;
+    m2.field = { id: 'draft', label: 'Черновик (правка)' };
+    m2.value = 'Первая строка *без* заголовка\n\nВторой абзац.';
+    m3.field = { id: 'empty', label: 'Пустое' };
+    m4.field = { id: 'ro', label: 'Только чтение' };
+    m4.value = md;
+    m5.field = { id: 'col', label: 'Свёрнутое' };
+    m5.value = md;
+    m2.addEventListener('value-changed', e => out.textContent = 'value-changed: ' + JSON.stringify(e.detail.value));
+</script>

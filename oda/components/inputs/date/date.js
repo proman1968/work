@@ -1,26 +1,40 @@
-ODA({is: 'oda-date-input',
+/**
+ * oda-date-input — дата и время на нативном input: date | time | datetime-local | month | week.
+ * Тип — inputType, иначе по field.type (date, time, datetime / DateTime / timestamp, month, week), иначе date.
+ * value — строка в нативном формате ('' — пусто).
+ */
+import '/oda/components/inputs/input/input.js';
+
+const TYPES = { date: 'date', time: 'time', datetime: 'datetime-local', 'datetime-local': 'datetime-local', timestamp: 'datetime-local', month: 'month', week: 'week' };
+
+ODA({
+    is: 'oda-date-input',
+    extends: 'oda-input',
     template: /*html*/`
-    <style>
-        :host {
-            @apply --horizontal;
-            @apply --flex;
-        }
-        input {
-            @apply --flex;
-            min-width: 0;
-            display: block;
-            box-sizing: border-box;
-            padding: 4px;
-            font-size: 125%;
-            border: none;
-            border-radius: 4px;
-        }
-    </style>
-    <input type="date" :value @change="value = $this.value">
+        <input class="control" part="control" :type="dateType" :value="value ?? ''"
+            :min="min || field?.min" :max="max || field?.max" :step="field?.step"
+            :readonly="isReadonly" :disabled :required="isRequired"
+            @input="value = $this.value" @change="value = $this.value">
     `,
-    value: '',
-    meta: null,
-    get disabled() {
-        return !!this.meta?.disabled;
+    $public: {
+        value: {
+            $def: '',
+            $type: String
+        },
+        /** date | time | datetime-local | month | week; пусто — по field.type */
+        inputType: '',
+        min: '',
+        max: ''
     },
+    get dateType() {
+        return TYPES[String(this.inputType || this.field?.type || 'date').toLowerCase()] ?? 'date';
+    },
+    get validationErrors() {
+        const v = this.value, min = this.min || this.field?.min, max = this.max || this.field?.max;
+        if (min && v < min)
+            return ['Не раньше ' + min];
+        if (max && v > max)
+            return ['Не позже ' + max];
+        return [];
+    }
 });

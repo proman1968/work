@@ -1,5 +1,5 @@
 const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
+ODA({ is: 'user-profile', imports: 'oda//otp.js',
     template:/* html */`
     <style>
         :host {
@@ -37,7 +37,7 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
             <input id="surname" placeholder="Фамилия" ::value="params.surname" name="surname">
             <input id="patronymic" placeholder="Отчество" ::value="params.patronymic" name="patronymic">
             <input id="email" :disabled="isLogin || showCode" placeholder="Email" ::value="params.email" type="email" name="email" :error="!correctEmail" :success="correctEmail">
-            <oda-secret-code-input ~if="showCode" center @code></oda-secret-code-input>
+            <oda-otp-input ~if="showCode" center @complete="_onCode"></oda-otp-input>
             <button ~if="state.label && !showCode" center horizontal :disabled="!correctEmail" flex raised :class="state.class" @tap.stop.prevent="register_start" style="gap: 8px;align-items: center;">
                 <span>{{state.label}}</span>
                 <oda-icon ~if="state.icon" :icon="state.icon"></oda-icon>
@@ -127,8 +127,9 @@ ODA({ is: 'user-profile', imports: 'oda//secret-code-input.js',
         }
     },
     fill_code() {
-        if (this.$('oda-secret-code-input') && this.text.length === this.$('oda-secret-code-input').codeSize)
-            this.$('oda-secret-code-input').code = this.text;
+        const otp = this.$('oda-otp-input');
+        if (otp && this.text.length === otp.length)
+            otp.value = this.text;
     },
     get isRegistered() {
         return !!this.credentials?.uid;

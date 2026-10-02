@@ -128,7 +128,6 @@ ODA({ is: 'microchat-assistant',
         </div>
         <div class="meta" ~if="text && !streamingText">
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
-            <oda-button ~if="isDoc && !nested" icon="carbon:document-view" :icon-size="14" title="Открыть в доках" @tap="openDoc"></oda-button>
             <span>{{info}}</span>
             <span ~if="data?.stopped">· остановлено</span>
         </div>
@@ -146,7 +145,6 @@ ODA({ is: 'microchat-assistant',
     get streamingText() { return !!this.stream?.content && !this.data?.durationMs; },
     get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.data?.durationMs; },
     get reasoningOpen() { return this.showReasoning || this.thinkingNow; },
-    get isDoc() { return !!this.$pdp?.docs?.some?.(d => d.key === 'reply:' + this.data?.id); },
     get info() {
         const u = this.data?.usage;
         return [
@@ -156,7 +154,6 @@ ODA({ is: 'microchat-assistant',
         ].filter(Boolean).join(' · ');
     },
     copy() { copyText(this.text); },
-    openDoc() { findShell(this)?.openDoc({ key: 'reply:' + this.data.id }); },
 });
 
 ODA({ is: 'microchat-steps',
@@ -271,7 +268,10 @@ ODA({ is: 'microchat-tool',
             .danger { color: var(--error-color); fill: var(--error-color); }
             .opt[selected] { outline: 2px solid var(--accent-color); }
             .field { @apply --vertical; gap: 6px; }
+            .frame { @apply --vertical; gap: 6px; }
+            .frame iframe { width: 100%; height: 60vh; min-height: 360px; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); background: var(--content-background); }
             .ask .lnk { color: var(--accent-color); text-decoration: underline; cursor: pointer; }
+            .ask .url { font-family: var(--font-mono); font-size: 12px; word-break: break-all; user-select: all; }
             .ask code { font-family: var(--font-mono); background: var(--code-background); padding: 0 4px; border-radius: 4px; user-select: all; }
             .field label { font-size: x-small; @apply --muted; }
             input, textarea, select {
@@ -310,6 +310,12 @@ ODA({ is: 'microchat-tool',
         <div class="ask" ~if="isConnect">
             <div class="q">Подключить {{data.connect.label || data.connect.provider}}?</div>
             <div class="why">{{data.connect.reason}}</div>
+            <div class="why" ~if="data.connect.signup">Регистрация: <span class="lnk" @tap="signupOpen = !signupOpen">{{hostOf(data.connect.signup)}}</span> · <span class="lnk" @tap="openUrl(data.connect.signup)">новая вкладка</span></div>
+            <div class="frame" ~if="signupOpen && data.connect.signup">
+                <iframe :src="data.connect.signup" sandbox="allow-scripts allow-forms allow-same-origin" loading="lazy"></iframe>
+                <div class="why">Не загрузилось (сайт запрещает фреймы)? Откройте в новой вкладке.</div>
+            </div>
+            <div class="why" ~if="data.connect.docs">Документация API: <span class="lnk" @tap="openUrl(data.connect.docs)">{{hostOf(data.connect.docs)}}</span></div>
             <div class="why" ~if="data.connect.scopes?.length">Доступ: {{data.connect.scopes.join(', ')}}</div>
             <div class="why">Вход выполняете вы сами — агент не видит паролей и токенов.</div>
             <div class="field" ~if="data.connect.provider === 'token'">
@@ -325,6 +331,20 @@ ODA({ is: 'microchat-tool',
             <div class="btns">
                 <oda-button hide-icon accent-invert :label="data.connect.provider === 'token' ? 'Сохранить' : 'Войти в ' + (data.connect.label || '')" @tap="connect()"></oda-button>
                 <oda-button hide-icon class="ghost danger" label="Не подключать" @tap="approve(false)"></oda-button>
+            </div>
+        </div>
+
+        <div class="ask" ~if="isPage">
+            <div class="q">Страница для просмотра</div>
+            <div class="why">{{pageHost}}</div>
+            <div class="url">{{data.page.url}}</div>
+            <div class="frame" ~if="pageOpen">
+                <iframe :src="data.page.url" sandbox="allow-scripts allow-forms allow-same-origin" loading="lazy"></iframe>
+                <div class="why">Не загрузилось (сайт запрещает фреймы)? Откройте в новой вкладке.</div>
+            </div>
+            <div class="btns">
+                <oda-button hide-icon accent-invert :label="pageOpen ? 'Скрыть предпросмотр' : 'Показать предпросмотр'" @tap="pageOpen = !pageOpen"></oda-button>
+                <oda-button hide-icon class="ghost" label="Открыть в новой вкладке" @tap="openExternal"></oda-button>
             </div>
         </div>
 
@@ -390,6 +410,20 @@ ODA({ is: 'microchat-tool',
     get isApproval() { return this.data?.status === 'approval'; },
     get isQuestion() { return this.data?.status === 'waiting' && this.data?.name === 'ask_user'; },
     get isConnect() { return this.data?.status === 'waiting' && this.data?.name === 'connect_service' && !!this.data?.connect; },
+    get isPage() { return !!this.data?.page?.url; },
+    // предпросмотр раскрыт сразу: entry.page появляется только после подтверждения человека
+    pageOpen: true,
+    signupOpen: false,
+    get pageHost() {
+        try { return new URL(this.data?.page?.url).host; }
+        catch { return String(this.data?.page?.url || ''); }
+    },
+    hostOf(u) {
+        try { return new URL(u).host; }
+        catch { return String(u || ''); }
+    },
+    openExternal() { window.open(this.data?.page?.url, '_blank'); },
+    openUrl(u) { window.open(u, '_blank'); },
     get needClient() { return !!this.data?.connect?.need_client && this.data.connect.provider !== 'token'; },
     get redirectUri() { return location.origin + '/oauth/callback'; },
     cred: {},

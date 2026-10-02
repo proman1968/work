@@ -1,6 +1,15 @@
 <meta charset="UTF-8">
-<script type="module" src="../../../oda.js"></script>
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>date</title>
+<script type="module" src="/oda/oda.js"></script>
 <script type="module" src="./date.js"></script>
-<oda-tester>
-    <oda-date-input value="2026-09-24"></oda-date-input>
-</oda-tester>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em; overflow: auto;">
+<oda-date-input value="2026-09-29"></oda-date-input>
+<oda-date-input input-type="time" value="15:30"></oda-date-input>
+<oda-date-input input-type="datetime-local" value="2026-09-29T15:30"></oda-date-input>
+<oda-date-input input-type="month" value="2026-09"></oda-date-input>
+<oda-date-input value="2026-01-01" disabled></oda-date-input>
+</div>
+

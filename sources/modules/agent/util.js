@@ -2,6 +2,39 @@
  * Общие мелочи ядра агента: id, обрезка, оценка токенов, фронтматтер.
  */
 
+/** Снимок вида /.имя/history/дата/файл — имя файла до /.имя/history/. */
+const SNAPSHOT_RE = /\/\.([^/]+)\/history\/\d{4}-\d{2}-\d{2}\/[^/]+$/;
+
+/**
+ * Снимки из результата вызова call → save_files: JSON-строка { includes: [...] }.
+ * Только снимки (/history/), живой путь файла сюда не попадает.
+ */
+export function callSnapshots(entry) {
+    if (entry?.name !== 'call' || entry?.status !== 'ok')
+        return [];
+    if (String(entry?.args?.method || '') !== 'save_files')
+        return [];
+    let r = entry.result;
+    if (typeof r === 'string') {
+        try {
+            r = JSON.parse(r);
+        }
+        catch {
+            return [];
+        }
+    }
+    const inc = r?.includes;
+    if (!Array.isArray(inc))
+        return [];
+    return inc.map(String).filter(s => SNAPSHOT_RE.test(s));
+}
+
+/** Имя файла по пути снимка (то, что перед /.имя/history/). */
+export function snapshotName(snapshot) {
+    const m = String(snapshot || '').match(SNAPSHOT_RE);
+    return m ? m[1] : String(snapshot || '').split('/').pop();
+}
+
 /** guid элемента ленты/вызова. */
 export function genId() {
     const uuid = globalThis.crypto?.randomUUID?.();

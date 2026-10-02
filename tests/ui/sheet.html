@@ -8,7 +8,7 @@
  * параметры уходят в fetch, ошибка видна, клик по счёту открывает его форму.
  */
 import '/oda/oda.js';
-import sheetProto from '/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js';
+import sheetProto from '/DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js';
 
 const results = [];
 window.__results = results;
@@ -66,9 +66,9 @@ await ODA(cloneProto(sheetProto, 'test-sheet'));
 const RES = {
     from: '2026-02-01', to: '2026-02-28',
     rows: [
-        { path: '/REGISTER/62', label: 'Расчёты', level: 0, leaf: false, open_debit: 1000, open_credit: 0, debit: 400, credit: 600, close_debit: 800, close_credit: 0 },
-        { path: '/REGISTER/62/01', label: 'Покупатели', level: 1, leaf: true, open_debit: 1000, open_credit: 0, debit: 0, credit: 600, close_debit: 400, close_credit: 0 },
-        { path: '/REGISTER/90', label: 'Продажи', level: 0, leaf: true, open_debit: 0, open_credit: 1000, debit: 0, credit: 400, close_debit: 0, close_credit: 1400 },
+        { path: '/DATA/REGISTER/62', label: 'Расчёты', level: 0, leaf: false, open_debit: 1000, open_credit: 0, debit: 400, credit: 600, close_debit: 800, close_credit: 0 },
+        { path: '/DATA/REGISTER/62/01', label: 'Покупатели', level: 1, leaf: true, open_debit: 1000, open_credit: 0, debit: 0, credit: 600, close_debit: 400, close_credit: 0 },
+        { path: '/DATA/REGISTER/90', label: 'Продажи', level: 0, leaf: true, open_debit: 0, open_credit: 1000, debit: 0, credit: 400, close_debit: 0, close_credit: 1400 },
     ],
     total: { open_debit: 1000, open_credit: 1000, debit: 400, credit: 1000, close_debit: 800, close_credit: 1400 },
 };
@@ -108,13 +108,13 @@ await test('sheet: параметры уходят в fetch, ошибка вид
     assert(await until(() => dataRows(el).length === 3), 'строки');
     el.from = '2026-02-01';
     el.to = '2026-02-28';
-    el.account = '/REGISTER/62';
+    el.account = '/DATA/REGISTER/62';
     await el.reload();
     const sent = calls.at(-1);
     eq(sent.method, 'sheet');
     eq(sent.params.from, '2026-02-01');
     eq(sent.params.to, '2026-02-28');
-    eq(sent.params.account, '/REGISTER/62');
+    eq(sent.params.account, '/DATA/REGISTER/62');
     el.remove();
     const bad = await mount('test-sheet', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
     assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
@@ -131,8 +131,8 @@ await test('sheet: клик по счёту открывает его форму
     try {
         dataRows(el)[1].querySelector('div.cell.acc').click();
         await tick(80);
-        eq(got.join(','), '/REGISTER/62/01');
-        eq(opened.join(','), '/REGISTER/62/01');
+        eq(got.join(','), '/DATA/REGISTER/62/01');
+        eq(opened.join(','), '/DATA/REGISTER/62/01');
     }
     finally {
         window.WORK = prevWork;

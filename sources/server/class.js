@@ -226,6 +226,16 @@ export class $class extends $folder{
             },
             get isCustom(){
                 return !WORK.types.includes(this.type)
+            },
+            /**
+             * uid пользователей, назначенных локально в #security по базовым ролям: строки дерева
+             * рисуют аватары по ним, а не запросами `?users`/`?bosses` на каждую строку.
+             */
+            get roleIds(){
+                const out = {};
+                for (const role of [$class.ROLES.ADMIN, $class.ROLES.BOSS, $class.ROLES.USER, $class.ROLES.GUEST])
+                    out[role] = this._roleIds(role).filter(id => id !== 'GUEST');
+                return out;
             }
         }
     }
@@ -408,12 +418,16 @@ export class $class extends $folder{
      * METADATA.FIELDS/INDEXES/POSTINGS: схема и правила наследуются всегда
      * (кроме явного отказа) — и остаются в self тоже.
      * @param {object|Array} data Входящий class.js
-     * @param {boolean|'schema'} [dflt] Поведение потомков без флагов: false — только self;
-     * true — в inherit целиком и в self; 'schema' — как true для FIELDS/INDEXES/POSTINGS.
+     * @param {boolean} [dflt] Наследовать всё без флагов (по умолчанию false).
+     * FIELDS/INDEXES/POSTINGS наследуются всегда и на любой глубине (кроме явного
+     * to_inherit:false) — и остаются в self тоже.
      */
     static separateInheritData(data, dflt = false) {
         const nonEmpty = (v) => Array.isArray(v) ? v.length > 0
             : (v && (typeof v !== 'object' || Object.keys(v).length > 0));
+        // схема и правила (FIELDS/INDEXES/POSTINGS) наследуются однотипными потомками
+        // всегда и на любой глубине — кроме явного to_inherit:false; остаются и в self
+        const schemaChild = (key) => dflt === true || (key === 'FIELDS' || key === 'INDEXES' || key === 'POSTINGS');
         if (Array.isArray(data)) {
             const selfData = [];
             const inheritData = [];
@@ -449,7 +463,6 @@ export class $class extends $folder{
             const selfData = {};
             const inheritData = {};
             let hasInherit = false;
-            const schemaKeys = dflt === 'schema' ? new Set(['FIELDS', 'INDEXES', 'POSTINGS']) : null;
             for (const key of Object.keys(data)) {
                 const desc = Object.getOwnPropertyDescriptor(data, key);
                 if (desc.get || desc.set) {
@@ -461,7 +474,7 @@ export class $class extends $folder{
                     selfData[key] = value;
                     continue;
                 }
-                const childDflt = dflt === true || schemaKeys?.has(key) ? true : false;
+                const childDflt = schemaChild(key);
                 const [selfValue, inheritValue, valueHasInherit] = this.separateInheritData(value, childDflt);
                 if (value?.to_inherit === true || dflt === true) {
                     inheritData[key] = value;
@@ -909,6 +922,45 @@ export class $class extends $folder{
         };
         sort(roots);
         return roots;
+    }
+    /** Файл местных расширений виртуального справочника ({registryId: {...}}). */
+    _overlayFile() {
+        return path.join(this.meta_folder.dir, 'overlay.json');
+    }
+    /**
+     * Прочитать местные расширения виртуального справочника.
+     * @returns {Promise<Record<string, object>>}
+     */
+    async overlay_read(params = {}) {
+        if (this.type !== '$virtual')
+            throw new Error('overlay_read: только $virtual');
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        try {
+            const doc = JSON.parse(await fsp.readFile(this._overlayFile(), 'utf-8'));
+            return doc && typeof doc === 'object' ? doc : {};
+        }
+        catch { return {}; }
+    }
+    /**
+     * Записать местные расширения объекта ({id, fields}).
+     * @param {object} [params]
+     * @param {object} [post] {id, fields}
+     */
+    async overlay_write(params = {}, post) {
+        if (this.type !== '$virtual')
+            throw new Error('overlay_write: только $virtual');
+        await this._assertDataWrite(params);
+        const patch = this._readDataBody(post ?? params.post);
+        const id = String(patch?.id || '').trim();
+        const fields = patch?.fields;
+        if (!id || !fields || typeof fields !== 'object' || Array.isArray(fields))
+            throw new Error('overlay_write: нужно {id, fields}');
+        const saved = await _lockedJson(this._overlayFile(), (doc) => {
+            doc = (doc && typeof doc === 'object') ? doc : {};
+            doc[id] = { ...(doc[id] || {}), ...fields };
+            return doc;
+        });
+        return { id, fields: saved[id] };
     }
     /**
      * Право писать объекты точки (create/update/delete): системная сессия

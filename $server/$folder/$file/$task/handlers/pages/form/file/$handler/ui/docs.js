@@ -1,13 +1,41 @@
 /**
  * Проекции ленты для доков и контекста (чистые функции, без DOM):
- *   collectDocs(items)  — полезные результаты работы: файлы (записанные/изменённые/картинки/навыки),
- *                          отчёты субагентов, развёрнутые ответы-сводки;
+ *   collectDocs(items)  — файлы (записанные/изменённые/картинки/навыки,
+ *                          вложения через call → save_files) и отчёты субагентов.
+ *                          Реплики агента доками не становятся: они уже видны в чате.
  *   computeStats(body)  — статистика сессии для вкладки «Контекст».
+ *   stableDocs(prev, list) — та же выборка без промаргивания: объекты доков переиспользуются,
+ *                          ссылка на массив сохраняется, пока набор ключей не изменился.
+ *   activityOf(...) — чем занят агент прямо сейчас (для строки состояния вместо «Работаю…»).
  */
+import { toolMeta } from './util.js';
+
+/** Тишина дольше — считаем зависшим ожиданием. */
+export const ACTIVITY_STALL_S = 120;
+let callSnapshots;
+let snapshotName;
+try {
+    // Абсолютный WORK-путь: работает и из прямого пути файла, и из ~ наследника задачи.
+    ({ callSnapshots, snapshotName } = await import('/sources/modules/agent/util.js'));
+}
+catch {
+    // Локальные тесты/старые маршруты без абсолютных WORK-путей.
+    ({ callSnapshots, snapshotName } = await import('../../../../../../../../../../sources/modules/agent/util.js'));
+}
 
 const FILE_TOOLS = { write: 'carbon:document-add', append: 'carbon:document-add', edit: 'carbon:edit', write_table: 'carbon:table', generate_image: 'carbon:image', save_skill: 'carbon:skill-level' };
-const REPORT_MIN = 700;
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
+const VIDEO_EXT = new Set(['mp4', 'webm']);
 
+/** Иконка дока по расширению снимка. */
+function extIcon(snapshot) {
+    const ext = String(snapshot || '').split('.').pop().toLowerCase();
+    if (VIDEO_EXT.has(ext))
+        return 'carbon:video';
+    if (IMAGE_EXT.has(ext))
+        return 'carbon:image';
+    return 'carbon:document';
+}
 function basename(p) {
     return String(p || '').split('/').pop() || String(p || '');
 }
@@ -19,14 +47,6 @@ function plainTitle(text, max = 48) {
     if (t.length > max)
         t = t.slice(0, max - 1) + '…';
     return t || 'Документ';
-}
-
-/** Ответ — документ: длинный или структурированный (заголовки, таблица). */
-export function isReport(text) {
-    const s = String(text || '');
-    if (s.length >= REPORT_MIN)
-        return true;
-    return s.length >= 300 && (/^\s{0,3}#{1,3}\s/m.test(s) || /^\|.+\|\s*$/m.test(s));
 }
 
 export function collectDocs(items, published) {
@@ -43,13 +63,10 @@ export function collectDocs(items, published) {
         docs.push(d);
     };
     const walkFiles = (list, nested) => {
-        const artifacts = new Map();
         for (const it of list || []) {
             if (it?.type !== 'assistant')
                 continue;
             for (const t of it.tools || []) {
-                if (t.status === 'ok' && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
-                    artifacts.set(t.path, t.snapshot || null);
                 if (FILE_TOOLS[t.name] && t.status === 'ok' && t.path) {
                     const snapshot = t.snapshot;
                     put({ key: 'file:' + (snapshot || t.id), kind: snapshot ? 'file' : 'text',
@@ -57,17 +74,62 @@ export function collectDocs(items, published) {
                         title: basename(t.path), icon: FILE_TOOLS[t.name], time: it.time, source: t.id,
                         ...(snapshot && pub.has(snapshot) ? { published: true } : {}) });
                 }
+                // вложения, сохранённые через call → save_files (путь — только в includes результата)
+                if (t?.status === 'ok' && t?.name === 'call') {
+                    for (const snapshot of callSnapshots(t)) {
+                        put({ key: 'file:' + snapshot, kind: 'file', path: snapshot,
+                            title: snapshotName(snapshot), icon: extIcon(snapshot), time: it.time, source: t.id,
+                            ...(pub.has(snapshot) ? { published: true } : {}) });
+                    }
+                }
                 if (t.name === 'task' && t.status === 'ok' && t.result && !nested)
                     put({ key: 'agent:' + t.id, kind: 'text', text: String(t.result), title: t.args?.description || plainTitle(t.result), icon: 'carbon:bot', time: it.time, source: t.id, subtitle: 'отчёт субагента ' + (t.agent || t.args?.agent || '') });
                 if (Array.isArray(t.items))
                     walkFiles(t.items, true);
             }
-            if (!nested && !it.error && isReport(it.content))
-                put({ key: 'reply:' + it.id, kind: 'text', text: String(it.content), artifacts: new Map(artifacts), title: plainTitle(it.content), icon: 'carbon:document', time: it.time, source: it.id, subtitle: 'ответ агента' });
         }
     };
     walkFiles(items, false);
     return docs;
+}
+
+/**
+ * Стабилизация доков между обновлениями ленты: каждый _reload собирает новые объекты,
+ * из-за чего вкладки и iframe/video пересоздаются и моргают. Переиспользуем прежние
+ * объекты по key (поля обновляем на месте); ссылку на массив держим, пока набор не изменился.
+ * @returns {{ docs: Array, changed: boolean }}
+ */
+export function stableDocs(prev, list) {
+    const prevMap = new Map((prev || []).map(d => [d?.key, d]));
+    const out = (list || []).map(d => {
+        const cur = d?.key != null ? prevMap.get(d.key) : null;
+        return cur ? Object.assign(cur, d) : d;
+    });
+    const same = Array.isArray(prev) && prev.length === out.length && prev.every((d, i) => d === out[i]);
+    return { docs: same ? prev : out, changed: !same };
+}
+
+/**
+ * Чем занят агент: текст строки состояния. null — виден текст с кареткой или задача не running.
+ */
+export function activityOf({ status, items, streams, nowMs, lastDeltaMs } = {}) {
+    if (status !== 'running')
+        return null;
+    const last = Array.isArray(items) ? items[items.length - 1] : null;
+    const s = last && streams ? streams[last.id] : null;
+    if (String(s?.content || '').trim())
+        return null;
+    const tool = last?.tools?.find(t => t?.status === 'running' || t?.status === 'pending');
+    if (tool)
+        return { kind: 'tool', text: 'Выполняю: ' + (toolMeta(tool.name)?.label || tool.name) + '…' };
+    const now = Number(nowMs) || Date.now();
+    const elapsed = Math.max(0, Math.round((now - (Number(lastDeltaMs) || now)) / 1000));
+    const ago = elapsed > 5 ? ' ' + elapsed + ' с' : '';
+    if (elapsed >= ACTIVITY_STALL_S)
+        return { kind: 'stalled', text: 'Нет ответа уже ' + elapsed + ' с — если зависло, остановите (Esc) и напишите «продолжай»' };
+    if (String(s?.reasoning || '').trim())
+        return { kind: 'think', text: 'Думаю…' + ago };
+    return { kind: 'wait', text: 'Жду ответ…' + ago };
 }
 
 function est(text) {

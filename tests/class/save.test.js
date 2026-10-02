@@ -122,11 +122,13 @@ describe('$class.separateInheritData', () => {
         assert.equal(selfFields[3].to_inherit, false);
 
         const inheritFields = inherit_data.METADATA.FIELDS;
-        assert.equal(inheritFields.length, 2);
-        assert.equal(inheritFields[0].id, 'f3');
-        assert.equal(inheritFields[0].fields[0].id, 'f31');
-        assert.equal(inheritFields[1].id, 'f5');
-        assert.equal(inheritFields[1].to_inherit, true);
+        assert.equal(inheritFields.length, 4);
+        assert.equal(inheritFields[0].id, 'f1');
+        assert.equal(inheritFields[1].id, 'f2');
+        assert.equal(inheritFields[2].id, 'f3');
+        assert.equal(inheritFields[2].fields[0].id, 'f31');
+        assert.equal(inheritFields[3].id, 'f5');
+        assert.equal(inheritFields[3].to_inherit, true);
     });
 
     it('puts to_inherit fields into inherit part', () => {

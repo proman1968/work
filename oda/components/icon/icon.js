@@ -121,6 +121,11 @@ ODA({is: 'oda-icon',
         subDefault: '',
         subIconColor: ''
     },
+    /** одна динамическая роль темы (имя mixin'а styles.js: accent, info-invert, error, …) */
+    colorMode: {
+        $def: '',
+        $attr: true
+    },
     _index: 0,
     get _icons_list() {
         return [this.icon, ...this.iconsList,  this.default]
@@ -166,7 +171,7 @@ ODA({is: 'oda-icon',
             case null:
                 let path = this._icon.name;
                 if(!path.includes('.'))
-                    path = path[0] + '.png';
+                    path += '.png';
                 if(!path.includes('/'))
                     path = `/oda/tools/icons/lib/png/${path}`;
                 return path;
@@ -234,16 +239,5 @@ ODA({is: 'oda-icon',
             style.transform = `rotate(${this.rotate + this._icon.rotation}deg)`;
         }
         return style;
-    },
-    get image() {
-        if (!this._icon) return;
-        if (this._icon.lib?.startsWith('@')) {
-            const text = this.$('.icon');
-            return WORK.renderText(text, this.iconColor);
-        }
-        const svg = this.$('svg');
-        if (svg) {
-            return WORK.renderSVG(svg);
-        }
     }
 });
