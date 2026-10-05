@@ -287,7 +287,7 @@ async function ensureBootstrapAdmin(uid, params = {}) {
     await WORK.init;
     const data = await WORK.DATA;
     data['#security'] ??= {};
-    for (const k of ['ADMINS', 'BOSSES', 'USERS']) {
+    for (const k of ['ADMIN', 'BOSS', 'USER']) {
         data['#security'][k] ??= [];
         data['#security'][k].add(uid);
     }

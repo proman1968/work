@@ -1,5 +1,32 @@
 import { $item } from '../core.js';
 
+/**
+ * Эффективная роль точки: предпочитаемая, если доступна (включая USER
+ * для просмотра); иначе ближайшая к ней по порядку, при равной
+ * удалённости — более слабая; без предпочтения — сильнейшая из своих.
+ * @param {string[]} mine Свои роли в точке
+ * @param {string[]} order Порядок ролей точки
+ * @param {string} preferred Предпочитаемая роль приложения
+ * @returns {string} Роль или 'GUEST'
+ */
+export function effectiveRole(mine = [], order = [], preferred = '') {
+    mine = Array.isArray(mine) ? [...new Set(mine)] : [];
+    if (!mine.length)
+        return 'GUEST';
+    const selectable = mine.includes('USER') ? mine : [...mine, 'USER'];
+    if (preferred && selectable.includes(preferred))
+        return preferred;
+    const rank = r => {
+        const i = order.indexOf(r);
+        return i < 0 ? order.length : i;
+    };
+    if (!preferred)
+        return mine.slice().sort((a, b) => rank(a) - rank(b))[0];
+    const pr = rank(preferred);
+    return mine.slice().sort((a, b) =>
+        (Math.abs(rank(a) - pr) - Math.abs(rank(b) - pr)) || (rank(b) - rank(a)))[0];
+}
+
 export class $folder extends $item {
     __version = 0;
     increaseVersion() {
@@ -52,16 +79,52 @@ export class $folder extends $item {
             },
             role: {
                 $def: '',
-                $save: true,
-                set(role) {
-                    const colors = { ADMIN: 'darkred', BOSS: 'blue', USER: 'indigo', GUEST: 'teal' };
-                    document.documentElement?.style?.setProperty('--main-color', colors[role] || 'indigo');
-                }
             },
         }
     }
     get url() {
         return encodeURI(globalThis.location?.origin + this.short);
+    }
+    /**
+     * Роли пользователя в точке (сервер). Кэш сбрасывается в reset().
+     * @returns {Promise<string[]>} Роли без дубликатов
+     */
+    get myRoles() {
+        return this._myRoles ??= Promise.resolve(this.fetch('roles'))
+            .then(roles => Array.isArray(roles) ? [...new Set(roles)] : [])
+            .catch(() => []);
+    }
+    /** Порядок ролей точки для выбора ближайшей (ключи declared_roles). */
+    get roleOrder() {
+        return this._roleOrder ??= Promise.resolve(this.fetch('declared_roles'))
+            .then(d => (d && typeof d === 'object' ? Object.keys(d) : ['ADMIN', 'BOSS', 'USER', 'GUEST']))
+            .catch(() => ['ADMIN', 'BOSS', 'USER', 'GUEST']);
+    }
+    /**
+     * Роли для переключателя: свои + USER, чтобы смотреть глазами исполнителя.
+     * @returns {Promise<string[]>}
+     */
+    get selectableRoles() {
+        return Promise.all([this.myRoles]).then(([mine]) =>
+            mine.includes('USER') ? mine : [...mine, 'USER']);
+    }
+    /**
+     * Эффективная роль точки: предпочитаемая (если доступна здесь),
+     * иначе ближайшая по порядку; без предпочтения — сильнейшая.
+     */
+    async syncRole() {
+        const mine = await this.myRoles;
+        const order = await this.roleOrder;
+        const next = effectiveRole(mine, order, WORK.preferredRole);
+        if (this.role !== next)
+            this.role = next;
+        return this.role;
+    }
+    /** Заполнить роль, если пустая (перед запросами, зависящими от роли). */
+    async ensureRole() {
+        if (!this.role)
+            await this.syncRole();
+        return this.role;
     }
     get open_url() {
         return new URL(this.url + '/~/handlers//' + this.page + '/index.html').href;
@@ -106,6 +169,8 @@ export class $folder extends $item {
         return null;
     }
     reset() {
+        this._myRoles = undefined;
+        this._roleOrder = undefined;
         if (this.path)
             this.fetch('reset');
         else {

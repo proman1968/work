@@ -20,7 +20,6 @@ ODA({
                 max-height: {{height === undefined ? '100% !important' : height + 'px'}};
                 padding: 0;
                 overflow: hidden;
-                border-radius: var(--radius-m);
                 box-shadow: var(--elevation-3);
                 @apply --vertical;
                 {{left < 0 ? '' : 'left:' + left + 'px;'}}

@@ -30,7 +30,7 @@ function copy(rel) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-filetypes-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     copy('$server/$folder/$file/$data/class.js');
@@ -39,7 +39,7 @@ before(async () => {
     copy('$server/$folder/$file/$eml/class.js');
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USERS: ['${USER1}'] } }`);
+    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${USER1}'] } }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });

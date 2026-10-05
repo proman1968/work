@@ -142,7 +142,6 @@ ODA({is: 'oda-tree-node',
                 overflow: hidden;
                 top: 0px;
                 position: sticky;
-                border-radius: var(--radius-s);
             }
             .node:hover {
                 background: var(--accent-soft);

@@ -1,7 +1,7 @@
 export default {
     label: "С расчётного счёта",
     "#security": {
-        USERS: ["CA4E097FF6C1D387"]
+        USER: ["CA4E097FF6C1D387"]
     },
     METADATA: {
         FIELDS: [{

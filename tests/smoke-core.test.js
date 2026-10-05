@@ -301,7 +301,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members({role}) читает #security, без role — дедуплицированные все', async () => {
         write('USERS/u1/$user/class.js', `export default { label: 'U1' }`);
         write('MBOX/$class/class.js',
-            `export default { label: 'MBOX', '#security': { ADMINS: ['u1'], USERS: ['u1'] } }`);
+            `export default { label: 'MBOX', '#security': { ADMIN: ['u1'], USER: ['u1'] } }`);
         WORK.reset();
 
         const mbox = await WORK.get_item('/MBOX');
@@ -325,7 +325,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members по массивам ADMINS/BOSSES, без role — все роли', async () => {
         write('USERS/u2/$user/class.js', `export default { label: 'U2' }`);
         write('MBOX2/$class/class.js',
-            `export default { label: 'MBOX2', '#security': { ADMINS: ['u1', 'u2'], BOSSES: ['u1'], USERS: ['u2'] } }`);
+            `export default { label: 'MBOX2', '#security': { ADMIN: ['u1', 'u2'], BOSS: ['u1'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
@@ -340,7 +340,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
     it('USERS:["GUEST"] — открытый доступ, литерал не резолвится в пользователя', async () => {
         write('MBOX3/$class/class.js',
-            `export default { label: 'MBOX3', '#security': { USERS: ['GUEST'] } }`);
+            `export default { label: 'MBOX3', '#security': { USER: ['GUEST'] } }`);
         WORK.reset();
 
         const mbox3 = await WORK.get_item('/MBOX3');
@@ -352,9 +352,9 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
     it('admins/bosses — локальные, allAdmins/allBosses — с наследованием', async () => {
         write('ORG/$class/class.js',
-            `export default { label: 'ORG', '#security': { ADMINS: ['u1'], BOSSES: ['u1'] } }`);
+            `export default { label: 'ORG', '#security': { ADMIN: ['u1'], BOSS: ['u1'] } }`);
         write('ORG/DEPT/$class/class.js',
-            `export default { label: 'DEPT', '#security': { ADMINS: ['u2'], BOSSES: ['u2'], USERS: ['u2'] } }`);
+            `export default { label: 'DEPT', '#security': { ADMIN: ['u2'], BOSS: ['u2'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
@@ -399,7 +399,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
         write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
         write('GUESTBOX/$class/class.js',
-            `export default { label: 'GUESTBOX', '#security': { GUESTS: ['u3'] } }`);
+            `export default { label: 'GUESTBOX', '#security': { GUEST: ['u3'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 

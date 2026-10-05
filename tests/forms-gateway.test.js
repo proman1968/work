@@ -28,13 +28,13 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-gw-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USER: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
     process.chdir(tmp);

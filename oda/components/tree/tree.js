@@ -334,7 +334,6 @@ ODA({is: 'oda-tree-item',
                 overflow: hidden;
                 top: 0px;
                 position: sticky;
-                border-radius: var(--radius-s);
                 border-bottom: {{columns.length?'1px solid var(--header-background)':'none'}};
             }
             .row:hover {

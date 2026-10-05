@@ -26,12 +26,12 @@ function copy(rel) {
     write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
 }
 
-const SEC = `'#security': { USERS: ['${USER1}'] }`;
+const SEC = `'#security': { USER: ['${USER1}'] }`;
 
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-acc-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);

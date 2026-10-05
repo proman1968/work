@@ -25,12 +25,12 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-flags-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     for (const uid of [ADMIN, BOSS, USER1, USER2])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${uid}' }`);
-    write('WITH/$class/class.js', `export default { label: 'С описанием', '#security': { BOSSES: ['${BOSS}'], USERS: ['${USER1}', '${USER2}', 'GUEST'] } }`);
+    write('WITH/$class/class.js', `export default { label: 'С описанием', '#security': { BOSS: ['${BOSS}'], USER: ['${USER1}', '${USER2}', 'GUEST'] } }`);
     write('WITH/$class/readme.md', '# описание');
     write('WITHOUT/$class/class.js', `export default { label: 'Без описания' }`);
     write('PLAIN/doc/readme.MD', '# в папке');

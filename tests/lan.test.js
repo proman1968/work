@@ -41,13 +41,13 @@ before(async () => {
     await fsp.mkdir(tempRoot, { recursive: true });
     tmp = await fsp.mkdtemp(path.join(tempRoot, 'lan-test-'));
     write('#system/os.json', JSON.stringify(cfg));
-    write('$server/class.js', `export default { '#security': { ADMINS: ['admin'] } }`);
+    write('$server/class.js', `export default { '#security': { ADMIN: ['admin'] } }`);
     write('$server/$folder/class.js', 'export default {}');
     write('$server/$folder/$class/class.js', 'export default {}');
     write('$server/$folder/$class/$service/class.js', 'export default {}');
     write('$server/$folder/$file/class.js', 'export default {}');
     write('SERVICES/$service/class.js', 'export default {}');
-    write('TARGET/$class/class.js', `export default { '#security': { USERS: ['worker'] } }`);
+    write('TARGET/$class/class.js', `export default { '#security': { USER: ['worker'] } }`);
     process.chdir(tmp); globalThis.WORK = new $server();
     server = http.createServer(async (req, res) => {
         const chunks = []; for await (const c of req) chunks.push(c);

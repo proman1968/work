@@ -78,7 +78,7 @@ export default {
         <div class="error" ~if="error">{{error}}</div>
         <div class="bar">
             <oda-button icon="editor:save" @tap="save">Сохранить</oda-button>
-            <oda-button icon="icons:delete" @tap="remove">Удалить</oda-button>
+            <oda-button icon="icons:delete" @tap="removeObject">Удалить</oda-button>
             <oda-button ~if="hasPostings" @tap="post">Провести</oda-button>
             <oda-button ~if="hasPostings && editing?.posted" @tap="unpost">Отменить</oda-button>
         </div>
@@ -201,7 +201,8 @@ export default {
             this.error = String(e?.message || e);
         }
     },
-    async remove() {
+    /** Удалить редактируемый объект (имя не remove — не затенять Element.remove). */
+    async removeObject() {
         if (!this.editing?.id)
             return;
         this.error = '';

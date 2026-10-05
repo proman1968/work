@@ -30,15 +30,15 @@ const FIELDS = `METADATA: { FIELDS: [
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-dataobj-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель'], [GUEST1, 'Гость']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USERS: ['${USER1}'] }, ${FIELDS} }`);
-    write('PARENT/$class/class.js', `export default { label: 'Родитель', '#security': { USERS: ['${USER1}'] }, ${FIELDS} }`);
-    write('PARENT/CHILD/$class/class.js', `export default { label: 'Ребёнок', '#security': { USERS: ['${USER1}'] }, ${FIELDS} }`);
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USER: ['${USER1}'] }, ${FIELDS} }`);
+    write('PARENT/$class/class.js', `export default { label: 'Родитель', '#security': { USER: ['${USER1}'] }, ${FIELDS} }`);
+    write('PARENT/CHILD/$class/class.js', `export default { label: 'Ребёнок', '#security': { USER: ['${USER1}'] }, ${FIELDS} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });

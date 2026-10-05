@@ -524,7 +524,7 @@ export const workTools = [
             for (const [id, role] of Object.entries(declared)) {
                 const local = point._roleIds(id, declared).filter(u => u !== 'GUEST');
                 const inherited = [];
-                if (role.scope === 'subtree')
+                if (POLICY.isSystemRole(id))
                     for (let p = point.$parent; p; p = p.$parent)
                         if (p instanceof FS.$class) {
                             await p.init;
@@ -533,14 +533,14 @@ export const workTools = [
                                 inherited.push(...p._roleIds(id, pd).map(u => u + ' (из ' + (p.path || '/') + ')'));
                         }
                 rows.push({
-                    role: id, label: role.label, scope: role.scope, feed: role.feed, write: role.write,
+                    role: id, label: role.label, system: POLICY.isSystemRole(id),
                     principals: role.principals,
                     read: POLICY.canRead(role, area, { logsContainer: !(target instanceof FS.$file) }),
                     change: POLICY.canWrite(role, area, { local: true, executable: POLICY.isExecutablePath(target.path, point.path) }),
                     assigned: local, inherited,
                 });
             }
-            const open = (point.DATA?.['#security']?.USERS || []).includes('GUEST');
+            const open = (point.DATA?.['#security']?.USER || []).includes('GUEST');
             return JSON.stringify({
                 path: target.path, point: point.path || '/', area,
                 openToAll: open || undefined,
@@ -595,10 +595,10 @@ export const workTools = [
             const data = text ? (await FS.$class.importScript(String(text))) || {} : {};
             const copy = { ...data };
             const sec = { ...(copy['#security'] || {}) };
-            const list = new Set([...(sec[role.key] || [])].filter(u => !remove.has(u)));
+            const list = new Set([...(sec[role.id] || [])].filter(u => !remove.has(u)));
             for (const u of add)
                 list.add(u);
-            sec[role.key] = [...list];
+            sec[role.id] = [...list];
             copy['#security'] = sec;
             await callAs(cls.meta_folder, 'save_file', {
                 filename: 'class.js',
@@ -606,7 +606,7 @@ export const workTools = [
                 message: 'роль ' + role.id + ': ' + [add.length ? '+' + add.join(',') : '', remove.size ? '−' + [...remove].join(',') : ''].filter(Boolean).join(' '),
             }, ctx, 'ADMIN');
             cls.reset();
-            return 'роль ' + role.id + ' в ' + cls.path + ': ' + (sec[role.key].join(', ') || 'никого');
+            return 'роль ' + role.id + ' в ' + cls.path + ': ' + (sec[role.id].join(', ') || 'никого');
         },
     },
     {

@@ -29,14 +29,14 @@ const FIELDS = `METADATA: { FIELDS: [{ id: 'name', required: true }] }`;
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-linktree-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Продавец'], [NOBODY, 'Чужой']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
     write('BASE/direction/sales/$group/class.js', `export default { label: 'Продажи',
-        '#security': { USERS: ['${USER1}'] },
+        '#security': { USER: ['${USER1}'] },
         LINKS: [
             { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
             { id: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },

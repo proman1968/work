@@ -113,10 +113,8 @@ export async function linkLevel(cls, params = {}) {
         const roles = await g.roles(params).catch(() => []);
         if (roles.includes('ADMIN'))
             best = takeRank(best, access === 'write' ? 'admin' : 'read');
-        else if (roles.includes('USER'))
-            best = takeRank(best, access);
         else if (roles.length)
-            best = takeRank(best, 'read');
+            best = takeRank(best, access);
     }
     return best;
 }
@@ -135,9 +133,9 @@ export async function dataAccess(cls, params = {}) {
             const d = declared[r];
             if (!d)
                 continue;
-            if (d.write === 'all')
+            if (r === 'ADMIN')
                 best = takeRank(best, 'admin');
-            else if (r === 'USER' && cls._roleIds(r, declared).includes(uid))
+            else if (r !== 'BOSS' && cls._roleIds(r, declared).includes(uid))
                 best = takeRank(best, 'write');
             else
                 best = takeRank(best, 'read');

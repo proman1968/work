@@ -24,21 +24,21 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-link-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USERS: ['${USER1}'] } }`);
-    write('DATA/CATALOGS/ITEMS/$class/class.js', `export default { label: 'Товары', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники', '#security': { USER: ['${USER1}'] } }`);
+    write('DATA/CATALOGS/ITEMS/$class/class.js', `export default { label: 'Товары', '#security': { USER: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
-    write('DATA/CATALOGS/TREE/$class/class.js', `export default { label: 'Дерево', '#security': { USERS: ['${USER1}'] } }`);
-    write('DATA/CATALOGS/TREE/SUB/$class/class.js', `export default { label: 'Ветка', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/CATALOGS/TREE/$class/class.js', `export default { label: 'Дерево', '#security': { USER: ['${USER1}'] } }`);
+    write('DATA/CATALOGS/TREE/SUB/$class/class.js', `export default { label: 'Ветка', '#security': { USER: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
     ] } }`);
-    write('DATA/OPERATIONS/$class/class.js', `export default { label: 'Операции', '#security': { USERS: ['${USER1}'] }, METADATA: { FIELDS: [
+    write('DATA/OPERATIONS/$class/class.js', `export default { label: 'Операции', '#security': { USER: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp' },
         { id: 'ref', type: 'Link', catalog: '/DATA/CATALOGS/ITEMS', label: 'Ссылка' },
         { id: 'sub', type: 'Link', catalog: '/DATA/CATALOGS/TREE', label: 'Ветка' },

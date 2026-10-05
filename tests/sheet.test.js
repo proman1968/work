@@ -37,14 +37,14 @@ const rule = (debit, credit) => `METADATA: {
     POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '${debit}' }, credit: { account: '${credit}' } }],
 }`;
 const INDEX = `METADATA: { INDEXES: [{ id: 'turnover', kind: 'turnover', by: [], measures: { debit: 'sum', credit: 'sum' } }] }`;
-const acc = (label, extra = '') => `export default { label: '${label}', '#security': { USERS: ['${USER1}'] }${extra ? ', ' + extra : ''} }`;
+const acc = (label, extra = '') => `export default { label: '${label}', '#security': { USER: ['${USER1}'] }${extra ? ', ' + extra : ''} }`;
 
 const row = (res, p) => res.rows.find(r => r.path === p);
 
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-sheet-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
@@ -70,7 +70,7 @@ before(async () => {
         ['SALE2', 'Продажа 2', '/DATA/REGISTER/62/02', '/DATA/REGISTER/90'],
         ['PAY', 'Оплата', '/DATA/REGISTER/51', '/DATA/REGISTER/62/01'],
     ])
-        await ops.create({ id, type: '$operation', post: `export default { label: '${label}', '#security': { USERS: ['${USER1}'] }, ${rule(d, c)} }`, ...admin });
+        await ops.create({ id, type: '$operation', post: `export default { label: '${label}', '#security': { USER: ['${USER1}'] }, ${rule(d, c)} }`, ...admin });
     const make = async (op, name, sum, day) => {
         const cls = await WORK.get_item('/DATA/OPERATIONS/' + op);
         const o = await cls.create_object({ filename: name + '.data', post: { name, sum, time: at(day) }, ...as(USER1) });

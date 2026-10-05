@@ -39,7 +39,7 @@ const SALE = `METADATA: {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-journal-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
@@ -54,10 +54,10 @@ before(async () => {
     globalThis.WORK = new $server();
     const reg = await WORK.get_item('/DATA/REGISTER');
     const admin = as(ADMIN);
-    await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', '#security': { USERS: ['${USER1}'] } }`, ...admin });
-    await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', '#security': { USERS: ['${USER1}'] } }`, ...admin });
+    await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', '#security': { USER: ['${USER1}'] } }`, ...admin });
+    await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', '#security': { USER: ['${USER1}'] } }`, ...admin });
     const ops = await WORK.get_item('/DATA/OPERATIONS');
-    await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USERS: ['${USER1}'] }, ${SALE} }`, ...admin });
+    await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USER: ['${USER1}'] }, ${SALE} }`, ...admin });
     const sale = await WORK.get_item('/DATA/OPERATIONS/SALE');
     const o1 = await sale.create_object({ filename: 's1.data', post: { name: 'Счёт 1', sum: 1000 }, ...as(USER1) });
     await sale.post({ id: o1.id, ...as(USER1) });

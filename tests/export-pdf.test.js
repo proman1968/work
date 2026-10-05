@@ -35,7 +35,7 @@ before(async () => {
     for (const rel of ['$server/$folder/$file/$data/class.js', '$server/$folder/$file/$logs/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
     write(`USERS/${IVAN}/$user/class.js`, `export default { label: 'Иванов Иван' }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USERS: ['${IVAN}'] } }`);
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USER: ['${IVAN}'] } }`);
     write('ORG/doc/note.md', 'заметка');
     process.chdir(tmp);
     globalThis.WORK = new $server();

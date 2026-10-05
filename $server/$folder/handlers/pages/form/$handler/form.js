@@ -40,7 +40,6 @@ export default {
             }
             #tools {
                 gap: 4px;
-                padding: 4px;
                 overflow-x: auto;
             }
             #tools oda-button {
@@ -72,13 +71,9 @@ ODA({is: 'work-form',
             }
         </style>
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
-            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px;">
+            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
-                <item-node-explorer no-flex :$item></item-node-explorer>
-                <oda-button content ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size @tap="nextRole"
-                    style="font-size: xx-small; border-radius: 4px; padding: 0px 4px;"
-                    center icon-pos="top"
-                ></oda-button>
+                <item-node-explorer no-flex :$item show-role></item-node-explorer>
                 <div flex></div>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
@@ -286,77 +281,55 @@ ODA({is: 'work-form',
                 const $class = await this.$item?.$class;
                 this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
 
-                if (!this.activeRole) {
-                    const roles = await this.roles;
-                    this.activeRole = roles[0] || 'GUEST';
-                }
-                n.role = this.activeRole;
+                await n.ensureRole?.();
                 const view_name = this.host.default_view || this.host.view_name || n?.form;
                 this.view ||= await this.resolveView(view_name);
             }
         }
     },
     focusedItem: null,
-    get roleIcon() {
-        return this.getRoleIcon(this.activeRole);
+    /** Роль формы — эффективная роль элемента (общая предпочитаемая + доступность). */
+    get activeRole() {
+        return this.$item?.role || '';
     },
-    get roles() {
-        return this.$item?.fetch('roles').then(roles => {
-            roles.add('USER');
-            return roles;
-        });
+    /** Роль для $observers: читает $item.role, меняется вместе с ней. */
+    get itemRole() {
+        return this.$item?.role;
     },
-    get showRoleSelector() {
-        return Promise.resolve(this.roles).then(roles =>
-            Array.isArray(roles) && roles.length > 1
-        );
-    },
-    async getRoleIcon(role) {
-        return ({
-            ADMIN: 'fontawesome:s-user-shield',
-            BOSS: 'fontawesome:s-user-tie',
-            USER: 'fontawesome:s-user-pen',
-        })[await role]
-    },
-    get _savePath() {
-        return
-    },
-    activeRole: {
-        $save: true,
-        get() {
-            return;
-        },
-        set(role) {
-            if (this.$item) {
-                this.$item.role = role;
-                // Сброс кэша класса для актуализации данных по новой роли
-                this.$item.reset?.();
-                // Сброс кэша представлений — каждое пересоздаётся заново,
-                // чтобы перезагрузить логи и данные по новой роли
-                for (const id in this.controls) {
-                    const el = this.controls[id];
-                    if (el?.isConnected)
-                        el.remove();
-                }
-                this.controls = {};
-                this.view_control = undefined;
-                // formViews пересчитается сам (зависимость от activeRole).
-                // Открытое представление — перепроверить на сервере: недоступное
-                // при новой роли заменится через resolveView. Пересоздание — в
-                // async: сеттер отрабатывает до reset_deps, кэши ещё старые.
-                if (this.view) {
-                    const id = this.view.id;
-                    this.view = undefined;
-                    this.async(async () => { this.view = await this.resolveView(id); });
-                }
+    $observers: {
+        // смена роли (из формы, меню или другого окна): цвет страницы,
+        // сброс кэша класса, пересоздание представлений и перепроверка вида
+        async _roleChanged(itemRole) {
+            if (!this.$item || !itemRole)
+                return;
+            try {
+                const declared = await this.$item.fetch('declared_roles');
+                const color = declared?.[itemRole]?.color || 'indigo';
+                document.documentElement?.style?.setProperty('--main-color', color);
+            } catch { /* цвет по умолчанию */ }
+            // Сброс кэша класса для актуализации данных по новой роли
+            this.$item.reset?.();
+            // Сброс кэша представлений — каждое пересоздаётся заново,
+            // чтобы перезагрузить логи и данные по новой роли
+            for (const id in this.controls) {
+                const el = this.controls[id];
+                // remove() не вызываем: представление может затенять его
+                // своим методом (как objects.remove — удаление объекта)
+                if (el?.isConnected)
+                    el.parentNode?.removeChild(el);
+            }
+            this.controls = {};
+            this.view_control = undefined;
+            // formViews пересчитается сам (зависимость от activeRole).
+            if (this.view) {
+                const id = this.view.id;
+                this.view = undefined;
+                this.view = await this.resolveView(id);
             }
         }
     },
-    async nextRole() {
-        const roles = await this.roles;
-        const act_role = await this.activeRole;
-        let idx = roles.indexOf(act_role);
-        this.activeRole = roles[idx + 1] || roles[0];
+    get _savePath() {
+        return
     },
     modal: false,
     dialog: false,

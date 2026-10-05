@@ -34,16 +34,16 @@ const SCHEMA = `METADATA: { FIELDS: [
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-index-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('INV/$class/class.js', `export default { label: 'Склад', '#security': { USERS: ['${USER1}'] }, ${SCHEMA} }`);
+    write('INV/$class/class.js', `export default { label: 'Склад', '#security': { USER: ['${USER1}'] }, ${SCHEMA} }`);
     write('INV/$class/$folder/$class/class.js', `export default { ${SCHEMA} }`);
-    write('INV/SEC/$class/class.js', `export default { label: 'Секция', '#security': { USERS: ['${USER1}'] } }`);
-    write('LVL/$class/class.js', `export default { label: 'Уровень', '#security': { USERS: ['${USER1}'] }, ${SCHEMA} }`);
+    write('INV/SEC/$class/class.js', `export default { label: 'Секция', '#security': { USER: ['${USER1}'] } }`);
+    write('LVL/$class/class.js', `export default { label: 'Уровень', '#security': { USER: ['${USER1}'] }, ${SCHEMA} }`);
     write('LVL/$class/$folder/$class/class.js', `export default { ${SCHEMA} }`);
     write('LVL/EMPTY/$class/class.js', `export default { label: 'Пусто' }`);
     write('LVL/$class/DATA/2026-09-03/1788000000003.X.data', JSON.stringify({ name: 'Старый', time: 1788000000003, code: 'OLD', price: 7 }));

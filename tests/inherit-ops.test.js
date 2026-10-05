@@ -28,7 +28,7 @@ function copy(rel) {
     write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
 }
 
-const SEC = (uid) => `'#security': { USERS: ['${uid}'] }`;
+const SEC = (uid) => `'#security': { USER: ['${uid}'] }`;
 const cls = (label, fields, extra = '') => `export default { label: '${label}', ${SEC(USER1)},
     METADATA: { FIELDS: [${fields}] }${extra} }`;
 const dist = (fields) => `export default { METADATA: { FIELDS: [${fields}] } }`;
@@ -37,7 +37,7 @@ const NF = `{ id: 'name', required: true }, { id: 'time', type: 'timestamp' }`;
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-inhops-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);

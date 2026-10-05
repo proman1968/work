@@ -9,7 +9,10 @@
  *  - Область: имя объявленной роли → зона этой роли; `logs` → лента точки;
  *    `DATA` → объекты (пишет только API класса); `INDEX` → производные агрегаты;
  *    `#secret` / `#system` → секреты; всё остальное → система.
- *  - Роль определяет охват и права: scope (point|subtree), feed (own|point), write (zone|all).
+ *  - ADMIN меняет систему в точке назначения и ниже, читает секреты и все логи.
+ *  - BOSS видит систему и логи в точке назначения и ниже, систему не меняет.
+ *  - Остальные роли читают систему своей точки, пишут только в свою зону,
+ *    видят только собственные логи из личного кабинета.
  *  - Лента определяет, что пользователю показали (индекс лент — access/refs.js).
  */
 
@@ -31,26 +34,38 @@ export const AREA = Object.freeze({
 export const RESERVED_ZONE_NAMES = Object.freeze(['DATA', 'INDEX', 'logs']);
 
 /**
- * Базовые роли. Прикладные роли объявляются в `ROLES` class.js слоя типа/класса
- * и собираются по `~` вместе с остальным class.js.
- * key — поле назначений в `#security` (массив uid).
+ * Системные роли: ADMIN и BOSS. Поведение зашито в коде (canRead/canWrite):
+ * ADMIN — меняет систему в точке назначения и ниже, читает секреты и все логи;
+ * BOSS — видит систему и логи в точке назначения и ниже, систему не меняет.
+ * Остальные роли (USER, GUEST, CUSTOMER, …) объявляются в `ROLES` class.js
+ * слоя типа/класса и собираются по `~` вместе с остальным class.js:
+ * читают систему своей точки, пишут только в свою ролевую папку,
+ * видят только собственные логи из личного кабинета.
+ * Ключ назначений в `#security` — id роли (массив uid).
  */
 export const BASE_ROLES = Object.freeze({
-    ADMIN: Object.freeze({ id: 'ADMIN', key: 'ADMINS', label: 'Администратор', scope: 'subtree', feed: 'point', write: 'all', principals: Object.freeze(['user']) }),
-    BOSS: Object.freeze({ id: 'BOSS', key: 'BOSSES', label: 'Руководитель', scope: 'subtree', feed: 'point', write: 'zone', principals: Object.freeze(['user']) }),
-    USER: Object.freeze({ id: 'USER', key: 'USERS', label: 'Исполнитель', scope: 'point', feed: 'own', write: 'zone', principals: Object.freeze(['user', 'node']) }),
-    GUEST: Object.freeze({ id: 'GUEST', key: 'GUESTS', label: 'Гость', scope: 'point', feed: 'own', write: 'zone', principals: Object.freeze(['user', 'node']) }),
+    ADMIN: Object.freeze({ id: 'ADMIN', label: 'Администратор', icon: '', color: '', principals: Object.freeze(['user']) }),
+    BOSS: Object.freeze({ id: 'BOSS', label: 'Руководитель', icon: '', color: '', principals: Object.freeze(['user']) }),
+    USER: Object.freeze({ id: 'USER', label: 'Исполнитель', icon: '', color: '', principals: Object.freeze(['user', 'node']) }),
+    GUEST: Object.freeze({ id: 'GUEST', label: 'Гость', icon: '', color: '', principals: Object.freeze(['user', 'node']) }),
 });
+
+/** Системная ли роль (поведение из кода, а не из данных). */
+export function isSystemRole(id) {
+    return id === 'ADMIN' || id === 'BOSS';
+}
+
+/** Видит ли роль ленту точки целиком (иначе — только свои записи). */
+export function seesFullFeed(role) {
+    const id = role?.id;
+    return id === 'ADMIN' || id === 'BOSS' || id === 'OWNER';
+}
 
 /** Виды субъектов: пользователь этого сервера | узел сети WORK (другой сервер и его представители). */
 export const PRINCIPALS = Object.freeze(['user', 'node']);
 
-/** Порядок ролей «по силе»: базовые, затем прикладные в порядке объявления. */
+/** Порядок ролей «по силе»: ADMIN, BOSS, затем остальные в порядке объявления. */
 export const BASE_ORDER = Object.freeze(['ADMIN', 'BOSS', 'USER', 'GUEST']);
-
-const SCOPES = new Set(['point', 'subtree']);
-const FEEDS = new Set(['own', 'point']);
-const WRITES = new Set(['zone', 'all', 'none']);
 
 /** Имя роли — заглавные латиница/цифры/подчёркивание (совпадает с именем папки зоны). */
 export function isRoleId(id) {
@@ -58,14 +73,15 @@ export function isRoleId(id) {
 }
 
 /**
- * Нормализовать объявление ролей: базовые + ROLES из class.js.
- * Прикладная роль по умолчанию ведёт себя как USER.
+ * Нормализовать объявление ролей: скелет из BASE_ROLES + ROLES из class.js.
+ * В данных — только внешний вид (label, icon, color) и субъекты (principals);
+ * поведение системных ролей — в коде и данными не меняется.
  * @param {object} [declared] DATA.ROLES
- * @returns {Record<string, {id, key, label, scope, feed, write}>}
+ * @returns {Record<string, {id, label, icon, color, principals}>}
  */
 export function normalizeRoles(declared) {
     const out = Object.create(null);
-    for (const id of BASE_ORDER)
+    for (const id of Object.keys(BASE_ROLES))
         out[id] = BASE_ROLES[id];
     if (!declared || typeof declared !== 'object')
         return out;
@@ -74,21 +90,17 @@ export function normalizeRoles(declared) {
             continue;
         if (RESERVED_ZONE_NAMES.includes(id))
             continue;
-        const base = out[id] || { id, key: id + 'S', label: id, scope: 'point', feed: 'own', write: 'zone', principals: PRINCIPALS };
+        const base = out[id] || { id, label: id, icon: '', color: '', principals: PRINCIPALS };
         const r = typeof raw === 'object' ? raw : {};
-        let principals = Array.isArray(r.principals) ? r.principals.filter(p => PRINCIPALS.includes(p)) : base.principals;
-        // узел сети никогда не получает write=all
-        const write = WRITES.has(r.write) ? r.write : base.write;
-        if (write === 'all')
-            principals = principals.filter(p => p !== 'node');
+        // системные роли держат только пользователи — данными не расширить
+        const principals = isSystemRole(id) ? ['user']
+            : (Array.isArray(r.principals) ? r.principals.filter(p => PRINCIPALS.includes(p)) : [...base.principals]);
         out[id] = Object.freeze({
             id,
-            key: typeof r.key === 'string' && r.key ? r.key : base.key,
             label: typeof r.label === 'string' && r.label ? r.label : base.label,
-            scope: SCOPES.has(r.scope) ? r.scope : base.scope,
-            feed: FEEDS.has(r.feed) ? r.feed : base.feed,
-            write,
-            principals: Object.freeze([...principals]),
+            icon: typeof r.icon === 'string' ? r.icon : (base.icon || ''),
+            color: typeof r.color === 'string' ? r.color : (base.color || ''),
+            principals: Object.freeze(principals),
         });
     }
     return out;
@@ -157,18 +169,23 @@ export function areaOfPath(path, pointPath, roleIds) {
 
 /**
  * Право чтения области ролью.
+ * ADMIN — всё, включая секреты. BOSS — всё, кроме секретов.
+ * Остальные: система/DATA/INDEX точки — да; своя зона — да;
+ * лента — только свои записи; секреты — нет.
  * @param {object} role Нормализованное объявление роли
  * @param {{kind, role?}} area
  * @param {object} [opts]
- * @param {boolean} [opts.ownEntry] Для LOGS при feed=own: запись принадлежит пользователю
- * @param {boolean} [opts.logsContainer] Для LOGS: папка ленты/дня (листинг), не запись
+ * @param {boolean} [opts.ownEntry] Запись ленты принадлежит пользователю
+ * @param {boolean} [opts.logsContainer] Папка ленты/дня (листинг), не запись
  */
 export function canRead(role, area, opts = {}) {
     if (!role || !area)
         return false;
+    if (role.id === 'ADMIN')
+        return true;
     if (area.kind === AREA.SECRET)
-        return role.write === 'all';
-    if (role.scope === 'subtree')
+        return false;
+    if (role.id === 'BOSS')
         return true;
     switch (area.kind) {
         case AREA.SYSTEM:
@@ -178,8 +195,6 @@ export function canRead(role, area, opts = {}) {
         case AREA.ZONE:
             return area.role === role.id;
         case AREA.LOGS:
-            if (role.feed === 'point')
-                return true;
             return !!(opts.logsContainer || opts.ownEntry);
         default:
             return false;
@@ -188,8 +203,8 @@ export function canRead(role, area, opts = {}) {
 
 /**
  * Право записи области ролью.
- * DATA/INDEX пишет только write=all (ADMIN) напрямую; остальные — через API класса
- * (create_object и т.п.), который сам проверяет права и пишет под системной сессией.
+ * ADMIN — всё. Остальные — только своя зона и только там, где роль
+ * назначена локально (в любом слое своей метапапки).
  * @param {object} role Нормализованное объявление роли
  * @param {{kind, role?}} area
  * @param {object} [opts]
@@ -198,9 +213,9 @@ export function canRead(role, area, opts = {}) {
 export function canWrite(role, area, opts = {}) {
     if (!role || !area)
         return false;
-    if (role.write === 'all')
+    if (role.id === 'ADMIN')
         return true;
-    if (role.write === 'none' || !opts.local || opts.executable)
+    if (!opts.local || opts.executable)
         return false;
     return area.kind === AREA.ZONE && area.role === role.id;
 }

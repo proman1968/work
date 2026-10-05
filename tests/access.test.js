@@ -14,8 +14,10 @@ import { closeIndexDb } from '../sources/host/index-db.js';
 /**
  * Модель доступа «Точки × Роли × Ленты» (sources/server/access):
  * зона = папка роли (собственная и унаследованная по ~), вне зон — система;
- * ADMIN/BOSS видят вниз по дереву, пишут: ADMIN — всё, остальные — своя зона где назначены;
- * лента точки — роли с feed=point, остальным свои записи; лента пользователя открывает то, на что указывает.
+ * ADMIN меняет всё и видит секреты, BOSS видит систему и логи вниз по дереву;
+ * остальные пишут только в свою зону где назначены;
+ * лента точки — системным ролям целиком, остальным свои записи;
+ * лента пользователя открывает то, на что указывает.
  */
 
 let tmp;
@@ -39,14 +41,14 @@ before(async () => {
     write('$server/$folder/$file/$md/class.js', `export default {}`);
     for (const u of ['a1', 'b1', 'u1', 'u2', 'c1'])
         write(`USERS/${u}/$user/class.js`, `export default { label: '${u}' }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['b1'], USERS: ['u2'] } }`);
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['b1'], USER: ['u2'] } }`);
     write('ORG/$class/BOSS/plan.md', '# План руководителя');
     write('ORG/$class/$folder/USER/instr.md', '# Инструкция для исполнителей ниже');
     write('ORG/$class/$folder/BOSS/order.md', '# Распоряжение руководителям ниже');
     write('ORG/DEPT/$class/class.js', `export default {
     label: 'DEPT',
     ROLES: { CUSTOMER: { label: 'Покупатель' } },
-    '#security': { USERS: ['u1'], CUSTOMERS: ['c1'] }
+    '#security': { USER: ['u1'], CUSTOMER: ['c1'] }
 }`);
     write('ORG/DEPT/$class/USER/work.md', 'рабочий файл');
     write('ORG/DEPT/$class/BOSS/boss.md', 'файл руководителя отдела');
@@ -93,12 +95,15 @@ describe('policy: чистые правила', () => {
     });
 
     it('normalizeRoles: базовые + прикладные, мусор отбрасывается', () => {
-        const R = POLICY.normalizeRoles({ CUSTOMER: { label: 'Покупатель', scope: 'bad' }, lower: {}, BOSS: { label: 'Шеф' } });
-        assert.equal(R.CUSTOMER.key, 'CUSTOMERS');
-        assert.equal(R.CUSTOMER.scope, 'point');
+        const R = POLICY.normalizeRoles({ CUSTOMER: { label: 'Покупатель', color: 'green', scope: 'bad', write: 'all' }, lower: {}, BOSS: { label: 'Шеф', principals: ['user', 'node'] } });
+        assert.equal(R.CUSTOMER.label, 'Покупатель');
+        assert.equal(R.CUSTOMER.color, 'green');
+        assert.equal(R.CUSTOMER.scope, undefined, 'полей поведения больше нет');
+        assert.deepEqual(R.CUSTOMER.principals, ['user', 'node']);
         assert.equal(R.BOSS.label, 'Шеф');
-        assert.equal(R.BOSS.scope, 'subtree');
+        assert.deepEqual(R.BOSS.principals, ['user'], 'системные роли — только пользователи');
         assert.equal(R.lower, undefined);
+        assert.ok(POLICY.isSystemRole('ADMIN') && POLICY.isSystemRole('BOSS') && !POLICY.isSystemRole('CUSTOMER'));
     });
 });
 
@@ -131,7 +136,7 @@ describe('ядро: canSee / canWrite по модели', () => {
         assert.equal(await org.canWrite(orgDist, as('b1', 'BOSS')), true, 'распределяемый слой $folder/BOSS — тоже своя зона');
     });
 
-    it('USER вышестоящей точки не видит нижестоящую (scope=point)', async () => {
+    it('USER вышестоящей точки не видит нижестоящую (роли действуют в своей точке)', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         assert.deepEqual(await dept.roles(as('u2')), []);
         assert.equal(await dept.canSee(await dept.meta_folder.get_item('readme.md'), as('u2')), false);

@@ -20,7 +20,7 @@ before(async () => {
     await fsp.mkdir(tempRoot, { recursive: true });
     tmp = await fsp.mkdtemp(path.join(tempRoot, 'os-test-'));
     root = path.join(tmp, 'work'); external = path.join(tmp, 'external'); fs.mkdirSync(external);
-    write(path.join(root, '$server/class.js'), `export default { '#security': { ADMINS: ['admin'] } }`);
+    write(path.join(root, '$server/class.js'), `export default { '#security': { ADMIN: ['admin'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file']) write(path.join(root, p, 'class.js'), 'export default {}');
     process.chdir(root); globalThis.WORK = new $server();
 });

@@ -18,7 +18,7 @@ const layerCache = new Map();
 const scopeCache = new Map();
 
 /** Владелец кабинета/системный просмотр: видно всё, кроме секретов (их нет в индексе). */
-export const OWNER_ROLE = Object.freeze({ id: 'OWNER', key: '', label: 'Владелец', scope: 'subtree', feed: 'point', write: 'all' });
+export const OWNER_ROLE = Object.freeze({ id: 'OWNER', label: 'Владелец' });
 
 export function invalidateLayers() {
     layerCache.clear();
@@ -113,7 +113,7 @@ function parseMeta(doc) {
 }
 
 function readable(role, area, doc, uid) {
-    if (area.kind === POLICY.AREA.LOGS && role.feed !== 'point' && role.scope !== 'subtree')
+    if (area.kind === POLICY.AREA.LOGS && !POLICY.seesFullFeed(role))
         return POLICY.isOwnLogRow(parseMeta(doc), uid);
     return POLICY.canRead(role, area, { logsContainer: false });
 }
@@ -235,7 +235,7 @@ export async function buildContexts(point, params = {}) {
                         continue;
                     await p.init;
                     if (p.hasAssignments?.())
-                        ids = (await p.roles(params)).filter(r => p._declaredRolesSync()[r]?.scope === 'subtree');
+                        ids = (await p.roles(params)).filter(r => POLICY.isSystemRole(r));
                 }
             }
         }
@@ -275,8 +275,8 @@ export async function buildContexts(point, params = {}) {
         if (uid && !system)
             for (const a of store.assignmentsOf(uid))
                 consider(a.class_path);
-        // охват вниз — если в точке есть роль со scope=subtree (или системный просмотр)
-        if (pointRoles.some(r => r.scope === 'subtree'))
+        // охват вниз — если в точке есть системная роль (или системный просмотр)
+        if (pointRoles.some(r => POLICY.isSystemRole(r.id)))
             for (const c of store.classesBelow(P.path || '/', 400))
                 consider(c);
         const sorted = [...candidates.entries()].sort((a, b) => a[1] - b[1]);
@@ -302,7 +302,7 @@ export async function buildContexts(point, params = {}) {
 
 async function isOpenAccess(cls) {
     await cls.init;
-    const users = cls.DATA?.['#security']?.USERS;
+    const users = cls.DATA?.['#security']?.USER;
     return Array.isArray(users) && users.includes('GUEST');
 }
 

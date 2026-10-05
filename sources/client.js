@@ -276,6 +276,40 @@ WORK.syncAuthUI = async function () {
 
 /** Событие auth для подписчиков в той же вкладке + BroadcastChannel для других. */
 WORK.authEvents ??= (typeof EventTarget !== 'undefined') ? new EventTarget() : null;
+
+/**
+ * Предпочитаемая роль на всё приложение: localStorage + рассылка окнам
+ * (родитель и iframe), как авторизация. Эффективная роль каждого элемента
+ * пересчитывается через item.syncRole().
+ */
+WORK.ROLE_KEY = 'work-role';
+try {
+    WORK.preferredRole ??= globalThis.localStorage?.getItem(WORK.ROLE_KEY) || '';
+}
+catch { WORK.preferredRole ??= ''; }
+WORK.setPreferredRole = function (role) {
+    role = String(role || '');
+    WORK.preferredRole = role;
+    try { globalThis.localStorage?.setItem(WORK.ROLE_KEY, role); } catch {}
+    try { WORK.ROLE_CHANNEL?.postMessage({ role }); } catch {}
+    WORK.applyRoleToItems();
+};
+WORK.applyRoleToItems = function () {
+    try {
+        for (const item of Object.values(CORE.$item.ITEMS))
+            if (item?.role && typeof item.syncRole === 'function')
+                item.syncRole().catch(() => {});
+    } catch {}
+};
+if (typeof BroadcastChannel !== 'undefined') {
+    WORK.ROLE_CHANNEL ??= new BroadcastChannel(WORK.ROLE_KEY);
+    WORK.ROLE_CHANNEL.addEventListener('message', (e) => {
+        const role = String(e.data?.role || '');
+        WORK.preferredRole = role;
+        try { globalThis.localStorage?.setItem(WORK.ROLE_KEY, role); } catch {}
+        WORK.applyRoleToItems();
+    });
+}
 WORK.notifyAuth = function (payload = {}) {
     try { WORK.AUTH_CHANNEL?.postMessage(payload); } catch {}
     try {

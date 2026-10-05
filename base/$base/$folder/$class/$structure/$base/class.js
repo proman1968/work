@@ -1,6 +1,5 @@
 export default {
     icon: 'fontawesome:s-building',
-    label: 'Организация',
     METADATA: {
         STATIC: [
             { id: 'inn', label: 'ИНН', type: 'string' },

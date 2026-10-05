@@ -47,7 +47,7 @@ const SALE = `METADATA: {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-post-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
@@ -58,15 +58,15 @@ before(async () => {
     copy('DATA/OPERATIONS/$operation/class.js');
     copy('DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js');
     write('DATA/CATALOGS/$class/class.js', `export default { label: 'Справочники' }`);
-    write('DATA/CATALOGS/CLIENTS/$class/class.js', `export default { label: 'Клиенты', '#security': { USERS: ['${USER1}'] }, ${CATALOG} }`);
+    write('DATA/CATALOGS/CLIENTS/$class/class.js', `export default { label: 'Клиенты', '#security': { USER: ['${USER1}'] }, ${CATALOG} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
     const reg = await WORK.get_item('/DATA/REGISTER');
     const admin = as(ADMIN);
-    await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', icon: 'carbon:wallet', '#security': { USERS: ['${USER1}'] }, ${ACC62} }`, ...admin });
-    await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', icon: 'carbon:wallet', '#security': { USERS: ['${USER1}'] } }`, ...admin });
+    await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты', icon: 'carbon:wallet', '#security': { USER: ['${USER1}'] }, ${ACC62} }`, ...admin });
+    await reg.create({ id: '90', type: '$account', post: `export default { label: 'Продажи', icon: 'carbon:wallet', '#security': { USER: ['${USER1}'] } }`, ...admin });
     const ops = await WORK.get_item('/DATA/OPERATIONS');
-    await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USERS: ['${USER1}'] }, ${SALE} }`, ...admin });
+    await ops.create({ id: 'SALE', type: '$operation', post: `export default { label: 'Продажа', '#security': { USER: ['${USER1}'] }, ${SALE} }`, ...admin });
 });
 
 after(async () => {
@@ -134,7 +134,7 @@ describe('разноска', () => {
 
     it('post без счёта — ошибка и компенсация', async () => {
         const ops = await WORK.get_item('/DATA/OPERATIONS');
-        await ops.create({ id: 'BAD', type: '$operation', post: `export default { label: 'Битый', '#security': { USERS: ['${USER1}'] },
+        await ops.create({ id: 'BAD', type: '$operation', post: `export default { label: 'Битый', '#security': { USER: ['${USER1}'] },
             METADATA: { FIELDS: [{ id: 'name' }, { id: 'time' }, { id: 'client', type: 'Link', catalog: '/DATA/CATALOGS/CLIENTS' }, { id: 'sum', type: 'Number' }],
             POSTINGS: [{ id: 'main', amount: 'sum',
                 debit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'client' } },

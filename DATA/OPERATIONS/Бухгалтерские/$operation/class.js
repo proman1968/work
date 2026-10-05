@@ -1,7 +1,7 @@
 export default {
     label: "Бухгалтерские",
     "#security": {
-        USERS: ["CA4E097FF6C1D387"]
+        USER: ["CA4E097FF6C1D387"]
     },
     METADATA: {
         FIELDS: [{

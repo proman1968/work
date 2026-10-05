@@ -90,7 +90,7 @@ before(async () => {
     // тип .task — настоящий слой проекта
     for (const rel of ['$server/$folder/$file/$task/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
-    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USERS: ['${CHILD_UID}'] } }`);
+    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${CHILD_UID}'] } }`);
     write(`USERS/${CHILD_UID}/$user/class.js`, `export default { label: 'Тестовый пользователь' }`);
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');

@@ -20,7 +20,7 @@ ODA({
                 min-height: 0;
                 overflow: hidden;
                 cursor: default;
-                border-radius: var(--radius-m);
+
             }
             :host(:focus-within) {
                 box-shadow: none;

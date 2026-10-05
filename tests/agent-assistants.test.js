@@ -37,7 +37,7 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-assist-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     // типы файлов данных проекта: лента (.logs) — запись дня, а не обычный файл
@@ -49,7 +49,7 @@ before(async () => {
             write('$server/$folder/$class/ai/' + dir + '/' + f, fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai', dir, f), 'utf-8'));
     for (const [uid, label] of [[ADMIN, 'Админ Главный'], [BOSS, 'Сидоров Босс'], [IVAN, 'Иванов Иван'], [PETR, 'Иванова Пётр']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['${BOSS}'], USERS: ['${IVAN}'] }, METADATA: { FIELDS: [
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}'], USER: ['${IVAN}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp', required: true },
         { id: 'code', label: 'Код', required: true }, { id: 'price', label: 'Цена', type: 'Number' },
         { id: 'active', type: 'Boolean' },
@@ -140,7 +140,7 @@ describe('отчёты и права', () => {
         const text = fs.readFileSync(path.join(tmp, 'ORG/$class/class.js'), 'utf-8');
         assert.match(text, new RegExp(PETR));
         assert.doesNotMatch(text, new RegExp(IVAN));
-        assert.match(text, /BOSSES/, 'другие роли сохранены');
+        assert.match(text, /BOSS:/, 'другие роли сохранены');
         const org = await WORK.get_item('/ORG');
         assert.deepEqual(await org.roles({ session: { uid: PETR } }), ['USER']);
         await assert.rejects(tool('assign').run({ path: '/ORG', role: 'NOPE', add: [IVAN] }, as(ADMIN)), /не объявлена/);
@@ -269,7 +269,7 @@ describe('память, эскалация, триггеры', () => {
 describe('роль задачи', () => {
     it('администратор в роли USER: запись в зону USER (кабинет и точка), без прав ADMIN и инструментов ОС', async () => {
         const { taskRole } = await import('../sources/modules/agent/session.js');
-        write('ORG/$class/class.js', fs.readFileSync(path.join(tmp, 'ORG/$class/class.js'), 'utf-8').replace("USERS: ['", "USERS: ['" + ADMIN + "', '"));
+        write('ORG/$class/class.js', fs.readFileSync(path.join(tmp, 'ORG/$class/class.js'), 'utf-8').replace("USER: ['", "USER: ['" + ADMIN + "', '"));
         (await WORK.get_item('/ORG')).reset();
         const ctx = { ...as(ADMIN), role: 'USER' };
         const cab = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/презентация.html', content: '<p>x</p>' }, ctx);

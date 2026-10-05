@@ -80,7 +80,6 @@ ODA({
             .box {
                 padding: 4px;
                 border: 1px solid var(--subtle-border);
-                border-radius: var(--radius-m);
             }
             .all-day-toggle {
                 align-items: center;

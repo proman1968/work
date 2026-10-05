@@ -68,18 +68,18 @@ before(async () => {
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-sec-'));
     for (const u of [ADMIN, USER, BOSS])
         keys[u] = rsa();
-    write('$server/class.js', `export default { label: 'SEC', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'SEC', '#security': { ADMIN: ['${ADMIN}'] } }`);
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$file/class.js', `export default {}`);
     write('$server/$folder/$file/$md/class.js', `export default {}`);
     for (const u of [ADMIN, USER, BOSS])
         write(`USERS/${u}/$user/class.js`, `export default { label: 'U${u.slice(0, 2)}', email: '${u}@x', keys: { '1': '${keys[u].pub}' } }`);
-    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['${BOSS}'] } }`);
+    write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}'] } }`);
     write('ORG/DEPT/$class/class.js', `export default {
     label: 'DEPT',
     ROLES: { CUSTOMER: { label: 'Покупатель' } },
-    '#security': { USERS: ['${USER}'], CUSTOMERS: ['${serverId}'] }
+    '#security': { USER: ['${USER}'], CUSTOMER: ['${serverId}'] }
 }`);
     write('ORG/DEPT/$class/USER/work.md', 'рабочий файл');
     write('ORG/DEPT/$class/BOSS/boss.md', 'файл руководителя');
@@ -99,7 +99,7 @@ before(async () => {
     label: 'SELF', host_id: '${serverId}', origin: '${base}', publicKey: '${pub}',
     fingerprint: '${fingerprint(pub)}', status: 'active',
     ROLES: { CUSTOMER: { label: 'Покупатель' } },
-    '#security': { CUSTOMERS: ['${USER}'] }
+    '#security': { CUSTOMER: ['${USER}'] }
 }`);
     WORK.reset();
 });
@@ -195,7 +195,7 @@ describe('шлюз методов', () => {
         const admin = await sessionOf(ADMIN);
         for (const m of ['fs', 'settings', 'DATA', '_roleIds', 'importScript', 'constructor', 'signIn', 'save_to_history', 'getFolderToSaveFile', 'real_dir'])
             assert.equal((await req('/?' + m, { cookie: admin })).status, 400, m);
-        const set = await req('/?DATA', { cookie: admin, json: { '#security': { ADMINS: ['X'] } } });
+        const set = await req('/?DATA', { cookie: admin, json: { '#security': { ADMIN: ['X'] } } });
         assert.equal(set.status, 400);
         assert.ok(!WORK.DATA['#security']?.ADMINS?.includes('X'), 'DATA не подменён');
         assert.equal((await req('/@settings', { cookie: admin })).status, 400);
@@ -229,7 +229,7 @@ describe('запись: пути и исполняемое', () => {
         assert.match(up.text, /Недопустимый путь/);
         const name = await req('/ORG/DEPT?save_file&filename=../../../../$server/class.js&role=USER', { cookie: user, method: 'POST', body: 'export default {}', headers: { 'content-type': 'text/plain' } });
         assert.ok(!fs.readFileSync(path.join(tmp, '$server/class.js'), 'utf-8').startsWith('export default {}'), 'корневой class.js не перезаписан ' + name.text);
-        assert.match(fs.readFileSync(path.join(tmp, 'ORG/DEPT/$class/class.js'), 'utf-8'), /USERS/, 'class.js класса не перезаписан');
+        assert.match(fs.readFileSync(path.join(tmp, 'ORG/DEPT/$class/class.js'), 'utf-8'), /USER:/);
         assert.ok(fs.existsSync(path.join(tmp, 'ORG/DEPT/$class/USER/text/class.js')), 'файл лёг в зону пользователя как обычный файл');
     });
 
@@ -356,7 +356,7 @@ describe('сеть WORK: узлы', () => {
         const session = { uid: serverId, principal: { kind: 'node', id: serverId, roles: [] } };
         assert.deepEqual(await dept.roles({ session }), ['CUSTOMER']);
         const org = await WORK.get_item('/ORG');
-        write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSSES: ['${BOSS}', '${serverId}'] } }`);
+        write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}', '${serverId}'] } }`);
         org.reset();
         assert.deepEqual(await org.roles({ session }), [], 'BOSS не выдаётся узлу');
     });

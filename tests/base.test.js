@@ -31,7 +31,7 @@ const REQUISITES = ['inn', 'kpp', 'ogrn', 'address', 'phone', 'email', 'bank', '
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-base-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMINS: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write(`USERS/${ADMIN}/$user/class.js`, `export default { label: 'Админ' }`);

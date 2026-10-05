@@ -97,7 +97,7 @@ ODA({
             }
             details {
                 border: 1px solid var(--subtle-border);
-                border-radius: var(--radius-m);
+
                 padding: 0 var(--space-m);
             }
             details[open] {

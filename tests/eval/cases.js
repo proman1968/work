@@ -14,8 +14,8 @@ const base = {
     [`USERS/${U.user}/$user/class.js`]: `export default { label: 'Иванов Иван' }`,
     [`USERS/${U.petrov}/$user/class.js`]: `export default { label: 'Петров Пётр' }`,
     [`USERS/${U.admin}/$user/class.js`]: `export default { label: 'Админ' }`,
-    '$server/class.js': `export default { label: 'EVAL', '#security': { ADMINS: ['${U.admin}'] } }`,
-    'ORG/$base/class.js': `export default { label: 'ООО Ромашка', '#security': { BOSSES: ['${U.boss}'], USERS: ['${U.user}', '${U.petrov}'] } }`,
+    '$server/class.js': `export default { label: 'EVAL', '#security': { ADMIN: ['${U.admin}'] } }`,
+    'ORG/$base/class.js': `export default { label: 'ООО Ромашка', '#security': { BOSS: ['${U.boss}'], USER: ['${U.user}', '${U.petrov}'] } }`,
     'ORG/$base/readme.md': '# ООО Ромашка\nОтчёты кладутся в папку «Отчёты». Поручения — через ленту с получателями и сроком.',
 };
 
@@ -41,7 +41,7 @@ export const CASES = [
         about: 'выборка объектов и отчёт в xlsx',
         files: {
             ...base,
-            'ORG/$base/class.js': `export default { label: 'ООО Ромашка', '#security': { BOSSES: ['${U.boss}'], USERS: ['${U.user}', '${U.petrov}'] }, METADATA: { FIELDS: [{ id: 'name', required: true }, { id: 'time', required: true }, { id: 'amount', type: 'Number' }, { id: 'client' }] } }`,
+            'ORG/$base/class.js': `export default { label: 'ООО Ромашка', '#security': { BOSS: ['${U.boss}'], USER: ['${U.user}', '${U.petrov}'] }, METADATA: { FIELDS: [{ id: 'name', required: true }, { id: 'time', required: true }, { id: 'amount', type: 'Number' }, { id: 'client' }] } }`,
             '$server/$folder/$file/$data/class.js': `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name', required: true }, { id: 'time', type: 'timestamp', required: true }] } }`,
             'ORG/$base/DATA/2026-09-01/1788000000001.X.data': JSON.stringify({ name: 'Сделка 1', time: 1788000000001, amount: 100, client: 'Альфа' }),
             'ORG/$base/DATA/2026-09-02/1788000000002.X.data': JSON.stringify({ name: 'Сделка 2', time: 1788000000002, amount: 250, client: 'Бета' }),

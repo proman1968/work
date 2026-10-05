@@ -6,6 +6,8 @@ let style = /*css*/`
 
 :root {
     --main-color: indigo;
+}
+:root, [role-theme] {
     --main-color-invert: oklch(from var(--main-color) 1 .15 h);
     --header-1: oklch(from var(--main-color) 0.8 .07 h);
     --header-2: oklch(from var(--main-color) 0.4 .07 h);
@@ -87,7 +89,7 @@ let style = /*css*/`
 }
 
 /* Современные токены: радиусы, приглушённый текст, тонкие поверхности и рамки — всё от --main-color/ролей */
-:root {
+:root, [role-theme] {
     --radius-s: 8px;
     --radius-m: 12px;
     --radius-l: 20px;
@@ -105,7 +107,7 @@ let style = /*css*/`
     --warning-soft: color-mix(in oklch, var(--warning-color) 16%, var(--content-background));
 }
 /* Шкалы и контролы: единые скругления, отступы, шрифт, высота полей, фокус, тени, анимация */
-:root {
+:root, [role-theme] {
     color-scheme: light dark;
     accent-color: var(--accent-color);
     caret-color: var(--accent-color);
@@ -594,7 +596,7 @@ body[context-menu-show] *:not(oda-context-menu){
         border-color: var(--info-color) !important;
 }
 
-:root{
+:root, [role-theme]{
     --hover: {
          filter: brightness(.96) !important;
 

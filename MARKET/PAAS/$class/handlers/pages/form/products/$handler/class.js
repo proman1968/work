@@ -358,18 +358,12 @@ export default {
     },
     async _formRole() {
         const allowed = ['ADMIN', 'BOSS', 'USER'];
-        let role = this.$pdp?.activeRole;
+        // эффективная роль уже вычислена формой ($item.role)
+        let role = this.$item?.role;
         if (typeof role?.then === 'function')
             role = await role;
-        if (!allowed.includes(role)) {
-            role = this.$item?.role;
-            if (typeof role?.then === 'function')
-                role = await role;
-        }
         if (!allowed.includes(role))
             return '';
-        if (this.$item)
-            this.$item.role = role;
         return role;
     },
     async _persist(el, role) {

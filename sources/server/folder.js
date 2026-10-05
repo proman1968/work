@@ -1528,7 +1528,7 @@ export class $folder extends $item{
 
     /**
      * Может ли автор записи создавать системные имена (`$…` типизаторы, `#…`, скрытые `.…`)
-     * и выходить за пределы зон: внутренние вызовы ядра, DEV, роли с write=all (ADMIN).
+     * и выходить за пределы зон: внутренние вызовы ядра, DEV, ADMIN.
      * Остальным такие имена запрещены — иначе в своей зоне можно создать `$handler/class.js`,
      * который сервер исполнит при обращении.
      */
@@ -1541,9 +1541,8 @@ export class $folder extends $item{
             return false;
         if (await owner._isWorkAdmin?.(params))
             return true;
-        const declared = await owner.declared_roles;
         const roles = await owner.roles(params);
-        return roles.some(r => declared?.[r]?.write === 'all');
+        return roles.includes('ADMIN');
     }
 
     /** Нормализовать имя и подпапку записи из пользовательского ввода (params.filename / params.folder). */
