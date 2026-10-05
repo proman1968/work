@@ -120,7 +120,7 @@ ODA({is: 'work-form',
                                 :icon-size
                                 :content="view?.id === $for.item.id"
                                 :raised="view?.id === $for.item.id"
-                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.45, borderRadius: '4px' }"
+                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.9, borderRadius: '4px' }"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
@@ -224,22 +224,29 @@ ODA({is: 'work-form',
             }
     },
     view_name: '',
-    formViews: [],
-    async loadFormViews() {
-        if (!this.$item) {
-            this.formViews = [];
-            return;
-        }
+    /**
+     * Список представлений формы — вычисляемый геттер: зависимости ($item,
+     * activeRole) читаются синхронно, поэтому пересчёт и перерисовка идут
+     * автоматически через Reactor, без ручных вызовов и render().
+     */
+    get formViews() {
+        const $item = this.$item;
+        const role = this.activeRole;
+        if (!$item || !role)
+            return [];
+        return this.loadFormViews($item, role);
+    },
+    async loadFormViews($item, role) {
         try {
-            const root = await this.$item.fetch('handlers', { path: '//form' });
+            const root = await $item.fetch('handlers', { path: '//form', role });
             let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.allowUse !== false
             );
             // Для handler'а 'file' подставляем icon/label из конкретного открытого файла,
             // чтобы отображать расширение (например 'JSON') и соответствующую иконку
-            const ext = this.$item?.ext;
+            const ext = $item?.ext;
             for (const v of views) {
-                v.$context = this.$item;
+                v.$context = $item;
                 if (v.id === 'file' && ext) {
                     v.icon = 'files-color:s-' + ext;
                     v.label = ext.toUpperCase();
@@ -248,19 +255,36 @@ ODA({is: 'work-form',
             // Форма objects — только классам с полями объектов (у групп и служебных её нет)
             if (views.some(v => v.id === 'objects')) {
                 try {
-                    const body = await this.$item?.body;
+                    const body = await $item?.body;
                     const fields = body?.METADATA?.FIELDS;
                     if (!Array.isArray(fields) || !fields.length)
                         views = views.filter(v => v.id !== 'objects');
                 }
                 catch { /* при ошибке оставляем как есть */ }
             }
-            this.formViews = views;
-            this.render();
+            return views;
         } catch (err) {
             console.error(err);
-            this.formViews = [];
+            return [];
         }
+    },
+    /**
+     * Представление по имени с проверкой доступа на сервере: недоступное
+     * (roles в class.js, отозванные права) — get_item вернёт null, тогда
+     * fallback на вид из $item.form или первый доступный.
+     * Проверять вхождение в formViews нельзя: виды с allowUse === false
+     * (например chat) открыты легально, но в списке их нет.
+     */
+    async resolveView(name) {
+        const $item = this.$item;
+        const role = this.activeRole;
+        if ($item && name) {
+            const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role });
+            if (view)
+                return view;
+        }
+        const views = await this.formViews;
+        return views.find(v => v.id === $item?.form) || views[0];
     },
     $item: {
         $def: null,
@@ -269,15 +293,13 @@ ODA({is: 'work-form',
                 const $class = await this.$item?.$class;
                 this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
 
-                const view_name = this.host.default_view || this.host.view_name || n?.form;
-                this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
-                this.loadFormViews();
-
                 if (!this.activeRole) {
                     const roles = await this.roles;
                     this.activeRole = roles[0] || 'GUEST';
                 }
                 n.role = this.activeRole;
+                const view_name = this.host.default_view || this.host.view_name || n?.form;
+                this.view ||= await this.resolveView(view_name);
             }
         }
     },
@@ -325,11 +347,14 @@ ODA({is: 'work-form',
                 }
                 this.controls = {};
                 this.view_control = undefined;
-                // Пересоздать текущее представление
+                // formViews пересчитается сам (зависимость от activeRole).
+                // Открытое представление — перепроверить на сервере: недоступное
+                // при новой роли заменится через resolveView. Пересоздание — в
+                // async: сеттер отрабатывает до reset_deps, кэши ещё старые.
                 if (this.view) {
-                    const view = this.view;
+                    const id = this.view.id;
                     this.view = undefined;
-                    this.async(() => { this.view = view; });
+                    this.async(async () => { this.view = await this.resolveView(id); });
                 }
             }
         }

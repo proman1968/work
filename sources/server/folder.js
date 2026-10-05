@@ -298,6 +298,14 @@ export class $folder extends $item{
         let tree  = await this.get_item('~/handlers' + p.path);
         if(!Array.isArray(tree))
             tree = [tree]
+        // Представления с `roles` в class.js — только своим ролям.
+        // Вложенные уровни отсекает visibleOnly→allowAccess внутри info(p),
+        // корень при точном пути (сам $handler) фильтруем здесь.
+        tree = (await Promise.all(tree.map(async el => {
+            if (el && typeof el._roleAllowed === 'function' && !(await el._roleAllowed(p)))
+                return null;
+            return el;
+        }))).filter(Boolean);
         tree = tree.map(el=>el.info(p));
         tree = await Promise.all(tree);
         const deepCollapseTree = (list)=>{

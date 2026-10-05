@@ -6,12 +6,12 @@ export default{
         <!-- Два дерева: свойства класса (STATIC) и поля объектов (FIELDS). -->
         <item-node dark slot="left-title" :$item="schemaOwner" @tap.stop.prevent="focusedItem = schemaOwner"
             :info-invert="focusedItem === schemaOwner"></item-node>
-        <div slot="left-panel" vertical flex style="overflow: hidden;" label="Свойства класса" icon="icons:settings">
+        <div slot="left-panel" vertical flex style="overflow: hidden;" label="CLASS" icon="icons:settings">
             <item-tree ::focused-item flex show-tools menu-mode="tools" allow-focus
                 :$item="await staticFields"
                 items-selector="fields" hide-tops="0" hide-roots="1"></item-tree>
         </div>
-        <div slot="left-panel" vertical flex style="overflow: hidden;" label="Поля объектов" icon="icons:tree-structure">
+        <div slot="left-panel" vertical flex style="overflow: hidden;" label="OBJECT" icon="icons:tree-structure">
             <item-tree ::focused-item flex show-tools menu-mode="tools" allow-focus
                 :$item="await objectFields"
                 items-selector="fields" hide-tops="0" hide-roots="1"></item-tree>

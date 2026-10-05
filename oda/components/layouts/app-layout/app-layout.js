@@ -278,6 +278,9 @@ ODA({is: 'app-tabs',
                 font-size: x-small;
                 order: {{mobile?1:0}};
             }
+            oda-button{
+                border-radius: 0px !important;
+            }
         </style>
         <div :horizontal="mobile">
             <oda-button :label="$for.item.label" :light="focusedIndex === $for?.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px; max-width: 40px; font-size: xx-small;" @tap="setIndex($for.index)"></oda-button>
