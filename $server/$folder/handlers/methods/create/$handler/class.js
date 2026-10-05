@@ -9,6 +9,8 @@ const EMPTY_NAME_ERROR = 'Имя пустое или состоит только
 export default {
     icon: 'icons:add',
     access: 'c',
+    /** Создание элементов — только роль ADMIN. */
+    roles: ['ADMIN'],
     async execute(filter) {
         const $context = await this.$item.$context;
         const props = {

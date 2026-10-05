@@ -295,14 +295,21 @@ export class $folder extends $item{
     async handlers(p = {}){
         p.path ||= '';
         p.deep ||= 8;
+        // Контекст для предикатов allowUse — сам запрашиваемый элемент.
+        // Строку от клиента не принимаем — только живой элемент.
+        if (!(p.$context instanceof FS.$folder))
+            p.$context = this;
         let tree  = await this.get_item('~/handlers' + p.path);
         if(!Array.isArray(tree))
             tree = [tree]
         // Представления с `roles` в class.js — только своим ролям.
-        // Вложенные уровни отсекает visibleOnly→allowAccess внутри info(p),
-        // корень при точном пути (сам $handler) фильтруем здесь.
+        // Применимость (`allowUse`) вложенных уровней отсекает
+        // visibleOnly→allowAccess внутри info(p), корень при точном пути
+        // (сам $handler) фильтруем здесь.
         tree = (await Promise.all(tree.map(async el => {
             if (el && typeof el._roleAllowed === 'function' && !(await el._roleAllowed(p)))
+                return null;
+            if (el && typeof el._usable === 'function' && !(await el._usable(p.$context, p)))
                 return null;
             return el;
         }))).filter(Boolean);

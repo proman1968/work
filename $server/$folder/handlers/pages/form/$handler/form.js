@@ -239,8 +239,10 @@ ODA({is: 'work-form',
     async loadFormViews($item, role) {
         try {
             const root = await $item.fetch('handlers', { path: '//form', role });
+            // usable — серверный предикат allowUse ($context — открытый элемент);
+            // allowUse — немигрированные клиентские геттеры (возвращают Promise).
             let views = (root?.items || []).filter(item =>
-                item.type === '$handler' && item.allowUse !== false
+                item.type === '$handler' && item.usable !== false && item.allowUse !== false
             );
             // Для handler'а 'file' подставляем icon/label из конкретного открытого файла,
             // чтобы отображать расширение (например 'JSON') и соответствующую иконку
@@ -252,16 +254,6 @@ ODA({is: 'work-form',
                     v.label = ext.toUpperCase();
                 }
             }
-            // Форма objects — только классам с полями объектов (у групп и служебных её нет)
-            if (views.some(v => v.id === 'objects')) {
-                try {
-                    const body = await $item?.body;
-                    const fields = body?.METADATA?.FIELDS;
-                    if (!Array.isArray(fields) || !fields.length)
-                        views = views.filter(v => v.id !== 'objects');
-                }
-                catch { /* при ошибке оставляем как есть */ }
-            }
             return views;
         } catch (err) {
             console.error(err);
@@ -270,8 +262,9 @@ ODA({is: 'work-form',
     },
     /**
      * Представление по имени с проверкой доступа на сервере: недоступное
-     * (roles в class.js, отозванные права) — get_item вернёт null, тогда
-     * fallback на вид из $item.form или первый доступный.
+     * (roles в class.js, отозванные права, allowUse) — get_item вернёт null,
+     * тогда fallback на вид из $item.form или первый доступный.
+     * contextPath — контекст для серверного предиката allowUse.
      * Проверять вхождение в formViews нельзя: виды с allowUse === false
      * (например chat) открыты легально, но в списке их нет.
      */
@@ -279,7 +272,7 @@ ODA({is: 'work-form',
         const $item = this.$item;
         const role = this.activeRole;
         if ($item && name) {
-            const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role });
+            const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
             if (view)
                 return view;
         }

@@ -1,9 +1,6 @@
 export default {
     icon: 'editor:mode-edit',
     imports: '~/lib//editor-form',
-    get allowUse() {
-        return this.$context?.$fields?.then(f => !!f?.fields?.length);
-    },
     template: /*html*/`
     <style>
         :host {
