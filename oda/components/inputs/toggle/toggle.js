@@ -2,10 +2,10 @@
  * oda-toggle — переключатель (role=switch) на нативном checkbox: трек и бегунок по токенам темы.
  * value — Boolean; checkedLabel / uncheckedLabel — подпись текущего состояния справа; size — высота трека в px.
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-toggle',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

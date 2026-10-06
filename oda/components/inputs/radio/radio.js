@@ -2,12 +2,12 @@
  * oda-radio-input — выбор одного варианта группой нативных radio: подпись и пояснение (description) варианта.
  * inline — варианты в ряд; allowOther — вариант «Своё значение» с текстовым полем.
  */
-import '/oda/components/inputs/input/input.js';
 
 let uid = 0;
 
 ODA({
     is: 'oda-radio-input',
+    imports: 'oda//input.js',
     extends: 'oda-options-input',
     template: /*html*/`
         <style>

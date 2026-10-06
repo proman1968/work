@@ -3,12 +3,12 @@
  * Тип — inputType, иначе по field.type (date, time, datetime / DateTime / timestamp, month, week), иначе date.
  * value — строка в нативном формате ('' — пусто).
  */
-import '/oda/components/inputs/input/input.js';
 
 const TYPES = { date: 'date', time: 'time', datetime: 'datetime-local', 'datetime-local': 'datetime-local', timestamp: 'datetime-local', month: 'month', week: 'week' };
 
 ODA({
     is: 'oda-date-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <input class="control" part="control" :type="dateType" :value="value ?? ''"

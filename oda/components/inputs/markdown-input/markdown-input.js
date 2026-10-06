@@ -2,11 +2,10 @@
  * oda-markdown-input — поле markdown: просмотр через oda-markdown-viewer или правка исходника в textarea.
  * Переключение — кнопка заголовка «Правка / Просмотр» (в режиме чтения только просмотр).
  */
-import '/oda/components/inputs/block/block.js';
-import '/oda/components/editors/markdown/markdown-viewer/markdown-viewer.js';
 
 ODA({
     is: 'oda-markdown-input',
+    imports: 'oda//block.js, oda//markdown-viewer.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

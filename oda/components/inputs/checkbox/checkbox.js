@@ -3,10 +3,10 @@
  * value — Boolean; state — checked | unchecked | indeterminate (синхронны).
  * threeStates — щелчок перебирает unchecked → checked → indeterminate.
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-checkbox',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

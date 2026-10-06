@@ -3,10 +3,10 @@
  * В фокусе — сырое число, без фокуса — формат Intl.NumberFormat (accuracy, currency, locale).
  * value — Number (пусто — undefined). Стрелки ↑/↓ меняют на step. Проверки: не число, min, max.
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-numeric-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

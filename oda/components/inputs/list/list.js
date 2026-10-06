@@ -2,10 +2,10 @@
  * oda-list-input — список строк: правка на месте, добавление (кнопка заголовка, Enter на строке), удаление, перестановка.
  * value — Array строк.
  */
-import '/oda/components/inputs/block/block.js';
 
 ODA({
     is: 'oda-list-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

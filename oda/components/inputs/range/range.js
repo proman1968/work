@@ -2,10 +2,10 @@
  * oda-range-input — число ползунком (нативный range, accent-color) с выводом значения.
  * value — Number; min / max / step — из свойств или описания поля (0 / 100 / 1).
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-range-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

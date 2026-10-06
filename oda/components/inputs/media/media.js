@@ -3,7 +3,6 @@
  * value — строка URL (http(s), data:, blob:). Выбор файла: изображение → data: URL (сериализуется),
  * видео и аудио → blob: URL (живёт только в текущей вкладке). Теги oda-image-input / oda-video-input / oda-audio-input — kind задан.
  */
-import '/oda/components/inputs/block/block.js';
 
 export const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*' };
 export const readAsDataURL = file => new Promise(resolve => {
@@ -32,6 +31,7 @@ export const mediaName = (src = '') => src.startsWith('data:') ? src.slice(0, sr
 
 ODA({
     is: 'oda-media-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

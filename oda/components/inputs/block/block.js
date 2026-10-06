@@ -3,11 +3,10 @@
  * Наследник дописывает в шаблон тело с class="body"; выжимку — геттер summary; кнопки заголовка — геттер tools
  * ([{icon, title, action(), disabled}]). Свёрнутый блок показывает только заголовок.
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 
 ODA({
     is: 'oda-block-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

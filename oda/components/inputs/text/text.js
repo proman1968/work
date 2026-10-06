@@ -2,13 +2,12 @@
  * oda-text-input — строчный ввод текста на нативном input: text, password (с показом), email, url, tel, search.
  * Тип — inputType, иначе field.type (если это один из типов текста), иначе text.
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 
 const TEXT_TYPES = ['text', 'password', 'email', 'url', 'tel', 'search'];
 
 ODA({
     is: 'oda-text-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-input',
     template: /*html*/`
         <input class="control" part="control"

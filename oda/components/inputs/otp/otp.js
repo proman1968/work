@@ -2,10 +2,10 @@
  * oda-otp-input — ввод одноразового кода по цифрам: автопереход, Backspace, вставка кода целиком.
  * value — строка введённых цифр; при заполнении всех ячеек — событие complete (detail.value = код).
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-otp-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

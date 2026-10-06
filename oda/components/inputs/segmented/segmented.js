@@ -2,10 +2,10 @@
  * oda-segmented-input — сегментированный переключатель: ряд сегментов в общей рамке, выбранный — акцентом.
  * multiple — value Array (несколько сегментов).
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-segmented-input',
+    imports: 'oda//input.js',
     extends: 'oda-options-input',
     template: /*html*/`
         <style>

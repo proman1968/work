@@ -2,10 +2,10 @@
  * oda-textarea-input — многострочный текст: блочный контрол на нативной textarea.
  * Высота по содержимому (field-sizing: content): от 3 строк до ~20em, дальше прокрутка; строки переносятся.
  */
-import '/oda/components/inputs/block/block.js';
 
 ODA({
     is: 'oda-textarea-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

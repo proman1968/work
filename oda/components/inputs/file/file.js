@@ -2,13 +2,12 @@
  * oda-file-input — строчный выбор файлов: кнопка «Выбрать…», имена с размером, очистка, перетаскивание на контрол.
  * value — File (или Array<File> при multiple); accept — из свойства или field.accept.
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 
 export const fileSize = n => n < 1024 ? n + ' Б' : n < 1048576 ? (n / 1024).toFixed(1) + ' КБ' : (n / 1048576).toFixed(1) + ' МБ';
 
 ODA({
     is: 'oda-file-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

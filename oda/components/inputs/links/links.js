@@ -2,10 +2,10 @@
  * oda-links-input — коллекция ссылок: подпись и URL, правка и удаление строки, добавление кнопкой заголовка.
  * value — Array {url, label?}.
  */
-import '/oda/components/inputs/block/block.js';
 
 ODA({
     is: 'oda-links-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

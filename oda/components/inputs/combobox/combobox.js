@@ -2,11 +2,10 @@
  * oda-combobox-input — текстовый ввод с подсказками из вариантов (нативный datalist).
  * Текст совпал с подписью варианта — value = значение варианта; иначе value = текст (allowOther) или ошибка.
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 
 ODA({
     is: 'oda-combobox-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-options-input',
     template: /*html*/`
         <input class="control" part="control" list="options" :value="text" :placeholder="placeholderText"

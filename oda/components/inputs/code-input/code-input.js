@@ -2,11 +2,10 @@
  * oda-code-input — блочное поле исходного кода на oda-code-editor (Ace).
  * mode — из свойства или field.mode / field.language (по умолчанию javascript); summary — число строк.
  */
-import '/oda/components/inputs/block/block.js';
-import '/oda/components/editors/code-editor/code-editor.js';
 
 ODA({
     is: 'oda-code-input',
+    imports: 'oda//block.js, oda//code-editor.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

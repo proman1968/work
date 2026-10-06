@@ -1,14 +1,13 @@
 /**
  * oda-icon-picker-input — имя иконки ('lib:name'): предпросмотр, текстовое поле и выбор из дерева библиотек иконок.
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 import { loadLibIndex, ICON_LIBS } from '/oda/tools/icons/lib-index.js';
 
 let uid = 0;
 
 ODA({
     is: 'oda-icon-picker-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-input',
     template: /*html*/`
         <oda-icon class="affix" :icon="value || 'icons:image'" :icon-size></oda-icon>

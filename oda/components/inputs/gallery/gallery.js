@@ -2,11 +2,11 @@
  * oda-gallery-input — коллекция медиа: текущий элемент крупно, лента миниатюр, навигация в заголовке.
  * value — Array элементов {src, type?, name?} или строк-URL; index — текущий элемент; клавиши ← / →.
  */
-import '/oda/components/inputs/block/block.js';
 import { fileToMedia, mediaKind, mediaName } from '/oda/components/inputs/media/media.js';
 
 ODA({
     is: 'oda-gallery-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

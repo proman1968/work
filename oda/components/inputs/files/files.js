@@ -2,13 +2,13 @@
  * oda-files-input — коллекция файлов списком: иконка по типу, имя (ссылка при url), размер, удаление.
  * value — Array {name, size?, type?, url?}; добавление кнопкой заголовка или перетаскиванием (url — blob: текущей вкладки, file — сам File).
  */
-import '/oda/components/inputs/block/block.js';
 import { fileSize } from '/oda/components/inputs/file/file.js';
 
 const TYPE_ICONS = { image: 'image:photo', video: 'av:videocam', audio: 'image:music-note' };
 
 ODA({
     is: 'oda-files-input',
+    imports: 'oda//block.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

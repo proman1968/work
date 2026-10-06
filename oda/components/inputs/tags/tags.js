@@ -2,11 +2,10 @@
  * oda-tags-input — список значений чипами: Enter или запятая добавляют, Backspace в пустом поле удаляет последний.
  * value — Array; подсказки из вариантов (datalist), своё значение — при allowOther (по умолчанию да).
  */
-import '/oda/components/inputs/input/input.js';
-import '/oda/components/button/button.js';
 
 ODA({
     is: 'oda-tags-input',
+    imports: 'oda//input.js, oda//button.js',
     extends: 'oda-options-input',
     template: /*html*/`
         <style>

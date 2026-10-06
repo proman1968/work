@@ -3,8 +3,6 @@
  * Колонка: {id, label, type, options, calc, total}; calc — выражение от полей строки (колонка только для чтения),
  * total — итог в строке-заголовке. Ячейки правятся контролами oda-table по стандартной карте типов.
  */
-import '/oda/components/inputs/block/block.js';
-import '/oda/components/table/table.js';
 import { CONTROLS } from '/oda/components/structure/controls.js';
 
 const CALC = Object.create(null);
@@ -18,6 +16,7 @@ const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
 
 ODA({
     is: 'oda-table-input',
+    imports: 'oda//block.js, oda//table.js',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

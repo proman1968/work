@@ -8,10 +8,10 @@
  * Описание поля (соглашение, не тип библиотеки): {id, type?, label?, description?, icon?, placeholder?, fields?, items?, required?, readonly?, expression?}.
  * Явные свойства контрола (readonly, required, placeholder, …) приоритетнее одноимённых полей описания.
  */
-import '/oda/components/icon/icon.js';
 
 ODA({
     is: 'oda-input',
+    imports: 'oda//icon.js',
     template: /*html*/`
         <style>
             :host {

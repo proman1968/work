@@ -2,10 +2,10 @@
  * oda-rating-input — оценка звёздами: max звёзд, value — Number (0 / undefined — нет оценки).
  * Клик по текущей звезде сбрасывает оценку; клавиши ← / → меняют её.
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-rating-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>

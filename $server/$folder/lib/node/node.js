@@ -13,7 +13,7 @@ export default {
                 padding: 2px;
             }
             :host(:hover){
-                background-color: rgba(1,1,1,.1);
+                background: linear-gradient(270deg, rgba(1,1,1,.5), transparent);
             }
             label{
                 text-overflow: ellipsis;

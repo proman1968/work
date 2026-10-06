@@ -5,7 +5,6 @@
  * Список option строится из значения целиком (optionsHtml: вариант = индекс, selected по value) — select не рассинхронизируется
  * при любом порядке установки items/value. ~for не подходит: обёртку <for-contents> нативный список (multiple) не рисует.
  */
-import '/oda/components/inputs/input/input.js';
 
 /** значение option «Своё значение…» (у вариантов — индексы) */
 const OTHER = 'other';
@@ -15,6 +14,7 @@ const option = (value, label, selected, disabled) =>
 
 ODA({
     is: 'oda-select-input',
+    imports: 'oda//input.js',
     extends: 'oda-options-input',
     template: /*html*/`
         <style>

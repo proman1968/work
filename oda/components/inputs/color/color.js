@@ -2,10 +2,10 @@
  * oda-color-input — цвет: образец (нативный input type=color) и поле hex.
  * value — строка '#rrggbb' ('' — пусто).
  */
-import '/oda/components/inputs/input/input.js';
 
 ODA({
     is: 'oda-color-input',
+    imports: 'oda//input.js',
     extends: 'oda-input',
     template: /*html*/`
         <style>
