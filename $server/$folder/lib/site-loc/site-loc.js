@@ -1,5 +1,28 @@
-// site-loc — парсинг/сборка якоря глубокой локации для site / site-navigation.
-// Формат: #ctx=<short>#ctx=<short>&view=site-main
+// site-loc — парсинг/сборка якоря глубокой локации для site и классификация узлов структуры.
+// Формат: #ctx=<short>#ctx=<short> (цепочка от оболочки к вложенной точке)
+
+/** Типы узлов оргструктуры, у которых есть сайт и которые видны в навигации. */
+export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base', '$group']);
+
+/**
+ * Вид узла структуры по типу: 'org' — организация, 'unit' — подразделение,
+ * 'group' — должностная группа, '' — не узел структуры (данные, кабинеты).
+ * @param {string} type Тип элемента ($base, $structure, …)
+ * @returns {string}
+ */
+export function structureKind(type) {
+    switch (type) {
+        case '$base': return 'org';
+        case '$structure': return 'unit';
+        case '$group': return 'group';
+        default: return '';
+    }
+}
+
+/** Узел оргструктуры (есть сайт, участвует в навигации). */
+export function isStructureNode(item) {
+    return !!item && STRUCTURE_TYPES.includes(item.type);
+}
 
 function _encodeVal(v) {
     return String(v == null ? '' : v)

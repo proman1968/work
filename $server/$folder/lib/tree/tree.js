@@ -53,7 +53,7 @@ export default {
         /** фильтры системных типов */
         hideSystem: false,
         hideFiles: false,
-        onlyClasses: false, // только CORE.$class (site-navigation)
+        onlyClasses: false, // только CORE.$class (site)
     },
     showUsers: false,
     showSize: false,

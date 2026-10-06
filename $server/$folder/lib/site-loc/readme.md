@@ -1,6 +1,7 @@
-# site-loc — helpers локации site / site-navigation
+# site-loc — локация сайта и узлы оргструктуры
 
-Чистые функции разбора/сборки `#ctx=…` для page-handler `site` и `site-navigation`.
+Чистые функции для page-handler `site`: разбор/сборка `#ctx=…` (цепочка вложенных сайтов)
+и классификация узлов структуры (`structureKind`, `isStructureNode`, `STRUCTURE_TYPES`).
 
 ## Использование (клиент)
 

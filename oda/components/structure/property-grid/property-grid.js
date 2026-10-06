@@ -3,17 +3,12 @@
  * Поля строятся из дескрипторов свойств ([R].props): $list → выбор, Boolean → флажок, Number → число, icon → выбор иконки;
  * свойство только с геттером — только чтение. Данные формы — сам объект (запись — через его сеттеры).
  */
-import '/oda/components/structure/form/form.js';
-import '/oda/components/inputs/text/text.js';
-import '/oda/components/inputs/numeric/numeric.js';
-import '/oda/components/inputs/checkbox/checkbox.js';
-import '/oda/components/inputs/select/select.js';
-import '/oda/components/inputs/icon-picker/icon-picker.js';
 
 const typeOf = p => p.$list ? 'select' : { Boolean: 'boolean', Number: 'number' }[p.$type?.name] ?? (/^(icon|\w+Icon)$/.test(p.name) ? 'icon' : undefined);
 
 ODA({
     is: 'oda-property-grid',
+    imports: 'oda//form.js, oda//text.js, oda//numeric.js, oda//checkbox.js, oda//select.js, oda//icon-picker.js',
     extends: 'oda-form',
     template: /*html*/`
         <style>

@@ -5,7 +5,13 @@ const config = await loadConfig();
 const truthy = new Set(['1', 'true', 'yes', 'on']);
 
 export function parseDevMode(env = process.env) {
-    return config.DEV_MODE ?? truthy.has((env.WORK_DEV ?? '').toLowerCase());
+    const v = String(env.WORK_DEV ?? '').toLowerCase();
+    // окружение — главный источник; config.json — запасной, когда переменной нет
+    if (truthy.has(v))
+        return true;
+    if (['false', '0', 'no', 'off'].includes(v))
+        return false;
+    return config.DEV_MODE ?? false;
 }
 
 export const DEV_MODE = parseDevMode();
@@ -39,12 +45,4 @@ async function loadConfig(){
     catch(e){
         return Object.freeze({});
     }
-}
-async function saveConfig(newConfig = {}){
-    const config = await loadConfig();
-    await fs.writeFile('./config.json', JSON.stringify(Object.assign({}, config, newConfig), null, 2));
-}
-export async function setDevMode(value = DEV_MODE){
-    if (value === DEV_MODE) return;
-    await saveConfig({ DEV_MODE: value });
 }

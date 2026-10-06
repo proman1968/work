@@ -15,7 +15,7 @@ import {
     removePushSubscription,
     sendPushNotification,
 } from '../host/push.js';
-import { DEV_MODE, setDevMode } from "../host/config.js";
+import { DEV_MODE } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
 import { guardedGet } from "../host/net-guard.js";
 
@@ -470,12 +470,52 @@ export class $server extends $class {
         const { readAudit } = await import('./access/audit.js');
         return readAudit(params.day || undefined, Math.min(5000, Number(params.limit) || 500));
     }
-    async devModeToggle(params){
-        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN)
-        await setDevMode(params.post.value);
-        setTimeout(() => {
-            process.exit(0);
-        }, 1000);
+    /**
+     * Перезапустить сервер в обычном режиме (без WORK_DEV).
+     * Проверка — явно здесь, а не через assertAccess: в режиме отладки
+     * assertAccess ничего не проверяет. Только вошедший ADMIN корня;
+     * узлы сети не проходят (у ADMIN принципал только user).
+     * Перезапуск одноразовый: режим никуда не записывается.
+     * @param {object} [params]
+     * @returns {Promise<boolean>} true — перезапуск запланирован
+     */
+    async restart_normal(params = {}) {
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            throw new Error('Доступ запрещён');
+        const roles = await this.roles(params).catch(() => []);
+        if (!roles.includes('ADMIN'))
+            throw new Error('Доступ запрещён');
+        if (!DEV_MODE)
+            throw new Error('Сервер уже работает в обычном режиме');
+        const { spawn } = await import('node:child_process');
+        const env = { ...process.env, WORK_DEV: 'false' };
+        // отладочные флаги не должны пережить перезапуск
+        delete env.NODE_OPTIONS;
+        const helper = `
+            const fs = await import('node:fs');
+            const path = await import('node:path');
+            const { spawn } = await import('node:child_process');
+            const pid = Number(process.argv[1]);
+            const cwd = process.argv[2];
+            for (let i = 0; i < 300; i++) {
+                try { process.kill(pid, 0); }
+                catch { break; }
+                await new Promise(r => setTimeout(r, 200));
+            }
+            const log = fs.openSync(path.join(cwd, 'work-restart.log'), 'a');
+            const child = spawn(process.execPath, ['run.mjs'], {
+                cwd, env: JSON.parse(process.argv[3]),
+                detached: true, stdio: ['ignore', log, log],
+            });
+            child.unref();
+        `;
+        spawn(process.execPath, ['--input-type=module', '-e', helper,
+            String(process.pid), process.cwd(), JSON.stringify(env)], {
+            detached: true, stdio: 'ignore', env,
+        }).unref();
+        setTimeout(() => process.exit(0), 1000).unref?.();
+        return true;
     }
 }
 $server.type_chain = Object.create(null);

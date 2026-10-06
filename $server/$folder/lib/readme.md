@@ -20,7 +20,7 @@
 - `security/` — компоненты безопасности
 - `tools/` — вспомогательные инструменты
 - `email/` — библиотека работы с почтой
-- `site-loc/` — helpers локации `#ctx=…` для site / site-navigation
+- `site-loc/` — helpers локации `#ctx=…` для site
 
 ## Использование
 

@@ -34,7 +34,7 @@ GET тела `$file` (без метода, `?load`, `?script`) — поток с
 - **CSRF**: уровни `call`/`write`/`admin` требуют заголовок клиента `X-WORK-WSID` (или same-origin по `Sec-Fetch-Site`) и отвергают чужой `Origin`. CORS не разрешён (кроме `/.well-known/work-node`), предзапросы `OPTIONS` получают пустой ответ.
 - **Пользовательское содержимое**: html/svg/xml/js из зон и кабинетов — `Content-Security-Policy: sandbox`; везде `X-Content-Type-Options: nosniff`.
 - **Range** — с той же проверкой доступа, что `download`.
-- **DEV** (`WORK_DEV`) — только для запросов с localhost.
+- **DEV** (`WORK_DEV`) — только для запросов с localhost. Источник режима — переменная окружения (`config.DEV_MODE` — запасной, когда её нет); в `config.json` режим не пишется. Кнопка «переключить в обычный» на плашке отладки (`page.html`) видна только ADMIN корня и зовёт `restart_normal`: отсоединённый помощник ждёт выхода старого процесса и стартует `node run.mjs` с `WORK_DEV=false` (лог — `work-restart.log`). Под менеджером процессов, перезапускающим сервер самим, режим меняется в его настройках.
 - **Вход**: `user_login_start` не меняет личность сессии (ожидание привязано к uid и сроку); `user_register_*`: uid = SHA-256(email)[0..16] (код уходит владельцу адреса), код 6 цифр, 5 попыток, лимит отправок.
 - **Узлы сети WORK**: запрос с `Work-Signature` — подпись узла из `/NODES` (см. `modules/nodes/readme.md`), эфемерная сессия без cookie.
 - Журнал безопасности — `.index/audit/YYYY-MM-DD.jsonl`, чтение — `WORK.security_log({day})` (ADMIN).

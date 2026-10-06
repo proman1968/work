@@ -4,10 +4,10 @@
  * Поле с дочерними полями — сворачиваемый блок (<details>): дочерние поля строятся только в раскрытом блоке,
  * а наличие «внуков» (экспандер) проверяется только у видимых полей — ленивый обход без бесконечной рекурсии.
  */
-import '/oda/components/structure/structure.js';
 
 ODA({
     is: 'oda-form',
+    imports: 'oda//structure.js',
     extends: 'oda-structure',
     template: /*html*/`
         <style>
@@ -23,7 +23,7 @@ ODA({
                 border-bottom: 1px solid var(--subtle-border);
             }
         </style>
-        <oda-form-field ~for="fields" :field="$for.item" :data :form :dense></oda-form-field>
+        <oda-form-field ~for="fields" :field="$for.item" :data :dense></oda-form-field>
     `,
     $public: {
         /** компактный вид (property-grid): контролы без рамки, строки с разделителями */
@@ -33,9 +33,6 @@ ODA({
         },
         /** раскрыть все блоки первого уровня */
         expanded: true
-    },
-    get form() {
-        return this;
     },
     /** значение поля изменено пользователем */
     changed(field, value, data) {
@@ -158,18 +155,21 @@ ODA({
                     @tap.stop @value-changed="set($event.detail.value)"></div>
             </summary>
             <div ~if="expanded" class="nested">
-                <oda-form-field ~for="children" :field="$for.item" :data="nestedData" :form :dense :level="level + 1"></oda-form-field>
+                <oda-form-field ~for="children" :field="$for.item" :data="nestedData" :dense :level="level + 1"></oda-form-field>
             </div>
         </details>
     `,
     field: {
-        $type: Object
+        $type: Object,
+        set(n) {
+            this.reset();
+        }
     },
     data: {
-        $type: Object
-    },
-    form: {
-        $type: Object
+        $type: Object,
+        set(n) {
+            this.reset();
+        }
     },
     dense: {
         $def: false,
@@ -180,20 +180,20 @@ ODA({
     expanded: {
         $def: false,
         get() {
-            return !this.level && !!this.form?.expanded;
+            return !this.level && !!this.$pdp?.expanded;
         }
     },
     get label() {
-        return this.form?.labelOf(this.field) ?? this.field?.id;
+        return this.$pdp?.labelOf(this.field) ?? this.field?.id;
     },
     get control() {
-        return this.form?.controlOf(this.field);
+        return this.$pdp?.controlOf(this.field);
     },
     get value() {
         return this.data?.[this.field?.id];
     },
     get isReadonly() {
-        return !!(this.form?.readonly || this.field?.readonly);
+        return !!(this.$pdp?.readonly || this.field?.readonly);
     },
     get isRequired() {
         return !!(this.field?.required ?? this.field?.require);
@@ -205,13 +205,13 @@ ODA({
     },
     /** дочерние поля — только для отрисованного (видимого) поля */
     get children() {
-        return this.form?.getFields(this.field);
+        return this.$pdp?.getFields(this.field);
     },
     get hasChildren() {
         return !!this.children?.length;
     },
     get nestedData() {
-        return this.form?.dataOf(this.field, this.data);
+        return this.$pdp?.dataOf(this.field, this.data);
     },
     set(value) {
         const old = this.data?.[this.field.id];
@@ -227,11 +227,16 @@ ODA({
             return;
         this.data[this.field.id] = value;
         this.invalidate('value');
-        this.form.changed(this.field, value, this.data);
+        this.$pdp.changed(this.field, value, this.data);
     },
     /** проверка своего контрола и раскрытых дочерних полей */
     validate() {
         const own = [...this.$$('.control, .block')].filter(c => c.validate && !c.validate()).map(c => ({ field: this.field, errors: c.errors }));
         return [...own, ...this.$$('oda-form-field').flatMap(f => f.validate())];
+    },
+    /** сброс кэша дочерних полей при смене field/data — children и hasChildren пересчитаются лениво */
+    reset() {
+        this.children = undefined;
+        this.hasChildren = undefined;
     }
 });

@@ -26,6 +26,32 @@
 
         WORK.DEV_MODE = {dev_mode};
 
+        /**
+         * Ожидание перезапуска сервера в обычный режим:
+         * сначала сервер должен упасть (старый процесс выходит),
+         * затем подняться (помощник стартует run.mjs).
+         */
+        async function waitServerRestart() {
+            const probe = async () => {
+                try {
+                    await fetch(window.location.origin, { method: 'HEAD' });
+                    return true;
+                }
+                catch { return false; }
+            };
+            const until = async (wantUp, tries, delay) => {
+                for (let i = 0; i < tries; i++) {
+                    if (await probe() === wantUp)
+                        return true;
+                    await new Promise(r => setTimeout(r, delay));
+                }
+                return false;
+            };
+            await until(false, 150, 200);
+            if (!await until(true, 600, 500))
+                throw new Error('Сервер не поднялся — проверьте work-restart.log и обновите страницу вручную');
+        }
+
         try{
             await WORK.login();
         }
@@ -33,7 +59,7 @@
             console.log(e.message)
         }
 
-        if (!(location.hash?.length > 2) && item_path === '/' && !WORK.uid && !['site', 'site-navigation', 'site-main'].includes(page_handler)) {
+        if (!(location.hash?.length > 2) && item_path === '/' && !WORK.uid && !['site'].includes(page_handler)) {
             const base = item_path.replace(/\/$/, '');
             location.replace(location.origin + base + '/~/handlers//site/index.html');
         } else {
@@ -103,9 +129,9 @@
             disableButton: false,
             rebooting: false,
             get showRebootButton(){
-                // todo: сделать правильную проверку на админа
+                // только реальный ADMIN корня; в DEV права не обходятся — роли читаются напрямую
                 if (!this.$item) return false;
-                return Promise.resolve(this.$item.admin).then(admin => admin?.id === WORK.uid);
+                return Promise.resolve(this.$item.isAdmin).catch(() => false);
             },
             get buttonText(){
                 return this.rebooting ?'перезапуск' : 'переключить в обычный';
@@ -123,8 +149,9 @@
                         CANCEL: { label: 'Отмена', icon: 'carbon:close' },
                     });
                     this.rebooting = true;
-                    const method = await this.$item.fetch('handlers', {path: '//toggleDevMode'});
-                    await method?.execute();
+                    await this.$item.fetch('restart_normal');
+                    await waitServerRestart();
+                    location.reload();
                 }
                 catch(err){
                     console.error(err);

@@ -34,6 +34,7 @@ export const MEMBERS = Object.freeze({
     logs: L.READ, logs_dates: L.READ, log_files: L.READ, read_log_bodies: L.READ,
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
+    work_zone: L.READ,
     data_access: L.READ, index: L.READ, link_tree: L.READ, overlay_read: L.READ,
     // геттеры (свойства и списки)
     size: L.READ, METADATA: L.READ, type: L.READ, type_chain: L.READ, label: L.READ, icon: L.READ,
@@ -58,7 +59,7 @@ export const MEMBERS = Object.freeze({
     read_object: L.READ, query: L.READ, read_link: L.READ,
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
-    delete: L.ADMIN, npm: L.ADMIN, devModeToggle: L.ADMIN, read_secret: L.ADMIN,
+    delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
     save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN,
 });
 

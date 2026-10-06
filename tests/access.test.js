@@ -142,6 +142,16 @@ describe('ядро: canSee / canWrite по модели', () => {
         assert.equal(await dept.canSee(await dept.meta_folder.get_item('readme.md'), as('u2')), false);
     });
 
+    it('work_zone через шлюз: своя зона читается, чужая — нет', async () => {
+        const { invoke, canRead } = await import('../sources/server/access/gateway.js');
+        const dept = await WORK.get_item('/ORG/DEPT');
+        const own = await invoke(dept, 'work_zone', { role: 'USER', session: { uid: 'u1' } });
+        assert.ok(own.path.endsWith('/USER'));
+        assert.equal(await canRead(own, { session: { uid: 'u1' } }), true);
+        const alien = await invoke(dept, 'work_zone', { role: 'BOSS', session: { uid: 'u1' } });
+        assert.equal(await canRead(alien, { session: { uid: 'u1' } }), false, 'зона BOSS закрыта для USER');
+    });
+
     it('прикладная роль CUSTOMER: назначение, зона, запись', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const declared = await dept.declared_roles;
