@@ -59,10 +59,10 @@
             console.log(e.message)
         }
 
-        if (!(location.hash?.length > 2) && item_path === '/' && !WORK.uid && !['site'].includes(page_handler)) {
-            const base = item_path.replace(/\/$/, '');
-            location.replace(location.origin + base + '/~/handlers//site/index.html');
-        } else {
+        // if (!(location.hash?.length > 2) && item_path === '/' && !WORK.uid && !['site'].includes(page_handler)) {
+        //     const base = item_path.replace(/\/$/, '');
+        //     location.replace(location.origin + base + '/~/handlers//site/index.html');
+        // } else {
             const $item = await WORK.get_item(item_path, 'info');
             window.$context ??= $item;
 
@@ -98,7 +98,7 @@
                 devPanel.$item = await WORK.get_item('/');
                 devPanel.style = '';
             }
-        }
+        // }
         ODA({
             is: 'dev-mode-panel',
             template: `
