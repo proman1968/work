@@ -43,8 +43,9 @@ before(async () => {
     copy('DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js');
     copy('DATA/CATALOGS/$catalog/class.js');
     copy('DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js');
-    write('BASE/direction/$group/class.js', `export default { label: 'Направления' }`);
-    write('BASE/direction/sales/$group/class.js', `export default { label: 'Продажи', ${SEC},
+    write('BASE/direction/$structure/class.js', `export default { label: 'Направления' }`);
+    write('BASE/direction/sales/$structure/class.js', `export default { label: 'Продажи',
+        '#security': { USER: ['${USER1}'],
         LINKS: [
             { id: '/DATA/OPERATIONS/ПРОДАЖА', access: 'write' },
             { id: '/DATA/OPERATIONS/ОПЛАТА', access: 'write' },
@@ -54,7 +55,7 @@ before(async () => {
             { id: '/DATA/REGISTER/90', access: 'read' },
             { id: '/DATA/REGISTER/51', access: 'read' },
             { id: '/DATA/REGISTER/ПИСЬМА', access: 'read' },
-        ] }`);
+        ] } }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
     const admin = as(ADMIN);

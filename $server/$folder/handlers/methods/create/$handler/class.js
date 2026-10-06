@@ -357,7 +357,6 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                     path = '/$server/$folder/$class/$structure';
                     break;
                 case '$role':
-                case '$group':
                     path = '/$server/$folder/$class/$structure/$role';
                     break;
             }

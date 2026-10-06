@@ -70,10 +70,10 @@ export default {
     },
     get securityKey() {
         switch (this.role) {
-            case 'BOSS':  return 'BOSSES';
-            case 'ADMIN': return 'ADMINS';
-            case 'GUEST': return 'GUESTS';
-            default:      return 'USERS';
+            case 'BOSS':  return 'BOSS';
+            case 'ADMIN': return 'ADMIN';
+            case 'GUEST': return 'GUEST';
+            default:      return 'USER';
         }
     },
     get _sourceUsers() {
@@ -139,22 +139,3 @@ export default {
         WORK.showDropdown(menu, { TITLE: { label: user.label } }, e.target);
     }
 }
-
-ODA({is: 'menu-node', exports: 'oda//icon.js',
-    template: /*html*/`
-    <style>
-        :host { @apply --horizontal; cursor: pointer; align-items: center; }
-    </style>
-    <oda-icon :icon></oda-icon>
-    <span>{{label}}</span>
-    `,
-    row: null,
-    get icon() { return this.row?.icon; },
-    get label() { return this.row?.label; },
-    $listeners: {
-        tap(e) {
-            this.row.execute?.();
-            this.$pdp.execute?.(this.row);
-        }
-    }
-})

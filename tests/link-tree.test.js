@@ -35,14 +35,17 @@ before(async () => {
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Продавец'], [NOBODY, 'Чужой']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    write('BASE/direction/sales/$group/class.js', `export default { label: 'Продажи',
-        '#security': { USER: ['${USER1}'] },
-        LINKS: [
-            { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
-            { id: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },
-            { id: '/DATA/CATALOGS/Контрагенты/Поставщики', access: 'write' },
-            { id: '/DATA/REGISTER/62', access: 'read' },
-        ] }`);
+    write('BASE/direction/$structure/class.js', `export default { label: 'Направление' }`);
+    write('BASE/direction/sales/$structure/class.js', `export default { label: 'Продажи',
+        '#security': {
+            USER: ['${USER1}'],
+            LINKS: [
+                { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
+                { id: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },
+                { id: '/DATA/CATALOGS/Контрагенты/Поставщики', access: 'write' },
+                { id: '/DATA/REGISTER/62', access: 'read' },
+            ],
+        } }`);
     write('DATA/OPERATIONS/Финансы/$operation/class.js', `export default { label: 'Финансы' }`);
     write('DATA/OPERATIONS/Финансы/Платежи/$operation/class.js', `export default { label: 'Платежи' }`);
     write('DATA/OPERATIONS/Финансы/Платежи/Поставщик/$operation/class.js', `export default { label: 'Поставщик', ${FIELDS} }`);
@@ -95,7 +98,7 @@ describe('link_tree', () => {
         assert.equal(reg.children[0].access, 'read');
     });
 
-    it('шлюз отдаёт link_tree члену группы, чужому — запрет', async () => {
+    it('шлюз отдаёт link_tree участнику, чужому — запрет', async () => {
         const sales = await WORK.get_item('/BASE/direction/sales');
         const tree = await invoke(sales, 'link_tree', as(USER1));
         assert.equal(tree.length, 1);

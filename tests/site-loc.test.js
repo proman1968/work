@@ -6,14 +6,13 @@ describe('site-loc: узлы оргструктуры', () => {
     it('вид узла по типу', () => {
         assert.equal(structureKind('$base'), 'org');
         assert.equal(structureKind('$structure'), 'unit');
-        assert.equal(structureKind('$group'), 'group');
         assert.equal(structureKind('$user'), '', 'кабинет — не узел структуры');
         assert.equal(structureKind('$class'), '', 'данные — не узел структуры');
     });
 
     it('узлы структуры в навигации', () => {
-        assert.deepEqual([...STRUCTURE_TYPES], ['$structure', '$base', '$group']);
-        assert.equal(isStructureNode({ type: '$group' }), true);
+        assert.deepEqual([...STRUCTURE_TYPES], ['$structure', '$base']);
+        assert.equal(isStructureNode({ type: '$structure' }), true);
         assert.equal(isStructureNode({ type: '$server' }), false, 'корень WORK — не дочерний узел');
         assert.equal(isStructureNode(null), false);
     });

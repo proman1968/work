@@ -851,7 +851,7 @@ export const workTools = [
         name: 'create_class',
         risk: 'write',
         target: args => absPath(String(args?.parent || '') + '/' + String(args?.id || ''), null),
-        description: 'Создать новый класс (узел структуры) внутри класса parent. Для обычного $class имя id — ЗАГЛАВНЫМИ. type — типизатор ($class, $group, $base, …: смотри контракт места через read). class_js — тело class.js (export default {...}).',
+        description: 'Создать новый класс (узел структуры) внутри класса parent. Для обычного $class имя id — ЗАГЛАВНЫМИ. type — типизатор ($class, $structure, $base, …: смотри контракт места через read). class_js — тело class.js (export default {...}).',
         parameters: {
             type: 'object',
             properties: {

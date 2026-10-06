@@ -34,8 +34,8 @@ before(async () => {
     write('X/Y/Z/$class/class.js', `export default { label: 'Z' }`);
     write('BAD/$class/class.js', `export default {`);
     write('plain/inner/note.txt', 'x');
-    write('DATA/WORKPLACE/$group/class.js', `export default { label: 'Место',
-        LINKS: [{ id: '/X', access: 'read' }] }`);
+    write('DATA/WORKPLACE/$structure/class.js', `export default { label: 'Место',
+        '#security': { LINKS: [{ id: '/X', access: 'read' }] } }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -56,7 +56,7 @@ describe('наблюдатель за кодом', () => {
         assert.equal(isCodeChange(p('OPERATIONS', 'SALE', '$operation', 'DATA', '2026-02-01', 'x.md')), false);
         assert.equal(isCodeChange(p('BASE', 'doc', 'history', '2026', 'a.md')), false);
         assert.equal(isCodeChange(p('REGISTER', '$register', 'class.js')), true);
-        assert.equal(isCodeChange(p('BASE', 'direction', '$group', 'class.js')), true);
+        assert.equal(isCodeChange(p('BASE', 'direction', '$structure', 'class.js')), true);
         assert.equal(isCodeChange(p('SERVICES', 'Yandex', '$service', 'readme.md')), true);
         assert.equal(isCodeChange(p('oda', 'components', 'tree', 'tree.js')), true);
     });
@@ -73,7 +73,7 @@ describe('наблюдатель за кодом', () => {
     it('реестр ссылок заходит под корневой DATA', async () => {
         const { covering, reset } = await import('../sources/server/access/links.js');
         reset();
-        assert.deepEqual(await covering('/X'), [{ group: '/DATA/WORKPLACE', id: '/X', access: 'read' }]);
+        assert.deepEqual(await covering('/X'), [{ structure: '/DATA/WORKPLACE', place: null, id: '/X', access: 'read' }]);
         reset();
     });
 });

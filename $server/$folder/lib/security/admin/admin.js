@@ -23,8 +23,9 @@ export default {
     },
     async assignUser(user) {
         const security = await this.getSecurity();
-        security.ADMINS ??= [];
-        security.ADMINS.add(user.id);
+        security.ADMIN ??= [];
+        if (!security.ADMIN.includes(user.id))
+            security.ADMIN.push(user.id);
         await this.saveSecurity(security);
     }
 }

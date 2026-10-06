@@ -273,7 +273,7 @@ export default {
             items = (await node.item.items) || [];
         } catch { items = []; }
         node.kids = items
-            .filter(i => i instanceof CORE.$class && ['$structure', '$base', '$group'].includes(i.type))
+            .filter(i => i instanceof CORE.$class && ['$structure', '$base'].includes(i.type))
             .map(item => new SiteOrgNode(item, node.depth + 1));
         return node.kids;
     },

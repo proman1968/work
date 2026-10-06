@@ -12,6 +12,7 @@ import { DEV_MODE } from "../host/config.js";
 import * as POLICY from './access/policy.js';
 import * as REFS from './access/refs.js';
 import * as LINKS from './access/links.js';
+import * as WORKPLACES from './access/workplaces.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -235,6 +236,14 @@ export class $class extends $folder{
                 const out = {};
                 for (const role of [$class.ROLES.ADMIN, $class.ROLES.BOSS, $class.ROLES.USER, $class.ROLES.GUEST])
                     out[role] = this._roleIds(role).filter(id => id !== 'GUEST');
+                if (out.USER) {
+                    const seen = new Set(out.USER);
+                    for (const u of WORKPLACES.placeUserIds(this.DATA?.['#security']))
+                        if (u !== 'GUEST' && !seen.has(u)) {
+                            seen.add(u);
+                            out.USER.push(u);
+                        }
+                }
                 return out;
             }
         }
@@ -581,8 +590,11 @@ export class $class extends $folder{
         return roles;
     }
 
-    /** uid, назначенные на роль локально в #security (ключ — id роли). */
+    /** uid, назначенные на роль локально в #security (ключ — id роли).
+     * Служебные ключи секции (LINKS, ROLES) ролями не являются. */
     _roleIds(roleId, declared = this._declaredRolesSync()) {
+        if (roleId === 'LINKS' || roleId === 'ROLES')
+            return [];
         const security = this.DATA?.['#security'];
         if (!security || !declared[roleId])
             return [];
@@ -590,16 +602,35 @@ export class $class extends $folder{
         return Array.isArray(list) ? list.filter(v => typeof v === 'string') : [];
     }
 
-    /** На классе назначен хотя бы один пользователь (любая роль). */
+    /** Класс — подразделение ($structure или наследник: $base, $server). */
+    async _isStructure() {
+        try {
+            return (await this.type_chain).includes('$structure');
+        }
+        catch {
+            return false;
+        }
+    }
+
+    /** Назначен ли uid на прикладную роль (#security.ROLES) этого подразделения. */
+    async _isPlaceMember(uid) {
+        if (!uid || !(await this._isStructure()))
+            return false;
+        return WORKPLACES.isPlaceMember(this.DATA?.['#security'], uid);
+    }
+
+    /** На классе назначен хотя бы один пользователь (любая роль или место). */
     hasAssignments() {
         const declared = this._declaredRolesSync();
-        return Object.keys(declared).some(id => this._roleIds(id, declared).length > 0);
+        return Object.keys(declared).some(id => this._roleIds(id, declared).length > 0)
+            || WORKPLACES.hasPlaceAssignments(this.DATA?.['#security']);
     }
 
     /**
      * Получить список ролей текущего пользователя в классе.
      * Системные роли (ADMIN, BOSS) наследуются от вышестоящих классов,
-     * остальные — только локальные назначения.
+     * остальные — только локальные назначения. Назначение на прикладную
+     * роль подразделения (#security.ROLES) даёт роль USER в нём.
      * @param {object} [params]
      * @param {object} [params.session] Объект пользователя из сессии
      * @returns {Promise<string[]>} Роли по убыванию силы: 'ADMIN', 'BOSS', 'USER', 'GUEST', прикладные
@@ -629,6 +660,8 @@ export class $class extends $folder{
                 }
             }
         }
+        if (!roles.includes('USER') && await this._isPlaceMember(uid))
+            roles.push('USER');
         // субъект-узел сети: только роли, допускающие узлы, и только заявленные его представителем
         const principal = params.session?.principal;
         if (principal?.kind === 'node') {
@@ -644,13 +677,15 @@ export class $class extends $folder{
         return this.id;
     }
 
-    /** Роль назначена пользователю в этой точке (а не унаследована сверху). */
+    /** Роль назначена пользователю в этой точке (а не унаследована сверху).
+     * Назначение на прикладную роль подразделения считается локальным USER. */
     async hasLocalRole(params = {}, role = params.role) {
         const uid = $class.resolveUid(params);
         if (!uid || !role)
             return false;
         await this.init;
-        return this._roleIds(role).includes(uid);
+        return this._roleIds(role).includes(uid)
+            || (role === $class.ROLES.USER && await this._isPlaceMember(uid));
     }
 
     /**
@@ -764,7 +799,7 @@ export class $class extends $folder{
 
         this.reset();
         this.DATA = await this.import();
-        if (this.type === '$group')
+        if (await this._isStructure())
             LINKS.reset();
 
         return true;
@@ -846,55 +881,72 @@ export class $class extends $folder{
         return LINKS.dataAccess(this, params);
     }
     /**
-     * Цепочки ссылок рабочего места для дерева: LINKS группы и их предки
-     * до корня типа (вниз и вбок — ничего). Клиент зеркалит структуру.
+     * Цепочки ссылок подразделения для дерева: ссылки #security (общие LINKS
+     * плюс LINKS прикладных ролей пользователя) и их предки до корня типа
+     * (вниз и вбок — ничего). Клиент зеркалит структуру.
      * @param {object} [params]
-     * @returns {Promise<Array>} [{path, label, icon, type, access, children}]
+     * @returns {Promise<Array>} [{path, label, icon, type, access, via, children}]
      */
     async link_tree(params = {}) {
-        if (this.type !== '$group')
+        if (!(await this._isStructure()))
             return [];
         await this.init;
-        const raw = Array.isArray(this.DATA?.LINKS) ? this.DATA.LINKS : [];
+        const sec = this.DATA?.['#security'];
+        const { common, places } = WORKPLACES.normalizeSecurity(sec);
         const roles = await this.roles(params).catch(() => []);
         const admin = roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
         if (!roles.length && !admin)
             return [];
+        const uid = $class.resolveUid(params);
         const rank = { read: 1, write: 2, admin: 3 };
         const eff = new Map();
-        for (const l of raw) {
-            const id = String(l?.id || '').trim();
-            const access = String(l?.access || '').trim();
-            if (!id.startsWith('/') || (access !== 'read' && access !== 'write'))
-                continue;
-            const level = admin ? (access === 'write' ? 'admin' : 'read')
-                : roles.length ? access : 'read';
-            if ((rank[level] || 0) > (rank[eff.get(id)] || 0))
-                eff.set(id, level);
+        const add = (id, access, via) => {
+            const cur = eff.get(id);
+            if ((rank[access] || 0) <= (rank[cur?.access] || 0) && cur)
+                cur.via.push(...via.filter(v => !cur.via.includes(v)));
+            else
+                eff.set(id, { access, via: [...new Set([...(cur?.via || []), ...via])] });
+        };
+        if (admin) {
+            for (const l of common)
+                add(l.id, l.access === 'write' ? 'admin' : 'read', [null]);
+            for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
+                const via = [WORKPLACES.trailKey(trail)];
+                for (const l of node.LINKS)
+                    add(l.id, l.access === 'write' ? 'admin' : 'read', via);
+            }
+        }
+        else {
+            for (const l of common)
+                add(l.id, l.access, [null]);
+            for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: roles.includes('BOSS') }))
+                add(id, e.access, e.via);
         }
         const byPath = new Map();
         const roots = [];
-        for (const [id, level] of eff) {
+        for (const [id, e] of eff) {
             const segs = id.split('/').filter(Boolean);
             let prefix = '', parent = null;
             segs.forEach((seg, i) => {
                 prefix += '/' + seg;
                 let n = byPath.get(prefix);
                 if (!n) {
-                    n = { path: prefix, label: seg, icon: '', type: '', access: 'read', children: [] };
+                    n = { path: prefix, label: seg, icon: '', type: '', access: 'read', via: [], children: [] };
                     byPath.set(prefix, n);
                     if (parent)
                         parent.children.push(n);
                     else
                         roots.push(n);
                 }
-                if (i === segs.length - 1 && (rank[level] || 0) > (rank[n.access] || 0))
-                    n.access = level;
+                if (i === segs.length - 1 && (rank[e.access] || 0) > (rank[n.access] || 0)) {
+                    n.access = e.access;
+                    n.via = e.via;
+                }
                 parent = n;
             });
         }
         // Подписи метками классов (внутренний обход — без проверок доступа,
-        // читать цепочку разрешено самим фактом членства в группе).
+        // читать цепочку разрешено самим фактом членства в подразделении).
         for (const n of byPath.values()) {
             try {
                 let t = await globalThis.WORK.get_item(n.path);
@@ -915,6 +967,68 @@ export class $class extends $folder{
         };
         sort(roots);
         return roots;
+    }
+    /**
+     * Дерево прикладных ролей подразделения с назначениями и ссылками.
+     * Для клиента (item-security): свои места помечены mine, ссылки подписаны
+     * метками классов. Пустые подразделения — { common: [], places: [] }.
+     * @param {object} [params]
+     * @returns {Promise<{common: Array, places: Array}>}
+     */
+    async places(params = {}) {
+        if (!(await this._isStructure()))
+            return { common: [], places: [] };
+        await this.init;
+        const uid = $class.resolveUid(params);
+        const roles = await this.roles(params).catch(() => []);
+        const sec = this.DATA?.['#security'];
+        const { common, places } = WORKPLACES.normalizeSecurity(sec);
+        const mine = new Set(WORKPLACES.memberTrailKeys(sec, uid));
+        const boss = roles.includes('BOSS');
+        const seen = new Map();
+        const describe = async (id) => {
+            if (!seen.has(id)) {
+                seen.set(id, (async () => {
+                    try {
+                        let t = await globalThis.WORK.get_item(id);
+                        if (Array.isArray(t))
+                            t = t.at(-1);
+                        if (!t)
+                            return null;
+                        await t.init;
+                        return { label: t.DATA?.label || t.name || id, icon: t.DATA?.icon || '', type: t.type || '' };
+                    }
+                    catch {
+                        return null;
+                    }
+                })());
+            }
+            return seen.get(id);
+        };
+        const outCommon = [];
+        for (const l of common)
+            outCommon.push({ id: l.id, access: l.access, ...(await describe(l.id) || {}) });
+        const walk = async (nodes, trail = []) => {
+            const out = [];
+            for (const node of nodes) {
+                const t = [...trail, node.id];
+                const key = WORKPLACES.trailKey(t);
+                const links = [];
+                for (const l of node.LINKS)
+                    links.push({ id: l.id, access: l.access, ...(await describe(l.id) || {}) });
+                out.push({
+                    id: node.id, label: node.label, icon: node.icon,
+                    users: [...node.USERS], links,
+                    mine: mine.has(key),
+                    inherited: mine.size > 0 && !mine.has(key)
+                        && [...mine].some(m => key.startsWith(m + '/')),
+                    bossView: boss && !mine.has(key),
+                    roles: await walk(node.ROLES, t),
+                });
+            }
+            return out;
+        };
+        return { common: outCommon, places: await walk(places) };
     }
     /** Файл местных расширений виртуального справочника ({registryId: {...}}). */
     _overlayFile() {
@@ -2595,10 +2709,15 @@ export class $class extends $folder{
         return this.assignedUsers;
     }
 
-    /** Пользователи роли, назначенные локально в #security (без наследования и литералов). */
+    /** Пользователи роли, назначенные локально в #security (без наследования и литералов).
+     * Для USER подразделения сюда же входят назначенные на прикладные роли. */
     _localRole(role) {
         return Promise.resolve(this.init).then(async () => {
-            const ids = this._roleIds(role);
+            const ids = [...this._roleIds(role)];
+            if (role === $class.ROLES.USER)
+                for (const u of WORKPLACES.placeUserIds(this.DATA?.['#security']))
+                    if (!ids.includes(u))
+                        ids.push(u);
             if (!ids?.length) return [];
             const usersRoot = await WORK.$users;
             const result = [];

@@ -1,11 +1,11 @@
-import { bindLinkTree, isLinkNode } from './link-nodes.js';
+import { isLinkNode } from './link-nodes.js';
 
 /**
  * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
  * или он неприменим: ссылки и группы достраивают детей на клиенте, фильтры дерева отсекают часть.
  */
 export function knownHasItems(it, pdp = {}) {
-    if (!it || isLinkNode(it) || it.type === '$group' || it.type === '$server')
+    if (!it || isLinkNode(it) || it.type === '$server')
         return undefined;
     if (pdp.hideSystem || pdp.hideFiles || pdp.onlyClasses || pdp.itemsSelector !== 'items')
         return undefined;
@@ -179,8 +179,13 @@ ODA({is: 'oda-tree-node',
         </style>
         <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused}" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
-            <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-            <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
+            <div vertical flex>
+                <div horizontal flex>
+                    <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
+                    <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
+                </div>
+                <item-security ~if="hasSecurity" ~show="expanded"></item-security>
+            </div>
         </div>
         <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
             <div class='step' ~if="hideRoots<1"></div>
@@ -189,6 +194,12 @@ ODA({is: 'oda-tree-node',
             </div>
         </div>
     `,
+    get hasSecurity(){
+        // Панель безопасности — только у подразделений ($structure и наследники);
+        // пустая (без ROLES и LINKS) скрывается самим item-security.
+        const t = this.$item?.type;
+        return t === '$structure' || t === '$base' || t === '$server';
+    },
     showStatus: false,
     showUsers: false,
     menuMode: {
@@ -318,53 +329,8 @@ ODA({is: 'oda-tree-node',
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }
-            // ссылки рабочего места: цепочки link_tree группы.
-            // Сервер отдаёт структуру (LINKS + предки до корня типа),
-            // клиент лишь привязывает настоящие элементы (все уровни кликабельны),
-            // дети узла — только цепочка. Кэш на узел, сброс — по 'changed' ниже.
-            try {
-                if (this.$item?.type === '$group' && Array.isArray(items)) {
-                    if (this._linkTreeFor !== this.$item) {
-                        this._linkTree = null;
-                        this._linkTreeFor = this.$item;
-                    }
-                    this._linkTree ??= (async () => {
-                        try {
-                            const raw = await WORK.fetch(this.$item.short || '/', 'link_tree', {});
-                            return await bindLinkTree(raw, (p) => WORK.get_item(p));
-                        }
-                        catch {
-                            // Старый сервер без link_tree — плоские листья как раньше.
-                            const out = [];
-                            try {
-                                const body = await this.$item.body;
-                                const links = Array.isArray(body?.LINKS) ? body.LINKS : [];
-                                for (const l of links) {
-                                    const id = String(l?.id || '').trim();
-                                    if (!id.startsWith('/'))
-                                        continue;
-                                    let t;
-                                    try {
-                                        t = await WORK.get_item(id);
-                                    }
-                                    catch { continue; }
-                                    if (Array.isArray(t))
-                                        t = t.at(-1);
-                                    if (t)
-                                        out.push(t);
-                                }
-                            }
-                            catch { /* без ссылок */ }
-                            return out;
-                        }
-                    })();
-                    const paths = new Set(items.map(x => x.path));
-                    const extra = (await this._linkTree).filter(t => t && !paths.has(t.path));
-                    if (extra.length)
-                        items = [...items, ...extra];
-                }
-            }
-            catch { /* без ссылок */ }
+            // Подразделения показывают состав мест и ссылки панелью item-security
+            // под узлом (см. hasSecurity) — отдельными детьми в дереве они не идут.
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
                     this._linkTree = null;

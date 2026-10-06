@@ -1,28 +1,35 @@
 /**
- * Ссылки рабочих мест (LINKS) на прикладные классы.
- * Рабочее место — $group; в его class.js: LINKS: [{ id: '/ПУТЬ/КЛАССА', access: 'read'|'write' }].
- * Ссылка распространяется на всё поддерево класса. Реестр строится лениво
- * обходом классов $group, сбрасывается при save() любой $group.
+ * Ссылки подразделений (#security структур) на прикладные классы.
+ * Подразделение — класс типа $structure или его наследника ($base, $server);
+ * в его `#security`: общие LINKS (всем назначенным) и дерево прикладных ролей
+ * ROLES (должности) со своими USERS и LINKS. Ссылка распространяется на всё
+ * поддерево класса. Реестр строится лениво обходом структур, сбрасывается
+ * при save() любой структуры.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { FS } from '../index.js';
 import * as POLICY from './policy.js';
+import * as WORKPLACES from './workplaces.js';
 
 /** Типы, на которые ссылки не действуют (структура видна по своим правилам). */
 export const NO_LINK_TYPES = new Set(['$structure', '$group', '$user', '$base', '$server']);
+
+/** Имена метапапок, в которых лежит class.js подразделения. */
+const STRUCTURE_METAS = WORKPLACES.STRUCTURE_META_NAMES;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'sources', 'oda', 'tests', 'docs', 'torus', 'DATA', 'INDEX', 'logs']);
 
 let cache = null;
 
-/** Сбросить реестр (после save $group). */
+/** Сбросить реестр (после save структуры). */
 export function reset() {
     cache = null;
 }
 
-/** Все ссылки всех рабочих мест: [{ group, id, access }]. */
+/** Все ссылки всех подразделений: [{ structure, place, id, access }].
+ * place — путь места в дереве ROLES ('heads/ceo'), null — общая ссылка #security.LINKS. */
 async function collect() {
     if (cache)
         return cache;
@@ -45,7 +52,7 @@ async function collect() {
                 && (e.name !== 'DATA' && e.name !== 'INDEX' || rel.split('/').some(s => s.startsWith('$'))))
                 continue;
             const sub = rel ? rel + '/' + e.name : e.name;
-            if (e.name === '$group') {
+            if (STRUCTURE_METAS.includes(e.name)) {
                 const segs = rel.split('/').filter(Boolean);
                 if (segs.some(s => s.startsWith('$')))
                     continue;
@@ -57,15 +64,15 @@ async function collect() {
                     if (!(g instanceof FS.$class))
                         continue;
                     await g.init;
-                    const links = g.DATA?.LINKS;
-                    if (!Array.isArray(links))
+                    if (!(await g.type_chain).includes('$structure'))
                         continue;
-                    for (const l of links) {
-                        const id = String(l?.id || '').trim();
-                        const access = String(l?.access || '').trim();
-                        if (!id.startsWith('/') || (access !== 'read' && access !== 'write'))
-                            continue;
-                        out.push({ group: clsPath, id, access });
+                    const { common, places } = WORKPLACES.normalizeSecurity(g.DATA?.['#security']);
+                    for (const l of common)
+                        out.push({ structure: clsPath, place: null, id: l.id, access: l.access });
+                    for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
+                        const place = WORKPLACES.trailKey(trail);
+                        for (const l of node.LINKS)
+                            out.push({ structure: clsPath, place, id: l.id, access: l.access });
                     }
                 }
                 catch { /* нет доступа */ }
@@ -93,17 +100,22 @@ function takeRank(best, level) {
 }
 
 /**
- * Уровень доступа по ссылкам рабочих мест (без прямых назначений).
+ * Уровень доступа по ссылкам подразделений (без прямых назначений).
  * Ссылка действует на класс и его поддерево, кроме структурных типов.
+ * Место даёт свой access участникам; вышестоящее место и BOSS видят
+ * ссылки вложенных мест на чтение; общая ссылка — всем назначенным.
  */
 export async function linkLevel(cls, params = {}) {
     if (NO_LINK_TYPES.has(cls.type))
         return null;
+    const uid = cls.constructor.resolveUid(params);
+    if (!uid)
+        return null;
     let best = null;
-    for (const { group, access } of await covering(cls.path)) {
+    for (const { structure, place, access } of await covering(cls.path)) {
         let g;
         try {
-            g = await globalThis.WORK.get_item(group);
+            g = await globalThis.WORK.get_item(structure);
         }
         catch { continue; }
         if (Array.isArray(g))
@@ -111,10 +123,24 @@ export async function linkLevel(cls, params = {}) {
         if (!(g instanceof FS.$class))
             continue;
         const roles = await g.roles(params).catch(() => []);
-        if (roles.includes('ADMIN'))
+        if (!roles.length)
+            continue;
+        if (roles.includes('ADMIN')) {
             best = takeRank(best, access === 'write' ? 'admin' : 'read');
-        else if (roles.length)
+            continue;
+        }
+        const sec = g.DATA?.['#security'];
+        if (place) {
+            if (WORKPLACES.memberTrailKeys(sec, uid).includes(place))
+                best = takeRank(best, access);
+            else if (WORKPLACES.isAncestorPlaceMember(sec, uid, place))
+                best = takeRank(best, 'read');
+            else if (roles.includes('BOSS'))
+                best = takeRank(best, 'read');
+        }
+        else {
             best = takeRank(best, access);
+        }
     }
     return best;
 }
@@ -173,14 +199,14 @@ export async function grants(cls, item, params) {
 /**
  * Путь — строгий предок какой-то ссылки, элемент — на цепочке к ней
  * (сам класс, путь к ссылке или её поддерево), и у пользователя есть роль
- * в группе ссылки. Даёт только каркас для цепочек (см. grants).
+ * в подразделении ссылки. Даёт только каркас для цепочек (см. grants).
  */
 export async function isLinkAncestor(path, params = {}, itemPath = null) {
     const p = String(path || '');
     if (!p.startsWith('/') || p === '/')
         return false;
     const item = itemPath == null ? p : String(itemPath);
-    for (const { group, id } of await collect()) {
+    for (const { structure, id } of await collect()) {
         if (!id.startsWith(p + '/'))
             continue;
         // Боковые ветки — мимо: элемент обязан лежать на цепочке.
@@ -188,7 +214,7 @@ export async function isLinkAncestor(path, params = {}, itemPath = null) {
             continue;
         let g;
         try {
-            g = await globalThis.WORK.get_item(group);
+            g = await globalThis.WORK.get_item(structure);
         }
         catch { continue; }
         if (Array.isArray(g))

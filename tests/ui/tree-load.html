@@ -136,13 +136,12 @@ await test('_onEmpty(items): один info с глубиной 1, дети пр�
     }
 });
 
-await test('стрелка по hasItems без чтения items; группы, ссылки и фильтры — по items', async () => {
+await test('стрелка по hasItems без чтения items; ссылки и фильтры — по items', async () => {
     const pdp = { itemsSelector: 'items' };
     const mk = (data, type = '$class') => WORK.__bind({ path: '/K/' + Math.random(), id: 'k', type, ...data });
     eq(knownHasItems(mk({ hasItems: true }), pdp), true);
     eq(knownHasItems(mk({ hasItems: false }), pdp), false);
     eq(knownHasItems(mk({}), pdp), undefined, 'без флага — неизвестно');
-    eq(knownHasItems(mk({ hasItems: false }, '$group'), pdp), undefined, 'группа достраивает ссылки');
     eq(knownHasItems(mk({ hasItems: false }), { ...pdp, onlyClasses: true }), undefined, 'фильтр дерева');
     const link = Object.create(mk({ hasItems: false }));
     link.isLink = true;

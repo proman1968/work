@@ -135,16 +135,6 @@ export default {
                 </div>
             </div>
         </section>
-        <section ~if="groups?.length">
-            <h2>Должностные группы</h2>
-            <div class="grid">
-                <div class="card" ~for="groups" @tap="openNode($for.item)">
-                    <item-icon :$item="$for.item" :icon-size="32"></item-icon>
-                    <div class="name">{{$for.item.label}}</div>
-                    <span class="chip">группа</span>
-                </div>
-            </div>
-        </section>
         <section ~if="links?.length">
             <h2>Рабочие ссылки</h2>
             <div class="grid">
@@ -155,14 +145,14 @@ export default {
                 </div>
             </div>
         </section>
-        <div class="empty" ~if="loaded && !units?.length && !groups?.length && !links?.length">
-            Здесь пока нет подразделений, групп и рабочих ссылок.
+        <div class="empty" ~if="loaded && !units?.length && !links?.length">
+            Здесь пока нет подразделений и рабочих ссылок.
         </div>
     </div>
     `,
     loaded: false,
     get kindLabel() {
-        return { '$base': 'Организация', '$structure': 'Подразделение', '$group': 'Должностная группа', '$server': 'WORK' }[this.$item?.type] || '';
+        return { '$base': 'Организация', '$structure': 'Подразделение', '$server': 'WORK' }[this.$item?.type] || '';
     },
     get description() {
         return Promise.resolve(this.$item?.body).then(b => b?.description || '').catch(() => '');
@@ -178,14 +168,11 @@ export default {
         if (!this.$item)
             return [];
         return Promise.resolve(this.$item.items).then(items =>
-            (items || []).filter(i => i instanceof CORE.$class && ['$structure', '$base', '$group'].includes(i.type))
+            (items || []).filter(i => i instanceof CORE.$class && ['$structure', '$base'].includes(i.type))
         ).catch(() => []);
     },
     get units() {
-        return Promise.resolve(this.structureChildren).then(l => l.filter(i => i.type !== '$group'));
-    },
-    get groups() {
-        return Promise.resolve(this.structureChildren).then(l => l.filter(i => i.type === '$group'));
+        return this.structureChildren;
     },
     /** Ссылки рабочего места (LINKS), доступные пользователю: листья link_tree (сырой JSON, без __bind). */
     get links() {

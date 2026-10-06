@@ -2,11 +2,11 @@
 // Формат: #ctx=<short>#ctx=<short> (цепочка от оболочки к вложенной точке)
 
 /** Типы узлов оргструктуры, у которых есть сайт и которые видны в навигации. */
-export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base', '$group']);
+export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base']);
 
 /**
  * Вид узла структуры по типу: 'org' — организация, 'unit' — подразделение,
- * 'group' — должностная группа, '' — не узел структуры (данные, кабинеты).
+ * '' — не узел структуры (данные, кабинеты).
  * @param {string} type Тип элемента ($base, $structure, …)
  * @returns {string}
  */
@@ -14,7 +14,6 @@ export function structureKind(type) {
     switch (type) {
         case '$base': return 'org';
         case '$structure': return 'unit';
-        case '$group': return 'group';
         default: return '';
     }
 }

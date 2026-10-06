@@ -17,7 +17,7 @@
 - `pages/form/$handler/` — форма по умолчанию (выбор формы из class.js)
 - `pages/form/chat/$handler/` — чат-интерфейс
 - `pages/form/folder/$handler/` — форма папки: ADMIN и BOSS видят метапапку, остальные — папку своей роли (`work_zone`)
-- `pages/site/` — сайт точки оргструктуры (WORK — лендинг, `$base` — организация, `$structure`/`$group` — рабочая зона); канон — [`$structure/.../site/$handler/readme.md`](/$server/$folder/$class/$structure/handlers/pages/site/$handler/readme.md/~/handlers/pages/form/)
+- `pages/site/` — сайт точки оргструктуры (WORK — лендинг, `$base` — организация, `$structure` — рабочая зона подразделения); канон — [`$structure/.../site/$handler/readme.md`](/$server/$folder/$class/$structure/handlers/pages/site/$handler/readme.md/~/handlers/pages/form/)
 
 ## Вызов
 

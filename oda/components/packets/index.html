@@ -1,0 +1,60 @@
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./packets.js"></script>
+<style>
+    body { padding: 16px; font-family: sans-serif; display: flex; flex-direction: column; gap: 16px; }
+    h2 { margin: 8px 0 4px; font-size: 15px; }
+    .demo { border: 1px solid var(--subtle-border, #ccc); border-radius: 8px; padding: 8px; }
+    .demo oda-packets { display: block; }
+    .panel { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+    .panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+    .out { font-size: 13px; white-space: pre-wrap; background: rgba(127,127,127,.1); border-radius: 8px; padding: 8px; min-height: 60px; }
+</style>
+
+<h2>day (2024-11-15 — 2025-02-10)</h2>
+<div class="demo"><oda-packets id="pDay" start="2024-11-15" end="2025-02-10" mode="day"></oda-packets></div>
+
+<h2>month (2024-01-01 — 2024-12-31)</h2>
+<div class="demo"><oda-packets id="pMonth" start="2024-01-01" end="2024-12-31" mode="month"></oda-packets></div>
+
+<h2>quarter (2023-06-01 — 2025-03-31)</h2>
+<div class="demo"><oda-packets id="pQuarter" start="2023-06-01" end="2025-03-31" mode="quarter"></oda-packets></div>
+
+<h2>year (2020-01-01 — 2025-12-31)</h2>
+<div class="demo"><oda-packets id="pYear" start="2020-01-01" end="2025-12-31" mode="year"></oda-packets></div>
+
+<h2>Живая панель</h2>
+<div class="demo">
+    <div class="panel">
+        <label>start (YYYY-MM-DD)<input id="inStart" type="date" value="2024-01-01"></label>
+        <label>end (YYYY-MM-DD)<input id="inEnd" type="date" value="2024-12-31"></label>
+        <label>mode
+            <select id="inMode">
+                <option value="day">day</option>
+                <option value="month" selected>month</option>
+                <option value="quarter">quarter</option>
+                <option value="year">year</option>
+            </select>
+        </label>
+    </div>
+    <oda-packets id="pLive" start="2024-01-01" end="2024-12-31" mode="month"></oda-packets>
+    <div class="out" id="out">Ожидание выбора...</div>
+</div>
+
+<script type="module">
+    inStart.onchange = () => pLive.start = inStart.value;
+    inEnd.onchange = () => pLive.end = inEnd.value;
+    inMode.onchange = () => pLive.mode = inMode.value;
+    const show = (src) => (e) => {
+        const d = e.detail?.value ?? e.detail ?? {};
+        out.textContent = `[${src}]\nselected: ${d.selected?.name} (${d.selected?.fullLabel || ''})\nmask: ${d.mask}\nperiod: ${JSON.stringify(d.period)}\ncount: ${d.selection?.length}`;
+    };
+    pDay.addEventListener('selection-changed', show('day'));
+    pMonth.addEventListener('selection-changed', show('month'));
+    pQuarter.addEventListener('selection-changed', show('quarter'));
+    pYear.addEventListener('selection-changed', show('year'));
+    pLive.addEventListener('selection-changed', show('live'));
+</script>
