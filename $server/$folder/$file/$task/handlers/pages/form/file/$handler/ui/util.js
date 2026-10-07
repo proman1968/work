@@ -31,6 +31,16 @@ export const TOOL_META = {
     disconnect_service: { label: 'Отключение', icon: 'carbon:connect' },
     http_request: { label: 'Запрос API', icon: 'carbon:http' },
     open_page: { label: 'Страница', icon: 'carbon:application-web' },
+    computer_status: { label: 'Компьютер', icon: 'carbon:screen' },
+    computer_network: { label: 'Сеть песочницы', icon: 'carbon:network' },
+    computer_destroy: { label: 'Удалить компьютер', icon: 'carbon:trash-can' },
+    computer_screenshot: { label: 'Скриншот', icon: 'carbon:image' },
+    computer_action: { label: 'Действие на экране', icon: 'carbon:cursor-1' },
+    computer_handoff: { label: 'Помощь человека', icon: 'carbon:help' },
+    sandbox_exec: { label: 'Команда', icon: 'carbon:terminal' },
+    sandbox_read: { label: 'Файл из песочницы', icon: 'carbon:document' },
+    sandbox_write: { label: 'Файл в песочницу', icon: 'carbon:document-add' },
+    sandbox_ls: { label: 'Папка песочницы', icon: 'carbon:folder' },
 };
 
 export function toolMeta(name) {
@@ -61,6 +71,16 @@ export function toolTarget(t) {
         return (t.connect?.label || a.provider || '') + (a.scopes?.length ? ' · ' + a.scopes.join(', ') : '');
     if (t?.name === 'todo_write')
         return (a.todos || []).filter(x => x.status === 'completed').length + '/' + (a.todos || []).length;
+    if (t?.name === 'sandbox_exec')
+        return String(a.command || '').split('\n')[0].slice(0, 80);
+    if (t?.name === 'computer_action') {
+        const coords = a.action === 'drag'
+            ? [a.x1, a.y1, a.x2, a.y2].map(v => v ?? '?').join(',')
+            : (a.x ?? '') + ',' + (a.y ?? '');
+        return (a.action || '') + (a.action === 'type' ? ' «' + String(a.text || '').slice(0, 40) + '»' : a.action === 'key' ? ' ' + (a.key || '') : ' ' + coords);
+    }
+    if (String(t?.name || '').startsWith('sandbox_') || String(t?.name || '').startsWith('computer_'))
+        return String(a.path || a.command || a.action || a.name || '').split('\n')[0].slice(0, 80);
     return String(t?.path || a.path || a.query || a.url || a.snapshot || a.name || a.question || a.prompt || '');
 }
 

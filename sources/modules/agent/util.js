@@ -59,7 +59,7 @@ export function estimateTokens(value) {
     return Math.ceil(s.length / 3.2);
 }
 
-/** Результат инструмента → текст для модели. */
+/** Результат инструмента → текст для модели. Богатый результат { text, images } → text (картинки кладутся рядом, см. loop.js). */
 export function resultText(value) {
     if (value == null)
         return 'ok';
@@ -67,6 +67,8 @@ export function resultText(value) {
         return value;
     if (Buffer.isBuffer?.(value))
         return '[бинарные данные ' + value.length + ' байт]';
+    if (typeof value === 'object' && !Array.isArray(value) && typeof value.text === 'string' && value.images !== undefined)
+        return value.text;
     try {
         return JSON.stringify(value, null, 2);
     }

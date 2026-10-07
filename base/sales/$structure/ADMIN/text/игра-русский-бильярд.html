@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Русский бильярд</title>
+<style>
+  :root{
+    --felt:#0b6b3a; --felt2:#0a5c33; --rail:#5a3418; --rail2:#7a4a24;
+    --wood:#3a2412; --gold:#d8b25a; --ink:#f4efe6; --dim:#b9c9bd;
+    --red:#c0392b; --black:#1c1c22; --free:#e8e2d0;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;}
+  body{
+    font-family:"Segoe UI",system-ui,Arial,sans-serif;
+    background:radial-gradient(1200px 700px at 50% -10%, #243b2e 0%, #101a14 55%, #0a110d 100%);
+    color:var(--ink); display:flex; flex-direction:column; align-items:center;
+    min-height:100%; padding:14px; gap:12px; user-select:none;
+  }
+  h1{font-size:20px; margin:0; letter-spacing:.5px; font-weight:600;}
+  h1 span{color:var(--gold);}
+  .wrap{width:100%; max-width:1040px; display:flex; flex-direction:column; gap:12px;}
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    background:linear-gradient(#1c2a21,#141f18); border:1px solid #2c4033;
+    border-radius:14px; padding:10px 14px; box-shadow:0 8px 24px rgba(0,0,0,.35);
+  }
+  .players{display:flex; gap:10px; align-items:center;}
+  .pcard{
+    display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:12px;
+    background:#0f1a13; border:1px solid #24382b; min-width:150px; transition:.2s;
+  }
+  .pcard.active{border-color:var(--gold); box-shadow:0 0 0 2px rgba(216,178,90,.25), 0 0 18px rgba(216,178,90,.15);}
+  .pcard .dot{width:16px;height:16px;border-radius:50%;flex:0 0 auto;box-shadow:inset -2px -2px 4px rgba(0,0,0,.4);}
+  .pcard .nm{font-size:13px; line-height:1.1;}
+  .pcard .nm b{display:block; font-size:14px;}
+  .pcard .col{font-size:11px; color:var(--dim);}
+  .pcard .pots{font-size:11px; color:var(--gold); margin-left:auto;}
+  .mid{display:flex; flex-direction:column; align-items:center; gap:4px; min-width:150px;}
+  .turn{font-size:13px; color:var(--dim);}
+  .turn b{color:var(--ink); font-size:15px;}
+  .msg{font-size:12px; color:var(--gold); min-height:15px; text-align:center;}
+  .controls{display:flex; gap:8px; align-items:center;}
+  .btn{
+    cursor:pointer; border:1px solid #35503f; background:linear-gradient(#243a2c,#1a2b20);
+    color:var(--ink); padding:8px 12px; border-radius:10px; font-size:13px; transition:.15s;
+  }
+  .btn:hover{border-color:var(--gold); color:var(--gold);}
+  .btn.small{padding:6px 9px; font-size:12px;}
+  .stage{
+    position:relative; width:100%; border-radius:16px; overflow:hidden;
+    box-shadow:0 20px 50px rgba(0,0,0,.5), inset 0 0 0 2px rgba(0,0,0,.3);
+    background:var(--wood);
+  }
+  canvas{display:block; width:100%; height:auto; touch-action:none; cursor:crosshair;}
+  .power{
+    position:absolute; left:14px; bottom:14px; width:220px; max-width:40%;
+    background:rgba(8,14,10,.7); border:1px solid #2c4033; border-radius:10px; padding:8px 10px;
+    backdrop-filter:blur(3px);
+  }
+  .power .lbl{font-size:11px; color:var(--dim); display:flex; justify-content:space-between; margin-bottom:5px;}
+  .bar{height:10px; border-radius:6px; background:#0c150f; overflow:hidden; border:1px solid #24382b;}
+  .bar > i{display:block; height:100%; width:0%;
+    background:linear-gradient(90deg,#3fae6a,#e8c14a 60%,#e0563a); transition:width .05s linear;}
+  .hint{font-size:12px; color:var(--dim); text-align:center; line-height:1.5;}
+  .hint b{color:var(--ink);}
+  .legend{display:flex; gap:14px; justify-content:center; flex-wrap:wrap; font-size:12px; color:var(--dim);}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-1px;margin-right:5px;box-shadow:inset -1px -1px 3px rgba(0,0,0,.4);}
+  .overlay{
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(6,12,8,.72); backdrop-filter:blur(4px); z-index:5;
+  }
+  .overlay.show{display:flex;}
+  .panel{
+    background:linear-gradient(#1d2c22,#131f17); border:1px solid #35503f; border-radius:18px;
+    padding:26px 30px; text-align:center; max-width:380px; box-shadow:0 20px 60px rgba(0,0,0,.6);
+  }
+  .panel h2{margin:0 0 8px; font-size:24px; color:var(--gold);}
+  .panel p{margin:6px 0; color:var(--dim); font-size:14px; line-height:1.5;}
+  .panel .btn{margin-top:14px; padding:10px 20px; font-size:15px;}
+  .rules{font-size:12px; color:var(--dim); text-align:left; line-height:1.6; margin-top:10px;}
+  .rules b{color:var(--ink);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="players">
+      <div class="pcard" id="pc0">
+        <span class="dot" id="dot0"></span>
+        <span class="nm"><b>Игрок 1</b><span class="col" id="col0">цвет не выбран</span></span>
+        <span class="pots" id="pots0">0</span>
+      </div>
+      <div class="pcard" id="pc1">
+        <span class="dot" id="dot1"></span>
+        <span class="nm"><b>Игрок 2</b><span class="col" id="col1">цвет не выбран</span></span>
+        <span class="pots" id="pots1">0</span>
+      </div>
+    </div>
+    <div class="mid">
+      <div class="turn">Ход: <b id="turn">Игрок 1</b></div>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="controls">
+      <button class="btn small" id="btnSound">🔊 Звук</button>
+      <button class="btn small" id="btnRules">Правила</button>
+      <button class="btn" id="btnNew">Новая игра</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <canvas id="cv" width="1000" height="540"></canvas>
+    <div class="power">
+      <div class="lbl"><span>Сила удара</span><span id="pct">0%</span></div>
+      <div class="bar"><i id="bar"></i></div>
+    </div>
+    <div class="overlay" id="overlay">
+      <div class="panel">
+        <h2 id="ovTitle">Русский бильярд</h2>
+        <p id="ovText">Классическая «русская пирамида» на 15 шаров.</p>
+        <div class="rules" id="ovRules" style="display:none">
+          <b>Цель:</b> сбить все шары своего цвета (красные 1–7 или чёрные 9–15) и свободный шар №8.<br>
+          <b>Цвет</b> выбирается после первого легального сбоя.<br>
+          <b>Фол:</b> удар не в свой цвет, сбит белый шар, не задет ни один шар, задет чужой шар первым.<br>
+          <b>За фол</b> соперник получает право поставить белый шар за линией (штрафной удар).<br>
+          <b>Управление:</b> мышь — прицел, зажать кнопку — сила, отпустить — удар.
+        </div>
+        <button class="btn" id="ovBtn">Начать игру</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:var(--red)"></i>Красные 1–7</span>
+    <span><i style="background:var(--free)"></i>Свободный №8</span>
+    <span><i style="background:var(--black)"></i>Чёрные 9–15</span>
+    <span><i style="background:#fff"></i>Белый (кусок)</span>
+  </div>
+  <div class="hint">
+    <b>Мышь</b> — прицел · <b>зажать кнопку</b> — набрать силу · <b>отпустить</b> — удар ·
+    после фола <b>клик</b> — поставить белый шар за линией
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===================== КОНСТАНТЫ ===================== */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+
+// Границы игрового поля (внутри бортов)
+const RAIL = 34;                 // толщина борта
+const PLAY = { x: RAIL, y: RAIL, w: W - RAIL*2, h: H - RAIL*2 };
+const BALL_R = 13;               // радиус шара
+const POCKET_R = 22;             // радиус лузы
+const FRICTION = 0.988;          // трение за кадр
+const STOP_V = 0.04;             // порог остановки
+const CUSHION_REST = 0.82;       // упругость борта
+const MAX_POWER = 26;            // максимальная скорость удара
+const HEAD_X = PLAY.x + PLAY.w * 0.25;   // линия (head string)
+
+// Лузы: 6 штук
+const POCKETS = [
+  {x:PLAY.x, y:PLAY.y}, {x:W/2, y:PLAY.y-4}, {x:PLAY.x+PLAY.w, y:PLAY.y},
+  {x:PLAY.x, y:PLAY.y+PLAY.h}, {x:W/2, y:PLAY.y+PLAY.h+4}, {x:PLAY.x+PLAY.w, y:PLAY.y+PLAY.h}
+];
+
+/* ===================== СОСТОЯНИЕ ===================== */
+let balls = [];
+let cue = null;
+let state = 'aim';        // aim | charging | rolling | place | over
+let current = 0;          // 0 или 1 — чей ход
+let colors = [null, null];// цвет игрока: 'red' | 'black' | null
+let pottedThisTurn = [];  // шары, сбитые за этот удар
+let firstHit = null;      // первый задетый шар за удар
+let cuePotted = false;
+let power = 0;
+let charging = false;
+let aim = {x:0, y:0};     // позиция мыши
+let soundOn = true;
+let winner = -1;
+let breakShot = true;
+
+/* ===================== ЗВУК (WebAudio) ===================== */
+let AC = null;
+function ac(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return AC; }
+function beep(freq, dur, type, vol){
+  if(!soundOn) return; const a = ac(); if(!a) return;
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type||'sine'; o.frequency.value = freq;
+  g.gain.value = vol||0.15; o.connect(g); g.connect(a.destination);
+  const t = a.currentTime; o.start(t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.stop(t + dur + 0.02);
+}
+const snd = {
+  hit:(v)=>beep(180+Math.random()*40, 0.06, 'triangle', Math.min(0.25, v*0.02)),
+  cushion:()=>beep(120, 0.05, 'sine', 0.12),
+  pocket:()=>{ beep(90,0.12,'sine',0.2); setTimeout(()=>beep(60,0.15,'sine',0.18),60); },
+  shoot:()=>beep(300,0.05,'square',0.08),
+  win:()=>{ [523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,0.25,'triangle',0.2), i*140)); }
+};
+
+/* ===================== СОЗДАНИЕ ШАРОВ ===================== */
+function ballColor(n){
+  if(n===0) return '#ffffff';
+  if(n===8) return '#e8e2d0';
+  if(n<=7) return '#c0392b';
+  return '#1c1c22';
+}
+function makeBall(n, x, y){
+  return { n, x, y, vx:0, vy:0, r:BALL_R, color:ballColor(n), potted:false,
+           group: n===0?'cue':(n===8?'free':(n<=7?'red':'black')) };
+}
+function rackBalls(){
+  balls = [];
+  // Пирамида: вершина у foot spot (75% ширины), 5 рядов
+  const footX = PLAY.x + PLAY.w * 0.72;
+  const footY = PLAY.y + PLAY.h/2;
+  const gap = BALL_R*2 + 0.6;
+  const order = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+  // перемешаем, но 8-й — в центр (3-й ряд, средний)
+  let idx = 0;
+  let row = 0, col = 0;
+  const placed = [];
+  // строим позиции
+  const pos = [];
+  for(let r=0;r<5;r++){
+    for(let c=0;c<=r;c++){
+      const x = footX + r*gap*0.87;
+      const y = footY + (c - r/2)*gap;
+      pos.push({x,y});
+    }
+  }
+  // 8-й шар — центр (позиция 3-го ряда, индекс: ряд0=1, ряд1=2, ряд2=3 -> центр = 1+2+1=4? )
+  // центр пирамиды = позиция с индексом 4 (0-based: 0; 1,2; 3,4,5 -> 4)
+  const centerIdx = 4;
+  // расставим номера: 8 в центр, остальные случайно
+  const nums = order.filter(n=>n!==8).sort(()=>Math.random()-0.5);
+  pos.forEach((p,i)=>{
+    const n = (i===centerIdx)?8:nums.shift();
+    balls.push(makeBall(n, p.x, p.y));
+  });
+  // Белый шар за линией
+  cue = makeBall(0, HEAD_X - 40, PLAY.y + PLAY.h/2);
+  balls.push(cue);
+}
+
+/* ===================== ФИЗИКА ===================== */
+function inPocket(b){
+  for(const p of POCKETS){
+    const dx=b.x-p.x, dy=b.y-p.y;
+    if(dx*dx+dy*dy < (POCKET_R-2)*(POCKET_R-2)) return p;
+  }
+  return null;
+}
+function stepPhysics(){
+  let moving = false;
+  // движение
+  for(const b of balls){
+    if(b.potted) continue;
+    b.x += b.vx; b.y += b.vy;
+    b.vx *= FRICTION; b.vy *= FRICTION;
+    if(Math.hypot(b.vx,b.vy) < STOP_V){ b.vx=0; b.vy=0; }
+    else moving = true;
+  }
+  // столкновения шаров
+  for(let i=0;i<balls.length;i++){
+    const a = balls[i]; if(a.potted) continue;
+    for(let j=i+1;j<balls.length;j++){
+      const c = balls[j]; if(c.potted) continue;
+      const dx=c.x-a.x, dy=c.y-a.y;
+      const d = Math.hypot(dx,dy);
+      const min = a.r+c.r;
+      if(d>0 && d<min){
+        const nx=dx/d, ny=dy/d;
+        const overlap = (min-d)/2;
+        a.x -= nx*overlap; a.y -= ny*overlap;
+        c.x += nx*overlap; c.y += ny*overlap;
+        // относительная скорость по нормали
+        const dvx=c.vx-a.vx, dvy=c.vy-a.vy;
+        const vn = dvx*nx + dvy*ny;
+        if(vn < 0){
+          const imp = -vn; // равные массы
+          a.vx += imp*nx; a.vy += imp*ny;
+          c.vx -= imp*nx; c.vy -= imp*ny;
+          // первый задетый
+          if(firstHit===null){
+            if(a.n===0) firstHit = c; else if(c.n===0) firstHit = a;
+          }
+          snd.hit(imp);
+        }
+      }
+    }
+  }
+  // борта (кроме зон луз)
+  for(const b of balls){
+    if(b.potted) continue;
+    const nearPocket = POCKETS.some(p=>Math.hypot(b.x-p.x,b.y-p.y) < POCKET_R+BALL_R*0.5);
+    if(!nearPocket){
+      if(b.x < PLAY.x + b.r){ b.x = PLAY.x+b.r; b.vx = -b.vx*CUSHION_REST; snd.cushion(); }
+      if(b.x > PLAY.x+PLAY.w - b.r){ b.x = PLAY.x+PLAY.w-b.r; b.vx = -b.vx*CUSHION_REST; snd.cushion(); }
+      if(b.y < PLAY.y + b.r){ b.y = PLAY.y+b.r; b.vy = -b.vy*CUSHION_REST; snd.cushion(); }
+      if(b.y > PLAY.y+PLAY.h - b.r){ b.y = PLAY.y+PLAY.h-b.r; b.vy = -b.vy*CUSHION_REST; snd.cushion(); }
+    }
+    // лузы
+    const pk = inPocket(b);
+    if(pk){
+      b.potted = true; b.vx=0; b.vy=0;
+      snd.pocket();
+      if(b.n===0){ cuePotted = true; }
+      else { pottedThisTurn.push(b); }
+    }
+  }
+  return moving;
+}
+
+/* ===================== ПРАВИЛА ===================== */
+function myColor(p){ return colors[p]; }
+function isOwnBall(b, p){
+  const c = myColor(p);
+  if(!c) return b.group!=='cue'; // до выбора цвета — любой цветной
+  return b.group===c || b.group==='free';
+}
+function checkWin(p){
+  const c = myColor(p);
+  if(!c) return false;
+  const own = balls.filter(b=>!b.potted && b.group===c);
+  const free = balls.filter(b=>!b.potted && b.group==='free');
+  return own.length===0 && free.length===0;
+}
+function endTurn(){
+  // определить фол
+  let foul = false;
+  let reason = '';
+  if(cuePotted){ foul=true; reason='Сбит белый шар'; }
+  else if(firstHit===null){ foul=true; reason='Не задет ни один шар'; }
+  else {
+    const c = myColor(current);
+    if(c){
+      if(firstHit.group!=='free' && firstHit.group!==c){ foul=true; reason='Первым задет чужой шар'; }
+    }
+  }
+  // выбор цвета после первого легального сбитого
+  if(!colors[current] && !foul && pottedThisTurn.length>0 && !breakShot){
+    const g = pottedThisTurn[0].group;
+    if(g==='red'||g==='black'){
+      colors[current] = g;
+      colors[1-current] = (g==='red')?'black':'red';
+      reason = 'Цвет выбран: ' + (g==='red'?'красный':'чёрный');
+    }
+  }
+  // победа
+  if(checkWin(current)){
+    winner = current; state='over';
+    showOverlay('Победа!', 'Игрок '+(current+1)+' сбил все шары своего цвета и свободный шар.', 'Новая игра');
+    snd.win(); updateUI(); return;
+  }
+  // смена хода
+  if(foul){
+    state = 'place';
+    // вернуть белый шар
+    cue.potted = false; cue.vx=0; cue.vy=0;
+    cue.x = HEAD_X - 40; cue.y = PLAY.y + PLAY.h/2;
+    msg('Фол: '+reason+'. Соперник ставит белый шар за линией.');
+  } else {
+    if(pottedThisTurn.length>0 && !breakShot){
+      // остался бить (сбил свой)
+      msg('Хорошо! Игрок '+(current+1)+' бьёт снова.');
+    } else {
+      current = 1-current;
+      msg('Ход переходит к Игроку '+(current+1)+'.');
+    }
+  }
+  breakShot = false;
+  pottedThisTurn = []; firstHit = null; cuePotted = false;
+  power = 0; updateUI();
+}
+
+/* ===================== УДАР ===================== */
+function shoot(){
+  if(state!=='charging') return;
+  const dx = aim.x - cue.x, dy = aim.y - cue.y;
+  const d = Math.hypot(dx,dy) || 1;
+  const sp = power * MAX_POWER / 100;
+  cue.vx = dx/d * sp; cue.vy = dy/d * sp;
+  state = 'rolling';
+  pottedThisTurn = []; firstHit = null; cuePotted = false;
+  snd.shoot();
+  updateUI();
+}
+
+/* ===================== ВВОД ===================== */
+function canvasPos(e){
+  const r = cv.getBoundingClientRect();
+  const cx = (e.touches? e.touches[0].clientX : e.clientX);
+  const cy = (e.touches? e.touches[0].clientY : e.clientY);
+  return { x:(cx-r.left)*(W/r.width), y:(cy-r.top)*(H/r.height) };
+}
+cv.addEventListener('mousemove', e=>{
+  const p = canvasPos(e); aim.x=p.x; aim.y=p.y;
+  if(state==='place'){ cue.x=p.x; cue.y=p.y; }
+});
+cv.addEventListener('mousedown', e=>{
+  ac();
+  const p = canvasPos(e); aim.x=p.x; aim.y=p.y;
+  if(state==='aim'){ charging=true; state='charging'; power=0; }
+  else if(state==='place'){
+    // поставить белый шар (только за линией)
+    if(p.x < HEAD_X){ cue.x=p.x; cue.y=p.y; state='aim'; msg('Белый шар поставлен. Бей!'); updateUI(); }
+    else msg('Ставьте белый шар ЗА линией (левая часть).');
+  }
+});
+window.addEventListener('mouseup', e=>{
+  if(state==='charging'){ shoot(); }
+});
+// touch
+cv.addEventListener('touchstart', e=>{ e.preventDefault(); ac();
+  const p = canvasPos(e); aim.x=p.x; aim.y=p.y;
+  if(state==='aim'){ charging=true; state='charging'; power=0; }
+  else if(state==='place'){ if(p.x<HEAD_X){ cue.x=p.x; cue.y=p.y; state='aim'; updateUI(); } }
+}, {passive:false});
+cv.addEventListener('touchmove', e=>{ e.preventDefault();
+  const p = canvasPos(e); aim.x=p.x; aim.y=p.y;
+  if(state==='place'){ cue.x=p.x; cue.y=p.y; }
+}, {passive:false});
+cv.addEventListener('touchend', e=>{ e.preventDefault(); if(state==='charging') shoot(); }, {passive:false});
+
+/* ===================== ОТРИСОВКА ===================== */
+function drawTable(){
+  // дерево
+  ctx.fillStyle = '#3a2412'; ctx.fillRect(0,0,W,H);
+  // борта
+  ctx.fillStyle = '#5a3418';
+  roundRect(PLAY.x-18, PLAY.y-18, PLAY.w+36, PLAY.h+36, 20); ctx.fill();
+  ctx.fillStyle = '#6b4020';
+  roundRect(PLAY.x-10, PLAY.y-10, PLAY.w+20, PLAY.h+20, 14); ctx.fill();
+  // сукно
+  const g = ctx.createRadialGradient(W/2,H/2,50, W/2,H/2, W/2);
+  g.addColorStop(0,'#0e7a44'); g.addColorStop(1,'#0a5c33');
+  ctx.fillStyle = g;
+  ctx.fillRect(PLAY.x, PLAY.y, PLAY.w, PLAY.h);
+  // линия (head string)
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(HEAD_X, PLAY.y); ctx.lineTo(HEAD_X, PLAY.y+PLAY.h); ctx.stroke();
+  // лузы
+  for(const p of POCKETS){
+    ctx.fillStyle = '#0a0a0a';
+    ctx.beginPath(); ctx.arc(p.x,p.y,POCKET_R,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#2a1a0c'; ctx.lineWidth=3; ctx.stroke();
+  }
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+function drawBall(b){
+  if(b.potted) return;
+  // тень
+  ctx.fillStyle='rgba(0,0,0,.3)';
+  ctx.beginPath(); ctx.ellipse(b.x+2,b.y+3,b.r,b.r*0.9,0,0,Math.PI*2); ctx.fill();
+  // тело
+  const g = ctx.createRadialGradient(b.x-b.r*0.35,b.y-b.r*0.4,b.r*0.2, b.x,b.y,b.r);
+  g.addColorStop(0, lighten(b.color,0.5));
+  g.addColorStop(0.5, b.color);
+  g.addColorStop(1, darken(b.color,0.4));
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+  // блик
+  ctx.fillStyle='rgba(255,255,255,.55)';
+  ctx.beginPath(); ctx.arc(b.x-b.r*0.3,b.y-b.r*0.35,b.r*0.28,0,Math.PI*2); ctx.fill();
+  // номер
+  if(b.n>0){
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r*0.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#111'; ctx.font='bold '+(b.r*0.7)+'px Arial';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(b.n, b.x, b.y+0.5);
+  }
+}
+function lighten(hex,amt){ return shade(hex,amt); }
+function darken(hex,amt){ return shade(hex,-amt); }
+function shade(hex,amt){
+  const c = hex.replace('#','');
+  let r=parseInt(c.substr(0,2),16), g=parseInt(c.substr(2,2),16), b=parseInt(c.substr(4,2),16);
+  r=Math.max(0,Math.min(255, Math.round(r + (amt>0?(255-r)*amt:r*(1+amt)))));
+  g=Math.max(0,Math.min(255, Math.round(g + (amt>0?(255-g)*amt:g*(1+amt)))));
+  b=Math.max(0,Math.min(255, Math.round(b + (amt>0?(255-b)*amt:b*(1+amt)))));
+  return 'rgb('+r+','+g+','+b+')';
+}
+function drawAim(){
+  if(state!=='aim' && state!=='charging') return;
+  const dx = aim.x-cue.x, dy=aim.y-cue.y;
+  const d = Math.hypot(dx,dy)||1;
+  const nx=dx/d, ny=dy/d;
+  // линия прицела
+  ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth=2; ctx.setLineDash([6,6]);
+  ctx.beginPath(); ctx.moveTo(cue.x,cue.y);
+  ctx.lineTo(cue.x+nx*200, cue.y+ny*200); ctx.stroke();
+  ctx.setLineDash([]);
+  // стрелка силы
+  if(state==='charging'){
+    const len = 30 + power*1.2;
+    ctx.strokeStyle = power>70?'#e0563a':(power>40?'#e8c14a':'#3fae6a');
+    ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(cue.x,cue.y); ctx.lineTo(cue.x-nx*len, cue.y-ny*len); ctx.stroke();
+  }
+}
+function render(){
+  drawTable();
+  for(const b of balls) if(b.n!==0) drawBall(b);
+  if(cue) drawBall(cue);
+  drawAim();
+}
+
+/* ===================== UI ===================== */
+function msg(t){ document.getElementById('msg').textContent = t; }
+function updateUI(){
+  document.getElementById('turn').textContent = 'Игрок '+(current+1);
+  document.getElementById('pc0').classList.toggle('active', current===0 && state!=='over');
+  document.getElementById('pc1').classList.toggle('active', current===1 && state!=='over');
+  const colName = c => c==='red'?'красный':(c==='black'?'чёрный':'цвет не выбран');
+  document.getElementById('col0').textContent = colName(colors[0]);
+  document.getElementById('col1').textContent = colName(colors[1]);
+  document.getElementById('dot0').style.background = colors[0]==='red'?'var(--red)':(colors[0]==='black'?'var(--black)':'#555');
+  document.getElementById('dot1').style.background = colors[1]==='red'?'var(--red)':(colors[1]==='black'?'var(--black)':'#555');
+  // сбитые
+  const p0 = balls.filter(b=>b.potted && b.n!==0 && (colors[0]?(b.group===colors[0]||b.group==='free'):false)).length;
+  const p1 = balls.filter(b=>b.potted && b.n!==0 && (colors[1]?(b.group===colors[1]||b.group==='free'):false)).length;
+  document.getElementById('pots0').textContent = colors[0]? p0 : '—';
+  document.getElementById('pots1').textContent = colors[1]? p1 : '—';
+  document.getElementById('pct').textContent = Math.round(power)+'%';
+  document.getElementById('bar').style.width = power+'%';
+}
+function showOverlay(title, text, btn){
+  document.getElementById('ovTitle').textContent = title;
+  document.getElementById('ovText').textContent = text;
+  document.getElementById('ovRules').style.display='none';
+  document.getElementById('ovBtn').textContent = btn;
+  document.getElementById('overlay').classList.add('show');
+}
+function hideOverlay(){ document.getElementById('overlay').classList.remove('show'); }
+
+/* ===================== КНОПКИ ===================== */
+document.getElementById('btnNew').onclick = ()=>{ newGame(); };
+document.getElementById('btnSound').onclick = function(){ soundOn=!soundOn; this.textContent = soundOn?'🔊 Звук':'🔇 Звук'; };
+document.getElementById('btnRules').onclick = ()=>{
+  document.getElementById('ovTitle').textContent='Правила';
+  document.getElementById('ovText').textContent='Русский бильярд — «русская пирамида».';
+  document.getElementById('ovRules').style.display='block';
+  document.getElementById('ovBtn').textContent='Понятно';
+  document.getElementById('overlay').classList.add('show');
+};
+document.getElementById('ovBtn').onclick = ()=>{
+  hideOverlay();
+  if(state==='over') newGame();
+};
+
+/* ===================== ЦИКЛ ===================== */
+function newGame(){
+  rackBalls();
+  current = 0; colors=[null,null]; winner=-1;
+  state='aim'; breakShot=true; power=0;
+  pottedThisTurn=[]; firstHit=null; cuePotted=false;
+  msg('Игрок 1 бьёт из-под бита.');
+  updateUI();
+}
+function loop(){
+  if(state==='charging'){
+    power = Math.min(100, power + 2.2);
+    updateUI();
+  }
+  if(state==='rolling'){
+    // несколько подшагов для стабильности
+    let moving = false;
+    for(let s=0;s<3;s++){ moving = stepPhysics() || moving; }
+    if(!moving){ state='aim'; endTurn(); }
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ===================== СТАРТ ===================== */
+newGame();
+showOverlay('Русский бильярд','Классическая «русская пирамида» на 15 шаров. Сбей все шары своего цвета и свободный №8.','Начать игру');
+loop();
+</script>
+</body>
+</html>

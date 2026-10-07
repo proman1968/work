@@ -1,0 +1,51 @@
+{
+  "name": "Какие навыки У тебя есть",
+  "created": 1791361674769,
+  "items": [
+    {
+      "id": "102edf6a-237f-45a4-bf11-910b9a1e663b",
+      "type": "user",
+      "time": 1791361676203,
+      "content": "Какие навыки У тебя есть"
+    },
+    {
+      "id": "a3320544-b907-4fbb-aa69-5b23ac96b1e2",
+      "type": "assistant",
+      "content": "Вот список моих навыков:\n\n| Навык | Назначение |\n|-------|-----------|\n| **approval-flow** | Согласование документа по цепочке ответственных через ленту WORK |\n| **backup-check** | Проверка резервных копий и места на сервере |\n| **data-quality** | Проверка качества объектов данных (дубли, пустые поля, форматы) |\n| **delegate-task** | Поручить работу сотруднику с контролем исполнения |\n| **doc-from-template** | Документ по шаблону (договор, счёт, акт, письмо) |\n| **email-mailbox** | Разбор почтового ящика: сводка, важное, черновики ответов |\n| **external-signup** | Довести до регистрации/токена на внешнем сайте |\n| **google-calendar** | События в Google Календаре (добавить, найти, изменить, удалить) |\n| **import-table** | Импорт Excel/CSV в объекты данных WORK |\n| **lan-inventory** | Инвентаризация локальной сети (принтеры, сканеры, 1С, серверы) |\n| **meeting-minutes** | Протокол встречи: решения, поручения, рассылка |\n| **node-connect** | Подключение сервера-партнёра сети WORK |\n| **office-documents** | Работа с офисными документами (PDF, DOCX, XLSX, отчёты) |\n| **onboarding** | Вывод нового сотрудника на работу в WORK |\n| **org-structure** | Развёртывание оргструктуры из описания или таблицы |\n| **printer-setup** | Подключение сетевого принтера и выдача доступа |\n| **register-accounts** | Заведение счетов бухгалтерской отчётности |\n| **scan-to-work** | Сканирование документа сетевым сканером в WORK |\n| **summarize-feed** | Сводка «что произошло» в точке за период |\n| **telegram-notify** | Уведомление в Telegram через бота организации |\n\nКаждый навык — проверенный рецепт: когда применять, какие шаги, проверки. Если задача подходит под какой-то из них — скажи, и я загрузлю его и буду следовать.",
+      "time": 1791361687492,
+      "model": "/MODELS/odant/Qwen3.8 27b",
+      "reasoning": "The user is asking what skills I have. I can see the list of skills in my system prompt. Let me list them in a clear, organized way in Russian.\n",
+      "usage": {
+        "prompt": 16990,
+        "completion": 550,
+        "total": 17540
+      },
+      "finish": "stop",
+      "durationMs": 16253
+    }
+  ],
+  "model": "/MODELS/odant/Qwen3.8 27b",
+  "effort": "low",
+  "time": 1791361674902,
+  "version": 2,
+  "type": "task",
+  "todos": [],
+  "allowed": [],
+  "results": [],
+  "mode": "auto",
+  "status": "idle",
+  "title": "Какие навыки У тебя есть",
+  "location": {
+    "tz": "Europe/Moscow"
+  },
+  "tz": "Europe/Moscow",
+  "role": "ADMIN",
+  "context": {
+    "limit": 262144,
+    "system": 4820,
+    "tools": 12747,
+    "messages": 83,
+    "time": 1791361687491
+  },
+  "updated": 1791361705887
+}

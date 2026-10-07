@@ -2,16 +2,18 @@
 <meta name="color-scheme" content="light dark">
 <style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>packets</title>
 <script type="module" src="/oda/oda.js"></script>
 <script type="module" src="./packets.js"></script>
 <style>
-    body { padding: 16px; font-family: sans-serif; display: flex; flex-direction: column; gap: 16px; }
+    body { padding: 16px; font-family: sans-serif; }
     h2 { margin: 8px 0 4px; font-size: 15px; }
     .demo { border: 1px solid var(--subtle-border, #ccc); border-radius: 8px; padding: 8px; }
     .demo oda-packets { display: block; }
     .panel { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
     .panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
     .out { font-size: 13px; white-space: pre-wrap; background: rgba(127,127,127,.1); border-radius: 8px; padding: 8px; min-height: 60px; }
+    .bad input { outline: 1px solid var(--error, #c00); }
 </style>
 
 <h2>day (2024-11-15 — 2025-02-10)</h2>
@@ -20,11 +22,25 @@
 <h2>month (2024-01-01 — 2024-12-31)</h2>
 <div class="demo"><oda-packets id="pMonth" start="2024-01-01" end="2024-12-31" mode="month"></oda-packets></div>
 
-<h2>quarter (2023-06-01 — 2025-03-31)</h2>
+<h2>quarter (2023-06-01 — 2025-03-31) — проверка period !== null</h2>
 <div class="demo"><oda-packets id="pQuarter" start="2023-06-01" end="2025-03-31" mode="quarter"></oda-packets></div>
 
 <h2>year (2020-01-01 — 2025-12-31)</h2>
 <div class="demo"><oda-packets id="pYear" start="2020-01-01" end="2025-12-31" mode="year"></oda-packets></div>
+
+<h2>Диалог произвольного периода</h2>
+<div class="demo">
+    <p style="font-size: 13px; margin: 0 0 6px;">Кликните по пункту <b>period</b> в полосе — откроется ввод границ. В month-режиме маска периода собирается по месяцам, в day-режиме тоже по месяцам (точность даёт period).</p>
+    <oda-packets id="pDialog" start="2024-01-01" end="2024-12-31" mode="month"></oda-packets>
+</div>
+
+<h2>Границы &gt; 12 лет — усечение с предупреждением</h2>
+<div class="demo"><oda-packets id="pLong" start="2000-01-01" end="2024-12-31" mode="year"></oda-packets></div>
+
+<h2 class="bad">Некорректные границы — сообщение об ошибке</h2>
+<div class="demo">
+    <oda-packets id="pBad" start="2024-13-01" end="2024-12-31" mode="month"></oda-packets>
+</div>
 
 <h2>Живая панель</h2>
 <div class="demo">
@@ -56,5 +72,8 @@
     pMonth.addEventListener('selection-changed', show('month'));
     pQuarter.addEventListener('selection-changed', show('quarter'));
     pYear.addEventListener('selection-changed', show('year'));
+    pDialog.addEventListener('selection-changed', show('dialog'));
+    pLong.addEventListener('selection-changed', show('long'));
+    pBad.addEventListener('selection-changed', show('bad'));
     pLive.addEventListener('selection-changed', show('live'));
 </script>

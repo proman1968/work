@@ -87,7 +87,7 @@ export default {
     pinned: true,
     groupOpen: {},
     dockOpen: { $def: false, $save: true },
-    dockTab: 'context',
+    dockTab: { $def: 'context' },
     dockWidth: { $def: 520, $save: true },
     freshDocs: 0,
     extraDocs: [],
@@ -148,6 +148,7 @@ export default {
             if (col)
                 this._ro.observe(col);
         }, 50);
+        this._startPcPoll();
     },
     detached() {
         this.removeEventListener('md-link', onMdLink);
@@ -156,6 +157,7 @@ export default {
         this._activityTimer = null;
         this._formHeader?.remove();
         this._formHeader = null;
+        this._stopPcPoll();
     },
     get mobile() { return ODA.states.mobileMode; },
     get showMain() { return !(this.dockOpen && this.mobile); },
@@ -213,6 +215,43 @@ export default {
     },
     get activity() {
         return activityOf({ status: this.status, items: this.items, streams: this.streams, nowMs: this._clock || Date.now(), lastDeltaMs: this._lastDelta });
+    },
+    /** Реальный статус компьютера: скриншот-пробка раз в 10 с. */
+    computerRunning: false,
+    get computerName() {
+        for (const it of this.items) {
+            if (it?.type !== 'assistant')
+                continue;
+            for (const t of it.tools || []) {
+                if ((t.name?.startsWith('computer_') || t.name?.startsWith('browser_')) && t.args?.name)
+                    return String(t.args.name).trim() || 'main';
+            }
+        }
+        return 'main';
+    },
+    _pcPoll: null,
+    /** Проверка компьютера через скриншот: 200 — жив, 502/404 — мёртв. */
+    async _checkComputer() {
+        try {
+            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/shot.png', { method: 'HEAD', credentials: 'same-origin' });
+            const on = r.ok;
+            if (on !== this.computerRunning)
+                this.computerRunning = on;
+        }
+        catch {
+            if (this.computerRunning)
+                this.computerRunning = false;
+        }
+    },
+    _startPcPoll() {
+        if (this._pcPoll)
+            return;
+        this._checkComputer();
+        this._pcPoll = setInterval(() => this._checkComputer(), 10000);
+    },
+    _stopPcPoll() {
+        clearInterval(this._pcPoll);
+        this._pcPoll = null;
     },
     get showTodos() {
         const t = this.data?.todos;

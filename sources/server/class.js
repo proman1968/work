@@ -245,7 +245,17 @@ export class $class extends $folder{
                         }
                 }
                 return out;
-            }
+            },
+            /**
+             * Заполнена ли #security (ROLES, LINKS или назначения ролей):
+             * дерево показывает стрелку и панель item-security без лишних запросов.
+             */
+            get hasSecurity(){
+                const sec = this.DATA?.['#security'];
+                if (!sec || typeof sec !== 'object')
+                    return false;
+                return Object.values(sec).some(v => Array.isArray(v) && v.length > 0);
+            },
         }
     }
     get size(){
@@ -922,6 +932,16 @@ export class $class extends $folder{
             for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: roles.includes('BOSS') }))
                 add(id, e.access, e.via);
         }
+        return this._linkTrie(eff);
+    }
+    /**
+     * Собрать цепочки ссылок от корней типов: трие эффективных ссылок
+     * (id → {access, via}) плюс предки до корня типа, подписи метками классов.
+     * @param {Map<string, {access: string, via: Array}>} eff
+     * @returns {Promise<Array>} [{path, label, icon, type, access, via, children}]
+     */
+    async _linkTrie(eff) {
+        const rank = { read: 1, write: 2, admin: 3 };
         const byPath = new Map();
         const roots = [];
         for (const [id, e] of eff) {
@@ -970,14 +990,15 @@ export class $class extends $folder{
     }
     /**
      * Дерево прикладных ролей подразделения с назначениями и ссылками.
-     * Для клиента (item-security): свои места помечены mine, ссылки подписаны
-     * метками классов. Пустые подразделения — { common: [], places: [] }.
+     * Для дерева: свои места помечены mine, ссылки подписаны метками классов,
+     * у каждого места и у общих ссылок — готовая цепочка tree от корня типа.
+     * Пустые подразделения — { common: [], commonTree: [], places: [] }.
      * @param {object} [params]
-     * @returns {Promise<{common: Array, places: Array}>}
+     * @returns {Promise<{common: Array, commonTree: Array, places: Array}>}
      */
     async places(params = {}) {
         if (!(await this._isStructure()))
-            return { common: [], places: [] };
+            return { common: [], commonTree: [], places: [] };
         await this.init;
         const uid = $class.resolveUid(params);
         const roles = await this.roles(params).catch(() => []);
@@ -1005,6 +1026,17 @@ export class $class extends $folder{
             }
             return seen.get(id);
         };
+        /** Эффективные ссылки списка: id → {access, via} (максимум при дублях). */
+        const toEff = (links, via) => {
+            const rank = { read: 1, write: 2, admin: 3 };
+            const eff = new Map();
+            for (const l of links) {
+                const cur = eff.get(l.id);
+                if (!cur || (rank[l.access] || 0) > (rank[cur.access] || 0))
+                    eff.set(l.id, { access: l.access, via });
+            }
+            return eff;
+        };
         const outCommon = [];
         for (const l of common)
             outCommon.push({ id: l.id, access: l.access, ...(await describe(l.id) || {}) });
@@ -1019,6 +1051,7 @@ export class $class extends $folder{
                 out.push({
                     id: node.id, label: node.label, icon: node.icon,
                     users: [...node.USERS], links,
+                    tree: await this._linkTrie(toEff(node.LINKS, [key])),
                     mine: mine.has(key),
                     inherited: mine.size > 0 && !mine.has(key)
                         && [...mine].some(m => key.startsWith(m + '/')),
@@ -1028,7 +1061,7 @@ export class $class extends $folder{
             }
             return out;
         };
-        return { common: outCommon, places: await walk(places) };
+        return { common: outCommon, commonTree: await this._linkTrie(toEff(common, [null])), places: await walk(places) };
     }
     /** Файл местных расширений виртуального справочника ({registryId: {...}}). */
     _overlayFile() {

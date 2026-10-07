@@ -24,6 +24,16 @@ function notifyUserOnline(session) {
 }
 
 export function onWebSocketConnect(ws, request) {
+    // Экран компьютера (RFB через docker exec) — отдельный обработчик, не подписка на пути
+    try {
+        if (/^\/~computer\//.test(String(request?.url || '').split('?')[0])) {
+            import('../modules/sandbox/vnc-proxy.js')
+                .then(m => m.handleVncSocket(ws, request))
+                .catch(() => { try { ws.close(4411, 'VNC недоступен'); } catch { /* уже */ } });
+            return;
+        }
+    }
+    catch { /* обычный путь подписки */ }
     const cookies = parseCookies(request);
     let session = $server.get_session(cookies.ssid);
     let wsid = $server.genGUID();

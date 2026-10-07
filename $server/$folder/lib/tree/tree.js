@@ -1,8 +1,8 @@
-import { isLinkNode } from './link-nodes.js';
+import { bindLinkTree, isLinkNode } from './link-nodes.js';
 
 /**
  * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
- * или он неприменим: ссылки и группы достраивают детей на клиенте, фильтры дерева отсекают часть.
+ * или он неприменим: ветка настройки достраивает детей на клиенте, фильтры дерева отсекают часть.
  */
 export function knownHasItems(it, pdp = {}) {
     if (!it || isLinkNode(it) || it.type === '$server')
@@ -127,7 +127,7 @@ export default {
     },
 }
 ODA({is: 'oda-tree-node',
-    imports: 'oda//icon, ~/lib//node',
+    imports: 'oda//icon, ~/lib//node, ~/lib//users',
     template:/*html*/`
         <style>
             :host {
@@ -159,6 +159,28 @@ ODA({is: 'oda-tree-node',
             oda-icon {
                 cursor: pointer;
             }
+            /* экспандер — по верху первой строки: иначе при раскрытой панели
+               он съезжает к центру выросшего узла */
+            .node > oda-icon {
+                align-self: flex-start;
+                margin-top: 3px;
+            }
+            /* пользователи места — компактно в правом краю строки, название не сжимают */
+            item-node item-users {
+                @apply --no-flex;
+            }
+            /* доступ узла-ссылки: A — запись, R — только чтение */
+            .access {
+                font-size: xx-small;
+                font-family: monospace;
+                border: 1px solid var(--border-color);
+                border-radius: 6px;
+                padding: 0 3px;
+                margin-left: 4px;
+                opacity: .7;
+                @apply --no-flex;
+                align-self: center;
+            }
         </style>
         <style>
             .step {
@@ -182,9 +204,12 @@ ODA({is: 'oda-tree-node',
             <div vertical flex>
                 <div horizontal flex>
                     <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-                    <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus"></item-node>
+                    <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
+                        <item-users ~if="isPlace" :$item="$item.owner" :place="$item.trail" :select-mode="false" :icon-size="20"></item-users>
+                        <span class="access" ~if="isLinkWrite">A</span>
+                        <span class="access" ~if="isLinkRead">R</span>
+                    </item-node>
                 </div>
-                <item-security ~if="hasSecurity" ~show="expanded"></item-security>
             </div>
         </div>
         <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
@@ -195,10 +220,27 @@ ODA({is: 'oda-tree-node',
         </div>
     `,
     get hasSecurity(){
-        // Панель безопасности — только у подразделений ($structure и наследники);
-        // пустая (без ROLES и LINKS) скрывается самим item-security.
+        // Ветка настройки — только у подразделений ($structure и наследники)
+        // с заполненной #security (ROLES, LINKS или назначения — флаг из $public).
+        // Места и ссылки рисуются обычными дочерними узлами (см. items).
         const t = this.$item?.type;
-        return t === '$structure' || t === '$base' || t === '$server';
+        if (t !== '$structure' && t !== '$base' && t !== '$server')
+            return false;
+        return !!this.$item?.DATA?.hasSecurity;
+    },
+    /** Строка рабочего места (#security.ROLES): пользователи — через item-users в слоте. */
+    get isPlace() {
+        return !!this.$item?.isPlace;
+    },
+    /**
+     * Значок доступа узла-ссылки. Чтение linkAccess только у ссылок:
+     * у настоящих элементов его нет, и прямое чтение дёрнуло бы `_onEmpty`.
+     */
+    get isLinkWrite() {
+        return isLinkNode(this.$item) && this.$item.linkAccess !== 'read';
+    },
+    get isLinkRead() {
+        return isLinkNode(this.$item) && this.$item.linkAccess === 'read';
     },
     showStatus: false,
     showUsers: false,
@@ -228,9 +270,17 @@ ODA({is: 'oda-tree-node',
         e.stopPropagation();
         if (e.dataTransfer) {
             const dt = e.dataTransfer;
-            dt.setData('data', JSON.stringify(this.$item));
-            dt.setData('application/json', JSON.stringify(this.$item));
-            dt.setData('text/plain', this.$item.short);
+            // виртуальные узлы (места) не обязаны сериализоваться полностью
+            let json = '';
+            try {
+                json = JSON.stringify(this.$item);
+            }
+            catch {
+                json = JSON.stringify({ path: this.$item?.path, label: this.$item?.label });
+            }
+            dt.setData('data', json);
+            dt.setData('application/json', json);
+            dt.setData('text/plain', this.$item.short || this.$item.path || '');
             dt.setData('application/oda.work.shortcut', JSON.stringify({
                 icon: this.$item.icon,
                 label: this.$item.label,
@@ -329,11 +379,25 @@ ODA({is: 'oda-tree-node',
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }
-            // Подразделения показывают состав мест и ссылки панелью item-security
-            // под узлом (см. hasSecurity) — отдельными детьми в дереве они не идут.
+            // Места и ссылки подразделения — обычные дочерние узлы дерева
+            // (ветка настройки): места с пользователями, ссылки — цепочкой
+            // от корня «Данные» через link-nodes. Кэш на узел, сброс — по 'changed'.
+            try {
+                if (this.hasSecurity && Array.isArray(items)) {
+                    if (this._secTreeFor !== this.$item) {
+                        this._secTree = null;
+                        this._secTreeFor = this.$item;
+                    }
+                    this._secTree ??= this._buildSecNodes(this.$item);
+                    const extra = await this._secTree;
+                    if (extra?.length)
+                        items = [...extra, ...items];
+                }
+            }
+            catch { /* без ветки настройки */ }
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
-                    this._linkTree = null;
+                    this._secTree = null;
                     this.$item.expanded = true;
                     if(e.detail.value){
                         let item = (await this.items)?.find(f=>f.id === e.detail.value);
@@ -346,8 +410,55 @@ ODA({is: 'oda-tree-node',
         })
     },
     /**
+     * Ветка настройки подразделения: узлы мест ($place) и цепочки ссылок.
+     * Один запрос places на узел; результат кэшируется (см. items).
+     */
+    async _buildSecNodes(item) {
+        if (!item || !(item instanceof CORE.$class))
+            return [];
+        let d = null;
+        try {
+            d = await item.fetch('places');
+        }
+        catch { return []; }
+        if (!d || (!d.places?.length && !d.commonTree?.length))
+            return [];
+        const out = [];
+        for (const p of d.places || [])
+            out.push(await this._placeNode(item, p, ''));
+        try {
+            out.push(...await bindLinkTree(d.commonTree || [], (p) => WORK.get_item(p)));
+        }
+        catch { /* без общих ссылок */ }
+        return out;
+    },
+    /** Узел рабочего места: вложенные места плюс цепочка его ссылок. */
+    async _placeNode(structItem, p, trail) {
+        const t = trail ? trail + '/' + p.id : p.id;
+        const kids = [];
+        for (const c of p.roles || [])
+            kids.push(await this._placeNode(structItem, c, t));
+        try {
+            kids.push(...await bindLinkTree(p.tree || [], (path) => WORK.get_item(path)));
+        }
+        catch { /* без ссылок места */ }
+        const node = {
+            id: p.id,
+            label: p.label || p.id,
+            icon: p.icon || 'fontawesome:s-user-tie',
+            type: '$place',
+            trail: t,
+            expanded: false,
+            isPlace: true,
+            items: kids,
+        };
+        // владелец — вне перечисляемых: иначе JSON.stringify узла закольцуется
+        Object.defineProperty(node, 'owner', { value: structItem });
+        return node;
+    },
+    /**
      * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
-     * или он неприменим (ссылки и группы достраивают детей на клиенте, фильтры дерева отсекают часть).
+     * или он неприменим (ветка настройки достраивает детей на клиенте, фильтры дерева отсекают часть).
      */
     get knownHasItems() {
         return knownHasItems(this.$item, this.$pdp);
@@ -356,6 +467,10 @@ ODA({is: 'oda-tree-node',
         let icon = 'icons:chevron-right';
         if (this.expanded)
             icon += ':90'
+        // у подразделения с настройкой стрелка есть всегда —
+        // иначе узел без детей (как «Продажи») нельзя раскрыть и ветку не увидеть
+        if (this.hasSecurity)
+            return icon;
         const known = this.knownHasItems;
         if (known !== undefined)
             return known ? icon : '';

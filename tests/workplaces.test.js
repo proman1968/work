@@ -94,7 +94,14 @@ describe('подразделения: ссылки #security', () => {
         assert.ok(users.some(u => u.id === USER2), 'руководитель в members');
     });
 
-    it('places: дерево мест с флагами mine', async () => {
+    it('hasSecurity в info: панель при заполненной #security', async () => {
+        const sales = await WORK.get_item('/BASE/direction/sales');
+        assert.equal((await sales.info({})).hasSecurity, true, 'есть ROLES, LINKS и USER');
+        const other = await WORK.get_item('/OTHER');
+        assert.equal((await other.info({})).hasSecurity, false, 'пусто — панели нет');
+    });
+
+    it('places: дерево мест с флагами mine и цепочками ссылок', async () => {
         const { invoke } = await import('../sources/server/access/gateway.js');
         const sales = await WORK.get_item('/BASE/direction/sales');
         const p = await invoke(sales, 'places', as(USER1));
@@ -102,6 +109,11 @@ describe('подразделения: ссылки #security', () => {
         assert.equal(p.places[0].mine, false);
         assert.equal(p.places[0].roles[0].id, 'seller');
         assert.equal(p.places[0].roles[0].mine, true);
+        const leaves = (nodes) => (nodes || []).flatMap(n => n.children?.length ? leaves(n.children) : [n]);
+        assert.deepEqual(p.commonTree.map(t => t.path), ['/OTHER']);
+        assert.deepEqual(p.places[0].tree.map(t => t.path), ['/DATA']);
+        assert.deepEqual(leaves(p.places[0].tree).map(t => [t.path, t.access]), [['/DATA/REGISTER/62', 'read']]);
+        assert.deepEqual(leaves(p.places[0].roles[0].tree).map(t => [t.path, t.access]), [['/DATA/OPERATIONS', 'write']]);
         await assert.rejects(invoke(sales, 'places', as(NOBODY)), /Доступ запрещён/);
     });
 
@@ -127,5 +139,6 @@ describe('подразделения: ссылки #security', () => {
         assert.equal(await acc.data_access(as(USER1)), 'write');
         const r = await acc.create_object({ filename: 'x.data', post: { name: 'x' }, ...as(USER1) });
         assert.ok(r.id);
+        assert.equal((await sales.info({})).hasSecurity, true, 'остались USER и LINKS — панель есть');
     });
 });

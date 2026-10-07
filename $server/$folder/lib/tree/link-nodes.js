@@ -1,6 +1,6 @@
 /**
- * Виртуальные узлы ссылок рабочего места (тестируется в браузере).
- * Серверный link_tree отдаёт структуру [{path, label, icon, type, access, children}],
+ * Виртуальные узлы ссылок подразделения.
+ * Сервер отдаёт цепочки [{path, label, icon, type, access, via, children}],
  * клиент привязывает настоящие элементы, чтобы все уровни были кликабельны,
  * а дети — только цепочка (вниз и вбок ничего не показываем).
  *
@@ -30,10 +30,11 @@ function linkData(real) {
     return data;
 }
 
-function makeLinkNode(real, kids) {
+function makeLinkNode(real, kids, access) {
     const link = new real.constructor(linkData(real));
     Object.defineProperty(link, 'isLink', { value: true, enumerable: true });
     Object.defineProperty(link, 'isLinkLeaf', { value: !kids.length, enumerable: true });
+    Object.defineProperty(link, 'linkAccess', { value: access || 'read', enumerable: true });
     Object.defineProperty(link, 'items', { value: kids, writable: true, configurable: true, enumerable: true });
     return Reactor.activate(link);
 }
@@ -50,7 +51,7 @@ async function bindLinkNode(n, getItem) {
     if (Array.isArray(real))
         real = real.at(-1);
     if (real)
-        return makeLinkNode(real, kids);
+        return makeLinkNode(real, kids, n.access);
     return {
         id: String(n.path || '').split('/').pop() || n.path,
         path: n.path,
@@ -59,6 +60,7 @@ async function bindLinkNode(n, getItem) {
         type: n.type || '$folder',
         isLink: true,
         isLinkLeaf: !kids.length,
+        linkAccess: n.access || 'read',
         noLinkTarget: true,
         items: kids,
         expanded: false,

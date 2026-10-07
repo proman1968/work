@@ -133,6 +133,52 @@ function takeQueued(items, host, depth) {
 
 export const IMAGE_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 export const IMAGE_MAX = 5 * 1024 * 1024;
+/** Скриншоты компьютера в контексте: не больше этого, только свежие (старые вычищает stripOldShots). */
+export const SHOTS_IN_CONTEXT = 3;
+export const SHOT_MAX_BYTES = 3 * 1024 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * Картинки результата инструмента [{ png: Buffer|base64, label? }] → [{ url, label }] для ленты.
+ * Хранятся data-URL в JSON задачи (последние 3 — в контексте модели, см. toMessages).
+ */
+export function normalizeShots(shots) {
+    const out = [];
+    for (const s of Array.isArray(shots) ? shots : []) {
+        const buf = Buffer.isBuffer(s?.png) ? s.png : (typeof s?.png === 'string' ? Buffer.from(s.png, 'base64') : null);
+        if (!buf || buf.length < 8 || buf.length > SHOT_MAX_BYTES)
+            continue;
+        if (!buf.subarray(0, 8).equals(PNG_MAGIC))
+            continue;
+        out.push({ url: 'data:image/png;base64,' + buf.toString('base64'), label: String(s?.label || 'экран').slice(0, 200) });
+    }
+    return out.slice(-SHOTS_IN_CONTEXT);
+}
+
+/** Оставить скриншоты только на последних shot-bearing ходах (вызывать перед toMessages/сжатием). */
+export function stripOldShots(items, keep = SHOTS_IN_CONTEXT) {
+    const live = (items || []).filter(i => i.type === 'assistant' && !i.compacted && (i.tools || []).some(t => t?.images?.length));
+    for (const it of live.slice(0, Math.max(0, live.length - keep)))
+        for (const t of it.tools || [])
+            if (t?.images) {
+                delete t.images;
+                t.shotDropped = true;
+            }
+}
+
+/** Последние скриншоты живой ленты → [{ url, label }]. */
+export function collectShots(items, keep = SHOTS_IN_CONTEXT) {
+    const out = [];
+    for (const it of items || []) {
+        if (it?.type !== 'assistant' || it?.compacted)
+            continue;
+        for (const t of it.tools || [])
+            for (const s of t?.images || [])
+                if (s?.url)
+                    out.push({ url: s.url, label: s.label || 'экран' });
+    }
+    return out.slice(-keep);
+}
 
 /** Картинки из вложений живой ленты → Map(path → data:URL). loader(path) → Buffer. Кэш — на элементе ленты не храним (base64 в JSON не кладём). */
 const imageCache = new Map();
@@ -340,8 +386,10 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         // действия во внешнем мире — каждое подтверждается отдельно («разрешить всегда» не предлагается)
         if (decision.noAlways)
             entry.noAlways = true;
+        if (decision.hideArgs)
+            entry.hideArgs = true;
         await host.save();
-        const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason }) || {};
+        const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason, hideArgs: decision.hideArgs }) || {};
         throwIfStopped(host.signal);
         delete entry.reason;
         if (res.always && !entry.noAlways)
@@ -366,6 +414,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         else {
             entry.status = 'ok';
             entry.result = clip(resultText(value), RESULT_MAX);
+            const rich = value && typeof value === 'object' && !Array.isArray(value) ? value.images : null;
+            if (Array.isArray(rich) && rich.length)
+                entry.images = normalizeShots(rich);
         }
     }
     catch (e) {
@@ -462,6 +513,18 @@ export function toMessages(system, items, images = null) {
                 break;
         }
     }
+    // Скриншоты — отдельным сообщением в конце: не все провайдеры понимают картинки в role:'tool'.
+    const shots = collectShots(live);
+    if (shots.length && images !== null) {
+        out.push({
+            role: 'user',
+            content: [
+                { type: 'text', text: '[Скриншоты экрана компьютера — свежие, по порядку (разрешение 1280×800):\n'
+                    + shots.map((s, i) => '[' + (i + 1) + '] ' + s.label).join('\n') + ']' },
+                ...shots.map(s => ({ type: 'image_url', image_url: { url: s.url } })),
+            ],
+        });
+    }
     return out;
 }
 
@@ -477,6 +540,7 @@ function userContent(it, imageMap) {
 
 /** Сжатие: контекст близок к пределу — старая часть ленты → сводка. */
 export async function maybeCompact({ llm, items, host, system, force = false }) {
+    stripOldShots(items);
     const limit = Number(llm.contextTokens) || 32000;
     const messages = toMessages(system, items);
     if (!force && estimateTokens(messages) < limit * COMPACT_AT)

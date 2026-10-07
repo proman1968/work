@@ -5,7 +5,8 @@ export function segmentsOf(items, streams = {}, nested = false) {
     const out = [];
     let group = null;
     const artifacts = new Map();
-    (items || []).forEach((it, i) => {
+    const sorted = [...(items || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
+    sorted.forEach((it, i) => {
         if (!it || (nested && i === 0 && it.type === 'user'))
             return;
         if (it.type !== 'assistant') {

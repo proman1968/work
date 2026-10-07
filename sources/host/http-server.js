@@ -291,6 +291,13 @@ export function createRequestHandler() {
             return;
         }
 
+        // Компьютер агента: страница просмотра, скриншот, takeover, клиент noVNC — до разбора дерева
+        if (path.startsWith('/~computer/') || path.startsWith('/~/lib/novnc/')) {
+            const { handleComputerHttp } = await import('../modules/sandbox/vnc-proxy.js');
+            if (await handleComputerHttp(request, response, url, readBody))
+                return;
+        }
+
         // шаги `@свойство` — только разрешённые на чтение члены
         GATEWAY.assertPathProps(path);
         item = await WORK.get_item(path, 0, undefined, { session });

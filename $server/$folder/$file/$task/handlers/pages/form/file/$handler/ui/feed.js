@@ -281,6 +281,8 @@ ODA({ is: 'microchat-tool',
             input:focus, textarea:focus, select:focus { border-color: var(--accent-color); }
             textarea { resize: vertical; min-height: 2.4em; }
             .answer { @apply --muted; padding: 0 10px 8px 34px; white-space: pre-wrap; }
+            .shots { display: flex; gap: 8px; flex-wrap: wrap; }
+            .shots img { max-width: 100%; max-height: 220px; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: zoom-in; background: #111; }
             .sub { padding: 8px 10px 10px 14px; border-top: 1px solid var(--subtle-border); }
         </style>
         <div class="row" @tap="open = !open">
@@ -298,7 +300,7 @@ ODA({ is: 'microchat-tool',
         <div class="ask" ~if="isApproval">
             <div class="q">Разрешить «{{meta.label}}»{{target ? ': ' + target : ''}}?</div>
             <div class="why" ~if="data?.reason">{{data.reason}}</div>
-            <pre ~if="argsPreview">{{argsPreview}}</pre>
+            <pre ~if="argsPreview && !data?.hideArgs">{{argsPreview}}</pre>
             <textarea placeholder="Комментарий или что сделать иначе (необязательно)" ::value="comment"></textarea>
             <div class="btns">
                 <oda-button hide-icon accent-invert label="Разрешить" @tap="approve(true)"></oda-button>
@@ -376,6 +378,11 @@ ODA({ is: 'microchat-tool',
             <div ~if="result">
                 <div class="caption">{{data?.status === 'error' ? 'Ошибка' : 'Результат'}}</div>
                 <oda-markdown-viewer vertical :value="resultMd"></oda-markdown-viewer>
+            </div>
+            <div ~if="shots.length">
+                <div class="caption">Экран · {{shotsLabel}}</div>
+                <div class="shots"><img ~for="shots" :src="$for.item.url" :title="$for.item.label" @tap="openComputer" loading="lazy"></div>
+                <div class="btns"><oda-button hide-icon class="ghost" label="Открыть экран" @tap="openComputer"></oda-button></div>
             </div>
         </div>
         <div class="sub" ~if="data?.items?.length && open">
@@ -492,6 +499,11 @@ ODA({ is: 'microchat-tool',
         return resultMarkdown(this.data);
     },
     get resultMd() { return linkifyWork(this.result); },
+    /** Скриншоты вызова (computer_screenshot/action/handoff) — миниатюры в карточке. */
+    get shots() { return Array.isArray(this.data?.images) ? this.data.images.filter(s => s?.url) : []; },
+    get shotsLabel() { return this.shots.map(s => s.label).filter(Boolean).join('; ') || this.shots.length; },
+    get shotName() { return String(this.data?.args?.name || 'main'); },
+    openComputer() { window.open('/~computer/' + encodeURIComponent(this.shotName), 'work-computer'); },
     attached() {
         if (this.attention)
             this.async(() => this.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }), 50);

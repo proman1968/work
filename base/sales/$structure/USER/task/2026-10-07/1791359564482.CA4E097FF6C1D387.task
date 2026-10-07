@@ -1,0 +1,53 @@
+{
+  "name": "Что ты умеешь",
+  "created": 1791359564351,
+  "items": [
+    {
+      "id": "4fc7f2df-75f8-41a7-8e2b-fb29b0ab0b5c",
+      "type": "user",
+      "time": 1791359566735,
+      "content": "Что ты умеешь"
+    },
+    {
+      "id": "0768861d-b935-4a4a-a7e0-d68ee596190a",
+      "type": "assistant",
+      "content": "## Что я умею\n\n**Работа с деревом WORK**\n- Осматривать структуру (ls, read, find, search)\n- Создавать и править файлы (write, edit, append)\n- Создавать классы и подразделения (create_class)\n- Вызывать серверные методы (schema → call)\n- Читать и писать таблицы (read_table, write_table, import_objects)\n- Работать с историей и журналом (history, restore, logs)\n\n**Документы и отчёты**\n- Генерировать документы по шаблону (render_doc)\n- Создавать PDF из HTML (export_pdf)\n- Сохранять отчёты в xlsx/csv\n- Публиковать результаты в ленту (publish)\n\n**Коммуникация**\n- Отправлять сообщения и поручения в ленту (send)\n- Уведомлять в Telegram (svc_Telegram_send_message)\n- Эскалировать вопросы ответственному (escalate)\n- Назначать роли (assign)\n\n**Внешние сервисы**\n- Google Календарь, Почта, Диск\n- GitHub, любой API по токену\n- Прогноз погоды (svc_Weather)\n- Веб-поиск и чтение страниц (web_search, web_fetch)\n\n**Компьютер (песочница Docker)**\n- Выполнять команды Linux (python, node, git, …)\n- Работать с файлами в /workspace\n- Управлять экраном (скриншоты, мышь, клавиатура)\n- Включать/выключать интернет\n\n**Планирование и память**\n- Вести чек-лист задач (todo_write)\n- Сохранять расписания (schedule)\n- Запоминать факты между задачами (memory)\n- Сохранять повторяемые рецепты как навыки (save_skill)\n\n**Субагенты** (параллельная работа)\n- **analyst** — отчёты и сводки по данным\n- **explore** — исследование дерева\n- **builder** — новые типы, классы, роли\n- **secretary** — входящие, поручения, напоминания\n- **reviewer** — ревью кода и модели\n- **it-admin** — состояние сервера\n- **negotiator** — работа с партнёрами в сети\n- **general** — универсальный исполнитель\n- и другие\n\n---\n\nГде сейчас нахожусь: `/BASE/sales` (Продажи). Чем помочь?",
+      "time": 1791359570484,
+      "model": "/MODELS/odant/Qwen3.8 27b",
+      "reasoning": "The user is asking \"Что ты умеешь\" which means \"What can you do?\" in Russian. This is a simple question about my capabilities, so I should answer it directly without using any tools. Let me provide a concise overview of what I can do in the WORK system.\n",
+      "usage": {
+        "prompt": 14229,
+        "completion": 634,
+        "total": 14863
+      },
+      "finish": "stop",
+      "durationMs": 14929
+    }
+  ],
+  "model": "/MODELS/odant/Qwen3.8 27b",
+  "effort": "low",
+  "time": 1791359564482,
+  "version": 2,
+  "type": "task",
+  "todos": [],
+  "allowed": [],
+  "results": [],
+  "mode": "auto",
+  "status": "idle",
+  "title": "Что ты умеешь",
+  "location": {
+    "lat": 54.62806914756151,
+    "lon": 39.745788547953566,
+    "tz": "Europe/Moscow"
+  },
+  "tz": "Europe/Moscow",
+  "role": "USER",
+  "context": {
+    "limit": 262144,
+    "system": 4720,
+    "tools": 10047,
+    "messages": 78,
+    "time": 1791359570484
+  },
+  "updated": 1791359585450
+}

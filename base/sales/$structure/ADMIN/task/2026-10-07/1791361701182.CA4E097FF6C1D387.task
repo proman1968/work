@@ -1,0 +1,53 @@
+{
+  "name": "Какие навыки У тебя есть",
+  "created": 1791361697876,
+  "items": [
+    {
+      "id": "4951a18c-4733-4ea3-8824-5905d69ff94d",
+      "type": "user",
+      "time": 1791361702210,
+      "content": "Какие навыки У тебя есть"
+    },
+    {
+      "id": "828b3c17-2b12-4a0b-b574-b189df2aa71a",
+      "type": "assistant",
+      "content": "## Мои навыки\n\nВот список навыков, которые я могу применить:\n\n| Навык | Что делает |\n|-------|-----------|\n| **approval-flow** | Согласование документа по цепочке ответственных через ленту WORK |\n| **backup-check** | Проверка резервных копий и места на сервере |\n| **data-quality** | Проверка качества данных: дубли, пустые поля, неверные форматы |\n| **delegate-task** | Поручить работу сотруднику с контролем исполнения |\n| **doc-from-template** | Сделать документ (договор, счёт, акт) по шаблону |\n| **email-mailbox** | Разбор почтового ящика: сводка, важное, черновики ответов |\n| **external-signup** | Довести до регистрации на внешнем сайте / получения токена |\n| **google-calendar** | Управление событиями Google Календаря |\n| **import-table** | Загрузка Excel/CSV в объекты данных WORK |\n| **lan-inventory** | Инвентаризация локальной сети (принтеры, сканеры, 1С) |\n| **meeting-minutes** | Протокол встречи: решения, поручения, рассылка |\n| **node-connect** | Подключение сервера-партнёра сети WORK |\n| **office-documents** | Работа с офисными документами: PDF, DOCX, XLSX, отчёты |\n| **onboarding** | Вывод нового сотрудника на работу в WORK |\n| **org-structure** | Развёртывание оргструктуры из описания или таблицы |\n| **printer-setup** | Подключение сетев пробного принтера и выдача доступа |\n| **register-accounts** | Заведение счетов бухгалтерской отчётности |\n| **scan-to-work** | Сканирование документа сетевым сканером в WORK |\n| **summarize-feed** | Сводка «что произошло» за период по ленте и документам |\n| **telegram-notify** | Уведомление в Telegram через бота организации |\n\nЕсли задача подходит под какой-то из них — скажи, и я загрузлю навык и буду действовать по его рецепту.",
+      "time": 1791361706730,
+      "model": "/MODELS/odant/Qwen3.8 27b",
+      "reasoning": "The user is asking what skills I have. I can see the list of skills in my context. Let me present them in a clear, organized way in Russian.\n",
+      "usage": {
+        "prompt": 16995,
+        "completion": 532,
+        "total": 17527
+      },
+      "finish": "stop",
+      "durationMs": 9967
+    }
+  ],
+  "model": "/MODELS/odant/Qwen3.8 27b",
+  "effort": "low",
+  "time": 1791361701182,
+  "version": 2,
+  "type": "task",
+  "todos": [],
+  "allowed": [],
+  "results": [],
+  "mode": "auto",
+  "status": "idle",
+  "title": "Какие навыки У тебя есть",
+  "location": {
+    "lat": 54.6280573763726,
+    "lon": 39.74580221959114,
+    "tz": "Europe/Moscow"
+  },
+  "tz": "Europe/Moscow",
+  "role": "ADMIN",
+  "context": {
+    "limit": 262144,
+    "system": 4801,
+    "tools": 12747,
+    "messages": 83,
+    "time": 1791361706730
+  },
+  "updated": 1791361716905
+}

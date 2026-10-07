@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: A4; margin: 20mm; }
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: 14px;
+  color: #222;
+  line-height: 1.6;
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 20px;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+}
+.header .title {
+  font-size: 18px;
+  font-weight: 600;
+}
+.header .date {
+  font-size: 13px;
+  color: #888;
+}
+.waiting {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.waiting .label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.waiting .time {
+  color: #999;
+  font-size: 12px;
+  margin-left: 8px;
+}
+.message {
+  margin-bottom: 20px;
+}
+.message p {
+  margin: 0 0 12px 0;
+}
+.message ol {
+  margin: 0 0 12px 0;
+  padding-left: 20px;
+}
+.message ol li {
+  margin-bottom: 8px;
+}
+.attachments {
+  margin-top: 16px;
+}
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.attachment .icon {
+  width: 24px;
+  height: 24px;
+  background: #4a90d9;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="title">task</span>
+  <span class="date">07.10 11:05</span>
+</div>
+
+<div class="waiting">
+  <span class="label">Ждёт вас</span>
+  Что нужно сделать с этими файлами по себестоимости?
+  <span class="time">5 мин 18 сек</span>
+</div>
+
+<div class="message">
+  <p>Привет! Вижу четыре файла по себестоимости пива за июнь 2026 (АО «Русская пивоваренная компания „Хмелёфф"»). Я их прочитал — вот что в них:</p>
+  <ol>
+    <li><strong>себестоимость июнь.xlsx</strong> — сводная калькуляция на литр:</li>
+  </ol>
+</div>
+
+<div class="attachments">
+  <div class="attachment">
+    <span class="icon">X</span>
+    <span>себестоимость июнь.xlsx</span>
+  </div>
+  <div class="attachment">
+    <span class="icon">X</span>
+    <span>затраты.xlsx</span>
+  </div>
+</div>
+</body>
+</html>

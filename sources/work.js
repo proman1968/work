@@ -56,6 +56,40 @@ if (process.env.WORK_SCHEDULE !== '0') {
     startScheduler();
 }
 
+// Песочницы: остановка простаивающих компьютеров (флаг + тихий пропуск без Docker); WORK_SWEEP=0 — выключить
+if (process.env.WORK_SWEEP !== '0') {
+    setInterval(async () => {
+        try {
+            const { loadSandboxConfig } = await import('./modules/sandbox/config.js');
+            if (loadSandboxConfig().enabled === false)
+                return;
+            const { getDocker } = await import('./modules/sandbox/driver.js');
+            const { sweepIdle } = await import('./modules/sandbox/manager.js');
+            const n = await sweepIdle(await getDocker(), loadSandboxConfig());
+            if (n)
+                console.log('[sandbox] остановлены простаивающие компьютеры:', n);
+        }
+        catch { /* Docker спит — не будим */ }
+    }, 5 * 60_000).unref?.();
+}
+
+// Сеть: авто-выключение интернета у песочниц по таймеру
+if (process.env.WORK_SWEEP !== '0') {
+    setInterval(async () => {
+        try {
+            const { loadSandboxConfig } = await import('./modules/sandbox/config.js');
+            if (loadSandboxConfig().enabled === false)
+                return;
+            const { getDocker } = await import('./modules/sandbox/driver.js');
+            const { sweepNetworkTTL } = await import('./modules/sandbox/manager.js');
+            const n = await sweepNetworkTTL(await getDocker(), loadSandboxConfig());
+            if (n)
+                console.log('[sandbox] отключён интернет у', n, 'компьютер(ов) по таймеру');
+        }
+        catch { /* Docker спит */ }
+    }, 2 * 60_000).unref?.();
+}
+
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);

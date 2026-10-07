@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "docker": { "socketPath": null, "host": null, "port": null },
+  "image": "work-computer:latest",
+  "images": ["work-computer:latest", "python:3.12-slim", "node:22-slim"],
+  "workdir": "/workspace",
+  "user": "",
+  "limits": { "memoryMb": 1024, "cpus": 1, "pids": 256 },
+  "maxPerUser": 2,
+  "maxRunning": 4,
+  "idleStopMin": 10,
+  "execTimeoutSec": 120,
+  "maxReadBytes": 1000000,
+  "maxWriteBytes": 200000,
+  "maxOutput": 200000,
+  "network": { "egressName": "work-egress", "sandboxName": "work-sandbox", "ttlMin": 15 },
+  "graphical": ["work-computer:latest"],
+  "displayWaitSec": 30
+}

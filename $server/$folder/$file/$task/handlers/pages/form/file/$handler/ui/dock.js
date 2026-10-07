@@ -106,7 +106,7 @@ ODA({ is: 'microchat-dock',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--subtle-border); background: var(--subtle-background); }
-            .tabs { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--subtle-border); overflow-x: auto; min-height: 44px; box-sizing: border-box; }
+            .tabs { @apply --horizontal; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--subtle-border); overflow-x: auto; min-height: 44px; box-sizing: border-box; }
             .tab {
                 @apply --horizontal; align-items: center; gap: 6px; flex-shrink: 0; max-width: 200px; height: 30px; padding: 0 10px;
                 border-radius: var(--radius-s); cursor: pointer; font-size: small; user-select: none; border: 1px solid transparent;
@@ -121,22 +121,33 @@ ODA({ is: 'microchat-dock',
             <div class="tab" :on="tab === 'context'" @tap="select('context')" title="Статистика сессии">
                 <oda-icon icon="carbon:chart-pie" :icon-size="14"></oda-icon><span>Контекст</span>
             </div>
-            <div class="tab" ~for="docs" :on="tab === $for.item.key" :title="$for.item.path || $for.item.subtitle || $for.item.title" @tap="select($for.item.key)">
-                <oda-icon :icon="$for.item.icon" :icon-size="14"></oda-icon><span>{{$for.item.title}}</span>
+            <div class="tab" ~if="hasComputer" :on="tab === 'monitor'" @tap="select('monitor')" title="Монитор компьютера">
+                <oda-icon icon="carbon:screen" :icon-size="14"></oda-icon><span>Монитор</span>
+            </div>
+            <div class="tab" ~if="hasResults" :on="tab === 'results'" @tap="select('results')" title="Результаты работы">
+                <oda-icon icon="carbon:report" :icon-size="14"></oda-icon><span>Результаты</span>
+            </div>
+            <div class="tab" ~if="hasFiles" :on="tab === 'files'" @tap="select('files')" title="Файлы задачи">
+                <oda-icon icon="carbon:folder" :icon-size="14"></oda-icon><span>Файлы</span>
             </div>
             <div flex></div>
             <oda-button no-flex icon="carbon:close" :icon-size="16" title="Скрыть доки" @tap="hide"></oda-button>
         </div>
         <div class="sheet" flex vertical>
             <microchat-context flex ~if="tab === 'context'"></microchat-context>
-            <microchat-doc flex ~if="current" :doc="current"></microchat-doc>
+            <microchat-monitor flex ~if="tab === 'monitor'"></microchat-monitor>
+            <microchat-results flex ~if="tab === 'results'"></microchat-results>
+            <microchat-files flex ~if="tab === 'files'"></microchat-files>
         </div>
     `,
     get shell() { return findShell(this); },
     get docs() { return this.$pdp?.docs || []; },
-    get tab() { return this.$pdp?.dockTab || 'context'; },
+    tab: { $def: 'context' },
+    get hasComputer() { return !!this.$pdp?.computerRunning; },
+    get hasResults() { return this.docs.some(d => d.kind === 'text' || (d.kind === 'file' && d.published)); },
+    get hasFiles() { return this.docs.some(d => d.kind === 'file'); },
     get current() { return this.tab === 'context' ? null : this.docs.find(d => d.key === this.tab) || null; },
-    select(key) { findShell(this)?.selectTab(key); },
+    select(key) { this.tab = key || 'context'; },
     hide() { findShell(this)?.toggleDock(false); },
 });
 
@@ -224,6 +235,190 @@ ODA({ is: 'microchat-context',
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     },
+});
+
+ODA({ is: 'microchat-monitor',
+    template: /*html*/`
+        <style>
+            :host { @apply --vertical; overflow: hidden; min-width: 0; }
+            .bar { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 36px; box-sizing: border-box; }
+            .bar span { font-size: small; font-weight: 600; }
+            .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .body { overflow: hidden; min-height: 0; flex: 1; position: relative; background: #111; }
+            iframe { border: none; width: 100%; height: 100%; position: absolute; inset: 0; }
+        </style>
+        <div class="bar" no-flex>
+            <span>Монитор компьютера</span>
+            <div flex></div>
+            <oda-button no-flex icon="carbon:launch" :icon-size="16" title="Открыть в новой вкладке" @tap="launch"></oda-button>
+        </div>
+        <div class="body">
+            <iframe :src="src"></iframe>
+        </div>
+    `,
+    get src() { return location.origin + '/~computer/main'; },
+    launch() { window.open(this.src, 'work-computer'); },
+});
+
+ODA({ is: 'microchat-results',
+    imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer',
+    template: /*html*/`
+        <style>
+            :host { @apply --vertical; overflow: hidden; min-width: 0; }
+            .sel-bar { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 36px; box-sizing: border-box; }
+            .sel { @apply --horizontal; align-items: center; gap: 6px; font-size: small; user-select: none; flex: 1; min-width: 0; }
+            .sel .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+            .sel .cnt { @apply --muted; font-size: x-small; white-space: nowrap; }
+            .arr { background: none; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: pointer; padding: 2px 6px; color: inherit; line-height: 1.2; }
+            .arr:hover { background: var(--code-background); }
+            .arr:disabled { opacity: .3; cursor: default; }
+            .body { overflow: auto; min-height: 0; flex: 1; }
+            .md { padding: 14px 20px; user-select: text; line-height: 1.6; }
+            .empty { @apply --muted; text-align: center; padding: 40px 20px; }
+        </style>
+        <div class="sel-bar" no-flex ~if="items.length">
+            <div class="sel" flex>
+                <button class="arr" :disabled="idx <= 0" @tap="prev" title="Предыдущий">‹</button>
+                <span class="name" :title="cur?.title">{{cur?.title}}</span>
+                <span class="cnt">{{idx + 1}} из {{items.length}}</span>
+                <button class="arr" :disabled="idx >= items.length - 1" @tap="next" title="Следующий">›</button>
+            </div>
+        </div>
+        <div class="body" flex vertical>
+            <div class="empty" ~if="!items.length">Результатов пока нет</div>
+            <microchat-doc flex ~if="cur" :doc="cur"></microchat-doc>
+        </div>
+    `,
+    idx: 0,
+    get items() {
+        const docs = this.$pdp?.docs || [];
+        // published results (файлы) + agent reports (text)
+        return docs.filter(d => d.kind === 'file' && d.published || d.kind === 'text');
+    },
+    get cur() { return this.items[this.idx] || null; },
+    prev() { if (this.idx > 0) this.idx--; },
+    next() { if (this.idx < this.items.length - 1) this.idx++; },
+    observe() {
+        const n = this.items.length;
+        if (n && this._prevN != null && n > this._prevN)
+            this.idx = n - 1;
+        this._prevN = n;
+    },
+    attached() { this.observe(); },
+    render() { this.observe(); },
+});
+
+ODA({ is: 'microchat-files',
+    imports: 'oda//button, oda//icon, oda//markdown//markdown-viewer',
+    template: /*html*/`
+        <style>
+            :host { @apply --vertical; overflow: hidden; min-width: 0; }
+            .list { overflow-y: auto; flex: 1; min-height: 0; }
+            .item {
+                @apply --horizontal; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none;
+                border-bottom: 1px solid var(--subtle-border); font-size: small;
+            }
+            .item:hover { background: var(--code-background); }
+            .item[on] { background: var(--content-background); font-weight: 600; }
+            .item .icon { flex-shrink: 0; }
+            .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+            .item .time { @apply --muted; font-size: x-small; white-space: nowrap; flex-shrink: 0; }
+            .preview { overflow: auto; min-height: 0; border-top: 1px solid var(--subtle-border); }
+            .preview-bar { @apply --horizontal; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 30px; box-sizing: border-box; }
+            .preview-bar span { font-size: small; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+            .preview-bar .back { background: none; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: pointer; padding: 1px 8px; color: inherit; font-size: small; }
+            .preview-bar .back:hover { background: var(--code-background); }
+            .preview-bar oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .preview-body { overflow: auto; min-height: 0; flex: 1; }
+            .preview-body iframe { border: none; width: 100%; height: 100%; background: white; }
+            .preview-body .img { @apply --vertical; align-items: center; justify-content: center; padding: 16px; }
+            .preview-body .img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-s); background: #111; }
+            .preview-body video { width: 100%; max-height: 100%; background: #000; border-radius: var(--radius-s); }
+            .preview-body .md { padding: 14px 20px; user-select: text; line-height: 1.6; }
+            .preview-body pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+            .empty { @apply --muted; text-align: center; padding: 40px 20px; }
+        </style>
+        <div class="list" ~if="!previewKey">
+            <div class="empty" ~if="!items.length">Файлов пока нет</div>
+            <div class="item" ~for="items" :on="previewKey === $for.item.key" @tap="open($for.item)">
+                <oda-icon class="icon" :icon="$for.item.icon" :icon-size="16"></oda-icon>
+                <span class="name" :title="$for.item.path || $for.item.title">{{$for.item.title}}</span>
+                <span class="time">{{fmtTime($for.item.time)}}</span>
+            </div>
+        </div>
+        <div class="preview" flex vertical ~if="previewKey">
+            <div class="preview-bar" no-flex>
+                <button class="back" @tap="close">← Файлы</button>
+                <span flex :title="previewPath">{{previewTitle}}</span>
+                <oda-button no-flex ~if="!isImage && !isPage && !isVideo" icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
+                <oda-button no-flex icon="carbon:download" :icon-size="14" title="Скачать" @tap="download"></oda-button>
+                <oda-button no-flex icon="carbon:launch" :icon-size="14" title="Открыть в новой вкладке" @tap="launch"></oda-button>
+            </div>
+            <div class="preview-body" flex vertical>
+                <iframe flex ~if="isPage" :src="previewUrl"></iframe>
+                <div class="img" flex ~if="isImage"><img :src="previewUrl"></div>
+                <video flex controls preload="metadata" ~if="isVideo" :src="previewUrl"></video>
+                <div class="md" ~if="isMarkdown && previewText"><oda-markdown-viewer vertical :value="previewMd"></oda-markdown-viewer></div>
+                <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && previewText">{{previewText}}</pre>
+            </div>
+        </div>
+    `,
+    previewKey: '',
+    previewText: '',
+    bust: 0,
+    get items() {
+        const docs = this.$pdp?.docs || [];
+        return docs.filter(d => d.kind === 'file');
+    },
+    get curDoc() { return this.previewKey ? this.items.find(d => d.key === this.previewKey) || null : null; },
+    get previewPath() { return this.curDoc?.path || ''; },
+    get previewTitle() { return this.curDoc?.title || ''; },
+    get previewExt() { return extOf(this.previewPath); },
+    get isImage() { return IMAGE.includes(this.previewExt); },
+    get isPage() { return PAGE.includes(this.previewExt); },
+    get isVideo() { return VIDEO.includes(this.previewExt); },
+    get isMarkdown() { return this.previewExt === 'md'; },
+    get previewUrl() { return this.previewPath ? fileUrl(this.previewPath) + '?_=' + this.bust : ''; },
+    get previewMd() { return this.previewText ? linkifyWork(this.previewText) : ''; },
+    fmtTime,
+    async open(doc) {
+        if (this.previewKey === doc.key) {
+            this.previewKey = '';
+            return;
+        }
+        this.previewKey = doc.key;
+        this.bust = Date.now();
+        this.previewText = '';
+        if (!this.isImage && !this.isPage && !this.isVideo) {
+            try {
+                const item = await WORK.get_item(doc.path);
+                const raw = await item?.load?.();
+                this.previewText = typeof raw === 'string' ? raw : (raw == null ? '' : JSON.stringify(raw, null, 2));
+            }
+            catch (e) {
+                this.previewText = 'Не удалось загрузить: ' + (e?.message || e);
+            }
+        }
+    },
+    close() { this.previewKey = ''; },
+    copy() { copyText(this.previewText); },
+    download() {
+        if (!this.previewPath) return;
+        if (this.isImage || this.isPage || this.isVideo) {
+            const a = document.createElement('a');
+            a.href = fileUrl(this.previewPath);
+            a.download = this.curDoc?.title || 'file';
+            a.click();
+            return;
+        }
+        const blob = new Blob([this.previewText], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = this.curDoc?.title || 'file';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    },
+    launch() { if (this.previewPath) window.open(fileUrl(this.previewPath), '_blank'); },
 });
 
 ODA({ is: 'microchat-doc',

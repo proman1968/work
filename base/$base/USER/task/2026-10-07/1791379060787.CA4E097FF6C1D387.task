@@ -1,0 +1,35 @@
+{
+  "name": "Добавь в класс базы в руководство роль секретарь",
+  "created": 1791379060676,
+  "items": [
+    {
+      "id": "18a91457-efbf-4902-b60c-a9a8bcb2ff1a",
+      "type": "user",
+      "time": 1791379061193,
+      "content": "Добавь в класс базы в руководство роль секретарь"
+    },
+    {
+      "id": "762b2c70-bccc-4b00-8932-2e67b3feb168",
+      "type": "error",
+      "time": 1791379062684,
+      "content": "модель не найдена или не умеет streamChat: /MODELS/BIS-Ollama/Qwen3.8 27b"
+    }
+  ],
+  "model": "/MODELS/odant/Qwen3.8 27b",
+  "effort": "low",
+  "time": 1791379060787,
+  "version": 2,
+  "type": "task",
+  "todos": [],
+  "allowed": [],
+  "results": [],
+  "mode": "auto",
+  "status": "error",
+  "title": "Добавь в класс базы в руководство роль секретарь",
+  "location": {
+    "tz": "Europe/Moscow"
+  },
+  "tz": "Europe/Moscow",
+  "role": "USER",
+  "updated": 1791379083928
+}

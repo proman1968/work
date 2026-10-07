@@ -3,10 +3,14 @@
  * Генерирует дерево дат из диапазона [start, end] (всегда YYYY-MM-DD).
  * mode задаёт гранулярность: day | month | quarter | year.
  * Наружу: selected, selection, mask, period {start, end} + событие 'selection-changed'.
+ * Подписи и служебные строки — на русском, локаль не переключается.
  */
 
 // Формат полной даты
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// Подписи и служебные строки — на русском
+const LOCALE = 'ru-RU';
 
 function _pad(n) {
     return String(n).padStart(2, '0');
@@ -26,6 +30,13 @@ function _parseBound(s) {
     const dt = new Date(y, mo - 1, d);
     if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
     return dt;
+}
+
+// Дата из 'YYYY-MM' или 'YYYY-MM-DD' строго в локальной зоне.
+// new Date('2024-11-01') парсится как UTC и в America/* уезжает на предыдущий месяц.
+function _localDate(s) {
+    const m = String(s).match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+    return m ? new Date(+m[1], +m[2] - 1, +(m[3] ?? 1)) : new Date(s);
 }
 
 function _daysInMonth(y, m) {
@@ -48,51 +59,45 @@ function _getType(name) {
     return 'service';
 }
 
-function _lang() {
-    try {
-        return (globalThis.ODA?.language) || navigator.language || 'ru-RU';
-    } catch { return 'ru-RU'; }
+function _quarterLabel(name, full) {
+    const [y, q] = name.split('-');
+    const n = parseInt(q.slice(1), 10);
+    return full ? `${y}, ${n} квартал` : `${n} квартал`;
 }
 
-// Человекочитаемая подпись (порт _getLabel из оригинала)
-function _getLabel(name, type) {
+// Человекочитаемая подпись (порт _getLabel из оригинала).
+// multiYear — диапазон пересекает календарные годы, без него подпись неоднозначна.
+function _getLabel(name, type, multiYear) {
     if (name === '*' || name === '<' || name === '>' || name === 'period') return name;
-    const lang = _lang();
     try {
-        if (type === 'year') return new Date(+name, 0, 1).toLocaleDateString(lang, { year: 'numeric' });
-        if (type === 'quarter') {
-            const q = parseInt(name.split('-')[1].slice(1), 10);
-            return `${q} квартал`;
+        if (type === 'year') return new Date(+name, 0, 1).toLocaleDateString(LOCALE, { year: 'numeric' });
+        if (type === 'quarter') return _quarterLabel(name, false);
+        if (type === 'month') {
+            const opts = multiYear ? { year: 'numeric', month: 'long' } : { month: 'long' };
+            return _localDate(name + '-01').toLocaleDateString(LOCALE, opts);
         }
-        if (type === 'month') return new Date(name + '-01').toLocaleDateString(lang, { month: 'long' });
-        if (type === 'day') return new Date(name).toLocaleDateString(lang, { day: 'numeric' });
+        if (type === 'day') {
+            const opts = multiYear ? { year: '2-digit', month: 'short', day: 'numeric' } : { day: 'numeric' };
+            return _localDate(name).toLocaleDateString(LOCALE, opts);
+        }
     } catch { /* fallback ниже */ }
     return name;
 }
 
 function _getFullLabel(name, type) {
     if (name === '*' || name === '<' || name === '>' || name === 'period') return name;
-    const lang = _lang();
     try {
-        if (type === 'year') return new Date(+name, 0, 1).toLocaleDateString(lang, { year: 'numeric' });
-        if (type === 'quarter') {
-            const [y, q] = name.split('-');
-            return `${y}, ${parseInt(q.slice(1), 10)} квартал`;
-        }
-        if (type === 'month') return new Date(name + '-01').toLocaleDateString(lang, { year: 'numeric', month: 'long' });
-        if (type === 'day') return new Date(name).toLocaleDateString(lang, { year: 'numeric', month: 'long', day: 'numeric' });
+        if (type === 'year') return new Date(+name, 0, 1).toLocaleDateString(LOCALE, { year: 'numeric' });
+        if (type === 'quarter') return _quarterLabel(name, true);
+        if (type === 'month') return _localDate(name + '-01').toLocaleDateString(LOCALE, { year: 'numeric', month: 'long' });
+        if (type === 'day') return _localDate(name).toLocaleDateString(LOCALE, { year: 'numeric', month: 'long', day: 'numeric' });
     } catch { /* fallback ниже */ }
     return name;
 }
 
-// Маска выбора (порт _getMask): квартал вне quarter-режима раскрывается в 3 месяца
-function _getMask(name, type, mode) {
+// Маска выбора: глоб-префикс единицы гранулярности. Каждый префикс — ключ _dayIndex.
+function _getMask(name) {
     if (name === '' || name === '*') return name;
-    if (type === 'quarter' && mode !== 'quarter') {
-        const [y, q] = name.split('-');
-        const n = parseInt(q.slice(1), 10);
-        return _getMonthsOfQuarter(n).map(m => `${y}-${m}*`).join('|');
-    }
     return name + '*';
 }
 
@@ -125,7 +130,7 @@ ODA({
                 @apply --error;
             }
         </style>
-        <oda-packets-row ~if="items?.length" :items :mode :selection :range-start="start" :range-end="end"
+        <oda-packets-row ~if="items?.length" :items :mode
             @item-pick="_onItemPick($event)" @open-menu="_onOpenMenu($event)"
             @nav-left="_onNavLeft($event)" @nav-right="_onNavRight($event)" @edit-period="_onEditPeriod($event)"></oda-packets-row>
         <div class="error" ~if="error">{{error}}</div>
@@ -168,12 +173,15 @@ ODA({
         }
     },
     error: '',
-    // Внутреннее: все дни диапазона по возрастанию + листья для навигации по mode
+    // Внутреннее: покрытие диапазона, единицы гранулярности mode, листья навигации
     _dayNames: [],
+    _dayIndex: {},
+    _units: {},
     _leaves: [],
-    get packetsBar() {
-        return this;
-    },
+    _lo: '',
+    _hi: '',
+    _multiYear: false,
+    _periodBase: '',
     $observers: {
         _rebuild(start, end, mode) {
             this._build(start, end, mode);
@@ -186,7 +194,10 @@ ODA({
         if (!dStart || !dEnd) {
             this.items = [];
             this._dayNames = [];
+            this._dayIndex = {};
+            this._units = {};
             this._leaves = [];
+            this._lo = this._hi = '';
             this.error = 'Задайте корректные start и end в формате YYYY-MM-DD';
             return;
         }
@@ -199,13 +210,21 @@ ODA({
             days.push(_toISO(cur.getFullYear(), cur.getMonth() + 1, cur.getDate()));
         }
         this._dayNames = days;
+        this._lo = days[0] ?? '';
+        this._hi = days[days.length - 1] ?? '';
+        this._multiYear = this._lo.slice(0, 4) !== this._hi.slice(0, 4);
+        // Усечение guard'ом — не молча: сообщаем фактическое покрытие
+        if (this._hi && this._hi < _toISO(to.getFullYear(), to.getMonth() + 1, to.getDate()))
+            this.error = `Диапазон ограничен ${this._lo} — ${this._hi}`;
+        this._dayIndex = this._buildIndex(days);
+        this._units = this._buildUnits(days, mode);
         const years = this._makeDateStructure(days, mode);
         this._leaves = this._collectLeaves(years, mode);
-        const bar = this._makeBar(years, mode, days[0], days[days.length - 1]);
+        const bar = this._makeBar(years, mode, this._lo, this._hi);
         this.items = bar.items;
         this._allItem = bar.allItem;
-        // По умолчанию выбран весь диапазон (тихо, без события)
-        if (this._allItem) this._applySelection([this._allItem], { silent: true });
+        // По умолчанию выбран весь диапазон; событие шлём — потребитель должен узнать о смене периода
+        if (this._allItem) this._applySelection([this._allItem]);
         else {
             this.selection = [];
             this.selected = null;
@@ -213,20 +232,55 @@ ODA({
             this.period = null;
         }
     },
+    // Все префиксы дат → [первый день, последний день]; ключ '*' — весь диапазон
+    _buildIndex(days) {
+        const index = {};
+        const set = (prefix, day) => {
+            const cur = index[prefix];
+            if (cur) cur[1] = day;
+            else index[prefix] = [day, day];
+        };
+        for (const day of days) {
+            const y = day.slice(0, 4);
+            set(y, day);
+            set(`${y}-q${_getQuarterOfMonth(day.slice(5, 7))}`, day);
+            set(day.slice(0, 7), day);
+            set(day, day);
+        }
+        if (days.length) index['*'] = [days[0], days[days.length - 1]];
+        return index;
+    },
+    // Единицы гранулярности mode → [первый день, последний день] (год | квартал | месяц)
+    _buildUnits(days, mode) {
+        const units = {};
+        const add = (prefix, day) => {
+            const cur = units[prefix];
+            if (cur) cur[1] = day;
+            else units[prefix] = [day, day];
+        };
+        for (const day of days) {
+            const y = day.slice(0, 4);
+            if (mode === 'year') add(y, day);
+            else if (mode === 'quarter') add(`${y}-q${_getQuarterOfMonth(day.slice(5, 7))}`, day);
+            else add(day.slice(0, 7), day);
+        }
+        return units;
+    },
     _makeItem(preset, mode) {
         const type = preset.type || _getType(preset.name);
-        const item = {
+        return {
+            ...preset,
             mode,
             type,
-            mask: preset.mask ?? _getMask(preset.name, type, mode),
-            label: preset.label ?? _getLabel(preset.name, type),
+            mask: preset.mask ?? _getMask(preset.name),
+            label: preset.label ?? _getLabel(preset.name, type, this._multiYear),
             fullLabel: preset.fullLabel ?? _getFullLabel(preset.name, type),
-            items: preset.items || [],
-            ...preset
+            items: preset.items || []
         };
-        return item;
     },
-    // Дерево год → квартал → месяц → день, только входящее в диапазон (порт _makeDateStructure)
+    // Дерево строго по гранулярности mode (порт _makeDateStructure):
+    // year → [год], quarter → год → [год, qN], month → год → [год, YYYY-MM],
+    // day → год → [год, YYYY-MM] → дни. Кварталов в month/day нет.
     _makeDateStructure(dayNames, mode) {
         const years = [];
         const byYear = new Map();
@@ -234,7 +288,6 @@ ODA({
             let node = byYear.get(y);
             if (!node) {
                 node = this._makeItem({ name: y, items: [] }, mode);
-                node.items = [];
                 byYear.set(y, node);
                 years.push(node);
             }
@@ -242,51 +295,42 @@ ODA({
         };
         for (const day of dayNames) {
             const y = day.slice(0, 4);
-            const m = day.slice(0, 7);
-            const q = `${y}-q${_getQuarterOfMonth(day.slice(5, 7))}`;
             const yearNode = getYear(y);
             if (mode === 'year') continue;
-            let qNode = yearNode.items.find(i => i.name === q);
-            if (!qNode) {
-                qNode = this._makeItem({ name: q, parent: yearNode, root: yearNode, items: [] }, mode);
-                qNode.items = [];
-                yearNode.items.push(qNode);
+            if (mode === 'quarter') {
+                const q = `${y}-q${_getQuarterOfMonth(day.slice(5, 7))}`;
+                if (!yearNode.items.some(i => i.name === q))
+                    yearNode.items.push(this._makeItem({ name: q, parent: yearNode, root: yearNode }, mode));
+                continue;
             }
-            if (mode === 'quarter') continue;
+            const m = day.slice(0, 7);
             let mNode = yearNode.items.find(i => i.name === m);
             if (!mNode) {
-                mNode = this._makeItem({ name: m, parent: qNode, root: yearNode, items: [] }, mode);
-                mNode.items = [];
+                mNode = this._makeItem({ name: m, parent: yearNode, root: yearNode, items: [] }, mode);
                 yearNode.items.push(mNode);
             }
             if (mode === 'month') continue;
-            if (!mNode.items.some(i => i.name === day)) {
-                mNode.items.push(this._makeItem({ name: day, parent: mNode, root: yearNode }, mode));
-            }
+            mNode.items.push(this._makeItem({ name: day, parent: mNode, root: yearNode }, mode));
         }
         // Пункт «весь год» первым ребёнком (как items[0] в оригинале)
         for (const yearNode of years) {
-            if (mode !== 'year') {
-                yearNode.items.unshift(this._makeItem({ name: yearNode.name, parent: yearNode, root: yearNode }, mode));
-            }
+            if (mode !== 'year')
+                yearNode.items.unshift(this._makeItem({ name: yearNode.name, whole: true, parent: yearNode, root: yearNode }, mode));
             yearNode.items.sort((a, b) => a.name.localeCompare(b.name));
         }
+        // Полоса идёт по убыванию лет, стрелки < / > — по возрастанию (_collectLeaves)
         years.sort((a, b) => b.name.localeCompare(a.name));
         return years;
     },
     // Плоский упорядоченный список единиц выбора для стрелок </> (по возрастанию)
     _collectLeaves(years, mode) {
         const out = [];
-        const asc = [...years].sort((a, b) => a.name.localeCompare(b.name));
-        for (const y of asc) {
+        for (const y of [...years].sort((a, b) => a.name.localeCompare(b.name))) {
             if (mode === 'year') { out.push(y); continue; }
-            const kids = [...(y.items || [])].sort((a, b) => a.name.localeCompare(b.name));
+            const kids = [...(y.items || [])].filter(i => !i.whole)
+                .sort((a, b) => a.name.localeCompare(b.name));
             for (const k of kids) {
-                if (k.name === y.name) continue; // «весь год» — не единица навигации
-                if (mode === 'quarter') { if (k.type === 'quarter') out.push(k); continue; }
-                if (k.type === 'quarter') continue;
-                if (mode === 'month') { out.push(k); continue; }
-                // day: месяцы с днями
+                if (mode !== 'day') { out.push(k); continue; }
                 for (const d of [...(k.items || [])].sort((a, b) => a.name.localeCompare(b.name))) out.push(d);
             }
         }
@@ -304,14 +348,15 @@ ODA({
             name: nowName, is: 'oda-packets-now-selector', type: mode === 'year' ? 'year' : mode === 'quarter' ? 'quarter' : mode,
             disabled: !nowInRange
         }, mode);
-        nowItem.label = 'Now ' + nowItem.label;
-        nowItem.fullLabel = 'Now ' + nowItem.fullLabel;
+        nowItem.label = `Сейчас ${nowItem.label}`;
+        nowItem.fullLabel = `Сейчас ${nowItem.fullLabel}`;
+        this._periodBase = `${rangeStart} - ${rangeEnd}`;
         const periodItem = this._makeItem({
             name: 'period', is: 'oda-packets-period-selector', _isRight: true,
-            label: `${rangeStart} - ${rangeEnd}`, fullLabel: `${rangeStart} - ${rangeEnd}`,
+            label: this._periodBase, fullLabel: this._periodBase,
             start: rangeStart, end: rangeEnd, mask: '*'
         }, mode);
-        const allItem = this._makeItem({ name: '*', label: 'All', fullLabel: 'All', _isRight: true, mask: '*' }, mode);
+        const allItem = this._makeItem({ name: '*', label: 'Все', fullLabel: 'Все', _isRight: true, mask: '*' }, mode);
         const items = [
             nowItem,
             ...years,
@@ -326,6 +371,22 @@ ODA({
     _detail(e) {
         return e?.detail?.value ?? e?.detail ?? {};
     },
+    // Пересечение [s, e] с фактическим покрытием диапазона; null — не пересекается
+    _clipRange(s, e) {
+        if (!this._lo) return null;
+        const start = s > this._lo ? s : this._lo;
+        const end = e < this._hi ? e : this._hi;
+        return start <= end ? [start, end] : null;
+    },
+    // Маска → список диапазонов дней через _dayIndex (без линейного скана по дням)
+    _maskRanges(mask) {
+        const out = [];
+        for (const part of String(mask || '').split('|')) {
+            const range = this._dayIndex[part.replace(/\*+$/, '')];
+            if (range) out.push(range);
+        }
+        return out;
+    },
     // --- выбор ---
     _onItemPick(e) {
         const { item, ctrlKey } = this._detail(e);
@@ -339,45 +400,47 @@ ODA({
             this._applySelection([item]);
         }
     },
-    _applySelection(selection, { silent } = {}) {
-        for (const i of this.items) i.selected = false;
+    _applySelection(selection) {
+        this._clearSelected(this.items);
         for (const s of selection) s.selected = true;
-        if (this._periodItem && selection.length === 1 && !selection[0]._isRight) {
-            this._periodItem.label = this._periodItem.fullLabel = selection[0].fullLabel;
+        // Одиночный выбор левой части подписывает пункт «period»; в остальных случаях — базовая подпись
+        const only = selection.length === 1 && !selection[0]._isRight;
+        if (this._periodItem) {
+            this._periodItem.label = this._periodItem.fullLabel = only ? selection[0].fullLabel : this._periodBase;
         }
         this.selection = [...selection];
         this.selected = selection[0] || null;
         this.mask = selection.map(i => i.mask).filter(Boolean).join('|');
         this.period = this._resolvePeriod(selection);
         this.items = [...this.items]; // триггер перерисовки
-        if (!silent) this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
+        this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
     },
-    // Период YYYY-MM-DD по маскам выбора (порт логики execute из оригинала)
+    // Сброс отметки по всему дереву, иначе вложенный месяц/день остаётся подсвеченным в меню
+    _clearSelected(items) {
+        for (const i of items || []) {
+            i.selected = false;
+            if (i.items?.length) this._clearSelected(i.items);
+        }
+    },
+    // Период YYYY-MM-DD. Одиночный выбор — по _leafSpan (quarter распаковывается корректно),
+    // мульти-выбор — по индексированным префиксам маски.
     _resolvePeriod(selection) {
-        if (!selection.length) return null;
-        if (selection.length === 1 && selection[0].name === 'period') {
-            return { start: selection[0].start, end: selection[0].end };
+        if (!selection?.length) return null;
+        if (selection.length === 1) {
+            const only = selection[0];
+            if (only.name === 'period') return { start: only.start, end: only.end };
+            const [s, e] = only.name === '*' ? [this._lo, this._hi] : _leafSpan(only.name, only.type);
+            const clipped = this._clipRange(s, e);
+            return clipped ? { start: clipped[0], end: clipped[1] } : null;
         }
-        if (selection.length === 1 && selection[0].name === '*') {
-            return { start: this.start <= this.end ? this.start : this.end, end: this.start <= this.end ? this.end : this.start };
-        }
-        const days = this._dayNames;
         let min = null, max = null;
         for (const item of selection) {
-            for (const prefix of String(item.mask || '').split('|')) {
-                const clean = prefix.replace(/\*$/, '');
-                const first = days.find(d => d.startsWith(clean));
-                if (first && (min === null || first < min)) min = first;
-                for (let i = days.length - 1; i >= 0; i--) {
-                    if (days[i].startsWith(clean)) {
-                        if (max === null || days[i] > max) max = days[i];
-                        break;
-                    }
-                }
+            for (const [s, e] of this._maskRanges(item.mask)) {
+                if (min === null || s < min) min = s;
+                if (max === null || e > max) max = e;
             }
         }
-        if (min === null) return null;
-        return { start: min, end: max };
+        return min === null ? null : { start: min, end: max };
     },
     // --- выпадающие меню (порт tap→showDropdown из row) ---
     async _onOpenMenu(e) {
@@ -417,7 +480,8 @@ ODA({
         if (!this._leaves.length) return;
         const cur = this.selection[0];
         let idx = -1;
-        if (cur && !cur._isRight) {
+        // _isRight — только про раскладку в полосе; шаг определяется границами выбора
+        if (cur && cur.name !== '<' && cur.name !== '>' && cur.name !== '*') {
             // period-item с кастомным диапазоном: шаг от его края
             if (cur.name === 'period' && cur.start) {
                 const edge = dir < 0 ? cur.start : cur.end;
@@ -436,38 +500,40 @@ ODA({
     },
     _onNavLeft() { this._step(-1); },
     _onNavRight() { this._step(1); },
+    // Маска произвольного периода по единицам гранулярности mode, пересекающим [start, end].
+    // В day-режиме единица — месяц (пикер идёт год → месяц → день), поэтому маска не раздувается.
+    _periodMask(start, end) {
+        const parts = [];
+        for (const [prefix, [s, e]] of Object.entries(this._units))
+            if (s <= end && e >= start) parts.push([s, prefix]);
+        return parts.sort((a, b) => a[0].localeCompare(b[0])).map(([, p]) => p + '*').join('|');
+    },
     // --- диалог произвольного периода (порт period-selector-input) ---
     async _onEditPeriod(e) {
         const { anchor } = this._detail(e);
         const fallbackStart = this.period?.start || this.start;
         const fallbackEnd = this.period?.end || this.end;
-        const lo = this.start <= this.end ? this.start : this.end;
-        const hi = this.start <= this.end ? this.end : this.start;
+        const lo = this._lo, hi = this._hi;
+        if (!lo) return;
         const input = ODA.createComponent('oda-packets-period-input', {
             start: fallbackStart, end: fallbackEnd, min: lo, max: hi
         });
         try {
-            await ODA.showDialog(input, {
-                TITLE: { label: 'Период' },
-                OK: { label: 'OK' },
-                CANCEL: { label: 'Отмена' }
-            });
+            // OK и CANCEL не передаём — стандартные подписи и оформление oda-popover
+            await ODA.showDialog(input, { TITLE: { label: 'Период' } });
         } catch { return; } // отмена
         let { start, end } = input;
         if (!start || !end) return;
         if (start > end) [start, end] = [end, start];
         start = start < lo ? lo : start > hi ? hi : start;
         end = end < lo ? lo : end > hi ? hi : end;
-        const covered = this._leaves.filter(l => {
-            const [s, e2] = _leafSpan(l.name, l.type);
-            return s <= end && e2 >= start;
-        });
-        if (!covered.length) return;
+        const mask = this._periodMask(start, end);
+        if (!mask) return;
         const p = this._periodItem;
         p.start = start;
         p.end = end;
-        p.mask = covered.map(i => i.mask).join('|');
-        p.label = p.fullLabel = `${start} - ${end}`;
+        p.mask = mask;
+        this._periodBase = `${start} - ${end}`;
         this._applySelection([p]);
     }
 });
@@ -512,18 +578,6 @@ ODA({
         mode: {
             $def: 'month',
             $list: ['day', 'month', 'quarter', 'year']
-        },
-        selection: {
-            $def: [],
-            $type: Array
-        },
-        rangeStart: {
-            $def: '',
-            $type: String
-        },
-        rangeEnd: {
-            $def: '',
-            $type: String
         }
     },
     get leftItems() {
