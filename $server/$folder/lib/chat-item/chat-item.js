@@ -48,7 +48,6 @@ ODA({is: 'chat-item',
                 min-height: 0;
                 overflow: auto;
                 width: stretch;
-                min-width: 30vw;
             }
             :host([compact]) .card {
                 border-radius: 0;
@@ -118,6 +117,10 @@ ODA({is: 'chat-item',
             const ext = String(file.ext || '').toLowerCase();
             const is = ext ? `item-${name}-${ext}` : `item-${name}`;
             await view?.importView?.(is);
+            if (!customElements.get(is)) {
+                console.error(`[chat-item] вид '${name}' не зарегистрирован как <${is}>`);
+                return 'item-node';
+            }
             return is;
         });
     },

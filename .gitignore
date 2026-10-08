@@ -22,6 +22,10 @@ users/*/
 **/*.webm
 **/history/
 **/work/
+**/DATA/
+**/ADMIN/
+**/USER/
+**/BOSS/
 
 # Progress snapshots (mirror of WORK history pattern)
 .progress.md/history/
@@ -45,3 +49,4 @@ package-lock.json
 
 # ��������� ������� ������� (������ �� ������, RAG)
 /.index/
+

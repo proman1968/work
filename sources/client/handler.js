@@ -10,7 +10,19 @@ export class $handler extends $class{
             path += '.js'
         const module = await import(path);
         let prototype = module?.default;
-        prototype.is ??= is || ('item-' + this.id);
+        // ES-модуль кэшируется: module.default — один объект на все импорты.
+        // ??= оставляло имя первого импорта, и повторный импорт того же URL
+        // с другим is регистрировал старое имя, а элемент с новым is
+        // оставался незарегистрированным (пустой экран при открытии во вкладке).
+        // Поэтому при несовпадении имён клонируем прототип с сохранением
+        // дескрипторов (геттеры/сеттеры) и регистрируем клон под нужным именем.
+        const want = is || ('item-' + this.id);
+        if (prototype.is && prototype.is !== want) {
+            // Клонируем с сохранением дескрипторов (геттеры/сеттеры переживают
+            // клонирование; Object.assign здесь нельзя — он схлопывает их в значения).
+            prototype = Object.defineProperties(Object.create(Object.getPrototypeOf(prototype)), Object.getOwnPropertyDescriptors(prototype));
+        }
+        prototype.is = want;
         await WORK(prototype);
         return await prototype;
     }

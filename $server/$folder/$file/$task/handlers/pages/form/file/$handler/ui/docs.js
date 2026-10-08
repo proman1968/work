@@ -74,6 +74,14 @@ export function collectDocs(items, published) {
                         title: basename(t.path), icon: FILE_TOOLS[t.name], time: it.time, source: t.id,
                         ...(snapshot && pub.has(snapshot) ? { published: true } : {}) });
                 }
+                // универсальное правило: любой инструмент со снимком — файл в WORK
+                if (t?.status === 'ok' && t.snapshot && !FILE_TOOLS[t.name] && t.name !== 'call') {
+                    const snap = t.snapshot;
+                    if (!byKey.has('file:' + snap))
+                        put({ key: 'file:' + snap, kind: 'file', path: snap,
+                            title: snapshotName(snap), icon: extIcon(snap), time: it.time, source: t.id,
+                            ...(pub.has(snap) ? { published: true } : {}) });
+                }
                 // вложения, сохранённые через call → save_files (путь — только в includes результата)
                 if (t?.status === 'ok' && t?.name === 'call') {
                     for (const snapshot of callSnapshots(t)) {

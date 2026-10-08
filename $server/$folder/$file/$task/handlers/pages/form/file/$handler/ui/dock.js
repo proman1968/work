@@ -10,9 +10,34 @@
 import { extOf, fileUrl, copyText, findShell, fmtTime, linkifyWork, workHref } from './util.js';
 import { fmtNum, fmtDate } from './docs.js';
 
+let snapshotName;
+try {
+    ({ snapshotName } = await import('/sources/modules/agent/util.js'));
+}
+catch {
+    ({ snapshotName } = await import('../../../../../../../../../../sources/modules/agent/util.js'));
+}
+
 const IMAGE = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 const PAGE = ['html', 'htm', 'pdf'];
 const VIDEO = ['mp4', 'webm'];
+const VIDEO_EXT = new Set(['mp4', 'webm']);
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
+const BINARY = ['docx', 'xlsx', 'xls', 'pptx', 'ppt', 'zip', 'rar', '7z', 'tar', 'gz', 'exe', 'dll', 'so', 'bin'];
+
+/** Иконка по расширению файла. */
+function extIcon(snapshot) {
+    const ext = String(snapshot || '').split('.').pop().toLowerCase();
+    if (VIDEO_EXT.has(ext))
+        return 'carbon:video';
+    if (IMAGE_EXT.has(ext))
+        return 'carbon:image';
+    if (ext === 'xlsx' || ext === 'xls')
+        return 'carbon:table';
+    if (ext === 'md' || ext === 'markdown')
+        return 'carbon:document';
+    return 'carbon:document';
+}
 
 const STATUS = {
     idle: { label: 'Готово', icon: 'carbon:checkmark' },
@@ -134,18 +159,35 @@ ODA({ is: 'microchat-dock',
             <oda-button no-flex icon="carbon:close" :icon-size="16" title="Скрыть доки" @tap="hide"></oda-button>
         </div>
         <div class="sheet" flex vertical>
-            <microchat-context flex ~if="tab === 'context'"></microchat-context>
-            <microchat-monitor flex ~if="tab === 'monitor'"></microchat-monitor>
-            <microchat-results flex ~if="tab === 'results'"></microchat-results>
-            <microchat-files flex ~if="tab === 'files'"></microchat-files>
+            <div flex vertical ~if="tab === 'context'" style="min-height:0"><microchat-context flex></microchat-context></div>
+            <div flex vertical ~if="tab === 'monitor'" style="min-height:0"><microchat-monitor flex></microchat-monitor></div>
+            <div flex vertical ~if="tab === 'results'" style="min-height:0"><microchat-results flex></microchat-results></div>
+            <div flex vertical ~if="tab === 'files'" style="min-height:0"><microchat-files flex></microchat-files></div>
         </div>
     `,
     get shell() { return findShell(this); },
     get docs() { return this.$pdp?.docs || []; },
+    /** Опубликованные результаты (из data.results). */
+    get results() { return this.$pdp?.data?.results || []; },
     tab: { $def: 'context' },
-    get hasComputer() { return !!this.$pdp?.computerRunning; },
-    get hasResults() { return this.docs.some(d => d.kind === 'text' || (d.kind === 'file' && d.published)); },
-    get hasFiles() { return this.docs.some(d => d.kind === 'file'); },
+    get hasComputer() {
+        // компьютер использовался в задаче и существует (running или stopped) — можно открыть и просмотреть/возобновить
+        const state = this.$pdp?.computerState;
+        if (state === 'missing')
+            return false;
+        const items = this.$pdp?.data?.items || [];
+        for (const it of items) {
+            if (it?.type !== 'assistant')
+                continue;
+            for (const t of it.tools || []) {
+                if (t.name?.startsWith('computer_') || t.name?.startsWith('browser_'))
+                    return true;
+            }
+        }
+        return false;
+    },
+    get hasResults() { return this.results.length > 0 || this.docs.some(d => d.kind === 'text'); },
+    get hasFiles() { return this.results.length > 0 || this.docs.some(d => d.kind === 'file'); },
     get current() { return this.tab === 'context' ? null : this.docs.find(d => d.key === this.tab) || null; },
     select(key) { this.tab = key || 'context'; },
     hide() { findShell(this)?.toggleDock(false); },
@@ -286,16 +328,34 @@ ODA({ is: 'microchat-results',
         </div>
         <div class="body" flex vertical>
             <div class="empty" ~if="!items.length">Результатов пока нет</div>
-            <microchat-doc flex ~if="cur" :doc="cur"></microchat-doc>
+            <microchat-doc flex ~if="curDoc" :doc="curDoc"></microchat-doc>
         </div>
     `,
     idx: 0,
+    get _shell() { return findShell(this); },
     get items() {
-        const docs = this.$pdp?.docs || [];
-        // published results (файлы) + agent reports (text)
-        return docs.filter(d => d.kind === 'file' && d.published || d.kind === 'text');
+        // published результаты из data.results + agent reports из docs
+        const shell = this._shell;
+        const results = shell?.data?.results || [];
+        const reports = (shell?.docs || []).filter(d => d.kind === 'text');
+        const mapped = results.map(r => ({
+            key: 'result:' + r.snapshot,
+            kind: 'file',
+            path: r.snapshot,
+            title: r.title || snapshotName(r.snapshot),
+            time: r.time,
+            published: true,
+        }));
+        return [...mapped, ...reports];
     },
     get cur() { return this.items[this.idx] || null; },
+    get curDoc() {
+        const item = this.cur;
+        if (!item) return null;
+        if (item.kind === 'text') return item;
+        // для result-файлов создаём doc-объект для microchat-doc
+        return { kind: 'file', path: item.path, title: item.title, time: item.time, published: true };
+    },
     prev() { if (this.idx > 0) this.idx--; },
     next() { if (this.idx < this.items.length - 1) this.idx++; },
     observe() {
@@ -322,7 +382,6 @@ ODA({ is: 'microchat-files',
             .item[on] { background: var(--content-background); font-weight: 600; }
             .item .icon { flex-shrink: 0; }
             .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-            .item .time { @apply --muted; font-size: x-small; white-space: nowrap; flex-shrink: 0; }
             .preview { overflow: auto; min-height: 0; border-top: 1px solid var(--subtle-border); }
             .preview-bar { @apply --horizontal; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 30px; box-sizing: border-box; }
             .preview-bar span { font-size: small; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -343,7 +402,6 @@ ODA({ is: 'microchat-files',
             <div class="item" ~for="items" :on="previewKey === $for.item.key" @tap="open($for.item)">
                 <oda-icon class="icon" :icon="$for.item.icon" :icon-size="16"></oda-icon>
                 <span class="name" :title="$for.item.path || $for.item.title">{{$for.item.title}}</span>
-                <span class="time">{{fmtTime($for.item.time)}}</span>
             </div>
         </div>
         <div class="preview" flex vertical ~if="previewKey">
@@ -359,28 +417,46 @@ ODA({ is: 'microchat-files',
                 <div class="img" flex ~if="isImage"><img :src="previewUrl"></div>
                 <video flex controls preload="metadata" ~if="isVideo" :src="previewUrl"></video>
                 <div class="md" ~if="isMarkdown && previewText"><oda-markdown-viewer vertical :value="previewMd"></oda-markdown-viewer></div>
-                <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && previewText">{{previewText}}</pre>
+                <div class="empty" ~if="previewText === '__BINARY_OFFICE__'">Двоичный файл — скачайте или откройте в приложении</div>
+                <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && previewText && previewText !== '__BINARY_OFFICE__'">{{previewText}}</pre>
             </div>
         </div>
     `,
     previewKey: '',
     previewText: '',
     bust: 0,
+    /** Все файлы задачи: collectDocs (write/edit/sandbox_export/call) + опубликованные результаты, дедуп по path. */
+    get _shell() { return findShell(this); },
     get items() {
-        const docs = this.$pdp?.docs || [];
-        return docs.filter(d => d.kind === 'file');
+        const shell = this._shell;
+        const fileDocs = (shell?.docs || []).filter(d => d.kind === 'file');
+        const results = shell?.data?.results || [];
+        const byPath = new Map();
+        // collectDocs-файлы (write, edit, sandbox_export, call→save_files)
+        for (const d of fileDocs) {
+            const key = d.key;
+            if (!byPath.has(key))
+                byPath.set(key, { key, path: d.path, title: d.title, icon: d.icon, time: d.time, published: d.published });
+        }
+        // опубликованные результаты (если ещё не добавлены)
+        for (const r of results) {
+            const key = 'result:' + r.snapshot;
+            if (!byPath.has(key))
+                byPath.set(key, { key, path: r.snapshot, title: r.title || snapshotName(r.snapshot), icon: extIcon(r.snapshot), time: r.time, published: true });
+        }
+        return [...byPath.values()];
     },
-    get curDoc() { return this.previewKey ? this.items.find(d => d.key === this.previewKey) || null : null; },
-    get previewPath() { return this.curDoc?.path || ''; },
-    get previewTitle() { return this.curDoc?.title || ''; },
+    get curItem() { return this.previewKey ? this.items.find(d => d.key === this.previewKey) || null : null; },
+    get previewPath() { return this.curItem?.path || ''; },
+    get previewTitle() { return this.curItem?.title || ''; },
     get previewExt() { return extOf(this.previewPath); },
     get isImage() { return IMAGE.includes(this.previewExt); },
     get isPage() { return PAGE.includes(this.previewExt); },
     get isVideo() { return VIDEO.includes(this.previewExt); },
     get isMarkdown() { return this.previewExt === 'md'; },
+    get isBinaryOffice() { return ['docx', 'xlsx', 'xls', 'pptx', 'ppt'].includes(this.previewExt); },
     get previewUrl() { return this.previewPath ? fileUrl(this.previewPath) + '?_=' + this.bust : ''; },
     get previewMd() { return this.previewText ? linkifyWork(this.previewText) : ''; },
-    fmtTime,
     async open(doc) {
         if (this.previewKey === doc.key) {
             this.previewKey = '';
@@ -389,7 +465,8 @@ ODA({ is: 'microchat-files',
         this.previewKey = doc.key;
         this.bust = Date.now();
         this.previewText = '';
-        if (!this.isImage && !this.isPage && !this.isVideo) {
+        const ext = extOf(doc.path);
+        if (!this.isImage && !this.isPage && !this.isVideo && !['docx', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)) {
             try {
                 const item = await WORK.get_item(doc.path);
                 const raw = await item?.load?.();
@@ -399,6 +476,9 @@ ODA({ is: 'microchat-files',
                 this.previewText = 'Не удалось загрузить: ' + (e?.message || e);
             }
         }
+        else if (['docx', 'xlsx', 'xls', 'pptx', 'ppt'].includes(ext)) {
+            this.previewText = '__BINARY_OFFICE__';
+        }
     },
     close() { this.previewKey = ''; },
     copy() { copyText(this.previewText); },
@@ -407,14 +487,14 @@ ODA({ is: 'microchat-files',
         if (this.isImage || this.isPage || this.isVideo) {
             const a = document.createElement('a');
             a.href = fileUrl(this.previewPath);
-            a.download = this.curDoc?.title || 'file';
+            a.download = this.curItem?.title || 'file';
             a.click();
             return;
         }
         const blob = new Blob([this.previewText], { type: 'text/plain' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = this.curDoc?.title || 'file';
+        a.download = this.curItem?.title || 'file';
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     },
@@ -457,7 +537,8 @@ ODA({ is: 'microchat-doc',
             <div class="img" flex ~if="isImage"><img :src="url"></div>
             <video flex controls preload="metadata" ~if="isVideo" :src="url"></video>
             <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
-            <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && text">{{text}}</pre>
+            <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && !isBinary && text">{{text}}</pre>
+            <div class="empty" ~if="isBinary">Двоичный файл — скачайте или откройте в приложении</div>
             <div class="empty" ~if="!isPage && !isImage && !isVideo && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
         </div>
     `,
@@ -477,6 +558,7 @@ ODA({ is: 'microchat-doc',
     get isFile() { return this.doc?.kind === 'file'; },
     get path() { return this.isFile ? this.doc.path : ''; },
     get ext() { return this.isFile ? extOf(this.path) : 'md'; },
+    get isBinary() { return BINARY.includes(this.ext); },
     get isImage() { return IMAGE.includes(this.ext); },
     get isPage() { return PAGE.includes(this.ext); },
     get isVideo() { return VIDEO.includes(this.ext); },
@@ -490,7 +572,7 @@ ODA({ is: 'microchat-doc',
         return [this.doc?.subtitle, fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
     },
     async loadText() {
-        if (!this.isFile || this.isImage || this.isPage || this.isVideo)
+        if (!this.isFile || this.isImage || this.isPage || this.isVideo || this.isBinary)
             return;
         this.loading = true;
         try {

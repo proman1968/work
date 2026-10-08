@@ -19,6 +19,7 @@ import { getDocker } from './driver.js';
 import { loadSandboxConfig } from './config.js';
 import {
     ownerOf, computerName, findComputer, statusOf, screenshotPng, setControl, controlBy,
+    waitVnc, touchComputer,
 } from './manager.js';
 import { isAdmin } from '../agent/system.js';
 
@@ -38,6 +39,13 @@ function sessionOf(req) {
     catch {
         return null;
     }
+}
+
+function respondJson(res, code, obj) {
+    const body = JSON.stringify(obj);
+    res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(body);
+    return true;
 }
 
 /**
@@ -124,11 +132,16 @@ export async function handleVncSocket(ws, req) {
         try { ws.close(4403, String(e?.message || e).slice(0, 120)); } catch { /* уже */ }
         return true;
     }
-    const st = await statusOf(acc.docker, acc.id).catch(() => null);
-    if (!st?.running) {
-        try { ws.close(4404, 'компьютер остановлен'); } catch { /* уже */ }
-        return true;
+    // автозапуск, если контейнер остановлен — том сохраняется, десктоп тот же
+    try {
+        const st = await statusOf(acc.docker, acc.id).catch(() => null);
+        if (st && !st.running) {
+            await acc.docker.getContainer(acc.id).start().catch(() => {});
+            await waitVnc(acc.docker, acc.id, { timeoutSec: 20 }).catch(() => {});
+            touchComputer(acc.owner, acc.name, acc.id);
+        }
     }
+    catch { /* не удалось запустить — попробуем подключиться как есть */ }
     try {
         const container = acc.docker.getContainer(acc.id);
         const exec = await container.exec({
@@ -151,13 +164,33 @@ export async function handleVncSocket(ws, req) {
     return true;
 }
 
-/** HTTP: страница просмотра / скриншот / takeover. Возвращает true, если путь наш. */
+/** HTTP: страница просмотра / скриншот / статус. Возвращает true, если путь наш. */
 export async function handleComputerHttp(req, res, url, readBody) {
     const pathname = decodeURIComponent(url.pathname);
     const novnc = pathname.match(NOVNC_RE);
     if (novnc) {
         serveNovnc(res, novnc[1]);
         return true;
+    }
+    // пассивный статус компьютера (не запускает!)
+    if (/^\/~computer\/([^/]+)\/status$/.test(pathname) && req.method === 'GET') {
+        const name = pathname.split('/')[3];
+        try {
+            const docker = await getDocker();
+            const session = sessionOf(req);
+            const uid = session?.uid;
+            if (!uid)
+                return respondJson(res, 401, { state: 'missing' });
+            const owner = uid;
+            const found = await findComputer(docker, owner, name).catch(() => null);
+            if (!found)
+                return respondJson(res, 404, { state: 'missing' });
+            const st = await statusOf(docker, found.id).catch(() => null);
+            return respondJson(res, 200, { state: st?.running ? 'running' : 'stopped' });
+        }
+        catch {
+            return respondJson(res, 200, { state: 'missing' });
+        }
     }
     const m = pathname.match(PAGE_RE);
     if (!m)
@@ -172,11 +205,17 @@ export async function handleComputerHttp(req, res, url, readBody) {
         res.end(String(e?.message || e));
         return true;
     }
-    if (m[2] === '/shot.png' && req.method === 'GET') {
+    // скриншот — GET или HEAD (HEAD — пассивная проверка для polling)
+    if (m[2] === '/shot.png' && (req.method === 'GET' || req.method === 'HEAD')) {
         try {
             const png = await screenshotPng(acc.docker, acc.id);
-            res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'no-store' });
-            res.end(png);
+            const hdrs = { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' };
+            if (req.method === 'HEAD')
+                hdrs['Content-Length'] = png.length;
+            else
+                hdrs['Content-Length'] = png.length;
+            res.writeHead(200, hdrs);
+            res.end(req.method === 'HEAD' ? '' : png);
         }
         catch (e) {
             res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });

@@ -280,6 +280,29 @@ export async function writeFile(path, content, ctx, extra = {}) {
         params.mainContext = ctx.task.path;
     if (folder)
         params.folder = folder;
+    // коррекция: если родитель — папка-тип рабочей зоны, а расширение файла относится к другому типу,
+    // поднимаем к классу — пусть class.save_file + getFolderToSaveFile положат файл в правильную папку
+    const corrected = correctTypeFolder(parent, filename);
+    if (corrected) {
+        const roles = (await roleOrder(corrected.parent, ctx?.session, ctx)).filter(Boolean);
+        if (corrected.parent instanceof FS.$class && roles.length) {
+            let last;
+            for (const role of roles) {
+                try {
+                    const p2 = { ...params, folder: corrected.folder };
+                    return await callAs(corrected.parent, 'save_file', p2, ctx, role);
+                }
+                catch (e) {
+                    if (!isAccessDenied(e))
+                        throw e;
+                    last = e;
+                }
+            }
+            if (last)
+                throw last;
+        }
+        return callAs(corrected.parent, 'save_file', { ...params, folder: corrected.folder }, ctx);
+    }
     // класс пишет в рабочую зону роли: роль задачи первой, затем другие роли пользователя здесь
     // (не в ADMIN-задаче — без ADMIN: иначе файлы уходят в зону администратора)
     const roles = (await roleOrder(parent, ctx?.session, ctx)).filter(Boolean);
@@ -298,6 +321,45 @@ export async function writeFile(path, content, ctx, extra = {}) {
         throw last;
     }
     return callAs(parent, 'save_file', params, ctx);
+}
+
+/** MIME top-level папки, которые getFolderToSaveFile использует для маршрутизации. */
+const MIME_TOP_FOLDERS = new Set(['text', 'image', 'video', 'audio']);
+
+/** Каноническая папка для расширения (правила getFolderToSaveFile). */
+function canonicalFolder(name) {
+    const ext = FS.$file.fileExt(name);
+    if (!ext)
+        return null;
+    const mime = typeof globalThis.mime?.contentType === 'function'
+        ? globalThis.mime.contentType(ext)
+        : null;
+    if (!mime)
+        return ext.toLowerCase();
+    const top = String(mime).split('/')[0];
+    if (MIME_TOP_FOLDERS.has(top))
+        return top;
+    if (top === 'application')
+        return ext.toLowerCase();
+    return top;
+}
+
+/** Если parent — папка-тип рабочей зоны, а расширение файла относится к другой папке → вернуть {parent, folder} для маршрутизации через класс. */
+function correctTypeFolder(parent, filename) {
+    if (!parent || parent instanceof FS.$class)
+        return null;
+    // parent.parent — потенциальный корень рабочей зоны (USER, ADMIN…)
+    const zoneRoot = parent.parent;
+    if (!zoneRoot)
+        return null;
+    const parentName = String(parent.name || '').toLowerCase();
+    if (!MIME_TOP_FOLDERS.has(parentName))
+        return null; // только MIME top-type папки (text/image/video/audio)
+    const canon = canonicalFolder(filename);
+    if (!canon || canon === parentName)
+        return null; // папка совпадает — коррекция не нужна
+    // нашёл mismatch (напр. docx в text/) → сохраняем через zoneRoot без folder, пусть routing решит
+    return { parent: zoneRoot, folder: undefined };
 }
 
 function realPathOf(log, fallback) {

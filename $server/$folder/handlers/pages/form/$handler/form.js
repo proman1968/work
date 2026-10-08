@@ -411,6 +411,12 @@ ODA({is: 'work-form',
                 const ext = String(this.$item?.ext || '').toLowerCase();
                 const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
                 await n.importView(is);
+                if (!customElements.get(is)) {
+                    // Вид не зарегистрирован под нужным тегом — создавать элемент
+                    // бессмысленно: он останется пустым (как на скриншоте).
+                    console.error(`[work-form] вид '${n.id}' не зарегистрирован как <${is}>`);
+                    return;
+                }
                 // Сеттер асинхронный: пока грузился модуль, параллельный вызов (роль, повторный $item)
                 // мог уже создать это представление — второй экземпляр не нужен.
                 el = this.controls[n.id];

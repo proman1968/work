@@ -17,7 +17,8 @@ function collectSnapshots(items, out = []) {
             continue;
         }
         for (const t of it.tools || []) {
-            if (t?.status === 'ok' && t?.snapshot && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name))
+            // любой инструмент со снимком — файл создан в WORK
+            if (t?.status === 'ok' && t?.snapshot)
                 out.push({ snapshot: t.snapshot, title: t.path ? String(t.path).split('/').pop() : null });
             // вложения, сохранённые через call → save_files (результат — JSON с includes)
             for (const snapshot of callSnapshots(t))
@@ -257,7 +258,7 @@ export const metaTools = [
     {
         name: 'publish',
         risk: 'write',
-        description: 'Отметить файл-результат задачи для общей ленты. В чате останется только карточка задачи с выбранным, промежуточные версии не шумят. Передай snapshot из результата write/append/edit или из includes результата call → save_files (путь .../history/...), несколько файлов — несколько вызовов. Убрать: action remove. Посмотреть набор: action list.',
+        description: 'Отметить файл-результат задачи для общей ленты. В чате останется только карточка задачи с выбранным, промежуточные версии не шумят. Передай snapshot из результата write/append/edit/sandbox_export или из includes результата call → save_files (путь .../history/...), несколько файлов — несколько вызовов. Убрать: action remove. Посмотреть набор: action list.',
         parameters: {
             type: 'object',
             properties: {
@@ -275,13 +276,13 @@ export const metaTools = [
                 return formatResults(await core.getBody(ctx.task).then(b => b.results || []));
             const snapshot = String(args?.snapshot || '').trim();
             if (!snapshot)
-                throw new Error('publish: нужен snapshot из результата write/append/edit или includes результата call → save_files');
+                throw new Error('publish: нужен snapshot из результата write/append/edit/sandbox_export или includes результата call → save_files');
             if (action === 'remove')
                 return formatResults(await core.addTaskResult(ctx.task, { snapshot, remove: true }, ctx.session));
             const known = collectSnapshots((await core.getBody(ctx.task)).items);
             const hit = known.find(s => s.snapshot === snapshot);
             if (!hit)
-                throw new Error('publish: снимок не из этой задачи — передай snapshot из результата записи (write/append/edit) или includes результата call → save_files, а не живой путь файла');
+                throw new Error('publish: снимок не из этой задачи — передай snapshot из результата записи (write/append/edit/sandbox_export) или includes результата call → save_files, а не живой путь файла');
             const item = await getItem(snapshot, ctx).catch(() => null);
             if (!item || Array.isArray(item))
                 throw new Error('publish: снимок не найден: ' + snapshot);

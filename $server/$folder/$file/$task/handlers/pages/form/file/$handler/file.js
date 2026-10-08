@@ -58,11 +58,6 @@ export default {
             <div class="scroller" flex vertical @scroll="onScroll">
                 <div class="col">
                     <div class="legacy" ~if="data?.legacy">Задача из прежней версии агента — показана упрощённо; продолжить можно как обычно.</div>
-                    <div class="empty" ~if="!items.length && !optimistic">
-                        <oda-icon icon="bootstrap:robot" :icon-size="40"></oda-icon>
-                        <b>Чем помочь?</b>
-                        <span>Агент работает в этом классе с вашими правами: исследует, создаёт и меняет файлы и классы, вызывает сервисы.</span>
-                    </div>
                     <microchat-feed :items="feedItems"></microchat-feed>
                     <div class="working" ~if="activity">
                         <oda-icon icon="spinners:3-dots-scale" :icon-size="16"></oda-icon><span>{{activity.text}}</span>
@@ -216,8 +211,8 @@ export default {
     get activity() {
         return activityOf({ status: this.status, items: this.items, streams: this.streams, nowMs: this._clock || Date.now(), lastDeltaMs: this._lastDelta });
     },
-    /** Реальный статус компьютера: скриншот-пробка раз в 10 с. */
-    computerRunning: false,
+    /** Статус компьютера: running|stopped|missing. */
+    computerState: 'missing',
     get computerName() {
         for (const it of this.items) {
             if (it?.type !== 'assistant')
@@ -230,17 +225,18 @@ export default {
         return 'main';
     },
     _pcPoll: null,
-    /** Проверка компьютера через скриншот: 200 — жив, 502/404 — мёртв. */
+    /** Проверка компьютера через пассивный статус: running|stopped|missing. */
     async _checkComputer() {
         try {
-            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/shot.png', { method: 'HEAD', credentials: 'same-origin' });
-            const on = r.ok;
-            if (on !== this.computerRunning)
-                this.computerRunning = on;
+            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status', { credentials: 'same-origin' });
+            const data = await r.json().catch(() => ({}));
+            const state = data.state || 'missing';
+            if (state !== this.computerState)
+                this.computerState = state;
         }
         catch {
-            if (this.computerRunning)
-                this.computerRunning = false;
+            if (this.computerState !== 'missing')
+                this.computerState = 'missing';
         }
     },
     _startPcPoll() {

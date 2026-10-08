@@ -272,6 +272,10 @@ ODA({is: 'oda-chat',
         this.send();
     },
     onBarStop() {
+        // Пока send в полёте — стоп не снимает ожидание карточки: это может быть
+        // второй клик по send, а не осознанный отказ от ожидания.
+        if (this._sending)
+            return;
         this.awaitTask = false;
     },
     async _onPromptKey(e){
@@ -320,6 +324,10 @@ ODA({is: 'oda-chat',
         $save: true,
     },
     async send(){
+        // Один send за раз: гео/вложения/сохранение длятся секунды — повторные Enter/клики игнорируются,
+        // иначе каждый клик по «не сработавшей» кнопке создаст свою задачу-дубликат.
+        if (this._sending)
+            return;
         this.$('#ribbon').scrollDown = true;
         const files = this.$('work-prompt-bar')?.files ?? this.files;
         if (!(this.value || files.length)) return;
@@ -330,13 +338,17 @@ ODA({is: 'oda-chat',
         else if(this.$pdp.receivers.length)
             params.receivers = this.$pdp.receivers.map(u => u.id);
 
-        const onFail = err => console.warn('[chat] send', err);
         const text = String(this.value ?? '').trim();
         const list = [...files];
+        // Черновик на случай сбоя: поле очищается до сохранения — при ошибке вернуть текст и вложения.
+        const draft = { value: this.value, files: list, reply: this.$pdp.replyTarget };
+        this._sending = true;
 
         try {
             if (this.isAIMode) {
                 this.awaitTask = true;
+                this._awaitTaskPath = '';
+                this.clear();
                 params.location = await this.location();
                 params.prompt = text;
                 if (list.length) {
@@ -366,9 +378,19 @@ ODA({is: 'oda-chat',
                 // effort всегда в body: hasEffort ложен, пока capabilities ещё Promise — иначе task стартует без effort → off
                 body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
                 const taskFile = new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' });
-                this.clear();
                 const log = await this.$pdp.$item.save_file(taskFile, params);
-                this._awaitNewTask(log?.logFullPath || log?.path);
+                // Время создания — числовой ключ для поиска карточки (избегаем Promise-проблем с путём).
+                const lt = log?.time;
+                this._awaitTaskTime = (typeof lt === 'number' && lt > 0) ? lt : Date.now();
+                // Путь: пытаемся извлечь, но не блокируем — лог может быть WORK-элементом с геттером.
+                let rawPath = log?.logFullPath;
+                if (!rawPath && log?.path != null) {
+                    const p = log.path;
+                    if (typeof p === 'string') rawPath = p;
+                    else if (typeof p?.then === 'function') rawPath = await p;
+                }
+                const taskPath = (typeof rawPath === 'string' && rawPath) ? rawPath : '';
+                this._awaitNewTask(taskPath);
             } else {
                 if (list.length) {
                     const formData = new FormData();
@@ -383,14 +405,26 @@ ODA({is: 'oda-chat',
                 this.clear();
             }
         } catch (err) {
-            onFail(err);
+            console.warn('[chat] send', err);
             this.awaitTask = false;
+            this._awaitTaskPath = '';
+            this._awaitTaskTime = null;
+            // Сбой — черновик не теряем: текст и вложения обратно в поле.
+            this.value = draft.value;
+            this.files = draft.files;
+            this.$pdp.replyTarget = draft.reply;
+            ODA.showMessage?.('Не удалось отправить: ' + (err?.message || err));
+            this.focusInput();
+        }
+        finally {
+            this._sending = false;
         }
         this.$('#ribbon').scrollDown = true;
     },
     /**
      * Новая задача сохранена: день — из пути файла (…/YYYY-MM-DD/….task), а не из часов браузера.
      * Нет дня в ленте — добавить (chat-day раскроет карточку, пока awaitTask). Страховка: 15 с — снять ожидание.
+     * _awaitTaskTime — время создания задачи (число): надёжный ключ, не зависит от Promise-путей.
      */
     _awaitNewTask(path) {
         const day = String(path || '').match(/\/(\d{4}-\d{2}-\d{2})\/[^/]+\.task$/)?.[1];
@@ -399,11 +433,17 @@ ODA({is: 'oda-chat',
             ribbon.dateList = [...ribbon.dateList, day].sort();
             ribbon.render();
         }
+        this._awaitTaskPath = String(path || '');
+        // Ретрай: вызываем _expandCreatedTask на всех видимых днях (найдёт по времени).
+        for (const el of ribbon?.$$?.('chat-day') || [])
+            el?._expandCreatedTask?.();
         clearTimeout(this._awaitTimer);
         this._awaitTimer = setTimeout(() => {
             if (!this.awaitTask)
                 return;
             this.awaitTask = false;
+            this._awaitTaskPath = '';
+            this._awaitTaskTime = null;
             ODA.showMessage?.('Задача создана' + (path ? ': ' + path : '') + ' — карточка не появилась в ленте, откройте из журнала');
         }, 15000);
     },
@@ -726,18 +766,111 @@ ODA({is: 'chat-day',
         const chat = this.$pdp.$pdp;
         if (!chat?.awaitTask)
             return;
-        file ??= this.logItems.last;
-        if (!file)
+        // Раскрываем только что созданную задачу.
+        // Основной ключ — время создания (число): избегаем Promise-проблем с путём.
+        // Строки ленты двух видов: .logs-заглушка (row.time === время задачи) и сам .task-файл (file.id начинается с timestamp).
+        const taskTime = chat._awaitTaskTime;
+        const target = String(chat._awaitTaskPath || '');
+        const m = target.match(/\/(\d{4}-\d{2}-\d{2})\/([^/]+\.task)$/);
+        if (m && this.day !== m[1])
             return;
-        let row;
-        try {
-            const raw = await file.load();
-            row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        } catch {
-            return;
+        const wanted = m ? m[2] : '';
+        const tsPrefix = taskTime ? String(taskTime) : '';
+
+        const isTarget = (f, r) => {
+            // 1) .logs-заглушка: ext='task' И время близко к моменту создания (±30 с)
+            if (r?.ext === 'task' && taskTime && typeof r.time === 'number'
+                && Math.abs(r.time - taskTime) < 30000)
+                return true;
+            // 2) .task-файл: timestamp в id близко к taskTime (±30 с)
+            if (f?.id && taskTime) {
+                const idTs = parseInt(String(f.id).split('.')[0], 10);
+                if (idTs && Math.abs(idTs - taskTime) < 30000)
+                    return true;
+            }
+            // 3) Точный путь (если доступен)
+            if (target && r?.path === target)
+                return true;
+            // 4) Точное совпадение id
+            if (wanted && String(f?.id || '') === wanted)
+                return true;
+            return false;
+        };
+
+        const loadRow = async f => {
+            try {
+                const raw = await f.load();
+                return typeof raw === 'string' ? JSON.parse(raw) : raw;
+            }
+            catch {
+                return null;
+            }
+        };
+
+        let row = null;
+        if (file)
+            row = await loadRow(file);
+        else {
+            // Ретрай после сохранения / инициализация дня — ищем по времени или id.
+            file = this.logItems.find(f => isTarget(f, null));
+            if (!file) {
+                for (const f of this.logItems) {
+                    const r = await loadRow(f);
+                    if (isTarget(f, r)) {
+                        file = f;
+                        row = r;
+                        break;
+                    }
+                }
+            }
+            if (file && !row)
+                row = await loadRow(file);
         }
-        if (!(row?.ext === 'task' || String(row?.path || '').endsWith('.task')))
-            return;
+        // Фоллбэк: если точный матч не сработал, ищем ближайший по времени .task-файл.
+        // Это нужно т.к. log.time недоступен через WORK-биндинг (_awaitTaskTime = Date.now()).
+        if (!file && taskTime) {
+            let bestFile = null, bestDiff = Infinity;
+            for (const f of this.logItems) {
+                const idTs = parseInt(String(f?.id || '').split('.')[0], 10);
+                if (idTs) {
+                    const diff = Math.abs(idTs - taskTime);
+                    if (diff < bestDiff && diff < 60000) {
+                        bestDiff = diff;
+                        bestFile = f;
+                    }
+                }
+            }
+            if (bestFile) {
+                file = bestFile;
+                row = await loadRow(file);
+            }
+        }
+        if (!file || !isTarget(file, row)) {
+            // Последний шанс: если awaitTask активен и есть любой .task-файл, раскрываем ближайший
+            if (chat?.awaitTask && this.logItems.length) {
+                let bestFile = null, bestDiff = Infinity;
+                for (const f of this.logItems) {
+                    const id = String(f?.id || '');
+                    if (id.endsWith('.task') || id.endsWith('.logs')) {
+                        const idTs = parseInt(id.split('.')[0], 10);
+                        const diff = taskTime ? Math.abs(idTs - taskTime) : 0;
+                        if (diff < bestDiff) { bestDiff = diff; bestFile = f; }
+                    }
+                }
+                if (bestFile) {
+                    file = bestFile;
+                    row = await loadRow(file);
+                    if (!isTarget(file, row)) {
+                        // Всё равно не совпало по критериям — но awaitTask активен, раскрываем
+                        // только если это .task-файл или stub с ext='task'
+                        const id = String(file?.id || '');
+                        if (!(id.endsWith('.task') || (row?.ext === 'task')))
+                            return;
+                    }
+                }
+            }
+            else return;
+        }
         this.render();
         this.async(() => {
             let card;
@@ -750,6 +883,9 @@ ODA({is: 'chat-day',
             if (card) {
                 card.expanded = true;
                 chat.awaitTask = false;
+                chat._awaitTaskPath = '';
+                chat._awaitTaskTime = null;
+                clearTimeout(chat._awaitTimer);
             }
         });
     },
