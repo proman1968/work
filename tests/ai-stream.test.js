@@ -1,7 +1,7 @@
 import '../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import aiDef, { resolveKey, toGigaChatMessages } from '../MODELS/$ai/$folder/$class/$ai/class.js';
+import aiDef, { resolveKey, gigachatToken, toGigaChatMessages } from '../MODELS/$ai/$folder/$class/$ai/class.js';
 
 function sseLine(obj) {
     return 'data: ' + JSON.stringify(obj) + '\n';
@@ -121,6 +121,34 @@ describe('ключи моделей', () => {
         const model = { read_secret: async () => ({}), $parent: provider };
         assert.equal(await resolveKey(model, 'secret:odant.json'), 'k-sec');
         await assert.rejects(() => resolveKey(model, 'secret:none.json'), /нет секрета/);
+    });
+
+    it('GigaChat: ключ из secret, запасной env GIGACHAT_KEY, иначе понятная ошибка', async () => {
+        const prev = process.env.GIGACHAT_KEY;
+        try {
+            delete process.env.GIGACHAT_KEY;
+            const provider = { read_secret: async ({ filename }) => filename === 'gigachat.json' ? { token: 'k-sec' } : {} };
+            const model = { token: 'secret:gigachat.json', read_secret: async () => ({}), $parent: provider };
+            assert.equal(await gigachatToken(model), 'k-sec');
+            const bare = { token: 'secret:gigachat.json', read_secret: async () => ({}) };
+            await assert.rejects(() => gigachatToken(bare), /нет секрета/);
+            process.env.GIGACHAT_KEY = 'k-env';
+            assert.equal(await gigachatToken(bare), 'k-env');
+            assert.equal(await gigachatToken(model), 'k-sec');
+            delete process.env.GIGACHAT_KEY;
+            await assert.rejects(() => gigachatToken({ token: '' }), /не задан ключ/);
+        }
+        finally {
+            if (prev === undefined)
+                delete process.env.GIGACHAT_KEY;
+            else
+                process.env.GIGACHAT_KEY = prev;
+        }
+    });
+
+    it('в коде провайдера GigaChat нет зашитого ключа', async () => {
+        const { default: def } = await import('../MODELS/GigaChat/$provider/$folder/$class/$ai/class.js');
+        assert.match(def.token, /^(secret|env):/);
     });
 
     it('GigaChat: tool_calls → function_call, tool → function', () => {

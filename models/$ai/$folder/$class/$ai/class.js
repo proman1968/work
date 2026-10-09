@@ -1017,9 +1017,26 @@ function normalizeRemoteModelIds(data) {
     return [];
 }
 
+/** Authorization key GigaChat: поле token модели (литерал | env: | secret:), запасной — env GIGACHAT_KEY. */
+export async function gigachatToken(ai) {
+    try {
+        const token = await resolveKey(ai, ai.token);
+        if (token)
+            return token;
+    }
+    catch (e) {
+        if (!process.env.GIGACHAT_KEY)
+            throw e;
+    }
+    const fallback = String(process.env.GIGACHAT_KEY || '').trim();
+    if (!fallback)
+        throw new Error('GigaChat: не задан ключ — положите {"token": "..."} в /MODELS/GigaChat/$provider/#secret/gigachat.json или задайте env GIGACHAT_KEY');
+    return fallback;
+}
+
 async function gigachatAuth(ai) {
     const url = new URL(ai.authUrl);
-    const token = await resolveKey(ai, ai.token);
+    const token = await gigachatToken(ai);
     return new Promise((resolve, reject) => {
         const req = WORK.https.request({
             hostname: url.hostname,
