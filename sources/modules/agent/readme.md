@@ -25,6 +25,7 @@
 |---|---|
 | `index.js` | окружение (`createEnv`), адаптер модели (`llmFor`), разовый запуск (`runOnce`) |
 | `loop.js` | цикл, лента → messages, сжатие (`maybeCompact`) |
+| `hooks.js` | хуки организации: `pre_tool` / `post_tool` / `on_stop` / `on_compact` в `ai/config.js` слоя (функция или `hooks/<имя>.js` в `ai/` этого слоя); слои **складываются** от движка к месту; менять `config.js` и `hooks/` может только ADMIN (системная область); хук только ограничивает — `deny` (первый побеждает), `ask`, подмена `args` — но не разрешает то, чего не разрешает политика; действуют и на субагентов; таймаут 5 с, сбои (исключение, таймаут, неверный ответ) не роняют цикл и пишутся в журнал безопасности (`agent_hook`) |
 | `undo.js` | откат файлов при `revert` ленты: `entry.undo` (op, прежнее состояние — снимок истории или текст ≤20 КБ, хеш после записи, путь на диске) ставят `write`/`append`/`edit`/`delete`/`writeBinary`; откат от новых к старым, существование и хеш — по диску (кэш дерева отстаёт), файл, изменённый после агента, не трогается; изменения без записи об откате (`snapshot` без `undo`) — в списке «вручную» |
 | `permissions.js` | режимы, защищённые зоны, действия наружу при зараженном ходе |
 | `taint.js` | обёртка `<untrusted>`, расчёт заражения хода, признак `outbound` |
@@ -54,6 +55,24 @@
 Элементы ленты: `user` · `assistant` (`content`, `reasoning`, `tools[]` со статусами `pending|approval|waiting|running|ok|error|denied|interrupted|approved`) · `summary` · `error`. Субагент хранит свою ленту в `tools[].items`.
 
 Инструмент: `{ name, description, parameters, readonly?, concurrent?, planSafe?, risk?:'write'|'danger', untrusted?, outbound?, target?(args), permission?(args), run(args, ctx) }`; `ctx`: `session`, `place`, `env`, `host`, `llm`, `entry` (карточка вызова — сюда `path`, `diff`, `items`), `signal`, `depth`, `tainted` (источники внешнего содержимого в ходе или `null`).
+
+**Хуки организации** (`hooks.js`) — пример `ai/config.js` слоя:
+
+```js
+export default { hooks: {
+    pre_tool: [
+        // запретить запись в архив для всех; хук получает копию данных вызова
+        ({ tool, args, target, role }) => tool === 'write' && String(target).startsWith('/ORG/Архив')
+            ? { verdict: 'deny', reason: 'архив только для чтения' } : undefined,
+        'hooks/limits.js',          // модуль из ai/hooks/ этого же слоя (default-экспорт или экспорт pre_tool)
+    ],
+    post_tool: [ ({ tool, status }) => tool === 'web_fetch' && status === 'ok' ? { append: 'Источник не проверен.' } : undefined ],
+    on_stop:    [ ({ status, turns, task }) => { /* уведомление, результат не используется */ } ],
+    on_compact: [ () => ({ append: 'ПРАВИЛО: ничего не удалять без согласования.' }) ],   // переживает сжатие контекста
+} };
+```
+
+`pre_tool` вызывается до проверки прав (после проверки аргументов) для каждого инструмента, включая субагентов; payload: `tool, args, risk, readonly, target, tainted, mode, role, task, depth, uid`. Ответ: `{ verdict: 'deny'|'ask', reason, args }` — подмена `args` накапливается по хукам, `deny` вызов не выполняет (модель видит «запрещён правилом организации» и причину), `ask` требует подтверждения человека даже в `auto` и без «разрешить всегда». `post_tool` получает ещё `status, result, error, durationMs` и может вернуть `{ append }` (дописывается к результату в ленте и в контексте). `on_stop` — только для основного цикла задачи. Модуль хука должен быть самодостаточным (без `import`): загружается как `data:`-модуль.
 
 **Чужое содержимое и prompt injection** (`taint.js`, структурная защита, а не только инструкция в промпте):
 - `untrusted: true` — инструмент отдаёт чужой текст (`web_search`, `web_fetch`, `http_request`, `browser_*`, `computer_screenshot/action`, внешние `svc_*` и все `mcp_*`, `net_http/net_probe`); если чужое только иногда — `run` ставит `ctx.entry.untrusted = true` (`read`/`search`/`query` для писем `.eml`, `agent_status`). Исключение (наша валидация) вызов не помечает; `{error}` от сервиса — помечает.

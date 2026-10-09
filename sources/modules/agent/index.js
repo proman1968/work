@@ -24,7 +24,8 @@ import { guarded, systemAllowed } from './system.js';
 
 /** ОС сервера и локальная сеть — инструменты только для администраторов WORK. */
 const SYSTEM_TOOLS = guarded([...osFileTools, ...osProcTools, ...netTools]);
-import { loadDocs, loadSystem, loadConfig } from './resources.js';
+import { loadDocs, loadSystem, loadConfig, loadHooks } from './resources.js';
+import { auditHook } from './hooks.js';
 import { clip } from './util.js';
 
 export { runLoop } from './loop.js';
@@ -169,8 +170,9 @@ export const VOICE_NOTE = `# Голосовой режим
 export async function createEnv({ place, session, host, tz, location, role, voice } = {}) {
     // ОС и сеть — администратору, работающему в роли ADMIN (или без выбранной роли: REST, расписание)
     const system = async () => (!role || role === 'ADMIN') && await systemAllowed(session);
-    const [config, allAgents, allSkills, baseSystem, caps] = await Promise.all([
+    const [config, hooks, allAgents, allSkills, baseSystem, caps] = await Promise.all([
         loadConfig(place),
+        loadHooks(place),
         loadDocs(place, 'agents'),
         loadDocs(place, 'skills'),
         loadSystem(place),
@@ -183,8 +185,13 @@ export async function createEnv({ place, session, host, tz, location, role, voic
     let extTools = null;
     let memo = null;
     const mcpErrors = [];
+    // сбои загрузки хуков не роняют агента: предупреждение и запись в журнал безопасности
+    for (const e of hooks.errors) {
+        console.warn('[hooks] ' + e.scope + (e.event ? ' ' + e.event : '') + ': ' + e.error);
+        auditHook({ on: e.event || 'load', scope: e.scope, outcome: 'load_error', error: e.error }, { session, role });
+    }
     const env = {
-        place, session, config, agents, skills, role,
+        place, session, config, hooks, agents, skills, role,
         /** Байты вложения (картинки для vision) с правами пользователя. */
         async loadImage(path) {
             const item = await WORK.get_item(path);
@@ -418,6 +425,7 @@ export async function runOnce({ place, session, prompt, model, agent, mode = 'au
         system: () => env.makeSystemParts(def),
         items,
         tools: await env.makeTools(def, 0),
+        hooks: env.hooks,
         host,
         ctx: { session, place, env, role },
         loadImage: env.loadImage,

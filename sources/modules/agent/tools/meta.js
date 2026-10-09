@@ -169,6 +169,7 @@ export const metaTools = [
                 host: ctx.host,
                 depth,
                 taintedFrom: ctx.tainted || [],
+                hooks: ctx.hooks, // правила организации действуют и на субагента: иначе их обходило бы делегирование
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
                 ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
                 maxTurns: Number(def.meta.maxTurns) || 40,

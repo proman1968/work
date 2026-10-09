@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { runLoop, toMessages, maybeCompact, VOLATILE_HEAD } from '../sources/modules/agent/loop.js';
+import { readAudit } from '../sources/server/access/audit.js';
 import { decide, isProtectedPath } from '../sources/modules/agent/permissions.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
 import { createEnv, runOnce } from '../sources/modules/agent/index.js';
@@ -109,6 +110,32 @@ before(async () => {
     write('SERVICES/$class/class.js', `export default {}`);
     write('SERVICES/zeta/$class/class.js', `export default { SCHEMA: { zrun: { description: 'z', readonly: true }, arun: { description: 'a', readonly: true } } }`);
     write('SERVICES/alpha/$class/class.js', `export default { SCHEMA: { zmid: { description: 'm', readonly: true }, abeg: { description: 'b', readonly: true } } }`);
+    // хуки организации (hooks.js): корневой класс, вложенный (слои складываются) и класс с ошибочными описаниями
+    write('HOOKY/$class/class.js', `export default { label: 'Хуки' }`);
+    write('HOOKY/$class/ai/config.js', `export default { hooks: {
+        pre_tool: [
+            function forbidWrites({ tool, args }) { if (tool === 'write' && String(args.path).includes('forbidden')) return { verdict: 'deny', reason: 'запись в forbidden запрещена' }; },
+            'hooks/rewrite.js',
+            function askMemory({ tool }) { if (tool === 'memory') return { verdict: 'ask', reason: 'память — только с подтверждением' }; },
+            function allowAll({ tool }) { if (tool === 'delete') return { verdict: 'allow' }; },
+            function sloppy({ tool }) { if (tool === 'ls') throw new Error('хук сломан'); },
+            function wrongArgs({ tool }) { if (tool === 'find') return { args: 'не объект' }; },
+            function slow({ tool }) { if (tool === 'schema') return new Promise(() => {}); },
+        ],
+        post_tool: [ function note({ tool, status }) { if (tool === 'ls' && status === 'ok') return { append: 'Список проверен хуком.' }; } ],
+        on_stop: [ function stop(p) { (globalThis.__HOOK_LOG__ ??= []).push(['stop', p.status, p.turns]); } ],
+        on_compact: [ () => ({ append: 'ПРАВИЛО: не удалять /HOOKY' }) ],
+        unknown_event: [],
+    } }`);
+    write('HOOKY/$class/ai/hooks/rewrite.js', `export default function rewrite({ tool, args }) { if (tool === 'ls' && args.path === '/HOOKY/secret') return { args: { ...args, path: '/HOOKY' } }; }`);
+    write('HOOKY/inner/$class/class.js', `export default { label: 'Вложенный' }`);
+    write('HOOKY/inner/$class/ai/config.js', `export default { hooks: {
+        pre_tool: [ function innerRule({ tool }) { if (tool === 'delete') return { verdict: 'deny', reason: 'внутри inner удалять нельзя' }; } ],
+        post_tool: 'hooks/stamp.js',
+    } }`);
+    write('HOOKY/inner/$class/ai/hooks/stamp.js', `export function post_tool({ tool }) { if (tool === 'ls') return { append: 'клеймо inner' }; }`);
+    write('HOOKY/bad/$class/class.js', `export default { label: 'Плохие хуки' }`);
+    write('HOOKY/bad/$class/ai/config.js', `export default { hooks: { pre_tool: ['hooks/missing.js', '../evil.js', 'hooks/../../x.js', 'other/x.js', 42], boom: [] } }`);
     write('MODELS/$class/class.js', `export default {}`);
     write('MODELS/mock/$ai/class.js', `export default {
         maxTokens: 50000,
@@ -1174,3 +1201,200 @@ describe('collectUndo: что откатывается автоматическ�
     });
 });
 
+describe('хуки организации (hooks.js)', () => {
+    const mockRun = async (place, steps, extra = {}) => {
+        globalThis.__MOCK_STREAM__ = scripted(steps).stream;
+        return runOnce({ place: await WORK.get_item(place), prompt: 'работай', ...extra });
+    };
+    const tools = res => res.items.flatMap(i => i.tools || []);
+    const hookRows = async since => (await readAudit()).filter(r => r.event === 'agent_hook' && r.time >= since);
+    const names = list => list.map(h => h.name);
+
+    it('слои складываются от корня к месту; ошибочные описания не роняют агента, а попадают в errors', async () => {
+        const { loadHooks } = await import('../sources/modules/agent/resources.js');
+        const root = await loadHooks(await WORK.get_item('/HOOKY'));
+        assert.deepEqual(names(root.pre_tool), ['forbidWrites', 'hooks/rewrite.js', 'askMemory', 'allowAll', 'sloppy', 'wrongArgs', 'slow']);
+        assert.ok(root.pre_tool.every(h => h.scope === '/HOOKY' && typeof h.fn === 'function'));
+        assert.deepEqual(names(root.post_tool), ['note']);
+        assert.deepEqual(root.errors.map(e => e.event), ['unknown_event']);
+
+        const inner = await loadHooks(await WORK.get_item('/HOOKY/inner'));
+        assert.deepEqual(names(inner.pre_tool), [...names(root.pre_tool), 'innerRule'], 'хуки корня остались, вложенного добавлены');
+        assert.deepEqual(names(inner.post_tool), ['note', 'hooks/stamp.js']);
+        assert.equal(inner.pre_tool.at(-1).scope, '/HOOKY/inner');
+        assert.deepEqual(names(inner.on_stop), ['stop']);
+
+        const bad = await loadHooks(await WORK.get_item('/HOOKY/bad'));
+        assert.deepEqual(names(bad.pre_tool), names(root.pre_tool), 'свои хуки слоя не загрузились, унаследованные работают');
+        assert.equal(bad.errors.filter(e => e.event === 'pre_tool').length, 5, JSON.stringify(bad.errors));
+        assert.ok(bad.errors.some(e => e.event === 'boom'));
+        assert.match(JSON.stringify(bad.errors), /не найден или не экспортирует/);
+        const none = await loadHooks(await WORK.get_item('/BOX'));
+        assert.deepEqual([none.pre_tool.length, none.errors.length], [0, 0], 'без hooks в конфиге — пусто');
+    });
+
+    it('config.js без hooks не мешает: остальной конфиг по-прежнему сливается, ключа hooks в config нет', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/HOOKY'), host: { mode: 'auto' } });
+        assert.equal(env.config.hooks, undefined, 'функции не должны попадать в общий конфиг');
+        assert.equal(typeof env.config.model, 'string');
+        assert.ok(env.hooks.pre_tool.length > 0);
+    });
+
+    it('pre_tool deny: вызов не выполняется, модель видит причину; запись в аудит; хук не в силах разрешить то, чего не разрешает политика', async () => {
+        const since = new Date().toISOString();
+        const res = await mockRun('/HOOKY', [
+            { calls: [{ name: 'write', args: { path: '/HOOKY/forbidden.md', content: 'x' } }] },
+            { calls: [{ name: 'delete', args: { path: '/HOOKY/anything.md' } }] },
+            { text: 'готово' },
+        ]);
+        const [wr, del] = tools(res);
+        assert.equal(wr.status, 'denied');
+        assert.equal(wr.hookDenied, true);
+        assert.match(wr.error, /запись в forbidden запрещена \(\/HOOKY\)/);
+        assert.equal(fs.existsSync(path.join(tmp, 'HOOKY/forbidden.md')), false);
+        assert.match(toMessages('', res.items).find(m => m.role === 'tool').content, /^Вызов запрещён правилом организации: запись в forbidden/);
+        // хук allowAll вернул allow для delete — политика (danger → спросить человека) сильнее; автономный запуск человека не имеет
+        assert.equal(del.status, 'denied');
+        assert.match(del.error, /нужно подтверждение человека/);
+        const rows = await hookRows(since);
+        assert.ok(rows.some(r => r.outcome === 'deny' && r.hook === 'forbidWrites' && r.tool === 'write' && r.on === 'pre_tool'));
+    });
+
+    it('слой места усиливает правила корня: inner запрещает delete, корень — нет', async () => {
+        const inner = await mockRun('/HOOKY/inner', [{ calls: [{ name: 'delete', args: { path: '/HOOKY/inner/x.md' } }] }, { text: 'ок' }]);
+        assert.equal(tools(inner)[0].hookDenied, true);
+        assert.match(tools(inner)[0].error, /внутри inner удалять нельзя \(\/HOOKY\/inner\)/);
+        // правило корня действует и во вложенном классе
+        const still = await mockRun('/HOOKY/inner', [{ calls: [{ name: 'write', args: { path: '/HOOKY/inner/forbidden.md', content: 'x' } }] }, { text: 'ок' }]);
+        assert.match(tools(still)[0].error, /запись в forbidden запрещена/);
+    });
+
+    it('pre_tool подмена аргументов: хук видит исходные, инструмент получает изменённые; карточка помечена', async () => {
+        const res = await mockRun('/HOOKY', [{ calls: [{ name: 'ls', args: { path: '/HOOKY/secret' } }] }, { text: 'ок' }]);
+        const ls = tools(res)[0];
+        assert.equal(ls.status, 'ok');
+        assert.equal(ls.args.path, '/HOOKY', 'аргумент подменён');
+        assert.equal(ls.hookArgs, true);
+        assert.match(ls.result, /inner\//, 'список настоящего /HOOKY, а не несуществующего secret');
+    });
+
+    it('pre_tool ask: подтверждение человека нужно даже в авто; автономный запуск отклоняет с причиной организации', async () => {
+        const res = await mockRun('/HOOKY', [{ calls: [{ name: 'memory', args: { action: 'remember', text: 'факт' } }] }, { text: 'ок' }]);
+        const m = tools(res)[0];
+        assert.equal(m.status, 'denied');
+        assert.match(m.error, /нужно подтверждение человека \(правило организации \(\/HOOKY\): память — только с подтверждением\)/);
+        // с человеком: вопрос показывается без «разрешить всегда»
+        const asked = [];
+        const env = await createEnv({ place: await WORK.get_item('/HOOKY'), host: { mode: 'auto' } });
+        const items = [{ id: 'u', type: 'user', content: 'запомни' }];
+        const host = mkHost({ wait: async req => { asked.push(req); return { accept: false, always: true }; } });
+        await runLoop({
+            llm: scripted([{ calls: [{ name: 'memory', args: { action: 'remember', text: 'факт' } }] }, { text: 'ок' }]),
+            system: 'S', items, tools: await env.makeTools(undefined, 0), hooks: env.hooks, host, ctx: { place: env.place, env },
+        });
+        assert.equal(asked.length, 1);
+        assert.match(asked[0].reason, /правило организации/);
+        assert.equal(items.flatMap(i => i.tools || [])[0].noAlways, true);
+    });
+
+    it('post_tool дописывает текст к результату — и в ленте, и в контексте модели; несколько слоёв — по порядку', async () => {
+        const log = [];
+        globalThis.__MOCK_STREAM__ = scripted([{ calls: [{ name: 'ls', args: { path: '/HOOKY/inner' } }] }, { text: 'ок' }], log).stream;
+        const res = await runOnce({ place: await WORK.get_item('/HOOKY/inner'), prompt: 'смотри' });
+        const ls = tools(res)[0];
+        assert.match(ls.result, /\[Правило организации\]\nСписок проверен хуком\.\nклеймо inner$/);
+        assert.match(log[1].messages.find(m => m.role === 'tool').content, /клеймо inner/);
+    });
+
+    it('сбои хуков не роняют цикл: исключение, подвисший хук (таймаут) и неверный args — вызов выполняется, всё в аудите', async () => {
+        const prev = process.env.WORK_HOOK_TIMEOUT_MS;
+        process.env.WORK_HOOK_TIMEOUT_MS = '80';
+        const since = new Date().toISOString();
+        try {
+            const t0 = Date.now();
+            const res = await mockRun('/HOOKY', [
+                { calls: [{ name: 'ls', args: { path: '/HOOKY' } }] },
+                { calls: [{ name: 'find', args: { name: '*.md' } }] },
+                { calls: [{ name: 'schema', args: { path: '/HOOKY' } }] },
+                { text: 'готово' },
+            ]);
+            assert.ok(Date.now() - t0 < 3000, 'подвисший хук не должен задерживать цикл дольше таймаута');
+            assert.equal(res.status, 'done');
+            assert.deepEqual(tools(res).map(t => t.status === 'denied'), [false, false, false]);
+            const rows = await hookRows(since);
+            assert.ok(rows.some(r => r.hook === 'sloppy' && r.outcome === 'error' && /хук сломан/.test(r.error)), 'исключение');
+            assert.ok(rows.some(r => r.hook === 'slow' && r.outcome === 'timeout'), 'таймаут');
+            assert.ok(rows.some(r => r.hook === 'wrongArgs' && /args должен быть объектом/.test(r.error)), 'args не объект');
+        }
+        finally {
+            if (prev === undefined)
+                delete process.env.WORK_HOOK_TIMEOUT_MS;
+            else
+                process.env.WORK_HOOK_TIMEOUT_MS = prev;
+        }
+    });
+
+    it('правила действуют и на субагента (делегированием их не обойти)', async () => {
+        const res = await mockRun('/HOOKY', [
+            { calls: [{ name: 'task', args: { agent: 'general', prompt: 'запиши файл' } }] },
+            { calls: [{ name: 'write', args: { path: '/HOOKY/forbidden-sub.md', content: 'x' } }] },
+            { text: 'не вышло' },
+            { text: 'субагент не смог' },
+        ]);
+        const inner = tools(res)[0].items.flatMap(i => i.tools || [])[0];
+        assert.equal(inner.status, 'denied');
+        assert.equal(inner.hookDenied, true);
+    });
+
+    it('on_stop: вызывается при завершении основного цикла (статус и число ходов), не для субагентов', async () => {
+        globalThis.__HOOK_LOG__ = [];
+        await mockRun('/HOOKY', [{ calls: [{ name: 'task', args: { agent: 'explore', prompt: 'осмотри' } }] }, { text: 'готово подчинённого' }, { text: 'итог' }]);
+        assert.deepEqual(globalThis.__HOOK_LOG__, [['stop', 'done', 2]]);
+        delete globalThis.__HOOK_LOG__;
+    });
+
+    it('on_compact: хук дописывает к сводке то, что должно пережить сжатие', async () => {
+        const { loadHooks } = await import('../sources/modules/agent/resources.js');
+        const hooks = await loadHooks(await WORK.get_item('/HOOKY'));
+        const items = [];
+        for (let k = 0; k < 6; k++) {
+            items.push({ id: 'u' + k, type: 'user', content: 'вопрос ' + k + ' ' + 'x'.repeat(2000) });
+            items.push({ id: 'a' + k, type: 'assistant', content: 'ответ ' + k });
+        }
+        const llm = { ...scripted([{ text: 'СВОДКА' }]), contextTokens: 1000 };
+        assert.equal(await maybeCompact({ llm, items, host: mkHost(), system: 'S', hooks }), true);
+        const summary = items.find(i => i.type === 'summary');
+        assert.equal(summary.content, 'СВОДКА\n\nПРАВИЛО: не удалять /HOOKY');
+    });
+});
+
+describe('hooks.js: выполнение хуков', () => {
+    it('цепочка pre_tool: args накапливаются, первый deny останавливает цепочку, ask запоминается, сбои пропускаются', async () => {
+        const { runPreTool, callHook } = await import('../sources/modules/agent/hooks.js');
+        const seen = [];
+        const h = (name, fn) => ({ name, scope: '/X', fn: p => { seen.push([name, JSON.stringify(p.args)]); return fn(p); } });
+        const hooks = { timeoutMs: 60, pre_tool: [
+            h('a', () => ({ args: { n: 1 } })),
+            h('b', p => ({ args: { n: p.args.n + 1 } })),
+            h('boom', () => { throw new Error('x'); }),
+            h('hang', () => new Promise(() => {})),
+            h('ask1', () => ({ verdict: 'ask', reason: 'первый' })),
+            h('ask2', () => ({ verdict: 'ask', reason: 'второй' })),
+            h('stop', () => ({ verdict: 'deny', reason: 'стоп' })),
+            h('never', () => ({ args: { n: 99 } })),
+        ] };
+        const r = await runPreTool(hooks, { tool: 't', args: { n: 0 } }, {});
+        assert.deepEqual(seen.map(s => s[0]), ['a', 'b', 'boom', 'hang', 'ask1', 'ask2', 'stop'], 'после deny хуки не вызываются');
+        assert.deepEqual(seen[1], ['b', '{"n":1}'], 'второй хук видит изменённые аргументы');
+        assert.deepEqual([r.verdict, r.reason, r.argsChanged], ['deny', 'стоп', false], 'deny отменяет и подмену аргументов');
+
+        const ok = await runPreTool({ timeoutMs: 60, pre_tool: hooks.pre_tool.slice(0, 6) }, { tool: 't', args: { n: 0 } }, {});
+        assert.deepEqual([ok.verdict, ok.reason, ok.args, ok.argsChanged], ['ask', 'первый', { n: 2 }, true], 'первый ask, args накопились');
+        const none = await runPreTool({ pre_tool: [h('nothing', () => undefined), h('str', () => 'строка')] }, { tool: 't', args: { a: 1 } }, {});
+        assert.deepEqual([none.verdict, none.args, none.argsChanged], [null, { a: 1 }, false]);
+
+        const mutated = { tool: 't', args: { a: [1, 2] } };
+        await callHook({ fn: p => { p.args.a.push(3); p.tool = 'другое'; } }, mutated);
+        assert.deepEqual(mutated, { tool: 't', args: { a: [1, 2] } }, 'хук получает копию, исходные данные не меняет');
+    });
+});

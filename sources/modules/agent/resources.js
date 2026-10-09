@@ -1,7 +1,7 @@
 /**
  * Данные агента из дерева (не код ядра):
  *   ai/system.md        — правила агента (слои дописываются; `replace: true` во фронтматтере — заменить)
- *   ai/config.js        — { model, imageModel, maxTurns }
+ *   ai/config.js        — { model, imageModel, maxTurns, hooks }; hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
  *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model, maxTurns, requires)
  *   ai/skills/*.md      — навыки (фронтматтер: name, description, requires; тело — инструкция)
  *
@@ -10,6 +10,7 @@
  */
 import { parseFrontmatter } from './util.js';
 import { FS } from '../../server/index.js';
+import { HOOK_EVENTS, emptyHooks } from './hooks.js';
 
 export const ENGINE_AI = '/$server/$folder/$class/ai';
 
@@ -93,18 +94,77 @@ export async function loadSystem(place) {
     return text;
 }
 
-/** config.js слоями (объединение, ближний перекрывает). */
-export async function loadConfig(place) {
-    const cfg = {};
-    for (const { dir } of await aiDirs(place)) {
+/** Данные config.js каждого слоя по порядку (движок → место): [{ scope, dir, data }]. */
+async function configLayers(place) {
+    const out = [];
+    for (const { dir, scope } of await aiDirs(place)) {
         const f = await safe(() => dir.get_item('config.js'));
         if (!f || Array.isArray(f))
             continue;
-        const data = await safe(() => f.importScript(), null);
+        const mod = await safe(() => f.importScript(), null);
+        const data = mod && typeof mod === 'object' ? (mod.default && typeof mod.default === 'object' ? mod.default : mod) : null;
         if (data && typeof data === 'object')
-            Object.assign(cfg, data.default && typeof data.default === 'object' ? data.default : data);
+            out.push({ scope, dir, data });
+    }
+    return out;
+}
+
+/** config.js слоями (объединение, ближний перекрывает). Ключ hooks сюда не входит — см. loadHooks (хуки складываются). */
+export async function loadConfig(place) {
+    const cfg = {};
+    for (const { data } of await configLayers(place)) {
+        const { hooks: _hooks, ...rest } = data;
+        Object.assign(cfg, rest);
     }
     return cfg;
+}
+
+/** Модуль хука — только из папки hooks/ того же слоя ai/ (системная область: писать может лишь ADMIN). */
+const HOOK_MODULE = /^hooks\/[\w.-]+\.m?js$/;
+
+/**
+ * Хуки по слоям (hooks.js): списки событий копятся от движка к месту задачи.
+ * Элемент — функция или 'hooks/<имя>.js' (default-экспорт или экспорт с именем события).
+ * Сбои загрузки не роняют агента: попадают в errors.
+ * @returns {Promise<{pre_tool: Array, post_tool: Array, on_stop: Array, on_compact: Array, errors: Array}>}
+ */
+export async function loadHooks(place) {
+    const hooks = emptyHooks();
+    for (const { scope, dir, data } of await configLayers(place)) {
+        const spec = data.hooks;
+        if (spec == null)
+            continue;
+        if (typeof spec !== 'object' || Array.isArray(spec)) {
+            hooks.errors.push({ scope, error: 'hooks должен быть объектом { событие: [хуки] }' });
+            continue;
+        }
+        for (const key of Object.keys(spec))
+            if (!HOOK_EVENTS.includes(key))
+                hooks.errors.push({ scope, event: key, error: 'неизвестное событие (есть: ' + HOOK_EVENTS.join(', ') + ')' });
+        for (const event of HOOK_EVENTS) {
+            const list = spec[event] == null ? [] : (Array.isArray(spec[event]) ? spec[event] : [spec[event]]);
+            for (const [i, item] of list.entries()) {
+                if (typeof item === 'function') {
+                    hooks[event].push({ fn: item, name: item.name || event + '#' + i, scope });
+                    continue;
+                }
+                if (typeof item !== 'string' || !HOOK_MODULE.test(item) || item.includes('..')) {
+                    hooks.errors.push({ scope, event, error: 'хук: функция или модуль hooks/<имя>.js в папке ai/ этого слоя, получено ' + JSON.stringify(item) });
+                    continue;
+                }
+                const hooksDir = await safe(() => dir.get_item('hooks'));
+                const file = hooksDir && !Array.isArray(hooksDir) ? await safe(() => hooksDir.get_item(item.slice('hooks/'.length))) : null;
+                const mod = file && !Array.isArray(file) ? await safe(() => file.importScript(), null) : null;
+                // importScript отдаёт `module.default || module`: default-функция приходит сама, иначе — пространство имён экспортов
+                const fn = typeof mod === 'function' ? mod : (typeof mod?.default === 'function' ? mod.default : (typeof mod?.[event] === 'function' ? mod[event] : null));
+                if (fn)
+                    hooks[event].push({ fn, name: item, scope });
+                else
+                    hooks.errors.push({ scope, event, error: 'модуль хука ' + item + ' не найден или не экспортирует функцию' });
+            }
+        }
+    }
+    return hooks;
 }
 
 /** Каталог ai/skills места задачи для записи нового навыка. */

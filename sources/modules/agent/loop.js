@@ -23,6 +23,7 @@
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
 import { decide } from './permissions.js';
 import { newNonce, wrapUntrusted, taintSources } from './taint.js';
+import { runPreTool, runAppend, runNotify } from './hooks.js';
 
 export const MAX_TURNS = 60;
 export const RESULT_MAX = 24000;
@@ -69,6 +70,30 @@ export const EMPTY_NUDGE = '[Система] Твой предыдущий от�
  * @returns {Promise<{status:'done'|'limit'|'stopped'|'error', content?:string}>}
  */
 export async function runLoop(opts) {
+    let res;
+    try {
+        res = await runLoopCore(opts);
+    }
+    catch (e) {
+        await notifyStop(opts, { status: 'error', content: String(e?.message || e) });
+        throw e;
+    }
+    await notifyStop(opts, res);
+    return res;
+}
+
+/** Хук on_stop (hooks.js): только для основного цикла задачи, не для субагентов. */
+async function notifyStop(opts, res) {
+    if (opts.depth || !opts.hooks?.on_stop?.length)
+        return;
+    await runNotify(opts.hooks, 'on_stop', {
+        status: res.status, content: clip(res.content || '', 2000),
+        turns: opts.items.filter(i => i.type === 'assistant').length,
+        task: opts.ctx?.task?.path || null,
+    }, opts.ctx);
+}
+
+async function runLoopCore(opts) {
     const { llm, items, host } = opts;
     const maxTurns = opts.maxTurns ?? MAX_TURNS;
     const tools = visibleTools(opts.tools || [], host.mode);
@@ -91,7 +116,7 @@ export async function runLoop(opts) {
             }
             const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
             const toolsTokens = estimateTokens(schemas);
-            await maybeCompact({ llm, items, host, system, toolsTokens });
+            await maybeCompact({ llm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
             if (empty)
@@ -428,12 +453,41 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         signal: host.signal,
         depth: opts.depth || 0,
         tools: opts.tools,
+        hooks: opts.hooks,
         runLoop,
     };
     // внешнее содержимое после последней реплики человека (и от родителя субагента) → действия наружу только с подтверждением
     const tainted = taintSources(opts.items, opts.taintedFrom);
     ctx.tainted = tainted.length ? tainted : null;
-    const decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
+    // хуки организации (hooks.js): могут запретить, потребовать подтверждение или поправить аргументы — но не разрешить сверх политики
+    let hookAsk = null;
+    if (opts.hooks?.pre_tool?.length) {
+        const pre = await runPreTool(opts.hooks, hookPayload(tool, entry, ctx), ctx);
+        if (pre.verdict === 'deny') {
+            entry.status = 'denied';
+            entry.hookDenied = true;
+            entry.error = pre.reason + ' (' + pre.scope + ')';
+            await host.save();
+            await noteAudit(tool, entry, ctx, 'deny', 'hook', { reason: clip(entry.error, 300) });
+            return;
+        }
+        if (pre.argsChanged) {
+            entry.args = pre.args;
+            entry.hookArgs = true;
+            const lacking = (tool.parameters?.required || []).filter(k => entry.args?.[k] == null || entry.args[k] === '');
+            if (lacking.length) {
+                entry.status = 'error';
+                entry.error = 'После правки аргументов правилом организации не хватает: ' + lacking.join(', ');
+                await host.save();
+                return;
+            }
+        }
+        if (pre.verdict === 'ask' && !preapproved)
+            hookAsk = pre;
+    }
+    let decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
+    if (hookAsk && decision.verdict === 'allow')
+        decision = { verdict: 'ask', noAlways: true, reason: 'правило организации (' + hookAsk.scope + '): ' + hookAsk.reason };
     if (decision.verdict === 'deny') {
         entry.status = 'denied';
         entry.error = decision.reason || 'запрещено политикой';
@@ -507,11 +561,39 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     if (entry.untrusted && !entry.nonce)
         entry.nonce = newNonce();
     entry.durationMs = Date.now() - t0;
+    // post_tool: хук может дописать к результату поясняющий текст организации
+    if (opts.hooks?.post_tool?.length && (entry.status === 'ok' || entry.status === 'error')) {
+        const extra = await runAppend(opts.hooks, 'post_tool', {
+            ...hookPayload(tool, entry, ctx),
+            status: entry.status, result: clip(entry.result || '', 4000), error: entry.error, durationMs: entry.durationMs,
+        }, ctx);
+        if (extra) {
+            if (entry.status === 'ok')
+                entry.result = clip((entry.result ?? '') + '\n\n[Правило организации]\n' + extra, RESULT_MAX);
+            else
+                entry.error = String(entry.error || '') + '\n[Правило организации] ' + extra;
+        }
+    }
     await host.save();
     // аудит: рискованные (risk) — любой итог; подтверждённые человеком — verdict 'ask'; пред-подтверждённые — 'allow' с пометкой
     if (tool.risk || approved || entry.status !== 'ok')
         await noteAudit(tool, entry, ctx, approved ? 'ask' : 'allow', entry.status,
             approved ? { reason: clip(approved.reason, 300), always: approved.always || undefined, preapproved: approved.preapproved || undefined } : {});
+}
+
+/** Данные вызова для хуков (копии простых значений — не живые объекты ядра). */
+function hookPayload(tool, entry, ctx) {
+    let target;
+    try {
+        target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
+    }
+    catch { /* цель не определилась */ }
+    return {
+        tool: tool.name, args: entry.args || {}, risk: tool.risk || null, readonly: !!tool.readonly,
+        target: Array.isArray(target) ? target.map(String) : (target != null ? String(target) : null),
+        tainted: ctx.tainted, mode: ctx.host?.mode || null, role: ctx.role || null,
+        task: ctx.task?.path || null, depth: ctx.depth || 0, uid: ctx.session?.uid || null,
+    };
 }
 
 /** Незакрытые вызовы (обрыв, рестарт) → interrupted: модель увидит честный результат. */
@@ -548,6 +630,8 @@ export function toolContent(t, old = false) {
             return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
         }
         case 'denied':
+            if (t.hookDenied)
+                return 'Вызов запрещён правилом организации: ' + (t.error || '');
             return 'Пользователь отклонил вызов.' + (t.answer ? ' Комментарий: ' + t.answer : '') + (t.error ? ' ' + t.error : '');
         default:
             return 'Вызов прерван (стоп или перезапуск) — результата нет.';
@@ -674,7 +758,7 @@ export function estimateContext({ items, system, toolsTokens = 0 }) {
 }
 
 /** Сжатие: контекст близок к пределу — старая часть ленты → сводка. toolsTokens — схемы инструментов для эвристики без usage. */
-export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0 }) {
+export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0, hooks, task }) {
     stripOldShots(items);
     const limit = Number(llm.contextTokens) || 32000;
     if (!force && estimateContext({ items, system, toolsTokens }).tokens < limit * COMPACT_AT)
@@ -718,7 +802,12 @@ export async function maybeCompact({ llm, items, host, system, force = false, to
     for (const it of old)
         it.compacted = true;
     const idx = items.indexOf(live[cut]);
-    items.splice(idx, 0, { id: genId(), type: 'summary', time: Date.now(), content: summary });
+    const note = { id: genId(), type: 'summary', time: Date.now(), content: summary };
+    // on_compact: хук может дописать к сводке то, что обязано пережить сжатие (правила, ссылки)
+    const extra = await runAppend(hooks, 'on_compact', { summary: clip(summary, 4000), compacted: old.length, task: task?.path || null }, { task });
+    if (extra)
+        note.content += '\n\n' + extra;
+    items.splice(idx, 0, note);
     await host.save();
     return true;
 }
