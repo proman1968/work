@@ -71,6 +71,39 @@ describe('streamChat SSE: рваные чанки собираются без п
     });
 });
 
+describe('streamChat: usage и токены кэша провайдера', () => {
+    const usageOf = async usage => {
+        installWork([sseLine({ choices: [{ delta: { content: 'ок' } }] }), sseLine({ usage }), 'data: [DONE]\n']);
+        return (await collect(ai, { messages })).events.find(e => e.type === 'usage');
+    };
+
+    it('OpenAI: prompt_tokens — полный размер запроса, cached_tokens из prompt_tokens_details', async () => {
+        const u = await usageOf({ prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, prompt_tokens_details: { cached_tokens: 800 } });
+        assert.deepEqual(u, { type: 'usage', prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, cached_tokens: 800 });
+    });
+
+    it('DeepSeek: prompt_cache_hit_tokens; без кэша — cached_tokens: 0', async () => {
+        assert.equal((await usageOf({ prompt_tokens: 500, completion_tokens: 5, prompt_cache_hit_tokens: 300, prompt_cache_miss_tokens: 200 })).cached_tokens, 300);
+        const none = await usageOf({ prompt_tokens: 500, completion_tokens: 5 });
+        assert.equal(none.cached_tokens, 0);
+        assert.equal(none.total_tokens, 505);
+    });
+
+    it('Anthropic-поля: input_tokens без кэша → полный размер = input + чтение + запись кэша', async () => {
+        const u = await usageOf({ input_tokens: 100, cache_read_input_tokens: 800, cache_creation_input_tokens: 50, output_tokens: 7 });
+        assert.equal(u.prompt_tokens, 950);
+        assert.equal(u.cached_tokens, 800);
+        assert.equal(u.completion_tokens, 7);
+        assert.equal(u.total_tokens, 957);
+    });
+
+    it('prompt_tokens имеет приоритет над input_tokens (шлюз уже суммировал кэш)', async () => {
+        const u = await usageOf({ prompt_tokens: 900, input_tokens: 100, cache_read_input_tokens: 800, completion_tokens: 3 });
+        assert.equal(u.prompt_tokens, 900);
+        assert.equal(u.cached_tokens, 800);
+    });
+});
+
 describe('streamChat: нативные tool_calls', () => {
     it('явный maxOutput задаёт лимит ответа, а не размер контекста', async () => {
         installWork(['data: [DONE]\n']);

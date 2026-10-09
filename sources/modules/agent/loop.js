@@ -31,6 +31,8 @@ export const KEEP_FULL_TURNS = 6;
 export const STREAM_RETRIES = 2;
 export const EMPTY_RETRIES = 2;
 export const COMPACT_AT = 0.72;
+/** usage ответа считается достоверным, если не меньше этой доли от system + схем инструментов (они есть в каждом запросе). */
+export const USAGE_TRUST_MIN = 0.7;
 /** Заголовок служебного сообщения с изменчивой частью среды (время, режим…), см. splitSystem/toMessages. */
 export const VOLATILE_HEAD = '[Служебный контекст среды на этот ход — не реплика пользователя]\n';
 
@@ -88,17 +90,21 @@ export async function runLoop(opts) {
                 return { status: 'limit' };
             }
             const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
-            await maybeCompact({ llm, items, host, system });
+            const toolsTokens = estimateTokens(schemas);
+            await maybeCompact({ llm, items, host, system, toolsTokens });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
             if (empty)
                 messages.push({ role: 'user', content: EMPTY_NUDGE });
             const systemTokens = estimateTokens(systemText(system));
+            const measured = estimateContext({ items, system, toolsTokens });
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
                 system: systemTokens,
-                tools: estimateTokens(schemas),
+                tools: toolsTokens,
                 messages: estimateTokens(messages) - systemTokens,
+                used: measured.tokens,
+                source: measured.source,
             });
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
@@ -275,7 +281,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                     host.emit?.({ type: 'delta', item: it.id, field: 'reasoning', token: ch.content });
                 }
                 else if (ch?.type === 'usage')
-                    it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens };
+                    it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens, ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}) };
                 else if (ch?.type === 'tool_calls')
                     calls = ch.calls || [];
                 else if (ch?.type === 'finish')
@@ -615,12 +621,52 @@ function userContent(it, imageMap) {
     return [{ type: 'text', text: text + note }, ...images.map(a => ({ type: 'image_url', image_url: { url: a.image_url } }))];
 }
 
-/** Сжатие: контекст близок к пределу — старая часть ленты → сводка. */
-export async function maybeCompact({ llm, items, host, system, force = false }) {
+/**
+ * Опора для оценки контекста — реальный usage последнего ответа модели: prompt_tokens того запроса.
+ * Не годится, если после него было сжатие (summary новее ответа): размер контекста с тех пор изменился.
+ * @returns {{index:number, prompt:number}|null}
+ */
+function usageBaseline(items) {
+    let summaryAt = 0;
+    for (const i of items)
+        if (i.type === 'summary')
+            summaryAt = Math.max(summaryAt, Number(i.time) || 0);
+    for (let k = items.length - 1; k >= 0; k--) {
+        const it = items[k];
+        if (it.type !== 'assistant' || it.compacted || it.error)
+            continue;
+        const prompt = Number(it.usage?.prompt) || 0;
+        if (prompt <= 0)
+            continue;
+        return summaryAt > (Number(it.time) || 0) ? null : { index: k, prompt };
+    }
+    return null;
+}
+
+/**
+ * Размер следующего запроса в токенах. Есть usage последнего ответа — реальный prompt того запроса
+ * (system + схемы инструментов + диалог) плюс оценка добавленного после него (ответ, результаты инструментов, реплики);
+ * иначе — эвристика len/3.2 по сообщениям плюс схемы инструментов (toolsTokens).
+ * Микросжатие старых результатов с тех пор могло уменьшить контекст — оценка с запасом, это безопасная сторона.
+ * @returns {{tokens:number, source:'usage'|'estimate'}}
+ */
+export function estimateContext({ items, system, toolsTokens = 0 }) {
+    const base = usageBaseline(items);
+    // usage меньше того, что заведомо входит в каждый запрос (схемы инструментов + system), — данные шлюза недостоверны
+    // (нулевой/неполный usage): не верим ему, иначе сжатие не сработает и контекст переполнится
+    const floor = toolsTokens + estimateTokens(systemText(system));
+    if (base && base.prompt >= floor * USAGE_TRUST_MIN) {
+        const added = items.slice(base.index).filter(i => !i.compacted);
+        return { tokens: base.prompt + estimateTokens(toMessages('', added)), source: 'usage' };
+    }
+    return { tokens: estimateTokens(toMessages(system, items)) + toolsTokens, source: 'estimate' };
+}
+
+/** Сжатие: контекст близок к пределу — старая часть ленты → сводка. toolsTokens — схемы инструментов для эвристики без usage. */
+export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0 }) {
     stripOldShots(items);
     const limit = Number(llm.contextTokens) || 32000;
-    const messages = toMessages(system, items);
-    if (!force && estimateTokens(messages) < limit * COMPACT_AT)
+    if (!force && estimateContext({ items, system, toolsTokens }).tokens < limit * COMPACT_AT)
         return false;
     const live = items.filter(i => !i.compacted);
     // граница — последний user-элемент, чтобы не резать пары вызов/результат

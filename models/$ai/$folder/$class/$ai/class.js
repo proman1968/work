@@ -266,14 +266,22 @@ export default {
                 noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
             if (json.usage) {
                 const u = json.usage;
-                const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
-                const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
+                // токены, прочитанные из кэша провайдера: OpenAI (prompt_tokens_details.cached_tokens), DeepSeek (prompt_cache_hit_tokens), Anthropic-поля
+                const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cache_read_input_tokens ?? 0) || 0;
+                const cacheWrite = Number(u.cache_creation_input_tokens ?? 0) || 0;
+                // prompt_tokens — ПОЛНЫЙ размер запроса, включая кэш (так его читает цикл агента для решения о сжатии);
+                // Anthropic-поля input_tokens не включают кэш — тогда полный размер = input + чтение + запись кэша
+                let promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
+                if (!promptTokens && u.input_tokens != null)
+                    promptTokens = (Number(u.input_tokens) || 0) + cached + cacheWrite;
+                const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? 0) || 0;
                 const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
                 yield {
                     type: 'usage',
                     prompt_tokens: promptTokens,
                     completion_tokens: completionTokens,
                     total_tokens: totalTokens,
+                    cached_tokens: cached,
                 };
             }
         };
