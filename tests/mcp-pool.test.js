@@ -31,6 +31,28 @@ describe('mcp-pool', () => {
         assert.notEqual(String(before), pid);
     });
 
+    it('запрос roots/list сервера: отвечаем корнями места задачи (не -32601)', async () => {
+        const roots = [{ uri: 'work:/ORG/Отдел продаж', name: '/ORG/Отдел продаж' }];
+        const r = text(await pool.rpc(cfg, 'tools/call', { name: 'roots' }, 30_000, { roots }));
+        assert.match(r, /roots \{"roots":\[\{"uri":"work:\/ORG\/Отдел продаж"/);
+    });
+
+    it('roots/list без места задачи — пустые корни; чужой запрос сервера — честный -32601', async () => {
+        // отдельный процесс: корни — на канал, место задачи держится между вызовами одного канала
+        const cfg2 = { command: process.execPath, args: [...cfg.args, '--fresh'] };
+        const r = text(await pool.rpc(cfg2, 'tools/call', { name: 'roots' }, 30_000));
+        assert.match(r, /"roots":\[\]/);
+        const a = text(await pool.rpc(cfg2, 'tools/call', { name: 'ask' }, 30_000, { roots: [{ uri: 'work:/ORG', name: '/ORG' }] }));
+        assert.match(a, /ask \{"code":-32601,"message":"not supported by work-mcp"\}/);
+        pool.closeAll();
+    });
+
+    it('initialize объявляет roots и шлёт notifications/initialized', async () => {
+        const r = text(await pool.rpc(cfg, 'tools/call', { name: 'caps' }, 30_000));
+        assert.match(r, /"roots":\{"listChanged":false\}/);
+        assert.match(r, /"notified":1/);
+    });
+
     it('ошибка метода — исключение с текстом сервера', async () => {
         await assert.rejects(() => pool.rpc(cfg, 'nope/x', {}), /no nope\/x/);
     });

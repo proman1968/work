@@ -1056,6 +1056,9 @@ export const workTools = [
                 throw new Error('метод ' + m + ' недоступен агенту');
             const a = args.args && typeof args.args === 'object' ? args.args : {};
             forceTaskContext(m, a, ctx);
+            // место задачи для MCP-клиентов ($service: roots/list): с сервера, не из аргументов модели
+            if (m.startsWith('mcp_') && ctx?.place?.path)
+                a.place = ctx.place.path;
             const res = await callAs(item, m, a, ctx, undefined, { gateway: true });
             if (res && typeof res === 'object' && typeof res.pipe === 'function')
                 return '[поток данных — используй read]';

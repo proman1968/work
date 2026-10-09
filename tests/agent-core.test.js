@@ -96,7 +96,7 @@ before(async () => {
     // тип .task — настоящий слой проекта
     for (const rel of ['$server/$folder/$file/$task/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
-    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${CHILD_UID}'] } }`);
+    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${CHILD_UID}'] }, async mcp_probe(params = {}) { return { got: params.place ?? null, spoofed: params.spoof ?? null }; } }`);
     write(`USERS/${CHILD_UID}/$user/class.js`, `export default { label: 'Тестовый пользователь' }`);
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');
@@ -469,6 +469,12 @@ describe('инструменты WORK на песочнице', () => {
         assert.match(await tool('schema').run({ path: '/BOX' }, ctx()), /save_file/);
         const info = await tool('call').run({ path: '/BOX/doc/note.md', method: 'read_text' }, ctx());
         assert.match(String(info), /строка 1/);
+        // место задачи для MCP-клиентов (hardening 3.4): с сервера, не из аргументов модели
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const atBox = { entry: {}, place: { path: '/BOX' }, session: actor };
+        assert.deepEqual(await tool('call').run({ path: '/BOX', method: 'mcp_probe', args: {} }, atBox), { got: '/BOX', spoofed: null });
+        assert.deepEqual(await tool('call').run({ path: '/BOX', method: 'mcp_probe', args: { place: '/ФЕЙК' } }, { ...atBox }), { got: '/BOX', spoofed: null }, 'подмена места из аргументов отклоняется');
         await assert.rejects(() => tool('call').run({ path: '/BOX', method: '_secretPath' }, ctx()), /недоступен/);
     });
 });

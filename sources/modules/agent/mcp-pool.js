@@ -21,6 +21,8 @@ function channel(child) {
     const pending = new Map();
     let buf = '';
     let stderr = '';
+    // корни для roots/list сервера: место задачи последнего вызова (параллельные вызовы — общий совет)
+    let serving = [];
     child.stdout.on('data', chunk => {
         buf += String(chunk);
         let i;
@@ -45,9 +47,13 @@ function channel(child) {
                     resolve(msg.result);
             }
             else if (msg.id != null && msg.method) {
-                // запрос сервера (roots/sampling) — честный отказ
-                write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'not supported by work-mcp' } });
+                // запрос сервера: roots/list — корни WORK (место задачи), остальное — честный отказ
+                if (msg.method === 'roots/list')
+                    write({ jsonrpc: '2.0', id: msg.id, result: { roots: serving } });
+                else
+                    write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'not supported by work-mcp' } });
             }
+            // ответ клиента на наш запрос (roots/…) приходит после resolve — совпадений нет, игнорируется
         }
     });
     child.stderr.on('data', chunk => {
@@ -65,6 +71,10 @@ function channel(child) {
     }
     return {
         get stderr() { return stderr; },
+        roots(list) {
+            if (Array.isArray(list) && list.length)
+                serving = list;
+        },
         notify(method, params) {
             try {
                 write({ jsonrpc: '2.0', method, params: params || {} });
@@ -118,7 +128,7 @@ function start(key, cfg) {
     child.on('error', drop);
     entry.ready = rpc.request('initialize', {
         protocolVersion: '2024-11-05',
-        capabilities: {},
+        capabilities: { roots: { listChanged: false } }, // roots/list отвечаем корнями места задачи
         clientInfo: { name: 'work-mcp', version: '2.0.0' },
     }, START_TIMEOUT).then(info => {
         rpc.notify('notifications/initialized');
@@ -161,12 +171,14 @@ function touch(entry) {
  * @param {{command:string,args?:string[],env?:object,cwd?:string}} cfg
  * @returns {Promise<any>} result (бросает при ошибке)
  */
-export async function rpc(cfg, method, params, timeout = CALL_TIMEOUT) {
+export async function rpc(cfg, method, params, timeout = CALL_TIMEOUT, opts = {}) {
     const key = keyOf(cfg);
     let entry = POOL.get(key);
     if (!entry || entry.dead)
         entry = start(key, cfg);
     entry.calls++;
+    if (Array.isArray(opts?.roots) && opts.roots.length)
+        entry.rpc.roots(opts.roots); // место задачи (для roots/list сервера)
     try {
         await entry.ready;
         return await entry.rpc.request(method, params, timeout);
