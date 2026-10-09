@@ -12,6 +12,7 @@ import { decide } from '../sources/modules/agent/permissions.js';
 
 let tmp, prevCwd, tokenServer, tokenPort, lastForm, tokenHits = 0;
 const uid = 'U1';
+const connDir = u => path.join(tmp, 'USERS', u, '$user', '#secret', 'connections');
 
 before(async () => {
     prevCwd = process.cwd();
@@ -47,6 +48,64 @@ describe('подключения', () => {
         const a = await C.authHeaders(uid, 'crm');
         assert.equal(a.headers.Authorization, 'Bearer SECRET');
         assert.ok(fs.existsSync(path.join(tmp, 'USERS', uid, '$user', '#secret', 'connections', 'crm.json')));
+    });
+
+    it('на диске токены зашифрованы; открытый файл старого формата читается и сразу перешифровывается', async () => {
+        const dir = connDir(uid);
+        const sealed = JSON.parse(fs.readFileSync(path.join(dir, 'crm.json'), 'utf-8'));
+        assert.equal(sealed.v, 2);
+        assert.ok(!JSON.stringify(sealed).includes('SECRET'), 'токен лежит открытым текстом');
+        fs.writeFileSync(path.join(dir, 'old.json'), JSON.stringify({ type: 'token', provider: 'token', token: 'LEGACY-T', header: 'Authorization', base_url: 'https://api.example.com', scopes: [], connected: 1 }));
+        assert.equal((await C.authHeaders(uid, 'old')).headers.Authorization, 'Bearer LEGACY-T');
+        const migrated = fs.readFileSync(path.join(dir, 'old.json'), 'utf-8');
+        assert.ok(!migrated.includes('LEGACY-T'), 'открытый файл не перешифрован');
+        assert.equal(JSON.parse(migrated).v, 2);
+        assert.equal((await C.authHeaders(uid, 'old')).headers.Authorization, 'Bearer LEGACY-T');
+    });
+
+    it('файл подключения нельзя подсунуть другому пользователю или под другим именем; повреждённый — понятная ошибка, list не падает', async () => {
+        const src = path.join(connDir(uid), 'crm.json');
+        fs.mkdirSync(connDir('U2'), { recursive: true });
+        fs.copyFileSync(src, path.join(connDir('U2'), 'crm.json'));
+        await assert.rejects(C.authHeaders('U2', 'crm'), /не расшифровать/);
+        fs.copyFileSync(src, path.join(connDir(uid), 'copy.json'));
+        await assert.rejects(C.authHeaders(uid, 'copy'), /не расшифровать/);
+        const box = JSON.parse(fs.readFileSync(src, 'utf-8'));
+        box.data = Buffer.from('испорчено').toString('base64');
+        fs.writeFileSync(path.join(connDir(uid), 'broken.json'), JSON.stringify(box));
+        await assert.rejects(C.authHeaders(uid, 'broken'), /повреждена|не расшифровать/);
+        const warn = console.warn;
+        console.warn = () => {};
+        try {
+            const names = (await C.list(uid)).map(c => c.name);
+            assert.ok(names.includes('crm'));
+            assert.ok(!names.includes('broken') && !names.includes('copy'));
+        }
+        finally {
+            console.warn = warn;
+        }
+        assert.equal(await C.authHeaders(uid, 'nope').catch(e => e.message.includes('нет подключения')), true);
+    });
+
+    it('WORK_SECRET_KEY добавили позже: записи под ключом сервера читаются и перешифровываются новым ключом', async () => {
+        const prev = process.env.WORK_SECRET_KEY;
+        await C.start({ uid: 'U3', provider: 'token', name: 'late', token: 'LATE-T', base_url: 'https://api.example.com' });
+        const file = path.join(connDir('U3'), 'late.json');
+        const kidBefore = JSON.parse(fs.readFileSync(file, 'utf-8')).kid;
+        process.env.WORK_SECRET_KEY = 'ab'.repeat(32);
+        try {
+            assert.equal((await C.authHeaders('U3', 'late')).headers.Authorization, 'Bearer LATE-T');
+            const after = JSON.parse(fs.readFileSync(file, 'utf-8'));
+            assert.notEqual(after.kid, kidBefore, 'запись не перешифрована новым ключом');
+            assert.ok(!JSON.stringify(after).includes('LATE-T'));
+            assert.equal((await C.authHeaders('U3', 'late')).headers.Authorization, 'Bearer LATE-T');
+        }
+        finally {
+            if (prev === undefined)
+                delete process.env.WORK_SECRET_KEY;
+            else
+                process.env.WORK_SECRET_KEY = prev;
+        }
     });
 
     it('OAuth2: без клиента — просьба создать; с клиентом — auth_url с PKCE; callback → токен; истёкший — обновляется', async () => {

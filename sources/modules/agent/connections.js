@@ -3,7 +3,8 @@
  *
  * Принцип: регистрация и вход — только руками пользователя. Агент просит подключение (connect_service),
  * человек в карточке сам вводит данные / входит на сайте провайдера (OAuth2 + PKCE); пароли и токены
- * не проходят через модель и не пишутся в ленту задачи. Хранилище — секреты пользователя:
+ * не проходят через модель и не пишутся в ленту задачи. Хранилище — секреты пользователя
+ * (зашифрованы AES-256-GCM, см. host/secret-box.js; ключ — WORK_SECRET_KEY или производный от #system/node-key.json):
  *   USERS/<uid>/$user/#secret/connections/<name>.json
  * OAuth-клиент (client_id/secret) — общий для системы (#system/oauth/<provider>.json, настраивает админ)
  * или свой у пользователя (вводит в карточке подключения).
@@ -14,6 +15,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { isPrivateAddress } from '../../host/net-guard.js';
+import * as SB from '../../host/secret-box.js';
 
 export const PROVIDERS = {
     google: {
@@ -83,19 +85,41 @@ function file(uid, name) {
     return path.join(userDir(uid), name + '.json');
 }
 
+/** Назначение ключа и владелец записи (AAD): файл нельзя подсунуть другому пользователю/имени. */
+const BOX = (uid, name) => ({ info: 'work-connections', aad: String(uid) + '/' + String(name) });
+
+/**
+ * Прочитать подключение. Записи шифруются (host/secret-box.js); открытый JSON старого формата читается
+ * и сразу перешифровывается. Нет файла → null; нельзя расшифровать → ошибка с понятной причиной.
+ */
 async function read(uid, name) {
+    let parsed;
     try {
-        return JSON.parse(await fs.promises.readFile(file(uid, name), 'utf-8'));
+        parsed = JSON.parse(await fs.promises.readFile(file(uid, name), 'utf-8'));
     }
     catch {
         return null;
+    }
+    if (!SB.isSealed(parsed)) {
+        await write(uid, name, parsed).catch(() => { /* миграция отложится до следующего чтения */ });
+        return parsed;
+    }
+    try {
+        const { value, rekey } = await SB.open(parsed, BOX(uid, name));
+        if (rekey)
+            await write(uid, name, value).catch(() => { /* перешифровка отложится */ });
+        return value;
+    }
+    catch (e) {
+        throw new Error('подключение «' + name + '» не расшифровать: ' + e.message + ' — попросите подключить аккаунт заново (connect_service)');
     }
 }
 
 async function write(uid, name, data) {
     await fs.promises.mkdir(userDir(uid), { recursive: true });
     const tmp = file(uid, name) + '.tmp';
-    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    const sealed = await SB.seal(data, BOX(uid, name));
+    await fs.promises.writeFile(tmp, JSON.stringify(sealed, null, 2), { encoding: 'utf-8', mode: 0o600 });
     await fs.promises.rename(tmp, file(uid, name));
 }
 
@@ -124,7 +148,14 @@ export async function list(uid) {
     catch { /* нет подключений */ }
     const out = [];
     for (const name of names) {
-        const c = await read(uid, name);
+        let c;
+        try {
+            c = await read(uid, name);
+        }
+        catch (e) {
+            console.warn('[connections]', e.message);
+            continue;
+        }
         if (!c)
             continue;
         out.push({
