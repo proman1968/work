@@ -5,7 +5,8 @@
  *
  *   node scripts/agent-eval.mjs [--model /MODELS/odant/Qwen3.8 27b] [--case delegate] [--keep]
  *
- * Итог — таблица задач (ok/fail, какие проверки не прошли, ходов, время) и файл
+ * Итог — таблица задач (ok/fail, какие проверки не прошли, ходов, время), суммарные токены
+ * (вход/выход/кэш из usage лент, включая субагентов — для замера стоимости и доли кэша) и файл
  * .index/eval/<дата>.json для сравнения моделей и версий промптов.
  */
 import fs from 'node:fs';
@@ -52,6 +53,22 @@ function toolsCalled(items) {
     return out;
 }
 
+/** usage всех ответов ленты (включая вложенные ленты субагентов) — для замера стоимости и доли кэша. */
+function usageOf(items, acc = { prompt: 0, completion: 0, cached: 0, cacheWrite: 0, answers: 0 }) {
+    for (const it of items || []) {
+        if (it?.type === 'assistant' && it.usage?.prompt) {
+            acc.prompt += Number(it.usage.prompt) || 0;
+            acc.completion += Number(it.usage.completion) || 0;
+            acc.cached += Number(it.usage.cached) || 0;
+            acc.cacheWrite += Number(it.usage.cacheWrite) || 0;
+            acc.answers++;
+        }
+        for (const t of it?.tools || [])
+            usageOf(t.items, acc);
+    }
+    return acc;
+}
+
 async function runCase(c, imports) {
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-eval-'));
     const prev = process.cwd();
@@ -82,6 +99,9 @@ async function runCase(c, imports) {
         result.toolErrors = calls.filter(t => t.error).map(t => t.name + ': ' + String(t.error).slice(0, 300));
         result.turns = res.items.filter(i => i.type === 'assistant').length;
         result.answer = res.content;
+        const u = usageOf(res.items);
+        if (u.answers)
+            result.tokens = { prompt: u.prompt, completion: u.completion, cached: u.cached, cacheWrite: u.cacheWrite, answers: u.answers };
         const files = walk(tmp);
         for (const ch of c.checks) {
             let ok = true, why = '';
@@ -143,10 +163,19 @@ for (const c of list) {
         console.log('    ! ' + e);
 }
 const passed = results.filter(r => !r.failed.length).length;
+const tokens = results.reduce((a, r) => ({
+    prompt: a.prompt + (r.tokens?.prompt || 0),
+    completion: a.completion + (r.tokens?.completion || 0),
+    cached: a.cached + (r.tokens?.cached || 0),
+    cacheWrite: a.cacheWrite + (r.cacheWrite || 0),
+}), { prompt: 0, completion: 0, cached: 0, cacheWrite: 0 });
+const cacheShare = tokens.prompt ? Math.round(tokens.cached / tokens.prompt * 100) : 0;
 console.log('\nИтог: ' + passed + '/' + results.length + (model ? ' — модель ' + model : ''));
+console.log('Токены: вход ' + tokens.prompt.toLocaleString('ru-RU') + ', выход ' + tokens.completion.toLocaleString('ru-RU')
+    + ', из кэша ' + tokens.cached.toLocaleString('ru-RU') + ' (' + cacheShare + '%), запись кэша ' + tokens.cacheWrite.toLocaleString('ru-RU'));
 const outDir = path.join(ROOT, '.index', 'eval');
 fs.mkdirSync(outDir, { recursive: true });
 const out = path.join(outDir, new Date().toISOString().replace(/[:.]/g, '-') + '.json');
-fs.writeFileSync(out, JSON.stringify({ model: model || 'по умолчанию', at: new Date().toISOString(), passed, total: results.length, results }, null, 2));
+fs.writeFileSync(out, JSON.stringify({ model: model || 'по умолчанию', at: new Date().toISOString(), passed, total: results.length, tokens, results }, null, 2));
 console.log('Результаты: ' + out);
 process.exit(passed === results.length ? 0 : 1);
