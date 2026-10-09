@@ -24,6 +24,7 @@ const RULES = [
     ['aws-access-key', /\bAKIA[0-9A-Z]{16}\b/],
     ['github-token', /\bgh[pousr]_[A-Za-z0-9]{20,}\b/],
     ['google-api-key', /\bAIza[0-9A-Za-z_-]{30,}\b/],
+    ['mcp-token', /\bwmcp\.[0-9A-F]{16}\.[A-Za-z0-9_-]{43}\b/],
     ['jwt', /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/],
     ['bearer-basic-b64', /\b(?:Authorization['"]?\s*[:=]\s*['"]?|Bearer\s+|Basic\s+)[A-Za-z0-9+/]{40,}={0,2}\b/],
     ['keyword-value', /\b(?:api[_-]?key|apikey|secret|token|password|passwd|pass)['"]?\s*[:=]\s*['"][^'"\s]{8,}['"]/i],

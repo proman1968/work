@@ -45,6 +45,14 @@ function sameCode(a, b) {
     return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
+/** uid вошедшего пользователя; сессия MCP (эфемерная) токены выпускать не может. */
+function mcpUser(params = {}) {
+    const s = params.session;
+    if (!s?.uid || s.ephemeral || s.principal?.kind !== 'user')
+        throw new Error('Доступ запрещён');
+    return s.uid;
+}
+
 export const authMethods = {
     async user_register_start(params = {}) {
         let { uid, email } = params.post || {};
@@ -255,6 +263,34 @@ export const authMethods = {
             $server.broadcastAuthChangedToSession(session, { uid, reason: 'login' });
         }
         return "Вход выполнен";
+    },
+
+    /**
+     * Токены доступа внешних ИИ-клиентов по MCP (modules/mcp). Только вошедший пользователь — не сессия самого MCP.
+     * mcp_token_create({ role?, label? }) → { token, id, role, label }: токен показывается один раз.
+     */
+    async mcp_token_create(params = {}) {
+        const uid = mcpUser(params);
+        const { role, label } = params.post || {};
+        const { issueToken } = await import('../modules/mcp/tokens.js');
+        const rec = await issueToken(uid, { role, label });
+        audit('mcp_token', { action: 'create', id: rec.id, role: rec.role, params });
+        return { ...rec, endpoint: '/mcp' };
+    },
+
+    async mcp_token_list(params = {}) {
+        const { listTokens } = await import('../modules/mcp/tokens.js');
+        return listTokens(mcpUser(params));
+    },
+
+    /** mcp_token_revoke({ id }) | ({ all: true }) → сколько токенов отозвано. */
+    async mcp_token_revoke(params = {}) {
+        const uid = mcpUser(params);
+        const { id, all } = params.post || {};
+        const { revokeToken } = await import('../modules/mcp/tokens.js');
+        const count = await revokeToken(uid, all ? 'all' : String(id || ''));
+        audit('mcp_token', { action: 'revoke', id: all ? 'all' : String(id || ''), count, params });
+        return { revoked: count };
     },
 
     async user_exit(params = {}) {

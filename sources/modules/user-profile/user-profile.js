@@ -42,6 +42,14 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
                 <span>{{state.label}}</span>
                 <oda-icon ~if="state.icon" :icon="state.icon"></oda-icon>
             </button>
+            <div ~if="isLogin && state?.name === 'ok' && !showCode" vertical style="gap: 8px; width: 100%;">
+                <button center horizontal flex @tap.stop.prevent="mcp_token" title="Доступ к WORK для внешних ИИ-клиентов (OpenCode, Claude Code…) по MCP">
+                    <span>Токен для MCP</span>
+                </button>
+                <button center horizontal flex @tap.stop.prevent="mcp_revoke">
+                    <span>Отозвать токены MCP</span>
+                </button>
+            </div>
     </div>
         <div flex style="text-align: center;" ~html="state.legend"></div>
         <div flex style="text-align: center;" ~html="text" :error="!!error" @tap="fill_code"></div>
@@ -188,6 +196,33 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
     showCode: false,
     get workSecure() {
         return ODA.LocalStorage.create('work-secure');
+    },
+    /** Токен внешнего ИИ-клиента (modules/mcp): выпускается вошедшим пользователем, показывается один раз. */
+    async mcp_token() {
+        try {
+            await WORK.showConfirm('Выпустить токен для внешнего ИИ-клиента (OpenCode, Claude Code…)? Он даёт доступ к WORK с вашими правами и покажется один раз.');
+        }
+        catch { return; }
+        try {
+            const r = await WORK.fetch('/', 'mcp_token_create', {}, { label: 'MCP-клиент' });
+            prompt('Токен MCP — скопируйте, повторно он не показывается.\nАдрес сервера: ' + location.origin + '/mcp', r.token);
+        }
+        catch (e) {
+            this.text = e.message;
+        }
+    },
+    async mcp_revoke() {
+        try {
+            await WORK.showConfirm('Отозвать все токены MCP? Подключённые внешние клиенты перестанут работать.');
+        }
+        catch { return; }
+        try {
+            const r = await WORK.fetch('/', 'mcp_token_revoke', {}, { all: true });
+            this.text = 'Токенов отозвано: ' + (r?.revoked ?? 0);
+        }
+        catch (e) {
+            this.text = e.message;
+        }
     },
     async register_start(e) {
         this.params.uid = await this.uid;

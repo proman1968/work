@@ -47,7 +47,7 @@ export const MEMBERS = Object.freeze({
     $parent: L.READ, $owner: L.READ, $class: L.READ, $folder: L.READ, $users: L.READ,
     types: L.READ, system_types: L.READ,
     // вошедший
-    proxy: L.USER, node_grants: L.USER,
+    proxy: L.USER, node_grants: L.USER, mcp_token_create: L.USER, mcp_token_list: L.USER, mcp_token_revoke: L.USER,
     // сеть WORK
     network_graph: L.READ, remote: L.WRITE, node_add: L.ADMIN, node_refresh: L.ADMIN,
     // запись (точное право — внутри метода)

@@ -258,6 +258,12 @@ export function createRequestHandler() {
             response.end();
             return;
         }
+        // WORK как MCP-сервер (внешние ИИ-клиенты, токен вместо cookie-сессии) — до разбора сессии и дерева
+        if (String(request.url).split('?')[0] === '/mcp') {
+            const { handleMcp } = await import('../modules/mcp/server.js');
+            await handleMcp(request, response);
+            return;
+        }
         const cookies = parseCookies(request);
         let session;
         // Подписанный запрос узла сети WORK — эфемерная сессия субъекта-узла (без cookie)

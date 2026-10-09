@@ -11,6 +11,8 @@ describe('сканер секретов', () => {
             ['aws-access-key', 'key = "AKIAIOSFODNN7EXAMPLE"'],
             ['github-token', 'token: "ghp_16C7e42F292c6912E7710c538742dadcafd"'],
             ['google-api-key', 'AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7'],
+            // токен доступа внешнего ИИ-клиента к WORK (modules/mcp), собранный из заглушек
+            ['mcp-token', 'Authorization: Bearer wmcp.' + 'A'.repeat(16) + '.' + 'x'.repeat(43)],
             ['jwt', 'auth: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpM'],
             ['keyword-value', "token: 'abc12345xyz'"],
             // ключ формата GigaChat (base64 от «uuid:uuid»), собранный из нулей/единиц — не настоящий
