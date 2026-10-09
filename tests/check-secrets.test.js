@@ -13,7 +13,8 @@ describe('сканер секретов', () => {
             ['google-api-key', 'AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7'],
             ['jwt', 'auth: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpM'],
             ['keyword-value', "token: 'abc12345xyz'"],
-            ['uuid-pair-key', "token: 'MDE5YjJjZGUtMjUyYy03ZTY5LWE0ZDEtMzQyNzQxODBiYTFhOjAzMGY5MDhiLTIyMWYtNDY1Ny04ZDE2LWU4NWQxYjA2YTc5Mw=='"],
+            // ключ формата GigaChat (base64 от «uuid:uuid»), собранный из нулей/единиц — не настоящий
+            ['uuid-pair-key', "token: '" + Buffer.from('00000000-0000-0000-0000-000000000000:11111111-1111-1111-1111-111111111111').toString('base64') + "'"],
         ];
         for (const [rule, line] of cases) {
             const found = scanText(line);

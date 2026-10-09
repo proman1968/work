@@ -4,7 +4,7 @@
  *   node scripts/check-secrets.mjs [--json] [--all]
  *
  * Ищет приватные ключи, токены известных форматов и «ключевое слово = значение»
- * в файлах из `git ls-files`. Исключения — .secretsignore (gitignore-подобные маски).
+ * в отслеживаемых и новых (не игнорируемых git) файлах. Исключения — .secretsignore (gitignore-подобные маски).
  * Бинарные файлы (NUL-байт) пропускаются. Вывод маскируется: сами значения не печатаются.
  * Находки → exit 1 (для CI и pre-commit), чисто → exit 0.
  *
@@ -104,7 +104,8 @@ function isBinary(full) {
 }
 
 function main() {
-    const ls = spawnSync('git', ['-C', ROOT, '-c', 'core.quotepath=false', 'ls-files'], { encoding: 'utf-8' });
+    // отслеживаемые + новые не игнорируемые файлы: секрет ловится до `git add`
+    const ls = spawnSync('git', ['-C', ROOT, '-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
     if (ls.status !== 0)
         return finish(ls.error?.message || 'git ls-files недоступен', 2);
     const ignores = loadIgnores();
