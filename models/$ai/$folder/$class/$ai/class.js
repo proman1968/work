@@ -188,7 +188,7 @@ export default {
                 port: url.port || (url.protocol === 'http:' ? 80 : 443),
                 path: url.pathname + url.search,
                 method: 'POST',
-                agent: isGigachat ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+                agent: WORK.tls_agent?.(ai),
                 headers,
             }, (res) => {
                 if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -464,7 +464,6 @@ export function buildMultipart(parts) {
 function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 60000) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
     return new Promise((resolve, reject) => {
         const req = transport.request({
@@ -472,7 +471,7 @@ function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'POST',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: '*/*', ...headers, 'Content-Type': contentType, 'Content-Length': data.length },
             timeout: timeoutMs,
         }, (res) => {
@@ -873,7 +872,6 @@ export async function resolveKey(ai, raw) {
 function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     const payload = JSON.stringify(body || {});
     return new Promise((resolve, reject) => {
         const req = transport.request({
@@ -881,7 +879,7 @@ function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'POST',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: 'application/json', ...headers, 'Content-Length': Buffer.byteLength(payload) },
             timeout: timeoutMs,
         }, (res) => {
@@ -968,14 +966,13 @@ function pickGeneratedImage(data) {
 function httpsGetJson(urlStr, headers, ai) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     return new Promise((resolve, reject) => {
         const req = transport.request({
             hostname: url.hostname,
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'GET',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: 'application/json', ...headers },
             timeout: 15000,
         }, (res) => {
@@ -1043,7 +1040,7 @@ async function gigachatAuth(ai) {
             port: url.port || 9443,
             path: url.pathname,
             method: 'POST',
-            agent: new WORK.https.Agent({ rejectUnauthorized: false }),
+            agent: WORK.tls_agent?.(ai),
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Accept': 'application/json',

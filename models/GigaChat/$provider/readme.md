@@ -14,4 +14,11 @@ Authorization key (из личного кабинета GigaChat API) **в ко�
 ## Состояние
 
 - Ключ перенесён из кода в `#secret` (hardening 0.2).
-- Проверка TLS для GigaChat пока отключена (`rejectUnauthorized:false`), включается в пункте 0.4 с корневым сертификатом НУЦ Минцифры.
+- Проверка TLS включена (hardening 0.4): серверы GigaChat подписаны корнем НУЦ Минцифры, которого нет в списке Node, поэтому к стандартным корням добавляется `#system/certs/russian_trusted_root_ca.pem` (публичный сертификат, SHA-256 `D2:6D:2D:02:…:CF:31`; действует до 2032-02). Реализация — `sources/host/tls-ca.js`, доступ из адаптера — `WORK.tls_agent(ai)`.
+
+## TLS-настройки модели / провайдера
+
+| Поле | Значение |
+|---|---|
+| `ca` | имя PEM-файла в `#system/certs/` (для `protocol: 'gigachat'` по умолчанию `russian_trusted_root_ca.pem`) |
+| `tlsInsecure` | `true` — отключить проверку сертификата. Только отладка, в лог пишется предупреждение |

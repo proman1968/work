@@ -9,7 +9,8 @@
 - `websocket.js` — WebSocket-события (`changed`, `chat.delta`, `chat.done`); подписка только на видимые пути
 - `index-db.js` — общая локальная БД индексов (`.index/work.db`, node:sqlite): индекс лент, RAG
 - `net-guard.js` — исходящие запросы по пользовательским URL: только публичные адреса, закреплённый IP, лимиты
-- `stun.js` — локальный STUN для WebRTC
+- `tls-ca.js` - TLS-агенты для API моделей с нестандартным корнем (GigaChat: корень НУЦ Минцифры из `#system/certs/`) вместо отключения проверки; доступ из адаптера через `WORK.tls_agent(ai)`
+- `stun.js` - локальный STUN для WebRTC
 - `auth-methods.js` — login/register/session (примешиваются в прототип `$server`)
 - `babel-merge.js` — merge `class.js` по слоям наследования (Babel AST)
 - `vapid.js`, `push.js` — push-уведомления

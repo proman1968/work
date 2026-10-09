@@ -88,14 +88,13 @@ function providerAuthHeaders(ai) {
 
 function providerHttpsGetJson(urlStr, headers, ai) {
     const url = new URL(urlStr);
-    const insecure = ai?.protocol === 'gigachat';
     return new Promise((resolve, reject) => {
         const req = WORK.https.request({
             hostname: url.hostname,
             port: url.port || 443,
             path: url.pathname + url.search,
             method: 'GET',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: 'application/json', ...headers },
             timeout: 15000,
         }, (res) => {

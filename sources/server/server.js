@@ -18,6 +18,7 @@ import {
 import { DEV_MODE } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
 import { guardedGet } from "../host/net-guard.js";
+import { tlsAgentFor } from "../host/tls-ca.js";
 
 /**
  * Ядро агента (sources/modules/agent) для слоёв дерева: class.js грузятся как data:-модули
@@ -63,6 +64,10 @@ export class $server extends $class {
     }
     get https(){
         return https
+    }
+    /** WORK.tls_agent(ai) → https.Agent с корнем из #system/certs (GigaChat) или undefined; геттер — не вызывается через API. */
+    get tls_agent(){
+        return tlsAgentFor
     }
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'
