@@ -88,6 +88,23 @@ it('создание: изоляция по умолчанию', async () => {
     assert.deepEqual(options.Cmd, ['sleep', 'infinity']);
 });
 
+it('создание: корень «только чтение» — tmpfs (/tmp, home с uid/gid пользователя образа, /var/tmp, /run); выключается конфигом', () => {
+    const cfg = { ...loadSandboxConfig(), readOnlyRootfs: true, homeDir: '/home/agent', homeUid: 1000, homeGid: 1000 };
+    const { options } = buildCreateOptions('user1', 'main', cfg);
+    assert.equal(options.HostConfig.ReadonlyRootfs, true);
+    assert.deepEqual(options.HostConfig.Tmpfs, {
+        '/tmp': 'rw,size=256m',
+        '/home/agent': 'rw,size=512m,uid=1000,gid=1000',
+        '/var/tmp': 'rw,size=64m',
+        '/run': 'rw,size=64m',
+    });
+    const off = buildCreateOptions('user1', 'main', { ...cfg, readOnlyRootfs: false }).options;
+    assert.equal(off.HostConfig.ReadonlyRootfs, false);
+    assert.equal(off.HostConfig.Tmpfs, undefined);
+    const other = buildCreateOptions('user1', 'main', { ...cfg, homeDir: '/root', homeUid: 0, homeGid: undefined }).options;
+    assert.equal(other.HostConfig.Tmpfs['/root'], 'rw,size=512m,uid=0,gid=0', 'uid=0 (root) валиден; gid по умолчанию = uid');
+});
+
 it('ensure/exec/read/write/ls по фейку; повторное ensure том переиспользует', async () => {
     const docker = fakeDocker();
     const cfg = loadSandboxConfig();

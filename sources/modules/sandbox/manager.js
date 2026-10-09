@@ -1,7 +1,9 @@
 /**
  * Менеджер персональных компьютеров (Docker-контейнеров).
  * Все операции принимают клиент dockerode первым аргументом — удобно подменять в тестах.
- * Изоляция: сеть none, CapDrop ALL, no-new-privileges, лимиты CPU/RAM/PID, только белый список образов.
+ * Изоляция: внутренняя сеть без внешнего маршрута (Internal:true; интернет — горячей заменой сети
+ * с подтверждением человека), CapDrop ALL, no-new-privileges, лимиты CPU/RAM/PID, только белый список образов,
+ * при readOnlyRootfs — корень только для чтения (пишут tmpfs и том /workspace).
  */
 import path from 'node:path';
 import { loadSandboxConfig } from './config.js';
@@ -80,10 +82,31 @@ export function assertSandboxPath(p, workdir = '/workspace') {
     return s;
 }
 
+/**
+ * tmpfs для корня «только чтение»: живут логи Xvfb/openbox/Chromium (/tmp), сокеты (/run)
+ * и HOME пользователя образа (pip --user, ~/.cache, Crashpad Chromium). Том /workspace — отдельно.
+ * HOME монтируется с uid/gid пользователя образа (tmpfs по умолчанию принадлежит root,
+ * а CapDrop ALL не даёт даже root выполнить chown) — homeUid/homeGid в #system/sandbox.json.
+ */
+export function readOnlyTmpfs(cfg) {
+    // uid=0 (root) — тоже валидный владелец: 0 не подменяем умолчанием
+    const num = (v, dflt) => Number.isFinite(Number(v)) ? Number(v) : dflt;
+    const uid = num(cfg.homeUid, 1000);
+    const gid = num(cfg.homeGid, uid);
+    const home = '/' + String(cfg.homeDir || 'home/agent').replace(/^\/+|\/+$/g, '');
+    return {
+        ['/tmp']: 'rw,size=256m',
+        [home]: 'rw,size=512m,uid=' + uid + ',gid=' + gid,
+        ['/var/tmp']: 'rw,size=64m',
+        ['/run']: 'rw,size=64m',
+    };
+}
+
 /** Опции создания контейнера: изоляция по умолчанию. Чистая функция — покрыта тестами. */
 export function buildCreateOptions(owner, name, cfg) {
     const cname = containerName(owner, name);
     const lim = cfg.limits || {};
+    const readonly = cfg.readOnlyRootfs === true;
     return {
         name: cname,
         volume: volumeName(owner, name),
@@ -105,7 +128,8 @@ export function buildCreateOptions(owner, name, cfg) {
                 PidsLimit: Math.max(32, Number(lim.pids) || 256),
                 CapDrop: ['ALL'],
                 SecurityOpt: ['no-new-privileges:true'],
-                ReadonlyRootfs: false,
+                ReadonlyRootfs: readonly,
+                ...(readonly ? { Tmpfs: readOnlyTmpfs(cfg) } : {}),
                 AutoRemove: false,
                 Init: true,  // tini — собирает зомби-процессы
                 Binds: [volumeName(owner, name) + ':' + (cfg.workdir || '/workspace')],
