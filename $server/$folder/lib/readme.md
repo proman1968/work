@@ -4,6 +4,7 @@
 
 ## Структура
 
+- `dot/` — `work-dot`: персонаж агента (голосовой режим, шапка задачи, превью)
 - `chat-item/` — карточка файла/сообщения в чате
 - `prompt-bar/` — `work-prompt-bar`: composer; модель/effort/TTS/mic — в баре; хост `send` / `stop` и `::model` / `::effort`
 - `tree/` — дерево элементов (item-tree); опциональный `hideFiles`

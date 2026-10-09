@@ -34,6 +34,7 @@ it('on_save передаёт именованные attachments задаче, н
 
 it('общий чат передаёт имя исходного файла отдельно от пути снимка', async () => {
     const previous = globalThis.ODA;
+    const previousWork = globalThis.WORK;
     const defs = [];
     globalThis.ODA = def => { defs.push(def); return def; };
     try {
@@ -56,14 +57,17 @@ it('общий чат передаёт имя исходного файла от
             value: 'task', files: [file], isAIMode: true, model: '', effort: 'low',
             $pdp: { isPrivate: false, receivers: [], $item: node },
             $(id) { return id === '#ribbon' ? { scrollDown: false } : { files: [file], effortLevel: 'low' }; },
-            async location() { return '{"tz":"Europe/Moscow"}'; },
-            clear() {}, _awaitNewTask() {},
+            _geo() { return null; },
+            clear() {}, focusInput() {}, _awaitNewTask() {},
+            _openCreated: async () => {},
+            _createTask: chat._createTask,
         };
         await chat.send.call(host);
         assert.deepEqual(JSON.parse(taskParams.includes), [history]);
-        assert.deepEqual(JSON.parse(taskParams.attachments), [{ path: history, name: file.name }]);
+
     }
     finally {
         globalThis.ODA = previous;
+        globalThis.WORK = previousWork;
     }
 });

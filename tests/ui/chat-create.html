@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Chat task creation UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Создание задачи из чата (tests/ui/run.mjs):
+ *  - задача стартует триггером on_save (как раньше), без явного prompt из клиента;
+ *  - send сразу чистит поле и блокирует повторный Enter;
+ *  - карточка открывается по пути из ответа сервера (без ожидания записи журнала),
+ *    а запись журнала о той же задаче не дублирует карточку;
+ *  - зависшая геопозиция не задерживает отправку.
+ */
+await import('/sources/client.js');
+const base = '/$server/$folder/$class/$structure/handlers/pages/form/chat/$handler/';
+await import(base + 'chat.js');
+await import('/$server/$folder/lib/chat-item/chat-item.js');
+await ODA.waitReg('chat-item');
+await ODA.waitReg('oda-chat');
+await ODA.waitReg('chat-day');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: String(e?.stack || e) }); }
+}
+const assert = (v, msg) => { if (!v) throw new Error(msg || 'assert'); };
+const eq = (a, b, msg) => { if (a !== b) throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, what, tries = 80) {
+    for (let i = 0; i < tries; i++) {
+        try { const v = fn(); if (v) return v; } catch { /* ещё не отрисовалось */ }
+        await sleep(50);
+    }
+    throw new Error('не дождались: ' + what);
+}
+
+const TODAY = new Date().toLocalDay();
+const TASK_PATH = '/BASE/$base/USER/task/' + TODAY + '/1791000000001.U1.task';
+
+/** Задача-заглушка: то, что вернул бы WORK.get_item(путь .task). */
+function fakeTask(calls) {
+    const task = new EventTarget();
+    Object.assign(task, {
+        id: '1791000000001.U1.task', path: TASK_PATH, short: TASK_PATH, ext: 'task', type: '$file', name: '1791000000001.U1.task',
+        async load() { return JSON.stringify({ name: 'привет', items: [], created: Date.now() }); },
+        async fetch(method, params, post) { calls.push([method, post ? JSON.parse(post) : null]); return { ok: true }; },
+        async get_item() { return null; },
+    });
+    return task;
+}
+
+/** Элемент чата-заглушка: журнал пустой, сохранение записывает вызовы. */
+function fakeChatItem(calls, saveImpl) {
+    const folder = new EventTarget();
+    folder.get_item = async () => [];
+    folder.files = [];
+    const item = new EventTarget();
+    Object.assign(item, {
+        id: 'BASE', path: '/BASE', short: '/BASE', type: '$class', name: 'BASE',
+        async fetch(method) { return method === 'logs' ? [] : method === 'chatSource' ? null : null; },
+        async logs() { return []; },
+        async get_item() { return folder; },
+        async save_file(file, params) { calls.push(['save_file', file.name, params]); return saveImpl ? saveImpl(file, params) : { logFullPath: TASK_PATH.slice(1) }; },
+    });
+    return item;
+}
+
+ODA({ is: 'x-chat-host', template: '<oda-chat :$item></oda-chat>', $item: null, receivers: [], isPrivate: false,
+    last: 0, model: '/MODELS/m', efforts: {}, effort: '', _savePath: 'x', get formChat() { return this; }, async _hydrateModel() {} });
+await ODA.waitReg('x-chat-host');
+
+async function mountChat({ saveImpl, calls = [] } = {}) {
+    const host = document.createElement('x-chat-host');
+    host.style.cssText = 'display:flex;height:600px';
+    host.$item = fakeChatItem(calls, saveImpl);
+    document.body.appendChild(host);
+    const chat = await waitFor(() => host.$('oda-chat'), 'oda-chat');
+    await waitFor(() => chat.$('#ribbon') && chat.$('work-prompt-bar'), 'лента и композер');
+    return { host, chat, calls };
+}
+
+const realGetItem = WORK.get_item;
+const realWarnGlobal = console.warn;
+const realGeo = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
+function stubGeolocation(impl) {
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: impl });
+}
+function restore() {
+    WORK.get_item = realGetItem;
+    if (realGeo) Object.defineProperty(navigator, 'geolocation', realGeo); else delete navigator.geolocation;
+}
+
+await test('отправка сразу чистит поле и блокирует повторный Enter, экрана «создаю задачу» нет', async () => {
+    stubGeolocation({ getCurrentPosition() {} });
+    const gate = {};
+    const { host, chat } = await mountChat({ saveImpl: () => new Promise(r => { gate.release = () => r({ logFullPath: TASK_PATH.slice(1) }); }) });
+    WORK.get_item = async p => p === TASK_PATH ? fakeTask([]) : null;
+    try {
+        chat.value = 'Сделай отчёт по сделкам';
+        const t0 = performance.now();
+        const sending = chat.send();
+        await sleep(0);
+        assert(performance.now() - t0 < 400, 'очистка поля за ' + Math.round(performance.now() - t0) + ' мс');
+        eq(chat.value, '', 'поле очищено сразу');
+        assert(chat._sending, 'пока идёт создание, второй send заблокирован');
+        assert(!chat.$('chat-task-pending'), 'экрана создания нет');
+        chat.value = 'второй';
+        await chat.send();
+        eq(chat.value, 'второй', 'повторный send во время создания проигнорирован');
+        chat.value = '';
+        gate.release();
+        await sending;
+    }
+    finally { restore(); host.remove(); }
+});
+
+await test('успех: задача сохранена и открыта по пути из ответа; агента запускает триггер on_save', async () => {
+    stubGeolocation({ getCurrentPosition() {} }); // разрешение не отвечено — не должно задерживать
+    const calls = [];
+    const task = fakeTask(calls);
+    WORK.get_item = async p => (p === TASK_PATH ? task : (p === TASK_PATH + '.logs' ? null : (p.endsWith('.task') ? { id: p.split('/').pop(), path: p, short: p, ext: 'task', type: '$file', name: p.split('/').pop(), async load(){ return JSON.stringify({ name: 'task', items: [] }); }, async get_item(){ return null; } } : null)));
+    const { host, chat } = await mountChat({ calls });
+    try {
+        const warns = [];
+        console.warn = (...a) => { warns.push(a.map(x => x?.message || x).join(' ')); };
+        const day0 = () => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY);
+        const proto = customElements.get('chat-day').prototype;
+        const origAdopt = proto.adoptTask;
+        const adopted = [];
+        proto.adoptTask = async function (file) { adopted.push(file.path || file.id); return origAdopt.call(this, file); };
+        chat.value = 'привет';
+        const t0 = performance.now();
+        await chat.send();
+        const took = performance.now() - t0;
+        assert(took < 3500, 'создание заняло ' + Math.round(took) + ' мс (геопозиция без ответа)');
+        const save = calls.find(c => c[0] === 'save_file');
+        assert(save, 'задача сохранена');
+        assert(!save[2].skip_file_handler, 'запуск как раньше — триггером on_save задачи');
+        assert(!calls.some(c => c[0] === 'prompt'), 'клиент не запускает агента сам — этим занимается триггер on_save');
+        const day = day0();
+        assert(day, 'день в ленте (adopted=' + JSON.stringify(adopted) + ')');
+        const card = await waitFor(() => [...day.$$('chat-item')].find(c => c.$item?.id === task.id), 'карточка задачи');
+        assert(card.expanded, 'карточка раскрыта');
+        assert(!warns.some(w => w.includes('напрямую не вышло')), 'прямое открытие без запасного пути: ' + warns);
+        eq(chat.awaitTask, false);
+    }
+    finally { console.warn = realWarnGlobal; restore(); host.remove(); }
+});
+
+await test('запись журнала о принятой задаче не создаёт вторую карточку', async () => {
+    const calls = [];
+    const task = fakeTask(calls);
+    WORK.get_item = async p => (p === TASK_PATH ? task : (p === TASK_PATH + '.logs' ? null : (p.endsWith('.task') ? { id: p.split('/').pop(), path: p, short: p, ext: 'task', type: '$file', name: p.split('/').pop(), async load(){ return JSON.stringify({ name: 'task', items: [] }); }, async get_item(){ return null; } } : null)));
+    const { host, chat } = await mountChat({ calls });
+    try {
+        chat.value = 'привет';
+        await chat.send();
+        const day = chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY);
+        const stub = { id: '1791000000001.U1.logs', async load() { return JSON.stringify({ time: 1791000000001, sender: 'U1', ext: 'task', path: TASK_PATH }); } };
+        const files = await day._dedupeLogFiles([stub]);
+        eq(files.length, 1, 'карточка одна');
+        eq(files[0].id, task.id, 'оставлен принятый .task-файл, запись журнала о нём не дублирует карточку');
+        const other = { id: '1791000000009.U1.logs', async load() { return JSON.stringify({ time: 1791000000009, sender: 'U1', ext: 'task', path: '/BASE/x/' + TODAY + '/1791000000009.U1.task' }); } };
+        eq((await day._dedupeLogFiles([stub, other])).length, 2, 'чужая задача дня остаётся');
+        day._adopted = null;
+    }
+    finally { restore(); host.remove(); }
+});
+
+await test('сбой сохранения: ошибка в тосте, текст возвращается в поле', async () => {
+    const calls = [];
+    let fails = 1;
+    const task = fakeTask(calls);
+    WORK.get_item = async p => (p === TASK_PATH ? task : (p === TASK_PATH + '.logs' ? null : (p.endsWith('.task') ? { id: p.split('/').pop(), path: p, short: p, ext: 'task', type: '$file', name: p.split('/').pop(), async load(){ return JSON.stringify({ name: 'task', items: [] }); }, async get_item(){ return null; } } : null)));
+    const { host, chat } = await mountChat({ calls, saveImpl: () => { if (fails-- > 0) throw new Error('Доступ запрещён'); return { logFullPath: TASK_PATH.slice(1) }; } });
+    try {
+        const warns = [];
+        console.warn = (...a) => { warns.push(a.map(x => x?.message || x).join(' ')); };
+        chat.value = 'важный запрос';
+        await chat.send();
+        assert(warns.some(w => w.includes('Доступ запрещён')), 'ошибка показана');
+        eq(chat.value, 'важный запрос', 'черновик вернулся в поле');
+        assert(!chat.$('chat-task-pending'), 'экрана с ошибкой нет');
+    }
+    finally { console.warn = realWarnGlobal; restore(); host.remove(); }
+});
+
+await test('геопозиция: нет ответа — не задерживает; отказ запоминается и не спрашивается заново', async () => {
+    let asked = 0;
+    stubGeolocation({ getCurrentPosition(ok, fail) { asked++; fail({ code: 1, message: 'denied' }); } });
+    const { host, chat } = await mountChat();
+    try {
+        const t0 = performance.now();
+        const pos = await chat._geo();
+        eq(pos, null);
+        await chat._geo();
+        await chat._geo();
+        assert(performance.now() - t0 < 500, 'отказ мгновенный');
+        eq(asked, 1, 'после отказа браузер больше не спрашивается');
+        stubGeolocation({ getCurrentPosition(ok) { ok({ coords: { latitude: 54.6, longitude: 39.7 } }); } });
+        chat._geoDeniedAt = 0;
+        const fix = await chat._geo();
+        eq(Math.round(fix.lat * 10), 546);
+        eq(chat._geo().lon, 39.7, 'удачная позиция кэшируется');
+    }
+    finally { restore(); host.remove(); }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

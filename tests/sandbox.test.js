@@ -157,7 +157,8 @@ it('инструменты: видны всем при Docker, скрыты бе
     for (const n of ['computer_status', 'computer_network', 'computer_destroy', 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_ls'])
         assert.ok(names.includes(n), n);
     assert.ok(!(await env.makeTools()).some(t => t.system)); // не админ — системных нет, песочница есть
-    assert.ok((await env.makeTools({ meta: { tools: 'sandbox_*' } })).every(t => t.name.startsWith('sandbox_')));
+    // маска сужает набор; чтение навыков (skill) субагентам добавляется всегда
+    assert.ok((await env.makeTools({ meta: { tools: 'sandbox_*' } })).every(t => t.name.startsWith('sandbox_') || t.name === 'skill'));
     const sub = await env.makeTools({ meta: { tools: '*' } });
     assert.ok(sub.some(t => t.name === 'sandbox_exec')); // субагенты наследуют
     const ctx = { session: { uid: 'user' }, host: { mode: 'auto', allowed: new Set() }, signal: new AbortController().signal };

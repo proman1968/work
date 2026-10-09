@@ -200,7 +200,7 @@ function matchCond(v, cond) {
 /**
  * Структурный запрос по объектам данных в тех же контекстах и с теми же правами, что поиск.
  * @param {object} point
- * @param {object} params {type, where, limit, session, role, rings}
+ * @param {object} params {type, where, limit, offset, session, role, rings}
  */
 export async function queryObjects(point, params = {}) {
     if (!await store.open())
@@ -235,5 +235,6 @@ export async function queryObjects(point, params = {}) {
         });
     }
     out.sort((a, b) => (b.weight - a.weight) || ((b.time || 0) - (a.time || 0)));
-    return out.slice(0, limit).map(({ weight, ...o }) => o);
+    const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
+    return out.slice(offset, offset + limit).map(({ weight, ...o }) => o);
 }

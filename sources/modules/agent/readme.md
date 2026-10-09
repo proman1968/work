@@ -27,8 +27,8 @@
 | `loop.js` | цикл, лента → messages, сжатие (`maybeCompact`) |
 | `permissions.js` | режимы и защищённые зоны |
 | `session.js` | хост `.task` v2: `prompt`, `approve`, `stop`, `revert`, `configure`, `compact`, `getBody` |
-| `resources.js` | данные из дерева: `ai/system.md`, `ai/config.js`, `ai/agents/*.md`, `ai/skills/*.md` по слоям (пакет движка → классы от корня к месту) |
-| `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `query` (объекты `$data` по полям), `access` (кто видит/меняет элемент), `assign` (роли в `#security`, ADMIN), `send` (запись в ленту с получателями: сообщение, поручение `order` со сроком, отчёт `done` с `reply_to`), `write`, `write_table` (xlsx/csv), `edit`, `create_class`, `schema`, `call`, `logs` (последние записи с id, видом, сроком), `history`, `restore`, `delete` |
+| `resources.js` | данные из дерева: `ai/system.md`, `ai/config.js`, `ai/agents/*.md`, `ai/skills/*.md` по слоям (пакет движка → классы от корня к месту). `system.md` слоёв дописываются друг к другу (`replace: true` во фронтматтере — заменить накопленное); `config.js` объединяются; агенты и навыки перекрываются по имени |
+| `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `query` (объекты `$data` по полям, страницами `limit` ≤ 500 + `offset`), `access` (кто видит/меняет элемент), `assign` (роли в `#security`, ADMIN), `send` (запись в ленту с получателями: сообщение, поручение `order` со сроком, отчёт `done` с `reply_to`; кривые `due` (YYYY-MM-DD) и `reply_to` (id `автор:время`, как в поле `id=` у `logs`) — ошибка, а не тихая потеря), `write`, `write_table` (xlsx/csv), `edit`, `create_class`, `schema`, `call`, `logs` (последние записи с id, видом, сроком), `history`, `restore`, `delete` |
 | `tools/docs.js` | `read_table` (xlsx/csv → строки), `import_objects` (строки → объекты `$data` по схеме: сопоставление колонок, типы, обязательные поля, `dry_run`; одна запись ленты на импорт), `render_doc` (шаблон docx/md/html/txt с `{{поле}}`; в docx метки, разрезанные Word, склеиваются), `export_pdf` (HTML WORK → настоящий PDF через headless-браузер, сеть при рендере заблокирована) |
 | `tools/memory.js` | `memory` (recall/remember/forget): память места для роли — `<метапапка>/<РОЛЬ>/ai/memory.md` (права зоны), личная — `/USERS/<uid>/$user/ai/memory.md`; блок памяти входит в system основного агента (как сведения, не инструкции); секреты не сохраняются |
 | `tools/work.js` `escalate` | запрос недостающего доступа/решения ответственному: BOSS точки → вышестоящий → ADMIN; поручение из кабинета пользователя (работает и без роли в точке) |
@@ -43,8 +43,11 @@
 | `tools/os-files.js` | `os_ls/stat/read/find`, запись/правка/копирование/перемещение/удаление, `os_import/export` между ОС и WORK |
 | `tools/os-proc.js` | `os_info/processes/services`, управление службами и процессами, `shell`, `install_package` |
 | `tools/net.js` | `net_info/discover/scan/probe/http/candidates/register`; протоколы и коннекторы — `../lan/` |
+| `voice.js` | голосовой режим задачи: `voiceConfig` (что доступно), `speak` (текст → WAV), `transcribe` (WAV → текст) через модели `ai/config.js` `ttsModel`/`sttModel` (capability `tts`/`stt`, методы `speak`/`transcribe` в `MODELS/$ai`); ключи остаются на сервере, нет модели на шлюзе — клиент берёт речь браузера. `dotLook`/`voiceConfig` отдают и внешний вид персонажа (`ai/config.js` `dot`, значения очищаются); распознавание считается доступным, только если шлюз перечислил модель (`list_remote`). Реплика с `voice: true` ставит `body.voice` — в system добавляется `VOICE_NOTE` (первый абзац ответа — устная речь) |
 | `diff.js` | построчный diff для карточек правок |
 | `util.js` | id, обрезка, оценка токенов, фронтматтер |
+
+**Субагенты и набор инструментов** (`index.js` `makeTools(def, depth, parent)`): набор субагента по фронтматтеру (`tools`: `readonly` | `*` | маски, где `*` — любая подстрока: `os_*`, `svc_*_query`) **пересекается с набором вызвавшего агента** — делегирование права не расширяет, `readonly`-агент не получит запись через `task`. Всегда вырезаны `ask_user`, `todo_write`, `save_skill`, `schedule`, `connect_service`/`disconnect_service`; всегда добавлен `skill`. `call: [методы]` во фронтматтере сужает `call` до перечисленных методов (отклонение до подтверждения и до вызова). `requires: system | sandbox` у агента или навыка скрывает его из списков и system, когда у сессии нет ОС/сети (не ADMIN) или Docker недоступен.
 
 Элементы ленты: `user` · `assistant` (`content`, `reasoning`, `tools[]` со статусами `pending|approval|waiting|running|ok|error|denied|interrupted|approved`) · `summary` · `error`. Субагент хранит свою ленту в `tools[].items`.
 
@@ -83,6 +86,8 @@
 `node scripts/agent-eval.mjs [--model /MODELS/…] [--case имя] [--keep]` — прогон на настоящей модели в
 изолированной копии `$server` и `MODELS` (рабочее дерево не трогается). Итоги с ошибками инструментов —
 в `.index/eval/<время>.json`: сравнивай модели и версии промптов/инструментов до и после изменений.
+
+Пакет данных `ai/` (субагенты, навыки, system) сверяется с реальными инструментами и их параметрами тестом `tests/ai-package.test.js`.
 
 Проверки: `tests/system-os.test.js`, `tests/lan.test.js` (изолированные каталоги и
 эмуляторы устройств на loopback, включая сохранение результата сканирования в WORK).

@@ -81,6 +81,7 @@ ODA({ is: 'microchat-user',
             </span>
         </div>
         <div class="meta" ~if="!data?.queued">
+            <oda-icon ~if="data?.voice" icon="carbon:microphone" :icon-size="12" title="Сказано голосом"></oda-icon>
             <span>{{time}}</span>
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
             <oda-button ~if="!nested" icon="carbon:undo" :icon-size="14" title="Вернуться к этому сообщению (изменить и отправить заново)" :disabled="busy" @tap="revert"></oda-button>
@@ -238,6 +239,7 @@ ODA({ is: 'microchat-tool',
             :host { @apply --vertical; @apply --card; min-width: 0; overflow: hidden; font-size: small; }
             .row { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; min-width: 0; }
             .row:hover { background: var(--code-background); }
+            .row:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; border-radius: var(--radius-m); }
             .label { font-weight: 600; white-space: nowrap; }
             .target { @apply --muted; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-family: var(--font-mono); font-size: 12px; }
             .target[link] { text-decoration: underline dotted; cursor: pointer; }
@@ -285,7 +287,7 @@ ODA({ is: 'microchat-tool',
             .shots img { max-width: 100%; max-height: 220px; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: zoom-in; background: #111; }
             .sub { padding: 8px 10px 10px 14px; border-top: 1px solid var(--subtle-border); }
         </style>
-        <div class="row" @tap="open = !open">
+        <div class="row" tabindex="0" role="button" :aria-expanded="open ? 'true' : 'false'" @tap="open = !open" @keydown="rowKey">
             <oda-icon no-flex :icon="meta.icon" :icon-size="16"></oda-icon>
             <span class="label" no-flex>{{meta.label}}</span>
             <span class="target" flex :title="linkPath ? 'Открыть ' + linkPath : target" :link="!!linkPath" @tap.stop="openArtifact">{{target}}</span>
@@ -507,6 +509,13 @@ ODA({ is: 'microchat-tool',
     attached() {
         if (this.attention)
             this.async(() => this.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }), 50);
+    },
+    /** Строка вызова доступна с клавиатуры: Enter / Пробел раскрывают, как тап. */
+    rowKey(e) {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' '))
+            return;
+        e.preventDefault();
+        this.open = !this.open;
     },
     openArtifact() {
         if (this.linkPath)

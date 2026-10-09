@@ -18,12 +18,14 @@
 6. Перед изменением плана — readme журнала и readme типа `$account`, затем **`ls` / `info` ветки `/DATA/REGISTER` (deep=2)**. Состав счетов **сейчас** — только из ls, не из примеров ниже.
 7. `METADATA.FIELDS` у корня журнала — метаданные журнала (не план счетов).
 8. Документ журнала — `readme.md` в `$register/`; документ счёта — в его `$account/`.
+9. ИИ-агент: рецепт «завести типовой план счетов» — навык [`register-accounts`](/DATA/REGISTER/$register/ai/skills/register-accounts.md) (виден агенту, работающему в `/DATA/REGISTER` и ниже).
 
 ## 4. Из чего это состоит
 
 - [`class.js`](/DATA/REGISTER/$register/class.js/~/handlers/pages/form/) — журнал: `label`, `icon`, `METADATA.FIELDS`
 - [`readme.md`](/DATA/REGISTER/$register/readme.md/~/handlers/pages/form/) — устройство журнала (этот документ)
 - [`$folder/$class/$account/`](/DATA/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — тип счёта (предок + базовый readme)
+- [`ai/skills/`](/DATA/REGISTER/$register/ai/skills/register-accounts.md) — навыки ИИ-агента места
 - Дети `/DATA/REGISTER` — счета `$account` (номера-папки); актуальный список — только через ls ветки, не фиксируется в этом разделе
 
 ## 5. В каком это состоянии

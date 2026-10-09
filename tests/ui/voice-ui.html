@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Voice / task UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Голосовой режим и кнопки задачи (tests/ui/run.mjs): полоса голоса, привязка вкладки дока к шеллу,
+ * метка голоса в реплике, быстрые действия на карточке задачи в ленте чата.
+ */
+await import('/sources/client.js');
+const base = '/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/';
+await import(base + 'feed.js');
+await import(base + 'dock.js');
+await import(base + 'voice-ui.js');
+await ODA.waitReg('microchat-voice');
+await ODA.waitReg('microchat-dock');
+await ODA.waitReg('microchat-user');
+await ODA.waitReg('work-dot');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+const assert = (v, msg) => { if (!v) throw new Error(msg || 'assert'); };
+const eq = (a, b, msg) => { if (a !== b) throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+async function tick(n = 4) { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 50)); }
+async function waitFor(fn, what, tries = 60) {
+    for (let i = 0; i < tries; i++) {
+        try { const v = fn(); if (v) return v; } catch { /* ещё не отрисовалось */ }
+        await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('не дождались: ' + what);
+}
+
+/** Шелл-заглушка (реактивный ODA-компонент, как настоящий): findShell идёт вверх по DOM до __microchatShell. */
+ODA({ is: 'x-test-shell', template: '<slot></slot>', __microchatShell: true, voiceOn: true, dockTab: 'context', docs: [], data: null, title: '', status: 'idle', stats: null, closable: false, dockOpen: false, freshDocs: 0 });
+await ODA.waitReg('x-test-shell');
+function mountShell(extra = {}) {
+    const shell = document.createElement('x-test-shell');
+    shell.calls = [];
+    Object.assign(shell, { data: { items: [], results: [] } }, extra);
+    shell.toggleVoice = on => { shell.calls.push(['toggleVoice', on]); };
+    shell.selectTab = key => { shell.calls.push(['selectTab', key]); shell.dockTab = key; };
+    shell.toggleDock = open => { shell.calls.push(['toggleDock', open]); };
+    document.body.appendChild(shell);
+    return shell;
+}
+function fakeVoice() {
+    const v = new EventTarget();
+    Object.assign(v, { state: 'listening', muted: false, readAll: false, mode: { stt: 'browser', tts: 'browser' }, calls: [] });
+    v.setMuted = m => { v.muted = m; v.calls.push(['mute', m]); };
+    v.stopSpeaking = () => v.calls.push(['hush']);
+    v.setReadAll = r => { v.readAll = r; v.calls.push(['readAll', r]); v.dispatchEvent(new CustomEvent('readall', { detail: r })); };
+    v.emit = (type, detail) => v.dispatchEvent(new CustomEvent(type, { detail }));
+    return v;
+}
+
+const dotOf = el => el.$('work-dot');
+const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+await test('персонаж: состояние контроллера и статуса задачи → состояние лица; кнопок и подписей нет', async () => {
+    const shell = mountShell({ _voice: fakeVoice() });
+    const el = document.createElement('microchat-voice');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => dotOf(el), 'персонаж');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'listening', 'слушает');
+        shell._voice.emit('state', 'hearing');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'hearing', 'слышит вас');
+        shell._voice.emit('state', 'recognizing');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'thinking', 'распознаёт → думает');
+        shell._voice.emit('state', 'speaking');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'speaking', 'говорит');
+        shell._voice.emit('state', 'listening');
+        shell.status = 'waiting';
+        shell.data = { items: [], waiting: { kind: 'approval' } };
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'waiting', 'ждёт разрешения');
+        shell.status = 'error';
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'error', 'ошибка');
+        shell.status = 'idle';
+        shell._voice.emit('state', 'paused');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'muted', 'микрофон выключен');
+        eq(el.$$('button, oda-button').length, 0, 'вокруг лица нет кнопок');
+        eq(el.querySelector('.cap'), null, 'нет подписей');
+        eq(el.textContent.replace(/\s+/g, ''), '', 'в лице нет текста');
+    }
+    finally { shell.remove(); }
+});
+
+await test('персонаж: тап по лицу во время речи — замолчать; без речи тап ничего не делает', async () => {
+    const shell = mountShell({ _voice: fakeVoice() });
+    const el = document.createElement('microchat-voice');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => dotOf(el), 'персонаж');
+        el.tapOrb();
+        eq(shell._voice.calls.length, 0, 'без речи тап ничего не делает (ни микрофон, ни выход)');
+        shell._voice.emit('state', 'speaking');
+        await tick();
+        dotOf(el).dispatchEvent(new CustomEvent('tap', { bubbles: true }));
+        el.tapOrb();
+        assert(JSON.stringify(shell._voice.calls).includes('["hush"]'), 'тап во время речи — замолчать: ' + JSON.stringify(shell._voice.calls));
+        assert(el.label.includes('говорит'), 'скринридер знает, что агент говорит');
+        eq(shell.calls.length, 0, 'шелл не дёргается');
+    }
+    finally { shell.remove(); }
+});
+
+await test('персонаж: громкость человека и агента идут в нужные моменты, чужая громкость игнорируется', async () => {
+    const shell = mountShell({ _voice: fakeVoice() });
+    const el = document.createElement('microchat-voice');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => dotOf(el), 'персонаж');
+        const dot = dotOf(el);
+        const seen = [];
+        dot.setLevel = v => seen.push(v);
+        shell._voice.emit('state', 'hearing');
+        shell._voice.emit('level', 0.7);
+        shell._voice.emit('speechlevel', 0.2);
+        eq(seen.at(-1), 0.7, 'пока слышит человека — его громкость');
+        shell._voice.emit('state', 'speaking');
+        shell._voice.emit('speechlevel', 0.5);
+        shell._voice.emit('level', 0.9);
+        eq(seen.at(-1), 0.5, 'пока говорит агент — громкость его речи, эхо микрофона не двигает форму');
+        shell._voice.emit('state', 'paused');
+        eq(seen.at(-1), 0, 'микрофон выключен — покой');
+    }
+    finally { shell.remove(); }
+});
+
+await test('персонаж: услышанная фраза на экране не показывается; «готово» — коротко', async () => {
+    const shell = mountShell({ _voice: fakeVoice() });
+    const el = document.createElement('microchat-voice');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => dotOf(el), 'персонаж');
+        shell._voice.emit('heard', 'сколько у нас сделок');
+        await tick(3);
+        assert(!el.textContent.includes('сколько у нас сделок'), 'фразы нет на экране');
+        shell._voice.emit('done');
+        await waitFor(() => dotOf(el).getAttribute('mood') === 'done', 'готово');
+        await waitFor(() => dotOf(el).getAttribute('mood') !== 'done', 'вернулся к обычному', 40);
+    }
+    finally { shell.remove(); }
+});
+
+await test('персонаж: слушатели контроллера снимаются при уходе из DOM', async () => {
+    const shell = mountShell({ _voice: fakeVoice() });
+    const el = document.createElement('microchat-voice');
+    shell.appendChild(el);
+    await waitFor(() => el._on, 'подписка');
+    el.remove();
+    await tick();
+    assert(!el._on, 'подписки сняты');
+    shell.remove();
+});
+
+await test('work-dot: рисует тело, форма живёт от громкости, лицо по состоянию, внешний вид из конфига', async () => {
+    const dot = document.createElement('work-dot');
+    dot.lively = true;
+    document.body.appendChild(dot);
+    try {
+        await waitFor(() => dot.$('#body')?.getAttribute('d'), 'тело нарисовано');
+        const calm = dot.$('#body').getAttribute('d');
+        assert(/^M[-\d. ]+(C[-\d. ]+){12}Z$/.test(calm), 'кривая: ' + calm.slice(0, 60));
+        dot.state = 'hearing';
+        dot.setLevel(1);
+        await frame(); await frame();
+        await waitFor(() => dot.$('#body').getAttribute('d') !== calm, 'форма изменилась');
+        eq(dot.getAttribute('mood'), 'hearing');
+        const wide = +dot.$('#eyeL').getAttribute('ry');
+        dot.state = 'muted';
+        dot.setLevel(0);
+        await waitFor(() => +dot.$('#eyeL').getAttribute('ry') < wide * 0.3, 'во сне глаза закрыты');
+        dot.state = 'done';
+        await waitFor(() => dot.$('#arcL').getAttribute('opacity') === '1', 'довольные глаза-дуги');
+        dot.state = 'error';
+        await waitFor(() => dot.$('#browL').getAttribute('opacity') === '1', 'брови при ошибке');
+        dot.accessory = 'glasses';
+        await waitFor(() => dot.$('#acc').innerHTML.includes('glasses'), 'очки');
+        dot.accessory = 'cap';
+        await waitFor(() => dot.$('#acc').innerHTML.includes('cap-top'), 'кепка');
+        dot.color = 'rgb(200, 30, 30)';
+        assert(dot.style.getPropertyValue('--dot-agent-color').includes('200'), 'цвет агента из конфига');
+        dot.size = 30;
+        eq(dot.style.width, '30px');
+    }
+    finally { dot.remove(); }
+});
+
+await test('work-dot: спокойный персонаж не крутит кадры вечно, отсоединённый — тем более', async () => {
+    const dot = document.createElement('work-dot');
+    document.body.appendChild(dot);
+    await waitFor(() => dot.$('#body')?.getAttribute('d'), 'тело');
+    await frame(); await frame();
+    await tick(4);
+    assert(!dot._raf, 'idle: цикл остановлен после последнего кадра');
+    dot.state = 'thinking';
+    await waitFor(() => dot._raf, 'активное состояние оживило цикл');
+    dot.remove();
+    await tick(4);
+    assert(!dot._raf, 'после удаления цикла нет');
+});
+await test('док: вкладка берётся из шелла (openDoc/новый док переключают её), выбор вкладки — в шелл', async () => {
+    const shell = mountShell({ docs: [{ key: 'file:a', kind: 'file', path: '/x/a.md', title: 'a.md' }] });
+    const el = document.createElement('microchat-dock');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => el.$('.tabs'), 'вкладки');
+        eq(el.tab, 'context');
+        shell.dockTab = 'file:a';
+        await waitFor(() => el.tab === 'file:a', 'вкладка последовала за шеллом');
+        el.select('files');
+        assert(JSON.stringify(shell.calls).includes('["selectTab","files"]'), 'выбор ушёл в шелл');
+    }
+    finally { shell.remove(); }
+});
+
+await test('реплика: пометка «сказано голосом» только у голосовых', async () => {
+    const mk = voice => {
+        const el = document.createElement('microchat-user');
+        el.data = { id: 'u', type: 'user', content: 'привет', time: Date.now(), ...(voice ? { voice: true } : {}) };
+        document.body.appendChild(el);
+        return el;
+    };
+    const spoken = mk(true), typed = mk(false);
+    try {
+        await waitFor(() => spoken.$('.meta'), 'мета');
+        await tick();
+        assert(spoken.$$('oda-icon').some(i => String(i.getAttribute('icon')).includes('microphone')), 'значок микрофона у голосовой');
+        assert(!typed.$$('oda-icon').some(i => String(i.getAttribute('icon')).includes('microphone')), 'нет значка у набранной');
+    }
+    finally { spoken.remove(); typed.remove(); }
+});
+
+await test('шапка: персонаж показывает статус задачи; кнопки голосового режима в шапке нет (она в панели ввода)', async () => {
+    await import(base + 'dock.js');
+    const shell = mountShell({ title: 'Задача', status: 'idle', stats: { pct: 0 }, closable: false });
+    const el = document.createElement('microchat-header');
+    shell.appendChild(el);
+    try {
+        await waitFor(() => el.$('work-dot'), 'персонаж в шапке');
+        eq(el.$('work-dot').getAttribute('mood'), 'idle');
+        shell.status = 'running';
+        await waitFor(() => el.$('work-dot').getAttribute('mood') === 'thinking', 'работает → думает');
+        shell.status = 'waiting';
+        await waitFor(() => el.$('work-dot').getAttribute('mood') === 'waiting', 'ждёт вас');
+        shell.status = 'error';
+        await waitFor(() => el.$('work-dot').getAttribute('mood') === 'error', 'ошибка');
+        assert(![...el.$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('headset')), 'наушников в шапке нет');
+    }
+    finally { shell.remove(); }
+});
+
+await test('панель ввода: вместо диктовки — кнопка со спектром; включена — полосы двигаются, выключена — неподвижны; событие dialog', async () => {
+    await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
+    await ODA.waitReg('work-prompt-bar');
+    await ODA.waitReg('work-voice-bars');
+    const bar = document.createElement('work-prompt-bar');
+    bar.dialog = true;
+    document.body.appendChild(bar);
+    try {
+        await waitFor(() => bar.$('.dialog-btn'), 'кнопка диалога');
+        assert(!bar.$$('oda-button').some(b => String(b.getAttribute('icon')).includes('microphone')), 'диктовки-микрофона нет');
+        const events = [];
+        bar.addEventListener('dialog', e => events.push(e.detail));
+        bar.$('.dialog-btn').dispatchEvent(new CustomEvent('tap', { bubbles: true }));
+        bar.toggleDialog();
+        eq(events[0]?.value, true, 'событие включения');
+        const bars = bar.$('work-voice-bars');
+        const heights = () => [...bars.$$('i')].map(i => i.style.transform);
+        eq(bars.$$('i').length, 5, 'пять полос');
+        const still = heights().join();
+        await tick(8);
+        eq(heights().join(), still, 'выключено — неподвижно');
+        bar.dialogOn = true;
+        await waitFor(() => bar.$('.dialog-btn').hasAttribute('on'), 'включено');
+        bar.setDialogLevel(0.9);
+        await tick(6);
+        const a = heights().join();
+        await tick(10);
+        assert(a !== still, 'включено — полосы изменились');
+        bar.dialogOn = false;
+        await tick(6);
+        const off = heights().join();
+        await tick(8);
+        eq(heights().join(), off, 'после выключения снова неподвижны');
+        // без диалога — обычная диктовка (главный чат)
+        const plain = document.createElement('work-prompt-bar');
+        document.body.appendChild(plain);
+        await waitFor(() => plain.$('.send'), 'обычный бар');
+        assert(!plain.$('.dialog-btn'), 'в главном чате кнопки диалога нет');
+        plain.remove();
+    }
+    finally { bar.remove(); }
+});
+
+await test('карточка задачи в ленте: быстрые действия — стоп, ответ вариантом, продолжить; разрешение решается в раскрытой задаче', async () => {
+    const preview = (await import('/$server/$folder/$file/$task/handlers/preview/$handler/preview.js')).default;
+    const get = Object.getOwnPropertyDescriptor(preview, 'actions').get;
+    const ctx = (status, items) => ({ status, items, pendingCall: [...items].reverse().flatMap(i => [...(i.tools || [])].reverse()).find(t => ['running', 'pending', 'waiting', 'approval'].includes(t.status)) });
+    const labels = (status, items) => get.call(ctx(status, items)).map(a => a.id + ':' + a.label);
+    const work = [{ type: 'assistant', tools: [{ id: 't1', name: 'ls', status: 'running' }] }];
+    eq(labels('running', work).join(), 'stop:Остановить');
+    const ask = [{ type: 'assistant', tools: [{ id: 'q1', name: 'ask_user', status: 'waiting', args: { question: 'Цвет?', options: ['красный', 'синий'] } }] }];
+    eq(labels('waiting', ask).join(), 'answer:красный,answer:синий,open:Другой ответ…');
+    const approval = [{ type: 'assistant', tools: [{ id: 'w1', name: 'write', status: 'approval', args: { path: '/x' } }] }];
+    eq(labels('waiting', approval).join(), 'open:Решить', 'разрешение — только через открытие задачи');
+    const form = [{ type: 'assistant', tools: [{ id: 'q2', name: 'ask_user', status: 'waiting', args: { question: 'Данные?', fields: [{ id: 'a', label: 'A' }], options: ['да'] } }] }];
+    eq(labels('waiting', form).join(), 'open:Ответить', 'форма с полями — не кнопками');
+    eq(labels('error', [{ type: 'user' }]).join(), 'resume:Продолжить');
+    eq(labels('idle', [{ type: 'user' }]).join(), '');
+    eq(labels('stopped', []).join(), '', 'пустая задача — нечего продолжать');
+});
+
+await test('save_file: ошибка сервера отклоняет промис, а не вешает отправку задачи', async () => {
+    const item = await WORK.get_item('/BASE');
+    assert(item?.save_file, 'элемент с save_file');
+    const real = WORK.fetch;
+    WORK.fetch = () => Promise.reject(new Error('Доступ запрещён'));
+    try {
+        const verdict = await Promise.race([
+            item.save_file(new File(['x'], 'x.task'), { ignore_save_logs: true }).then(() => 'ok', e => 'rejected: ' + e.message),
+            new Promise(r => setTimeout(() => r('hang'), 4000)),
+        ]);
+        eq(verdict, 'rejected: Доступ запрещён');
+    }
+    finally {
+        WORK.fetch = real;
+    }
+});
+
+await test('модули формы задачи и чата импортируются без ошибок', async () => {
+    const file = (await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/file.js')).default;
+    assert(typeof file.toggleVoice === 'function' && typeof file._bindItem === 'function', 'шелл задачи');
+    const task = await import('/$server/$folder/$class/$structure/handlers/pages/form/chat/$handler/chat-task.js');
+    eq(task.taskKeyOf('/a/2026-10-08/5.U.task'), '5.U.task');
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

@@ -60,6 +60,22 @@ before(async () => {
     barDef._Mic = Mic;
 });
 
+describe('MicAudioController: уже набранный текст', () => {
+    it('диктовка дописывает набранное, а не стирает его', async () => {
+        installBrowser();
+        const { host, ctl } = mkHost(true, barDef);
+        host.value = 'Сделай отчёт';
+        await ctl.start();
+        await tick();
+        assert.equal(host.value, 'Сделай отчёт', 'старт записи не трогает текст');
+        fakeInterim(ctl.recognition, 'за неделю');
+        assert.equal(host.value, 'Сделай отчёт за неделю');
+        fakeResult(ctl.recognition, 'за неделю');
+        assert.equal(host.value, 'Сделай отчёт за неделю');
+        ctl.stop();
+    });
+});
+
 describe('MicAudioController.stopAndFlush', () => {
     it('ИИ-режим: ждёт onend и забирает финальный транскрипт', async () => {
         installBrowser();

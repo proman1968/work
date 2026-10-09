@@ -20,8 +20,8 @@ ODA({ is: 'microchat-panel',
             .go { border-radius: 999px; padding: 0 12px; height: 24px; font-size: x-small; border: 1px solid var(--subtle-border); }
         </style>
         <work-prompt-bar ai ::value ::files :pending="busy" :placeholder
-            :model="data?.model" :effort="data?.effort" :modes :mode
-            @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
+            :model="data?.model" :effort="data?.effort" :modes :mode :dialog="canVoice" :dialog-on="voiceOn"
+            @dialog.stop="onDialog" @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
             @send="send" @stop="stop"></work-prompt-bar>
         <div class="foot">
             <span flex>{{hint}}</span>
@@ -33,6 +33,35 @@ ODA({ is: 'microchat-panel',
     value: '',
     modes: MODES,
     $item: null,
+    /** Голосовой диалог: кнопка со спектром вместо диктовки; нужен микрофон (https/localhost) или распознавание браузера. */
+    get canVoice() {
+        return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
+    },
+    get voiceOn() { return !!findShell(this)?.voiceOn; },
+    onDialog(e) { findShell(this)?.toggleVoice(!!(e.detail?.value ?? e.detail)); },
+    /** Полосы кнопки движутся в такт голосу: свой голос, пока слушаем, и речь агента, пока он говорит. Без перерисовок. */
+    bindVoice(v) {
+        for (const [k, fn] of Object.entries(this._vOn || {}))
+            this._v?.removeEventListener(k, fn);
+        this._vOn = this._v = null;
+        const bar = () => this.$('work-prompt-bar');
+        bar()?.setDialogLevel(0);
+        if (!v)
+            return;
+        let user = 0, speech = 0, state = v.state;
+        const push = () => bar()?.setDialogLevel(state === 'speaking' ? speech : user);
+        this._v = v;
+        this._vOn = {
+            level: e => { user = e.detail; push(); },
+            speechlevel: e => { speech = e.detail; push(); },
+            state: e => { state = e.detail; push(); },
+        };
+        for (const [k, fn] of Object.entries(this._vOn))
+            v.addEventListener(k, fn);
+    },
+    detached() {
+        this.bindVoice(null);
+    },
     get status() { return this.$pdp?.status || this.data?.status || 'idle'; },
     get busy() { return this.status === 'running'; },
     get waiting() { return this.status === 'waiting' ? this.data?.waiting : null; },
@@ -103,15 +132,25 @@ ODA({ is: 'microchat-panel',
             return;
         this.value = '';
         this.files = [];
-        const shell = findShell(this);
         const attachments = files.length ? await this._upload(files) : [];
+        await this.dispatch(text, attachments);
+        this.focus();
+    },
+    /** Реплика голосом (голосовой режим): та же отправка, но с пометкой — агент ответит абзацем для озвучки. */
+    async sendText(text, { voice = false } = {}) {
+        text = String(text ?? '').trim();
+        if (text)
+            await this.dispatch(text, [], { voice });
+    },
+    async dispatch(text, attachments = [], { voice = false } = {}) {
+        const shell = findShell(this);
         // во время работы реплика уходит в очередь (видна в ленте из body.queue), иначе — сразу в ленту
         if (!this.busy)
-            shell?.optimisticUser(text, attachments);
-        const res = await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments }));
+            shell?.optimisticUser(text, attachments, voice);
+        const res = await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments, ...(voice ? { voice: true } : {}) }));
         if (res?.busy)
             shell?.toast(res.error);
-        this.focus();
+        return res;
     },
     /** Черновик из revert: текст и вложения — обратно в поле. */
     prefill(res = {}) {

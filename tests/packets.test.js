@@ -1,6 +1,6 @@
 /**
  * Логика дат oda-packets: маска ↔ период, гранулярность mode, стрелки </>,
- * сброс отметки в дереве, усечение диапазона, TZ-независимость подписей.
+ * сброс отметки в дереве, усечение диапазона, TZ-независимость подписей, выбор в меню.
  * Компонент — браузерный, поэтому тест поднимает тело ODA({...}) с заглушкой ODA
  * и проверяет методы напрямую (без Reactor, шаблонов и DOM).
  */
@@ -319,5 +319,82 @@ describe('oda-packets: диалог произвольного периода', 
             delete fakeODA.showDialog;
         }
         assert.equal(inst.selected.name, before);
+    });
+});
+
+describe('oda-packets: меню выбора', () => {
+    // day-режим: окно месяцев — свой компонент, дни едут в пункте, значение из окна дней — это день
+    it('day: окно месяцев своё, дни в пункте, выбор дня применяется', async () => {
+        const { inst } = mount({ mode: 'day' });
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        let created = null, params = null;
+        fakeODA.createComponent = (id, props) => (created = { id, ...props });
+        fakeODA.showMenu = async (p) => { params = p; return '2024-05-17'; };
+        try {
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        assert.equal(created.id, 'oda-packets-months');
+        assert.equal(params.menu, created, 'содержимое окна передаётся в ODA.showMenu');
+        const may = created.items.find(i => i.value === '2024-05');
+        assert.equal(may.days.length, 31, 'дни месяца в пункте');
+        assert.equal(may.days[0].value, '2024-05-01');
+        assert.deepEqual(created.items.find(i => i.value === '2024').days, [], 'у «весь год» дней нет');
+        assert.equal(created.value, '', 'выбран весь диапазон — отметки нет');
+        assert.equal(created.day, '');
+        assert.equal(inst.selected.name, '2024-05-17');
+        assert.equal(inst.mask, '2024-05-17*');
+    });
+
+    it('day: отметка месяца и дня берётся из выбранного дня', async () => {
+        const { inst } = mount({ mode: 'day' });
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        inst._applySelection([leaf(inst, '2024-05-17')]);
+        let created = null;
+        fakeODA.createComponent = (id, props) => (created = { id, ...props });
+        fakeODA.showMenu = async () => { throw new Error('отмена'); };
+        try {
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        assert.equal(created.value, '2024-05');
+        assert.equal(created.day, '2024-05-17');
+        assert.equal(inst.selected.name, '2024-05-17', 'отмена окна не меняет выбор');
+    });
+
+    it('месяц без дней (весь год) выбирается сразу', async () => {
+        const { inst } = mount({ mode: 'day' });
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        fakeODA.createComponent = (id, props) => ({ id, ...props });
+        fakeODA.showMenu = async () => '2024';
+        try {
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        assert.equal(inst.selected.name, '2024');
+        assert.equal(inst.mask, '2024*');
+    });
+
+    it('month: меню стандартное, дни в пункты не попадают', async () => {
+        const { inst } = mount();
+        build(inst, '2024-01-01', '2024-12-31', 'month');
+        let params = null;
+        fakeODA.showMenu = async (p) => { params = p; return '2024-03'; };
+        try {
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.showMenu;
+        }
+        assert.equal(params.menu, undefined, 'вне day-режима меню не подменяется');
+        assert.equal(params.items.length, 13, '12 месяцев и «весь год»');
+        assert.deepEqual(params.items[1].days, [], 'в month-режиме у месяца нет дней');
+        assert.equal(inst.selected.name, '2024-03');
+        assert.equal(inst.mask, '2024-03*');
     });
 });

@@ -62,6 +62,64 @@ ODA({ is: 'work-prompt-menu',
     pick(id) { this.parentElement?.close?.(id); },
 });
 
+/**
+ * Кнопка голосового диалога: вертикальные полосы спектра, нарисованные здесь (в наборе иконок такой нет).
+ * Выключена — неподвижный силуэт; включена — полосы двигаются в такт голосу (setLevel(0..1) без перерисовки)
+ * и слегка «дышат», пока тихо. prefers-reduced-motion — без движения, только высота по уровню.
+ */
+const BARS_BASE = [0.38, 0.66, 1, 0.66, 0.38];
+ODA({ is: 'work-voice-bars',
+    template: /*html*/`
+        <style>
+            :host { display: inline-flex; align-items: center; justify-content: center; gap: 2px; width: 100%; height: 100%; color: inherit; }
+            i { display: block; width: 3px; height: 14px; border-radius: 2px; background: currentColor; transform-origin: 50% 50%; will-change: transform; }
+        </style>
+        <i ~for="bars" :style="'transform: scaleY(' + $for.item + ')'"></i>
+    `,
+    bars: BARS_BASE,
+    on: {
+        $attr: true,
+        $def: false,
+        set() {
+            this._kick();
+            if (!this.on)
+                this.async(() => this.$$('i').forEach((el, i) => { el.style.transform = 'scaleY(' + BARS_BASE[i] + ')'; }));
+        },
+    },
+    /** Уровень голоса 0..1 — вызывается часто, DOM не перерисовывается. */
+    setLevel(v) {
+        this._level = Math.max(0, Math.min(1, +v || 0));
+    },
+    attached() {
+        this._t0 = performance.now();
+        this._tick = () => {
+            this._raf = 0;
+            if (!this.on || !this.isConnected)
+                return;
+            const still = matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+            const t = (performance.now() - this._t0) / 1000;
+            const bars = this.$$('i');
+            this._smooth = (this._smooth ?? 0) + ((this._level || 0) - (this._smooth ?? 0)) * 0.35;
+            for (let i = 0; i < bars.length; i++) {
+                const wave = still ? 1 : 0.5 + 0.5 * Math.sin(t * (4.2 + i * 1.3) + i * 1.7);
+                const idle = still ? 0.15 : 0.12 + 0.1 * wave;
+                const v = Math.min(1, idle + this._smooth * (0.55 + 0.45 * wave));
+                bars[i].style.transform = 'scaleY(' + (BARS_BASE[i] * (0.3 + 0.7 * v)).toFixed(3) + ')';
+            }
+            this._raf = requestAnimationFrame(this._tick);
+        };
+        this._kick();
+    },
+    detached() {
+        cancelAnimationFrame(this._raf);
+        this._raf = 0;
+    },
+    _kick() {
+        if (this.on && !this._raf && this._tick)
+            this._raf = requestAnimationFrame(this._tick);
+    },
+});
+
 ODA({ is: 'work-prompt-bar',
     imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user',
     template: /* html */`
@@ -97,6 +155,11 @@ ODA({ is: 'work-prompt-bar',
             .pill span { overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
             .icon-btn { width: 32px; height: 32px; border-radius: 50%; padding: 0; flex-shrink: 0; }
             .icon-btn[rec] { background: var(--error-soft); fill: var(--error-color); }
+            .dialog-btn { width: 32px; height: 32px; border-radius: 50%; padding: 0; flex-shrink: 0; border: none; background: transparent; color: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: .75; }
+            .dialog-btn:hover { background: var(--code-background, rgba(0,0,0,.05)); opacity: 1; }
+            .dialog-btn:focus-visible { @apply --focus-ring; }
+            .dialog-btn[on] { background: var(--accent-soft); color: var(--accent-color); opacity: 1; }
+            .dialog-btn work-voice-bars { width: 20px; height: 20px; }
             .timer { color: var(--error-color); font-size: small; padding: 0 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
             .send {
                 width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0;
@@ -132,7 +195,10 @@ ODA({ is: 'work-prompt-bar',
                     <oda-icon icon="carbon:idea" :icon-size="14"></oda-icon><span>{{effortLabel}}</span>
                 </button>
                 <span class="timer" ~if="recording">⏺ {{timer}}</span>
-                <oda-button class="icon-btn" ~if="speech" :rec="recording" :icon="recording ? 'carbon:stop-filled' : 'carbon:microphone'" :icon-size="18"
+                <button class="dialog-btn" ~if="dialog" :on="dialogOn" :title="dialogOn ? 'Выключить голосовой диалог' : 'Голосовой диалог: говорите с агентом'" :aria-pressed="dialogOn ? 'true' : 'false'" @tap="toggleDialog">
+                    <work-voice-bars :on="dialogOn"></work-voice-bars>
+                </button>
+                <oda-button class="icon-btn" ~if="speech && !dialog" :rec="recording" :icon="recording ? 'carbon:stop-filled' : 'carbon:microphone'" :icon-size="18"
                     :title="recording ? 'Остановить диктовку' : 'Диктовка'" @tap="toggleMic"></oda-button>
                 <button class="send" :disabled="!canSend && !pending && !recording" :title="recording ? 'Остановить запись и отправить (Enter)' : (stopMode ? 'Остановить (Esc)' : (pending ? 'Отправить в очередь (Enter)' : 'Отправить (Enter)'))" @tap="onSendTap">
                     <oda-icon :icon="stopMode ? 'carbon:stop-filled' : 'carbon:arrow-up'" :icon-size="18"></oda-icon>
@@ -148,6 +214,12 @@ ODA({ is: 'work-prompt-bar',
     },
     files: [],
     ai: false,
+    /** Вместо микрофона-диктовки — кнопка голосового диалога со спектром (форма задачи); событие dialog с новым состоянием. */
+    dialog: { $attr: true, $def: false },
+    dialogOn: false,
+    /** Уровень голоса 0..1 для полос спектра — без перерисовки. */
+    setDialogLevel(v) { this.$('work-voice-bars')?.setLevel(v); },
+    toggleDialog() { this.fire('dialog', !this.dialogOn); },
     pending: false,
     recording: false,
     timer: '',
@@ -451,7 +523,10 @@ class MicAudioController {
             this.recognizing = true;
             this._armFlush();
             this.bar.recording = true;
-            this.bar.value = '';
+            // уже набранный текст не стираем: диктовка дописывает его
+            this._prefix = String(this.bar.value || '').trim();
+            if (this._prefix)
+                this._prefix += ' ';
             this._beep('start');
             this._startTimer();
             this.bar.focusInput();
@@ -531,7 +606,8 @@ class MicAudioController {
         parts.pop();
         const next = parts.join(' ');
         this.bar.value = next;
-        this.final_transcript = next;
+        const prefix = this._prefix || '';
+        this.final_transcript = prefix && next.startsWith(prefix.trim()) ? next.slice(prefix.trim().length).trim() : next;
         this.ignoreInterim = true;
         try { this.recognition?.stop(); } catch {}
     }
@@ -575,7 +651,7 @@ class MicAudioController {
             if (gotFinal)
                 this.ignoreInterim = false;
             this.final_transcript = this.final_transcript.replace(/\s([\.+,?!:-])/g, '$1');
-            this.bar.value = (this.final_transcript + (interim ? ' ' + interim : '')).trim();
+            this.bar.value = ((this._prefix || '') + (this.final_transcript + (interim ? ' ' + interim : '')).trim()).trim();
         };
         return this.recognition;
     }
@@ -598,7 +674,7 @@ class MicAudioController {
         this.timerInterval = setInterval(() => {
             sec++;
             this.bar.timer = this.pad(Math.floor(sec / 60)) + ':' + this.pad(sec % 60);
-            if (sec > 60) this.stop();
+            if (sec > 180) this.stop();
         }, 1000);
     }
     _editInterim(s) {

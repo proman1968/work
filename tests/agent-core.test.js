@@ -82,7 +82,12 @@ before(async () => {
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$class/ai/system.md', 'СИСТЕМА-ДВИЖКА');
-    write('$server/$folder/$class/ai/config.js', `export default { model: '/MODELS/mock' }`);
+    write('$server/$folder/$class/ai/config.js', `export default { model: '/MODELS/mock', ttsModel: '/MODELS/tts', sttModel: '/MODELS/stt', voice: { instructions: 'тихий голос' } }`);
+    write('MODELS/tts/$ai/class.js', `export default { model: 'tts-x', capabilities: ['tts'], speak(p) { return Buffer.from('RIFF' + JSON.stringify(p)); } }`);
+    write('MODELS/stt/$ai/class.js', `export default { model: 'stt-x', capabilities: ['stt'], list_remote() { return { models: ['other-model'] }; }, transcribe(p) { return { text: 'привет ' + p.audio.length }; } }`);
+    write('MODELS/stt2/$ai/class.js', `export default { model: 'stt-ok', capabilities: ['stt'], list_remote() { return { models: ['vllm-x/stt-ok'] }; }, transcribe(p) { return { text: 'ok' }; } }`);
+    write('OKSTT/$class/class.js', `export default { label: 'Со слухом' }`);
+    write('OKSTT/$class/ai/config.js', `export default { sttModel: '/MODELS/stt2', dot: { eyes: 'happy', accessory: 'glasses', color: 'red; x' } }`);
     write('$server/$folder/$class/ai/agents/explore.md', '---\nname: explore\ndescription: читать\ntools: readonly\n---\nТы исследователь.');
     write('$server/$folder/$class/ai/agents/general.md', '---\nname: general\ndescription: исполнитель\ntools: *\n---\nВыполни поручение.');
     write('$server/$folder/$class/ai/skills/hello.md', '---\nname: hello\ndescription: поздороваться\n---\nСкажи привет.');
@@ -95,6 +100,11 @@ before(async () => {
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');
     write('BOX/doc/note.md', 'строка 1\nстрока 2\nстрока 3\n');
+    write('BOX/$class/ai/system.md', 'ПРАВИЛА-МЕСТА');
+    write('REPL/$class/class.js', `export default { label: 'Замена' }`);
+    write('REPL/$class/ai/system.md', '---\nreplace: true\n---\nТОЛЬКО-ЭТО');
+    write('$server/$folder/$class/ai/agents/sysonly.md', '---\nname: sysonly\ndescription: только админ\nrequires: system\ntools: readonly\n---\nАдмин.');
+    write('$server/$folder/$class/ai/skills/sysskill.md', '---\nname: sysskill\ndescription: только админ\nrequires: system\n---\nТело.');
     write('MODELS/$class/class.js', `export default {}`);
     write('MODELS/mock/$ai/class.js', `export default {
         maxTokens: 50000,
@@ -484,6 +494,50 @@ describe('окружение: слои ai/, system, навыки, субаген
         assert.match(metaTools.find(t => t.name === 'task').description, /той же роли задачи/);
     });
 
+    it('system.md слоёв дописывается к базовому; replace: true заменяет всё накопленное', async () => {
+        const sys = await (await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } })).makeSystem();
+        assert.ok(sys.indexOf('СИСТЕМА-ДВИЖКА') >= 0 && sys.indexOf('СИСТЕМА-ДВИЖКА') < sys.indexOf('ПРАВИЛА-МЕСТА'));
+        const replaced = await (await createEnv({ place: await WORK.get_item('/REPL'), host: { mode: 'auto' } })).makeSystem();
+        assert.match(replaced, /ТОЛЬКО-ЭТО/);
+        assert.doesNotMatch(replaced, /СИСТЕМА-ДВИЖКА/);
+    });
+
+    it('requires: system — агент и навык скрыты, когда у сессии нет ОС/сети', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        assert.ok(!env.agents.has('sysonly') && !env.skills.has('sysskill'));
+        assert.ok(env.agents.has('explore') && env.skills.has('hello'));
+        const sys = await env.makeSystem();
+        assert.doesNotMatch(sys, /sysonly|sysskill/);
+    });
+
+    it('субагент не получает инструментов сверх набора вызвавшего; skill есть у всех', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const reader = await env.makeTools(env.agents.get('explore'), 1);
+        const names = new Set(reader.map(t => t.name));
+        const general = await env.makeTools(env.agents.get('general'), 2, reader);
+        assert.ok(general.length > 0 && general.every(t => names.has(t.name)), 'general под readonly-родителем — только чтение');
+        assert.ok(!general.some(t => ['write', 'edit', 'call', 'send'].includes(t.name)));
+        const free = await env.makeTools(env.agents.get('general'), 1);
+        assert.ok(free.some(t => t.name === 'write'), 'без родителя набор по описанию');
+        const listed = await env.makeTools({ name: 'x', meta: { tools: ['ls'] } }, 1);
+        assert.deepEqual(listed.map(t => t.name).sort(), ['ls', 'skill']);
+    });
+
+    it('маска tools: звёздочка в середине имени', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const tools = await env.makeTools({ name: 'x', meta: { tools: ['*_table', 'wr*e'] } }, 1);
+        assert.deepEqual(tools.map(t => t.name).sort(), ['read_table', 'skill', 'write', 'write_table']);
+    });
+
+    it('call: [методы] — чужой метод отклоняется до подтверждения и до вызова', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const [call] = (await env.makeTools({ name: 'x', meta: { tools: ['call'], call: ['members'] } }, 1)).filter(t => t.name === 'call');
+        assert.ok(call);
+        assert.equal((await call.permission({ method: 'create_object' }, {})).verdict, 'deny');
+        assert.notEqual((await call.permission({ method: 'members' }, {}))?.verdict, 'deny');
+        await assert.rejects(() => call.run({ path: '/BOX', method: 'save_file', args: {} }, { entry: {} }), /только методы call: members/);
+    });
+
     it('субагент task: своя лента внутри вызова, отчёт — результат', async () => {
         const place = await WORK.get_item('/BOX');
         globalThis.__MOCK_STREAM__ = scripted([
@@ -498,6 +552,61 @@ describe('окружение: слои ai/, system, навыки, субаген
         assert.equal(call.agent, 'explore');
         assert.equal(call.result, 'В doc: note.md');
         assert.equal(call.items[1].tools[0].name, 'ls');
+    });
+});
+
+describe('голосовой режим: модели речи на сервере', () => {
+    it('voiceConfig: синтез настроен; распознавания нет на шлюзе — false (клиент берёт речь браузера)', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        voice.resetVoiceProbes();
+        const place = await WORK.get_item('/BOX');
+        const cfg = await voice.voiceConfig(place);
+        assert.equal(cfg.tts, true);
+        assert.equal(cfg.stt, false);
+        assert.equal(cfg.lang, 'Russian');
+    });
+
+    it('voiceConfig: распознавание считается доступным, только если шлюз его перечислил; внешний вид персонажа очищается', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        voice.resetVoiceProbes();
+        const heard = await voice.voiceConfig(await WORK.get_item('/OKSTT'));
+        assert.equal(heard.stt, true);
+        assert.deepEqual(heard.dot, { color: '', eyes: 'happy', accessory: 'glasses' }, 'мусорный цвет отброшен');
+        const plain = await voice.voiceConfig(await WORK.get_item('/BOX'));
+        assert.equal(plain.stt, false, 'шлюз модель не перечислил');
+        assert.deepEqual(plain.dot, { color: '', eyes: 'round', accessory: 'none' });
+        assert.deepEqual(await voice.dotLook(await WORK.get_item('/OKSTT')), heard.dot);
+    });
+    it('speak: текст очищается и режется, голос из конфига места; пустой текст и нет модели — ошибки', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const wav = await voice.speak(place, { text: '  Привет,\u0007   мир!  ' });
+        const sent = JSON.parse(wav.toString('utf-8').slice(4));
+        assert.equal(sent.text, 'Привет, мир!');
+        assert.equal(sent.instructions, 'тихий голос');
+        const long = JSON.parse((await voice.speak(place, { text: 'я'.repeat(5000) })).toString('utf-8').slice(4));
+        assert.equal(long.text.length, voice.MAX_SPEECH_CHARS);
+        await assert.rejects(() => voice.speak(place, { text: '   ' }), /пустой текст/);
+    });
+
+    it('transcribe: аудио уходит модели, лимит размера и пустое аудио — ошибки', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const res = await voice.transcribe(place, { audio: Buffer.alloc(10), language: 'ru' });
+        assert.equal(res.text, 'привет 10');
+        await assert.rejects(() => voice.transcribe(place, { audio: Buffer.alloc(0) }), /нет аудио/);
+        await assert.rejects(() => voice.transcribe(place, { audio: Buffer.alloc(voice.MAX_AUDIO_BYTES + 1) }), /слишком длинная/);
+    });
+
+    it('реплика голосом: агент получает VOICE_NOTE, обычная — нет', async () => {
+        const { VOICE_NOTE } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const spoken = await (await createEnv({ place, host: { mode: 'auto' }, voice: true })).makeSystem();
+        assert.ok(spoken.includes(VOICE_NOTE));
+        const typed = await (await createEnv({ place, host: { mode: 'auto' } })).makeSystem();
+        assert.ok(!typed.includes('# Голосовой режим'));
+        const sub = await (async () => { const env = await createEnv({ place, host: { mode: 'auto' }, voice: true }); return env.makeSystem(env.agents.get('explore')); })();
+        assert.ok(!sub.includes('# Голосовой режим'), 'субагенту голосовая заметка не нужна');
     });
 });
 
@@ -677,6 +786,22 @@ describe('сессия .task', () => {
         assert.equal(body.items[1].content, 'Готово.');
         assert.equal(body.model, '/MODELS/mock');
         assert.equal(body.title, 'сделай');
+    });
+
+    it('prompt({ voice }): реплика помечена и агент получает голосовую заметку; набранная вручную реплика флаг снимает', async () => {
+        const file = await newTask('t-voice');
+        const log = [];
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Сделал. Подробности на экране.' }, { text: 'Ок.' }], log).stream;
+        await session.prompt(file, { prompt: 'сколько файлов', voice: true });
+        await session.idle(file);
+        let body = await session.getBody(file);
+        assert.equal(body.items[0].voice, true);
+        assert.match(log[0].messages[0].content, /# Голосовой режим/);
+        await session.prompt(file, { prompt: 'а теперь текстом' });
+        await session.idle(file);
+        body = await session.getBody(file);
+        assert.equal(body.items.find(i => i.content === 'а теперь текстом').voice, undefined);
+        assert.doesNotMatch(log[1].messages[0].content, /# Голосовой режим/);
     });
 
     it('ask_user: ожидание → ответ человека текстом → продолжение', async () => {

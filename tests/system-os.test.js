@@ -31,7 +31,7 @@ it('админ получает os/net, пользователь и узел —
     const names = (await admin.makeTools()).map(t => t.name);
     assert.ok(names.includes('os_read') && names.includes('net_scan'));
     assert.ok(!(await admin.makeTools({ meta: { tools: '*' } })).some(t => t.system));
-    assert.ok((await admin.makeTools({ meta: { tools: 'os_* net_*' } })).every(t => t.system));
+    assert.ok((await admin.makeTools({ meta: { tools: 'os_* net_*' } })).every(t => t.system || t.name === 'skill'));
     for (const session of [{ uid: 'user' }, { uid: 'admin', principal: { kind: 'node', id: 'admin' } }]) {
         const env = await createEnv({ place: WORK, session });
         assert.ok(!(await env.makeTools()).some(t => t.system));

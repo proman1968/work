@@ -90,6 +90,19 @@ describe('люди и поручения', () => {
         assert.match(cabinet, /Подготовь отчёт/, 'поручение в кабинете исполнителя');
     });
 
+    it('send/logs: id из logs (id=автор:время) подходит как reply_to; кривые срок и ссылка — ошибка, а не тихая потеря', async () => {
+        const order = await tool('send').run({ path: '/ORG', message: 'Задача для сверки id', to: ['Иванов Иван'], due: '2026-10-06' }, as(BOSS));
+        const sent = order.match(/id (\S+)\)/)[1];
+        const feed = await tool('logs').run({ path: '/ORG' }, as(BOSS));
+        assert.ok(feed.includes('id=' + sent), 'logs печатает id= без #');
+        assert.doesNotMatch(feed, /#\S+:\d{10,}/);
+        const done = await tool('send').run({ path: '/ORG', message: 'ok', kind: 'done', reply_to: '#' + sent }, as(IVAN));
+        assert.match(done, /записано/);
+        assert.ok((await tool('logs').run({ path: '/ORG' }, as(BOSS))).includes('на ' + sent), '# и id= снимаются, связь сохранена');
+        await assert.rejects(tool('send').run({ path: '/ORG', message: 'x', due: '5 октября' }, as(BOSS)), /due — YYYY-MM-DD/);
+        await assert.rejects(tool('send').run({ path: '/ORG', message: 'x', kind: 'done', reply_to: 'какая-то запись' }, as(IVAN)), /reply_to/);
+    });
+
     it('save_message: sender из запроса не подменяет автора', async () => {
         const org = await WORK.get_item('/ORG');
         const row = await org.save_message({ session: { uid: IVAN }, role: 'USER', sender: BOSS, message: 'подмена' });
@@ -338,14 +351,17 @@ describe('расписание', () => {
 describe('пакет ассистентов', () => {
     it('субагенты и навыки загружаются; схема запуска доступна только основному агенту', async () => {
         const env = await createEnv({ place: WORK, session: { uid: BOSS } });
-        for (const a of ['analyst', 'secretary', 'auditor', 'builder', 'it-admin', 'integrator-1c', 'negotiator', 'reviewer'])
+        for (const a of ['analyst', 'secretary', 'auditor', 'builder', 'integrator-1c', 'negotiator', 'reviewer'])
             assert.ok(env.agents.has(a), 'субагент ' + a);
         for (const s of ['summarize-feed', 'delegate-task', 'meeting-minutes', 'org-structure', 'onboarding',
-            'doc-from-template', 'import-table', 'data-quality', 'approval-flow', 'lan-inventory', 'node-connect'])
+            'doc-from-template', 'import-table', 'data-quality', 'approval-flow', 'node-connect', 'request-access', 'scheduled-report', 'restore-file'])
             assert.ok(env.skills.has(s), 'навык ' + s);
-        // it-admin у не-администратора не получает инструментов ОС/сети
-        assert.ok(!(await env.makeTools(env.agents.get('it-admin'))).some(t => t.system));
+        // it-admin и навыки ОС/сети (requires: system) у не-администратора не видны вовсе
+        assert.ok(!env.agents.has('it-admin'));
+        for (const s of ['lan-inventory', 'backup-check'])
+            assert.ok(!env.skills.has(s), 'навык ' + s + ' скрыт');
         const admin = await createEnv({ place: WORK, session: { uid: ADMIN } });
+        assert.ok(admin.agents.has('it-admin') && admin.skills.has('lan-inventory') && admin.skills.has('backup-check'));
         const itTools = (await admin.makeTools(admin.agents.get('it-admin'))).map(t => t.name);
         assert.ok(itTools.includes('net_scan') && itTools.includes('os_info'));
         // reviewer — только чтение

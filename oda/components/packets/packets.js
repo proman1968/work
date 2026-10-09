@@ -450,30 +450,30 @@ ODA({
             label: child.label,
             hint: child.fullLabel !== child.label ? child.fullLabel : '',
             disabled: !!child.disabled,
-            value: child.name
+            value: child.name,
+            // day-режим: дни месяца едут в меню месяцев, окно дней открывает сам oda-packets-months
+            days: child.items?.map(d => ({ label: d.label, hint: d.fullLabel, value: d.name }))
         }));
+        const { month, day } = this._menuFocus(item);
+        const params = this.mode === 'day'
+            ? { menu: ODA.createComponent('oda-packets-months', { items: menuItems, value: month, day }) }
+            : { items: menuItems, value: month };
         let pickedName = null;
         try {
-            pickedName = await ODA.showMenu({ items: menuItems, value: item.items.find(i => i.selected)?.name }, anchor || this);
+            pickedName = await ODA.showMenu(params, anchor || this);
         } catch { return; } // отмена
+        // Значение — месяц либо день (day-режим закрывает окно месяцев именем выбранного дня)
         const pickedValue = pickedName?.value ?? pickedName;
-        const picked = item.items.find(c => c.name === pickedValue);
-        if (!picked || picked.disabled) return;
-        // Второй уровень: месяц → дни в day-режиме
-        if (this.mode === 'day' && picked.type === 'month' && picked.items?.length) {
-            let dayName = null;
-            try {
-                dayName = await ODA.showMenu({
-                    items: picked.items.map(d => ({ label: d.label, hint: d.fullLabel, value: d.name })),
-                    value: picked.items.find(i => i.selected)?.name
-                }, anchor || this);
-            } catch { return; }
-            const dayValue = dayName?.value ?? dayName;
-            const day = picked.items.find(d => d.name === dayValue);
-            if (day && !day.disabled) this._applySelection([day]);
-            return;
-        }
-        this._applySelection([picked]);
+        const monthItem = item.items.find(c => c.name === pickedValue);
+        const dayItem = item.items.flatMap(c => c.items).find(d => d.name === pickedValue);
+        if (dayItem && !dayItem.disabled) this._applySelection([dayItem]);
+        else if (monthItem && !monthItem.disabled) this._applySelection([monthItem]);
+    },
+    // Отметка в меню: месяц и день текущего выбора (в day-режиме выбран день — месяц это его префикс)
+    _menuFocus(item) {
+        const sel = this.selected;
+        if (sel?.type === 'day') return { month: sel.name.slice(0, 7), day: sel.name };
+        return { month: item.items.find(i => i.selected)?.name ?? '', day: '' };
     },
     // --- стрелки </> : шаг по _leaves с зацикливанием ---
     _step(dir) {
@@ -659,6 +659,26 @@ ODA({ is: 'oda-packets-selector', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-period-selector', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-left-arrow', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-right-arrow', extends: 'oda-packets-item' });
+
+// Список месяцев окна выбора дня: месяц не закрывает окно, а открывает окно дней справа.
+// Якорь окна дней — {target, x, y}: target внутри окна месяцев сохраняет верхний уровень в стеке
+// (ODA.showPopover), x/y — экранные координаты левого верхнего угла (oda-popover.layout).
+ODA({
+    is: 'oda-packets-months',
+    extends: 'oda-menu-list',
+    imports: '/oda/components/menus/menu-list/menu-list.js',
+    /** выбранный день — отметка в окне дней */
+    day: '',
+    async pick(item) {
+        // месяц без дней («весь год») выбирается сразу
+        if (!item.days?.length) return this.parentElement.close(item.value);
+        this.value = item.value;
+        const { right, top } = this.getBoundingClientRect();
+        const picked = await ODA.showMenu({ items: item.days, value: this.day },
+            { target: this, x: right, y: top }).catch(() => null); // отмена окна дней — выбор не меняется
+        if (picked) this.parentElement.close(picked?.value ?? picked);
+    }
+});
 
 ODA({
     is: 'oda-packets-period-input',

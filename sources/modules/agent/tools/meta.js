@@ -164,7 +164,7 @@ export const metaTools = [
                 llm,
                 system: () => env.makeSystem(def),
                 items: entry.items,
-                tools: await env.makeTools(def, depth),
+                tools: await env.makeTools(def, depth, ctx.tools),
                 host: ctx.host,
                 depth,
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
@@ -198,7 +198,7 @@ export const metaTools = [
             const def = ctx.env.agents.get(String(args.agent));
             if (!def)
                 throw new Error('нет субагента «' + args.agent + '»');
-            if (!(await ctx.env.makeTools(def, depth)).length)
+            if (!(await ctx.env.makeTools(def, depth, ctx.tools)).length)
                 throw new Error('субагенту в этой роли недоступны инструменты');
             const point = ctx.env.place;
             if (!point || typeof point.save_file !== 'function')
@@ -378,5 +378,5 @@ export const metaTools = [
 
 /** Короткий листинг для system: имя — описание. */
 export function listing(map, max = 60) {
-    return [...map.values()].slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 300)).join('\n');
+    return [...map.values()].slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
 }

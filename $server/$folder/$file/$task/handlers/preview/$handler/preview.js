@@ -1,4 +1,8 @@
-import { linkifyWork, toolMeta, toolTarget } from '/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js';
+import { linkifyWork, toolMeta, toolTarget, fileItemOf } from '/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js';
+import { taskFiles } from '/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import '/$server/$folder/lib/chat-item/chat-item.js';
+import '/$server/$folder/lib/dot/dot.js';
+import { dotStateOfTask } from '/$server/$folder/lib/dot/dot-math.js';
 
 /**
  * Превью .task (карточка в ленте чата / проводнике): полоса состояния незавершённой работы
@@ -48,17 +52,35 @@ export default {
             .bar b { font-weight: 600; white-space: nowrap; }
             .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; opacity: .85; }
             .aux { @apply --muted; white-space: nowrap; font-size: x-small; font-variant-numeric: tabular-nums; }
+            .acts { @apply --horizontal; flex-wrap: wrap; gap: 6px; }
+            .act {
+                @apply --chip; font-size: small; padding: 3px 12px; cursor: pointer; background: var(--content-background); color: inherit; font-family: inherit;
+            }
+            .act:hover { background: var(--accent-soft); }
+            .act[main] { background: var(--accent-color); color: var(--accent-back); border-color: transparent; }
             .body { font-size: small; max-height: 240px; overflow: hidden; -webkit-mask-image: linear-gradient(black 75%, transparent); mask-image: linear-gradient(black 75%, transparent); }
             .muted { @apply --muted; font-size: small; }
+            .files { @apply --vertical; gap: 4px; }
+            .files-head { @apply --muted; font-size: x-small; text-transform: uppercase; letter-spacing: .05em; }
+            .files-list { @apply --vertical; gap: 6px; max-height: 260px; overflow-y: auto; }
         </style>
         <div class="bar" ~if="meta" :kind="meta.kind" :title="what">
-            <oda-icon no-flex :icon="meta.icon" :icon-size="16"></oda-icon>
+            <work-dot no-flex :size="24" :state="dotState" :title="meta.label"></work-dot>
             <b no-flex>{{meta.label}}</b>
             <span class="what" flex>{{what}}</span>
             <span class="aux" no-flex ~if="plan">{{plan}}</span>
             <span class="aux" no-flex ~if="elapsed">{{elapsed}}</span>
         </div>
+        <div class="acts" ~if="actions.length">
+            <button class="act" ~for="actions" :main="$for.item.main" :title="$for.item.title" @tap.stop="act($for.item)">{{$for.item.label}}</button>
+        </div>
         <div class="body" ~if="answer"><oda-markdown-viewer vertical :value="answerMd"></oda-markdown-viewer></div>
+        <div class="files" ~if="files.length">
+            <div class="files-head">Файлы · {{files.length}}</div>
+            <div class="files-list">
+                <chat-item ~for="files" visible history compact :$file="itemOf($for.item)" :title="$for.item.source === 'user' ? 'Ваше вложение' : 'Создано агентом'"></chat-item>
+            </div>
+        </div>
         <div class="muted" ~if="!answer && !meta">{{hint}}</div>
     `,
     task: null,
@@ -66,9 +88,19 @@ export default {
     now: 0,
     $item: {
         async set(n) {
-            const reload = () => this.debounce('task-preview', () => this._load(), 300);
-            n?.listen('changed', reload);
-            n?.listen('task.state', e => {
+            this._bindPreview(n);
+        },
+    },
+    /** Подписки на события задачи: прежний элемент отписывается, при уходе из DOM — тоже (иначе копятся). */
+    _bindPreview(n) {
+        this._unbindPreview();
+        this._bound = n || null;
+        if (!n)
+            return;
+        const reload = () => this.debounce('task-preview', () => this._load(), 300);
+        this._h = {
+            'changed': reload,
+            'task.state': e => {
                 const s = e.detail?.value?.status;
                 if (s && this.task) {
                     this.task = { ...this.task, status: s };
@@ -76,15 +108,65 @@ export default {
                     this._tick();
                 }
                 reload();
-            });
-            n?.listen('chat.start', () => { this.running = true; this._tick(); });
-            n?.listen('chat.done', reload);
-            this._load();
-        },
+            },
+            'chat.start': () => { this.running = true; this._tick(); },
+            'chat.done': reload,
+        };
+        for (const [k, fn] of Object.entries(this._h))
+            n.listen(k, fn);
+        this._load();
+    },
+    _unbindPreview() {
+        const n = this._bound;
+        if (n && this._h)
+            for (const [k, fn] of Object.entries(this._h))
+                n.unlisten(k, fn);
+        this._bound = null;
+        this._h = null;
+    },
+    attached() {
+        if (this.$item && !this._bound)
+            this._bindPreview(this.$item);
     },
     detached() {
         clearInterval(this._timer);
         this._timer = null;
+        this._unbindPreview();
+    },
+    /**
+     * Быстрые действия на карточке — только безопасные: стоп, «продолжить», ответ вариантом на вопрос агента.
+     * Разрешения и подключения решаются в раскрытой задаче, где видны аргументы и изменения.
+     */
+    get actions() {
+        const s = this.status;
+        const t = this.pendingCall;
+        if (s === 'running')
+            return [{ id: 'stop', label: 'Остановить', title: 'Остановить работу агента' }];
+        if (s === 'waiting') {
+            const options = t?.name === 'ask_user' && Array.isArray(t.args?.options) && !t.args?.fields?.length
+                ? t.args.options.map(String).slice(0, 4) : [];
+            return [
+                ...options.map(o => ({ id: 'answer', label: o, call: t.id, title: 'Ответить: ' + o })),
+                { id: 'open', label: options.length ? 'Другой ответ…' : (t?.name === 'ask_user' ? 'Ответить' : 'Решить'), main: !options.length, title: 'Открыть задачу' },
+            ];
+        }
+        if (['stopped', 'interrupted', 'error', 'limit'].includes(s) && this.items.length)
+            return [{ id: 'resume', label: 'Продолжить', main: true, title: 'Продолжить с того места, где остановились' }];
+        return [];
+    },
+    async act(a) {
+        const n = this.$item;
+        if (!n)
+            return;
+        if (a.id === 'open')
+            return this.fire('expand-card');
+        if (a.id === 'stop')
+            await n.fetch('stop', {});
+        else if (a.id === 'resume')
+            await n.fetch('prompt', {}, JSON.stringify({ prompt: '' }));
+        else if (a.id === 'answer')
+            await n.fetch('approve', {}, JSON.stringify({ call: a.call, content: a.label }));
+        this._load();
     },
     async _load() {
         try {
@@ -123,6 +205,8 @@ export default {
         return s;
     },
     get meta() { return STATE[this.status] || null; },
+    /** Персонаж вместо иконки: тот же язык состояний, что в шапке задачи. */
+    get dotState() { return dotStateOfTask(this.status); },
     get items() { return this.task?.items || []; },
     get pendingCall() {
         return [...this.items].reverse().flatMap(i => [...(i.tools || [])].reverse())
@@ -176,6 +260,9 @@ export default {
                 return String(items[i].content);
         return '';
     },
+    /** Все файлы задачи: ваши вложения и созданное агентом — как на вкладке «Файлы» задачи. */
+    get files() { return taskFiles(this.items, this.task?.results || []); },
+    itemOf(f) { return fileItemOf(f.path); },
     get answerMd() { return linkifyWork(this.answer); },
     get hint() {
         const u = this.items.find(i => i.type === 'user');

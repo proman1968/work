@@ -193,16 +193,15 @@ export class $folder extends $item {
         return this.fetch('save_includes', {}, data)
     }
     async save_file(file, params = {}) {
-        return new Promise(resolve => {
-            params.filename = params.id = file.name;
+        params.filename = params.id = file.name;
+        // ошибка чтения и ошибка сервера отклоняют промис: раньше она терялась внутри onload, и вызывающий ждал вечно
+        const data = await new Promise((resolve, reject) => {
             const fr = new FileReader();
-            fr.onload = async () => {
-                let data = fr.result;
-                let res = await this.fetch('save_file', params, data);
-                resolve(res)
-            }
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = () => reject(fr.error || new Error('не удалось прочитать файл ' + file.name));
             fr.readAsArrayBuffer(file);
-        })
+        });
+        return this.fetch('save_file', params, data);
     }
     writeToStream(data, params = {}) {
         return this.fetch('write_to_stream', params, data, data.type);

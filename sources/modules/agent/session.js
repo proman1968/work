@@ -359,7 +359,7 @@ function start(s, session, file) {
             const place = file.$class || file.$owner || null;
             // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
             body.role = taskRole(file) || body.role;
-            const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role });
+            const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role, voice: !!body.voice });
             const def = body.childAgent ? env.agents.get(body.childAgent) : null;
             if (body.childAgent && !def)
                 throw new Error('субагент «' + body.childAgent + '» больше не доступен в этой точке');
@@ -486,7 +486,10 @@ export async function prompt(file, params = {}) {
         applyOffline(body, w.kind === 'question' ? { content: text } : { accept: false, content: text });
     }
     else if (text || attachments.length) {
-        body.items.push({ id: genId(), type: 'user', time: Date.now(), content: text, ...(attachments.length ? { attachments } : {}) });
+        // voice: реплика продиктована — агент отвечает первым абзацем для озвучки (VOICE_NOTE), клиент его читает вслух
+        const voice = params.voice === true || params.voice === 'true';
+        body.voice = voice;
+        body.items.push({ id: genId(), type: 'user', time: Date.now(), content: text, ...(voice ? { voice: true } : {}), ...(attachments.length ? { attachments } : {}) });
         if (!body.title)
             body.title = text.split('\n')[0].slice(0, 80);
     }

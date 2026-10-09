@@ -99,7 +99,7 @@ ODA({is: 'chat-item',
                 </item-node>
                 <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
-            <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;"></div>
+            <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
             <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
@@ -125,6 +125,9 @@ ODA({is: 'chat-item',
         });
     },
     get includeFiles() {
+        // карточка задачи показывает все файлы сама (превью .task: вложения + созданное агентом) — вложения записи журнала не дублируем
+        if (String(this.$file?.ext || '').toLowerCase() === 'task')
+            return [];
         const raw = this.log?.includes;
         let paths = raw;
         if (!Array.isArray(paths)) {
@@ -187,6 +190,7 @@ ODA({is: 'chat-item',
         this.async(() => {
             this.colorMode = this._color || 'light';
         });
+        this._watchLog();
         this._revealIfReady();
     },
     history: {
@@ -324,6 +328,12 @@ ODA({is: 'chat-item',
                 const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
                 if (!data.path && item.path)
                     data.path = item.path;
+                // сам .task-файл (карточка принята в ленту напрямую): время — из имени файла <мс>.<uid>.task, как у записи журнала
+                if (!data.time && item.ext === 'task') {
+                    const ts = parseInt(String(item.id || '').split('.')[0], 10);
+                    if (ts > 0)
+                        data.time = ts;
+                }
                 if (data.sender && !this.senderIsReady)
                     this.senderId = data.sender;
                 else if (!this.senderIsReady)
@@ -443,7 +453,7 @@ ODA({is: 'chat-item',
             this.senderIsReady = false;
             this._includeFile = null;
             this.log = null;
-            this._logWatch?.();
+            this._unwatchLog();
             this._applySenderFromRef(n);
             if (n?.listen && n?.id?.endsWith?.('.logs')) {
                 const applyLog = raw => {
@@ -460,11 +470,30 @@ ODA({is: 'chat-item',
                 if (typeof n.load === 'function') {
                     n.load().then(applyLog).catch(() => {});
                 }
-                this._logWatch = () => n.listen('changed', () => {
-                    n.load().then(applyLog).catch(() => {});
-                });
-                this._logWatch();
+                this._watched = { item: n, fn: () => n.load().then(applyLog).catch(() => {}) };
+                this._watchLog();
             }
+        }
+    },
+    /** Подписка на изменения записи: ровно одна, снимается при смене элемента и уходе из DOM. */
+    _watchLog() {
+        const w = this._watched;
+        if (w && !w.on) {
+            w.item.listen('changed', w.fn);
+            w.on = true;
+        }
+    },
+    _unwatchLog() {
+        const w = this._watched;
+        if (w?.on)
+            w.item.unlisten('changed', w.fn);
+        this._watched = null;
+    },
+    detached() {
+        const w = this._watched;
+        if (w?.on) {
+            w.item.unlisten('changed', w.fn);
+            w.on = false;
         }
     },
     senderId: {

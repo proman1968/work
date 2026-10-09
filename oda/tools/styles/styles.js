@@ -105,6 +105,16 @@ let style = /*css*/`
     --success-soft: color-mix(in oklch, var(--success-color) 14%, var(--content-background));
     --error-soft: color-mix(in oklch, var(--error-color) 12%, var(--content-background));
     --warning-soft: color-mix(in oklch, var(--warning-color) 16%, var(--content-background));
+
+    /* work-dot (персонаж агента): ваш голос — акцент темы, речь агента — тот же цвет, повёрнутый по кругу оттенков */
+    --dot-user-color: light-dark(oklch(from var(--accent-color) .62 .2 h), oklch(from var(--accent-color) .74 .17 h));
+    --dot-agent-color: light-dark(oklch(from var(--accent-color) .76 .16 calc(h + 130)), oklch(from var(--accent-color) .8 .15 calc(h + 130)));
+    --dot-calm-color: light-dark(color-mix(in oklch, var(--dot-user-color) 38%, var(--content-background)), oklch(from var(--dot-user-color) .5 .09 h));
+    --dot-muted-color: light-dark(color-mix(in oklch, var(--content-color) 22%, var(--content-background)), oklch(.42 .015 280));
+    --dot-warn-color: light-dark(oklch(.87 .13 98), oklch(.82 .12 98));
+    --dot-error-color: color-mix(in oklch, var(--error-color) 62%, white);
+    --dot-ink: oklch(.26 .03 280);
+    --dot-ink-calm: light-dark(oklch(.26 .03 280), oklch(.96 .02 280));
 }
 /* Шкалы и контролы: единые скругления, отступы, шрифт, высота полей, фокус, тени, анимация */
 :root, [role-theme] {

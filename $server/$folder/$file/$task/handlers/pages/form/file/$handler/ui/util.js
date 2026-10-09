@@ -41,6 +41,56 @@ export const TOOL_META = {
     sandbox_read: { label: 'Файл из песочницы', icon: 'carbon:document' },
     sandbox_write: { label: 'Файл в песочницу', icon: 'carbon:document-add' },
     sandbox_ls: { label: 'Папка песочницы', icon: 'carbon:folder' },
+    sandbox_import: { label: 'В песочницу', icon: 'carbon:upload' },
+    sandbox_export: { label: 'Из песочницы', icon: 'carbon:download' },
+    search: { label: 'Смысловой поиск', icon: 'carbon:search-advanced' },
+    query: { label: 'Выборка объектов', icon: 'carbon:data-table' },
+    access: { label: 'Права', icon: 'carbon:user-access' },
+    assign: { label: 'Назначение роли', icon: 'carbon:user-role' },
+    escalate: { label: 'Запрос доступа', icon: 'carbon:request-quote' },
+    send: { label: 'Сообщение в ленту', icon: 'carbon:send-alt' },
+    write_table: { label: 'Таблица', icon: 'carbon:table' },
+    read_table: { label: 'Чтение таблицы', icon: 'carbon:table' },
+    import_objects: { label: 'Импорт объектов', icon: 'carbon:data-base' },
+    render_doc: { label: 'Документ по шаблону', icon: 'carbon:document-export' },
+    export_pdf: { label: 'PDF', icon: 'carbon:document-pdf' },
+    memory: { label: 'Память', icon: 'carbon:notebook' },
+    publish: { label: 'Результат в ленту', icon: 'carbon:share' },
+    schedule: { label: 'Расписание', icon: 'carbon:alarm' },
+    browser_open: { label: 'Открыть сайт', icon: 'carbon:application-web' },
+    browser_snapshot: { label: 'Снимок страницы', icon: 'carbon:image' },
+    browser_click: { label: 'Клик на странице', icon: 'carbon:cursor-1' },
+    browser_type: { label: 'Ввод на странице', icon: 'carbon:text-creation' },
+    browser_select: { label: 'Выбор на странице', icon: 'carbon:list-boxes' },
+    browser_nav: { label: 'Навигация', icon: 'carbon:arrow-left' },
+    browser_secrets: { label: 'Секреты входа', icon: 'carbon:password' },
+    browser_fill_secret: { label: 'Вход по секрету', icon: 'carbon:password' },
+    os_info: { label: 'Состояние сервера', icon: 'carbon:server' },
+    os_processes: { label: 'Процессы', icon: 'carbon:task-tools' },
+    os_services: { label: 'Службы', icon: 'carbon:settings' },
+    os_service: { label: 'Управление службой', icon: 'carbon:settings' },
+    os_kill: { label: 'Завершить процесс', icon: 'carbon:stop-outline' },
+    os_ls: { label: 'Папка сервера', icon: 'carbon:folder' },
+    os_stat: { label: 'Сведения о файле ОС', icon: 'carbon:document' },
+    os_read: { label: 'Файл сервера', icon: 'carbon:document' },
+    os_find: { label: 'Поиск на сервере', icon: 'carbon:search' },
+    os_write: { label: 'Запись на сервере', icon: 'carbon:document-add' },
+    os_edit: { label: 'Правка на сервере', icon: 'carbon:edit' },
+    os_mkdir: { label: 'Папка на сервере', icon: 'carbon:folder-add' },
+    os_copy: { label: 'Копирование на сервере', icon: 'carbon:copy' },
+    os_move: { label: 'Перенос на сервере', icon: 'carbon:move' },
+    os_delete: { label: 'Удаление на сервере', icon: 'carbon:trash-can' },
+    os_import: { label: 'Файл сервера → WORK', icon: 'carbon:upload' },
+    os_export: { label: 'Файл WORK → сервер', icon: 'carbon:download' },
+    shell: { label: 'Команда сервера', icon: 'carbon:terminal' },
+    install_package: { label: 'Установка пакета', icon: 'carbon:package' },
+    net_info: { label: 'Сеть сервера', icon: 'carbon:network-3' },
+    net_discover: { label: 'Поиск устройств', icon: 'carbon:search' },
+    net_scan: { label: 'Сканирование сети', icon: 'carbon:radar' },
+    net_probe: { label: 'Проверка устройства', icon: 'carbon:radar' },
+    net_http: { label: 'Запрос к устройству', icon: 'carbon:http' },
+    net_candidates: { label: 'Найденные устройства', icon: 'carbon:devices' },
+    net_register: { label: 'Регистрация устройства', icon: 'carbon:add-alt' },
 };
 
 export function toolMeta(name) {
@@ -162,6 +212,15 @@ export function liveText(saved, streamed) {
 }
 
 /** Расширение по пути. */
+/** Карточка файла по пути (chat-item compact / вкладка «Файлы»). Обещание кэшируется: иначе плитка перезагружалась бы при каждой перерисовке. */
+const FILE_ITEMS = new Map();
+export function fileItemOf(path) {
+    const p = String(path || '');
+    if (!FILE_ITEMS.has(p))
+        FILE_ITEMS.set(p, WORK.get_item(p.startsWith('/') ? p : '/' + p, 'info'));
+    return FILE_ITEMS.get(p);
+}
+
 export function extOf(path) {
     const leaf = String(path || '').split('/').pop() || '';
     const m = leaf.match(/\.([a-z0-9]{1,8})$/i);

@@ -354,7 +354,148 @@ export default {
         }
         throw new Error('generateImage: не удалось получить картинку (' + lastErr + ')');
     },
+
+    /**
+     * Синтез речи (capabilities `tts`): OpenAI-совместимый POST {origin}/v1/audio/speech → WAV (Buffer).
+     * Поля модели: voice ('default'), ttsTask ('VoiceDesign' | 'CustomVoice' | 'Base'), instructions (описание голоса),
+     * language ('Russian'). Через шлюз Bifrost task_type/language проходят только с заголовком passthrough.
+     * @param {object} [params]
+     * @param {string} params.text Текст (до 1500 символов)
+     * @param {string} [params.instructions] Описание голоса/манеры — перекрывает поле модели
+     * @param {string} [params.language]
+     * @returns {Promise<Buffer>} WAV 24 кГц, 16 бит, моно
+     */
+    async speak(params = {}) {
+        const ai = params.$ai || this;
+        if (!hasCap(ai, 'tts'))
+            throw new Error('speak: у модели нет capabilities tts');
+        const text = String(params.text ?? params.post ?? '').trim().slice(0, 1500);
+        if (!text)
+            throw new Error('speak: пустой текст');
+        const tag = String(params.model || ai.model || '').trim();
+        if (!tag)
+            throw new Error('speak: нет model');
+        const origin = speechOrigin(params, ai, 'speak');
+        const headers = await getAuthHeaders(ai);
+        headers['x-bf-passthrough-extra-params'] = 'true';
+        const body = {
+            model: tag,
+            input: text,
+            voice: String(ai.voice || 'default'),
+            response_format: 'wav',
+            task_type: String(ai.ttsTask || 'VoiceDesign'),
+            language: String(params.language || ai.language || 'Russian'),
+        };
+        const instructions = String(params.instructions || ai.instructions || '').trim();
+        if (instructions)
+            body.instructions = instructions;
+        const buf = await httpsPostBuffer(origin + '/v1/audio/speech', headers, JSON.stringify(body), 'application/json', ai, 90000);
+        if (buf.length < 64 || buf.toString('latin1', 0, 4) !== 'RIFF')
+            throw new Error('speak: ответ не WAV: ' + buf.toString('utf-8', 0, 160).replace(/\s+/g, ' '));
+        return buf;
+    },
+
+    /**
+     * Распознавание речи (capabilities `stt`): OpenAI-совместимый POST {origin}/v1/audio/transcriptions (multipart).
+     * @param {object} [params]
+     * @param {Buffer} params.audio Аудио (WAV 16 кГц моно — самый переносимый вход)
+     * @param {string} [params.language] Код языка (ru)
+     * @returns {Promise<{ text: string, model: string }>}
+     */
+    async transcribe(params = {}) {
+        const ai = params.$ai || this;
+        if (!hasCap(ai, 'stt'))
+            throw new Error('transcribe: у модели нет capabilities stt');
+        const audio = Buffer.isBuffer(params.audio) ? params.audio : null;
+        if (!audio?.length)
+            throw new Error('transcribe: нет аудио');
+        const tag = String(params.model || ai.model || '').trim();
+        if (!tag)
+            throw new Error('transcribe: нет model');
+        const origin = speechOrigin(params, ai, 'transcribe');
+        const headers = await getAuthHeaders(ai);
+        delete headers['Content-Type'];
+        const form = buildMultipart([
+            { name: 'model', value: tag },
+            { name: 'language', value: String(params.language || ai.language || 'ru').slice(0, 8) },
+            { name: 'response_format', value: 'json' },
+            { name: 'temperature', value: '0' },
+            { name: 'file', filename: 'speech.wav', type: 'audio/wav', value: audio },
+        ]);
+        const buf = await httpsPostBuffer(origin + '/v1/audio/transcriptions', headers, form.body, form.type, ai, 90000);
+        let data;
+        try {
+            data = JSON.parse(buf.toString('utf-8'));
+        }
+        catch {
+            throw new Error('transcribe: ответ не JSON: ' + buf.toString('utf-8', 0, 160));
+        }
+        return { text: String(data?.text ?? '').trim(), model: tag };
+    },
 };
+
+function speechOrigin(params, ai, who) {
+    const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+    if (!base)
+        throw new Error(who + ': нет baseUrl у ' + (ai.short || ai.path || '?'));
+    try {
+        return new URL(base).origin;
+    }
+    catch {
+        throw new Error(who + ': некорректный baseUrl: ' + base);
+    }
+}
+
+/** multipart/form-data: поля и один файл → { body: Buffer, type }. */
+export function buildMultipart(parts) {
+    const boundary = '----work' + Date.now().toString(16) + Math.random().toString(16).slice(2, 10);
+    const chunks = [];
+    for (const p of parts) {
+        let head = '--' + boundary + '\r\nContent-Disposition: form-data; name="' + p.name + '"';
+        if (p.filename)
+            head += '; filename="' + p.filename + '"\r\nContent-Type: ' + (p.type || 'application/octet-stream');
+        chunks.push(Buffer.from(head + '\r\n\r\n'), Buffer.isBuffer(p.value) ? p.value : Buffer.from(String(p.value)), Buffer.from('\r\n'));
+    }
+    chunks.push(Buffer.from('--' + boundary + '--\r\n'));
+    return { body: Buffer.concat(chunks), type: 'multipart/form-data; boundary=' + boundary };
+}
+
+/** POST произвольного тела по HTTP/HTTPS → Buffer ответа (WAV, JSON…). */
+function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 60000) {
+    const url = new URL(urlStr);
+    const transport = transportFor(url);
+    const insecure = ai?.protocol === 'gigachat';
+    const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
+    return new Promise((resolve, reject) => {
+        const req = transport.request({
+            hostname: url.hostname,
+            port: url.port || (url.protocol === 'http:' ? 80 : 443),
+            path: url.pathname + url.search,
+            method: 'POST',
+            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            headers: { Accept: '*/*', ...headers, 'Content-Type': contentType, 'Content-Length': data.length },
+            timeout: timeoutMs,
+        }, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                const buf = Buffer.concat(chunks);
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error('HTTP ' + res.statusCode + ': ' + buf.toString('utf-8', 0, 200)));
+                    return;
+                }
+                resolve(buf);
+            });
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('timeout'));
+        });
+        req.on('error', reject);
+        req.write(data);
+        req.end();
+    });
+}
 
 function hasCap(ai, name) {
     const c = ai?.capabilities;

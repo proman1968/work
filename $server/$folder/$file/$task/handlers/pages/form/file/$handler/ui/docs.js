@@ -8,7 +8,7 @@
  *                          ссылка на массив сохраняется, пока набор ключей не изменился.
  *   activityOf(...) — чем занят агент прямо сейчас (для строки состояния вместо «Работаю…»).
  */
-import { toolMeta } from './util.js';
+import { toolMeta, toolTarget, attachmentName, extOf } from './util.js';
 
 /** Тишина дольше — считаем зависшим ожиданием. */
 export const ACTIVITY_STALL_S = 120;
@@ -34,6 +34,12 @@ function extIcon(snapshot) {
         return 'carbon:video';
     if (IMAGE_EXT.has(ext))
         return 'carbon:image';
+    if (ext === 'pdf')
+        return 'carbon:document-pdf';
+    if (['xlsx', 'xls', 'csv'].includes(ext))
+        return 'carbon:table';
+    if (['html', 'htm'].includes(ext))
+        return 'carbon:application-web';
     return 'carbon:document';
 }
 function basename(p) {
@@ -101,6 +107,104 @@ export function collectDocs(items, published) {
     return docs;
 }
 
+/** Снимок …/.имя/history/ДЕНЬ/снимок → путь самого файла …/имя (иначе путь как есть). */
+export function realPathOfSnapshot(p) {
+    const s = String(p || '');
+    const m = s.match(/^(.*)\/\.([^/]+)\/history\/[^/]+\/[^/]+$/);
+    return m ? m[1] + '/' + m[2] : s;
+}
+
+/**
+ * Все файлы задачи одним списком — для вкладки «Файлы» и карточки задачи в ленте чата:
+ * вложения человека, файлы, созданные агентом (запись, правка, таблицы, картинки, PDF, документы по шаблону,
+ * выгрузка из песочницы, call → save_files — в том числе у субагентов), опубликованные результаты.
+ * Один файл — одна запись: показывается последняя версия (снимок), десять правок одной страницы — одна плитка.
+ * @returns {Array<{key, real, path, title, ext, icon, time, source: 'user'|'agent', published?: boolean}>} по возрастанию времени
+ */
+export function taskFiles(items, published = []) {
+    const byReal = new Map();
+    const put = (real, f) => {
+        if (!real || !f.path)
+            return;
+        const prev = byReal.get(real);
+        if (prev && (prev.time || 0) > (f.time || 0)) {
+            if (f.published)
+                prev.published = true;
+            return;
+        }
+        byReal.set(real, { ...prev, ...f, ...(f.published || prev?.published ? { published: true } : {}), key: 'f:' + real, real });
+    };
+    const pubs = (Array.isArray(published) ? published : []).filter(r => r?.snapshot);
+    const isPublished = snapshot => pubs.some(r => r.snapshot === snapshot);
+    const fileOf = (snapshot, real, time, title, source = 'agent') => ({
+        path: snapshot, title: title || basename(real), ext: extOf(real) || extOf(snapshot), icon: extIcon(real), time, source,
+        ...(isPublished(snapshot) ? { published: true } : {}),
+    });
+    const walk = (list, nested) => {
+        for (const it of list || []) {
+            if (it?.type === 'user') {
+                for (const a of it.attachments || []) {
+                    const path = String(a?.path || (typeof a === 'string' ? a : ''));
+                    put(realPathOfSnapshot(path), fileOf(path, realPathOfSnapshot(path), it.time, attachmentName(a), 'user'));
+                }
+                continue;
+            }
+            if (it?.type !== 'assistant')
+                continue;
+            for (const t of it.tools || []) {
+                if (t?.status === 'ok') {
+                    if (t.snapshot && t.name !== 'call') {
+                        const real = t.path || realPathOfSnapshot(t.snapshot);
+                        put(real, fileOf(t.snapshot, real, it.time));
+                    }
+                    if (t.name === 'call')
+                        for (const snapshot of callSnapshots(t))
+                            put(realPathOfSnapshot(snapshot), fileOf(snapshot, realPathOfSnapshot(snapshot), it.time, snapshotName(snapshot)));
+                }
+                if (Array.isArray(t?.items))
+                    walk(t.items, true);
+            }
+        }
+    };
+    walk(items, false);
+    for (const r of pubs) {
+        const real = realPathOfSnapshot(r.snapshot);
+        put(real, fileOf(r.snapshot, real, Number(r.time) || 0, r.title || snapshotName(r.snapshot)));
+    }
+    return [...byReal.values()].sort((a, b) => (a.time || 0) - (b.time || 0));
+}
+
+const COMPUTER_TOOL = /^(computer_|browser_|sandbox_)/;
+
+/**
+ * Использовал ли агент компьютер (песочницу, экран, браузер) в этой задаче — независимо от того, жив ли он сейчас:
+ * вкладка «Монитор» нужна и тогда, когда компьютер уже удалён (скриншоты и команды остаются в ленте).
+ * @returns {{ used: boolean, name: string, commands: Array<{label, target, status, time}>, screens: Array<{url, label, time}> }}
+ */
+export function computerUse(items) {
+    const out = { used: false, name: 'main', commands: [], screens: [] };
+    const walk = list => {
+        for (const it of list || []) {
+            if (it?.type !== 'assistant')
+                continue;
+            for (const t of it.tools || []) {
+                if (COMPUTER_TOOL.test(String(t?.name || ''))) {
+                    out.used = true;
+                    if (/^(computer_|browser_)/.test(t.name) && t.args?.name)
+                        out.name = String(t.args.name).trim() || 'main';
+                    out.commands.push({ label: toolMeta(t.name).label, target: toolTarget(t), status: t.status, time: it.time });
+                    for (const s of t.images || [])
+                        if (s?.url)
+                            out.screens.push({ url: s.url, label: s.label || 'экран', time: it.time });
+                }
+                if (Array.isArray(t?.items))
+                    walk(t.items);
+            }
+        }
+    };
+    walk(items);
+    return out;
+}
 /**
  * Стабилизация доков между обновлениями ленты: каждый _reload собирает новые объекты,
  * из-за чего вкладки и iframe/video пересоздаются и моргают. Переиспользуем прежние

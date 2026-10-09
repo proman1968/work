@@ -22,10 +22,11 @@ users/*/
 **/*.webm
 **/history/
 **/work/
-**/DATA/
-**/ADMIN/
-**/USER/
-**/BOSS/
+# Зоны ролей и данных — только внутри метапапки ($тип/DATA, $тип/USER…); одноимённые классы (/DATA) публикуются
+**/$*/DATA/
+**/$*/ADMIN/
+**/$*/USER/
+**/$*/BOSS/
 
 # Progress snapshots (mirror of WORK history pattern)
 .progress.md/history/

@@ -743,13 +743,20 @@ export const workTools = [
             const cls = classOf(item) || item;
             if (typeof cls.save_message !== 'function')
                 throw new Error('send: у ' + cls.path + ' нет ленты');
+            // ядро молча отбрасывает кривые срок и ссылку — модель должна узнать об ошибке сразу
+            const due = args.due == null || args.due === '' ? undefined : String(args.due).trim();
+            if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due))
+                throw new Error('send: срок due — YYYY-MM-DD, получено «' + due + '»');
+            const replyTo = args.reply_to == null || args.reply_to === '' ? undefined : String(args.reply_to).trim().replace(/^[#]|^id=/, '');
+            if (replyTo && !/^[\w.@-]{1,80}:\d{10,16}$/.test(replyTo) && !/^\//.test(replyTo))
+                throw new Error('send: reply_to — id записи вида «автор:время» (из результата send или поля id= в logs), получено «' + replyTo + '»');
             const receivers = await resolvePeople(args.to || []);
             const row = await callAs(cls, 'save_message', {
                 message: String(args.message),
                 receivers: receivers.map(r => r.id),
                 includes: (args.includes || []).map(p => absPath(p, ctx)),
-                kind: args.kind || (args.due ? 'order' : 'message'),
-                due: args.due, reply_to: args.reply_to,
+                kind: args.kind || (due ? 'order' : 'message'),
+                due, reply_to: replyTo,
             }, ctx);
             return 'записано в ленту ' + cls.path + ' (id ' + row.id + ')'
                 + (receivers.length ? '; получатели: ' + receivers.map(r => r.label + ' [' + r.id + ']').join(', ') : '');
@@ -1062,7 +1069,7 @@ export const workTools = [
                 const to = r.receivers?.length ? '→ ' + [].concat(r.receivers).join(',') : '';
                 const meta = [r.kind && r.kind !== 'message' ? r.kind : '', r.due ? 'срок ' + r.due : '', r.reply_to ? 'на ' + r.reply_to : '']
                     .filter(Boolean).join(', ');
-                const id = r.sender && r.time ? '#' + r.sender + ':' + r.time : '';
+                const id = r.sender && r.time ? 'id=' + r.sender + ':' + r.time : '';
                 return [t, id, who, to, meta ? '{' + meta + '}' : '', r.ext ? '[' + r.ext + ']' : '', r.path || '', r.content ? '— ' + clip(String(r.content), 300) : ''].filter(Boolean).join(' ');
             }).join('\n');
         },
@@ -1078,6 +1085,7 @@ export const workTools = [
                 type: { type: 'string', description: 'Расширение типа объектов: data, eml, ics, task…' },
                 where: { type: 'object', description: 'Условия по полям: {поле: значение} или {поле: {eq|ne|gt|gte|lt|lte|contains|in: …}}' },
                 limit: { type: 'integer', description: 'Максимум объектов (по умолчанию 100, до 500)' },
+                offset: { type: 'integer', description: 'Сколько объектов пропустить (постраничная выборка: offset = 0, 500, 1000…)' },
                 rings: { type: 'integer', description: 'Насколько широко по дереву (0 — только точка; по умолчанию 3)' },
             },
         },
@@ -1085,13 +1093,17 @@ export const workTools = [
             const point = await mustItem(args.path, ctx);
             if (Array.isArray(point))
                 throw new Error('query: укажи точку без ~');
+            const limit = Math.min(500, Number(args.limit) || 100);
+            const offset = Math.max(0, Number(args.offset) || 0);
             const rows = await callAs(point, 'query_objects', {
-                type: args.type, where: args.where, rings: args.rings,
-                limit: Math.min(500, Number(args.limit) || 100),
+                type: args.type, where: args.where, rings: args.rings, limit, offset,
             }, ctx);
             if (!rows?.length)
-                return 'объектов не найдено (индекс мог ещё не обработать данные — call rag_status)';
-            return JSON.stringify(rows, null, 1);
+                return offset
+                    ? 'объектов с offset ' + offset + ' больше нет'
+                    : 'объектов не найдено (индекс мог ещё не обработать данные — call rag_status)';
+            return JSON.stringify(rows, null, 1)
+                + (rows.length >= limit ? '\n(получено ' + rows.length + ' — возможно, есть ещё: повтори с offset ' + (offset + rows.length) + ')' : '');
         },
     },
     {
