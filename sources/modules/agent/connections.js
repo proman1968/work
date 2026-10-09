@@ -12,6 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import net from 'node:net';
+import { isPrivateAddress } from '../../host/net-guard.js';
 
 export const PROVIDERS = {
     google: {
@@ -268,7 +270,10 @@ export async function remove(uid, name) {
     return true;
 }
 
-/** Внешний адрес не должен вести во внутреннюю сеть сервера (агент не ходит в localhost/LAN). */
+/**
+ * Быстрая предпроверка адреса (по тексту). Окончательную проверку — DNS, закрепление IP, каждый редирект —
+ * делает guardedRequest (host/net-guard.js).
+ */
 export function assertPublicUrl(u) {
     let url;
     try {
@@ -283,6 +288,8 @@ export function assertPublicUrl(u) {
     if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h === '0.0.0.0' || h === '::1'
         || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)
         || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h))
+        throw new Error('адрес во внутренней сети запрещён: ' + h);
+    if (net.isIP(h) && isPrivateAddress(h))
         throw new Error('адрес во внутренней сети запрещён: ' + h);
     return url;
 }

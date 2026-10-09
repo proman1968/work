@@ -8,6 +8,7 @@
  */
 import * as C from '../connections.js';
 import { clip } from '../util.js';
+import { guardedRequest } from '../../../host/net-guard.js';
 import { assertPageUrl } from './browse.js';
 
 const READ = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -110,9 +111,12 @@ export const connectTools = [
             const method = String(args.method || 'GET').toUpperCase();
             let headers = { Accept: 'application/json, text/plain, */*', 'User-Agent': 'ODANT-WORK/1.0' };
             let base = '';
+            // заголовки подключения (авторизация, свой заголовок токена) не должны уходить на чужой домен при редиректе
+            let sensitiveHeaders = [];
             if (args.connection) {
                 const a = await C.authHeaders(uidOf(ctx), String(args.connection));
                 headers = { ...headers, ...a.headers };
+                sensitiveHeaders = Object.keys(a.headers || {});
                 base = a.base_url || '';
             }
             for (const [k, v] of Object.entries(args.headers || {}))
@@ -138,19 +142,22 @@ export const connectTools = [
             }
             if (ctx.entry)
                 ctx.entry.url = url.origin + url.pathname;
-            const res = await fetch(url, {
-                method, headers, body, redirect: 'follow',
-                signal: ctx.signal ? AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+            // каждый переход (и сам адрес) проверяется по DNS, IP закрепляется; редиректы — вручную (net-guard)
+            const res = await guardedRequest(url.href, {
+                method, headers, body, sensitiveHeaders,
+                maxRedirects: 5, maxBytes: 5 * 1024 * 1024, timeoutMs: 30000,
+                signal: ctx.signal ? AbortSignal.any([ctx.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
             });
-            const text = await res.text();
+            const text = res.body.toString('utf-8');
             let data = text;
             try {
                 data = JSON.parse(text);
             }
             catch { /* не JSON */ }
-            if (!res.ok)
-                return { error: 'HTTP ' + res.status + ': ' + clip(typeof data === 'string' ? data : JSON.stringify(data), 1500) };
-            return 'HTTP ' + res.status + '\n' + clip(typeof data === 'string' ? data : JSON.stringify(data, null, 2), 20000);
+            const moved = res.redirects ? ' (после перенаправления: ' + new URL(res.url).origin + new URL(res.url).pathname + ')' : '';
+            if (res.status < 200 || res.status >= 300)
+                return { error: 'HTTP ' + res.status + moved + ': ' + clip(typeof data === 'string' ? data : JSON.stringify(data), 1500) };
+            return 'HTTP ' + res.status + moved + '\n' + clip(typeof data === 'string' ? data : JSON.stringify(data, null, 2), 20000);
         },
     },
     {

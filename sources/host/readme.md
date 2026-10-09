@@ -8,7 +8,7 @@
 - `http-server.js` — запуск HTTP/HTTPS, разбор запроса, вызов методов через шлюз доступа (`execItemMethod` → `server/access/gateway.js`)
 - `websocket.js` — WebSocket-события (`changed`, `chat.delta`, `chat.done`); подписка только на видимые пути
 - `index-db.js` — общая локальная БД индексов (`.index/work.db`, node:sqlite): индекс лент, RAG
-- `net-guard.js` — исходящие запросы по пользовательским URL: только публичные адреса, закреплённый IP, лимиты
+- `net-guard.js` — исходящие запросы по пользовательским URL и от агента (`guardedGet`, `guardedRequest`): только публичные адреса, DNS-проверка и закрепление IP на каждом переходе, редиректы вручную (при смене origin снимаются `authorization`/`cookie` и заголовки подключения; POST после 301/302/303 → GET без тела; 307/308 с телом на другой origin — отказ), лимиты размера/времени/редиректов, распаковка gzip/br с лимитом
 - `tls-ca.js` - TLS-агенты для API моделей с нестандартным корнем (GigaChat: корень НУЦ Минцифры из `#system/certs/`) вместо отключения проверки; доступ из адаптера через `WORK.tls_agent(ai)`
 - `stun.js` - локальный STUN для WebRTC
 - `auth-methods.js` — login/register/session (примешиваются в прототип `$server`)

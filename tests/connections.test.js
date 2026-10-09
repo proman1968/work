@@ -10,7 +10,7 @@ import * as C from '../sources/modules/agent/connections.js';
 import { connectTools } from '../sources/modules/agent/tools/connect.js';
 import { decide } from '../sources/modules/agent/permissions.js';
 
-let tmp, prevCwd, tokenServer, tokenPort, lastForm;
+let tmp, prevCwd, tokenServer, tokenPort, lastForm, tokenHits = 0;
 const uid = 'U1';
 
 before(async () => {
@@ -18,6 +18,7 @@ before(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'work-conn-'));
     process.chdir(tmp);
     tokenServer = http.createServer((req, res) => {
+        tokenHits++;
         let b = '';
         req.on('data', d => b += d);
         req.on('end', () => {
@@ -71,6 +72,22 @@ describe('подключения', () => {
         for (const bad of ['http://localhost:8001/x', 'http://127.0.0.1/', 'http://192.168.1.5/', 'http://10.0.0.1/', 'file:///etc/passwd'])
             assert.throws(() => C.assertPublicUrl(bad));
         assert.ok(C.assertPublicUrl('https://www.googleapis.com/calendar/v3'));
+    });
+
+    it('предпроверка ловит IPv6-формы внутренних адресов (::ffff:127.0.0.1 и т.п.)', () => {
+        for (const bad of ['http://[::ffff:7f00:1]/', 'http://[::ffff:a00:1]/', 'http://[::ffff:c0a8:101]/', 'http://[fd00::1]/', 'http://[::1]/', 'http://169.254.169.254/latest/meta-data'])
+            assert.throws(() => C.assertPublicUrl(bad), /внутренней сети/, bad);
+    });
+
+    it('http_request: внутренний адрес отклоняется сразу и в относительном url поверх base_url подключения', async () => {
+        const t = connectTools.find(x => x.name === 'http_request');
+        const ctx = { session: { uid } };
+        const hitsBefore = tokenHits;
+        await assert.rejects(t.run({ method: 'GET', url: 'http://127.0.0.1:' + tokenPort + '/token' }, ctx), /внутренней сети/);
+        await assert.rejects(t.run({ method: 'GET', url: 'http://[::ffff:7f00:1]/' }, ctx), /внутренней сети/);
+        await C.start({ uid, provider: 'token', name: 'lan', token: 'T', base_url: 'http://192.168.0.5/api' });
+        await assert.rejects(t.run({ connection: 'lan', method: 'GET', url: '/x' }, ctx), /внутренней сети/);
+        assert.equal(tokenHits, hitsBefore, 'локальный сервер не должен получать запросов от http_request');
     });
 
     it('http_request: чтение — сразу, изменение — всегда вопрос без «разрешить всегда» (даже в авто и после allowed)', async () => {

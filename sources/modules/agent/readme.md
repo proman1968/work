@@ -38,7 +38,7 @@
 | `tools/meta.js` | `todo_write`, `ask_user`, `task` (разовые субагенты), `agent_start/status/message/stop` (продолжимые), `skill`, `save_skill`, `generate_image` |
 | `mcp-pool.js` | пул stdio MCP-серверов: процесс живёт между вызовами, простой 5 мин — закрыть, падение — перезапуск при следующем вызове |
 | `connections.js` | подключения пользователя к внешним сервисам (OAuth2 + PKCE, токен): хранение в `USERS/<uid>/$user/#secret/connections/`, обновление токенов, `/oauth/callback`; OAuth-клиент системы — `#system/oauth/<provider>.json` `{ client_id, client_secret }` |
-| `tools/connect.js` | `connections`, `connect_service` (вход — руками пользователя в карточке), `http_request` (GET — сразу, изменения — всегда с подтверждением, без «разрешить всегда»; внутренняя сеть запрещена), `disconnect_service` |
+| `tools/connect.js` | `connections`, `connect_service` (вход — руками пользователя в карточке), `http_request` (GET — сразу, изменения — всегда с подтверждением, без «разрешить всегда»; внутренняя сеть запрещена: проверка по DNS, закрепление IP и перепроверка каждого редиректа в `host/net-guard.js`; заголовки подключения не уходят на другой origin), `disconnect_service` |
 | `system.js` | доступ к ОС/сети для корневого ADMIN, настройки `#system/os.json`, проверка путей и аудит |
 | `tools/os-files.js` | `os_ls/stat/read/find`, запись/правка/копирование/перемещение/удаление, `os_import/export` между ОС и WORK |
 | `tools/os-proc.js` | `os_info/processes/services`, управление службами и процессами, `shell`, `install_package` |
