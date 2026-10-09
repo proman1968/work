@@ -31,6 +31,26 @@ export const KEEP_FULL_TURNS = 6;
 export const STREAM_RETRIES = 2;
 export const EMPTY_RETRIES = 2;
 export const COMPACT_AT = 0.72;
+/** Заголовок служебного сообщения с изменчивой частью среды (время, режим…), см. splitSystem/toMessages. */
+export const VOLATILE_HEAD = '[Служебный контекст среды на этот ход — не реплика пользователя]\n';
+
+/**
+ * system → { stable, volatile }. Строка (разовые вызовы, сжатие) — только стабильная часть.
+ * stable идёт первым сообщением system и почти не меняется (префикс для кэша провайдера),
+ * volatile (время, режим) — отдельным сообщением в КОНЦЕ: изменение в начале сломало бы кэш всей истории.
+ */
+export function splitSystem(system) {
+    if (system && typeof system === 'object')
+        return { stable: String(system.stable || ''), volatile: String(system.volatile || '') };
+    return { stable: String(system || ''), volatile: '' };
+}
+
+/** Весь текст system одной строкой (оценка токенов). */
+export function systemText(system) {
+    const { stable, volatile } = splitSystem(system);
+    return volatile ? stable + '\n\n' + volatile : stable;
+}
+
 /** Скрытая подсказка после пустого хода (только в messages, в ленту не пишется). */
 export const EMPTY_NUDGE = '[Система] Твой предыдущий ответ был пустым: ни текста, ни вызова инструмента. Продолжай работу — вызови нужный инструмент или напиши итоговый ответ пользователю.';
 
@@ -38,7 +58,7 @@ export const EMPTY_NUDGE = '[Система] Твой предыдущий от�
  * Выполнить агента до ответа без вызовов инструментов (или стопа/лимита).
  * @param {object} opts
  * @param {object} opts.llm  { name, contextTokens, stream(req) → AsyncIterable }
- * @param {string|Function} opts.system  system-промпт или async () => string
+ * @param {string|{stable:string,volatile:string}|Function} opts.system  system-промпт: строка, части или async () => то же (splitSystem)
  * @param {Array} opts.items  лента (мутируется)
  * @param {Array} opts.tools  инструменты { name, description, parameters, readonly?, risk?, run(args, ctx) }
  * @param {object} opts.host
@@ -67,17 +87,18 @@ export async function runLoop(opts) {
                 await host.save();
                 return { status: 'limit' };
             }
-            const system = typeof opts.system === 'function' ? await opts.system() : String(opts.system || '');
+            const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
             await maybeCompact({ llm, items, host, system });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
             if (empty)
                 messages.push({ role: 'user', content: EMPTY_NUDGE });
+            const systemTokens = estimateTokens(systemText(system));
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
-                system: estimateTokens(system),
+                system: systemTokens,
                 tools: estimateTokens(schemas),
-                messages: estimateTokens(messages) - estimateTokens(system),
+                messages: estimateTokens(messages) - systemTokens,
             });
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
@@ -526,8 +547,9 @@ export function toolContent(t, old = false) {
  */
 export function toMessages(system, items, images = null) {
     const out = [];
-    if (system)
-        out.push({ role: 'system', content: system });
+    const { stable, volatile } = splitSystem(system);
+    if (stable)
+        out.push({ role: 'system', content: stable });
     const live = items.filter(i => !i.compacted);
     const assistants = live.filter(i => i.type === 'assistant');
     const fullFrom = assistants.length - KEEP_FULL_TURNS;
@@ -564,6 +586,10 @@ export function toMessages(system, items, images = null) {
                 break;
         }
     }
+    // Изменчивая часть среды (время, режим) — в конце: история выше остаётся неизменным префиксом для кэша провайдера.
+    // Роль user, а не второй system: шаблоны многих моделей допускают system только первым сообщением.
+    if (volatile)
+        out.push({ role: 'user', content: VOLATILE_HEAD + volatile });
     // Скриншоты — отдельным сообщением в конце: не все провайдеры понимают картинки в role:'tool'.
     const shots = collectShots(live);
     if (shots.length && images !== null) {

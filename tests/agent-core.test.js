@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
-import { runLoop, toMessages, maybeCompact } from '../sources/modules/agent/loop.js';
+import { runLoop, toMessages, maybeCompact, VOLATILE_HEAD } from '../sources/modules/agent/loop.js';
 import { decide, isProtectedPath } from '../sources/modules/agent/permissions.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
 import { createEnv, runOnce } from '../sources/modules/agent/index.js';
@@ -105,6 +105,10 @@ before(async () => {
     write('REPL/$class/ai/system.md', '---\nreplace: true\n---\nТОЛЬКО-ЭТО');
     write('$server/$folder/$class/ai/agents/sysonly.md', '---\nname: sysonly\ndescription: только админ\nrequires: system\ntools: readonly\n---\nАдмин.');
     write('$server/$folder/$class/ai/skills/sysskill.md', '---\nname: sysskill\ndescription: только админ\nrequires: system\n---\nТело.');
+    // фейковые сервисы для проверки порядка svc_* (методы объявлены не по алфавиту; дерево строится до старта WORK)
+    write('SERVICES/$class/class.js', `export default {}`);
+    write('SERVICES/zeta/$class/class.js', `export default { SCHEMA: { zrun: { description: 'z', readonly: true }, arun: { description: 'a', readonly: true } } }`);
+    write('SERVICES/alpha/$class/class.js', `export default { SCHEMA: { zmid: { description: 'm', readonly: true }, abeg: { description: 'b', readonly: true } } }`);
     write('MODELS/$class/class.js', `export default {}`);
     write('MODELS/mock/$ai/class.js', `export default {
         maxTokens: 50000,
@@ -796,12 +800,14 @@ describe('сессия .task', () => {
         await session.idle(file);
         let body = await session.getBody(file);
         assert.equal(body.items[0].voice, true);
-        assert.match(log[0].messages[0].content, /# Голосовой режим/);
+        // голосовая заметка — изменчивая часть: в конце контекста, а не в стабильном system (префикс кэша)
+        assert.match(log[0].messages.at(-1).content, /# Голосовой режим/);
+        assert.doesNotMatch(log[0].messages[0].content, /# Голосовой режим/);
         await session.prompt(file, { prompt: 'а теперь текстом' });
         await session.idle(file);
         body = await session.getBody(file);
         assert.equal(body.items.find(i => i.content === 'а теперь текстом').voice, undefined);
-        assert.doesNotMatch(log[1].messages[0].content, /# Голосовой режим/);
+        assert.doesNotMatch(log[1].messages.at(-1).content, /# Голосовой режим/);
     });
 
     it('ask_user: ожидание → ответ человека текстом → продолжение', async () => {
@@ -858,14 +864,16 @@ describe('сессия .task', () => {
         const seen = [];
         let release;
         const gate = new Promise(r => release = r);
+        // реплики человека — без служебного сообщения со средой (оно в конце контекста, см. VOLATILE_HEAD)
+        const human = req => req.messages.filter(m => m.role === 'user' && !String(m.content).startsWith(VOLATILE_HEAD)).map(m => m.content);
         globalThis.__MOCK_STREAM__ = (req) => (async function* () {
-            seen.push(req.messages.filter(m => m.role === 'user').map(m => m.content));
+            seen.push(human(req));
             if (seen.length === 1) {
                 await gate;
                 yield { type: 'tool_calls', calls: [{ id: 'x1', name: 'ls', arguments: { path: '/BOX' } }] };
                 return;
             }
-            yield 'учёл: ' + req.messages.filter(m => m.role === 'user').at(-1).content;
+            yield 'учёл: ' + human(req).at(-1);
         })();
         await session.prompt(file, { prompt: 'первое' });
         const q = await session.prompt(file, { prompt: 'и ещё вот это' });
@@ -933,3 +941,70 @@ describe('внешнее содержимое: почта в дереве WORK',
         assert.notEqual(snd2.status, 'denied', 'своя заметка не заражает: ' + snd2.error);
     });
 });
+describe('system prompt для кэша: сборка по частям (makeSystemParts)', () => {
+    const mk = async (extra = {}) => createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER', ...extra });
+
+    it('stable — постоянное (правила, роль, контракт, навыки), volatile — время, режим, голос; makeSystem = части подряд', async () => {
+        const env = await mk({ voice: true });
+        const { stable, volatile } = await env.makeSystemParts();
+        for (const must of ['СИСТЕМА-ДВИЖКА', 'ПРАВИЛА-МЕСТА', '# Среда WORK', 'Ты работаешь в роли USER', '# Контекст', '# Контракт места', 'Здесь лежат отчёты', '# Навыки'])
+            assert.ok(stable.includes(must), 'в stable нет: ' + must);
+        for (const never of ['Сейчас:', 'Режим «Авто»', '# Голосовой режим'])
+            assert.ok(!stable.includes(never), 'в stable не должно быть: ' + never);
+        for (const must of ['Сейчас:', 'Режим «Авто»', '# Голосовой режим'])
+            assert.ok(volatile.includes(must), 'в volatile нет: ' + must);
+        assert.equal(await env.makeSystem(), stable + '\n\n' + volatile);
+    });
+
+    it('stable не меняется со временем, volatile — меняется; смена режима трогает только volatile', async () => {
+        const { mock } = await import('node:test');
+        mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 0, 5, 10, 0) });
+        try {
+            const env = await mk();
+            const a = await env.makeSystemParts();
+            mock.timers.tick(7 * 60_000);
+            const b = await env.makeSystemParts();
+            assert.equal(b.stable, a.stable, 'stable зависит от времени — кэш префикса не сработает');
+            assert.notEqual(b.volatile, a.volatile);
+            const ask = await (await mk({ host: { mode: 'ask' } })).makeSystemParts();
+            assert.equal(ask.stable, a.stable);
+            assert.match(ask.volatile, /Режим «Спрашивать»/);
+        }
+        finally {
+            mock.timers.reset();
+        }
+    });
+
+    it('навыки и субагенты перечислены по имени; набор инструментов — один и тот же между вызовами', async () => {
+        const env = await mk();
+        const { stable } = await env.makeSystemParts();
+        const at = s => stable.indexOf('- ' + s + ':');
+        assert.ok(at('hello') >= 0 && at('local') >= 0);
+        assert.ok(at('hello') < at('local'), 'навыки не по имени');
+        const names = async () => (await env.makeTools()).map(t => t.name);
+        assert.deepEqual(await names(), await names());
+    });
+
+    it('субагент: своя роль в stable, время — в volatile, голосовой заметки нет', async () => {
+        const env = await mk({ voice: true });
+        const { stable, volatile } = await env.makeSystemParts(env.agents.get('explore'));
+        assert.match(stable, /Твоя роль \(субагент explore\)/);
+        assert.ok(!stable.includes('Сейчас:'));
+        assert.match(volatile, /Сейчас:/);
+        assert.ok(!volatile.includes('# Голосовой режим'));
+    });
+});
+
+
+describe('порядок внешних инструментов (svc_*) в окружении', () => {
+    it('extTools отсортированы по имени независимо от порядка объявления сервисов и методов', async () => {
+        const { resetServiceRegistry } = await import('../sources/modules/agent/tools/services.js');
+        resetServiceRegistry();
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const names = (await env.extTools()).map(t => t.name);
+        assert.deepEqual(names.filter(n => n.startsWith('svc_')), ['svc_alpha_abeg', 'svc_alpha_zmid', 'svc_zeta_arun', 'svc_zeta_zrun']);
+        assert.deepEqual(names, [...names].sort());
+        resetServiceRegistry();
+    });
+});
+

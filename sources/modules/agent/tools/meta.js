@@ -163,7 +163,7 @@ export const metaTools = [
             const llm = def.meta.model ? await env.llmFor(def.meta.model) : ctx.llm;
             const res = await ctx.runLoop({
                 llm,
-                system: () => env.makeSystem(def),
+                system: () => env.makeSystemParts(def),
                 items: entry.items,
                 tools: await env.makeTools(def, depth, ctx.tools),
                 host: ctx.host,
@@ -385,5 +385,6 @@ export const metaTools = [
 
 /** Короткий листинг для system: имя — описание. */
 export function listing(map, max = 60) {
-    return [...map.values()].slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
+    // выбор первых max — как раньше, но показ по имени: порядок не должен зависеть от порядка чтения файлов (префикс кэша)
+    return [...map.values()].slice(0, max).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
 }

@@ -322,7 +322,7 @@ describe('taint: цикл агента', () => {
         const subTools = [poster(calls)];
         const env = {
             agents: new Map([['general', { name: 'general', meta: { tools: '*' }, body: '' }]]),
-            makeSystem: async () => 'S',
+            makeSystemParts: async () => ({ stable: 'S', volatile: '' }),
             makeTools: async () => subTools,
             llmFor: async () => { throw new Error('не нужен'); },
         };
