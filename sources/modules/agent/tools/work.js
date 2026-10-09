@@ -4,6 +4,7 @@
  */
 import { clip, isAccessDenied } from '../util.js';
 import { lineDiff } from '../diff.js';
+import { beforeWrite, recordWrite, recordDelete } from '../undo.js';
 import { FS } from '../../../server/index.js';
 import * as GATEWAY from '../../../server/access/gateway.js';
 
@@ -373,10 +374,29 @@ function realPathOf(log, fallback) {
 
 /** Записать бинарный файл (картинка и т.п.) → фактический путь. */
 export async function writeBinary(path, buffer, ctx) {
+    const pre = await beforeWrite(await fileAt(path, ctx));
     const log = await writeFile(path, buffer, ctx);
     if (ctx?.entry)
         ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
-    return realPathOf(log, absPath(path, ctx));
+    const real = realPathOf(log, absPath(path, ctx));
+    await trackWrite(ctx, real, log, pre);
+    return real;
+}
+
+/** Существующий файл по пути (не папка, не несколько элементов) или null — для записи «как откатить» (undo.js). */
+async function fileAt(path, ctx) {
+    const item = await getItem(path, ctx).catch(() => null);
+    return item && !Array.isArray(item) && !isContainer(item) ? item : null;
+}
+
+/** Записать в карточку вызова способ отката (undo.js); ошибка отслеживания не ломает запись. */
+async function trackWrite(ctx, realPath, log, pre) {
+    if (!ctx?.entry)
+        return;
+    try {
+        await recordWrite(ctx.entry, { realItem: await fileAt(realPath, ctx), pre });
+    }
+    catch { /* откат не поставится — изменение попадёт в список «вручную» */ }
 }
 
 const target = key => args => absPath(args?.[key], null);
@@ -832,9 +852,10 @@ export const workTools = [
         },
         async run(args, ctx) {
             let before = null;
-            const existing = await getItem(args.path, ctx).catch(() => null);
-            if (existing && !Array.isArray(existing) && !isContainer(existing))
+            const existing = await fileAt(args.path, ctx);
+            if (existing)
                 before = await callAs(existing, 'load', { encoding: 'utf-8' }, ctx).catch(() => null);
+            const pre = await beforeWrite(existing);
             const log = await writeFile(args.path, args.content, ctx);
             const real = realPathOf(log, absPath(args.path, ctx));
             if (ctx.entry) {
@@ -842,6 +863,7 @@ export const workTools = [
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
                 ctx.entry.diff = lineDiff(typeof before === 'string' ? before : '', String(args.content));
             }
+            await trackWrite(ctx, real, log, pre);
             const req = absPath(args.path, ctx);
             return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)'
                 + (real !== req ? '; запрошено ' + req + ' — в классе файлы ложатся в зону роли, дальше используй путь ' + real : '');
@@ -871,12 +893,14 @@ export const workTools = [
             const saveParams = { post: before + chunk };
             if (ctx?.task?.path)
                 saveParams.mainContext = ctx.task.path;
+            const pre = await beforeWrite(file);
             const log = await callAs(file, 'save', saveParams, ctx);
             if (ctx.entry) {
                 ctx.entry.path = file.path;
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
                 ctx.entry.diff = lineDiff(before, before + chunk);
             }
+            await trackWrite(ctx, file.path, log, pre);
             return 'добавлено ' + chunk.length + ' символов в ' + file.path + ' (всего ' + (before.length + chunk.length) + ')';
         },
     },
@@ -916,12 +940,14 @@ export const workTools = [
             const saveParams = { post: out };
             if (ctx?.task?.path)
                 saveParams.mainContext = ctx.task.path;
+            const pre = await beforeWrite(file);
             const log = await callAs(file, 'save', saveParams, ctx);
             if (ctx.entry) {
                 ctx.entry.path = file.path;
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;
                 ctx.entry.diff = lineDiff(text, after);
             }
+            await trackWrite(ctx, file.path, log, pre);
             return 'изменён ' + file.path + ' (замен: ' + (args.replace_all ? count : 1) + ')';
         },
     },
@@ -1181,7 +1207,11 @@ export const workTools = [
             const item = await mustItem(args.path, ctx);
             if (Array.isArray(item))
                 throw new Error('путь дал несколько элементов — уточни');
-            return callAs(item, 'delete', {}, ctx);
+            // файл (не папку) можно вернуть при откате ленты: запоминаем прежнее состояние (undo.js)
+            const pre = isContainer(item) ? null : await beforeWrite(item);
+            const res = await callAs(item, 'delete', {}, ctx);
+            recordDelete(ctx.entry, { item, pre });
+            return res;
         },
     },
 ];

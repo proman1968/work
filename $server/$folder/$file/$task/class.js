@@ -7,7 +7,8 @@
  *   approve({ call, accept, always, content, values }) — подтверждение вызова или ответ формой
  *   unqueue({ id })                                — убрать реплику из очереди (отправлена во время работы)
  *   stop()                                         — стоп
- *   revert({ id })                                 — откат ленты к реплике → { prompt, attachments }
+ *   revert({ id, dry?, files? })                   — откат ленты к реплике → { prompt, attachments }; dry — только список изменённых агентом файлов;
+ *                                                    files — заодно вернуть эти файлы → { files: { reverted, skipped } }
  *   configure({ model, effort, mode })             — настройки
  *   compact()                                      — сжать контекст
  *   state()                                        — тело + running

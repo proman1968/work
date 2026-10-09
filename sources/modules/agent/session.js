@@ -19,6 +19,8 @@
 import { runLoop, maybeCompact } from './loop.js';
 import { createEnv, llmFor } from './index.js';
 import { genId } from './util.js';
+import { collectUndo, applyUndo } from './undo.js';
+import { getItem, callAs, writeFile } from './tools/work.js';
 
 const RUNS = new Map();
 const MODES = ['auto', 'ask', 'plan'];
@@ -605,19 +607,43 @@ export async function stop(file, params = {}) {
     return { ok: true, stopped: true };
 }
 
-/** Откат ленты к реплике id (она и всё после удаляются; текст — назад в поле ввода). */
+/**
+ * Откат ленты к реплике id (она и всё после удаляются; текст — назад в поле ввода).
+ *   dry: true   — ничего не менять, вернуть { files: [{path, op}], manual: [...] } — что агент изменил в этом диапазоне
+ *                 (интерфейс спрашивает про файлы только если есть что откатывать);
+ *   files: true — заодно вернуть файлы, изменённые агентом (undo.js): { reverted, skipped } в ответе.
+ */
 export async function revert(file, params = {}) {
     params = argsOf(params);
     const s = stateOf(file);
     const id = params.id ?? params.post?.id;
     if (!id)
         return { ok: false, error: 'id required' };
+    const flag = v => v === true || v === 1 || /^(1|true|yes)$/i.test(String(v ?? ''));
+    if (flag(params.dry)) {
+        const b = await getBody(file);
+        const at = b.items.findIndex(i => i.id === id);
+        if (at < 0)
+            return { ok: false, error: 'элемент не найден' };
+        const { undo, manual } = collectUndo(b.items.slice(at));
+        return { ok: true, dry: true, files: undo.map(u => ({ path: u.path, op: u.op, tool: u.tool })), manual: manual.map(m => ({ path: m.path, tool: m.tool })) };
+    }
     if (s.running)
         await stop(file, params);
     const body = await getBody(file);
     const idx = body.items.findIndex(i => i.id === id);
     if (idx < 0)
         return { ok: false, error: 'элемент не найден' };
+    let fileReport = null;
+    if (flag(params.files)) {
+        const { undo } = collectUndo(body.items.slice(idx));
+        const ctx = { session: params.session, role: body.role, task: file };
+        fileReport = await applyUndo(undo, {
+            getItem: p => getItem(p, ctx),
+            callAs: (item, method, args) => callAs(item, method, args, ctx),
+            writeFile: (p, text) => writeFile(p, text, ctx),
+        });
+    }
     const removed = body.items.splice(idx);
     // сжатые элементы до точки отката снова живые, если сводка ушла
     if (removed.some(i => i.type === 'summary') && !body.items.some(i => i.type === 'summary'))
@@ -632,6 +658,7 @@ export async function revert(file, params = {}) {
         ok: true,
         prompt: first?.type === 'user' ? String(first.content || '') : '',
         attachments: first?.attachments || [],
+        ...(fileReport ? { files: fileReport } : {}),
     };
 }
 

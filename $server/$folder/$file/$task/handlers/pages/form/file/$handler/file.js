@@ -483,11 +483,26 @@ export default {
     async revert(item) {
         if (!item?.id || item.id === 'optimistic')
             return;
-        const res = await this.$item?.fetch('revert', { id: item.id });
+        // про файлы спрашиваем только если агент в откатываемом диапазоне реально что-то менял
+        const dry = await this.$item?.fetch('revert', { id: item.id, dry: 1 });
+        const changed = dry?.files || [];
+        let withFiles = false;
+        if (changed.length) {
+            const list = changed.slice(0, 6).map(f => '• ' + f.path).join('\n') + (changed.length > 6 ? '\n… и ещё ' + (changed.length - 6) : '');
+            const manual = dry?.manual?.length ? '\n\nЕщё ' + dry.manual.length + ' изменений агента автоматически не откатываются.' : '';
+            withFiles = confirm('После этого сообщения агент менял файлы (' + changed.length + '):\n' + list + manual
+                + '\n\nОК — откатить ленту и вернуть файлы\nОтмена — откатить только ленту (файлы останутся как есть)');
+        }
+        const res = await this.$item?.fetch('revert', { id: item.id, ...(withFiles ? { files: 1 } : {}) });
         if (!res || res.ok === false)
             return this.toast(res?.error || 'Откат не удался');
         this.optimistic = null;
         this.$('microchat-panel')?.prefill(res.prompt ? res : { prompt: item.content, attachments: item.attachments });
+        if (res.files) {
+            const skipped = res.files.skipped || [];
+            this.toast('Файлы возвращены: ' + (res.files.reverted || []).length
+                + (skipped.length ? '. Не тронуты (' + skipped.length + '): ' + skipped.slice(0, 2).map(s => s.path.split('/').pop() + ' — ' + s.reason).join('; ') : ''));
+        }
     },
     toggleGroup(id, open) {
         this.groupOpen = { ...this.groupOpen, [id]: open };

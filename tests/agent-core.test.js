@@ -1008,3 +1008,169 @@ describe('порядок внешних инструментов (svc_*) в ок
     });
 });
 
+
+describe('откат ленты с файлами (undo.js)', () => {
+    const disk = rel => path.join(tmp, rel);
+    const read = rel => fs.readFileSync(disk(rel), 'utf-8');
+    const exists = rel => fs.existsSync(disk(rel));
+    /** Файл создан в обход инструментов: сбрасываем кэш папки дерева, иначе агент его «не увидит». */
+    const seed = async (rel, content) => { write(rel, content); (await WORK.get_item('/BOX/doc'))?.reset?.(); };
+
+    async function newTask(name) {
+        const box = await WORK.get_item('/BOX');
+        const log = await box.meta_folder.save_file({ folder: 'USER', filename: name + '.task', post: JSON.stringify({ name, items: [] }), skip_file_handler: true });
+        const file = await WORK.get_item(log.logFullPath || log.path);
+        await file.init;
+        return file;
+    }
+    /** Один ход пользователя: сценарные вызовы инструментов, затем итог; подтверждения (delete и др.) человек даёт. */
+    async function turn(file, prompt, calls) {
+        globalThis.__MOCK_STREAM__ = scripted([...calls.map(c => ({ calls: [c] })), { text: 'готово' }]).stream;
+        await session.prompt(file, { prompt });
+        for (let i = 0; i < 400; i++) {
+            const body = await session.getBody(file);
+            if (body.waiting?.call) {
+                await session.approve(file, { call: body.waiting.call, accept: true });
+                continue;
+            }
+            if (!session.isRunning(file))
+                return body;
+            await new Promise(r => setTimeout(r, 25));
+        }
+        throw new Error('ход не завершился');
+    }
+    const W = (p, content) => ({ name: 'write', args: { path: p, content } });
+    const users = body => body.items.filter(i => i.type === 'user');
+
+    it('создание, перезапись и правка: откат всех трёх возвращает исходное состояние (снимок истории и текст в записи)', async () => {
+        await seed('BOX/doc/rv-orig.md', 'ORIGINAL\n');
+        const file = await newTask('u1');
+        const body = await turn(file, 'правь', [
+            W('/BOX/doc/rv-new.md', 'новый файл'),
+            W('/BOX/doc/rv-orig.md', 'ПЕРЕЗАПИСАНО'),
+            { name: 'edit', args: { path: '/BOX/doc/rv-orig.md', old_string: 'ПЕРЕЗАПИСАНО', new_string: 'ПРАВКА' } },
+        ]);
+        const calls = body.items.flatMap(i => i.tools || []);
+        assert.deepEqual(calls.map(t => t.undo?.op), ['create', 'modify', 'modify']);
+        assert.match(calls[0].undo.hash, /^[0-9a-f]{40}$/);
+        assert.equal(calls[0].undo.before, null);
+        assert.deepEqual(calls[1].undo.before, { text: 'ORIGINAL\n' }, 'у файла не было истории — прежняя версия текстом');
+        assert.match(calls[2].undo.before.snapshot, /\/history\//, 'прежняя версия правки — снимок истории');
+        assert.equal(read('BOX/doc/rv-orig.md'), 'ПРАВКА');
+
+        const dry = await session.revert(file, { id: users(body)[0].id, dry: 1 });
+        assert.equal(dry.dry, true);
+        assert.deepEqual(dry.files.map(f => f.op), ['create', 'modify', 'modify']);
+        assert.equal((await session.getBody(file)).items.length, body.items.length, 'dry ничего не меняет');
+
+        const res = await session.revert(file, { id: users(body)[0].id, files: 1 });
+        assert.equal(res.ok, true);
+        assert.equal(res.files.reverted.length, 3, JSON.stringify(res.files.skipped));
+        assert.deepEqual(res.files.skipped, []);
+        assert.equal(exists('BOX/doc/rv-new.md'), false, 'созданный файл удалён');
+        assert.equal(read('BOX/doc/rv-orig.md'), 'ORIGINAL\n');
+        assert.equal(res.prompt, 'правь');
+    });
+
+    it('без флага files лента откатывается, файлы остаются; dry без изменений агента — пустой список (вопрос не нужен)', async () => {
+        const file = await newTask('u2');
+        const body = await turn(file, 'создай', [W('/BOX/doc/rv-keep.md', 'останется')]);
+        const res = await session.revert(file, { id: users(body)[0].id });
+        assert.equal(res.ok, true);
+        assert.equal(res.files, undefined);
+        assert.equal(read('BOX/doc/rv-keep.md'), 'останется');
+        assert.equal((await session.getBody(file)).items.length, 0);
+
+        const file2 = await newTask('u3');
+        const body2 = await turn(file2, 'посмотри', [{ name: 'ls', args: { path: '/BOX' } }]);
+        const dry = await session.revert(file2, { id: users(body2)[0].id, dry: 1 });
+        assert.deepEqual([dry.files, dry.manual], [[], []]);
+    });
+
+    it('файл изменён человеком после агента — не трогается, причина в отчёте; остальные откатываются', async () => {
+        await seed('BOX/doc/rv-human.md', 'исходное\n');
+        const file = await newTask('u4');
+        const body = await turn(file, 'правь', [W('/BOX/doc/rv-human.md', 'версия агента'), W('/BOX/doc/rv-other.md', 'второй')]);
+        fs.writeFileSync(disk('BOX/doc/rv-human.md'), 'правка человека');
+        const res = await session.revert(file, { id: users(body)[0].id, files: 1 });
+        assert.equal(read('BOX/doc/rv-human.md'), 'правка человека', 'чужая правка сохранена');
+        assert.deepEqual(res.files.skipped.map(s => [s.path, s.reason]), [['/BOX/doc/rv-human.md', 'файл изменён после агента']]);
+        assert.equal(exists('BOX/doc/rv-other.md'), false);
+        assert.equal(res.files.reverted.length, 1);
+    });
+
+    it('цепочка правок одного файла откатывается от новых к старым; откат с середины возвращает только поздние изменения', async () => {
+        const file = await newTask('u5');
+        await turn(file, 'первое', [W('/BOX/doc/rv-chain.md', 'v1')]);
+        const body = await turn(file, 'второе', [W('/BOX/doc/rv-chain.md', 'v2'), W('/BOX/doc/rv-second.md', 's')]);
+        const [, secondUser] = users(body);
+        const res = await session.revert(file, { id: secondUser.id, files: 1 });
+        assert.equal(res.files.reverted.length, 2, JSON.stringify(res.files.skipped));
+        assert.equal(read('BOX/doc/rv-chain.md'), 'v1', 'версия первого хода сохранена');
+        assert.equal(exists('BOX/doc/rv-second.md'), false);
+        assert.equal((await session.getBody(file)).items.length, 3, 'остался первый ход: реплика и два ответа');
+    });
+
+    it('человек правил файл в обход истории между двумя записями агента: прежней версией становится его текст, а не устаревший снимок', async () => {
+        const file = await newTask('u8');
+        const first = await turn(file, 'создай', [W('/BOX/doc/rv-stale.md', 'версия агента 1')]);
+        fs.writeFileSync(disk('BOX/doc/rv-stale.md'), 'правка человека без истории');
+        const body = await turn(file, 'ещё', [W('/BOX/doc/rv-stale.md', 'версия агента 2')]);
+        const undo = body.items.flatMap(i => i.tools || []).at(-1).undo;
+        assert.deepEqual(undo.before, { text: 'правка человека без истории' }, 'снимок истории устарел — не должен использоваться');
+        const [, secondUser] = users(body);
+        const res = await session.revert(file, { id: secondUser.id, files: 1 });
+        assert.equal(res.files.reverted.length, 1, JSON.stringify(res.files.skipped));
+        assert.equal(read('BOX/doc/rv-stale.md'), 'правка человека без истории');
+        assert.ok(first);
+    });
+
+    it('удаление агентом: откат возвращает файл; если файл создан заново — не трогается', async () => {
+        await seed('BOX/doc/rv-gone.md', 'нужный текст');
+        await seed('BOX/doc/rv-gone2.md', 'второй');
+        const file = await newTask('u6');
+        const body = await turn(file, 'удали', [{ name: 'delete', args: { path: '/BOX/doc/rv-gone.md' } }, { name: 'delete', args: { path: '/BOX/doc/rv-gone2.md' } }]);
+        assert.deepEqual(body.items.flatMap(i => i.tools || []).map(t => t.undo?.op), ['delete', 'delete']);
+        assert.equal(exists('BOX/doc/rv-gone.md'), false);
+        fs.writeFileSync(disk('BOX/doc/rv-gone2.md'), 'создан человеком');
+        const res = await session.revert(file, { id: users(body)[0].id, files: 1 });
+        assert.equal(read('BOX/doc/rv-gone.md'), 'нужный текст');
+        assert.equal(read('BOX/doc/rv-gone2.md'), 'создан человеком');
+        assert.deepEqual(res.files.skipped.map(s => s.reason), ['файл уже создан заново']);
+    });
+
+    it('большой файл без истории: прежней версии нет — не трогаем и честно говорим; запись агента остаётся', async () => {
+        await seed('BOX/doc/rv-big.md', 'x'.repeat(30000));
+        const file = await newTask('u7');
+        const body = await turn(file, 'правь', [W('/BOX/doc/rv-big.md', 'коротко')]);
+        assert.deepEqual(body.items.flatMap(i => i.tools || [])[0].undo.before, { lost: true });
+        const res = await session.revert(file, { id: users(body)[0].id, files: 1 });
+        assert.deepEqual(res.files.skipped.map(s => s.reason), ['прежняя версия не сохранена']);
+        assert.equal(read('BOX/doc/rv-big.md'), 'коротко');
+    });
+});
+
+describe('collectUndo: что откатывается автоматически, а что — вручную', () => {
+    it('вложенные ленты субагентов учитываются; изменения без записи об откате — в manual; неуспешные вызовы пропускаются', async () => {
+        const { collectUndo, applyUndo } = await import('../sources/modules/agent/undo.js');
+        const u = (path, op = 'modify') => ({ path, op, before: { text: 'x' }, hash: 'h' });
+        const items = [
+            { type: 'user' },
+            { type: 'assistant', tools: [
+                { id: 'a', name: 'write', status: 'ok', undo: u('/A') },
+                { id: 'b', name: 'task', status: 'ok', items: [{ type: 'assistant', tools: [{ id: 'c', name: 'edit', status: 'ok', undo: u('/B') }] }] },
+                { id: 'd', name: 'generate_image', status: 'ok', snapshot: '/img/.p.png/history/2026-01-01/1.png', path: '/img/p.png' },
+                { id: 'e', name: 'write', status: 'error', undo: u('/E') },
+                { id: 'f', name: 'ls', status: 'ok' },
+            ] },
+        ];
+        const r = collectUndo(items);
+        assert.deepEqual(r.undo.map(x => x.path), ['/A', '/B']);
+        assert.deepEqual(r.manual.map(x => [x.path, x.tool]), [['/img/p.png', 'generate_image']]);
+        // порядок отката — от новых к старым
+        const order = [];
+        await applyUndo(r.undo, { getItem: async p => { order.push(p); return null; }, callAs: async () => {}, writeFile: async () => {} });
+        assert.deepEqual(order, ['/B', '/A']);
+    });
+});
+
