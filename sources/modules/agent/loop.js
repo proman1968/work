@@ -281,7 +281,14 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                     host.emit?.({ type: 'delta', item: it.id, field: 'reasoning', token: ch.content });
                 }
                 else if (ch?.type === 'usage')
-                    it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens, ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}) };
+                    it.usage = {
+                        prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens,
+                        ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}),
+                        ...(ch.cache_creation_tokens ? { cacheWrite: ch.cache_creation_tokens } : {}),
+                    };
+                // подписанные блоки размышлений (Anthropic): без них следующий шаг цикла инструментов при включённом thinking — ошибка API
+                else if (ch?.type === 'thinking_blocks')
+                    it.thinkingBlocks = ch.blocks;
                 else if (ch?.type === 'tool_calls')
                     calls = ch.calls || [];
                 else if (ch?.type === 'finish')
@@ -583,6 +590,10 @@ export function toMessages(system, items, images = null) {
                     }));
                 if (!msg.content && !msg.tool_calls)
                     break;
+                // блоки размышлений — неперечисляемое свойство: не попадает в JSON других протоколов и в оценку токенов,
+                // читает его только адаптер Anthropic (MODELS/$ai …/class.js toAnthropicMessages)
+                if (it.thinkingBlocks?.length)
+                    Object.defineProperty(msg, 'thinking_blocks', { value: it.thinkingBlocks, enumerable: false });
                 out.push(msg);
                 for (const t of tools)
                     out.push({ role: 'tool', tool_call_id: t.id, content: toolContent(t, old) });
