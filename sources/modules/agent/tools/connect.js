@@ -36,6 +36,7 @@ export const connectTools = [
     {
         name: 'connect_service',
         planSafe: true,
+        outbound: true, // подключение аккаунта по подсказке из внешнего содержимого — только с подтверждением (taint.js)
         description: 'Попросить пользователя подключить его аккаунт во внешнем сервисе. Вход/регистрацию он делает сам в карточке (OAuth на сайте провайдера или ввод токена) — никогда не спрашивай пароли и токены в чате. Затем используй http_request с connection=name.',
         parameters: {
             type: 'object',
@@ -87,6 +88,8 @@ export const connectTools = [
     {
         name: 'http_request',
         risk: 'danger',
+        untrusted: true,
+        outbound: args => !READ.has(String(args?.method || 'GET').toUpperCase()),
         description: 'Запрос к API внешнего сервиса. connection — подключённый аккаунт (авторизация подставится сама), url — полный или путь от base_url подключения. Пример Google Calendar: POST /calendar/v3/calendars/primary/events. Любое изменение (не GET) пользователь подтверждает явно — опиши в reason, что именно сделаешь.',
         parameters: {
             type: 'object',

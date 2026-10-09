@@ -22,6 +22,7 @@
  */
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
 import { decide } from './permissions.js';
+import { newNonce, wrapUntrusted, taintSources } from './taint.js';
 
 export const MAX_TURNS = 60;
 export const RESULT_MAX = 24000;
@@ -42,6 +43,7 @@ export const EMPTY_NUDGE = '[Система] Твой предыдущий от�
  * @param {Array} opts.tools  инструменты { name, description, parameters, readonly?, risk?, run(args, ctx) }
  * @param {object} opts.host
  * @param {object} [opts.ctx]  доп. поля в ctx инструментов (session, place, …)
+ * @param {string[]} [opts.taintedFrom]  внешнее содержимое в контексте родителя (для субагента, см. taint.js)
  * @returns {Promise<{status:'done'|'limit'|'stopped'|'error', content?:string}>}
  */
 export async function runLoop(opts) {
@@ -367,6 +369,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         tools: opts.tools,
         runLoop,
     };
+    // внешнее содержимое после последней реплики человека (и от родителя субагента) → действия наружу только с подтверждением
+    const tainted = taintSources(opts.items, opts.taintedFrom);
+    ctx.tainted = tainted.length ? tainted : null;
     const decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
     if (decision.verdict === 'deny') {
         entry.status = 'denied';
@@ -407,6 +412,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     try {
         const value = await tool.run(entry.args || {}, ctx);
         throwIfStopped(host.signal);
+        // чужое содержимое (даже в ответе-ошибке сервиса): в контексте оборачивается в <untrusted>, ход считается зараженным
+        if (tool.untrusted)
+            entry.untrusted = true;
         if (value && typeof value === 'object' && !Array.isArray(value) && value.error && Object.keys(value).length <= 3) {
             entry.status = 'error';
             entry.error = String(value.error);
@@ -428,6 +436,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         entry.status = 'error';
         entry.error = String(e?.message || e);
     }
+    // инструмент мог пометить вызов сам (ctx.entry.untrusted = true, например read письма .eml)
+    if (entry.untrusted && !entry.nonce)
+        entry.nonce = newNonce();
     entry.durationMs = Date.now() - t0;
     await host.save();
 }
@@ -458,10 +469,13 @@ export function toolContent(t, old = false) {
     switch (t.status) {
         case 'ok': {
             const r = String(t.result ?? 'ok');
-            return old ? clip(r, OLD_RESULT_MAX) : r;
+            const text = old ? clip(r, OLD_RESULT_MAX) : r;
+            return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
         }
-        case 'error':
-            return 'Ошибка: ' + (t.error || 'неизвестно');
+        case 'error': {
+            const text = 'Ошибка: ' + (t.error || 'неизвестно');
+            return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
+        }
         case 'denied':
             return 'Пользователь отклонил вызов.' + (t.answer ? ' Комментарий: ' + t.answer : '') + (t.error ? ' ' + t.error : '');
         default:

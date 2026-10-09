@@ -458,8 +458,12 @@ export const workTools = [
                 ctx.entry && (ctx.entry.path = absPath(args.path, ctx));
                 return 'Сборка слоёв: ' + files.map(f => f.path).join(' → ') + '\n\n' + numbered(text, args.offset, args.limit);
             }
-            if (ctx.entry)
+            if (ctx.entry) {
                 ctx.entry.path = item.path;
+                // письмо — текст чужого автора: в контексте оборачивается в <untrusted> (taint.js)
+                if (/\.eml$/i.test(String(item.path || '')))
+                    ctx.entry.untrusted = true;
+            }
             if (isContainer(item))
                 return describeClass(item, ctx);
             const text = await loadText(item, ctx);
@@ -550,6 +554,8 @@ export const workTools = [
                 rings: args.rings,
             }, ctx);
             const rows = res?.results || [];
+            if (ctx.entry && rows.some(r => /\.eml$/i.test(String(r?.path || ''))))
+                ctx.entry.untrusted = true;
             if (!rows.length)
                 return 'ничего не найдено' + (res?.pending ? ' (индексация ещё идёт: ' + res.pending + ' в очереди)' : '');
             const out = rows.map((r, i) => {
@@ -615,6 +621,7 @@ export const workTools = [
     {
         name: 'assign',
         risk: 'write',
+        outbound: true, // смена прав доступа после чтения внешнего содержимого — только с подтверждением (taint.js)
         target: args => absPath(String(args?.path || '') + '/class.js', null),
         description: 'Назначить или снять пользователей (или узлы сети) на роль класса: меняет только #security собственного class.js. Роль — объявленная в точке (ADMIN, BOSS, USER, GUEST, прикладные). Требует прав администратора.',
         parameters: {
@@ -724,6 +731,8 @@ export const workTools = [
     {
         name: 'send',
         risk: 'write',
+        // сообщение людям — действие наружу (taint.js); запись в ленту без получателей — нет
+        outbound: args => (Array.isArray(args?.to) ? args.to.length : (args?.to ? 1 : 0)) > 0,
         description: 'Записать в ленту точки сообщение или поручение и доставить его получателям (их кабинетам): текст, вложения (видимые тебе файлы WORK), срок. Поручение — kind:"order" с due; отчёт об исполнении — kind:"done" с reply_to (id поручения).',
         parameters: {
             type: 'object',
@@ -982,6 +991,8 @@ export const workTools = [
     {
         name: 'call',
         risk: 'write',
+        // опасные методы и операции администратора — действие наружу (taint.js)
+        outbound: args => DANGER_METHODS.has(String(args?.method || '')) || GATEWAY.MEMBERS[String(args?.method || '')] === GATEWAY.LEVEL.ADMIN,
         target: target('path'),
         description: 'Вызвать серверный метод элемента WORK (см. schema): path + method + args. Для чтения, записи и бизнес-операций классов, для которых нет отдельного инструмента.',
         parameters: {
@@ -1102,7 +1113,11 @@ export const workTools = [
                 return offset
                     ? 'объектов с offset ' + offset + ' больше нет'
                     : 'объектов не найдено (индекс мог ещё не обработать данные — call rag_status)';
-            return JSON.stringify(rows, null, 1)
+            const json = JSON.stringify(rows, null, 1);
+            // объекты-письма (.eml) — чужой текст: <untrusted> + заражение хода (taint.js)
+            if (ctx.entry && (/^\.?eml$/i.test(String(args.type || '')) || /\.eml"/i.test(json)))
+                ctx.entry.untrusted = true;
+            return json
                 + (rows.length >= limit ? '\n(получено ' + rows.length + ' — возможно, есть ещё: повтори с offset ' + (offset + rows.length) + ')' : '');
         },
     },

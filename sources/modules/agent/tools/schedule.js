@@ -6,6 +6,8 @@ import * as S from '../scheduler.js';
 export const scheduleTools = [
     {
         name: 'schedule',
+        // создание отложенных запусков после чтения внешнего содержимого — только с подтверждением (taint.js)
+        outbound: args => args?.action === 'create',
         description: 'Расписание этой задачи: create — запускать её по времени с текстом prompt (сводка по понедельникам, ежедневная проверка, напоминание к дате); list — расписания пользователя; cancel — удалить. Запуск идёт от имени пользователя; действия с подтверждением будут ждать его.',
         parameters: {
             type: 'object',

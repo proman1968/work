@@ -119,6 +119,7 @@ export const webTools = [
     {
         name: 'web_search',
         readonly: true,
+        untrusted: true,
         description: 'Поиск в интернете. Возвращает ссылки с описаниями; содержимое страницы — web_fetch.',
         parameters: {
             type: 'object',
@@ -155,6 +156,7 @@ export const webTools = [
     {
         name: 'web_fetch',
         readonly: true,
+        untrusted: true,
         description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url).',
         parameters: {
             type: 'object',
@@ -185,6 +187,8 @@ export async function serviceTools(session) {
             out.push({
                 name: toolId('svc', s.id, method),
                 readonly: spec?.readonly ?? READ_NAME.test(method),
+                untrusted: !s.data.lanKind, // ответ внешнего сервиса — чужой текст (taint.js); LAN-сервисы (1С, принтеры) — свои данные
+                outbound: !(spec?.readonly ?? READ_NAME.test(method)),
                 risk: (spec?.readonly ?? READ_NAME.test(method)) ? undefined : 'danger',
                 permission: s.data.lanKind && !(spec?.readonly ?? READ_NAME.test(method))
                     ? askEach(() => (s.data.label || s.id) + ': ' + method) : undefined,
@@ -234,6 +238,8 @@ export async function mcpTools({ onError } = {}) {
             out.push({
                 name: toolId('mcp', s.id, t.name),
                 readonly: ro,
+                untrusted: true, // ответ MCP-сервера — чужой текст (taint.js)
+                outbound: !ro,
                 risk: ro ? undefined : (t.annotations?.destructiveHint ? 'danger' : 'write'),
                 description: '[MCP ' + (s.data.label || s.id) + '] ' + String(t.description || t.name).slice(0, 1000),
                 parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },

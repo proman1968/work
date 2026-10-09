@@ -9,7 +9,10 @@
  * Инструмент: readonly (чтение, всегда можно) | risk: 'write' | 'danger'.
  * tool.target(args) → WORK-путь цели (для проверки защищённых зон).
  * host.allowed — «разрешить всегда» в этой сессии.
+ * ctx.tainted — источники внешнего содержимого в ходе (taint.js): инструмент с `outbound` (действие наружу)
+ * тогда всегда спрашивает человека, не предлагая «разрешить всегда».
  */
+import { isOutbound } from './taint.js';
 
 /** Зоны самоизменения системы: правки только с подтверждением. */
 export const PROTECTED_PREFIXES = ['/$server', '/sources', '/oda', '/MODELS', '/SERVICES', '/NODES', '/torus'];
@@ -39,6 +42,21 @@ export async function decide(tool, args, ctx) {
     const mode = host.mode || 'auto';
     if (mode === 'plan' && !tool.planSafe)
         return { verdict: 'deny', reason: 'режим «План»: изменения запрещены — предложи план и попроси переключить режим' };
+    // в контексте внешнее содержимое (taint.js): действия «наружу» — только с подтверждением, даже в auto и без «разрешить всегда»
+    if (ctx.tainted?.length && isOutbound(tool, args, ctx)) {
+        let own = null;
+        if (!tool.planSafe && typeof tool.permission === 'function') {
+            own = await tool.permission(args, ctx);
+            if (own?.verdict === 'deny')
+                return own;
+        }
+        return {
+            verdict: 'ask', noAlways: true,
+            ...(own?.hideArgs ? { hideArgs: true } : {}),
+            reason: 'в контексте есть внешнее содержимое (' + ctx.tainted.join(', ') + '), действие наружу — только с вашего подтверждения'
+                + (own?.reason ? ': ' + own.reason : ''),
+        };
+    }
     if (tool.planSafe)
         return { verdict: 'allow' };
     if (typeof tool.permission === 'function') {

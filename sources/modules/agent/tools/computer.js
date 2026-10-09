@@ -33,6 +33,7 @@ const NAME_PROP = { name: { type: 'string', description: 'Компьютер (п
 export const computerTools = [
     {
         name: 'computer_screenshot',
+        untrusted: true, // на экране может быть чужой текст: картинку обернуть нельзя, но ход считается зараженным (taint.js)
         readonly: true,
         description: 'Скриншот экрана компьютера (1280×800). Смотри изображение в конце контекста; координаты для computer_action — пиксели этого скриншота. Нужен графический образ (work-computer).',
         parameters: { type: 'object', properties: { ...NAME_PROP } },
@@ -45,6 +46,7 @@ export const computerTools = [
     {
         name: 'computer_action',
         risk: 'write',
+        untrusted: true,
         description: 'Мышь и клавиатура компьютера + свежий скриншот после. Сначала computer_screenshot, целься по нему. Пока экраном управляет человек — недоступно.',
         parameters: {
             type: 'object',

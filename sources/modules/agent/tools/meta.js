@@ -5,6 +5,7 @@
 import { genId, stringifyFrontmatter, clip, callSnapshots, snapshotName } from '../util.js';
 import { absPath, callAs, getItem, writeBinary } from './work.js';
 import { ENGINE_AI } from '../resources.js';
+import { untrustedNames } from '../taint.js';
 
 const TODO_STATUS = ['pending', 'in_progress', 'completed'];
 export const MAX_DEPTH = 2;
@@ -167,6 +168,7 @@ export const metaTools = [
                 tools: await env.makeTools(def, depth, ctx.tools),
                 host: ctx.host,
                 depth,
+                taintedFrom: ctx.tainted || [],
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
                 ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
                 maxTurns: Number(def.meta.maxTurns) || 40,
@@ -183,6 +185,7 @@ export const metaTools = [
     {
         name: 'agent_start',
         risk: 'write',
+        outbound: true, // новый автономный агент получает инструкции: после внешнего содержимого — только с подтверждением (taint.js)
         description: 'Запустить продолжимого субагента в отдельной .task: сразу вернуть путь. Он переживает перезапуск и принимает agent_message. Роль и права — те же, что у родителя; для короткого разового поручения используй task.',
         parameters: { type: 'object', properties: {
             agent: { type: 'string', description: 'Имя агента из списка «Субагенты»' },
@@ -230,13 +233,16 @@ export const metaTools = [
         parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
         async run(args, ctx) {
             const { child, body, core } = await ownedChild(args.path, ctx);
+            // ответ дочернего агента мог быть составлен из внешнего содержимого — тот же режим, что у чужого текста
+            if (ctx.entry && untrustedNames(body.items).size)
+                ctx.entry.untrusted = true;
             const last = [...body.items].reverse().find(i => i.type === 'assistant' && i.content);
             return { path: child.path, status: core.isRunning(child) ? 'running' : body.status,
                 waiting: body.waiting || null, last: last?.content || '', updated: body.updated };
         },
     },
     {
-        name: 'agent_message', risk: 'write',
+        name: 'agent_message', risk: 'write', outbound: true,
         description: 'Отправить сообщение своему продолжимому субагенту. Во время работы оно ставится в очередь; ожидание вопроса не подменяется ответом родителя.',
         parameters: { type: 'object', properties: { path: { type: 'string' }, prompt: { type: 'string' } }, required: ['path', 'prompt'] },
         async run(args, ctx) {
@@ -311,6 +317,7 @@ export const metaTools = [
     {
         name: 'save_skill',
         risk: 'write',
+        outbound: true, // новый навык = закрепление инструкций в системе (taint.js)
         target: args => args?.scope === 'global' ? ENGINE_AI + '/skills/' + args?.name + '.md' : null,
         description: 'Сохранить удачно выполненную работу как навык — рецепт для повторения: когда применять, шаги (какие инструменты, пути, контракты), проверки результата, подводные камни. Сохраняй, когда человек просит «запомни/зафиксируй как навык» или подтверждает предложение.',
         parameters: {

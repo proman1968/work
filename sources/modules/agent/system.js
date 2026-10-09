@@ -198,6 +198,8 @@ export function guarded(tools) {
     return tools.map(t => ({
         ...t,
         system: true,
+        // любое изменение в ОС/сети сервера — действие наружу: после внешнего содержимого только с подтверждением (taint.js)
+        outbound: t.outbound ?? !t.readonly,
         async run(args, ctx) {
             const t0 = Date.now();
             try {

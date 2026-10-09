@@ -109,6 +109,7 @@ export const sandboxTools = [
     },
     {
         name: 'computer_network',
+        outbound: a => !!a?.on,
         permission: a => (a?.on
             ? { verdict: 'ask', noAlways: true, hideArgs: true,
                 reason: 'включить компьютеру исходящий интернет (песочница перестанет быть изолированной от сети)'

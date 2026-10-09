@@ -25,7 +25,8 @@
 |---|---|
 | `index.js` | окружение (`createEnv`), адаптер модели (`llmFor`), разовый запуск (`runOnce`) |
 | `loop.js` | цикл, лента → messages, сжатие (`maybeCompact`) |
-| `permissions.js` | режимы и защищённые зоны |
+| `permissions.js` | режимы, защищённые зоны, действия наружу при зараженном ходе |
+| `taint.js` | обёртка `<untrusted>`, расчёт заражения хода, признак `outbound` |
 | `session.js` | хост `.task` v2: `prompt`, `approve`, `stop`, `revert`, `configure`, `compact`, `getBody` |
 | `resources.js` | данные из дерева: `ai/system.md`, `ai/config.js`, `ai/agents/*.md`, `ai/skills/*.md` по слоям (пакет движка → классы от корня к месту). `system.md` слоёв дописываются друг к другу (`replace: true` во фронтматтере — заменить накопленное); `config.js` объединяются; агенты и навыки перекрываются по имени |
 | `tools/work.js` | `ls`, `read`, `find`, `search` (RAG от места задачи, с правами пользователя), `query` (объекты `$data` по полям, страницами `limit` ≤ 500 + `offset`), `access` (кто видит/меняет элемент), `assign` (роли в `#security`, ADMIN), `send` (запись в ленту с получателями: сообщение, поручение `order` со сроком, отчёт `done` с `reply_to`; кривые `due` (YYYY-MM-DD) и `reply_to` (id `автор:время`, как в поле `id=` у `logs`) — ошибка, а не тихая потеря), `write`, `write_table` (xlsx/csv), `edit`, `create_class`, `schema`, `call`, `logs` (последние записи с id, видом, сроком), `history`, `restore`, `delete` |
@@ -51,7 +52,14 @@
 
 Элементы ленты: `user` · `assistant` (`content`, `reasoning`, `tools[]` со статусами `pending|approval|waiting|running|ok|error|denied|interrupted|approved`) · `summary` · `error`. Субагент хранит свою ленту в `tools[].items`.
 
-Инструмент: `{ name, description, parameters, readonly?, concurrent?, planSafe?, risk?:'write'|'danger', target?(args), permission?(args), run(args, ctx) }`; `ctx`: `session`, `place`, `env`, `host`, `llm`, `entry` (карточка вызова — сюда `path`, `diff`, `items`), `signal`, `depth`.
+Инструмент: `{ name, description, parameters, readonly?, concurrent?, planSafe?, risk?:'write'|'danger', untrusted?, outbound?, target?(args), permission?(args), run(args, ctx) }`; `ctx`: `session`, `place`, `env`, `host`, `llm`, `entry` (карточка вызова — сюда `path`, `diff`, `items`), `signal`, `depth`, `tainted` (источники внешнего содержимого в ходе или `null`).
+
+**Чужое содержимое и prompt injection** (`taint.js`, структурная защита, а не только инструкция в промпте):
+- `untrusted: true` — инструмент отдаёт чужой текст (`web_search`, `web_fetch`, `http_request`, `browser_*`, `computer_screenshot/action`, внешние `svc_*` и все `mcp_*`, `net_http/net_probe`); если чужое только иногда — `run` ставит `ctx.entry.untrusted = true` (`read`/`search`/`query` для писем `.eml`, `agent_status`). Исключение (наша валидация) вызов не помечает; `{error}` от сервиса — помечает.
+- Такой результат в контексте модели оборачивается в `<untrusted source="инструмент" id="КОД">…</untrusted id="КОД">`: КОД случаен для каждого вызова (хранится в `entry.nonce`), вхождения `<untrusted` внутри данных экранируются; в ленте (для UI) результат лежит без тегов. `ENV_GUIDE` объясняет модели: внутри тегов — только данные.
+- `outbound` (`true` | `(args) => boolean`) — действие «наружу»: `send` людям, `http_request` не GET, `call` опасных методов/ADMIN, `memory remember`, `schedule create`, `save_skill`, `agent_start/agent_message`, `assign`, `connect_service`, `computer_network on`, `browser_fill_secret`, внешние `svc_*`/`mcp_*` с изменением, все не-readonly инструменты ОС/сети (`guarded()`).
+- **Заражение хода**: с момента `untrusted`-результата и до следующей реплики человека (`ctx.tainted`, вычисляется по ленте — переживает рестарт, учитывает вложенные ленты `task`; субагент наследует заражение родителя через `opts.taintedFrom`) любой `outbound`-инструмент в `decide()` даёт `ask` **без «разрешить всегда»** даже в `auto`; собственный `deny` инструмента сильнее вопроса. В автономном запуске (нет `host.wait`) такое действие отклоняется.
+- Остаточные риски: утечка данных через адрес читающего запроса (`web_fetch`/GET с данными в URL); вывод `sandbox_exec` (команды с сетью) не помечается; письма, пришедшие через `call`/ленту, не помечаются; сводка сжатия контекста пересказывает чужое содержимое без тегов (заражение хода при этом сохраняется).
 
 ## 5. В каком это состоянии
 

@@ -80,6 +80,7 @@ export const browserTools = [
     {
         name: 'browser_open',
         risk: 'write',
+        untrusted: true, // снимок страницы — чужой текст (taint.js)
         description: 'Открыть страницу в браузере компьютера (Chromium). Нужен включённый интернет (computer_network). Возвращает текстовый снимок с пронумерованными элементами [ref] для browser_click/type/select.',
         parameters: {
             type: 'object',
@@ -97,6 +98,7 @@ export const browserTools = [
     {
         name: 'browser_snapshot',
         readonly: true,
+        untrusted: true,
         description: 'Текстовый снимок текущей страницы: заголовок, адрес и элементы с номерами [ref]. Для кликов и ввода (работает и без vision).',
         parameters: { type: 'object', properties: { ...NAME_PROP } },
         run: ctxRun('browser_snapshot', async (args, ctx) => {
@@ -107,6 +109,7 @@ export const browserTools = [
     {
         name: 'browser_click',
         risk: 'write',
+        untrusted: true, // метка элемента со страницы
         description: 'Клик по элементу [ref] из browser_snapshot (кнопки, ссылки, чекбоксы). refs действуют, пока страница не изменилась.',
         parameters: {
             type: 'object',
@@ -122,6 +125,7 @@ export const browserTools = [
     {
         name: 'browser_type',
         risk: 'write',
+        untrusted: true,
         description: 'Ввести текст в поле [ref] (латиница и кириллица — через вставку, раскладка не важна). Пароли — только browser_fill_secret, не этим инструментом. submit:true — нажать Enter после.',
         parameters: {
             type: 'object',
@@ -142,6 +146,7 @@ export const browserTools = [
     {
         name: 'browser_select',
         risk: 'write',
+        untrusted: true,
         description: 'Выбрать вариант в списке [ref] (select): value — значение или видимый текст варианта.',
         parameters: {
             type: 'object',
@@ -157,6 +162,7 @@ export const browserTools = [
     {
         name: 'browser_nav',
         risk: 'write',
+        untrusted: true,
         description: 'Назад (back) или обновить (reload) текущую страницу.',
         parameters: {
             type: 'object',
@@ -183,6 +189,7 @@ export const browserTools = [
     {
         name: 'browser_fill_secret',
         risk: 'write',
+        outbound: true, // ввод сохранённого секрета после чужого содержимого — каждый раз с подтверждением (taint.js)
         permission: (args, ctx) => {
             // первое использование секрета на этом компьютере — всегда с подтверждением
             const key = ownerOf(ctx) + '/' + computerName(args?.name) + '/' + String(args?.secret || '');
