@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runLoop, toMessages, toolContent } from '../sources/modules/agent/loop.js';
 import { decide } from '../sources/modules/agent/permissions.js';
+import { readAudit } from '../sources/server/access/audit.js';
 import { wrapUntrusted, taintSources, untrustedNames, isOutbound, newNonce } from '../sources/modules/agent/taint.js';
 import { metaTools } from '../sources/modules/agent/tools/meta.js';
 import { memoryTools } from '../sources/modules/agent/tools/memory.js';
@@ -352,3 +353,71 @@ describe('taint: цикл агента', () => {
         assert.equal(tool[1], 'файл');
     });
 });
+
+describe('аудит вызовов инструментов (server/access/audit.js)', () => {
+    const agentRows = async () => (await readAudit()).filter(r => r.event === 'agent');
+    /** Только новые записи (readAudit отдаёт по убыванию времени: новые — сверху). */
+    const fresh = (rows, before) => rows.slice(0, Math.max(0, rows.length - before.length));
+
+    it('risk:write ok — запись (инструмент, цель, вердикт, итог, субъект/роль); readonly ok — записи нет', async () => {
+        const rows0 = await agentRows();
+        const w = { name: 'w', risk: 'write', target: () => '/BOX/a.md', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }, run: () => 'сделано' };
+        const ro = { name: 'ro', readonly: true, parameters: { type: 'object', properties: {} }, run: () => 'прочитано' };
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        await runLoop({
+            llm: scripted([{ calls: [{ name: 'ro' }] }, { calls: [{ name: 'w', args: { path: '/BOX/a.md' } }] }, { text: 'итог' }]),
+            system: 'S', items, tools: [ro, w],
+            host: mkHost(),
+            ctx: { session: { uid: 'U1', principal: { id: 'U1', kind: 'user' }, $user: null }, role: 'USER', task: { path: '/ORG/task.task' } },
+        });
+        const rows = fresh(await agentRows(), rows0);
+        assert.equal(rows.length, 1, 'запись только про risk-инструмент');
+        assert.deepEqual(Object.fromEntries(['tool', 'verdict', 'outcome', 'target', 'task', 'subject', 'kind'].map(k => [k, rows[0][k]])),
+            { tool: 'w', verdict: 'allow', outcome: 'ok', target: '/BOX/a.md', task: '/ORG/task.task', subject: 'U1', kind: 'user' });
+        assert.equal(rows[0].role, 'USER');
+        assert.equal(rows[0].args, undefined, 'аргументы не пишутся (секреты)');
+    });
+
+    it('решения человека: подтверждение (always) и отказ (с комментарием) — verdict ask, outcome ok/denied', async () => {
+        const rows0 = await agentRows();
+        const d = { name: 'd', risk: 'danger', parameters: { type: 'object', properties: {} }, run: () => 'сделано' };
+        for (const accept of [true, false]) {
+            const items = [{ id: 'u', type: 'user', content: 'x' }];
+            await runLoop({
+                llm: scripted([{ calls: [{ name: 'd' }] }, { text: 'итог' }]),
+                system: 'S', items, tools: [d],
+                host: mkHost({ wait: async () => ({ accept, always: true, content: accept ? '' : 'не надо' }) }),
+                ctx: { session: { uid: 'U1' } },
+            });
+        }
+        const rows = fresh(await agentRows(), rows0);
+        assert.deepEqual(rows.map(r => [r.verdict, r.outcome, r.always || undefined, r.answer]),
+            [['ask', 'denied', undefined, 'не надо'], ['ask', 'ok', true, undefined]]);
+        assert.ok(rows.every(r => typeof r.reason === 'string' && r.reason.length > 0));
+    });
+
+    it('отказы политики: собственный deny инструмента и ask без человека (заражённый ход) — вердикты deny/ask, итоги policy/denied', async () => {
+        const rows0 = await agentRows();
+        const denying = { name: 'denying', risk: 'write', permission: () => ({ verdict: 'deny', reason: 'нельзя' }), parameters: { type: 'object', properties: {} }, run: () => 'не дошло' };
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        await runLoop({ llm: scripted([{ calls: [{ name: 'denying' }] }, { text: 'итог' }]), system: 'S', items, tools: [denying], host: mkHost(), ctx: { session: { uid: 'U1' } } });
+        const items2 = [{ id: 'u', type: 'user', content: 'x' }];
+        await runLoop({ llm: scripted([{ calls: [{ name: 'fetcher' }] }, { calls: [{ name: 'poster' }] }, { text: 'итог' }]), system: 'S', items: items2, tools: [fetcher(), poster()], host: mkHost(), ctx: { session: { uid: 'U1' } } });
+        const rows = fresh(await agentRows(), rows0);
+        assert.deepEqual(rows.map(r => [r.verdict, r.outcome, r.headless || undefined]),
+            [['ask', 'denied', true], ['deny', 'policy', undefined]]);
+        assert.match(rows[0].reason, /внешнее содержимое/);
+        assert.match(rows[1].reason, /нельзя/);
+    });
+
+    it('ошибка risk-инструмента — тоже запись (outcome error, причина)', async () => {
+        const rows0 = await agentRows();
+        const bad = { name: 'bad', risk: 'write', parameters: { type: 'object', properties: {} }, run() { throw new Error('упало'); } };
+        await runLoop({ llm: scripted([{ calls: [{ name: 'bad' }] }, { text: 'итог' }]), system: 'S', items: [{ id: 'u', type: 'user', content: 'x' }], tools: [bad], host: mkHost(), ctx: { session: { uid: 'U1' } } });
+        const rows = fresh(await agentRows(), rows0);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].outcome, 'error');
+        assert.match(rows[0].error, /упало/);
+    });
+});
+

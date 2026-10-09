@@ -336,6 +336,33 @@ async function runCalls({ it, byName, host, llm, opts }) {
     }
 }
 
+/**
+ * Аудит вызова инструмента (server/access/audit.js, event 'agent'): рискованные (risk) — любой итог,
+ * отказы политики и решения человека — всегда. Аргументы не пишутся (секреты), только цель (target).
+ * Журнал асинхронный и не должен ронять цикл.
+ */
+async function noteAudit(tool, entry, ctx, verdict, outcome, extra = {}) {
+    try {
+        const { audit } = await import('../../server/access/audit.js');
+        let target;
+        try {
+            target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
+        }
+        catch { /* цель не определилась — не повод ломать вызов */ }
+        audit('agent', {
+            tool: tool.name,
+            verdict, outcome,
+            ...extra,
+            target: Array.isArray(target) ? String(target[0]) : (target != null ? String(target) : undefined),
+            task: ctx?.task?.path,
+            error: entry.error ? clip(entry.error, 300) : undefined,
+            ms: entry.durationMs || 0,
+            params: { session: ctx?.session, role: ctx?.role },
+        });
+    }
+    catch { /* журнал не должен ронять цикл */ }
+}
+
 async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     if (!tool) {
         entry.status = 'error';
@@ -377,14 +404,18 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         entry.status = 'denied';
         entry.error = decision.reason || 'запрещено политикой';
         await host.save();
+        await noteAudit(tool, entry, ctx, 'deny', 'policy', { reason: clip(entry.error, 300) });
         return;
     }
     if (decision.verdict === 'ask' && typeof host.wait !== 'function') {
         entry.status = 'denied';
         entry.error = 'нужно подтверждение человека (' + (decision.reason || 'политика') + '), а запуск автономный — предложи действие в ответе';
         await host.save();
+        await noteAudit(tool, entry, ctx, 'ask', 'denied', { reason: clip(decision.reason || 'политика', 300), headless: true });
         return;
     }
+    // подтверждение человека (или пред-подтверждение после рестарта) — в аудит попадает пометкой
+    let approved = preapproved ? { preapproved: true } : null;
     if (decision.verdict === 'ask') {
         entry.status = 'approval';
         entry.reason = decision.reason;
@@ -403,8 +434,10 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
             entry.status = 'denied';
             entry.answer = res.content ? String(res.content) : undefined;
             await host.save();
+            await noteAudit(tool, entry, ctx, 'ask', 'denied', { reason: clip(decision.reason, 300), answer: entry.answer ? clip(entry.answer, 300) : undefined });
             return;
         }
+        approved = { reason: decision.reason, always: !!(res.always && !entry.noAlways) };
     }
     entry.status = 'running';
     const t0 = Date.now();
@@ -441,6 +474,10 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         entry.nonce = newNonce();
     entry.durationMs = Date.now() - t0;
     await host.save();
+    // аудит: рискованные (risk) — любой итог; подтверждённые человеком — verdict 'ask'; пред-подтверждённые — 'allow' с пометкой
+    if (tool.risk || approved || entry.status !== 'ok')
+        await noteAudit(tool, entry, ctx, approved ? 'ask' : 'allow', entry.status,
+            approved ? { reason: clip(approved.reason, 300), always: approved.always || undefined, preapproved: approved.preapproved || undefined } : {});
 }
 
 /** Незакрытые вызовы (обрыв, рестарт) → interrupted: модель увидит честный результат. */
