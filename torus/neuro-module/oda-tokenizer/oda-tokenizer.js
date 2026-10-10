@@ -110,8 +110,8 @@ ODA({is: 'oda-tokenizer',
                     label: `${word[1]}`
                 };
             });
-            const res = await ODA.showDropdown('oda-menu', {items:list} );
-            const choice = res.control.focusedItem.label.split('\"')[1];
+            const res = await ODA.showMenu({ items: list });
+            const choice = res.label.split('\"')[1];
             this.focused_token = choice;
             this.async(()=>{
                 this.$('div[focused]').scrollIntoViewIfNeeded();

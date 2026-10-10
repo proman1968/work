@@ -1,4 +1,5 @@
 import "../oda/oda.js";
+import "../oda/components/containers/containers.js";
 import * as CORE from "./client/index.js";
 import { Reactor } from "./reactor.js";
 import { RTCCaller } from "./modules/call/call.js";
@@ -232,7 +233,9 @@ WORK.__bind = function (data, path = '') {
             }
             for (let list of CORE.$item.LISTS) {
                 let items = data[list];
-                if (items?.length) {
+                // пустой список из ответа — тоже знание (детей нет): без этого дерево
+                // перезапрашивало бы @items у каждого пустого узла
+                if (Array.isArray(items)) {
                     item[list] = WORK.__bind(items);
                 }
             }
@@ -244,151 +247,12 @@ WORK.__bind = function (data, path = '') {
 
 
 
-WORK.showModal = function (el, params = {}) {
-    params.popoverType = 'modal';
-    return WORK.showPopover(el, params);
-}
-WORK.showDialog = function (el, params = {}) {
-    params.popoverType = 'dialog';
-    return WORK.showPopover(el, params);
-}
-WORK.showMenu = function (params = {}, e) {
-    params.popoverType = 'menu';
-    params.menu ??= ODA.createComponent('item-menu', params);
-    return WORK.showPopover(params.menu, params, e);
-}
-WORK.showConfirm = function (textContent = 'Подтвердить?', params = {}) {
-    const el = ODA.createElement('p', {textContent, style: 'margin: 1em;'});
-    return WORK.showDialog(el, {
-        allowClose: true,
-        TITLE: { label: 'Подтверждение', allowClose: true },
-        OK: { label: 'Да', icon: 'icons:check' },
-        CANCEL: { label: 'Нет', icon: 'icons:close' },
-        ...params
-    });
-}
-
-WORK.showDropdown = function (el, params = {}, e) {
-    params.popoverType = 'dropdown';
-    return WORK.showPopover(el, params, e);
-}
-
-/** Типизированная ошибка отмены popover (отличается от реальной ошибки через instanceof). */
-WORK.CancelError = class WORK_CancelError extends Error {}
-
-/** Стек открытых pop в порядке открытия. */
-WORK.popovers = [];
-/** WeakMap pop -> {resolve, reject} — резолверы промисов showPopover. */
-WORK.popoverResolvers = new WeakMap();
-
-/** Единый путь закрытия pop: результат -> resolve, отмена -> reject(CancelError). */
-WORK.closePopup = function (pop, result) {
-    const idx = WORK.popovers.indexOf(pop);
-    if (idx === -1)
-        return;
-    for (let i = WORK.popovers.length - 1; i > idx; i--) {
-        if (WORK.popovers[i].popoverType === 'modal')
-            break;
-        WORK.closePopup(WORK.popovers[i]);
-    }
-    WORK.popovers.splice(idx, 1);
-    const resolver = WORK.popoverResolvers.get(pop);
-    WORK.popoverResolvers.delete(pop);
-    pop.remove();
-    if (!resolver)
-        return;
-    if (result)
-        resolver.resolve(result);
-    else
-        resolver.reject(new WORK.CancelError());
-}
-
-/** Закрывает с отменой pop сверху стека до stopIdx (не включая его); модалы не трогает. */
-WORK.dismissTo = function (stopIdx) {
-    for (let i = WORK.popovers.length - 1; i > stopIdx; i--) {
-        if (WORK.popovers[i].popoverType === 'modal')
-            break;
-        WORK.closePopup(WORK.popovers[i]);
-    }
-}
-
-/** Закрывает с отменой все не-модальные pop сверху стека. */
-WORK.dismissToModal = function () {
-    WORK.dismissTo(-1);
-}
-
-/** Закрывает с отменой все pop поверх заданного; сам pop и контекст модала не трогает. */
-WORK.dismissAbove = function (pop) {
-    const idx = WORK.popovers.indexOf(pop);
-    if (idx !== -1)
-        WORK.dismissTo(idx);
-}
-
-/** Возвращает pop (элемент с атрибутом popover), внутри которого находится target, или null. */
-WORK.findPopover = function (target) {
-    let h = target;
-    while (h && h.nodeType === 1 && !h.hasAttribute?.('popover'))
-        h = h.host || h.parentElement;
-    return h;
-}
-
-WORK._closeFrames ??= new WeakSet();
-WORK._bindCloseFrames = function () {
-    for (let i = 0; i < window.frames.length; i++) {
-        const frame = window.frames[i];
-        if (WORK._closeFrames.has(frame))
-            continue;
-        WORK._closeFrames.add(frame);
-        frame.addEventListener('pointerdown', () => WORK.dismissToModal());
-    }
-}
-
-/** Не-top окна слушают клики во всех предках до window.top, чтобы закрывать свои pop. */
-WORK._bindParentClose = function () {
-    if (WORK._parentCloseBound)
-        return;
-    WORK._parentCloseBound = true;
-    const targets = [];
-    let t = window.parent;
-    while (t && t !== window) {
-        targets.push(t);
-        if (t === window.top)
-            break;
-        try { t = t.parent; }
-        catch { break; }
-    }
-    for (let t of targets) {
-        try {
-            t.document.addEventListener('pointerdown', () => WORK.dismissToModal());
-        } catch {}
-    }
-}
-
-WORK.showPopover = function (el, params = {}, e) {
-    return new Promise((resolve, reject) => {
-        const pop = ODA.createComponent('item-popover', params);
-        if (params.popoverType === 'menu' || params.popoverType === 'dropdown') {
-            const src = e?.target ?? (e?.nodeType === 1 ? e : null);
-            if (!WORK.findPopover(src))
-                WORK.dismissToModal();
-        }
-        pop.setAttribute('popover', 'manual');
-        pop.position = e;
-        pop.control = el;
-        WORK.popovers.push(pop);
-        WORK.popoverResolvers.set(pop, { resolve, reject });
-        pop.listen('close', ev => WORK.closePopup(pop, ev.detail?.value), { once: true });
-        pop.listen('beforetoggle', ev => {
-            if (ev.newState === 'closed')
-                WORK.closePopup(pop);
-        });
-        WORK._bindCloseFrames();
-        window.document.body.appendChild(pop);
-        try { pop.showPopover(); }
-        catch (e) { WORK.closePopup(pop); }
-        pop.async?.(() => pop._show?.());
-    })
-}
+// Всплывающие окна — ODA (oda/components/containers): WORK подставляет свою оболочку item-popover и меню item-menu
+ODA.popoverTag = 'item-popover';
+ODA.menuTag = 'item-menu';
+for (const name of ['showPopover', 'showModal', 'showDialog', 'showMenu', 'showConfirm', 'showDropdown', 'showPrompt',
+    'CancelError', 'popovers', 'popoverResolvers', 'closePopup', 'dismissTo', 'dismissToModal', 'dismissAbove', 'findPopover'])
+    WORK[name] = ODA[name];
 WORK.clearSessionCache = function () {
     for (const item of Object.values(CORE.$item.ITEMS)) {
         Reactor.cleanupDeps(item);
@@ -412,6 +276,40 @@ WORK.syncAuthUI = async function () {
 
 /** Событие auth для подписчиков в той же вкладке + BroadcastChannel для других. */
 WORK.authEvents ??= (typeof EventTarget !== 'undefined') ? new EventTarget() : null;
+
+/**
+ * Предпочитаемая роль на всё приложение: localStorage + рассылка окнам
+ * (родитель и iframe), как авторизация. Эффективная роль каждого элемента
+ * пересчитывается через item.syncRole().
+ */
+WORK.ROLE_KEY = 'work-role';
+try {
+    WORK.preferredRole ??= globalThis.localStorage?.getItem(WORK.ROLE_KEY) || '';
+}
+catch { WORK.preferredRole ??= ''; }
+WORK.setPreferredRole = function (role) {
+    role = String(role || '');
+    WORK.preferredRole = role;
+    try { globalThis.localStorage?.setItem(WORK.ROLE_KEY, role); } catch {}
+    try { WORK.ROLE_CHANNEL?.postMessage({ role }); } catch {}
+    WORK.applyRoleToItems();
+};
+WORK.applyRoleToItems = function () {
+    try {
+        for (const item of Object.values(CORE.$item.ITEMS))
+            if (item?.role && typeof item.syncRole === 'function')
+                item.syncRole().catch(() => {});
+    } catch {}
+};
+if (typeof BroadcastChannel !== 'undefined') {
+    WORK.ROLE_CHANNEL ??= new BroadcastChannel(WORK.ROLE_KEY);
+    WORK.ROLE_CHANNEL.addEventListener('message', (e) => {
+        const role = String(e.data?.role || '');
+        WORK.preferredRole = role;
+        try { globalThis.localStorage?.setItem(WORK.ROLE_KEY, role); } catch {}
+        WORK.applyRoleToItems();
+    });
+}
 WORK.notifyAuth = function (payload = {}) {
     try { WORK.AUTH_CHANNEL?.postMessage(payload); } catch {}
     try {
@@ -462,6 +360,8 @@ WORK.login = async function(){
         let KEY = secure.getItem('KEY');
         let uid = WORK.credentials?.uid;
         if(uid && KEY){
+            if (WORK.uid && WORK.uid !== uid)
+                await WORK.removeCurrentPushSubscription?.();
             let challengeId = crypto.randomUUID();
             const challenge = await WORK.fetch("/", 'user_login_start', { uid, challengeId});
             KEY = Uint8Array.from(atob(KEY), c => c.charCodeAt(0));
@@ -474,6 +374,8 @@ WORK.login = async function(){
             WORK.notifyAuth?.({ uid, reason: 'login' });
             return res;
         }
+        if (WORK.uid)
+            await WORK.removeCurrentPushSubscription?.();
         WORK.uid = '';
         WORK.USER = undefined;
         await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
@@ -502,6 +404,18 @@ WORK.storePushSubscription = function (subscription) {
 WORK.removePushSubscription = function (subscription) {
     return WORK.fetch("/", 'remove_push_subscription', {}, subscription);
 }
+/** Перед выходом убрать подписку у прежнего uid, иначе следующий пользователь получит его push. */
+WORK.removeCurrentPushSubscription = async function () {
+    if (!WORK.uid || !navigator.serviceWorker || typeof Notification === 'undefined' || Notification.permission !== 'granted')
+        return;
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub)
+            await WORK.removePushSubscription(sub);
+    }
+    catch (e) { console.warn('[push] unsubscribe user', e); }
+};
 WORK.urlBase64ToUint8Array = function(base64String){
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding)
@@ -522,22 +436,6 @@ WORK.arrayBufferToBase64 = function(buffer) {
     }
     return window.btoa(binary);
 }
-window.addEventListener('pointerdown', e => {
-    if (!WORK.popovers?.length)
-        return;
-    const pop = WORK.findPopover(e.target);
-    if (pop) {
-        WORK.dismissAbove(pop);
-        return;
-    }
-    WORK.dismissToModal();
-})
-
-/** Отмены popover не считаются ошибками приложения — не шумим в консоль. */
-window.addEventListener('unhandledrejection', e => {
-    if (e.reason instanceof WORK.CancelError)
-        e.preventDefault();
-})
 
 
 
@@ -633,9 +531,22 @@ setTimeout(() => {
                         delete item[key];
                         Reactor.invalidate(item, key);
                     }
+                    // «есть дети» мог устареть (создан/удалён потомок) — дерево перепроверит по items
+                    if (item.DATA)
+                        delete item.DATA.hasItems;
                     // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
                     // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON
                     item.increaseVersion();
+                    // роли пользователей приходят в данных элемента (roleIds): подтянуть свежие и сбросить списки
+                    if (item.DATA?.roleIds && !(item instanceof CORE.$user) && !WORK._roleRefresh.has(item)) {
+                        WORK._roleRefresh.add(item);
+                        item.fetch('info').then(() => {
+                            for (const key of ['admins', 'bosses', 'users', 'guests']) {
+                                delete item[key];
+                                Reactor.invalidate(item, key);
+                            }
+                        }).catch(() => { }).finally(() => WORK._roleRefresh.delete(item));
+                    }
                     item.fire('changed', data);
                 }
             }
@@ -662,39 +573,41 @@ WORK.top = (() => {
     return top;
 })();
 if (WORK.top === window) {
-    setTimeout(async () => {
-        const swRegistration = await navigator.serviceWorker.register('/sw.js');
-        await navigator.serviceWorker.ready;
-        const pushPermission = await WORK.requestNotificationPermission();
-        if (pushPermission) {
-            try {
-                const vapidPublicKey = await WORK.getPublicVapid();
-                let pushSubscription = await swRegistration.pushManager.getSubscription();
-                const subscriptionIsValid = (() => {
-                    if (pushSubscription) {
-                        return (!pushSubscription.expirationTime || Date.now() < pushSubscription.expirationTime) &&
-                            WORK.arrayBufferToBase64(pushSubscription.options.applicationServerKey) === vapidPublicKey
-                    }
-                    return false;
-                })();
-                if(!subscriptionIsValid){
-                    if(pushSubscription){
-                        await WORK.removePushSubscription(pushSubscription);
-                        await pushSubscription.unsubscribe();
-                    }
-                    pushSubscription = await swRegistration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: WORK.urlBase64ToUint8Array(vapidPublicKey)
-                    });
-                    await WORK.storePushSubscription(pushSubscription);
-                }
+    /** Кнопка в задаче вызывает с user gesture; при входе уже выданное разрешение переиспользуется. */
+    WORK.enableTaskNotifications = async function (ask = true) {
+        if (!WORK.uid || !navigator.serviceWorker || typeof Notification === 'undefined')
+            return false;
+        // Запрашиваем разрешение до первого await — браузер требует прямого пользовательского действия.
+        const permission = ask ? await WORK.requestNotificationPermission() : Notification.permission === 'granted';
+        if (!permission)
+            return false;
+        try {
+            const reg = await navigator.serviceWorker.register('/sw.js');
+            const vapid = await WORK.getPublicVapid();
+            let subscription = await reg.pushManager.getSubscription();
+            const valid = subscription && (!subscription.expirationTime || Date.now() < subscription.expirationTime)
+                && subscription.options?.applicationServerKey
+                && WORK.arrayBufferToBase64(subscription.options.applicationServerKey) === vapid;
+            if (!valid) {
+                if (subscription)
+                    await subscription.unsubscribe();
+                subscription = await reg.pushManager.subscribe({ userVisibleOnly: true,
+                    applicationServerKey: WORK.urlBase64ToUint8Array(vapid) });
             }
-            catch (err) {
-                console.warn(err);
-            }
+            // Даже действующую подписку привязываем к текущему uid после входа/рестарта.
+            await WORK.storePushSubscription(subscription);
+            return true;
         }
+        catch (err) { console.warn('[push] subscription', err); return false; }
+    };
+    setTimeout(() => {
+        WORK.enableTaskNotifications(false);
         RTCCaller.init();
     }, 3000);
+    WORK.authEvents?.addEventListener('auth', e => {
+        if (e.detail?.uid)
+            WORK.enableTaskNotifications(false);
+    });
 }
 let _renderCanvas = null;
 function getRenderCanvas()  {
@@ -854,6 +767,28 @@ WORK.renderSVG = async (svg) => {
     img.src = dataUrl;
     return promise;
 }
+/** Элементы, у которых идёт обновление ролей (не читать произвольные свойства реактивного элемента — это запрос на сервер). */
+WORK._roleRefresh = new WeakSet();
+/** Пользователи по uid: общий список /USERS (один запрос), недостающих — добор по одному. */
+WORK.usersByIds = async function (ids) {
+    if (!ids?.length)
+        return [];
+    let all = [];
+    try {
+        all = (await WORK.users) || [];
+    }
+    catch { all = []; }
+    const byId = new Map(all.map(u => [u.id, u]));
+    const out = [];
+    for (const id of ids) {
+        let u = byId.get(id);
+        if (!u)
+            u = await WORK.get_item('/USERS//' + id);
+        if (u)
+            out.push(u);
+    }
+    return out;
+}
 Object.defineProperty(WORK, 'users', {
     get(){ //todo надо сбрасывать при появлении новых пользователей на сервере
         return WORK._users ??= new AsyncPromise(async _=>{
@@ -866,4 +801,3 @@ Object.defineProperty(WORK, 'users', {
 
 
 new WebSocketEvents();
-WORK._bindParentClose();

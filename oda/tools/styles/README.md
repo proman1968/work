@@ -14,6 +14,12 @@
 
 Не задавайте в компонентах собственные `#fff`, `rgba(0,0,0,.1)` и т.п., если задачу решает семантический хранилищ (`content`, `light`, `accent-invert`, …).
 
+## Слоты и flex
+
+ODA складывает распределённые узлы внутрь `<slot>` как fallback-контент. Голый `<slot>` прозрачен для раскладки (`slot { display: contents }`), поэтому содержимое панели — полноправный flex-элемент колонки. Слоты с классами (`vertical`, `flex`, …) работают как обычно.
+
+Правило для панелей: скроллируемый элемент — `flex: 1; min-width: 0; min-height: 0; overflow: auto` (в колонке) и цепочка `min-height: 0` вверх до фиксированной высоты. Фиксированные `width`/`height`/`100%`/`100dvh` — только крайняя мера.
+
 ## Mixins и `@apply`
 
 Правило в `:root` с именем `--имя` и телом `{ … }` — **mixin**. В `<style>` компонента:
@@ -158,7 +164,7 @@
 
 ## Поля ввода
 
-Глобально `input` / `textarea` наследуют `--content-background` и `--content-color`. Внутри themed-контейнера (`content border`) достаточно:
+Глобально `input` наследует `--content-background` и `--content-color`; поля ввода библиотеки — `oda/components/inputs` (рамка `@apply --control`). Внутри themed-контейнера (`content border`) достаточно:
 
 ```css
 .prompt {
@@ -173,11 +179,20 @@
 
 Placeholder наследует цвет с `opacity: .5` (см. `styles.js`).
 
+## Тема, шкалы и контролы
+
+- `:root { color-scheme: light dark }` — тема по системной настройке без meta в странице; `accent-color` и `caret-color` нативных контролов — от `--accent-color`.
+- Цвета `--focused-color`, `--border-color`, `--shadow-color`, статусы (`--success-*`, `--error-*`, `--warning-*`), `--disabled-color` выводятся из темы (`oklch` / `light-dark`), не литералы.
+- Шкалы: `--radius-xs|s|m|l|xl|round`, `--space-xs|s|m|l|xl`, `--font-size-xs|s|m|l`, `--line-height`, `--elevation-1|2|3`, `--duration-fast`, `--duration`, `--easing`.
+- Контролы: `--control-height`, `--control-padding`, `--control-radius`, `--control-background`, `--control-color`, `--control-border-color|hover|focus`; миксин `--control` (рамка поля, только `@apply`).
+- Фокус: `:focus-visible` глобально, `--focus-ring-width|offset|color`, миксин `--focus-ring`.
+- `prefers-reduced-motion: reduce` отключает анимации.
+
 ## Токены и служебные миксины
 
 - Токены (`styles.js`, блок «Современные токены»): `--radius-s|m|l`, `--space-s|m|l`, `--font-mono`, `--muted-color`, `--subtle-background`, `--subtle-border`, `--code-background`, `--accent-soft`, `--success-soft`, `--error-soft`, `--warning-soft` — всё выводится из ролей темы.
 - Миксины `--card`, `--muted`, `--chip` — поверхности и подписи.
-- Только для `@apply` (без глобальных `[attr]`, чтобы не конфликтовать со свойствами компонентов): `cover`, `hover`, `shadow-transition`, `error-before`, `help-after`, `font-150`, `user-select`, `boxed`, `heading`, `text-shadow`, `text-shadow-black` (`APPLY_ONLY`).
+- Только для `@apply` (без глобальных `[attr]`, чтобы не конфликтовать со свойствами компонентов): `control`, `focus-ring`, `cover`, `hover`, `shadow-transition`, `error-before`, `help-after`, `font-150`, `user-select`, `boxed`, `heading`, `text-shadow`, `text-shadow-black` (`APPLY_ONLY`).
 - Неизвестный `@apply --x` — предупреждение в консоли, правило пропускается (раньше в CSS вставлялось `undefined`).
 - `html { touch-action: manipulation }` — прокрутка и масштаб на телефоне; перетаскивание — `pointer*` + `setPointerCapture` в компоненте.
 

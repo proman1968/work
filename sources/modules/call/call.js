@@ -1,3 +1,13 @@
+/** Растеризация oda-icon для canvas звонка: текстовая иконка (@…) — renderText, svg — renderSVG. */
+function renderIcon(icon) {
+    if (!icon._icon)
+        return;
+    if (icon._icon.lib?.startsWith('@'))
+        return WORK.renderText(icon.$('.icon'), icon.iconColor);
+    const svg = icon.$('svg');
+    if (svg)
+        return WORK.renderSVG(svg);
+}
 export class RTCCaller extends EventTarget {
     static CALL_SOUND_PATH = '/sources/modules/call/call.mp3';
     static AWAIT_SOUND_PATH = '/sources/modules/call/await.mp3';
@@ -1127,7 +1137,7 @@ ODA({is: 'call-form',
             <div class="buttons" horizontal flex>
                 <oda-button :icon="videoEnabled ? 'carbon:video' : 'carbon:video-off'" shadow round @click="toggleVideo" :success="videoEnabled" :disabled="screenCasting"></oda-button>
                 <oda-button :icon="audioEnabled ? 'carbon:microphone' : 'carbon:microphone-off'" shadow round @click="toggleAudio" :success="audioEnabled"></oda-button>
-                <oda-toggle ::toggled="screenCasting" size="32" checked-label="screen" unchecked-label="video"></oda-toggle>
+                <oda-toggle ::value="screenCasting" size="32" checked-label="screen" unchecked-label="video"></oda-toggle>
             </div>
             <oda-button class="stop" @tap="end_call" shadow icon-size="48" round error :icon="recdMode ? 'carbon:stop-filled-alt' : 'communication:call-end'"></oda-button>
 
@@ -1401,7 +1411,7 @@ ODA({
             ctx.drawImage(this.video, video_x, video_y, video_w, video_h);
         }
         if (this.icon) {
-            const iconImage = await this.icon.image;
+            const iconImage = await renderIcon(this.icon);
             if (iconImage) {
                 const icon_x = x + this.icon.offsetLeft;
                 const icon_y = y + this.icon.offsetTop;
@@ -1416,7 +1426,7 @@ ODA({
             }
         }
         if (this.micIcon) {
-            const iconImage = await this.micIcon.image;
+            const iconImage = await renderIcon(this.micIcon);
             if (iconImage) {
                 const icon_x = x + this.micIcon.offsetLeft;
                 const icon_y = y + this.micIcon.offsetTop;

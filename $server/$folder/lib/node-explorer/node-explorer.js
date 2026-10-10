@@ -1,5 +1,5 @@
 export default {
-    imports: '~/lib//node',
+    imports: '~/lib//node, ~/lib//role',
     template: /*html*/`
         <style>
             :host {
@@ -58,6 +58,7 @@ export default {
                 @tap.stop="expand($for.item)"
             ></oda-icon>
         </div>
+        <item-role no-flex ~if="showRole" :$item></item-role>
         <slot no-flex></slot>        
     `,
     async get_icon(item){
@@ -67,6 +68,10 @@ export default {
     iconSize: 24,
     nextIcon: 'icons:chevron-right',
     focusedItem: null,
+    showRole: {
+        $def: false,
+        $attr: true,
+    },
     levels: {
         $type: Array,
         async get() {

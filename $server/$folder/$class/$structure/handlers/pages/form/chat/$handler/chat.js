@@ -1,3 +1,15 @@
+import { taskKeyOf, taskDayOf, isCreatedTask } from './chat-task.js';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** localStorage.workChatDebug = 1 — журнал времён создания задачи в консоли. */
+function chatDebug(...a) {
+    try {
+        if (globalThis.localStorage?.workChatDebug)
+            console.log('[chat]', Math.round(performance.now()) + 'мс', ...a);
+    }
+    catch { /* нет localStorage */ }
+}
+
 /** Первый лист $ai с chat (или без caps). image-only не мозг задачи. */
 async function firstChatLeaf(node) {
     if (!node)
@@ -272,6 +284,10 @@ ODA({is: 'oda-chat',
         this.send();
     },
     onBarStop() {
+        // Пока send в полёте — стоп не снимает ожидание карточки: это может быть
+        // второй клик по send, а не осознанный отказ от ожидания.
+        if (this._sending)
+            return;
         this.awaitTask = false;
     },
     async _onPromptKey(e){
@@ -320,53 +336,31 @@ ODA({is: 'oda-chat',
         $save: true,
     },
     async send(){
-        this.$('#ribbon').scrollDown = true;
+        // Один send за раз: повторные Enter/клики игнорируются, иначе каждый клик создаст свою задачу-дубликат.
+        if (this._sending)
+            return;
         const files = this.$('work-prompt-bar')?.files ?? this.files;
         if (!(this.value || files.length)) return;
+        chatDebug('send: клик');
+        this.$('#ribbon').scrollDown = true;
 
-        let params = {encoding: 'utf-8'}
-        if(this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
-            params.receivers = [this.$pdp.$item.id];
-        else if(this.$pdp.receivers.length)
-            params.receivers = this.$pdp.receivers.map(u => u.id);
-
-        const onFail = err => console.warn('[chat] send', err);
         const text = String(this.value ?? '').trim();
         const list = [...files];
+        // Черновик на случай сбоя: поле очищается до сохранения — при ошибке вернуть текст и вложения.
+        const draft = { value: this.value, files: list, reply: this.$pdp.replyTarget };
+        this._sending = true;
 
         try {
             if (this.isAIMode) {
-                this.awaitTask = true;
-                params.location = await this.location();
-                params.prompt = text;
-                if (list.length) {
-                    const paths = [];
-                    for (const file of list) {
-                        const log = await this.$pdp.$item.save_file(file, {
-                            encoding: params.encoding,
-                            ignore_save_logs: true,
-                        });
-                        const path = log?.logFullPath || log?.path;
-                        if (path)
-                            paths.push(path.startsWith('/') ? path : '/' + path);
-                    }
-                    if (paths.length)
-                        params.includes = JSON.stringify(paths);
-                }
-                const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
-                const body = {
-                    name,
-                    created: Date.now(),
-                    items: [],
-                };
-                if (this.model) body.model = this.model;
-                // effort всегда в body: hasEffort ложен, пока capabilities ещё Promise — иначе task стартует без effort → off
-                body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
-                const taskFile = new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' });
+                // экран «создаю задачу» — сразу, до любых запросов: человек видит, что процесс пошёл
                 this.clear();
-                const log = await this.$pdp.$item.save_file(taskFile, params);
-                this._awaitNewTask(log?.logFullPath || log?.path);
+                await this._createTask({ text, files: list, draft });
             } else {
+                const params = { encoding: 'utf-8' };
+                if (this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
+                    params.receivers = [this.$pdp.$item.id];
+                else if (this.$pdp.receivers.length)
+                    params.receivers = this.$pdp.receivers.map(u => u.id);
                 if (list.length) {
                     const formData = new FormData();
                     for (const file of list)
@@ -380,48 +374,167 @@ ODA({is: 'oda-chat',
                 this.clear();
             }
         } catch (err) {
-            onFail(err);
-            this.awaitTask = false;
+            console.warn('[chat] send', err);
+            // Сбой — черновик не теряем: текст и вложения обратно в поле.
+            this.value = draft.value;
+            this.files = draft.files;
+            this.$pdp.replyTarget = draft.reply;
+            ODA.showMessage?.('Не удалось отправить: ' + (err?.message || err));
+            this.focusInput();
+        }
+        finally {
+            this._sending = false;
         }
         this.$('#ribbon').scrollDown = true;
     },
     /**
+     * Создание задачи: экран «создаю» → вложения → сохранение → явный запуск агента → карточка открыта по пути из ответа.
+     * resume — задача уже создана (повтор запуска после сбоя), второй не создаётся.
+     */
+    async _createTask({ text, files, draft }) {
+        this.awaitTask = true;
+        const item = this.$pdp.$item;
+        try {
+            const attachments = [];
+            await Promise.all(files.map(async file => {
+                const log = await item.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
+                const path = log?.logFullPath || log?.path;
+                if (path)
+                    attachments.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
+            }));
+            const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
+            const body = { name, created: Date.now(), items: [] };
+            if (this.model)
+                body.model = this.model;
+            body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
+            const params = { encoding: 'utf-8' };
+            if (attachments.length) {
+                params.includes = JSON.stringify(attachments.map(a => a.path));
+                params.attachments = JSON.stringify(attachments);
+            }
+            const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
+            const path = log?.logFullPath || log?.path || '';
+            this.awaitTask = false;
+            if (path)
+                await this._openCreated(path);
+            else
+                this._awaitNewTask('');
+        }
+        catch (err) {
+            console.warn('[chat] создание задачи', err);
+            this.awaitTask = false;
+            ODA.showMessage?.('Не удалось отправить: ' + (err?.message || err));
+            this.value = draft.value;
+            this.files = draft.files;
+            this.$pdp.replyTarget = draft.reply;
+            this.focusInput();
+        }
+    },
+    /**
+     * Карточка созданной задачи — раскрыта сразу по пути из ответа сервера: .task-файл кладётся в ленту дня
+     * (chat-day.adoptTask), события ленты не ждём. Не вышло — прежний путь: ждать запись ленты (_awaitNewTask).
+     */
+    async _openCreated(path) {
+        const ribbon = this.$('#ribbon');
+        const day = taskDayOf(path) || new Date().toLocalDay();
+        try {
+            if (!ribbon.dateList.includes(day)) {
+                ribbon.dateList = [...ribbon.dateList, day].sort();
+                ribbon.render();
+            }
+            let dayEl = null;
+            for (let i = 0; i < 40 && !dayEl; i++) {
+                dayEl = [...(ribbon.$$('chat-day') || [])].find(d => d.day === day);
+                if (!dayEl)
+                    await sleep(50);
+            }
+            if (!dayEl)
+                throw new Error('нет дня в ленте: ' + day);
+            const file = await WORK.get_item(path);
+            if (!file || Array.isArray(file))
+                throw new Error('нет файла задачи: ' + path);
+            await dayEl.adoptTask(file);
+        }
+        catch (err) {
+            console.warn('[chat] открыть созданную задачу напрямую не вышло — ждём запись ленты:', err?.message || err);
+            this._awaitKnown = new Set((ribbon?.$$?.('chat-day') || []).flatMap(d => (d.logItems || []).map(i => String(i?.id || ''))));
+            this.awaitTask = true;
+            this._awaitNewTask(path);
+        }
+    },
+    /**
      * Новая задача сохранена: день — из пути файла (…/YYYY-MM-DD/….task), а не из часов браузера.
      * Нет дня в ленте — добавить (chat-day раскроет карточку, пока awaitTask). Страховка: 15 с — снять ожидание.
+     * _awaitTaskKey — имя файла задачи: точный ключ карточки (chat-task.js), не зависит от времени и префикса пути.
      */
     _awaitNewTask(path) {
-        const day = String(path || '').match(/\/(\d{4}-\d{2}-\d{2})\/[^/]+\.task$/)?.[1];
+        const day = taskDayOf(path);
         const ribbon = this.$('#ribbon');
         if (day && ribbon && !ribbon.dateList.includes(day)) {
             ribbon.dateList = [...ribbon.dateList, day].sort();
             ribbon.render();
         }
+        this._awaitTaskPath = String(path || '');
+        this._awaitTaskKey = taskKeyOf(path);
+        // Ретрай: вызываем _expandCreatedTask на всех видимых днях (найдёт по времени).
+        for (const el of ribbon?.$$?.('chat-day') || [])
+            el?._expandCreatedTask?.();
         clearTimeout(this._awaitTimer);
         this._awaitTimer = setTimeout(() => {
             if (!this.awaitTask)
                 return;
             this.awaitTask = false;
+            this._awaitTaskPath = '';
+            this._awaitTaskKey = '';
+            this._awaitKnown = null;
             ODA.showMessage?.('Задача создана' + (path ? ': ' + path : '') + ' — карточка не появилась в ленте, откройте из журнала');
         }, 15000);
     },
-    async location() {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const pos = await this._geo();
-        return JSON.stringify(pos ? { lat: pos.lat, lon: pos.lon, tz } : { tz });
-    },
+    /**
+     * Геопозиция для запроса: уже известная (30 минут) или запрашивается при открытии чата. Отправку она не держит:
+     * getCurrentPosition не имеет тайм-аута, пока человек не ответил на запрос разрешения, — свои 6 с; отказ помним 30 минут.
+     */
     _geo() {
-        if (this._geoFix) return this._geoFix;
-        if (!navigator.geolocation) return null;
-        return this._geoWait ??= new Promise(resolve => {
+        const now = Date.now();
+        const TTL = 30 * 60 * 1000;
+        if (this._geoFix && now - (this._geoFix.at || 0) < TTL)
+            return this._geoFix;
+        this._geoFix = null;
+        if (!navigator.geolocation || (this._geoDeniedAt && now - this._geoDeniedAt < TTL))
+            return null;
+        if (this._geoWait)
+            return this._geoWait;
+        let finished = false;
+        const promise = new Promise(resolve => {
+            const finish = (pos, denied = false) => {
+                if (finished)
+                    return;
+                finished = true;
+                clearTimeout(timer);
+                this._geoWait = null;
+                if (pos)
+                    this._geoFix = pos;
+                if (denied)
+                    this._geoDeniedAt = Date.now();
+                resolve(pos);
+            };
+            const timer = setTimeout(() => {
+                chatDebug('геопозиция: ответа нет');
+                finish(null);
+            }, 6000);
             navigator.geolocation.getCurrentPosition(
-                p => {
-                    this._geoFix = { lat: p.coords.latitude, lon: p.coords.longitude };
-                    resolve(this._geoFix);
+                p => finish({ lat: p.coords.latitude, lon: p.coords.longitude, at: Date.now() }),
+                err => {
+                    chatDebug('геопозиция недоступна:', err?.message || err);
+                    finish(null, err?.code === 1);
                 },
-                () => resolve(null),
                 { enableHighAccuracy: false, maximumAge: 300000, timeout: 4000 }
             );
         });
+        // колбэк мог сработать синхронно (finished) — тогда запоминать ожидание нельзя: оно залипло бы навсегда
+        if (!finished)
+            this._geoWait = promise;
+        return promise;
     },
 });
 ODA({is: 'chat-ribbon',
@@ -561,7 +674,8 @@ ODA({is: 'chat-ribbon',
         return this.dateList;
     },
     detached() {
-        this.$item.unlisten('changed', this.onChanged);
+        this.$item?.unlisten?.('changed', this.onChanged);
+        this._datesWatch = null;
     }
 })
 ODA({is: 'chat-day',
@@ -657,6 +771,12 @@ ODA({is: 'chat-day',
                 try {
                     const raw = await f.load();
                     const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    // Записи файлов из контекста задачи — только внутри её карточки, не отдельными карточками.
+                    if (row?.mainContext)
+                        continue;
+                    // задача, принятая в ленту напрямую (adoptTask), — карточка уже есть; запись журнала о ней не дублируем
+                    if (row?.ext === 'task' && this._adopted?.has(taskKeyOf(row.path)))
+                        continue;
                     if (row?.path)
                         key = row.path;
                 }
@@ -667,7 +787,38 @@ ODA({is: 'chat-day',
             seen.add(key);
             result.push(f);
         }
-        return result;
+        // принятые напрямую задачи в журнале дня могут ещё не появиться — не теряем их при перечитывании ленты
+        for (const f of this._adopted?.values() || [])
+            if (!result.some(r => r?.id === f.id))
+                result.push(f);
+        return this._sortLogFiles(result);
+    },
+    /**
+     * Принять только что созданную задачу в ленту дня сразу по её файлу: карточка раскрывается, не дожидаясь записи
+     * журнала. Резолвится, когда форма задачи нарисована (до этого чат держит экран «создаю задачу»).
+     */
+    async adoptTask(file) {
+        const key = taskKeyOf(file.path) || String(file.id);
+        (this._adopted ??= new Map()).set(key, file);
+        if (!(this.logItems || []).some(i => i?.id === file.id))
+            this.logItems = this._sortLogFiles([...(this.logItems || []), file]);
+        this.expanded = true;
+        this.render();
+        this._scrollRibbonDown();
+        for (let i = 0; i < 60; i++) {
+            const card = [...(this.$$('chat-item') || [])].find(el => el.$item?.id === file.id);
+            if (card) {
+                card.expanded = true;
+                for (let j = 0; j < 30; j++) {
+                    if (card.$('.body > *')?.data)
+                        break;
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                return true;
+            }
+            await new Promise(r => setTimeout(r, 50));
+        }
+        throw new Error('карточка задачи не появилась в ленте');
     },
     _scrollRibbonDown(){
         if (this.$pdp.ribbon?.scrollDown)
@@ -689,7 +840,8 @@ ODA({is: 'chat-day',
         }
         if (!this._dayFolderHooked) {
             this._dayFolderHooked = true;
-            folder.listen?.('changed', e => this._onLogsChanged(e));
+            this._dayHandler = e => this._onLogsChanged(e);
+            folder.listen?.('changed', this._dayHandler);
         }
         return true;
     },
@@ -708,36 +860,56 @@ ODA({is: 'chat-day',
         files = await Promise.all(files.map(f => Promise.resolve(f)));
         return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'))));
     },
+    /**
+     * Раскрыть карточку только что созданной задачи. Строго та, что создана: по имени файла .task;
+     * пока путь неизвестен — только новая запись моего авторства, которой не было в ленте до отправки.
+     * «Ближайшая по времени» не подходит: раскрывалась последняя прежняя задача (см. chat-task.js).
+     */
     async _expandCreatedTask(file) {
         const chat = this.$pdp.$pdp;
         if (!chat?.awaitTask)
             return;
-        file ??= this.logItems.last;
-        if (!file)
+        const day = taskDayOf(chat._awaitTaskPath);
+        if (day && this.day !== day)
             return;
-        let row;
-        try {
-            const raw = await file.load();
-            row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        } catch {
-            return;
-        }
-        if (!(row?.ext === 'task' || String(row?.path || '').endsWith('.task')))
-            return;
-        this.render();
-        this.async(() => {
-            let card;
-            for (const el of this.$$('chat-item')) {
-                if (el.$item?.id === file.id) {
-                    card = el;
-                    break;
-                }
+        const want = { key: chat._awaitTaskKey || '', known: chat._awaitKnown || new Set(), uid: WORK.uid };
+        const loadRow = async f => {
+            try {
+                const raw = await f.load();
+                return typeof raw === 'string' ? JSON.parse(raw) : raw;
             }
+            catch {
+                return null;
+            }
+        };
+        let hit = null;
+        for (const f of file ? [file] : this.logItems) {
+            if (want.known.has(String(f?.id || '')))
+                continue;
+            if (isCreatedTask(f, await loadRow(f), want)) {
+                hit = f;
+                break;
+            }
+        }
+        if (!hit)
+            return;
+        // день мог быть свёрнут, карточка рисуется после render — ждём её появления
+        if (!this.expanded)
+            this.expanded = true;
+        this.render();
+        for (let i = 0; i < 30; i++) {
+            const card = [...this.$$('chat-item')].find(el => el.$item?.id === hit.id);
             if (card) {
                 card.expanded = true;
                 chat.awaitTask = false;
+                chat._awaitTaskPath = '';
+                chat._awaitTaskKey = '';
+                chat._awaitKnown = null;
+                clearTimeout(chat._awaitTimer);
+                return;
             }
-        });
+            await new Promise(r => setTimeout(r, 50));
+        }
     },
     async _onLogsChangedRun(e){
         await this._bindLogsFolder();
@@ -751,6 +923,15 @@ ODA({is: 'chat-day',
             try {
                 let file = await folder.get_item('/' + initiator, 'info');
                 if (file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) {
+                    try {
+                        const raw = await file.load?.();
+                        const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        if (row?.mainContext)
+                            return;
+                        if (row?.ext === 'task' && this._adopted?.has(taskKeyOf(row.path)))
+                            return;
+                    }
+                    catch { /* не разобрали — показываем как раньше */ }
                     if (!this.logItems.some(i => i.id === file.id)) {
                         this.logItems.push(file);
                         this._scrollRibbonDown();
@@ -775,15 +956,19 @@ ODA({is: 'chat-day',
         if (this._logsInit)
             return;
         this._logsInit = true;
+        this._wasInit = true;
         Promise.resolve(this.logsSource).then(async source => {
             if (!source)
                 return;
             if (!this._logsListenersHooked) {
                 this._logsListenersHooked = true;
-                const onChanged = e => this._onLogsChanged(e);
+                const onChanged = this._onChangedFn = e => this._onLogsChanged(e);
+                this._listened = [source, this.$pdp.$item];
                 source?.listen?.('changed', onChanged);
                 this.$pdp.$item?.listen?.('changed', onChanged);
                 const history = await source.get_item('/~/logs');
+                if (history)
+                    this._listened.push(history);
                 history?.listen?.('changed', onChanged);
             }
             await this._bindLogsFolder();
@@ -799,6 +984,23 @@ ODA({is: 'chat-day',
     get logs() {
         this._ensureLogsInit();
         return this.logItems;
+    },
+    /** День вернули в DOM после снятия подписок — подписаться заново (день, который не открывали, ленту не грузит). */
+    attached() {
+        if (this._wasInit && !this._logsInit)
+            this._ensureLogsInit();
+    },
+    /** Снять подписки на ленту: день убрали из DOM — события больше не нужны (иначе копятся по числу дней). */
+    detached() {
+        for (const target of this._listened || [])
+            target?.unlisten?.('changed', this._onChangedFn);
+        this._listened = null;
+        this._logsListenersHooked = false;
+        this._logsInit = false;
+        if (this._logsFolder && this._dayFolderHooked) {
+            this._logsFolder.unlisten?.('changed', this._dayHandler);
+            this._dayFolderHooked = false;
+        }
     },
     get logsSource(){
         // Источник логов определяется сервером по роли:

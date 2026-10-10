@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Task dock UI tests (real shell)</title></head>
+<body>
+<script type="module">
+/**
+ * Правая панель задачи на НАСТОЯЩЕМ шелле формы задачи (file.js), а не на заглушке: вкладки «Контекст / Монитор / Файлы»,
+ * переключение на «Файлы» не сбрасывается обратно, «Монитор» есть и у задачи с удалённым компьютером,
+ * в панели ввода — кнопка голосового диалога вместо диктовки.
+ */
+await import('/sources/client.js');
+const base = '/$server/$folder/$file/$task/handlers/pages/form/file/$handler/';
+const def = (await import(base + 'file.js')).default;
+// не ...def: расширение объекта вычислило бы геттеры один раз, и шелл потерял бы реактивность
+const shellDef = Object.defineProperties({ is: 'x-task-shell' }, Object.getOwnPropertyDescriptors(def));
+ODA(shellDef);
+await ODA.waitReg('x-task-shell');
+await ODA.waitReg('microchat-dock');
+await ODA.waitReg('microchat-panel');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: String(e?.stack || e) }); }
+}
+const assert = (v, msg) => { if (!v) throw new Error(msg || 'assert'); };
+const eq = (a, b, msg) => { if (a !== b) throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, what, tries = 80) {
+    for (let i = 0; i < tries; i++) {
+        try { const v = fn(); if (v) return v; } catch { /* ещё не отрисовалось */ }
+        await sleep(50);
+    }
+    throw new Error('не дождались: ' + what);
+}
+
+const snap = (path, ts) => {
+    const parts = path.split('/');
+    const name = parts.pop();
+    return parts.join('/') + '/.' + name + '/history/2026-10-08/' + ts + '.U1.' + name.split('.').pop();
+};
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const tool = (name, extra = {}) => ({ id: name + Math.random(), name, status: 'ok', ...extra });
+
+function body(over = {}) {
+    return {
+        name: 'Отчёт', status: 'idle', created: Date.now() - 600000, results: [],
+        items: [
+            { id: 'u1', type: 'user', time: Date.now() - 500000, content: 'Сделай отчёт', attachments: [{ path: snap('/USERS/U1/up/данные.xlsx', 1), name: 'данные.xlsx' }] },
+            { id: 'a1', type: 'assistant', time: Date.now() - 400000, durationMs: 100, content: 'Готово', tools: [
+                tool('write', { path: '/BASE/Отчёты/отчёт.html', snapshot: snap('/BASE/Отчёты/отчёт.html', 2) }),
+                tool('export_pdf', { path: '/BASE/Отчёты/отчёт.pdf', snapshot: snap('/BASE/Отчёты/отчёт.pdf', 3) }),
+                tool('computer_screenshot', { args: { name: 'main' }, images: [{ url: PNG, label: 'экран 1' }] }),
+                tool('computer_destroy', { args: { name: 'main' } }),
+            ] },
+        ],
+        ...over,
+    };
+}
+
+function fakeTask(data) {
+    const t = new EventTarget();
+    Object.assign(t, {
+        id: '1791000000001.U1.task', path: '/BASE/USER/task/2026-10-08/1791000000001.U1.task', ext: 'task', type: '$file', name: 'task',
+        async load() { return JSON.stringify(data); },
+        async fetch() { return { ok: true }; },
+        async get_item() { return null; },
+    });
+    return t;
+}
+
+const realGetItem = WORK.get_item;
+async function mountShell(data) {
+    WORK.get_item = async (p) => {
+        const n = new EventTarget();
+        const name = String(p).split('/').pop();
+        Object.assign(n, { id: name, path: p, ext: name.split('.').pop(), name, type: '$file', async load() { return ''; }, async get_item() { return null; } });
+        return n;
+    };
+    const shell = document.createElement('x-task-shell');
+    shell.style.cssText = 'display:flex;width:1100px;height:700px';
+    shell.dockOpen = true;
+    document.body.appendChild(shell);
+    await sleep(100);
+    shell.$item = fakeTask(data);
+    await waitFor(() => shell.data, 'данные задачи');
+    await waitFor(() => shell.$('microchat-dock')?.$('.tabs'), 'доки');
+    return shell;
+}
+const inDock = (shell, sel) => shell.$('microchat-dock')?.$(sel);
+const tabIds = shell => shell.$('microchat-dock').tabs.map(t => t.id);
+
+await test('вкладки: Контекст, Монитор (компьютер уже удалён), Файлы со счётчиком', async () => {
+    const shell = await mountShell(body());
+    try {
+        eq(tabIds(shell).join(), 'context,monitor,files');
+        eq(shell.files.length, 3, 'вложение + html + pdf');
+        eq(shell.$('microchat-dock').tabs.find(t => t.id === 'files').count, 3);
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('«Файлы»: клик переключает и вкладка НЕ сбрасывается; плитки всех файлов; открыть файл и вернуться', async () => {
+    const shell = await mountShell(body());
+    try {
+        const dock = shell.$('microchat-dock');
+        dock.select('files');
+        await sleep(300);
+        eq(shell.dockTab, 'files', 'вкладка осталась «Файлы»');
+        const files = await waitFor(() => inDock(shell, 'microchat-files'), 'вкладка файлов');
+        await waitFor(() => files.$$('div.tile').length === 3, 'три плитки');
+        assert(files.$$('div.tile chat-item').length === 3, 'плитки — карточки chat-item');
+        files.open(shell.files[1]);
+        await waitFor(() => shell.dockFile === shell.files[1].key && files.$('.back'), 'файл открыт, кнопка «← Файлы»');
+        eq(shell.dockTab, 'files');
+        files.close();
+        await waitFor(() => files.$$('div.tile').length === 3, 'вернулись к списку');
+        // повторный клик по вкладке при открытом файле — к списку
+        files.open(shell.files[0]);
+        await waitFor(() => files.$('.back'), 'файл');
+        dock.select('files');
+        await waitFor(() => !files.$('.back'), 'повторный клик — список');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('«Монитор»: компьютер удалён — подпись и скриншоты из ленты; «Контекст» на месте', async () => {
+    const shell = await mountShell(body());
+    try {
+        const dock = shell.$('microchat-dock');
+        dock.select('monitor');
+        const mon = await waitFor(() => inDock(shell, 'microchat-monitor'), 'монитор');
+        await waitFor(() => mon.$('.off'), 'офлайн-вид');
+        await waitFor(() => /больше нет|выключен/.test(mon.$('.note').textContent), 'подпись о компьютере', 140);
+        assert(mon.$('img.shot'), 'последний скриншот');
+        assert(mon.$$('.cmd').length >= 1, 'команды агента');
+        eq(shell.dockTab, 'monitor');
+        dock.select('context');
+        await waitFor(() => inDock(shell, 'microchat-context'), 'контекст');
+        eq(shell.dockTab, 'context');
+        assert(inDock(shell, 'microchat-context').offsetHeight > 0, 'контекст виден');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('без компьютера и файлов — только «Контекст»; песочница (sandbox_*) даёт «Монитор»', async () => {
+    const plain = await mountShell({ name: 'x', status: 'idle', created: 1, results: [], items: [{ id: 'u', type: 'user', content: 'привет', time: 1 }, { id: 'a', type: 'assistant', content: 'ок', durationMs: 1, time: 2, tools: [] }] });
+    try { eq(tabIds(plain).join(), 'context'); }
+    finally { plain.remove(); }
+    const sb = await mountShell({ name: 'x', status: 'idle', created: 1, results: [], items: [{ id: 'u', type: 'user', content: 'посчитай', time: 1 }, { id: 'a', type: 'assistant', content: 'ок', durationMs: 1, time: 2, tools: [tool('sandbox_exec', { args: { command: 'echo 1' } })] }] });
+    try { assert(tabIds(sb).includes('monitor'), 'монитор у задачи с песочницей: ' + tabIds(sb)); }
+    finally { sb.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('панель ввода задачи: кнопка со спектром вместо микрофона; шапка без наушников; включение идёт в шелл', async () => {
+    const shell = await mountShell(body());
+    try {
+        const bar = await waitFor(() => shell.$('microchat-panel')?.$('work-prompt-bar'), 'бар');
+        await waitFor(() => bar.$('.dialog-btn') || !shell.$('microchat-panel').canVoice, 'кнопка диалога');
+        if (shell.$('microchat-panel').canVoice) {
+            const calls = [];
+            shell.toggleVoice = on => calls.push(on);
+            bar.toggleDialog();
+            eq(calls[0], true, 'включение дошло до шелла');
+            assert(![...bar.$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('microphone')), 'микрофона-диктовки нет');
+        }
+        assert(![...shell.$('microchat-header').$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('headset')), 'наушников в шапке нет');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('новая задача из чата: «Запускаю агента…» вместо пустого экрана, пока нет первой реплики', async () => {
+    const shell = await mountShell({ name: 'Сделай отчёт', status: 'idle', created: Date.now(), results: [], items: [] }).catch(e => { throw e; });
+    try {
+        assert(shell.starting, 'starting');
+                eq(shell.feedItems[0].content, 'Сделай отчёт');
+        eq(shell.activity?.text, 'Запускаю агента…');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

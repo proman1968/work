@@ -3,6 +3,6 @@
  */
 export default {
     METADATA: {
-        FIELDS: [],
+        STATIC: [],
     },
 };

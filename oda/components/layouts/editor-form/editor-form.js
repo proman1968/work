@@ -1,16 +1,16 @@
 import '/oda/components/inputs/text/text.js';
 import '/oda/components/inputs/textarea/textarea.js';
 import '/oda/components/inputs/date/date.js';
-import '/oda/components/inputs/datetime/datetime.js';
 import '/oda/components/inputs/select/select.js';
 import '/oda/components/inputs/radio/radio.js';
-import '/oda/components/inputs/table/table.js';
+import '/oda/components/inputs/table-input/table-input.js';
+import '/oda/components/inputs/link/link.js';
 import '/oda/components/inputs/numeric/numeric.js';
-import '/oda/components/checkbox/checkbox.js';
+import '/oda/components/inputs/checkbox/checkbox.js';
 import '/oda/components/icon/icon.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
-export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table'];
+export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link'];
 
 /** Тип поля -> тег редактора. Number/Boolean — существующие oda-компоненты. */
 const EDITORS = {
@@ -18,11 +18,12 @@ const EDITORS = {
     Text: 'oda-textarea-input',
     Number: 'oda-numeric-input',
     Date: 'oda-date-input',
-    DateTime: 'oda-datetime-input',
+    DateTime: 'oda-date-input',
     Boolean: 'oda-checkbox',
     Select: 'oda-select-input',
     Radio: 'oda-radio-input',
     Table: 'oda-table-input',
+    Link: 'oda-link-input',
 };
 
 export function editorForType(type) {
@@ -46,6 +47,10 @@ function cleanField(f, seen) {
     };
     if (f.disabled === true)
         field.disabled = true;
+    if (typeof f.catalog === 'string' && f.catalog.trim())
+        field.catalog = f.catalog.trim();
+    if (f.analytic === true)
+        field.analytic = true;
     if (type === 'Select' || type === 'Radio') {
         const options = Array.isArray(f.options) ? f.options : [];
         field.options = options
@@ -93,10 +98,11 @@ function cleanField(f, seen) {
  * Канонические поля из metadata. Входы:
  * - массив полей
  * - { title, fields: [...] } (parseFormSpec / normalizeFormSpec)
- * - { FIELDS: [...] } / объект с METADATA (встроенный стандарт: METADATA: { FIELDS })
- * - map { key: descriptor } (id = key)
+ * - { FIELDS: [...] } / { STATIC: [...] } / объект с METADATA
+ *   (встроенный стандарт: METADATA: { STATIC — свойства класса, FIELDS — поля объектов }).
+ * kind: 'auto' (STATIC при наличии, иначе FIELDS) | 'static' | 'fields'.
  */
-export function normalizeEditorFields(meta) {
+export function normalizeEditorFields(meta, kind = 'auto') {
     let title = '';
     let list = [];
     if (Array.isArray(meta)) {
@@ -106,11 +112,19 @@ export function normalizeEditorFields(meta) {
         title = String(meta.title || meta.label || '');
         if (Array.isArray(meta.fields))
             list = meta.fields;
+        else if (Array.isArray(meta.STATIC) && (kind !== 'fields') && (kind === 'static' || meta.STATIC.length || !Array.isArray(meta.FIELDS)))
+            list = meta.STATIC;
         else if (Array.isArray(meta.FIELDS))
             list = meta.FIELDS;
         else if (meta.METADATA && typeof meta.METADATA === 'object') {
             const md = meta.METADATA;
-            if (Array.isArray(md.FIELDS))
+            if (kind === 'static')
+                list = Array.isArray(md.STATIC) ? md.STATIC : (Array.isArray(md.FIELDS) ? md.FIELDS : []);
+            else if (kind === 'fields')
+                list = Array.isArray(md.FIELDS) ? md.FIELDS : [];
+            else if (Array.isArray(md.STATIC) && md.STATIC.length)
+                list = md.STATIC;
+            else if (Array.isArray(md.FIELDS))
                 list = md.FIELDS;
             else if (Array.isArray(md.fields))
                 list = md.fields;
@@ -220,7 +234,7 @@ ODA({is: 'oda-editor-form-field',
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
         <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
         <div class="editor-box">
-            <div ~is="editor" ::value="data[field.id]" :meta="field" :disabled="field.disabled"></div>
+            <div ~is="editor" ::value="data[field.id]" :field :meta="field" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
                 <oda-editor-form-field ~for="children" :field="$for.item" :data></oda-editor-form-field>
             </div>

@@ -36,11 +36,22 @@ export class $class extends $folder{
         day ??= new Date().toLocalDay();
         return this.get_item(`/~/logs/${day}/*.logs`);
     }
+    /**
+     * Пользователи роли: сервер кладёт uid ролей в данные элемента (`roleIds`), поэтому строка дерева
+     * не ходит за `?users`/`?bosses` — берёт готовых пользователей из общего списка /USERS.
+     * Нет `roleIds` (старый ответ) — прежний запрос.
+     */
+    _roleUsers(role, method) {
+        const ids = this.DATA?.roleIds?.[role];
+        if (!Array.isArray(ids))
+            return this.fetch(method);
+        return Promise.resolve(WORK.usersByIds(ids));
+    }
     get admins(){
-        return this.fetch('admins');
+        return this._roleUsers('ADMIN', 'admins');
     }
     get bosses(){
-        return this.fetch('bosses');
+        return this._roleUsers('BOSS', 'bosses');
     }
     get allAdmins(){
         return this.fetch('allAdmins');
@@ -49,16 +60,16 @@ export class $class extends $folder{
         return this.fetch('allBosses');
     }
     get users(){
-        return this.fetch('users');
+        return this._roleUsers('USER', 'users');
     }
     get guests(){
-        return this.fetch('guests');
+        return this._roleUsers('GUEST', 'guests');
     }
     import(){
         const url = (this.short || '/') + '?load' + `&version=${this.__version}`;
         return import(url).then(module => module?.default ?? {}).catch(err => {
             console.warn('[WORK] class ?load:', url, err?.message || err);
-            return { METADATA: { FIELDS: [] } };
+            return { METADATA: { FIELDS: [], STATIC: [] } };
         });
     }
     get body(){
@@ -79,7 +90,7 @@ export class $class extends $folder{
             return body.METADATA;
         })
     }
-    /** METADATA.FIELDS — массив полей; обёртка {id, fields} больше не канон. */
+    /** METADATA.STATIC — свойства класса; fallback FIELDS для файлов до миграции. */
     static fieldsList(fields) {
         if (Array.isArray(fields))
             return fields;
@@ -87,11 +98,14 @@ export class $class extends $folder{
             return fields.fields;
         return [];
     }
+    static staticList(meta) {
+        return this.fieldsList(meta?.STATIC?.length ? meta.STATIC : meta?.FIELDS);
+    }
     get $fields(){
         return Promise.resolve(this.metadata).then(meta => {
             meta ??= {};
-            meta.FIELDS = this.constructor.fieldsList(meta.FIELDS);
-            return new CORE.$field({ id: 'FIELDS', fields: meta.FIELDS }, this);
+            const list = this.constructor.staticList(meta);
+            return new CORE.$field({ id: 'STATIC', fields: list }, this);
         })
     }
     async execute(...params){

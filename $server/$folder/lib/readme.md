@@ -4,6 +4,7 @@
 
 ## Структура
 
+- `dot/` — `work-dot`: персонаж агента (голосовой режим, шапка задачи, превью)
 - `chat-item/` — карточка файла/сообщения в чате
 - `prompt-bar/` — `work-prompt-bar`: composer; модель/effort/TTS/mic — в баре; хост `send` / `stop` и `::model` / `::effort`
 - `tree/` — дерево элементов (item-tree); опциональный `hideFiles`
@@ -13,12 +14,14 @@
 - `file-viewer/` — просмотрщик файлов
 - `icon/` — компонент иконки
 - `menu/` — контекстное меню; `hide-files` + «?» на родителе (тот же `item-node`, что дерево)
-- `dialogs/` — диалоговые окна
+- `dialogs/` — диалоговые окна; `popover/` — `item-popover` (наследник `oda-popover`, `ODA.popoverTag`): заголовок-навигатор по `$item`
+- `item-form/` — `item-form` (oda-form по METADATA.FIELDS класса) и `item-link-input` (ссылочные поля: тип — путь класса)
+- `item-data-grid/` — `item-data-grid` (oda-table, колонки — METADATA.FIELDS класса)
 - `pack/` — работа с пакетами файлов
 - `security/` — компоненты безопасности
 - `tools/` — вспомогательные инструменты
 - `email/` — библиотека работы с почтой
-- `site-loc/` — helpers локации `#ctx=…` для site / site-navigation
+- `site-loc/` — helpers локации `#ctx=…` для site
 
 ## Использование
 

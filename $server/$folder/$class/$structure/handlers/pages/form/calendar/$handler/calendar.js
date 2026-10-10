@@ -5,7 +5,7 @@ export default {
     template: /*html*/`
         <oda-form-calendar slot="main" flex :$item style="overflow-y: auto;" :events ::view-mode ::current-date ::selected_users></oda-form-calendar>
         <div slot="right-panel" vertical flex icon="carbon:table-of-contents:180" style="overflow-y: auto; height: 0; padding: 4px 0;">
-            <oda-form-calendar-list-view flex label="Tasks" :events></oda-form-calendar-list-view>
+            <oda-form-calendar-list-view flex label="Встречи" :events></oda-form-calendar-list-view>
         </div>
     `,
     viewMode: {
@@ -16,7 +16,7 @@ export default {
         }
     },
     currentDate: {
-        $def: new Date(),
+        $def: null,
         set() {
             this.events = undefined;
         }
@@ -78,18 +78,28 @@ export default {
                 to: dayTo,
                 ext: 'ics',
             });
-            const parsed = [];
+            // rows отсортированы по убыванию time: первая строка uid — последняя версия встречи
+            const latest = new Map();
             for (const row of rows || []) {
-                if (selected_users.length && !selected_users.includes(row.sender))
+                const content = _parseContent(row.content);
+                if (!content)
                     continue;
-                let content = row.content;
-                if (typeof content === 'string')
-                    content = JSON.parse(content);
-                if (!content?.start || !content?.end)
+                const key = meetingKey(row, content);
+                if (!latest.has(key))
+                    latest.set(key, { row, content });
+            }
+            const parsed = [];
+            for (const { row, content } of latest.values()) {
+                if (content.status === 'cancelled')
+                    continue;
+                if (!content.start || !content.end)
+                    continue;
+                if (selected_users.length && !selected_users.includes(row.sender))
                     continue;
                 parsed.push({ row, content });
             }
             const events = await Promise.all(parsed.map(async ({ row, content }) => ({
+                uid: meetingKey(row, content),
                 start: content.start,
                 end: content.end,
                 summary: content.summary ?? '',
@@ -101,18 +111,30 @@ export default {
             return this.events = events;
         })();
     },
+    detached() {
+        this._historyFolder?.unlisten?.('changed', this._boundOnLogsChanged);
+        this._historyFolder = null;
+    },
     async showMeeting(arg) {
         const isEdit = arg && typeof arg.load === 'function';
         let el;
-        let historyPath;
+        let uid;
+        let filename;
 
         if (isEdit) {
             const raw = await arg.load();
             const log = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            historyPath = log.path;
+            const content = _parseContent(log.content) || {};
+            uid = meetingKey(log, content);
+            // новые встречи — <uid>.ics; старые (без uid) — прежнее имя файла
+            filename = content.uid && !String(content.uid).startsWith('file:')
+                ? `${content.uid}.ics`
+                : filenameFromHistoryPath(log.path);
             const file = await WORK.get_item(log.path);
-            el = ODA.createElement('calendar-form', { $item: file });
+            el = ODA.createElement('calendar-form', { $item: file, canCancel: true });
         } else {
+            uid = _newUid();
+            filename = `${uid}.ics`;
             const detail = arg || {};
             const start = detail.start ? new Date(detail.start) : new Date();
             let end;
@@ -139,7 +161,7 @@ export default {
 
         try {
             await WORK.showDialog(el, {
-                TITLE: { label: isEdit ? 'Event' : 'New event', icon: 'enterprise:calendar' },
+                TITLE: { label: isEdit ? 'Встреча' : 'Новая встреча', icon: 'enterprise:calendar' },
                 OK: { label: 'Сохранить', icon: 'icons:save' },
                 CANCEL: { label: 'Отмена', icon: 'icons:close' },
             });
@@ -153,17 +175,14 @@ export default {
         if (isNaN(startDate) || isNaN(endDate) || endDate <= startDate)
             return;
 
+        persist.uid = uid;
         persist.time = startDate.getTime();
-        const stem = String(persist.summary || 'встреча').trim() || 'встреча';
-        const editPath = el.$item?.path || historyPath || '';
-        const filename = isEdit && /\/history(?:\/|$)/.test(editPath)
-            ? filenameFromHistoryPath(editPath)
-            : `${stem}.ics`;
-        const body = isEdit
-            ? (el.$item?.body ?? JSON.stringify(persist))
-            : JSON.stringify(persist);
-        const file = new File([body || ''], filename, { type: 'text/plain' });
+        persist.status = el.cancelled ? 'cancelled' : 'confirmed';
+        const body = JSON.stringify(persist);
+        const file = new File([body], filename, { type: 'text/plain' });
         const message = JSON.stringify({
+            uid,
+            status: persist.status,
             start: persist.start,
             end: persist.end,
             summary: persist.summary,
@@ -185,47 +204,39 @@ ODA({
                 @apply --flex;
             }
             .toolbar {
-                @apply --vertical;
-                @apply --header;
                 padding: 4px;
                 align-items: normal;
             }
             .calendar-container {
-                @apply --vertical;
-                @apply --flex;
                 overflow: auto;
             }
             .btn_mode {
-                border-radius: 4px;
+                border-radius: var(--radius-s);
             }
         </style>
         <item-users accent-invert flex :$item ::selected_users slot="top"></item-users>
-        <div vertical class="toolbar">
+        <div vertical header class="toolbar">
             <div horizontal>
                 <oda-date-nav :view-mode ::current-date></oda-date-nav>
                 <div horizontal>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-day" :border="viewMode==='day'" title="День" @tap="viewMode='day'"></oda-button>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-range" :border="viewMode==='workweek'" title="Рабочая неделя" @tap="viewMode='workweek'"></oda-button>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-week" :border="viewMode==='week'" title="Неделя" @tap="viewMode='week'"></oda-button>
-                    <oda-button class="btn_mode" icon="bootstrap:calendar2-month" :border="viewMode==='month'" title="Месяц" @tap="viewMode='month'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-day" :info="viewMode==='day'" title="День" @tap="viewMode='day'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-range" :info="viewMode==='workweek'" title="Рабочая неделя" @tap="viewMode='workweek'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-week" :info="viewMode==='week'" title="Неделя" @tap="viewMode='week'"></oda-button>
+                    <oda-button class="btn_mode" icon="bootstrap:calendar2-month" :info="viewMode==='month'" title="Месяц" @tap="viewMode='month'"></oda-button>
                 </div>
             </div>
         </div>
-        <div class="calendar-container" flex>
-            <oda-calendar-month-view ~if="viewMode==='month'" :events :current-date :day-from="dayFrom" :day-to="dayTo"></oda-calendar-month-view>
+        <div class="calendar-container" vertical flex>
+            <oda-calendar-month-view ~if="viewMode==='month'" :events :current-date></oda-calendar-month-view>
             <oda-calendar-time-grid ~if="viewMode!=='month'" :events :current-date :view-mode></oda-calendar-time-grid>
         </div>
     `,
     $item: null,
     events: [],
     selected_users: [],
-    viewMode: {
-        $def: 'day',
-        $save: true
-    },
-    currentDate: {
-        $def: new Date()
-    },
+    // состояние хранит handler (viewMode с $save), здесь — только двусторонняя привязка
+    viewMode: 'day',
+    currentDate: null,
     $listeners: {
         'add-event'(e) {
             this._addEvent(e);
@@ -244,28 +255,26 @@ ODA({
             :host {
                 display: block;
                 box-sizing: border-box;
-                background: var(--success-color);
-                color: var(--dark-color);
+                @apply --accent-invert;
                 padding: 2px 4px;
-                border-radius: 2px;
+                border-radius: var(--radius-s);
                 font-size: small;
                 overflow: hidden;
                 cursor: pointer;
             }
             :host(:hover) {
-                opacity: 0.8;
+                @apply --hover;
             }
             :host([block]) {
                 position: absolute;
                 z-index: 1;
-                border: 1px solid var(--dark-color);
-                border-radius: 4px;
+                /* цвет рамки задаёт роль accent-invert */
+                border: 1px solid;
                 pointer-events: auto;
             }
             :host([badge]) {
                 font-size: xx-small;
                 margin: 2px 0;
-                color: var(--info-background);
             }
             .row {
                 align-items: center;
@@ -318,8 +327,8 @@ ODA({
             .time-grid {
                 display: grid;
                 gap: 1px;
-                background: var(--border-color);
-                border-bottom: 1px solid var(--border-color);
+                background: var(--subtle-border);
+                border-bottom: 1px solid var(--subtle-border);
                 color: var(--dark-color);
                 position: sticky;
                 top: 0;
@@ -357,12 +366,12 @@ ODA({
                 @apply --flex;
                 min-height: 32px;
                 cursor: pointer;
-                border-top: 1px solid var(--border-color);
+                border-top: 1px solid var(--subtle-border);
                 padding: 2px 4px;
                 box-sizing: border-box;
             }
             .all-day:hover {
-                background: var(--light-background);
+                background: var(--subtle-background);
             }
             .time-body {
                 display: grid;
@@ -377,7 +386,7 @@ ODA({
             .slot-label {
                 height: 32px;
                 box-sizing: border-box;
-                border-top: 1px dotted var(--border-color);
+                border-top: 1px dotted var(--subtle-border);
                 font-size: 10px;
                 align-items: center;
                 justify-content: flex-end;
@@ -385,7 +394,7 @@ ODA({
                 gap: 4px;
             }
             .slot-label[hour-start] {
-                border-top: 1px solid var(--border-color);
+                border-top: 1px solid var(--subtle-border);
             }
             .slot-label:first-of-type {
                 border-top: none;
@@ -409,14 +418,14 @@ ODA({
                 height: 32px;
                 box-sizing: border-box;
                 cursor: pointer;
-                border-top: 1px dotted var(--border-color);
-                border-left: 1px solid var(--border-color);
+                border-top: 1px dotted var(--subtle-border);
+                border-left: 1px solid var(--subtle-border);
             }
             .slot:first-child {
                 border-top: none;
             }
             .slot[hour-start] {
-                border-top: 1px solid var(--border-color);
+                border-top: 1px solid var(--subtle-border);
             }
             .slot[hour-start]:first-child {
                 border-top: none;
@@ -425,10 +434,10 @@ ODA({
                 border-top: none;
             }
             .slot:hover {
-                background: var(--light-background);
+                background: var(--subtle-background);
             }
         </style>
-        <div class="time-grid" style="border-top: 1px solid var(--border-color);" ~style="gridStyle">
+        <div class="time-grid" style="border-top: 1px solid var(--subtle-border);" ~style="gridStyle">
             <div class="time-header"></div>
             <div ~for="columns" class="day-header" vertical :today="$for.item.isToday">
                 <div horizontal class="day-title">
@@ -436,7 +445,7 @@ ODA({
                     <div class="day-name flex">{{$for.item.dayName}}</div>
                 </div>
                 <div class="all-day" vertical @tap="selectAllDay($for.item)">
-                    <oda-calendar-event badge ~for="$for.item.allDayBlocks" :data="$for.$for.item" :title="$for.$for.item.title"></oda-calendar-event>
+                    <oda-calendar-event badge ~for="$for.item.allDayBlocks" :data="$for.$for.item" :title="$for.$for.item.title" :$item="$for.$for.item.$item"></oda-calendar-event>
                 </div>
             </div>
         </div>
@@ -450,13 +459,13 @@ ODA({
             <div ~for="columns" class="day-col" vertical>
                 <div ~for="hourSlots" class="slot" :hour-start="$for.$for.item.isHourStart"
                      @tap="selectSlot($for.item, $for.$for.item)"></div>
-                <oda-calendar-event block ~for="$for.item.blocks" :data="$for.$for.item" ~style="$for.$for.item.style" :title="$for.$for.item.title"></oda-calendar-event>
+                <oda-calendar-event block ~for="$for.item.blocks" :data="$for.$for.item" ~style="$for.$for.item.style" :title="$for.$for.item.title" :$item="$for.$for.item.$item"></oda-calendar-event>
             </div>
         </div>
     `,
     interval: 30,
     currentDate: {
-        $def: new Date(),
+        $def: null,
         set(n) {
             this.gridDays = undefined;
             this.columns = undefined;
@@ -555,8 +564,8 @@ ODA({
                 display: grid;
                 grid-template-columns: auto repeat(7, 1fr);
                 gap: 1px;
-                background: var(--border-color);
-                border: 1px solid var(--border-color);
+                background: var(--subtle-border);
+                border: 1px solid var(--subtle-border);
             }
             .weekday-header {
                 @apply --header;
@@ -572,11 +581,17 @@ ODA({
             <oda-calendar-month-week ~for="weeks" :item="$for.item"></oda-calendar-month-week>
         </div>
     `,
-    currentDate: new Date(),
+    currentDate: null,
     events: [],
-    dayFrom: '',
-    dayTo: '',
-    weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    weekdays: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
+    get dayFrom() {
+        const date = _asDate(this.currentDate);
+        return _formatDate(_weekStart(new Date(date.getFullYear(), date.getMonth(), 1)));
+    },
+    get dayTo() {
+        const date = _asDate(this.currentDate);
+        return _formatDate(_weekEnd(new Date(date.getFullYear(), date.getMonth() + 1, 0)));
+    },
     get calendarDays() {
         const from = this.dayFrom;
         const to = this.dayTo;
@@ -625,9 +640,12 @@ ODA({
             return !isNaN(start) && !isNaN(end) && end > dayStart && start < next;
         }).map(event => ({ ...event, title: eventTitle(event) }));
     },
-    selectMonthDay(start) {
-        const end = new Date(start.getTime() + 30 * 60 * 1000);
-        this.fire('add-event', { start, end });
+    selectMonthDay(date) {
+        const start = new Date(date);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        this.fire('add-event', { start, end, allDay: true });
     }
 })
 
@@ -647,16 +665,13 @@ ODA({
                 white-space: nowrap;
             }
             oda-calendar-month-day:hover {
-                background: var(--light-background);
-            }
-            oda-calendar-month-day[other-month] {
-                opacity: 0.9;
+                background: var(--subtle-background);
             }
             oda-calendar-month-day[today] {
-                background: var(--info-background);
+                @apply --info;
             }
             oda-calendar-month-day[today]:hover {
-                background: var(--light-background);
+                @apply --hover;
             }
         </style>
         <div class="week-label">{{item?.label}}</div>
@@ -680,6 +695,10 @@ ODA({
             .day-number {
                 font-weight: normal;
                 margin-bottom: 4px;
+            }
+            /* дни соседнего месяца: ослабляем только номер, встречи остаются яркими */
+            :host([other-month]) .day-number {
+                opacity: .5;
             }
         </style>
         <div class="day-number">{{item?.day}}</div>
@@ -740,13 +759,13 @@ ODA({is: 'oda-log-group',
                 gap: 6px;
                 cursor: pointer;
                 user-select: none;
-                border-top: 1px solid var(--border-color);
+                border-top: 1px solid var(--subtle-border);
             }
             .group-header:first-child {
                 border-top: none;
             }
             .group-header:hover {
-                background: var(--light-background);
+                background: var(--subtle-background);
             }
             .group-label {
                 @apply --bold;
@@ -759,7 +778,7 @@ ODA({is: 'oda-log-group',
                 padding-left: 8px;
             }
             oda-log-view:hover {
-                @apply --info-invert;
+                background: var(--subtle-background);
             }
         </style>
         <div horizontal class="group-header" @tap="$pdp._toggleGroup(item.dateKey)">
@@ -768,7 +787,7 @@ ODA({is: 'oda-log-group',
             <span class="group-count">{{item.events.length}}</span>
         </div>
         <div ~if="!item.collapsed" class="group-items" vertical flex>
-            <oda-log-view ~for="item.events" :data="$for.item" @tap.stop="open($for.item.$item)"></oda-log-view>
+            <oda-log-view ~for="item.events" :data="$for.item" @tap.stop="$pdp.open($for.item.$item)"></oda-log-view>
         </div>
     `,
     item: null,
@@ -840,7 +859,7 @@ ODA({
             .date-picker {
                 position: relative;
                 cursor: pointer;
-                border-radius: 4px;
+                border-radius: var(--radius-s);
                 padding: 4px 8px;
                 align-content: center;
                 white-space: nowrap;
@@ -864,9 +883,7 @@ ODA({
     viewMode: {
         $def: 'day'
     },
-    currentDate: {
-        $def: new Date()
-    },
+    currentDate: null,
     get datePickerValue() {
         return _formatDate(_asDate(this.currentDate));
     },
@@ -895,11 +912,46 @@ ODA({
     }
 })
 
-const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const monthsNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const monthsFullNames = ['January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'];
+const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const monthsNames = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн',
+    'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const monthsFullNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const LABEL_ALL_DAY = 'весь день';
+
+/** Содержимое строки лога (message) → объект или null. */
+function _parseContent(content) {
+    if (content && typeof content === 'object')
+        return content;
+    if (typeof content !== 'string' || !content)
+        return null;
+    try {
+        const parsed = JSON.parse(content);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+/** Ключ встречи: uid из JSON; для старых встреч без uid — имя файла из history-пути. */
+function meetingKey(row, content) {
+    if (content?.uid)
+        return String(content.uid);
+    // старые встречи: ключ = имя файла; при первой правке он же пишется в uid
+    try {
+        return 'file:' + filenameFromHistoryPath(row?.path);
+    }
+    catch {
+        return 'path:' + (row?.path || row?.logsFilePath || '');
+    }
+}
+
+function _newUid() {
+    if (globalThis.crypto?.randomUUID)
+        return crypto.randomUUID();
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
 const monthsRu = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
     'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const daysRu = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -923,7 +975,7 @@ function eventHhmm(iso) {
 
 function eventInterval(ev) {
     if (ev?.allDay)
-        return 'all day';
+        return LABEL_ALL_DAY;
     if (!ev?.start || !ev?.end)
         return '';
     const a = eventHhmm(ev.start);

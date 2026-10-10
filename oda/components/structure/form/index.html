@@ -1,0 +1,65 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-form</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./form.js"></script>
+<script type="module" src="/oda/components/button/button.js"></script>
+<script type="module" src="/oda/components/inputs/checkbox/checkbox.js"></script>
+<div horizontal style="padding: var(--space-l); gap: var(--space-l); overflow: auto;" flex>
+    <oda-form id="form" style="width: 38em;" no-flex></oda-form>
+    <div vertical flex style="gap: var(--space-s);">
+        <div horizontal style="gap: var(--space-s); align-items: center;">
+            <oda-button id="check" label="Проверить" border></oda-button>
+            <oda-checkbox id="ro" caption="только чтение"></oda-checkbox>
+            <oda-checkbox id="dense" caption="компактно"></oda-checkbox>
+        </div>
+        <pre id="out" style="font-family: var(--font-mono); font-size: var(--font-size-s);"></pre>
+    </div>
+</div>
+<script type="module">
+    import { CONTROLS } from '/oda/components/structure/controls.js';
+    // ссылочный тип-путь: дочерние поля берутся «из класса» — демонстрация ленивой загрузки и самоссылки
+    const PERSON = [
+        { id: 'name', label: 'Имя', required: true },
+        { id: 'email', type: 'email', label: 'E-mail', icon: 'icons:mail' },
+        { id: 'manager', type: '/DEMO/PERSON', label: 'Руководитель', description: 'ссылка на объект того же класса' }
+    ];
+    form.controls = { ...CONTROLS, '/DEMO/PERSON': 'oda-text-input' };
+    form.getFields = field => field.type === '/DEMO/PERSON'
+        ? new Promise(r => setTimeout(() => r(PERSON), 200))
+        : field.fields;
+    form.fields = [
+        { id: 'title', label: 'Название', required: true, placeholder: 'Как называется задача' },
+        { id: 'status', type: 'select', label: 'Статус', items: [{ value: 'new', label: 'Новая' }, { value: 'work', label: 'В работе' }, { value: 'done', label: 'Готово' }] },
+        { id: 'priority', type: 'rating', label: 'Приоритет' },
+        { id: 'color', type: 'color', label: 'Цвет' },
+        { id: 'due', type: 'date', label: 'Срок' },
+        { id: 'budget', type: 'number', label: 'Бюджет', description: 'в рублях, без НДС' },
+        { id: 'urgent', type: 'boolean', label: 'Срочно' },
+        { id: 'tags', type: 'tags', label: 'Метки' },
+        { id: 'description', type: 'text', label: 'Описание' },
+        { id: 'address', label: 'Адрес', fields: [
+            { id: 'city', label: 'Город' },
+            { id: 'street', label: 'Улица' },
+            { id: 'geo', label: 'Координаты', fields: [{ id: 'lat', type: 'number', label: 'Широта' }, { id: 'lon', type: 'number', label: 'Долгота' }] }
+        ] },
+        { id: 'owner', type: '/DEMO/PERSON', label: 'Ответственный' },
+        { id: 'items', type: 'table', label: 'Позиции', columns: [
+            { id: 'name', label: 'Название', type: 'string' },
+            { id: 'qty', label: 'Кол-во', type: 'number' },
+            { id: 'price', label: 'Цена', type: 'number' },
+            { id: 'sum', label: 'Сумма', type: 'number', calc: 'qty * price', total: true }
+        ] },
+        { id: 'photos', type: 'gallery', label: 'Фото' }
+    ];
+    form.data = { title: 'Подготовить отчёт', status: 'work', priority: 3, color: '#4b0082', tags: ['отчёт'], address: { city: 'Москва' },
+        items: [{ name: 'Бумага', qty: 2, price: 300 }, { name: 'Картридж', qty: 1, price: 4500 }] };
+    const show = () => out.textContent = JSON.stringify(form.data, null, 2);
+    form.addEventListener('field-changed', show);
+    show();
+    check.addEventListener('click', () => out.textContent = (form.validate() ? 'OK\n' : 'Ошибки: ' + JSON.stringify(form.errors.map(e => e.field.id)) + '\n') + JSON.stringify(form.data, null, 2));
+    ro.addEventListener('value-changed', e => form.readonly = e.detail.value);
+    dense.addEventListener('value-changed', e => form.dense = e.detail.value);
+</script>

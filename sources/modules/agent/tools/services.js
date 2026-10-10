@@ -7,6 +7,7 @@
  */
 import { clip } from '../util.js';
 import { callAs } from './work.js';
+import { askEach } from '../system.js';
 
 const REGISTRY_TTL = 60_000;
 const MCP_TOOLS_TTL = 10 * 60_000;
@@ -86,16 +87,21 @@ function formatSearch(res) {
     return (res.source ? 'Источник: ' + res.source + '\n' : '') + lines.join('\n');
 }
 
+/** Страница по публичному адресу (внутренняя сеть сервера — не для web_fetch: см. net_http у администратора). */
 async function plainFetch(url, signal) {
-    const res = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 WORK-agent', Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5' },
-        redirect: 'follow',
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
+    if (signal?.aborted)
+        throw new Error('остановлено');
+    const { guardedGet } = await import('../../../host/net-guard.js');
+    const res = await guardedGet(url, {
+        maxBytes: 5 * 1024 * 1024,
+        signal,
+        timeoutMs: 20000,
+        headers: { 'user-agent': 'Mozilla/5.0 WORK-agent', accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5' },
     });
-    if (!res.ok)
+    if (res.status < 200 || res.status >= 300)
         throw new Error('HTTP ' + res.status);
-    const type = res.headers.get('content-type') || '';
-    const text = await res.text();
+    const type = String(res.headers['content-type'] || '');
+    const text = res.body.toString('utf-8');
     if (!/html/i.test(type))
         return text;
     return text
@@ -161,31 +167,27 @@ export const webTools = [
                 throw new Error('нужен полный http(s) URL');
             if (ctx.entry)
                 ctx.entry.url = url;
-            const s = (await listServices()).find(x => x.data.SCHEMA?.fetch_url);
-            if (s) {
-                try {
-                    const res = await callAs(s.item, 'fetch_url', { url }, ctx);
-                    if (res && !res.error)
-                        return clip(typeof res === 'string' ? res : (res.text || res.content || JSON.stringify(res)), 30000);
-                }
-                catch { /* ниже — прямой fetch */ }
-            }
+            // URL проверяет закрепляющий IP транспорт, включая каждое перенаправление.
             return clip(await plainFetch(url, ctx.signal), 30000);
         },
     },
 ];
 
 /** svc_* — методы SCHEMA сервисов, кроме search/fetch_url (они в web_*). */
-export async function serviceTools() {
+export async function serviceTools(session) {
     const out = [];
     for (const s of await listServices()) {
+        if (s.data.lanKind && (!session?.uid || session.principal?.kind === 'node' || !await s.item.canSee(s.item, { session })))
+            continue;
         for (const [method, spec] of Object.entries(s.data.SCHEMA || {})) {
             if (method === 'search' || method === 'fetch_url')
                 continue;
             out.push({
                 name: toolId('svc', s.id, method),
-                readonly: READ_NAME.test(method),
-                risk: READ_NAME.test(method) ? undefined : 'danger',
+                readonly: spec?.readonly ?? READ_NAME.test(method),
+                risk: (spec?.readonly ?? READ_NAME.test(method)) ? undefined : 'danger',
+                permission: s.data.lanKind && !(spec?.readonly ?? READ_NAME.test(method))
+                    ? askEach(() => (s.data.label || s.id) + ': ' + method) : undefined,
                 description: '[' + (s.data.label || s.id) + '] ' + String(spec?.description || method),
                 parameters: spec?.params && typeof spec.params === 'object' ? spec.params : { type: 'object', properties: {} },
                 source: { service: s.path, method },

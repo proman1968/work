@@ -8,6 +8,8 @@ export class MambaBlock extends BinNet {
         this.hSize = config.hiddenSizeBlocks;
         this.state = this.write(new Uint32Array(this.hSize), 'mamba_state');
         this.output = this.write(new Uint32Array(this.hSize), 'mamba_output');
+        // Состояние ДО шага — нужно обратному проходу (dL/d гейтов зависят от h_prev)
+        this.prevState = this.write(new Uint32Array(this.hSize), 'mamba_prev_state');
         this.resetState();
     }
 
@@ -35,6 +37,7 @@ export class MambaBlock extends BinNet {
             wg.compile(code, this.id + ':SSM_STEP');
         }
 
+        this.gpu.copy(this.state, this.prevState, 0, 0, this.hSize * 4);
         // Выполняем битовый шаг селективной памяти на GPU
         this._shader.compute([
             inputData.conv,

@@ -28,7 +28,10 @@ export const RESULT_MAX = 24000;
 export const OLD_RESULT_MAX = 1500;
 export const KEEP_FULL_TURNS = 6;
 export const STREAM_RETRIES = 2;
+export const EMPTY_RETRIES = 2;
 export const COMPACT_AT = 0.72;
+/** Скрытая подсказка после пустого хода (только в messages, в ленту не пишется). */
+export const EMPTY_NUDGE = '[Система] Твой предыдущий ответ был пустым: ни текста, ни вызова инструмента. Продолжай работу — вызови нужный инструмент или напиши итоговый ответ пользователю.';
 
 /**
  * Выполнить агента до ответа без вызовов инструментов (или стопа/лимита).
@@ -54,6 +57,7 @@ export async function runLoop(opts) {
             if (entry.status === 'approved')
                 await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
         await recoverInterrupted(items, host);
+        let empty = 0;
         for (let turn = 0; ; turn++) {
             throwIfStopped(host.signal);
             if (turn >= maxTurns) {
@@ -65,6 +69,8 @@ export async function runLoop(opts) {
             await maybeCompact({ llm, items, host, system });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
+            if (empty)
+                messages.push({ role: 'user', content: EMPTY_NUDGE });
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
                 system: estimateTokens(system),
@@ -82,14 +88,22 @@ export async function runLoop(opts) {
                     continue;
                 }
                 if (!it.content.trim()) {
+                    // пустой ход (только рассуждение / обрыв без ошибки) — сами делаем «дальше»
+                    if (it.finish !== 'length' && empty < EMPTY_RETRIES) {
+                        empty++;
+                        items.splice(items.indexOf(it), 1);
+                        await host.save();
+                        continue;
+                    }
                     it.error = true;
-                    it.content = 'Модель вернула пустой ответ.';
+                    it.content = emptyReason(it);
                     await host.save();
                     return { status: 'error', content: it.content };
                 }
                 await host.save();
                 return { status: 'done', content: it.content };
             }
+            empty = 0;
             it.tools = calls.map(c => ({ id: c.id || genId(), name: c.name, args: c.arguments || {}, status: 'pending' }));
             await host.save();
             await runCalls({ it, byName, host, llm, opts });
@@ -119,6 +133,52 @@ function takeQueued(items, host, depth) {
 
 export const IMAGE_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 export const IMAGE_MAX = 5 * 1024 * 1024;
+/** Скриншоты компьютера в контексте: не больше этого, только свежие (старые вычищает stripOldShots). */
+export const SHOTS_IN_CONTEXT = 3;
+export const SHOT_MAX_BYTES = 3 * 1024 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * Картинки результата инструмента [{ png: Buffer|base64, label? }] → [{ url, label }] для ленты.
+ * Хранятся data-URL в JSON задачи (последние 3 — в контексте модели, см. toMessages).
+ */
+export function normalizeShots(shots) {
+    const out = [];
+    for (const s of Array.isArray(shots) ? shots : []) {
+        const buf = Buffer.isBuffer(s?.png) ? s.png : (typeof s?.png === 'string' ? Buffer.from(s.png, 'base64') : null);
+        if (!buf || buf.length < 8 || buf.length > SHOT_MAX_BYTES)
+            continue;
+        if (!buf.subarray(0, 8).equals(PNG_MAGIC))
+            continue;
+        out.push({ url: 'data:image/png;base64,' + buf.toString('base64'), label: String(s?.label || 'экран').slice(0, 200) });
+    }
+    return out.slice(-SHOTS_IN_CONTEXT);
+}
+
+/** Оставить скриншоты только на последних shot-bearing ходах (вызывать перед toMessages/сжатием). */
+export function stripOldShots(items, keep = SHOTS_IN_CONTEXT) {
+    const live = (items || []).filter(i => i.type === 'assistant' && !i.compacted && (i.tools || []).some(t => t?.images?.length));
+    for (const it of live.slice(0, Math.max(0, live.length - keep)))
+        for (const t of it.tools || [])
+            if (t?.images) {
+                delete t.images;
+                t.shotDropped = true;
+            }
+}
+
+/** Последние скриншоты живой ленты → [{ url, label }]. */
+export function collectShots(items, keep = SHOTS_IN_CONTEXT) {
+    const out = [];
+    for (const it of items || []) {
+        if (it?.type !== 'assistant' || it?.compacted)
+            continue;
+        for (const t of it.tools || [])
+            for (const s of t?.images || [])
+                if (s?.url)
+                    out.push({ url: s.url, label: s.label || 'экран' });
+    }
+    return out.slice(-keep);
+}
 
 /** Картинки из вложений живой ленты → Map(path → data:URL). loader(path) → Buffer. Кэш — на элементе ленты не храним (base64 в JSON не кладём). */
 const imageCache = new Map();
@@ -178,6 +238,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
     const t0 = Date.now();
     for (let attempt = 0; ; attempt++) {
         let calls = [];
+        let finish = null;
         try {
             for await (const ch of llm.stream({ messages, tools: schemas, signal: host.signal, effort })) {
                 if (host.signal?.aborted)
@@ -194,11 +255,18 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                     it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens };
                 else if (ch?.type === 'tool_calls')
                     calls = ch.calls || [];
+                else if (ch?.type === 'finish')
+                    finish = ch;
             }
             if (host.signal?.aborted) {
                 it.stopped = true;
                 throw new StopError();
             }
+            if (finish?.reason)
+                it.finish = String(finish.reason);
+            // соединение закрылось без [DONE] и без finish_reason — обрыв, а не ответ
+            if (finish && !finish.done && !finish.reason && !calls.length && !it.content && !it.reasoning)
+                throw new Error('поток ответа оборвался');
             it.content = stripThink(it.content).replace(/^\s+/, '').replace(/\s+$/, '');
             it.durationMs = Date.now() - t0;
             return calls;
@@ -221,6 +289,17 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
             throw Object.assign(new Error(String(e.message || e)), { reported: true });
         }
     }
+}
+
+/** Текст ошибки пустого ответа: что именно пришло от модели. */
+function emptyReason(it) {
+    if (it.finish === 'length')
+        return 'Ответ модели обрезан лимитом длины (maxOutput) до появления текста. Увеличьте maxOutput модели или напишите «дальше».';
+    const why = [
+        it.reasoning ? 'было только рассуждение' : '',
+        it.finish && it.finish !== 'stop' ? 'finish_reason: ' + it.finish : '',
+    ].filter(Boolean).join(', ');
+    return 'Модель вернула пустой ответ' + (why ? ' (' + why + ')' : '') + '. Напишите «дальше», чтобы продолжить.';
 }
 
 /** <think>…</think> в content (модели без отдельного reasoning-канала). */
@@ -264,7 +343,12 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     }
     if (entry.args?.raw && Object.keys(entry.args).length === 1) {
         entry.status = 'error';
-        entry.error = 'Аргументы не разобраны как JSON: ' + clip(entry.args.raw, 300);
+        const raw = String(entry.args.raw);
+        entry.error = 'Аргументы вызова не разобраны как JSON (' + raw.length + ' символов'
+            + (it.finish === 'length' ? ', ответ модели достиг лимита длины' : '')
+            + '). Возможно, длинный content обрезан или нарушено экранирование. '
+            + 'Повтори коротким вызовом; большой файл создавай через write и дополняй небольшими частями через append. Фрагмент: '
+            + clip(raw, 300);
         await host.save();
         return;
     }
@@ -302,8 +386,10 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         // действия во внешнем мире — каждое подтверждается отдельно («разрешить всегда» не предлагается)
         if (decision.noAlways)
             entry.noAlways = true;
+        if (decision.hideArgs)
+            entry.hideArgs = true;
         await host.save();
-        const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason }) || {};
+        const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason, hideArgs: decision.hideArgs }) || {};
         throwIfStopped(host.signal);
         delete entry.reason;
         if (res.always && !entry.noAlways)
@@ -328,6 +414,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         else {
             entry.status = 'ok';
             entry.result = clip(resultText(value), RESULT_MAX);
+            const rich = value && typeof value === 'object' && !Array.isArray(value) ? value.images : null;
+            if (Array.isArray(rich) && rich.length)
+                entry.images = normalizeShots(rich);
         }
     }
     catch (e) {
@@ -403,6 +492,9 @@ export function toMessages(system, items, images = null) {
             case 'assistant': {
                 const old = ai++ < fullFrom;
                 const tools = (it.tools || []).filter(t => t && t.name);
+                // наши сообщения об ошибке — не реплика модели, в контекст не идут
+                if (it.error && !tools.length)
+                    break;
                 const msg = { role: 'assistant', content: it.content || '' };
                 if (tools.length)
                     msg.tool_calls = tools.map(t => ({
@@ -421,6 +513,18 @@ export function toMessages(system, items, images = null) {
                 break;
         }
     }
+    // Скриншоты — отдельным сообщением в конце: не все провайдеры понимают картинки в role:'tool'.
+    const shots = collectShots(live);
+    if (shots.length && images !== null) {
+        out.push({
+            role: 'user',
+            content: [
+                { type: 'text', text: '[Скриншоты экрана компьютера — свежие, по порядку (разрешение 1280×800):\n'
+                    + shots.map((s, i) => '[' + (i + 1) + '] ' + s.label).join('\n') + ']' },
+                ...shots.map(s => ({ type: 'image_url', image_url: { url: s.url } })),
+            ],
+        });
+    }
     return out;
 }
 
@@ -436,6 +540,7 @@ function userContent(it, imageMap) {
 
 /** Сжатие: контекст близок к пределу — старая часть ленты → сводка. */
 export async function maybeCompact({ llm, items, host, system, force = false }) {
+    stripOldShots(items);
     const limit = Number(llm.contextTokens) || 32000;
     const messages = toMessages(system, items);
     if (!force && estimateTokens(messages) < limit * COMPACT_AT)

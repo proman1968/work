@@ -15,7 +15,9 @@
 2. **Одна динамическая роль** — `:color-mode` (свойство `colorMode` = имя mixin’а); не несколько конкурирующих `:light` / `:accent` / …
 3. **`@apply --имя`** в `<style>` компонента, если нужен mixin на `:host` / классе.
 4. **CSS-переменная** темы: `var(--border-color)`, `var(--header-background)`, `var(--error-color)`, … — без hex/rgba-fallback.
-5. Локальный CSS — только то, чего нет в системе (`overflow`, `gap`, `border-radius`, ellipsis).
+5. Локальный CSS — только то, чего нет в системе (`overflow`, `gap`, ellipsis); отступы, скругления, тени, длительности — токены (`--space-*`, `--radius-*`, `--elevation-*`, `--duration*`), поля ввода — `@apply --control` и `--control-*`.
+
+Тема светлая / тёмная выбирается автоматически (`color-scheme: light dark` на `:root`, роли через `light-dark()`); акцент нативных контролов — `accent-color` от `--accent-color`; фокус — `:focus-visible` и `--focus-ring-*`.
 
 ## Когда что
 

@@ -1,4 +1,4 @@
-import { loadLibIndex } from '/oda/tools/icons/lib-index.js';
+import { loadLibIndex, ICON_LIBS } from '/oda/tools/icons/lib-index.js';
 ODA({is: 'oda-icons-tree', imports: 'oda//tree', extends: 'this, oda-tree',
     template:/* html */`
         <style>
@@ -25,17 +25,13 @@ ODA({is: 'oda-icons-tree', imports: 'oda//tree', extends: 'this, oda-tree',
     step: 0,
     nodeTemplate: 'icons-tree-node',
     get items(){
-        return WORK.get_item('/oda/tools/icons//svg/*.svg', 'info').then(items=>{
-            return items.map(file=>{
-                return {file,
-                    expanded: false,
-                    items: [{
-                        get file(){
-                            return file;
-                        }, 
-                        nodeTemplate:'icons-tree-lib'}]
-                }
-            })
+        return ICON_LIBS.map(lib => {
+            const file = { name: lib + '.svg' };
+            return {
+                file,
+                expanded: false,
+                items: [{ file, nodeTemplate: 'icons-tree-lib' }]
+            };
         });
     },
     get hideRoots(){

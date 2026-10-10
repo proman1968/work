@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { $item } from '../core.js';
 import * as mime from "mime-types";
-import { extractor } from '../modules/embeddings/embeddings.js';
 import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { $class } from './class.js';
@@ -36,6 +35,9 @@ export class $user extends $class{
         // WORK_DEV снимает все проверки видимости — и доступ к кабинету тоже (как canSee/canWrite)
         if (DEV_MODE)
             return true;
+        // профили пользователей видны пользователям сервера, но не узлам сети
+        if (params?.session?.principal?.kind === 'node')
+            return false;
         return params?.session?.$user?.id;
     }
 }

@@ -1,16 +1,46 @@
 <meta charset="UTF-8">
-<script type="module" src="../../../oda.js"></script>
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-select-input</title>
+<script type="module" src="/oda/oda.js"></script>
 <script type="module" src="./select.js"></script>
-<oda-tester>
-    <oda-select-input id="sel"></oda-select-input>
-</oda-tester>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em; overflow: auto;">
+    <oda-select-input id="s1" placeholder="Выберите город"></oda-select-input>
+    <oda-select-input id="s2" required></oda-select-input>
+    <oda-select-input id="s3" allow-other></oda-select-input>
+    <oda-select-input id="s4" multiple></oda-select-input>
+    <oda-select-input id="s5" readonly></oda-select-input>
+    <oda-select-input id="s6" disabled></oda-select-input>
+    <oda-select-input id="s7" dense></oda-select-input>
+    <oda-select-input id="s8"></oda-select-input>
+    <div id="out" muted></div>
+</div>
 <script type="module">
-    sel.meta = {
-        options: [
-            { value: 'one', label: 'Первый' },
-            { value: 'two', label: 'Второй' },
-        ],
-        other: { label: 'Свой ответ' },
-    };
-    sel.value = 'two';
+    const cities = [
+        { value: 'msk', label: 'Москва', icon: 'icons:star' },
+        { value: 'spb', label: 'Санкт-Петербург' },
+        { value: 'kzn', label: 'Казань' },
+        { value: 'nsk', label: 'Новосибирск', disabled: true }
+    ];
+    s1.items = cities;
+    // обратный порядок: сначала значение, потом варианты — рассинхрона нет
+    s2.value = 'kzn';
+    s2.field = { id: 'city', label: 'Город', required: true, items: cities, icon: 'icons:search' };
+    s3.items = cities;
+    s3.value = 'Тверь';
+    s4.items = cities;
+    s4.value = ['msk', 'kzn'];
+    s5.items = cities;
+    s5.value = 'spb';
+    s6.items = cities;
+    s6.value = 'msk';
+    s7.items = [1, 2, 3, 5, 8];
+    s7.value = 3;
+    // совместимость: старое описание meta {options, other}
+    s8.meta = { options: [{ value: 'one', label: 'Первый' }, { value: 'two', label: 'Второй' }], other: { label: 'Свой ответ' } };
+    s8.value = 'two';
+    const show = () => out.textContent = [...document.querySelectorAll('oda-select-input')].map(e => e.id + ': ' + JSON.stringify(e.value)).join(' · ');
+    document.addEventListener('value-changed', show);
+    setTimeout(show, 500);
 </script>

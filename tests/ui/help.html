@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Help UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Хендлер «Справка» (tests/ui/run.mjs): открывает readme.md контекста на форме файла,
+ * без справки показывает сообщение. Новых запросов, кроме readme_merged, нет.
+ */
+import helpProto from '/$server/$folder/handlers/methods/help/$handler/class.js';
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+
+await test('help: мета — иконка и подпись', async () => {
+    eq(helpProto.icon, 'icons:help');
+    eq(helpProto.label, 'Справка');
+});
+
+await test('help: открывает readme.md контекста', async () => {
+    const calls = [];
+    const opened = [];
+    const ctx = { path: '/DATA/REGISTER', fetch: async (m) => {
+        calls.push(m);
+        return { text: '# Журнал', path: '/DATA/REGISTER/$register/readme.md' };
+    } };
+    const file = { path: '/DATA/REGISTER/$register/readme.md', execute: async () => { opened.push('form'); } };
+    const prevGet = window.WORK?.get_item;
+    window.WORK = { get_item: async (p) => { calls.push('get:' + p); return file; } };
+    try {
+        await helpProto.execute.call({ $context: ctx });
+        eq(calls.join(','), 'readme_merged,get:/DATA/REGISTER/$register/readme.md');
+        eq(opened.join(','), 'form');
+        eq(file.$context, ctx, 'контекст файлу');
+    }
+    finally {
+        if (prevGet)
+            window.WORK.get_item = prevGet;
+        else
+            delete window.WORK;
+    }
+});
+
+await test('help: без справки — сообщение, лишнего не грузит', async () => {
+    const calls = [];
+    const said = [];
+    const prevMsg = window.ODA?.showMessage;
+    if (window.ODA)
+        window.ODA.showMessage = (m) => said.push(m);
+    else
+        window.ODA = { showMessage: (m) => said.push(m) };
+    const prevWork = window.WORK;
+    window.WORK = { get_item: async (p) => { calls.push(p); return null; } };
+    try {
+        await helpProto.execute.call({ $context: { path: '/X', fetch: async () => ({ text: '', path: '' }) } });
+        eq(said.join('|'), 'Справки нет');
+        eq(calls.length, 0, 'файл не искали');
+        await helpProto.execute.call({ $context: { path: '/X', fetch: async () => { throw new Error('нет доступа'); } } });
+        eq(said.length, 2, 'ошибка чтения — тоже сообщение');
+    }
+    finally {
+        if (prevMsg && window.ODA)
+            window.ODA.showMessage = prevMsg;
+        window.WORK = prevWork;
+    }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

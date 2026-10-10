@@ -1,0 +1,16 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>media</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./media.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 40em; overflow: auto;">
+<oda-image-input id="a" field='{"label":"Фото"}'></oda-image-input>
+<oda-image-input field='{"label":"Пустое изображение"}'></oda-image-input>
+<oda-audio-input field='{"label":"Аудио"}' collapsed></oda-audio-input>
+<oda-video-input id="v" readonly field='{"label":"Видео (только чтение)"}'></oda-video-input>
+</div>
+<script type="module">
+a.value = '/oda/tools/icons/icon.png';
+</script>

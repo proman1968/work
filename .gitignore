@@ -4,7 +4,10 @@ node_modules/
 /#system/mail.json
 /#system/server.json
 /#system/vapid_keys.json
+/#system/node-key.json
 /#system/settings.json
+/#system/os.json
+/#system/lan/
 /services/AI/GigaChat/$service/#system/settings.json
 .env
 **/#secret/
@@ -19,6 +22,11 @@ users/*/
 **/*.webm
 **/history/
 **/work/
+# Зоны ролей и данных — только внутри метапапки ($тип/DATA, $тип/USER…); одноимённые классы (/DATA) публикуются
+**/$*/DATA/
+**/$*/ADMIN/
+**/$*/USER/
+**/$*/BOSS/
 
 # Progress snapshots (mirror of WORK history pattern)
 .progress.md/history/
@@ -28,11 +36,8 @@ Thumbs.db
 *.log
 .svn/
 
-# Python venv / models (local TTS)
-sources/modules/tts/.venv/
-sources/modules/tts/.venv-piper/
-sources/modules/tts/qwen3_tts_model/
-sources/modules/tts/piper_voices/
+# Python venv / models (локальные модели; веса качаются отдельно, см. README модели)
+sources/modules/*/.venv/
 
 # Large ML model weights (download separately)
 torus/binnet/models/
@@ -42,3 +47,7 @@ torus/binnet/models/
 .vscode/tasks.json
 package-lock.json
 /#system/oauth/
+
+# ��������� ������� ������� (������ �� ������, RAG)
+/.index/
+

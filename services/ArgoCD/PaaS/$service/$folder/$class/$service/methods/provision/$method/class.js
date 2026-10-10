@@ -80,7 +80,7 @@ export default {
                     status: 'в процессе создания',
                     buyer,
                     usersActiveToday: 0,
-                    '#security': buyer ? { admin: buyer, users: [buyer] } : {},
+                    '#security': buyer ? { ADMIN: [buyer], USER: [buyer] } : {},
                 }),
                 session: globalThis.WORK,
             });
@@ -99,11 +99,14 @@ export default {
                 await paasItem.info?.();
                 const data = Object.assign({}, paasItem.DATA || {});
                 const security = Object.assign({}, data['#security'] || {});
-                security.admin = security.admin || buyer;
-                const users = Array.isArray(security.users) ? security.users.slice() : [];
+                const admins = Array.isArray(security.ADMIN) ? security.ADMIN.slice() : (security.ADMIN ? [security.ADMIN] : []);
+                if (!admins.includes(buyer))
+                    admins.push(buyer);
+                security.ADMIN = admins;
+                const users = Array.isArray(security.USER) ? security.USER.slice() : [];
                 if (!users.includes(buyer))
                     users.push(buyer);
-                security.users = users;
+                security.USER = users;
                 data['#security'] = security;
                 data.status = data.status || 'в процессе создания';
                 data.tariff = data.tariff || tariff;
@@ -119,7 +122,7 @@ export default {
                 });
                 paasItem.reset?.();
             } catch (e) {
-                console.warn('[provision] set #security.users:', e.message);
+                console.warn('[provision] set #security.USER:', e.message);
             }
         }
 

@@ -5,7 +5,8 @@
   "description": "1-bit Binary Mamba LLM Engine on WebGPU and Node.js",
   "main": "run.mjs",
   "scripts": {
-    "start": "node --max-old-space-size=16384 run.mjs"
+    "start": "node --max-old-space-size=16384 run.mjs",
+    "bench": "node test/bench.mjs"
   },
   "dependencies": {
     "webgpu": "^0.4.0"

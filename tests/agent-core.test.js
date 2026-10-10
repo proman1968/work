@@ -14,11 +14,14 @@ import { runLoop, toMessages, maybeCompact } from '../sources/modules/agent/loop
 import { decide, isProtectedPath } from '../sources/modules/agent/permissions.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
 import { createEnv, runOnce } from '../sources/modules/agent/index.js';
+import { metaTools } from '../sources/modules/agent/tools/meta.js';
 import * as session from '../sources/modules/agent/session.js';
+import { findPendingTasks } from '../sources/modules/agent/recovery.js';
 import { lineDiff } from '../sources/modules/agent/diff.js';
 import { parseFrontmatter } from '../sources/modules/agent/util.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+const CHILD_UID = 'EU00000000000001';
 let tmp, prevCwd;
 
 function write(rel, content) {
@@ -79,17 +82,29 @@ before(async () => {
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$class/ai/system.md', 'СИСТЕМА-ДВИЖКА');
-    write('$server/$folder/$class/ai/config.js', `export default { model: '/MODELS/mock' }`);
+    write('$server/$folder/$class/ai/config.js', `export default { model: '/MODELS/mock', ttsModel: '/MODELS/tts', sttModel: '/MODELS/stt', voice: { instructions: 'тихий голос' } }`);
+    write('MODELS/tts/$ai/class.js', `export default { model: 'tts-x', capabilities: ['tts'], speak(p) { return Buffer.from('RIFF' + JSON.stringify(p)); } }`);
+    write('MODELS/stt/$ai/class.js', `export default { model: 'stt-x', capabilities: ['stt'], list_remote() { return { models: ['other-model'] }; }, transcribe(p) { return { text: 'привет ' + p.audio.length }; } }`);
+    write('MODELS/stt2/$ai/class.js', `export default { model: 'stt-ok', capabilities: ['stt'], list_remote() { return { models: ['vllm-x/stt-ok'] }; }, transcribe(p) { return { text: 'ok' }; } }`);
+    write('OKSTT/$class/class.js', `export default { label: 'Со слухом' }`);
+    write('OKSTT/$class/ai/config.js', `export default { sttModel: '/MODELS/stt2', dot: { eyes: 'happy', accessory: 'glasses', color: 'red; x' } }`);
     write('$server/$folder/$class/ai/agents/explore.md', '---\nname: explore\ndescription: читать\ntools: readonly\n---\nТы исследователь.');
+    write('$server/$folder/$class/ai/agents/general.md', '---\nname: general\ndescription: исполнитель\ntools: *\n---\nВыполни поручение.');
     write('$server/$folder/$class/ai/skills/hello.md', '---\nname: hello\ndescription: поздороваться\n---\nСкажи привет.');
     write('$server/$folder/$class/ai/skills/readme.md', '# не навык');
     // тип .task — настоящий слой проекта
-    for (const rel of ['$server/$folder/$file/$data/$task/class.js'])
+    for (const rel of ['$server/$folder/$file/$task/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
-    write('BOX/$class/class.js', `export default { label: 'Коробка' }`);
+    write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${CHILD_UID}'] } }`);
+    write(`USERS/${CHILD_UID}/$user/class.js`, `export default { label: 'Тестовый пользователь' }`);
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');
     write('BOX/doc/note.md', 'строка 1\nстрока 2\nстрока 3\n');
+    write('BOX/$class/ai/system.md', 'ПРАВИЛА-МЕСТА');
+    write('REPL/$class/class.js', `export default { label: 'Замена' }`);
+    write('REPL/$class/ai/system.md', '---\nreplace: true\n---\nТОЛЬКО-ЭТО');
+    write('$server/$folder/$class/ai/agents/sysonly.md', '---\nname: sysonly\ndescription: только админ\nrequires: system\ntools: readonly\n---\nАдмин.');
+    write('$server/$folder/$class/ai/skills/sysskill.md', '---\nname: sysskill\ndescription: только админ\nrequires: system\n---\nТело.');
     write('MODELS/$class/class.js', `export default {}`);
     write('MODELS/mock/$ai/class.js', `export default {
         maxTokens: 50000,
@@ -109,6 +124,17 @@ after(async () => {
 });
 
 describe('loop: цикл tool calling', () => {
+    it('битый длинный JSON аргументов объясняет обрезку и советует append', async () => {
+        const items = [{ id: 'u', type: 'user', content: 'html' }];
+        await runLoop({ llm: scripted([
+            { calls: [{ name: 'write', args: { raw: '{"path":"/BOX/doc/x.html","content":"' + 'x'.repeat(2000) } }] },
+            { text: 'попробую частями' },
+        ]), system: 'S', items, tools: workTools, host: mkHost() });
+        const call = items.find(i => i.tools)?.tools[0];
+        assert.equal(call.status, 'error');
+        assert.match(call.error, /20\d\d символов/);
+        assert.match(call.error, /append/);
+    });
     it('ответ без инструментов — done, стрим дельт, usage', async () => {
         const items = [{ id: 'u', type: 'user', content: 'привет' }];
         const host = mkHost();
@@ -192,6 +218,45 @@ describe('loop: цикл tool calling', () => {
         assert.equal(items2[1].error, true);
     });
 
+    it('пустой ход (только рассуждение) — сам «дальше» со скрытой подсказкой, без ошибки в ленте', async () => {
+        const log = [];
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm: scripted([{ reasoning: 'думаю…' }, { text: 'готово' }], log), system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'done');
+        assert.equal(items.length, 2);
+        assert.equal(items[1].content, 'готово');
+        assert.match(log[1].messages.at(-1).content, /пустым/);
+    });
+
+    it('пустые ходы подряд — ошибка с причиной; в контекст модели она не идёт', async () => {
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm: scripted([{ reasoning: 'a' }, { reasoning: 'b' }, { reasoning: 'c' }]), system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'error');
+        assert.equal(items.length, 2);
+        assert.match(items[1].content, /пустой ответ.*рассуждение/);
+        assert.equal(toMessages('S', items).length, 2);
+    });
+
+    it('поток оборвался без [DONE] и finish_reason — повтор хода', async () => {
+        let n = 0;
+        const llm = {
+            name: 'mock', contextTokens: 100000,
+            async *stream() {
+                if (n++ === 0) {
+                    yield { type: 'finish', reason: null, done: false };
+                    return;
+                }
+                yield 'ok';
+                yield { type: 'finish', reason: 'stop', done: true };
+            },
+        };
+        const items = [{ id: 'u', type: 'user', content: 'x' }];
+        const res = await runLoop({ llm, system: 'S', items, tools: [], host: mkHost() });
+        assert.equal(res.status, 'done');
+        assert.equal(n, 2);
+        assert.equal(items[1].content, 'ok');
+    });
+
     it('сжатие: старая часть ленты → сводка, контекст начинается со сводки', async () => {
         const items = [];
         for (let k = 0; k < 6; k++) {
@@ -252,18 +317,116 @@ describe('инструменты WORK на песочнице', () => {
         const out = await tool('write').run({ path: '/BOX/doc/new.md', content: 'альфа\nбета\nбета\n' }, c);
         assert.match(out, /создан/);
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/new.md')));
+        assert.match(c.entry.snapshot, /\/\.new\.md\/history\/[^/]+\/[^/]+\.md$/);
+        assert.equal(await tool('read').run({ path: c.entry.snapshot }, ctx()).then(s => s.includes('альфа')), true);
         await assert.rejects(() => tool('edit').run({ path: '/BOX/doc/new.md', old_string: 'бета', new_string: 'гамма' }, ctx()), /2 раз/);
+        await new Promise(r => setTimeout(r, 5));
         const c2 = ctx();
         await tool('edit').run({ path: '/BOX/doc/new.md', old_string: 'альфа', new_string: 'АЛЬФА' }, c2);
+        assert.notEqual(c.entry.snapshot, c2.entry.snapshot);
+        assert.match(await tool('read').run({ path: c.entry.snapshot }, ctx()), /альфа/);
+        assert.doesNotMatch(await tool('read').run({ path: c.entry.snapshot }, ctx()), /АЛЬФА/);
         assert.equal(fs.readFileSync(path.join(tmp, 'BOX/doc/new.md'), 'utf-8'), 'АЛЬФА\nбета\nбета\n');
         assert.equal(c2.entry.diff.added, 1);
         assert.equal(c2.entry.diff.removed, 1);
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/.new.md/history')));
     });
 
+    it('записи задачи помечаются mainContext и не шумят в общей ленте', async () => {
+        const readLogRows = () => {
+            const out = [];
+            const walk = dir => {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory())
+                        walk(p);
+                    else if (e.name.endsWith('.logs')) {
+                        try {
+                            out.push(JSON.parse(fs.readFileSync(p, 'utf-8')));
+                        }
+                        catch { /* не строка лога */ }
+                    }
+                }
+            };
+            walk(tmp);
+            return out;
+        };
+        const taskCtx = () => ({ entry: {}, place: null, task: { path: '/BOX/task/42.task' } });
+        const c = taskCtx();
+        await tool('write').run({ path: '/BOX/doc/pub.md', content: 'v1' }, c);
+        await tool('append').run({ path: c.entry.path, content: 'v2' }, taskCtx());
+        const marked = readLogRows().filter(r => String(r.path || '').includes('.pub.md/history'));
+        assert.ok(marked.length >= 2);
+        assert.ok(marked.every(r => r.mainContext === '/BOX/task/42.task'));
+        await tool('write').run({ path: '/BOX/doc/plain.md', content: 'x' }, ctx());
+        const plain = readLogRows().filter(r => String(r.path || '').includes('.plain.md/history'));
+        assert.ok(plain.length >= 1);
+        assert.ok(plain.every(r => !r.mainContext));
+    });
+
+    it('call на методы записи из задачи принудительно ставит mainContext', async () => {
+        const readLogRows = () => {
+            const out = [];
+            const walk = dir => {
+                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const p = path.join(dir, e.name);
+                    if (e.isDirectory())
+                        walk(p);
+                    else if (e.name.endsWith('.logs')) {
+                        try {
+                            out.push(JSON.parse(fs.readFileSync(p, 'utf-8')));
+                        }
+                        catch { /* не строка лога */ }
+                    }
+                }
+            };
+            walk(tmp);
+            return out;
+        };
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const taskCtx = () => ({ entry: {}, place: null, task: { path: '/BOX/task/42.task' }, session: actor, role: 'USER' });
+        const plainCtx = () => ({ entry: {}, place: null, session: actor, role: 'USER' });
+        const call = tool('call');
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'черновик агента' } }, taskCtx());
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'подмена', mainContext: '/ELSEWHERE/x.task' } }, taskCtx());
+        await call.run({ path: '/BOX', method: 'save_message', args: { message: 'без задачи' } }, plainCtx());
+        const rows = readLogRows().filter(r => ['черновик агента', 'подмена', 'без задачи'].includes(r.content));
+        // appendRow зеркалит запись в кабинет автора — проверяем по группам, а не штучно
+        const byContent = c => rows.filter(r => r.content === c);
+        assert.ok(byContent('черновик агента').length >= 1);
+        assert.ok(byContent('черновик агента').every(r => r.mainContext === '/BOX/task/42.task'));
+        assert.ok(byContent('подмена').every(r => r.mainContext === '/BOX/task/42.task'), 'подмена mainContext отклонена');
+        assert.ok(byContent('без задачи').every(r => !r.mainContext));
+        // чтение через call не трогаем
+        const schema = await call.run({ path: '/BOX', method: 'get_schema', args: {} }, taskCtx());
+        assert.ok(schema && typeof schema === 'object' && !('mainContext' in schema));
+    });
+
     it('write во вложенную несуществующую папку', async () => {
         await tool('write').run({ path: '/BOX/doc/sub/deep.txt', content: 'x' }, ctx());
         assert.ok(fs.existsSync(path.join(tmp, 'BOX/doc/sub/deep.txt')));
+    });
+
+    it('write + append: большой HTML пишется частями, каждый шаг остаётся в истории', async () => {
+        const first = ctx(), second = ctx();
+        await tool('write').run({ path: '/BOX/doc/slides.html', content: '<html>\n' }, first);
+        await tool('append').run({ path: first.entry.path, content: '<section>Слайд 1</section>\n' }, second);
+        assert.equal(fs.readFileSync(path.join(tmp, 'BOX/doc/slides.html'), 'utf-8'), '<html>\n<section>Слайд 1</section>\n');
+        assert.notEqual(first.entry.snapshot, second.entry.snapshot);
+        const old = await WORK.get_item(first.entry.snapshot);
+        assert.equal(await old.load({ encoding: 'utf-8' }), '<html>\n');
+        await assert.rejects(() => tool('append').run({ path: '/BOX/doc/missing.html', content: 'x' }, ctx()), /не найдено/);
+    });
+
+    it('два сохранения одного файла в одну миллисекунду не перезаписывают снимок', async () => {
+        const folder = await WORK.get_item('/BOX/doc');
+        const time = Date.now();
+        const first = await folder.save_file({ filename: 'collision.md', post: 'первая версия', time });
+        const second = await folder.save_file({ filename: 'collision.md', post: 'вторая версия', time });
+        assert.notEqual(first.path, second.path);
+        assert.match(await tool('read').run({ path: first.path }, ctx()), /первая версия/);
+        assert.match(await tool('read').run({ path: second.path }, ctx()), /вторая версия/);
     });
 
     it('create_class / find по имени и тексту / schema / call', async () => {
@@ -295,6 +458,86 @@ describe('окружение: слои ai/, system, навыки, субаген
         assert.equal(await env.defaultModel(), '/MODELS/mock');
     });
 
+    it('геопозиция в system: координаты → город; без координат — запрет выводить город из tz', async () => {
+        const place = await WORK.get_item('/BOX');
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = async () => ({ ok: true, json: async () => ({ address: { city: 'Рязань', state: 'Рязанская область', country: 'Россия' } }) });
+        try {
+            const withGeo = await (await createEnv({ place, host: { mode: 'auto' }, location: { lat: 54.6281, lon: 39.7457, tz: 'Europe/Moscow' } })).makeSystem();
+            assert.match(withGeo, /Рязань/);
+            assert.match(withGeo, /54\.6281, 39\.7457/);
+        }
+        finally {
+            globalThis.fetch = realFetch;
+        }
+        const noGeo = await (await createEnv({ place, host: { mode: 'auto' }, location: { tz: 'Europe/Moscow' } })).makeSystem();
+        assert.match(noGeo, /Местоположение пользователя неизвестно/);
+        assert.match(noGeo, /Не выводи город из часового пояса/);
+        assert.doesNotMatch(noGeo, /Местоположение пользователя: \d/);
+    });
+
+    it('роль USER в system: запрет искать os_/net_ и поручать их субагенту', async () => {
+        const place = await WORK.get_item('/BOX');
+        const sys = await (await createEnv({ place, host: { mode: 'auto' }, role: 'USER' })).makeSystem();
+        assert.match(sys, /запустить в роли ADMIN/);
+        assert.match(sys, /os_\*\/net_\*\/shell у тебя нет в списке/);
+        assert.match(sys, /не поручай такую работу субагенту/);
+    });
+
+    it('субагент в роли USER не получает net_/os_/shell сверх набора (делегирование не эскалирует)', async () => {
+        const place = await WORK.get_item('/BOX');
+        const env = await createEnv({ place, host: { mode: 'auto' }, role: 'USER' });
+        const tools = await env.makeTools({ name: 'it-admin', meta: { tools: 'os_*, net_*, shell, ls, read, find, write, access, call' } }, 1);
+        assert.ok(!tools.some(t => t.name.startsWith('net_') || t.name.startsWith('os_') || t.name === 'shell'));
+        assert.ok(tools.some(t => t.name === 'ls'));
+        const { metaTools } = await import('../sources/modules/agent/tools/meta.js');
+        assert.match(metaTools.find(t => t.name === 'task').description, /той же роли задачи/);
+    });
+
+    it('system.md слоёв дописывается к базовому; replace: true заменяет всё накопленное', async () => {
+        const sys = await (await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } })).makeSystem();
+        assert.ok(sys.indexOf('СИСТЕМА-ДВИЖКА') >= 0 && sys.indexOf('СИСТЕМА-ДВИЖКА') < sys.indexOf('ПРАВИЛА-МЕСТА'));
+        const replaced = await (await createEnv({ place: await WORK.get_item('/REPL'), host: { mode: 'auto' } })).makeSystem();
+        assert.match(replaced, /ТОЛЬКО-ЭТО/);
+        assert.doesNotMatch(replaced, /СИСТЕМА-ДВИЖКА/);
+    });
+
+    it('requires: system — агент и навык скрыты, когда у сессии нет ОС/сети', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        assert.ok(!env.agents.has('sysonly') && !env.skills.has('sysskill'));
+        assert.ok(env.agents.has('explore') && env.skills.has('hello'));
+        const sys = await env.makeSystem();
+        assert.doesNotMatch(sys, /sysonly|sysskill/);
+    });
+
+    it('субагент не получает инструментов сверх набора вызвавшего; skill есть у всех', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const reader = await env.makeTools(env.agents.get('explore'), 1);
+        const names = new Set(reader.map(t => t.name));
+        const general = await env.makeTools(env.agents.get('general'), 2, reader);
+        assert.ok(general.length > 0 && general.every(t => names.has(t.name)), 'general под readonly-родителем — только чтение');
+        assert.ok(!general.some(t => ['write', 'edit', 'call', 'send'].includes(t.name)));
+        const free = await env.makeTools(env.agents.get('general'), 1);
+        assert.ok(free.some(t => t.name === 'write'), 'без родителя набор по описанию');
+        const listed = await env.makeTools({ name: 'x', meta: { tools: ['ls'] } }, 1);
+        assert.deepEqual(listed.map(t => t.name).sort(), ['ls', 'skill']);
+    });
+
+    it('маска tools: звёздочка в середине имени', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const tools = await env.makeTools({ name: 'x', meta: { tools: ['*_table', 'wr*e'] } }, 1);
+        assert.deepEqual(tools.map(t => t.name).sort(), ['read_table', 'skill', 'write', 'write_table']);
+    });
+
+    it('call: [методы] — чужой метод отклоняется до подтверждения и до вызова', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const [call] = (await env.makeTools({ name: 'x', meta: { tools: ['call'], call: ['members'] } }, 1)).filter(t => t.name === 'call');
+        assert.ok(call);
+        assert.equal((await call.permission({ method: 'create_object' }, {})).verdict, 'deny');
+        assert.notEqual((await call.permission({ method: 'members' }, {}))?.verdict, 'deny');
+        await assert.rejects(() => call.run({ path: '/BOX', method: 'save_file', args: {} }, { entry: {} }), /только методы call: members/);
+    });
+
     it('субагент task: своя лента внутри вызова, отчёт — результат', async () => {
         const place = await WORK.get_item('/BOX');
         globalThis.__MOCK_STREAM__ = scripted([
@@ -312,7 +555,214 @@ describe('окружение: слои ai/, system, навыки, субаген
     });
 });
 
+describe('голосовой режим: модели речи на сервере', () => {
+    it('voiceConfig: синтез настроен; распознавания нет на шлюзе — false (клиент берёт речь браузера)', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        voice.resetVoiceProbes();
+        const place = await WORK.get_item('/BOX');
+        const cfg = await voice.voiceConfig(place);
+        assert.equal(cfg.tts, true);
+        assert.equal(cfg.stt, false);
+        assert.equal(cfg.lang, 'Russian');
+    });
+
+    it('voiceConfig: распознавание считается доступным, только если шлюз его перечислил; внешний вид персонажа очищается', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        voice.resetVoiceProbes();
+        const heard = await voice.voiceConfig(await WORK.get_item('/OKSTT'));
+        assert.equal(heard.stt, true);
+        assert.deepEqual(heard.dot, { color: '', eyes: 'happy', accessory: 'glasses' }, 'мусорный цвет отброшен');
+        const plain = await voice.voiceConfig(await WORK.get_item('/BOX'));
+        assert.equal(plain.stt, false, 'шлюз модель не перечислил');
+        assert.deepEqual(plain.dot, { color: '', eyes: 'round', accessory: 'none' });
+        assert.deepEqual(await voice.dotLook(await WORK.get_item('/OKSTT')), heard.dot);
+    });
+    it('speak: текст очищается и режется, голос из конфига места; пустой текст и нет модели — ошибки', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const wav = await voice.speak(place, { text: '  Привет,\u0007   мир!  ' });
+        const sent = JSON.parse(wav.toString('utf-8').slice(4));
+        assert.equal(sent.text, 'Привет, мир!');
+        assert.equal(sent.instructions, 'тихий голос');
+        const long = JSON.parse((await voice.speak(place, { text: 'я'.repeat(5000) })).toString('utf-8').slice(4));
+        assert.equal(long.text.length, voice.MAX_SPEECH_CHARS);
+        await assert.rejects(() => voice.speak(place, { text: '   ' }), /пустой текст/);
+    });
+
+    it('transcribe: аудио уходит модели, лимит размера и пустое аудио — ошибки', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const res = await voice.transcribe(place, { audio: Buffer.alloc(10), language: 'ru' });
+        assert.equal(res.text, 'привет 10');
+        await assert.rejects(() => voice.transcribe(place, { audio: Buffer.alloc(0) }), /нет аудио/);
+        await assert.rejects(() => voice.transcribe(place, { audio: Buffer.alloc(voice.MAX_AUDIO_BYTES + 1) }), /слишком длинная/);
+    });
+
+    it('реплика голосом: агент получает VOICE_NOTE, обычная — нет', async () => {
+        const { VOICE_NOTE } = await import('../sources/modules/agent/index.js');
+        const place = await WORK.get_item('/BOX');
+        const spoken = await (await createEnv({ place, host: { mode: 'auto' }, voice: true })).makeSystem();
+        assert.ok(spoken.includes(VOICE_NOTE));
+        const typed = await (await createEnv({ place, host: { mode: 'auto' } })).makeSystem();
+        assert.ok(!typed.includes('# Голосовой режим'));
+        const sub = await (async () => { const env = await createEnv({ place, host: { mode: 'auto' }, voice: true }); return env.makeSystem(env.agents.get('explore')); })();
+        assert.ok(!sub.includes('# Голосовой режим'), 'субагенту голосовая заметка не нужна');
+    });
+});
+
 describe('сессия .task', () => {
+    it('продолжимый субагент: отдельная задача, сообщение после завершения, статус и остановка', async () => {
+        const parent = await newTask('parent-child');
+        const point = await WORK.get_item('/BOX');
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const env = await createEnv({ place: point, session: actor, host: mkHost(), role: 'USER' });
+        const ctx = { task: parent, session: actor, role: 'USER', place: point, env, depth: 0,
+            entry: {}, llm: { name: '/MODELS/mock' } };
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Первый отчёт' }, { text: 'Второй отчёт' }]).stream;
+        const start = metaTools.find(t => t.name === 'agent_start');
+        const result = await start.run({ agent: 'general', prompt: 'Исследуй /BOX', description: 'Долгая работа' }, ctx);
+        assert.match(result, /Продолжимый агент/);
+        assert.match(ctx.entry.path, new RegExp('\\.' + CHILD_UID + '\\.task$'));
+        const child = await WORK.get_item(ctx.entry.path);
+        await session.idle(child);
+        const body = await session.getBody(child);
+        assert.equal(body.parentTask, parent.path);
+        assert.equal(body.ownerUid, CHILD_UID);
+        assert.equal(body.childAgent, 'general');
+        assert.equal(body.role, 'USER');
+        assert.equal(body.items.at(-1).content, 'Первый отчёт');
+        const status = metaTools.find(t => t.name === 'agent_status');
+        assert.equal((await status.run({ path: child.path }, ctx)).status, 'idle');
+        assert.match((await status.run({ path: child.path }, ctx)).last, /Первый отчёт/);
+        await metaTools.find(t => t.name === 'agent_message').run({ path: child.path, prompt: 'Добавь подробности' }, ctx);
+        await session.idle(child);
+        assert.equal((await session.getBody(child)).items.at(-1).content, 'Второй отчёт');
+        await metaTools.find(t => t.name === 'agent_stop').run({ path: child.path }, ctx);
+        assert.equal((await session.getBody(child)).status, 'stopped');
+        await assert.rejects(() => status.run({ path: parent.path }, ctx), /не принадлежит|не найдена/);
+        const anotherParent = await newTask('other-parent');
+        const outsider = { ...ctx, task: anotherParent };
+        await assert.rejects(() => status.run({ path: child.path }, outsider), /не принадлежит/);
+    });
+    it('после рестарта находит задачи только в рабочей зоне, не в history', async () => {
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000000.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'running', items: [] }));
+        write('RECOVERY/doc/history/task/2026-10-01/1790800000001.EU00000000000001.task', JSON.stringify({ version: 2, status: 'running' }));
+        const pending = await findPendingTasks(tmp);
+        assert.ok(pending.some(t => t.path === '/' + rel.replaceAll('\\', '/') && t.uid === 'EU00000000000001'));
+        assert.ok(!pending.some(t => t.path.includes('/history/')));
+    });
+
+    it('не повторяет после рестарта начатое изменяющее действие: нужна ручная проверка', async () => {
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000002.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'running', items: [
+            { id: 'a1', type: 'assistant', content: '', tools: [{ id: 'send1', name: 'send', status: 'running', args: { message: 'письмо' } }] },
+        ] }));
+        const file = { dir: path.join(tmp, rel), path: '/' + rel, short: '/' + rel,
+            load: ({ encoding }) => fsp.readFile(file.dir, encoding), reset() {} };
+        const old = process.env.WORK_TEST;
+        process.env.WORK_TEST = '1';
+        try {
+            const res = await session.recover(file, { uid: 'EU00000000000001', send() {} });
+            assert.equal(res.status, 'needs_review');
+            const body = await session.getBody(file);
+            assert.equal(body.status, 'needs_review');
+            assert.equal(body.items[0].tools[0].status, 'interrupted');
+            assert.match(body.items.at(-1).content, /НЕ повторено автоматически/);
+            assert.match((await session.prompt(file, { prompt: '' })).error, /Сначала проверьте результат/);
+        }
+        finally { if (old == null) delete process.env.WORK_TEST; else process.env.WORK_TEST = old; }
+    });
+
+    it('сохраняет ожидание вопроса после рестарта, не запускает модель заново', async () => {
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000003.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'waiting', waiting: { kind: 'question', call: 'q1', item: 'a1' }, items: [
+            { id: 'a1', type: 'assistant', tools: [{ id: 'q1', name: 'ask_user', status: 'waiting', args: { question: 'Какой город?' } }] },
+        ] }));
+        const file = { dir: path.join(tmp, rel), path: '/' + rel, short: '/' + rel,
+            load: ({ encoding }) => fsp.readFile(file.dir, encoding), reset() {} };
+        const old = process.env.WORK_TEST;
+        process.env.WORK_TEST = '1';
+        try {
+            const res = await session.recover(file, { uid: 'EU00000000000001', send() {} });
+            assert.equal(res.status, 'waiting');
+            assert.equal((await session.getBody(file)).waiting.call, 'q1');
+            assert.equal((await session.message(file, { session: { uid: CHILD_UID }, prompt: 'дополнительный контекст' })).queued, true);
+            assert.equal((await session.getBody(file)).waiting.call, 'q1');
+            assert.equal((await session.getBody(file)).queue[0].content, 'дополнительный контекст');
+        }
+        finally { if (old == null) delete process.env.WORK_TEST; else process.env.WORK_TEST = old; }
+    });
+
+    it('publish: отметить/снять/посмотреть результаты; чужой снимок отклоняется', async () => {
+        const writeTool = workTools.find(t => t.name === 'write');
+        const wc = { entry: {}, place: null };
+        await writeTool.run({ path: '/BOX/doc/pub2.md', content: 'итог' }, wc);
+        const snap = wc.entry.snapshot;
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000005.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'idle', items: [
+            { id: 'a1', type: 'assistant', content: '', time: 1, tools: [
+                { id: 'w1', name: 'write', status: 'ok', path: '/BOX/doc/pub2.md', snapshot: snap },
+            ] },
+        ] }));
+        const file = { dir: path.join(tmp, rel), path: '/' + rel, short: '/' + rel,
+            load: ({ encoding }) => fsp.readFile(file.dir, encoding), reset() {} };
+        const publish = metaTools.find(t => t.name === 'publish');
+        const pctx = { task: file, session: { uid: CHILD_UID }, entry: {} };
+        await assert.rejects(
+            () => publish.run({ snapshot: '/BOX/doc/.x.md/history/2026-10-01/1.X.md' }, pctx), /не из этой задачи/);
+        await publish.run({ snapshot: snap, title: 'Итог' }, pctx);
+        await publish.run({ snapshot: snap }, pctx);
+        assert.equal((await session.getBody(file)).results.length, 1);
+        assert.match(await publish.run({ action: 'list' }, pctx), /Итог/);
+        assert.match(await publish.run({ snapshot: snap, action: 'remove' }, pctx), /не отмечены/);
+        assert.equal((await session.getBody(file)).results.length, 0);
+    });
+
+    it('завершение публикует результаты в запись задачи (владелец и кабинет)', async () => {
+        const calls = [];
+        const owner = { path: '/BOX', append_log_includes: async p => { calls.push(['owner', p]); return { includes: p.includePaths }; } };
+        const cab = { path: '/USERS//X', append_log_includes: async p => { calls.push(['cab', p]); return { includes: p.includePaths }; } };
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000006.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'idle', items: [] }));
+        const file = { dir: path.join(tmp, rel), path: '/' + rel, short: '/' + rel,
+            load: ({ encoding }) => fsp.readFile(file.dir, encoding), reset() {}, $owner: owner };
+        const ses = { uid: 'X', $user: cab };
+        await session.addTaskResult(file, { snapshot: '/S/1.md', title: 'Один' }, ses);
+        await session.addTaskResult(file, { snapshot: '/S/2.md' }, ses);
+        assert.equal(await session.publishTaskResults(file, ses), 2);
+        assert.equal(calls.length, 2);
+        for (const [, p] of calls) {
+            assert.equal(p.entryPath, file.path);
+            assert.deepEqual(p.includePaths, ['/S/1.md', '/S/2.md']);
+        }
+        const bare = { path: '/RECOVERY/other.task', $owner: owner };
+        assert.equal(await session.publishTaskResults(bare, ses), 0);
+        assert.equal(calls.length, 2);
+    });
+
+    it('автоматически продолжает безопасный ход с сохранённой задачей', async () => {
+        const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000004.EU00000000000001.task';
+        write(rel, JSON.stringify({ version: 2, status: 'running', model: '/MODELS/mock', items: [
+            { id: 'u1', type: 'user', content: 'продолжи' },
+            { id: 'a1', type: 'assistant', content: '', tools: [{ id: 'read1', name: 'read', status: 'running', args: { path: '/BOX/doc/note.md' } }] },
+        ] }));
+        const file = { dir: path.join(tmp, rel), path: '/' + rel, short: '/' + rel,
+            load: ({ encoding }) => fsp.readFile(file.dir, encoding), reset() {} };
+        const old = process.env.WORK_TEST;
+        process.env.WORK_TEST = '1';
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Продолжено после рестарта' }]).stream;
+        try {
+            assert.equal((await session.recover(file, { uid: CHILD_UID, send() {} })).status, 'resumed');
+            await session.idle(file);
+            const body = await session.getBody(file);
+            assert.equal(body.status, 'idle');
+            assert.equal(body.items[1].tools[0].status, 'interrupted');
+            assert.equal(body.items.at(-1).content, 'Продолжено после рестарта');
+        }
+        finally { if (old == null) delete process.env.WORK_TEST; else process.env.WORK_TEST = old; }
+    });
     async function newTask(name) {
         const box = await WORK.get_item('/BOX');
         // .task — файл данных: ядро само кладёт его в {папка}/{день}/{время}.{uid}.task
@@ -336,6 +786,22 @@ describe('сессия .task', () => {
         assert.equal(body.items[1].content, 'Готово.');
         assert.equal(body.model, '/MODELS/mock');
         assert.equal(body.title, 'сделай');
+    });
+
+    it('prompt({ voice }): реплика помечена и агент получает голосовую заметку; набранная вручную реплика флаг снимает', async () => {
+        const file = await newTask('t-voice');
+        const log = [];
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Сделал. Подробности на экране.' }, { text: 'Ок.' }], log).stream;
+        await session.prompt(file, { prompt: 'сколько файлов', voice: true });
+        await session.idle(file);
+        let body = await session.getBody(file);
+        assert.equal(body.items[0].voice, true);
+        assert.match(log[0].messages[0].content, /# Голосовой режим/);
+        await session.prompt(file, { prompt: 'а теперь текстом' });
+        await session.idle(file);
+        body = await session.getBody(file);
+        assert.equal(body.items.find(i => i.content === 'а теперь текстом').voice, undefined);
+        assert.doesNotMatch(log[1].messages[0].content, /# Голосовой режим/);
     });
 
     it('ask_user: ожидание → ответ человека текстом → продолжение', async () => {

@@ -40,7 +40,6 @@ export default {
             }
             #tools {
                 gap: 4px;
-                padding: 4px;
                 overflow-x: auto;
             }
             #tools oda-button {
@@ -72,13 +71,9 @@ ODA({is: 'work-form',
             }
         </style>
         <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
-            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px;">
+            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
-                <item-node-explorer no-flex :$item></item-node-explorer>
-                <oda-button content ~if="showRoleSelector" :icon="roleIcon" :label="activeRole" :icon-size @tap="nextRole"
-                    style="font-size: xx-small; border-radius: 4px; padding: 0px 4px;"
-                    center icon-pos="top"
-                ></oda-button>
+                <item-node-explorer no-flex :$item show-role></item-node-explorer>
                 <div flex></div>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
@@ -120,7 +115,7 @@ ODA({is: 'work-form',
                                 :icon-size
                                 :content="view?.id === $for.item.id"
                                 :raised="view?.id === $for.item.id"
-                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.45, borderRadius: '4px' }"
+                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.9, borderRadius: '4px' }"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
@@ -224,33 +219,60 @@ ODA({is: 'work-form',
             }
     },
     view_name: '',
-    formViews: [],
-    async loadFormViews() {
-        if (!this.$item) {
-            this.formViews = [];
-            return;
-        }
+    /**
+     * Список представлений формы — вычисляемый геттер: зависимости ($item,
+     * activeRole) читаются синхронно, поэтому пересчёт и перерисовка идут
+     * автоматически через Reactor, без ручных вызовов и render().
+     */
+    get formViews() {
+        const $item = this.$item;
+        const role = this.activeRole;
+        if (!$item || !role)
+            return [];
+        return this.loadFormViews($item, role);
+    },
+    async loadFormViews($item, role) {
         try {
-            const root = await this.$item.fetch('handlers', { path: '//form' });
+            const root = await $item.fetch('handlers', { path: '//form', role });
+            // usable — серверный предикат allowUse ($context — открытый элемент);
+            // allowUse — немигрированные клиентские геттеры (возвращают Promise).
             let views = (root?.items || []).filter(item =>
-                item.type === '$handler' && item.allowUse !== false
+                item.type === '$handler' && item.usable !== false && item.allowUse !== false
             );
             // Для handler'а 'file' подставляем icon/label из конкретного открытого файла,
             // чтобы отображать расширение (например 'JSON') и соответствующую иконку
-            const ext = this.$item?.ext;
+            const ext = $item?.ext;
             for (const v of views) {
-                v.$context = this.$item;
+                v.$context = $item;
                 if (v.id === 'file' && ext) {
                     v.icon = 'files-color:s-' + ext;
                     v.label = ext.toUpperCase();
                 }
             }
-            this.formViews = views;
-            this.render();
+            return views;
         } catch (err) {
             console.error(err);
-            this.formViews = [];
+            return [];
         }
+    },
+    /**
+     * Представление по имени с проверкой доступа на сервере: недоступное
+     * (roles в class.js, отозванные права, allowUse) — get_item вернёт null,
+     * тогда fallback на вид из $item.form или первый доступный.
+     * contextPath — контекст для серверного предиката allowUse.
+     * Проверять вхождение в formViews нельзя: виды с allowUse === false
+     * (например chat) открыты легально, но в списке их нет.
+     */
+    async resolveView(name) {
+        const $item = this.$item;
+        const role = this.activeRole;
+        if ($item && name) {
+            const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
+            if (view)
+                return view;
+        }
+        const views = await this.formViews;
+        return views.find(v => v.id === $item?.form) || views[0];
     },
     $item: {
         $def: null,
@@ -259,76 +281,55 @@ ODA({is: 'work-form',
                 const $class = await this.$item?.$class;
                 this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
 
+                await n.ensureRole?.();
                 const view_name = this.host.default_view || this.host.view_name || n?.form;
-                this.view ||= await n.get_item(`/~/handlers//form/${view_name}`);
-                this.loadFormViews();
-
-                if (!this.activeRole) {
-                    const roles = await this.roles;
-                    this.activeRole = roles[0] || 'GUEST';
-                }
-                n.role = this.activeRole;
+                this.view ||= await this.resolveView(view_name);
             }
         }
     },
     focusedItem: null,
-    get roleIcon() {
-        return this.getRoleIcon(this.activeRole);
+    /** Роль формы — эффективная роль элемента (общая предпочитаемая + доступность). */
+    get activeRole() {
+        return this.$item?.role || '';
     },
-    get roles() {
-        return this.$item?.fetch('roles').then(roles => {
-            roles.add('USER');
-            return roles;
-        });
+    /** Роль для $observers: читает $item.role, меняется вместе с ней. */
+    get itemRole() {
+        return this.$item?.role;
     },
-    get showRoleSelector() {
-        return Promise.resolve(this.roles).then(roles =>
-            Array.isArray(roles) && roles.length > 1
-        );
-    },
-    async getRoleIcon(role) {
-        return ({
-            ADMIN: 'fontawesome:s-user-shield',
-            BOSS: 'fontawesome:s-user-tie',
-            USER: 'fontawesome:s-user-pen',
-        })[await role]
-    },
-    get _savePath() {
-        return
-    },
-    activeRole: {
-        $save: true,
-        get() {
-            return;
-        },
-        set(role) {
-            if (this.$item) {
-                this.$item.role = role;
-                // Сброс кэша класса для актуализации данных по новой роли
-                this.$item.reset?.();
-                // Сброс кэша представлений — каждое пересоздаётся заново,
-                // чтобы перезагрузить логи и данные по новой роли
-                for (const id in this.controls) {
-                    const el = this.controls[id];
-                    if (el?.isConnected)
-                        el.remove();
-                }
-                this.controls = {};
-                this.view_control = undefined;
-                // Пересоздать текущее представление
-                if (this.view) {
-                    const view = this.view;
-                    this.view = undefined;
-                    this.async(() => { this.view = view; });
-                }
+    $observers: {
+        // смена роли (из формы, меню или другого окна): цвет страницы,
+        // сброс кэша класса, пересоздание представлений и перепроверка вида
+        async _roleChanged(itemRole) {
+            if (!this.$item || !itemRole)
+                return;
+            try {
+                const declared = await this.$item.fetch('declared_roles');
+                const color = declared?.[itemRole]?.color || 'indigo';
+                document.documentElement?.style?.setProperty('--main-color', color);
+            } catch { /* цвет по умолчанию */ }
+            // Сброс кэша класса для актуализации данных по новой роли
+            this.$item.reset?.();
+            // Сброс кэша представлений — каждое пересоздаётся заново,
+            // чтобы перезагрузить логи и данные по новой роли
+            for (const id in this.controls) {
+                const el = this.controls[id];
+                // remove() не вызываем: представление может затенять его
+                // своим методом (как objects.remove — удаление объекта)
+                if (el?.isConnected)
+                    el.parentNode?.removeChild(el);
+            }
+            this.controls = {};
+            this.view_control = undefined;
+            // formViews пересчитается сам (зависимость от activeRole).
+            if (this.view) {
+                const id = this.view.id;
+                this.view = undefined;
+                this.view = await this.resolveView(id);
             }
         }
     },
-    async nextRole() {
-        const roles = await this.roles;
-        const act_role = await this.activeRole;
-        let idx = roles.indexOf(act_role);
-        this.activeRole = roles[idx + 1] || roles[0];
+    get _savePath() {
+        return
     },
     modal: false,
     dialog: false,
@@ -410,6 +411,12 @@ ODA({is: 'work-form',
                 const ext = String(this.$item?.ext || '').toLowerCase();
                 const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
                 await n.importView(is);
+                if (!customElements.get(is)) {
+                    // Вид не зарегистрирован под нужным тегом — создавать элемент
+                    // бессмысленно: он останется пустым (как на скриншоте).
+                    console.error(`[work-form] вид '${n.id}' не зарегистрирован как <${is}>`);
+                    return;
+                }
                 // Сеттер асинхронный: пока грузился модуль, параллельный вызов (роль, повторный $item)
                 // мог уже создать это представление — второй экземпляр не нужен.
                 el = this.controls[n.id];

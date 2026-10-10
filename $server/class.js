@@ -1,10 +1,10 @@
 export default {
     icon: "./odant.png",
     '#security': {
-        ADMINS: [
+        ADMIN: [
             "CA4E097FF6C1D387"
         ],
-        BOSSES: [
+        BOSS: [
             "CA4E097FF6C1D387"
         ]
     }

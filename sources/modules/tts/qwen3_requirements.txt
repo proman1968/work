@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-qwen-tts
-numpy
-scipy
-soundfile

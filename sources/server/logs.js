@@ -5,8 +5,10 @@
  * Чистые функции над storage ($class). Публичный фасад — методы $class:
  * logs({mode}), read_log_entry(), append_log_includes().
  */
+import fs from 'node:fs';
 import { $item } from '../core.js';
 import { FS } from './index.js';
+import * as REFS from './access/refs.js';
 
 /** Сегодня по местному времени сервера — как папки дня при записи (save_data_file: toISOTimezoneString), не UTC. */
 export const today = () => new Date().toLocalDay();
@@ -278,7 +280,7 @@ function logClassKey(storage) {
     return storage.id || storage.path || storage.dir || '';
 }
 
-async function writeLogTo(storage, log_param, written) {
+async function writeLogTo(storage, log_param, written, row) {
     if (!storage?.save_file)
         return;
     const key = logClassKey(storage);
@@ -286,7 +288,36 @@ async function writeLogTo(storage, log_param, written) {
         return;
     if (key)
         written.add(key);
-    await storage.save_file(log_param);
+    const res = await storage.save_file(log_param);
+    // Запись в ленте кабинета открывает владельцу то, на что она указывает
+    if (row && (storage instanceof FS.$user || storage instanceof FS.$node)) {
+        try {
+            await REFS.addRow(storage.principalId ?? storage.id, row, res?.logFullPath || res?.path || '');
+        }
+        catch (e) {
+            console.warn('[logs] feed refs:', e.message);
+        }
+    }
+}
+
+/**
+ * Вложить в запись можно только то, что видит сам автор — иначе лента становится
+ * обходом прав (получатели увидят вложенное). Системные вызовы (без session / WORK) не проверяются.
+ * @param {string[]} paths Пути includes
+ * @param {object} params session, role
+ */
+export async function assertIncludesVisible(paths, params = {}) {
+    const session = params?.session;
+    if (!session || session.$user === globalThis.WORK || !paths?.length)
+        return;
+    for (const p of paths) {
+        let item = await globalThis.WORK.get_item(p);
+        if (Array.isArray(item))
+            item = item.at(-1);
+        if (!item || typeof item.assertAccess !== 'function')
+            continue;
+        await item.assertAccess({ session, role: params.role }, FS.$class.ACCESS_LEVEL.READ);
+    }
 }
 
 /**
@@ -306,12 +337,12 @@ export async function appendRow(storage, row, params = {}) {
         session: { $user: WORK }
     });
     const written = new Set();
-    await writeLogTo(storage, log_param, written);
+    await writeLogTo(storage, log_param, written, row);
 
     const authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
     if (authorCabinet && authorCabinet !== globalThis.WORK
         && logClassKey(authorCabinet) !== logClassKey(storage))
-        await writeLogTo(authorCabinet, log_param, written);
+        await writeLogTo(authorCabinet, log_param, written, row);
 
     let receivers = row.receivers;
     if (typeof receivers === 'string')
@@ -322,7 +353,7 @@ export async function appendRow(storage, row, params = {}) {
             const usersList = await globalThis.WORK.$users;
             const resolved = await Promise.all(receivers.map(uid => usersList.get_item('//' + uid)));
             for (const receiver of resolved)
-                await writeLogTo(receiver, log_param, written);
+                await writeLogTo(receiver, log_param, written, row);
         }
         row.receivers = receivers;
     }
@@ -334,36 +365,51 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
     includePaths = normalizeIncludes(includePaths);
     if (!entryPath || !includePaths.length)
         return null;
+    await assertIncludesVisible(includePaths, params);
     const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
     const shortTarget = $item.toShortPath(target);
     const days = await datesList(storage);
+    const session = params.session;
+    const internal = !session || session.$user === globalThis.WORK;
     for (const day of days) {
         for (const f of await dayFilesArray(storage, day)) {
+            let row;
             try {
                 const raw = await f.load();
-                const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (!row?.path)
-                    continue;
-                const rowPath = row.path.startsWith('/') ? row.path : '/' + row.path;
-                if (!sameLogPath(rowPath, target, shortTarget))
-                    continue;
-                row.includes ??= [];
-                for (const p of includePaths) {
-                    const path = p.startsWith('/') ? p : '/' + p;
-                    if (!row.includes.includes(path))
-                        row.includes.push(path);
-                }
-                await f.save({
-                    post: JSON.stringify(row, null, 2),
-                    encoding: 'utf-8',
-                    session: params.session || { $user: globalThis.WORK },
-                });
-                storage.reset();
-                return row;
+                row = typeof raw === 'string' ? JSON.parse(raw) : raw;
             }
-            catch (e) {
-                console.warn('[WORK] append_log_includes', e.message);
+            catch {
+                continue;
             }
+            if (!matchesEntry(target, row, f.path) && !(row?.path && sameLogPath(row.path.startsWith('/') ? row.path : '/' + row.path, target, shortTarget)))
+                continue;
+            // дописывать запись может её автор (или ядро / администратор WORK)
+            const uid = FS.$class.resolveUid(params);
+            if (!internal && uid !== row.sender && !(await storage._isWorkAdmin?.(params)))
+                throw new Error('Доступ запрещён');
+            row.includes ??= [];
+            for (const p of includePaths) {
+                const path = p.startsWith('/') ? p : '/' + p;
+                if (!row.includes.includes(path))
+                    row.includes.push(path);
+            }
+            // запись обновляется на месте (новая точка данных создала бы дубль записи)
+            const disk = f.real_dir;
+            const tmp = disk + '.' + process.pid + '.tmp';
+            await fs.promises.writeFile(tmp, JSON.stringify(row), 'utf-8');
+            try {
+                await fs.promises.rename(tmp, disk);
+            }
+            catch {
+                await fs.promises.unlink(disk).catch(() => {});
+                await fs.promises.rename(tmp, disk);
+            }
+            f.reset();
+            storage.reset();
+            globalThis.WORK_RAG?.invalidate?.(disk);
+            if (storage instanceof FS.$user || storage instanceof FS.$node)
+                await REFS.addRow(storage.principalId ?? storage.id, row, f.path).catch(() => {});
+            return row;
         }
     }
     return null;

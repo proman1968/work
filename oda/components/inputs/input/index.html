@@ -1,0 +1,23 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-input</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="/oda/components/inputs/text/text.js"></script>
+<script type="module" src="/oda/components/inputs/select/select.js"></script>
+<!-- база не рисует поле ввода: состояния рамки показаны на наследниках -->
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em;">
+    <oda-text-input placeholder="обычное"></oda-text-input>
+    <oda-text-input id="req" required placeholder="обязательное — после validate() подсвечено"></oda-text-input>
+    <oda-text-input value="только чтение" readonly></oda-text-input>
+    <oda-text-input value="отключено" disabled></oda-text-input>
+    <oda-text-input value="без рамки (borderless)" borderless></oda-text-input>
+    <oda-text-input value="компактно (dense)" dense></oda-text-input>
+    <oda-select-input id="opt" placeholder="oda-options-input: варианты из field.items"></oda-select-input>
+</div>
+<script type="module">
+    await customElements.whenDefined('oda-text-input');
+    req.validate();
+    opt.field = { label: 'Вариант', items: ['Первый', { value: 2, label: 'Второй' }] };
+</script>

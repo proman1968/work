@@ -48,7 +48,12 @@ export default {
         return ['handlers', 'both'].includes(this.mode);
     },
     get handlersRoot() {
-        return this.$item?.fetch('handlers', {path: this.path});
+        const $item = this.$item;
+        if (!$item)
+            return null;
+        // роль должна быть известна до запроса: без неё фильтр по роли не сработает
+        return Promise.resolve($item.ensureRole?.()).then(() =>
+            $item.fetch('handlers', { path: this.path }));
     },
     get tools(){
         return this.$item?.tools;

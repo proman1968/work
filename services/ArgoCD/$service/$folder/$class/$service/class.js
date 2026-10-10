@@ -1,7 +1,7 @@
 /**
  * ArgoCD — базовая точка подключения к Argo CD.
  *
- * METADATA.FIELDS — схема настроек (подключение и шаблон Application); значения — корневые props.
+ * METADATA.STATIC — схема настроек (подключение и шаблон Application); значения — корневые props.
  * Token хранится только в #secret/argocd.json и никогда не отдаётся на клиент.
  *
  * Серверные методы (по канону Weather/SearXNG — прямо в class.js):
@@ -23,7 +23,7 @@ export default {
     icon: 'carbon:kubernetes',
     label: 'Argo CD',
     METADATA: {
-        FIELDS: [
+        STATIC: [
             { id: 'url', type: 'string', label: 'url', placeholder: 'https://argocd.example.com', required: true },
             { id: 'insecure', type: 'boolean', label: 'insecure', placeholder: 'false' },
             { id: 'project', type: 'string', label: 'project', placeholder: 'default' },

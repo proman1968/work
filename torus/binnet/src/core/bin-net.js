@@ -3,8 +3,73 @@ import fsp from "node:fs/promises";
 import path from "path";
 export class BinNet extends EventTarget {
     static max32 = 4294967295; // 2 ** 32 - 1
+
+    // Режим обучения 'ste': у каждого бита веса — целочисленный счетчик (латентный вес),
+    // бит = знак счетчика. Forward по-прежнему XNOR+popcount, назад идет числовой сигнал.
+    static fmt(x) { return Number(x).toFixed(8); }
+    static STE_WGSL = `
+        fn ste_hash(x: u32) -> u32 {
+            var v = x;
+            v = ((v >> 16u) ^ v) * 0x45d9f3bu;
+            v = ((v >> 16u) ^ v) * 0x45d9f3bu;
+            return (v >> 16u) ^ v;
+        }
+        // Стохастическое округление: E[результат] == d
+        fn ste_round(d: f32, r: u32) -> i32 {
+            let fl = floor(d);
+            let u = f32(r >> 8u) / 16777216.0;
+            return i32(fl) + select(0, 1, u < (d - fl));
+        }
+        fn ste_sign(word: u32, b: u32) -> f32 {
+            return f32(i32((word >> b) & 1u) * 2 - 1);
+        }
+    `;
+    // Обновление 32 счетчиков одного слова весов, возвращает новое слово.
+    // grad(b) — WGSL-выражение градиента по биту b (использует переменную b).
+    static steWordUpdate({ lr, cmax, grad, salt = 0 }) {
+        return `
+            var word = 0u;
+            let seed_s = ste_hash(seed ^ ${salt >>> 0}u);
+            for (var b = 0u; b < 32u; b++) {
+                let ci = widx * 32u + b;
+                let d = -${BinNet.fmt(lr)} * (${grad});
+                var c = counters[ci] + ste_round(d, ste_hash(seed_s ^ ste_hash(ci + 1u)));
+                c = clamp(c, -${cmax}, ${cmax - 1});
+                counters[ci] = c;
+                if (c >= 0) { word |= (1u << b); }
+            }`;
+    }
+    // Зерно для стохастического округления. Если LLM выставил общее зерно на шаг
+    // (gpu.stepSeed, пишется раз на токен) — берем его, иначе пишем свое.
+    get steSalt() {
+        let h = 2166136261;
+        for (const ch of this.id) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+        return h >>> 0;
+    }
+    steSeed() {
+        if (this.gpu.stepSeed) return this.gpu.stepSeed;
+        this._seed ??= this.write(new Uint32Array(1), 'seed', 'uniform');
+        this._seed[0] = Math.trunc(BinNet.max32 * Math.random());
+        this.write(this._seed);
+        return this._seed;
+    }
+    static countersFromWeights(weights, init = 0) {
+        const c = new Int32Array(weights.length * 32);
+        for (let w = 0; w < weights.length; w++) {
+            const word = weights[w];
+            for (let b = 0; b < 32; b++)
+                c[w * 32 + b] = ((word >>> b) & 1) ? init : -init - 1;
+        }
+        return c;
+    }
+
     constructor(config = {}) {
         super(); 
+        this.ste = config.learn === 'ste';
+        this.steLr = config.steLr ?? 8;
+        this.steCmax = config.steCmax ?? 16;
+        this.steInit = config.steInit ?? 0;
+        this.steClip = config.steClip ?? 2;
         this.testMode = config.testMode;
         this.gpu = config.gpu;
         this.id = this.constructor.name + (config.id?'_' + config.id:''); 
@@ -97,7 +162,44 @@ export class BinNet extends EventTarget {
                 console.log(`Созданы новые параметры "${name}"`);
             }
         }
+        await this.loadSte();
         console.log(`Модуль "${this.id}" готов к работе\n`);
+    }
+    // STE-состояние (счетчики весов, смещения) хранится рядом с весами: "<id> - counters.bin"
+    async loadSte() {
+        if (!this.ste) return;
+        for (const name of ['counters', 'bias']) {
+            try {
+                const buf = await this.readFile(`${this.id} - ${name}.bin`);
+                const arr = Int32Array.from(new Int32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
+                if (name === 'counters') this._savedCounters = arr;
+                else if (this.bias && arr.length === this.bias.length) { this.bias.set(arr); this.write(this.bias); }
+                console.log(`STE "${this.id} - ${name}.bin" загружен`);
+            } catch (e) { /* нет файла — начнем с битов */ }
+        }
+    }
+    async saveSte() {
+        if (!this.ste) return;
+        for (const name of ['counters', 'bias']) {
+            const arr = this[name];
+            if (!arr) continue;
+            try {
+                await this.gpu.readData(arr);
+                await this.writeFile(`${this.id} - ${name}.bin`, arr);
+            } catch (e) {
+                console.error(`${this.id} - ${name}.bin\n${e.message}`);
+            }
+        }
+    }
+    // Счетчики создаются лениво при первом обратном проходе: из файла или из текущих бит
+    ensureCounters(weights) {
+        if (!this.counters) {
+            let c = this._savedCounters;
+            if (!c || c.length !== weights.length * 32) c = BinNet.countersFromWeights(weights, this.steInit);
+            this._savedCounters = null;
+            this.counters = this.write(c, 'counters');
+        }
+        return this.counters;
     }
     async save(config = {readGpu: true}) {
         for (let p in this.params) {
@@ -113,6 +215,7 @@ export class BinNet extends EventTarget {
                 console.error(name + '\n' + e.message);
             }
         }
+        await this.saveSte();
         console.log(`Модуль "${this.id}" сохранен\n`);
     }    
     static vec2bits(vector = new Uint32Array(), split = 0) {

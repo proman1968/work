@@ -1,0 +1,27 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Редакторы</title>
+<script type="module" src="/oda/oda.js"></script>
+<style>html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}html,body{height:100%;}body{margin:0;visibility:hidden;display:flex;flex-direction:column;}</style>
+<script type="module" src="/oda/components/button/button.js"></script>
+<style>
+    .side { gap: var(--space-xs); padding: var(--space-m); overflow: auto; width: 15em; min-height: 0; min-height: 0; flex: none; }
+    .side p { margin: 0 0 var(--space-s); font-size: var(--font-size-s); opacity: .75; }
+    .side oda-button { justify-content: flex-start; }
+    iframe { border: none; background: var(--content-background); min-width: 0; min-height: 0; }
+</style>
+<div horizontal flex style="overflow: hidden; min-height: 0;">
+    <div class="side" vertical no-flex border-right>
+        <b>Редакторы</b>
+        <p>Код (Ace) и markdown.</p>
+        <oda-button allow-toggle toggle-group="nav" toggled data-src="./code-editor/index.html" label="code-editor"></oda-button>
+        <oda-button allow-toggle toggle-group="nav" data-src="./markdown/index.html" label="markdown"></oda-button>
+    </div>
+    <iframe id="demo" flex src="./code-editor/index.html"></iframe>
+</div>
+<script type="module">
+    await customElements.whenDefined('oda-button');
+    for (const b of document.querySelectorAll('oda-button[data-src]'))
+        b.addEventListener('click', () => document.querySelector('#demo').src = b.dataset.src);
+</script>

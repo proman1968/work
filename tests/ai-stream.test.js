@@ -72,6 +72,11 @@ describe('streamChat SSE: рваные чанки собираются без п
 });
 
 describe('streamChat: нативные tool_calls', () => {
+    it('явный maxOutput задаёт лимит ответа, а не размер контекста', async () => {
+        installWork(['data: [DONE]\n']);
+        await collect(ai, { messages, maxOutput: 8192 });
+        assert.equal(lastBody.max_tokens, 8192);
+    });
     it('параллельные вызовы собираются по index, отдаются одним событием', async () => {
         installWork([
             sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'ls', arguments: '{"pa' } }] } }] }),
@@ -88,6 +93,17 @@ describe('streamChat: нативные tool_calls', () => {
             { id: 'c1', name: 'ls', arguments: { path: '/A' } },
             { id: 'c2', name: 'read', arguments: { path: '/B' } },
         ]);
+    });
+
+    it('конец ответа: finish_reason и [DONE] — событие finish; обрыв — done:false', async () => {
+        installWork([sseLine({ choices: [{ delta: { content: 'a' }, finish_reason: 'length' }] }), 'data: [DONE]\n']);
+        let fin = (await collect(ai, { messages })).events.find(e => e.type === 'finish');
+        assert.equal(fin.reason, 'length');
+        assert.equal(fin.done, true);
+        installWork([sseLine({ choices: [{ delta: { content: 'a' } }] })]);
+        fin = (await collect(ai, { messages })).events.find(e => e.type === 'finish');
+        assert.equal(fin.reason, null);
+        assert.equal(fin.done, false);
     });
 
     it('ошибка в SSE-потоке — исключение, а не тишина', async () => {

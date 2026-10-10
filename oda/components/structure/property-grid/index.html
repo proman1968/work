@@ -1,0 +1,18 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-property-grid</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./property-grid.js"></script>
+<script type="module" src="/oda/components/button/button.js"></script>
+<div horizontal flex style="padding: var(--space-l); gap: var(--space-l); overflow: hidden;">
+    <div flex vertical center>
+        <oda-button id="button" label="Инспектируемая кнопка" icon="icons:star"></oda-button>
+    </div>
+    <oda-property-grid id="grid" border no-flex style="width: 26em;"></oda-property-grid>
+</div>
+<script type="module">
+    await customElements.whenDefined('oda-button');
+    grid.inspected = button;
+</script>

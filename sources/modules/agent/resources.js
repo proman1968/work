@@ -1,9 +1,9 @@
 /**
  * Данные агента из дерева (не код ядра):
- *   ai/system.md        — базовые правила агента
- *   ai/config.js        — { model, imageModel, maxTurns, mode }
- *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model)
- *   ai/skills/*.md      — навыки (фронтматтер: name, description, when; тело — инструкция)
+ *   ai/system.md        — правила агента (слои дописываются; `replace: true` во фронтматтере — заменить)
+ *   ai/config.js        — { model, imageModel, maxTurns }
+ *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model, maxTurns, requires)
+ *   ai/skills/*.md      — навыки (фронтматтер: name, description, requires; тело — инструкция)
  *
  * Слои: пакет движка /$server/$folder/$class/ai, затем метапапки классов от корня к месту задачи
  * (<класс>/$тип/ai/…). Ближний слой перекрывает дальний по имени — место уточняет общее.
@@ -75,16 +75,20 @@ export async function loadDocs(place, sub) {
     return out;
 }
 
-/** system.md: ближний слой (место) побеждает; пакет движка — по умолчанию. */
+/**
+ * system.md по слоям: базовые правила движка всегда первыми, правила места дописываются после.
+ * Слой, которому нужно заменить всё накопленное, начинает файл фронтматтером `replace: true`.
+ */
 export async function loadSystem(place) {
     let text = '';
     for (const { dir } of await aiDirs(place)) {
         const f = await safe(() => dir.get_item('system.md'));
-        if (f && !Array.isArray(f)) {
-            const t = (await safe(() => textOf(f), '')).trim();
-            if (t)
-                text = t;
-        }
+        if (!f || Array.isArray(f))
+            continue;
+        const { meta, body } = parseFrontmatter(await safe(() => textOf(f), ''));
+        if (!body)
+            continue;
+        text = !text || meta.replace === true ? body : text + '\n\n' + body;
     }
     return text;
 }

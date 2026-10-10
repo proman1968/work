@@ -13,8 +13,6 @@ ODA({is: 'oda-table-panel',
         }
     </style>   
     <oda-table-groups class="flex horizontal"></oda-table-groups>
-    <span>{{screenTopRowIndex}}</span>
-    <input type="checkbox" ::checked="autoWidth">
     `,
 
 });
@@ -102,7 +100,7 @@ ODA({is: 'oda-table-group-cell',
                 border-radius: 6px;
                 align-content: center;
                 align-self: normal;
-                cusror: pointer;
+                cursor: pointer;
             }
             oda-icon {
                 cursor: pointer;

@@ -6,7 +6,7 @@ export default {
         effort: ""
     },
     METADATA: {
-        FIELDS: [{
+        STATIC: [{
             id: "protocol",
             type: "String",
             placeholder: "openai | anthropic | gigachat | custom",

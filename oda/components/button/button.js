@@ -5,8 +5,11 @@ ODA({is: 'oda-button', extends: 'oda-icon',
     <style>
         :host {
             @apply --horizontal;
-            padding: 4px;
+            padding: var(--space-xs);
+            gap: var(--space-xs);
+            border-radius: var(--radius-s);
             cursor: pointer !important;
+            transition: background-color var(--duration-fast) var(--easing);
             align-items: center;
             justify-content: center;
             outline-offset: -1px;
@@ -39,11 +42,14 @@ ODA({is: 'oda-button', extends: 'oda-icon',
         :host([icon-pos=bottom]) {
             flex-direction: column-reverse !important;
         }
+        :host(:hover) {
+            background-color: color-mix(in oklch, currentColor 8%, transparent);
+        }
         :host(:active) {
-            filter: contrast(.6);
-            outline: 1px dotted silver;
             @apply --active;
-            outline-offset: -1px;
+        }
+        :host([disabled]) {
+            @apply --disabled;
         }
         :host([toggled]) {
             @apply --selected;
@@ -51,7 +57,6 @@ ODA({is: 'oda-button', extends: 'oda-icon',
     </style>
     <style>
         label{
-            width: 100%;
             color: {{fill}};
         }
         .icon {
@@ -68,6 +73,11 @@ ODA({is: 'oda-button', extends: 'oda-icon',
             $attr: true,
         },
         label: String,
+        /** неактивна (атрибут disabled — системный стиль) */
+        disabled: {
+            $def: false,
+            $attr: true
+        },
         toggled: {
             $def: false,
             $attr: true,

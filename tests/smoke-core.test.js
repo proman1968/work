@@ -146,6 +146,15 @@ describe('Reactor#async на сервере', () => {
     });
 });
 
+/** Записи ленты корня за сегодня (по времени): каждая — отдельный файл дня. */
+function dayRows() {
+    const dir = path.join(tmp, '$server', 'logs', new Date().toLocalDay());
+    if (!fs.existsSync(dir))
+        return [];
+    return fs.readdirSync(dir).filter(f => f.endsWith('.logs')).sort()
+        .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')));
+}
+
 describe('save_file → history → log → on_save', () => {
     it('полный цикл сохранения файла', async () => {
         globalThis.__SMOKE_ON_SAVE__ = 0;
@@ -176,10 +185,11 @@ describe('save_file → history → log → on_save', () => {
         assert.ok(log.path?.includes('/history/' + day + '/'), 'log.path указывает в history');
         assert.equal(log.ext, 'smoke');
 
-        // 4. Лог записан у ближайшего класса (WORK → $server/logs)
-        const logsFile = path.join(tmp, '$server', 'logs', 'data.logs');
-        assert.ok(fs.existsSync(logsFile), 'data.logs записан в мету класса');
-        const row = JSON.parse(fs.readFileSync(logsFile, 'utf-8'));
+        // 4. Лог — запись дня у ближайшего класса (WORK → $server/logs/ДЕНЬ/{время}.{автор}.logs)
+        const rows = dayRows();
+        const row = rows.find(r => r.path === log.path);
+        assert.ok(row, 'запись дня в мете класса указывает на снимок');
+        assert.ok(!fs.existsSync(path.join(tmp, '$server', 'logs', 'data.logs')), 'общего data.logs нет');
         assert.equal(row.ext, 'smoke');
         // Без params.message контент файла НЕ инлайнится в лог (ядро не знает имён)
         assert.equal(row.content, undefined, 'без message контент не инлайнится');
@@ -202,10 +212,7 @@ describe('save_file → history → log → on_save', () => {
             message: 'видимое сообщение',
             encoding: 'utf-8',
         });
-        const logsFile = path.join(tmp, '$server', 'logs', 'data.logs');
-        const rows = fs.readFileSync(logsFile, 'utf-8')
-            .trim().split(/\n(?=\{)/).map(s => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
-        const row = rows.reverse().find(r => r.path?.includes('anything.smoke'));
+        const row = dayRows().reverse().find(r => r.path?.includes('anything.smoke'));
         assert.ok(row, 'запись лога для anything.smoke найдена');
         assert.equal(row.content, 'видимое сообщение', 'content = params.message, а не тело файла');
     });
@@ -272,12 +279,18 @@ describe('лог-фасад: logs / read_log_entry / append_log_includes', () =>
             assert.equal(byStub.logsFilePath, target.logsFilePath);
         }
 
+        const before = dayRows().length;
         const updated = await WORK.append_log_includes({
             entryPath: target.path,
             includePaths: ['/PLAIN/extra.smoke'],
         });
         assert.ok(updated, 'append вернул обновлённую запись');
         assert.ok(updated.includes.includes('/PLAIN/extra.smoke'));
+        assert.equal(dayRows().length, before, 'запись обновлена на месте, а не продублирована');
+        // чужую запись дописать нельзя
+        await assert.rejects(WORK.append_log_includes({
+            entryPath: target.path, includePaths: ['/PLAIN/x.smoke'], session: { uid: 'stranger' },
+        }), /Доступ запрещён/);
 
         const reread = await WORK.read_log_entry({ path: target.path });
         assert.ok(reread.includes?.includes('/PLAIN/extra.smoke'), 'includes сохранены на диске');
@@ -288,7 +301,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members({role}) читает #security, без role — дедуплицированные все', async () => {
         write('USERS/u1/$user/class.js', `export default { label: 'U1' }`);
         write('MBOX/$class/class.js',
-            `export default { label: 'MBOX', '#security': { ADMINS: ['u1'], USERS: ['u1'] } }`);
+            `export default { label: 'MBOX', '#security': { ADMIN: ['u1'], USER: ['u1'] } }`);
         WORK.reset();
 
         const mbox = await WORK.get_item('/MBOX');
@@ -312,7 +325,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members по массивам ADMINS/BOSSES, без role — все роли', async () => {
         write('USERS/u2/$user/class.js', `export default { label: 'U2' }`);
         write('MBOX2/$class/class.js',
-            `export default { label: 'MBOX2', '#security': { ADMINS: ['u1', 'u2'], BOSSES: ['u1'], USERS: ['u2'] } }`);
+            `export default { label: 'MBOX2', '#security': { ADMIN: ['u1', 'u2'], BOSS: ['u1'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
@@ -327,7 +340,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
     it('USERS:["GUEST"] — открытый доступ, литерал не резолвится в пользователя', async () => {
         write('MBOX3/$class/class.js',
-            `export default { label: 'MBOX3', '#security': { USERS: ['GUEST'] } }`);
+            `export default { label: 'MBOX3', '#security': { USER: ['GUEST'] } }`);
         WORK.reset();
 
         const mbox3 = await WORK.get_item('/MBOX3');
@@ -339,9 +352,9 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
 
     it('admins/bosses — локальные, allAdmins/allBosses — с наследованием', async () => {
         write('ORG/$class/class.js',
-            `export default { label: 'ORG', '#security': { ADMINS: ['u1'], BOSSES: ['u1'] } }`);
+            `export default { label: 'ORG', '#security': { ADMIN: ['u1'], BOSS: ['u1'] } }`);
         write('ORG/DEPT/$class/class.js',
-            `export default { label: 'DEPT', '#security': { ADMINS: ['u2'], BOSSES: ['u2'], USERS: ['u2'] } }`);
+            `export default { label: 'DEPT', '#security': { ADMIN: ['u2'], BOSS: ['u2'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
@@ -376,7 +389,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         const legacy = await mbox.get_storage({ role: 'USER' });
         assert.equal(legacy.path, zone.path, 'алиас возвращает ту же папку');
         const def = await mbox.work_zone({});
-        assert.equal(slash(def.path), metaPath + '/GUESTS', 'без роли — папка GUESTS');
+        assert.equal(slash(def.path), metaPath + '/GUEST', 'без роли — папка GUEST');
         for (const role of ['ADMIN', 'BOSS', 'GUEST']) {
             const z = await mbox.work_zone({ role });
             assert.equal(slash(z.path), metaPath + '/' + role, role + '-зона — папка ' + role + ' в мета');
@@ -386,7 +399,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
         write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
         write('GUESTBOX/$class/class.js',
-            `export default { label: 'GUESTBOX', '#security': { GUESTS: ['u3'] } }`);
+            `export default { label: 'GUESTBOX', '#security': { GUEST: ['u3'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
@@ -403,18 +416,21 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
     });
 
-    it('GUEST видит guests и логи, но не work; пишет только в guests', async () => {
+    it('GUEST видит систему и зону GUEST, но не зону USER; пишет только в GUEST', async () => {
         const gbox = await WORK.get_item('/GUESTBOX');
-        const guests = await gbox.meta_folder._get_next_item('guests', FS.$folder);
-        const work = await gbox.meta_folder._get_next_item('work', FS.$folder);
+        const guests = await gbox.meta_folder._get_next_item('GUEST', FS.$folder);
+        const work = await gbox.meta_folder._get_next_item('USER', FS.$folder);
+        const handlers = await gbox.meta_folder._get_next_item('handlers', FS.$folder);
         const params = { session: { uid: 'u3' }, role: 'GUEST' };
 
         assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');
-        assert.equal(await gbox.canSee(guests, params), true, 'видит guests-зону');
-        assert.equal(await gbox.canSee(work, params), false, 'не видит work');
+        assert.equal(await gbox.canSee(guests, params), true, 'видит зону GUEST');
+        assert.equal(await gbox.canSee(handlers, params), true, 'видит систему точки');
+        assert.equal(await gbox.canSee(work, params), false, 'не видит зону USER');
 
-        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в guests');
-        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в work');
+        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в GUEST');
+        assert.equal(await gbox.canWrite(work, params), false, 'не пишет в USER');
+        assert.equal(await gbox.canWrite(handlers, params), false, 'не пишет в систему');
     });
 
     it('assertAccess бросает при отказе', async () => {

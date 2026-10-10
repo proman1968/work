@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Virtual UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Обзор виртуального справочника (tests/ui/run.mjs): строки текстом,
+ * местные расширения колонками, дата уходит в fetch, ошибка видна,
+ * клик открывает форму реестра.
+ */
+import '/oda/oda.js';
+import virtualProto from '/DATA/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(80);
+    return el;
+}
+const text = el => el?.textContent?.trim();
+
+/** Копия прототипа с сохранением геттеров/сеттеров (spread их убивает). */
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    proto.imports = undefined;
+    return proto;
+}
+
+await ODA(cloneProto(virtualProto, 'test-virtual'));
+
+const ROWS = [
+    { id: '1.X', name: 'Иван', body: { name: 'Иван' }, overlay: { until: 'завтра' } },
+    { id: '2.X', name: 'Пётр', body: { name: 'Пётр' }, overlay: {} },
+];
+function stubItem(calls, rows, over) {
+    return {
+        body: Promise.resolve({
+            SOURCE: { registry: '/DATA/CATALOGS/K' },
+            OVERLAY: over || [{ id: 'until', label: 'До' }],
+        }),
+        fetch: async (method, params) => {
+            calls.push({ method, params });
+            if (method === 'browse')
+                return rows;
+            return null;
+        },
+    };
+}
+const dataRows = (el) => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
+
+await test('virtual: шапка, строки и расширения текстом', async () => {
+    const calls = [];
+    const el = await mount('test-virtual', { $item: stubItem(calls, ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'две строки');
+    const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
+    eq(head, 'Название|До');
+    const first = dataRows(el)[0].textContent;
+    assert(first.includes('Иван') && first.includes('завтра'), 'строка: ' + first);
+    assert(!el.__shadowRoot__.textContent.includes('[object Object]'), 'без [object Object]');
+    assert(el.__shadowRoot__.querySelector('div.row.total').textContent.includes('2'), 'итог');
+    el.remove();
+});
+
+await test('virtual: дата уходит в fetch, ошибка видна', async () => {
+    const calls = [];
+    const el = await mount('test-virtual', { $item: stubItem(calls, ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'строки');
+    el.at = '2026-02-01';
+    await el.reload();
+    const sent = calls.at(-1);
+    eq(sent.method, 'browse');
+    eq(sent.params.at, '2026-02-01');
+    el.remove();
+    const bad = await mount('test-virtual', { $item: { body: Promise.resolve({}), fetch: async () => { throw new Error('сервер отказал'); } } });
+    assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
+    bad.remove();
+});
+
+await test('virtual: клик открывает форму реестра', async () => {
+    const el = await mount('test-virtual', { $item: stubItem([], ROWS) });
+    assert(await until(() => dataRows(el).length === 2), 'строки');
+    const got = [], opened = [];
+    const prevWork = window.WORK, prevExec = window.execute;
+    window.WORK = { get_item: async (p) => { got.push(p); return { path: p }; } };
+    window.execute = (t) => opened.push(t.path);
+    try {
+        dataRows(el)[0].querySelector('div.cell.link').click();
+        await tick(80);
+        eq(got.join(','), '/DATA/CATALOGS/K');
+        eq(opened.join(','), '/DATA/CATALOGS/K');
+    }
+    finally {
+        window.WORK = prevWork;
+        window.execute = prevExec;
+    }
+    el.remove();
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

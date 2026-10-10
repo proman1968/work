@@ -28,9 +28,29 @@ export class Linear extends BinNet {
 
         this.output = this.write(BinNet.create_zeros_vector(this.out_size), 'output');
         this.seedArray = this.write(new Uint32Array(1), 'seed', 'uniform');
+
+        if (this.ste) {
+            this.nBits = this.weight_size * 32; // входных бит на нейрон
+            this.preact = this.write(new Int32Array(this.out_size * 32), 'preact');
+            this.gA = this.write(new Float32Array(this.out_size * 32), 'grad_preact');
+            this.gIn = this.write(new Float32Array(this.in_size * 32), 'grad_in');
+            // Битовый residual: preact += R·r±, R = β·√n. Слой «перекрывает» проходящий
+            // бит, только когда уверен сильнее β. Градиент по r идет напрямую (identity).
+            this.resBeta = config.resBeta ?? 0;
+            this.resR = Math.round(this.resBeta * Math.sqrt(this.nBits));
+            // Обучаемое смещение нейрона (целое, в единицах popcount): preact += bias.
+            // biasInit — в единицах a (≈ σ при случайных весах): -1.5 → бит горит ~7% времени.
+            this.useBias = !!config.useBias;
+            if (this.useBias) {
+                const b0 = Math.round((config.biasInit ?? 0) * Math.sqrt(this.nBits));
+                this.bias = this.write(new Int32Array(this.out_size * 32).fill(b0), 'bias');
+                this.biasLr = config.biasLr ?? 16;
+            }
+        }
     }
 
     async forward(input) {
+        if (this.ste) return this.forwardSte(input);
         let incoming = input?.data ?? input;
 
         if (!this.input) {
@@ -96,7 +116,164 @@ export class Linear extends BinNet {
         return { data: this.output, src: this };  
     }
 
+    _bindInput(input) {
+        let incoming = input?.data ?? input;
+        if (!this.input) {
+            this.input = incoming;
+            if (!this.gpu.buffers.has(this.input))
+                this.write(this.input, 'input: ' + this.id);
+        }
+        else if (this.input !== incoming) {
+            this.input.set(incoming);
+            this.write(this.input);
+        }
+    }
+
+    // Нейрон: a = Σ x·w / √n над ±1 (XNOR+popcount), выход = a > 0.
+    async forwardSte(input) {
+        this._bindInput(input);
+        const res = this.resR > 0;
+        if (!this._shaders.FWD_STE) {
+            const wg = this.gpu.compute_info(this.out_size);
+            this._shaders.FWD_STE = wg;
+            wg.compile(`
+                // FORWARD Linear STE
+                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
+                @group(0) @binding(1) var<storage, read> weights: array<u32>;
+                @group(0) @binding(2) var<storage, read_write> outputs: array<u32>;
+                @group(0) @binding(3) var<storage, read_write> preact: array<i32>;
+                ${res ? '@group(0) @binding(4) var<storage, read> residual: array<u32>;' : ''}
+                ${this.useBias ? `@group(0) @binding(${res ? 5 : 4}) var<storage, read> bias: array<i32>;` : ''}
+                @compute @workgroup_size(${wg.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wg.idx_code_gen}
+                    const w_size = ${this.weight_size}u;
+                    let input_start = (idx / ${this.out_size / this.divider}u) * w_size;
+                    var out_value = 0u;
+                    for (var o = 0u; o < 32u; o++) {
+                        let w_start = ((idx * 32u) + o) * w_size;
+                        var sum = 0;
+                        for (var i = 0u; i < w_size; i++) {
+                            sum += 2 * i32(countOneBits(~(inputs[input_start + i] ^ weights[w_start + i]))) - 32;
+                        }
+                        ${res ? `sum += ${this.resR} * (i32((residual[idx] >> o) & 1u) * 2 - 1);` : ''}
+                        ${this.useBias ? 'sum += bias[idx * 32u + o];' : ''}
+                        preact[idx * 32u + o] = sum;
+                        if (sum > 0) { out_value |= (1u << o); }
+                    }
+                    outputs[idx] = out_value;
+                }
+            `, this.id + ':FWD_STE');
+        }
+        const bufs = [this.input, this.params.weights, this.output, this.preact];
+        if (res) bufs.push(input.residual);
+        if (this.useBias) bufs.push(this.bias);
+        this._shaders.FWD_STE.compute(bufs);
+        return { data: this.output, src: this };
+    }
+
+    // grad — dL/d(выходной бит), Float32Array длины out_size*32.
+    // Возвращает { grad: dL/d(входной бит) } и обновляет счетчики весов.
+    async backSte(data) {
+        const gOut = data.grad;
+        this.ensureCounters(this.params.weights);
+        const invSqrt = BinNet.fmt(1 / Math.sqrt(this.nBits));
+        const W = this.weight_size;
+        const outPer = this.out_size / this.divider;
+
+        if (!this._shaders.GRAD_A) {
+            const wg = this.gpu.compute_info(this.out_size * 32);
+            this._shaders.GRAD_A = wg;
+            const nb = this.nBits;
+            wg.compile(`
+                // STE-маска: градиент проходит, пока нейрон не уверен (|a| <= clip)
+                @group(0) @binding(0) var<storage, read> gout: array<f32>;
+                @group(0) @binding(1) var<storage, read> preact: array<i32>;
+                @group(0) @binding(2) var<storage, read_write> ga: array<f32>;
+                ${this.useBias ? `
+                @group(0) @binding(3) var<storage, read_write> bias: array<i32>;
+                @group(0) @binding(4) var<uniform> seed: u32;` : ''}
+                @compute @workgroup_size(${wg.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wg.idx_code_gen}
+                    let a = abs(f32(preact[idx])) * ${invSqrt};
+                    let g = select(0.0, gout[idx], a <= ${BinNet.fmt(this.steClip)});
+                    ga[idx] = g;
+                    ${this.useBias ? `
+                    if (g != 0.0) {
+                        let d = -${BinNet.fmt(this.biasLr)} * g;
+                        let r = ste_hash(ste_hash(seed ^ ${(this.steSalt ^ 0x9e3779b9) >>> 0}u) ^ ste_hash(idx + 1u));
+                        bias[idx] = clamp(bias[idx] + ste_round(d, r), -${nb}, ${nb});
+                    }` : ''}
+                }
+                ${this.useBias ? BinNet.STE_WGSL : ''}
+            `, this.id + ':GRAD_A');
+
+            const wx = this.gpu.compute_info(this.in_size * 32);
+            this._shaders.BACK_X = wx;
+            wx.compile(`
+                // BACK Linear STE: dL/dx_i = Σ_o ga_o · w_oi / √n
+                @group(0) @binding(0) var<storage, read> weights: array<u32>;
+                @group(0) @binding(1) var<storage, read> ga: array<f32>;
+                @group(0) @binding(2) var<storage, read_write> gin: array<f32>;
+                @compute @workgroup_size(${wx.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wx.idx_code_gen}
+                    let j = idx / 32u;
+                    let b = idx % 32u;
+                    let subnet = j / ${W}u;
+                    let jj = j % ${W}u;
+                    let n0 = subnet * ${outPer}u * 32u;
+                    var sum = 0.0;
+                    for (var k = 0u; k < ${outPer * 32}u; k++) {
+                        let n = n0 + k;
+                        let g = ga[n];
+                        if (g != 0.0) {
+                            sum += g * ste_sign(weights[n * ${W}u + jj], b);
+                        }
+                    }
+                    gin[idx] = sum * ${invSqrt};
+                }
+                ${BinNet.STE_WGSL}
+            `, this.id + ':BACK_X');
+
+            const wu = this.gpu.compute_info(this.all_weights_size);
+            this._shaders.UPDATE_STE = wu;
+            wu.compile(`
+                // UPDATE Linear STE: счетчик -= lr · ga_o · x_i / √n
+                @group(0) @binding(0) var<storage, read> inputs: array<u32>;
+                @group(0) @binding(1) var<storage, read_write> weights: array<u32>;
+                @group(0) @binding(2) var<storage, read_write> counters: array<i32>;
+                @group(0) @binding(3) var<storage, read> ga: array<f32>;
+                @group(0) @binding(4) var<uniform> seed: u32;
+                @compute @workgroup_size(${wu.workgroup_size})
+                fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                    ${wu.idx_code_gen}
+                    let widx = idx;
+                    let n = widx / ${W}u;
+                    let i = widx % ${W}u;
+                    let g = ga[n];
+                    if (g == 0.0) { return; }
+                    let input_start = ((n / 32u) / ${outPer}u) * ${W}u;
+                    let x = inputs[input_start + i];
+                    let gs = g * ${invSqrt};
+                    ${BinNet.steWordUpdate({ lr: this.steLr, cmax: this.steCmax, grad: 'gs * ste_sign(x, b)', salt: this.steSalt })}
+                    weights[widx] = word;
+                }
+                ${BinNet.STE_WGSL}
+            `, this.id + ':UPDATE_STE');
+        }
+
+        this._shaders.GRAD_A.compute(this.useBias
+            ? [gOut, this.preact, this.gA, this.bias, this.steSeed()]
+            : [gOut, this.preact, this.gA]);
+        this._shaders.BACK_X.compute([this.params.weights, this.gA, this.gIn]);
+        this._shaders.UPDATE_STE.compute([this.input, this.params.weights, this.counters, this.gA, this.steSeed()]);
+        return { grad: this.gIn };
+    }
+
     async back(targetInput) {
+        if (this.ste) return this.backSte(targetInput);
         let incoming = targetInput?.back_target ?? targetInput;
 
         if (!this.target) {

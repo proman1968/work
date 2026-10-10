@@ -270,12 +270,10 @@ export class $file extends $folder{
         const data = await $file.typeData(ext);
         return data?.isDataFile ?? false;
     }
-    get rag(){
-        return Promise.resolve(this.parent.rag).then(rag => rag?.[this.id]);
-    }
     async delete(params = {}){
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
+        globalThis.WORK_RAG?.invalidate?.(this.dir);
         this.parent.reset();
         this.reset();
         return 'removed: '+ this.path;
@@ -540,11 +538,35 @@ export class $file extends $folder{
         params.date ??= date.slice(0, 10).split('.').toReversed().join('-');
 
         // Обычный файл: снимок в storage/.history. Логи (.logs) пишутся как файл данных в meta/logs/DAY/.
-        let dir = this.storage_folder.dir + '/history/' + params.date;
-        fs.mkdirSync(dir, { recursive: true });
-        let id = params.time + '.' + uid + '.' + this.ext;
+        let dir, id, reserved;
+        // Даже два сохранения одним автором в одну миллисекунду должны иметь разные снимки.
+        // 'wx' резервирует имя атомарно и не даёт параллельной записи перезаписать снимок.
+        for (;;) {
+            dir = this.storage_folder.dir + '/history/' + params.date;
+            fs.mkdirSync(dir, { recursive: true });
+            id = params.time + '.' + uid + '.' + this.ext;
+            try {
+                reserved = await fsp.open(dir + '/' + id, 'wx');
+                await reserved.close();
+                break;
+            }
+            catch (e) {
+                if (e.code !== 'EEXIST')
+                    throw e;
+                params.time++;
+                params.dateTime = new Date(params.time);
+                const date = params.dateTime.toISOTimezoneString();
+                params.date = date.slice(0, 10).split('.').toReversed().join('-');
+            }
+        }
         dir += '/' + id;
-        await fsp.copyFile(this.dir, dir);
+        try {
+            await fsp.copyFile(this.dir, dir);
+        }
+        catch (e) {
+            await fsp.rm(dir, { force: true });
+            throw e;
+        }
         let history = await this.storage_folder._get_next_item('history', FS.$folder);
         let data_history = await history._get_next_item(params.date, FS.$folder);
 
@@ -567,6 +589,13 @@ export class $file extends $folder{
             log.sender = params.session.uid;
         else if (params.session?.$user === globalThis.WORK)
             log.sender = WORK.id;
+        // представитель узла сети: кто конкретно действовал от имени узла
+        const principal = params.session?.principal;
+        if (principal?.actor) {
+            log.actor = principal.actor;
+            if (principal.actorLabel)
+                log.actorLabel = principal.actorLabel;
+        }
         // Инлайн текста — только через params.message (ядро не знает имён файлов).
         if (params.message != null)
             log.content = params.message;
@@ -582,10 +611,13 @@ export class $file extends $folder{
             log.receivers = params.receivers.slice();
 
         const includes = LOGS.normalizeIncludes(params.includes);
+        await LOGS.assertIncludesVisible(includes, params);
         if (includes.length)
             log.includes = includes;
         if (params.mainContext)
             log.mainContext = params.mainContext;
+        // Индекс RAG: сохранённый файл (живой и снимок) — в очередь переиндексации
+        globalThis.WORK_RAG?.invalidate?.(this.real_dir);
         if (params.ignore_save_logs) {
             log.logFullPath = this.json_model.path;
             return log;
@@ -594,6 +626,8 @@ export class $file extends $folder{
         await LOGS.appendRow(owner, log, params);
         params.logFullPath = this.json_model.path;
         params.logPath = this.short;
+        // триггеры агента (ai/triggers/*.md точки) — фоном, сохранение не ждёт
+        globalThis.WORK_AGENT_TRIGGERS?.(this, params);
         if (!params.skip_file_handler) {
             queueMicrotask(async () => {
                 try {
@@ -617,3 +651,5 @@ export class $file extends $folder{
 }
 $file.type_chain = Object.create(null);
 $file.__type_data__ = Object.create(null);
+/** Извлечение текста из байтов (sniff → utf-8/html → Kreuzberg → таблицы); используется read_text и RAG. */
+$file.extractText = extractText;

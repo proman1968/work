@@ -8,6 +8,7 @@
  */
 import * as C from '../connections.js';
 import { clip } from '../util.js';
+import { assertPageUrl } from './browse.js';
 
 const READ = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -42,6 +43,8 @@ export const connectTools = [
                 name: { type: 'string', description: 'Имя подключения (по умолчанию = provider)' },
                 scopes: { type: 'array', items: { type: 'string' }, description: 'Доступы: для google — calendar, calendar.readonly, gmail, gmail.readonly, drive, tasks, contacts; или полные scope-URL' },
                 base_url: { type: 'string', description: 'Для provider=token — базовый URL API' },
+                signup: { type: 'string', description: 'Страница регистрации сервиса (для человека; покажется в карточке рядом с полем токена)' },
+                docs: { type: 'string', description: 'Документация API сервиса (для человека)' },
                 reason: { type: 'string', description: 'Зачем нужен доступ (покажется пользователю)' },
             },
             required: ['provider', 'reason'],
@@ -49,6 +52,13 @@ export const connectTools = [
         async run(args, ctx) {
             const uid = uidOf(ctx);
             const name = String(args.name || args.provider);
+            // ссылки для человека — та же строгая проверка, что у open_page (карточка подставляет их в iframe)
+            for (const key of ['signup', 'docs']) {
+                if (args[key] != null && String(args[key]).trim() !== '')
+                    args[key] = assertPageUrl(args[key]);
+                else
+                    args[key] = undefined;
+            }
             const have = (await C.list(uid)).find(c => c.name === name);
             const want = C.scopesOf(args.provider, args.scopes);
             if (have && want.every(s => have.scopes.includes(s)))
@@ -59,6 +69,7 @@ export const connectTools = [
             entry.connect = {
                 name, provider: args.provider, label: C.PROVIDERS[args.provider]?.label,
                 scopes: want, base_url: args.base_url, reason: args.reason,
+                signup: args.signup || undefined, docs: args.docs || undefined,
                 need_client: C.needsClient(args.provider), console: C.PROVIDERS[args.provider]?.console,
             };
             entry.status = 'waiting';

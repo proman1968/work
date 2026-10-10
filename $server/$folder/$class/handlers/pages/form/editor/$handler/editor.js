@@ -1,9 +1,6 @@
 export default {
     icon: 'editor:mode-edit',
     imports: '~/lib//editor-form',
-    get allowUse() {
-        return this.$context?.$fields?.then(f => !!f?.fields?.length);
-    },
     template: /*html*/`
     <style>
         :host {
@@ -17,7 +14,7 @@ export default {
     dataAccessNode: null,
     async attached() {
         const node = await this.$item.dataAccessRoot
-        this.dataAccessNode = node.children.find(n => n.field.id === 'FIELDS');
+        this.dataAccessNode = node.children.find(n => n.field.id === 'STATIC') || node.children.find(n => n.field.id === 'FIELDS');
         this.body = await node.getDataRoot();
     }
 };

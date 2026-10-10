@@ -1,4 +1,6 @@
 export default {
+    /** Установка пакетов — только роль ADMIN. */
+    roles: ['ADMIN'],
     async execute() {       
         try {
             const value = prompt('NPM package name:');

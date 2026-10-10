@@ -1,5 +1,32 @@
 import { $item } from '../core.js';
 
+/**
+ * Эффективная роль точки: предпочитаемая, если доступна (включая USER
+ * для просмотра); иначе ближайшая к ней по порядку, при равной
+ * удалённости — более слабая; без предпочтения — сильнейшая из своих.
+ * @param {string[]} mine Свои роли в точке
+ * @param {string[]} order Порядок ролей точки
+ * @param {string} preferred Предпочитаемая роль приложения
+ * @returns {string} Роль или 'GUEST'
+ */
+export function effectiveRole(mine = [], order = [], preferred = '') {
+    mine = Array.isArray(mine) ? [...new Set(mine)] : [];
+    if (!mine.length)
+        return 'GUEST';
+    const selectable = mine.includes('USER') ? mine : [...mine, 'USER'];
+    if (preferred && selectable.includes(preferred))
+        return preferred;
+    const rank = r => {
+        const i = order.indexOf(r);
+        return i < 0 ? order.length : i;
+    };
+    if (!preferred)
+        return mine.slice().sort((a, b) => rank(a) - rank(b))[0];
+    const pr = rank(preferred);
+    return mine.slice().sort((a, b) =>
+        (Math.abs(rank(a) - pr) - Math.abs(rank(b) - pr)) || (rank(b) - rank(a)))[0];
+}
+
 export class $folder extends $item {
     __version = 0;
     increaseVersion() {
@@ -52,16 +79,52 @@ export class $folder extends $item {
             },
             role: {
                 $def: '',
-                $save: true,
-                set(role) {
-                    const colors = { ADMIN: 'darkred', BOSS: 'blue', USER: 'indigo', GUEST: 'teal' };
-                    document.documentElement?.style?.setProperty('--main-color', colors[role] || 'indigo');
-                }
             },
         }
     }
     get url() {
         return encodeURI(globalThis.location?.origin + this.short);
+    }
+    /**
+     * Роли пользователя в точке (сервер). Кэш сбрасывается в reset().
+     * @returns {Promise<string[]>} Роли без дубликатов
+     */
+    get myRoles() {
+        return this._myRoles ??= Promise.resolve(this.fetch('roles'))
+            .then(roles => Array.isArray(roles) ? [...new Set(roles)] : [])
+            .catch(() => []);
+    }
+    /** Порядок ролей точки для выбора ближайшей (ключи declared_roles). */
+    get roleOrder() {
+        return this._roleOrder ??= Promise.resolve(this.fetch('declared_roles'))
+            .then(d => (d && typeof d === 'object' ? Object.keys(d) : ['ADMIN', 'BOSS', 'USER', 'GUEST']))
+            .catch(() => ['ADMIN', 'BOSS', 'USER', 'GUEST']);
+    }
+    /**
+     * Роли для переключателя: свои + USER, чтобы смотреть глазами исполнителя.
+     * @returns {Promise<string[]>}
+     */
+    get selectableRoles() {
+        return Promise.all([this.myRoles]).then(([mine]) =>
+            mine.includes('USER') ? mine : [...mine, 'USER']);
+    }
+    /**
+     * Эффективная роль точки: предпочитаемая (если доступна здесь),
+     * иначе ближайшая по порядку; без предпочтения — сильнейшая.
+     */
+    async syncRole() {
+        const mine = await this.myRoles;
+        const order = await this.roleOrder;
+        const next = effectiveRole(mine, order, WORK.preferredRole);
+        if (this.role !== next)
+            this.role = next;
+        return this.role;
+    }
+    /** Заполнить роль, если пустая (перед запросами, зависящими от роли). */
+    async ensureRole() {
+        if (!this.role)
+            await this.syncRole();
+        return this.role;
     }
     get open_url() {
         return new URL(this.url + '/~/handlers//' + this.page + '/index.html').href;
@@ -75,11 +138,11 @@ export class $folder extends $item {
     }
     /** Роли текущего пользователя в данном классе (через серверный метод roles). */
     get roles() {
-        return this.fetch('roles').then(roles => Array.isArray(roles) ? roles : []);
+        return Promise.resolve(this.fetch('roles')).then(roles => Array.isArray(roles) ? roles : []);
     }
     /** Проверка роли администратора. */
     get isAdmin() {
-        return this.roles.then(roles => roles.includes('ADMIN'));
+        return Promise.resolve(this.roles).then(roles => roles.includes('ADMIN'));
     }
     get expanded() {
         return false
@@ -106,6 +169,8 @@ export class $folder extends $item {
         return null;
     }
     reset() {
+        this._myRoles = undefined;
+        this._roleOrder = undefined;
         if (this.path)
             this.fetch('reset');
         else {
@@ -128,16 +193,15 @@ export class $folder extends $item {
         return this.fetch('save_includes', {}, data)
     }
     async save_file(file, params = {}) {
-        return new Promise(resolve => {
-            params.filename = params.id = file.name;
+        params.filename = params.id = file.name;
+        // ошибка чтения и ошибка сервера отклоняют промис: раньше она терялась внутри onload, и вызывающий ждал вечно
+        const data = await new Promise((resolve, reject) => {
             const fr = new FileReader();
-            fr.onload = async () => {
-                let data = fr.result;
-                let res = await this.fetch('save_file', params, data);
-                resolve(res)
-            }
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = () => reject(fr.error || new Error('не удалось прочитать файл ' + file.name));
             fr.readAsArrayBuffer(file);
-        })
+        });
+        return this.fetch('save_file', params, data);
     }
     writeToStream(data, params = {}) {
         return this.fetch('write_to_stream', params, data, data.type);
@@ -226,8 +290,16 @@ export class $folder extends $item {
     _onEmpty(key, params = {}) {
         if (key[0] === '#')
             return undefined;
+        // отладка: сколько раз какое свойство ушло на сервер (WORK.emptyHits; tests/perf/tree-load.mjs)
+        if (WORK.DEV_MODE)
+            (WORK.emptyHits ??= {})[key] = (WORK.emptyHits[key] || 0) + 1;
         let fn = (params = {}) => {
             if (this[R].cache[key] !== undefined) return this[R].cache[key];
+            // дети — через info с глубиной 1: у каждого ребёнка приходит hasItems,
+            // и дереву не нужен отдельный @items ради стрелки раскрытия
+            if (key === 'items' && this.type !== '$file' && !String(this.short).includes('~'))
+                return WORK.fetch(location.origin + (this.short || '/'), 'info', { ...params, deep: 1 })
+                    .then(r => Array.isArray(r?.items) ? r.items : []);
             let path;
             switch (key) {
                 case 'entries':

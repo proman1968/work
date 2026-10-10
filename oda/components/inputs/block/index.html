@@ -1,0 +1,25 @@
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oda-block-input</title>
+<script type="module" src="/oda/oda.js"></script>
+<script type="module" src="./block.js"></script>
+<div vertical style="padding: var(--space-l); gap: var(--space-m); max-width: 36em;">
+    <oda-demo-block id="a"></oda-demo-block>
+    <oda-demo-block id="b" collapsed></oda-demo-block>
+    <oda-demo-block id="c" readonly></oda-demo-block>
+</div>
+<script type="module">
+    // минимальный наследник: тело, выжимка и кнопка заголовка
+    ODA({ is: 'oda-demo-block', extends: 'oda-block-input',
+        template: `<div class="body" style="padding: var(--space-m);">Тело блока: {{value}}</div>`,
+        get summary() { return 'выжимка: ' + (this.value ?? ''); },
+        get tools() { return [{ icon: 'icons:add', title: 'Плюс один', edit: true, action: () => this.value = (this.value ?? 0) + 1 }]; }
+    });
+    await customElements.whenDefined('oda-demo-block');
+    for (const [el, label] of [[a, 'Блок'], [b, 'Свёрнутый'], [c, 'Только чтение']]) {
+        el.field = { label };
+        el.value = 1;
+    }
+</script>

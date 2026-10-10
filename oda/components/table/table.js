@@ -1,10 +1,28 @@
-import '/oda//button.js'
+import '/oda/components/button/button.js'
+import '/oda/components/structure/form/form.js'
+import '/oda/components/layouts/splitter/splitter.js'
 import '/oda//table/lib/body.js'
 import '/oda//table/lib/panel.js'
 import '/oda//table/lib/header.js'
 import '/oda//table/lib/footer.js'
-ODA({is: 'oda-table',
+/**
+ * oda-table — таблица: виртуализация строк, дерево строк, группировка, дерево колонок, фиксированные колонки,
+ * сортировка и фильтр, ширина колонок (ручная, по содержимому), контролы ячеек по карте controls (oda-structure),
+ * мини-форма строки в боковой панели.
+ */
+ODA({is: 'oda-table', extends: 'oda-structure',
     $public:{
+        /** правка ячеек контролами (иначе контролы только отображают значение) */
+        editable: {
+            $def: false,
+            $attr: true
+        },
+        /** строка поиска по видимым колонкам */
+        filter: '',
+        /** ширина колонок по содержимому при смене данных (для колонок без заданной width) */
+        autoFit: false,
+        /** разрешить боковую панель строки (двойной щелчок / Enter по строке) */
+        allowRowPanel: false,
         '@templates':{
             cellTemplate: 'span',
         },
@@ -93,14 +111,43 @@ ODA({is: 'oda-table',
             }
         </style>
         <style>{{col_styles}}</style>
+        <style>
+            .row-panel {
+                width: 22em;
+                overflow: hidden;
+                border-left: 1px solid var(--subtle-border);
+                @apply --content;
+            }
+            .row-panel-title {
+                align-items: center;
+                gap: var(--space-s);
+                padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-m);
+                font-weight: 600;
+            }
+            .row-panel oda-form {
+                overflow: auto;
+                padding: var(--space-s);
+                --form-label-width: 40%;
+            }
+        </style>
         <oda-table-panel ~if="showGroupPanel"></oda-table-panel>
-        <div id="container" vertical header flex style="overflow-y: auto;" ~style="{overflowX: autoWidth?'hidden': 'auto'}" @scroll>
-            <oda-table-header></oda-table-header>
-            <oda-table-body flex :even-odd  ~style="{top: (showHeader?$('oda-table-header')?.offsetHeight:0) + 'px'}"></oda-table-body>
-            <div vertical flex content ~style="{minHeight: scrollExpand + 'px'}">
-                <oda-table-row flex style="min-heigth: 100%"></oda-table-row>
+        <div horizontal flex style="overflow: hidden;">
+            <div id="container" vertical header flex style="overflow-y: auto;" ~style="{overflowX: autoWidth?'hidden': 'auto'}" @scroll>
+                <oda-table-header></oda-table-header>
+                <oda-table-body flex :even-odd  ~style="{top: (showHeader?$('oda-table-header')?.offsetHeight:0) + 'px'}"></oda-table-body>
+                <div vertical flex content style="position: relative; z-index: 0;" ~style="{minHeight: scrollExpand + 'px'}">
+                    <oda-table-row flex></oda-table-row>
+                </div>
+                <oda-table-footer ~if="showFooter"></oda-table-footer>
             </div>
-            <oda-table-footer ~if="showFooter"></oda-table-footer>
+            <oda-splitter ~if="rowPanelShown" left min="160"></oda-splitter>
+            <div ~if="rowPanelShown" class="row-panel" vertical no-flex>
+                <div class="row-panel-title" horizontal no-flex header>
+                    <span flex>{{rowTitle}}</span>
+                    <oda-button icon="icons:close" :icon-size title="Закрыть" @tap="rowPanelOpen = false"></oda-button>
+                </div>
+                <oda-form flex dense :fields="rowFields" :data="focusedRow" :controls :readonly="!editable" @field-changed="onRowFormChanged($event)"></oda-form>
+            </div>
         </div>
     `,
     '@system':{
@@ -108,10 +155,10 @@ ODA({is: 'oda-table',
             return this;
         },
         get treeColumn(){
-            return this.columns.find(i=>i.treeMode);
+            return this.columnsList.find(i=>i.treeMode);
         },
         get footerHeight(){
-            return this.$('oda-table-fooler')?.offsetHeight || 0;
+            return this.$('oda-table-footer')?.offsetHeight || 0;
         },
         get scrollExpand(){
             let h = Math.ceil((this.rowCount + this.raised.length + 1) * this.minRowHeight);
@@ -152,10 +199,41 @@ ODA({is: 'oda-table',
             }
         },
         dataSet:[],
+        /** данные после фильтра и сортировки (новые массивы; сами строки — те же объекты) */
+        get preparedData(){
+            const filters = (this.visible_columns ?? []).filter(c => c.name && c.$element?.filter).map(c => [c.name, c.$element.filter.toLowerCase()]);
+            const search = String(this.filter ?? '').toLowerCase();
+            const names = (this.visible_columns ?? []).map(c => c.name).filter(Boolean);
+            const sorts = (this.sorts_columns ?? []).map(c => [c.name, Math.sign(c.$element.sortOrder)]);
+            const text = (row, name) => String(row[name] ?? '').toLowerCase();
+            const own = row => filters.every(([n, f]) => text(row, n).includes(f)) && (!search || names.some(n => text(row, n).includes(search)));
+            const compare = (a, b) => {
+                for (const [n, dir] of sorts) {
+                    const x = a[n], y = b[n];
+                    if (x === y) continue;
+                    if (x === undefined || x === null) return 1;
+                    if (y === undefined || y === null) return -1;
+                    return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })) * dir;
+                }
+                return 0;
+            };
+            const prepare = rows => {
+                let res = rows;
+                if (filters.length || search || sorts.length)
+                    for (const r of res)
+                        if (r.items?.length) CHILDREN.set(r, prepare(r.items));
+                if (filters.length || search)
+                    res = res.filter(r => own(r) || CHILDREN.get(r)?.length);
+                if (sorts.length)
+                    res = [...res].sort(compare);
+                return res;
+            };
+            CHILDREN = new WeakMap();
+            return prepare(this.dataSet ?? []);
+        },
         get items(){
             if (!this.dataSet?.length) return [];
-            let items =  extract(this.dataSet);
-            return items;
+            return extract(this.preparedData, 0, undefined, !!(this.filter || this.visible_columns?.some(c => c.$element?.filter)));
         },
         get filteredItems(){
             return this.groupedItems;
@@ -222,6 +300,24 @@ ODA({is: 'oda-table',
         },
         get sortedItems(){
             return this.filteredItems;
+        },
+        /** строка, открытая в боковой панели */
+        rowPanelOpen: false,
+        get rowPanelShown(){
+            return this.allowRowPanel && this.rowPanelOpen && !!this.focusedRow && !this.focusedRow.isGroup && !this.focusedRow.isRaised;
+        },
+        /** поля мини-формы строки — листовые колонки */
+        get rowFields(){
+            return this.flat_columns.filter(c => c.name && !c.items?.length).map(c => this.cellField(this.focusedRow, c));
+        },
+        get rowTitle(){
+            const col = this.treeColumn ?? this.flat_columns.find(c => c.name);
+            return String(this.focusedRow?.[col?.name] ?? '');
+        },
+        onRowFormChanged(e){
+            const { field, value, data } = e.detail.value;
+            this.items = undefined;
+            this.fire('cell-changed', { row: data, column: this.flat_columns.find(c => c.name === field.id), value });
         },
         raised: [],
         get rows(){
@@ -332,7 +428,7 @@ ODA({is: 'oda-table',
                     }, []) || [];
                     return cols;
                 }
-                let columns = flat(this.columns);
+                let columns = flat(this.columnsList);
                 return columns;
             }
         },
@@ -364,6 +460,70 @@ ODA({is: 'oda-table',
             },
             home(){
                 this.container.scrollTop = 0;
+            },
+            /** сортировка только по колонке: dir 1 / -1, 0 — сброс */
+            sortBy(column, dir){
+                for (const c of this.flat_columns)
+                    if (c.$element) c.$element.sortOrder = c === column ? dir : 0;
+            },
+            /** ширина колонки по содержимому (заголовок и первые 500 строк данных) */
+            fitColumn(column){
+                const el = column.$element;
+                if (!el || !column.name)
+                    return;
+                const ctx = CANVAS.getContext('2d');
+                ctx.font = getComputedStyle(this).font;
+                const rows = this.sortedItems.slice(0, 500);
+                let w = ctx.measureText(String(column.label ?? column.name)).width + this.iconSize * 1.5;
+                const options = column.options ?? [];
+                const text = v => String(options.find(o => (o?.value ?? o) === v)?.label ?? v ?? '');
+                // у контрола (выбор, дата…) — место под его кнопку
+                const extra = this.cellControl(this.cellField(undefined, column)) ? this.iconSize * 1.5 : 0;
+                for (const row of rows)
+                    w = Math.max(w, ctx.measureText(text(row[column.name])).width + this.iconSize + extra
+                        + (column.treeMode ? (row.level + 1) * this.treeStep + (this.allowCheck !== 'none' ? this.iconSize : 0) : 0));
+                w = Math.min(600, Math.max(el.minWidth, Math.ceil(w)));
+                el.style.width = w + 'px';
+                el.width = w;
+                this.col_styles = undefined;
+            },
+            /** состояние отметки строки с каскадом: down — потомкам, up — пересчёт предков, double — оба */
+            setChecked(row, state){
+                const mode = this.allowCheck;
+                if (row.checked === state)
+                    return;
+                const down = r => r.items?.forEach(c => { c.checked = state; down(c); });
+                row.checked = state;
+                if (['down', 'double', 'clear-down', 'clear-double'].includes(mode))
+                    down(row);
+                if (['up', 'double', 'clear-up', 'clear-double'].includes(mode)) {
+                    for (let p = PARENTS.get(row); p; p = PARENTS.get(p)) {
+                        const states = new Set(p.items.map(c => c.checked || 'unchecked'));
+                        p.checked = states.size > 1 ? 'indeterminate' : [...states][0];
+                    }
+                }
+                this.items = undefined;
+                this.fire('checked-changed', { row, state });
+            },
+            /** описание поля ячейки: колонка ← строка ($fields['*']) ← ячейка ($fields[имя колонки]) */
+            cellField(row, column){
+                return { ...column, id: column.name ?? column.id, ...row?.$fields?.['*'], ...row?.$fields?.[column.name] };
+            },
+            /** тег контрола ячейки: field.control / template, иначе по карте controls (без карты — текст) */
+            cellControl(field){
+                if (field.control || field.template)
+                    return field.control || field.template;
+                if (this.controls)
+                    return this.controlOf(field);
+                if (this.cellTemplate !== 'span')
+                    return this.cellTemplate;
+            },
+            /** значение ячейки изменено пользователем */
+            setCell(row, column, value){
+                if (!this.editable || row[column.name] === value)
+                    return;
+                row[column.name] = value;
+                this.fire('cell-changed', { row, column, value });
             }
         },
         get col_styles(){
@@ -372,7 +532,7 @@ ODA({is: 'oda-table',
                 col = col.$element;
                 fix = col.fix;
                 
-                width = col.width || Math.ceil(col?.getBoundingClientRect?.()?.width);
+                width = col.flex ? Math.ceil(col.getBoundingClientRect().width) : Math.max(col.realWidth || 0, col.minWidth || 0);
                 let styles = `*::part(cell-${idx}){
                     min-width: ${width}px;
                     max-width: ${width}px;
@@ -407,19 +567,20 @@ ODA({is: 'oda-table',
             }).join('\n');
         },
         columns: [],
+        /** колонки (columns может быть Promise до загрузки) */
+        get columnsList(){
+            return Array.isArray(this.columns) ? this.columns : [];
+        },
         get cols(){
-            const cols = [...this.columns]
+            const cols = [...this.columnsList]
             if (!this.autoWidth)
-                cols.push({ flex: true, order: 1000, disabled: true, flex: true});
+                cols.push({ flex: true, order: 1000, disabled: true });
             return cols;
         },
         get groups(){
             let groups =  this.flat_columns.filter(col=>col.$element?.groupOrder > -1);
             if(groups.length)
                 return groups;
-        },
-        set groups(n){
-            console.warn(n)
         },
         visible_columns:{
             $def: [],
@@ -441,8 +602,19 @@ ODA({is: 'oda-table',
             }
         },
     },
-
+    $observers: {
+        _autoFit(dataSet, visible_columns, autoFit){
+            if (autoFit)
+                requestAnimationFrame(() => visible_columns.filter(c => c.name && !c.width).forEach(c => this.fitColumn(c)));
+        }
+    }
 })
+
+/** родитель строки дерева (для каскадной отметки) */
+const PARENTS = new WeakMap();
+/** дочерние строки после фильтра и сортировки (исходные items не меняются) */
+let CHILDREN = new WeakMap();
+const CANVAS = document.createElement('canvas');
 
 export function getSortedChildren(el){
     return sort(el.children, 'real_order');
@@ -457,15 +629,19 @@ export function sort(items, prop = 'real_order', dir = 1){
 export const drag = {}
 
 
-function extract(items, level = 0){
+/** дерево → плоский список видимых строк; при фильтре (open) ветки с совпадениями раскрыты */
+function extract(items, level = 0, parent, open = false){
     let result = []
     for (let row of items){
         row.level = level;
         row.expanded ??= false;
         row.checked ??= 'unchecked';
+        if (parent)
+            PARENTS.set(row, parent);
         result.push(row);
-        if (row.items && row.expanded)
-            result.push(...extract(row.items, level + 1));
+        const children = CHILDREN.get(row) ?? row.items;
+        if (children && (row.expanded || open))
+            result.push(...extract(children, level + 1, row, open));
     }
     return result;
 }
