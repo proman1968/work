@@ -154,6 +154,18 @@ after(async () => {
     catch { /* windows */ }
 });
 
+describe('workTools: состав и порядок (снимок)', () => {
+    // порядок — часть контракта: префикс кэша провайдера строится по составу и порядку инструментов,
+    // расщепление tools/work.js → tools/work/ (hardening 4.4) не должно его менять
+    it('имена и порядок идентичны снимку, у каждого есть описание и run', () => {
+        assert.deepEqual(workTools.map(t => t.name), [
+            'ls', 'read', 'find', 'search', 'access', 'assign', 'escalate', 'send', 'write_table',
+            'write', 'append', 'edit', 'create_class', 'schema', 'call', 'logs', 'query', 'history', 'restore', 'delete',
+        ]);
+        assert.ok(workTools.every(t => t.description && typeof t.run === 'function'));
+    });
+});
+
 describe('loop: цикл tool calling', () => {
     it('битый длинный JSON аргументов объясняет обрезку и советует append', async () => {
         const items = [{ id: 'u', type: 'user', content: 'html' }];
