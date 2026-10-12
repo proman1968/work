@@ -2,6 +2,7 @@
  * Инструменты работы с деревом WORK (серверный объектный API).
  * Все вызовы идут с session пользователя — права проверяет ядро (assertAccess).
  */
+import { log } from '../log.js';
 import { clip, isAccessDenied } from '../util.js';
 import { lineDiff } from '../diff.js';
 import { beforeWrite, recordWrite, recordDelete } from '../undo.js';
@@ -177,7 +178,7 @@ async function listTree(item, depth, indent, out, limit) {
         await item.init;
         kids = (await item.items) || [];
     }
-    catch { /* нет доступа/не папка */ }
+    catch (e) { log.debug('tree.items', e); /* нет доступа/не папка */ }
     kids = kids.filter(k => k && k.id && k.id !== 'node_modules');
     for (const k of kids) {
         if (out.length >= limit) {
@@ -187,7 +188,7 @@ async function listTree(item, depth, indent, out, limit) {
         try {
             await k.init;
         }
-        catch { /* покажем без DATA */ }
+        catch (e) { log.debug('tree.init', e); /* покажем без DATA */ }
         out.push(indent + await lineFor(k));
         if (depth > 1 && isContainer(k))
             await listTree(k, depth - 1, indent + '  ', out, limit);
@@ -205,7 +206,7 @@ async function describeClass(item, ctx) {
         if (chain?.length)
             lines.push('цепочка типов: ' + chain.join(' → '));
     }
-    catch { /* нет цепочки */ }
+    catch (e) { log.debug('schema.chain', e); /* нет цепочки */ }
     try {
         const meta = item.meta_folder;
         if (meta) {
@@ -213,7 +214,7 @@ async function describeClass(item, ctx) {
             lines.push('метапапка ' + meta.path + ': ' + (files.join(', ') || '—'));
         }
     }
-    catch { /* нет метапапки */ }
+    catch (e) { log.debug('schema.meta', e); /* нет метапапки */ }
     try {
         const own = await item.meta_file;
         if (own) {
@@ -221,13 +222,13 @@ async function describeClass(item, ctx) {
             lines.push('\n## class.js (свой слой)\n```js\n' + clip(text, 6000) + '\n```');
         }
     }
-    catch { /* нет class.js */ }
+    catch (e) { log.debug('schema.class', e); /* нет class.js */ }
     try {
         const rm = await item.readme_merged?.();
         if (rm?.text)
             lines.push('\n## readme (собранный по ~, ближайший слой ' + rm.path + ')\n' + clip(rm.text, 12000));
     }
-    catch { /* нет readme */ }
+    catch (e) { log.debug('schema.readme', e); /* нет readme */ }
     return lines.join('\n');
 }
 
@@ -396,7 +397,7 @@ async function trackWrite(ctx, realPath, log, pre) {
     try {
         await recordWrite(ctx.entry, { realItem: await fileAt(realPath, ctx), pre });
     }
-    catch { /* откат не поставится — изменение попадёт в список «вручную» */ }
+    catch (e) { log.debug('undo.record', e); /* откат не поставится — изменение попадёт в список «вручную» */ }
 }
 
 const target = key => args => absPath(args?.[key], null);

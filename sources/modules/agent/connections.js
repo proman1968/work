@@ -10,6 +10,7 @@
  * или свой у пользователя (вводит в карточке подключения).
  * Обратный адрес OAuth: <origin>/oauth/callback (обрабатывает http-server до разбора дерева).
  */
+import { log } from './log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -145,7 +146,7 @@ export async function list(uid) {
     try {
         names = (await fs.promises.readdir(userDir(uid))).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5));
     }
-    catch { /* нет подключений */ }
+    catch (e) { log.debug('connections.list', e); /* нет подключений */ }
     const out = [];
     for (const name of names) {
         let c;
@@ -265,7 +266,7 @@ export async function callback(query = {}) {
         try {
             pend.onDone?.();
         }
-        catch { /* задача могла закончиться */ }
+        catch (e) { log.debug('connections.oauth', e); /* задача могла закончиться */ }
         return page(true, (p.label || pend.provider) + ': доступ выдан (' + (pend.scope.join(', ') || 'базовый') + ').');
     }
     catch (e) {

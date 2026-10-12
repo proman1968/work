@@ -4,6 +4,7 @@
  * Вызовы к одному серверу идут по одному каналу параллельно (JSON-RPC id), таймауты — на запрос.
  * Модуль-синглтон (слои дерева грузятся data:-модулями и пересоздаются — состояние держим здесь).
  */
+import { log } from './log.js';
 import { spawn } from 'node:child_process';
 
 export const IDLE_MS = 5 * 60_000;
@@ -79,7 +80,7 @@ function channel(child) {
             try {
                 write({ jsonrpc: '2.0', method, params: params || {} });
             }
-            catch { /* некому слушать */ }
+            catch (e) { log.debug('mcp.notify', e); /* некому слушать */ }
         },
         request(method, params, timeout = CALL_TIMEOUT) {
             return new Promise((resolve, reject) => {
@@ -148,11 +149,11 @@ function close(entry) {
     try {
         entry.child.stdin.end();
     }
-    catch { /* закрыт */ }
+    catch (e) { log.debug('mcp.close', e); /* закрыт */ }
     try {
         entry.child.kill();
     }
-    catch { /* мёртв */ }
+    catch (e) { log.debug('mcp.close', e); /* мёртв */ }
 }
 
 function touch(entry) {

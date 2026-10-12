@@ -16,6 +16,7 @@
  * События в UI (session.send): chat.start / chat.done (занятость), task.state { status },
  * task.delta { item, field, token } (стрим), { path } — файл изменился (перечитать).
  */
+import { log } from './log.js';
 import { runLoop, maybeCompact } from './loop.js';
 import { createEnv, llmFor } from './index.js';
 import { genId } from './util.js';
@@ -89,7 +90,7 @@ export async function getBody(file) {
     try {
         raw = String(await file.load({ encoding: 'utf-8' }) ?? '');
     }
-    catch { /* нового файла ещё нет */ }
+    catch (e) { log.debug('task.load', e); /* нового файла ещё нет */ }
     let parsed;
     try {
         parsed = raw.trim() ? JSON.parse(raw) : {};
@@ -130,7 +131,7 @@ async function save(s, session) {
             try {
                 s.file.reset?.();
             }
-            catch { /* кэш файла */ }
+            catch (e) { log.debug('task.reset', e); /* кэш файла */ }
         } while (s.again);
     })();
     try {
@@ -541,7 +542,7 @@ function argsOf(params = {}) {
         try {
             out.values = JSON.parse(out.values);
         }
-        catch { /* строка */ }
+        catch (e) { log.debug('task.parse', e); /* строка */ }
     }
     return out;
 }
@@ -553,7 +554,7 @@ function normAttachments(list) {
         try {
             list = JSON.parse(list);
         }
-        catch { /* одиночный путь */ }
+        catch (e) { log.debug('task.parse', e); /* одиночный путь */ }
     }
     const arr = Array.isArray(list) ? list : [list];
     return arr.map(a => typeof a === 'string' ? { path: a, name: a.split('/').pop() } : a).filter(a => a?.path);

@@ -1,3 +1,4 @@
+import { log } from '../modules/agent/log.js';
 import * as WebSocket from 'ws';
 import { parseCookies } from './http-server.js';
 import { $server } from '../server/server.js';
@@ -29,11 +30,11 @@ export function onWebSocketConnect(ws, request) {
         if (/^\/~computer\//.test(String(request?.url || '').split('?')[0])) {
             import('../modules/sandbox/vnc-proxy.js')
                 .then(m => m.handleVncSocket(ws, request))
-                .catch(() => { try { ws.close(4411, 'VNC недоступен'); } catch { /* уже */ } });
+                .catch(() => { try { ws.close(4411, 'VNC недоступен'); } catch (e) { log.debug('ws.vnc', e); /* уже */ } });
             return;
         }
     }
-    catch { /* обычный путь подписки */ }
+    catch (e) { log.debug('ws.upgrade', e); /* обычный путь подписки */ }
     const cookies = parseCookies(request);
     let session = $server.get_session(cookies.ssid);
     let wsid = $server.genGUID();
@@ -60,7 +61,7 @@ export function onWebSocketConnect(ws, request) {
                         continue;
                     session.sockets[wsid]?.events.add(path);
                 }
-                catch { /* нет пути или доступа — не подписываем */ }
+                catch (e) { log.debug('ws.subscribe', e); /* нет пути или доступа — не подписываем */ }
             }
         }
         catch (e) {

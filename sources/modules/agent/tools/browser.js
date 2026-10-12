@@ -4,6 +4,7 @@
  * клики/ввод — по ref, координаты резолвит помощник. refs действуют, пока страница не изменилась.
  * Пароли — только browser_fill_secret (значение из #secret, модель его не видит).
  */
+import { log } from '../log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDocker } from '../../sandbox/driver.js';
@@ -234,7 +235,7 @@ export function noteDomain(ctx, url) {
         if (host)
             lastDomain.set(ownerOf(ctx) + '/' + computerName(ctx?.entry?.args?.name), host);
     }
-    catch { /* не URL */ }
+    catch (e) { log.debug('browser.host', e); /* не URL */ }
 }
 
 /** Доступ к чужому компьютеру — только админу (для UI/расширений). */

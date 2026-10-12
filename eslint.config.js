@@ -25,7 +25,7 @@ export default [
             ...js.configs.recommended.rules,
             // переменные с префиксом _ — осознанно отбрасываемые (resources.js: _hooks)
             'no-unused-vars': ['error', { varsIgnorePattern: '^_' }],
-            'no-empty': ['warn', { allowEmptyCatch: false }],
+            'no-empty': ['error', { allowEmptyCatch: false }],
         },
     },
 ];

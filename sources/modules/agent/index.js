@@ -5,6 +5,7 @@
  *   runOnce({ place, session, prompt, model, agent }) → { status, content, items }  — разовый запуск без ленты
  *   Сессия задачи (.task) — ./session.js
  */
+import { log } from './log.js';
 import { runLoop } from './loop.js';
 import { workTools } from './tools/work.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
@@ -222,7 +223,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
                 if (await sandboxAvailable())
                     all.push(...sandboxTools, ...computerTools, ...browserTools);
             }
-            catch { /* Docker недоступен — без песочницы */ }
+            catch (e) { log.debug('env.tools', e); /* Docker недоступен — без песочницы */ }
             if (depth >= MAX_DEPTH)
                 all = all.filter(t => t.name !== 'task');
             if (!def)
@@ -285,7 +286,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
                         + ' Экран (графический образ work-computer): computer_screenshot — смотри скриншот в конце контекста, координаты — пиксели 1280×800; computer_action — мышь/клавиатура (сначала скриншот, потом действие, после каждого — новый скриншот); текст вводи type только латиницей. Не получается (капча, вход, подтверждение) — computer_handoff человеку. Пока экраном управляет человек, действия недоступны.'
                         + ' Браузер Chromium: browser_open (нужен интернет через computer_network), browser_snapshot — текстовый снимок с номерами [ref] (работает и без vision), browser_click/type/select — действия по ref (refs живут, пока страница не изменилась), browser_nav — назад/обновить. Пароли — только browser_fill_secret (имена — browser_secrets, значения модель не видит). Сайты проси открыть явно; сам без просьбы не лазай.');
             }
-            catch { /* Docker недоступен — без подсказки */ }
+            catch (e) { log.debug('env.system', e); /* Docker недоступен — без подсказки */ }
             if (!def) {
                 const rm = await safeReadme(place);
                 if (rm)
@@ -347,7 +348,7 @@ async function resolvePlace(lat, lon) {
             place = [a.city || a.town || a.village || a.municipality, a.state, a.country].filter(Boolean).join(', ') || null;
         }
     }
-    catch { /* сеть — только координаты */ }
+    catch (e) { log.debug('place.resolve', e); /* сеть — только координаты */ }
     PLACES.set(key, place);
     return place;
 }
@@ -359,7 +360,7 @@ async function placeBlock(place, session, location) {
         try {
             await place.init;
         }
-        catch { /* без DATA */ }
+        catch (e) { log.debug('place.init', e); /* без DATA */ }
         lines.push('- Место задачи (текущий класс): ' + place.path + (place.DATA?.label ? ' «' + place.DATA.label + '»' : '') + (place.type ? ' [' + place.type + ']' : ''));
     }
     const user = session?.$user;
@@ -370,7 +371,7 @@ async function placeBlock(place, session, location) {
             if (roles?.length)
                 lines.push('- Роли пользователя здесь: ' + roles.join(', '));
         }
-        catch { /* нет ролей */ }
+        catch (e) { log.debug('place.roles', e); /* нет ролей */ }
     }
     if (location?.lat != null && location?.lon != null) {
         const lat = Number(location.lat).toFixed(4), lon = Number(location.lon).toFixed(4);
@@ -393,7 +394,7 @@ function nowLine(tzIn) {
     try {
         local = now.toLocaleString('ru-RU', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
     }
-    catch { /* неизвестная tz */ }
+    catch (e) { log.debug('time.tz', e); /* неизвестная tz */ }
     return '# Время\n- Сейчас: ' + local + ' (' + tz + ')';
 }
 

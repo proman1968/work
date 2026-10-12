@@ -4,6 +4,7 @@
  * внутри контейнера без сети, хост и дерево WORK командам недоступны.
  * Видимы модели только когда Docker отвечает (см. sandboxAvailable).
  */
+import { log } from '../log.js';
 import { loadSandboxConfig } from '../../sandbox/config.js';
 import { getDocker, dockerAvailable } from '../../sandbox/driver.js';
 import {
@@ -101,7 +102,7 @@ export const sandboxTools = [
                 try {
                     net = netState(await statusOf(docker, c.id));
                 }
-                catch { /* параллельно удалён */ }
+                catch (e) { log.debug('sandbox.status', e); /* параллельно удалён */ }
                 lines.push('- «' + (c.name || '?') + '»: ' + c.state + ', образ ' + c.image + ', ' + net);
             }
             return 'Ваши компьютеры:\n' + lines.join('\n');

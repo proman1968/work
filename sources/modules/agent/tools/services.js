@@ -5,6 +5,7 @@
  *  - mcp_* — инструменты MCP-серверов (сервисы с полем mcp), список кэшируется.
  * Реестр строится из дерева: новый сервис/MCP в /SERVICES — новые инструменты без кода.
  */
+import { log } from '../log.js';
 import { clip } from '../util.js';
 import { callAs } from './work.js';
 import { askEach } from '../system.js';
@@ -27,7 +28,7 @@ export async function listServices(force = false) {
     try {
         root = await WORK.get_item('/SERVICES');
     }
-    catch { /* нет каталога */ }
+    catch (e) { log.debug('services.list', e); /* нет каталога */ }
     const walk = async (folder, level, prefix) => {
         let kids;
         try {

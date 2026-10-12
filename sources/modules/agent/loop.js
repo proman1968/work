@@ -20,6 +20,7 @@
  *   mode: 'auto'|'ask'|'plan' — режим разрешений
  *   allowed: Set<string>     — «разрешить всегда» в этой сессии (имена инструментов)
  */
+import { log } from './log.js';
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
 import { decide } from './permissions.js';
 import { newNonce, wrapUntrusted, taintSources } from './taint.js';
@@ -407,7 +408,7 @@ async function noteAudit(tool, entry, ctx, verdict, outcome, extra = {}) {
         try {
             target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
         }
-        catch { /* цель не определилась — не повод ломать вызов */ }
+        catch (e) { log.debug('audit.target', e); /* цель не определилась — не повод ломать вызов */ }
         audit('agent', {
             tool: tool.name,
             verdict, outcome,
@@ -419,7 +420,7 @@ async function noteAudit(tool, entry, ctx, verdict, outcome, extra = {}) {
             params: { session: ctx?.session, role: ctx?.role },
         });
     }
-    catch { /* журнал не должен ронять цикл */ }
+    catch (e) { log.debug('audit', e); /* журнал не должен ронять цикл */ }
 }
 
 async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
@@ -587,7 +588,7 @@ function hookPayload(tool, entry, ctx) {
     try {
         target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
     }
-    catch { /* цель не определилась */ }
+    catch (e) { log.debug('tool.target', e); /* цель не определилась */ }
     return {
         tool: tool.name, args: entry.args || {}, risk: tool.risk || null, readonly: !!tool.readonly,
         target: Array.isArray(target) ? target.map(String) : (target != null ? String(target) : null),

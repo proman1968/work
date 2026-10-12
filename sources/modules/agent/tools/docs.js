@@ -6,6 +6,7 @@
  *   export_pdf     — настоящий PDF из HTML-документа WORK (headless-браузер сервера).
  * Все чтения и записи — с правами пользователя (callAs).
  */
+import { log } from '../log.js';
 import AdmZip from 'adm-zip';
 import fsp from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -51,7 +52,7 @@ export function findPdfBrowser(env = process.env, platform = process.platform, e
             if (exists(p))
                 return p;
         }
-        catch { /* следующий */ }
+        catch (e) { log.debug('docs.read', e); /* следующий */ }
     }
     return null;
 }
@@ -99,7 +100,7 @@ async function waitPdf(pdfFile, signal, deadlineMs = 5000) {
             if (buf.length >= 100 && buf.subarray(0, 5).equals(Buffer.from('%PDF-')))
                 return buf;
         }
-        catch { /* файла ещё нет */ }
+        catch (e) { log.debug('docs.wait', e); /* файла ещё нет */ }
         if (Date.now() - t0 > deadlineMs)
             return null;
         await new Promise(r => setTimeout(r, 100));

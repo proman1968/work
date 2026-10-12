@@ -12,6 +12,7 @@
  * не трогается — попадает в `skipped` с причиной. Права — те же, что у пользователя задачи (callAs).
  * Зависимости (getItem, callAs, writeFile) передаются снаружи: модуль не импортирует tools/work.js (цикл).
  */
+import { log } from './log.js';
 import fs from 'node:fs/promises';
 import pathMod from 'node:path';
 import crypto from 'node:crypto';
@@ -41,7 +42,7 @@ export async function snapshotsOf(item) {
             for (const snap of await fs.readdir(pathMod.join(hdir, day)))
                 out.push({ path: wbase + '/' + day + '/' + snap, dir: pathMod.join(hdir, day, snap) });
     }
-    catch { /* истории нет */ }
+    catch (e) { log.debug('undo.list', e); /* истории нет */ }
     return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 

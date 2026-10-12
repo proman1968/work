@@ -17,6 +17,7 @@
  * Таймаут — HOOK_TIMEOUT_MS (5 с; env WORK_HOOK_TIMEOUT_MS — для тестов); ошибка/таймаут не роняют цикл (хук пропускается) и пишутся в журнал безопасности (agent_hook).
  * Хукам передаются копии данных, а не живые объекты (сессия, инструменты, лента).
  */
+import { log } from './log.js';
 
 export const HOOK_EVENTS = ['pre_tool', 'post_tool', 'on_stop', 'on_compact'];
 export const HOOK_TIMEOUT_MS = 5000;
@@ -42,7 +43,7 @@ export async function auditHook(rec, ctx) {
         const { audit } = await import('../../server/access/audit.js');
         audit('agent_hook', { ...rec, task: ctx?.task?.path, params: { session: ctx?.session, role: ctx?.role } });
     }
-    catch { /* журнал не должен ронять цикл */ }
+    catch (e) { log.debug('hooks.audit', e); /* журнал не должен ронять цикл */ }
 }
 
 /**

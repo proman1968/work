@@ -6,6 +6,7 @@
  *                      любое изменение (POST/PUT/PATCH/DELETE) — всегда с явным подтверждением, без «разрешить всегда»;
  *   disconnect_service — удалить подключение (с подтверждением).
  */
+import { log } from '../log.js';
 import * as C from '../connections.js';
 import { clip } from '../util.js';
 import { guardedRequest } from '../../../host/net-guard.js';
@@ -156,7 +157,7 @@ export const connectTools = [
             try {
                 data = JSON.parse(text);
             }
-            catch { /* не JSON */ }
+            catch (e) { log.debug('connect.json', e); /* не JSON */ }
             const moved = res.redirects ? ' (после перенаправления: ' + new URL(res.url).origin + new URL(res.url).pathname + ')' : '';
             if (res.status < 200 || res.status >= 300)
                 return { error: 'HTTP ' + res.status + moved + ': ' + clip(typeof data === 'string' ? data : JSON.stringify(data), 1500) };

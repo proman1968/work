@@ -13,6 +13,7 @@
  * Дерево WORK файловыми os_* недоступно: там работают WORK-инструменты (права, история, журнал).
  * Вызовы os_*, net_* пишутся в общий журнал безопасности (.index/audit).
  */
+import { log } from './log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -252,7 +253,7 @@ export function run(file, args = [], o = {}) {
                 else
                     child.kill('SIGKILL');
             }
-            catch { /* уже завершён */ }
+            catch (e) { log.debug('shell.kill', e); /* уже завершён */ }
         };
         const timer = setTimeout(() => { timedOut = true; kill(); }, o.timeout || 60_000);
         const onAbort = () => kill();
