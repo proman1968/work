@@ -172,7 +172,7 @@ export const osFileTools = [
                     truncated = true;
                     return;
                 }
-                let kids = [];
+                let kids;
                 try {
                     kids = await fsp.readdir(dir, { withFileTypes: true });
                 }

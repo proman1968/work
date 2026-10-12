@@ -73,7 +73,7 @@ export const osProcTools = [
         parameters: { type: 'object', properties: { filter: { type: 'string' } } },
         async run(args) {
             const f = String(args.filter || '').toLowerCase();
-            let lines = [];
+            let lines;
             if (IS_WIN) {
                 const r = await powershell('Get-Service | Select-Object Name,DisplayName,@{n="S";e={"$($_.Status)"}},@{n="T";e={"$($_.StartType)"}} | ConvertTo-Json -Compress', { timeout: 30000 });
                 lines = [].concat(JSON.parse(r.stdout || '[]')).map(s => s.Name + '\t' + s.S + '\t' + s.T + '\t' + s.DisplayName);

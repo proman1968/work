@@ -111,7 +111,7 @@ async function read(uid, name) {
         return value;
     }
     catch (e) {
-        throw new Error('подключение «' + name + '» не расшифровать: ' + e.message + ' — попросите подключить аккаунт заново (connect_service)');
+        throw new Error('подключение «' + name + '» не расшифровать: ' + e.message + ' — попросите подключить аккаунт заново (connect_service)', { cause: e });
     }
 }
 
@@ -224,7 +224,7 @@ async function tokenRequest(p, body) {
         signal: AbortSignal.timeout(20000),
     });
     const text = await res.text();
-    let json = null;
+    let json;
     try {
         json = JSON.parse(text);
     }

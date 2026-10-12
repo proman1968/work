@@ -29,7 +29,7 @@ export async function listServices(force = false) {
     }
     catch { /* нет каталога */ }
     const walk = async (folder, level, prefix) => {
-        let kids = [];
+        let kids;
         try {
             kids = (await folder.items) || [];
         }
@@ -38,7 +38,7 @@ export async function listServices(force = false) {
             const id = kid.id || '';
             if (!id || /^[$.#]/.test(id) || typeof kid.import !== 'function')
                 continue;
-            let data = null;
+            let data;
             try {
                 data = await kid.import();
             }

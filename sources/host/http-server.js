@@ -11,7 +11,6 @@ import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE, MAX_BODY_BYTES, M
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import * as GATEWAY from '../server/access/gateway.js';
-import { audit } from '../server/access/audit.js';
 
 /** Активное содержимое из пользовательских зон (html/svg/xml/js) — в песочнице: нельзя исполнить на нашем домене. */
 const ACTIVE_TYPE = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)/i;
@@ -501,7 +500,6 @@ export function createRequestHandler() {
         else if (result instanceof CORE.$folder && result !== item && !(await GATEWAY.canRead(result, params)))
             throw new Error('Нет доступа');
 
-        const isFilePayload = item?.constructor === CORE.$file && (!method || method === 'load' || method === 'script' || method === 'download');
         const header = { "Content-Type": "application/json", "X-Content-Type-Options": "nosniff" };
         subscribe();
         // if (method === 'load_icon') {

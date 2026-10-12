@@ -196,7 +196,7 @@ export const authMethods = {
     },
 
     async user_login_start(params = {}) {
-        const { uid, session, challengeId } = params;
+        const { uid, challengeId } = params;
         if (!uid || !UID_RE.test(String(uid).toUpperCase()))
             throw new Error("uid required");
         if (!challengeId || String(challengeId).length > 64)

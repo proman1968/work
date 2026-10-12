@@ -90,7 +90,7 @@ export async function getBody(file) {
         raw = String(await file.load({ encoding: 'utf-8' }) ?? '');
     }
     catch { /* нового файла ещё нет */ }
-    let parsed = {};
+    let parsed;
     try {
         parsed = raw.trim() ? JSON.parse(raw) : {};
     }
@@ -357,6 +357,8 @@ function start(s, session, file) {
     send(s, session, { type: 'chat.start' });
     const host = makeHost(s, session);
     s.running = (async () => {
+        let restart;
+        let aborted;
         try {
             const place = file.$class || file.$owner || null;
             // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
@@ -392,30 +394,29 @@ function start(s, session, file) {
         finally {
             delete body.waiting;
             s.waiters.clear();
-            const aborted = !!s.controller?.signal.aborted;
+            aborted = !!s.controller?.signal.aborted;
             s.controller = null;
             // реплики, пришедшие под конец (или при стопе), не теряются: в ленту; без стопа — новый прогон
             const rest = body.queue || [];
             delete body.queue;
             for (const u of rest)
                 body.items.push({ ...u, queued: undefined });
-            if (rest.length && !aborted && body.status !== 'error') {
-                await save(s, session);
-                s.running = null;
-                start(s, session, file);
-                return;
-            }
+            restart = rest.length > 0 && !aborted && body.status !== 'error';
             await save(s, session);
             s.running = null;
-            send(s, session, { type: 'task.state', status: body.status });
-            send(s, session, { type: 'chat.done' });
-            if (!aborted && body.status === 'idle')
-                await publishTaskResults(file, session).catch(e => console.warn('[task publish]', e?.message || e));
-            if (!aborted && body.status === 'error')
-                pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
-            else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
-                pushNotify(s, session, 'done', lastAnswer(body));
         }
+        if (restart) {
+            start(s, session, file);
+            return;
+        }
+        send(s, session, { type: 'task.state', status: body.status });
+        send(s, session, { type: 'chat.done' });
+        if (!aborted && body.status === 'idle')
+            await publishTaskResults(file, session).catch(e => console.warn('[task publish]', e?.message || e));
+        if (!aborted && body.status === 'error')
+            pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
+        else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
+            pushNotify(s, session, 'done', lastAnswer(body));
     })();
     return s.running;
 }

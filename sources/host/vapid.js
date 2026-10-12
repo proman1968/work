@@ -6,7 +6,7 @@ export const vapidKeys = await (async () => {
     try {
         return JSON.parse(await fs.promises.readFile(path, { encoding: 'utf-8' }));
     }
-    catch (err) {
+    catch {
         const keys = webPush.generateVAPIDKeys();
         await fs.promises.writeFile(path, JSON.stringify(keys));
         return keys;

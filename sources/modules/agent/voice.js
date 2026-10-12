@@ -14,6 +14,7 @@ const probes = new Map();
 /** Текст для синтеза: без управляющих символов и лишних пробелов, не длиннее лимита. */
 export function speechInput(text, max = MAX_SPEECH_CHARS) {
     const s = String(text ?? '')
+        // eslint-disable-next-line no-control-regex -- управляющие символы здесь вырезаются намеренно (текст для синтеза речи)
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
         .replace(/[ \t]+/g, ' ')
         .replace(/\s*\n\s*/g, '\n')
@@ -38,7 +39,7 @@ async function modelFor(file, key, cap) {
     const path = cfg?.[key];
     if (!path)
         return null;
-    let item = null;
+    let item;
     try {
         item = await WORK.get_item(path);
         await item?.init;

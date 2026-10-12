@@ -95,7 +95,7 @@ function decodeBody(buf, encoding, maxBytes) {
             return zlib.brotliDecompressSync(buf, opt);
     }
     catch (e) {
-        throw new Error(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'Ответ больше допустимого размера' : 'Не удалось распаковать ответ: ' + e.message);
+        throw new Error(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'Ответ больше допустимого размера' : 'Не удалось распаковать ответ: ' + e.message, { cause: e });
     }
     return buf;
 }

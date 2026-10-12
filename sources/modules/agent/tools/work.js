@@ -40,12 +40,12 @@ export function absPath(p, ctx) {
 
 export async function getItem(path, ctx) {
     const p = absPath(path, ctx);
-    let item = null;
+    let item;
     try {
         item = await WORK.get_item(p === '/' ? '' : p);
     }
     catch (e) {
-        throw new Error('путь ' + p + ': ' + String(e.message || e));
+        throw new Error('путь ' + p + ': ' + String(e.message || e), { cause: e });
     }
     if (Array.isArray(item))
         return item.length ? item : null;
@@ -518,7 +518,7 @@ export const workTools = [
                 const walk = async (it, level) => {
                     if (out.length >= limit || level > 8)
                         return;
-                    let kids = [];
+                    let kids;
                     try {
                         kids = (await it.items) || [];
                     }

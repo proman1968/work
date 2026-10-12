@@ -4,7 +4,7 @@ import path from 'node:path';
 import { recover, idle } from './session.js';
 
 const SKIP = new Set(['.git', '.index', '.RAG', 'node_modules', 'history', 'logs', '#secret', '#system', 'sources', 'oda', 'tests', 'scripts']);
-const TASK_PATH = /(?:^|\/)task\/\d{4}-\d{2}-\d{2}\/\d+\.([^.\/]+)\.task$/i;
+const TASK_PATH = /(?:^|\/)task\/\d{4}-\d{2}-\d{2}\/\d+\.([^./]+)\.task$/i;
 
 export async function findPendingTasks(root = '.', max = 10_000) {
     const found = [];

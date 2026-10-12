@@ -13,7 +13,6 @@ import path from 'node:path';
 const SRC = path.resolve(import.meta.dirname, '../oda/components/packets/packets.js');
 const defs = [];
 const fakeODA = (d) => { defs.push(d); return d; };
-// eslint-disable-next-line no-new-func
 new Function('ODA', fs.readFileSync(SRC, 'utf-8'))(fakeODA);
 
 function mount(props = {}) {

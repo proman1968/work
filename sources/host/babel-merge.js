@@ -180,7 +180,7 @@ export const MERGE =
                 if (t.isObjectProperty(existing) && t.isObjectProperty(prop)) {
                     // Р•СЃР»Рё РѕР±Р° СЃРІРѕР№СЃС‚РІР° СЏРІР»СЏСЋС‚СЃСЏ РѕР±СЉРµРєС‚Р°РјРё СЃ РІР»РѕР¶РµРЅРЅС‹РјРё РѕР±СЉРµРєС‚Р°РјРё
                     if (t.isObjectExpression(existing.value) && t.isObjectExpression(prop.value)) {
-                        // Р РµРєСѓСЂСЃРёРІРЅРѕРµ РіР»СѓР±РѕРєРѕРµ СЃР»РёСЏРЅРёРµ
+                        // Р РµРєСѓСЂСЃРёРІРЅРѕРµ РіР»СѓР±РѕРєРѕРµ СЃР»РёСЏРЅРёРµ
                         const mergedInnerProps = MERGE.deepMergeObjectExpressions(
                             existing.value.properties,
                             prop.value.properties
@@ -210,7 +210,7 @@ export const MERGE =
                     // Р”Р»СЏ РјРµС‚РѕРґРѕРІ - РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј
                     mergedMap.set(key, cloneNode(prop));
                 } else {
-                    // Р Р°Р·РЅС‹Рµ С‚РёРїС‹ СЃРІРѕР№СЃС‚РІ - РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј
+                    // Р Р°Р·РЅС‹Рµ С‚РёРїС‹ СЃРІРѕР№СЃС‚РІ - РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј
                     mergedMap.set(key, cloneNode(prop));
                 }
             }
@@ -264,7 +264,7 @@ export const MERGE =
             return t.exportDefaultDeclaration(classObject);
         }
 
-        // РЎР»СѓС‡Р°Р№ 4: Р Р°Р·РЅС‹Рµ С‚РёРїС‹ - СЃРѕР·РґР°РµРј РѕР±СЉРµРєС‚ СЃ РѕР±РµРёРјРё С‡Р°СЃС‚СЏРјРё
+        // РЎР»СѓС‡Р°Р№ 4: Р Р°Р·РЅС‹Рµ С‚РёРїС‹ - СЃРѕР·РґР°РµРј РѕР±СЉРµРєС‚ СЃ РѕР±РµРёРјРё С‡Р°СЃС‚СЏРјРё
         return t.exportDefaultDeclaration(
             t.objectExpression([
                 t.objectProperty(
