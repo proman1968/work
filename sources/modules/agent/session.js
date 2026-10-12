@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Сессия задачи (.task, версия 2) — тонкий хост ленты для цикла агента.
  *
@@ -35,7 +36,10 @@ function stateOf(file) {
     return s;
 }
 
-/** Нормализация тела; v1 (старый движок) → v2 одноразово. */
+/** Нормализация тела; v1 (старый движок) → v2 одноразово.
+ * @param {string | { [key: string]: any }} raw
+ * @returns {TaskBody}
+ */
 export function normalizeBody(raw) {
     const body = raw && typeof raw === 'object' ? raw : {};
     if (body.version !== 2) {
@@ -81,7 +85,10 @@ function migrateLegacy(blocks) {
     return out;
 }
 
-/** Тело: в работе — из памяти, иначе с диска (его могли поменять снаружи). */
+/** Тело: в работе — из памяти, иначе с диска (его могли поменять снаружи).
+ * @param {any} file  элемент .task
+ * @returns {Promise<TaskBody>}
+ */
 export async function getBody(file) {
     const s = stateOf(file);
     if (s.running && s.body)
@@ -221,7 +228,11 @@ const SAFE_RECOVERY_TOOLS = new Set([
     'read_table', 'web_search', 'web_fetch', 'connections', 'skill', 'todo_write',
 ]);
 
-/** Вызывается восстановителем после рестарта; ожидающие вопросы не перезапускаются. */
+/** Вызывается восстановителем после рестарта; ожидающие вопросы не перезапускаются.
+ * @param {any} file  элемент .task
+ * @param {any} session
+ * @returns {Promise<any>}
+ */
 export async function recover(file, session) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -298,7 +309,12 @@ function makeHost(s, session) {
     };
 }
 
-/** Набор результатов задачи (publish): добавление, снятие, чтение. Сохраняется сразу. */
+/** Набор результатов задачи (publish): добавление, снятие, чтение. Сохраняется сразу.
+ * @param {any} file  элемент .task
+ * @param {{ snapshot?: string, title?: string, remove?: boolean, [key: string]: any }} res
+ * @param {any} session
+ * @returns {Promise<any[]>}
+ */
 export async function addTaskResult(file, res, session) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -311,7 +327,11 @@ export async function addTaskResult(file, res, session) {
     return body.results;
 }
 
-/** При успешном завершении: выбранные результаты — в includes записи задачи (все копии). */
+/** При успешном завершении: выбранные результаты — в includes записи задачи (все копии).
+ * @param {any} file  элемент .task
+ * @param {any} session
+ * @returns {Promise<number>}
+ */
 export async function publishTaskResults(file, session) {
     const body = stateOf(file).body;
     const snaps = [...new Set((body?.results || []).map(r => r?.snapshot).filter(Boolean))];
@@ -337,7 +357,10 @@ export async function publishTaskResults(file, session) {
     return n;
 }
 
-/** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null. */
+/** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null.
+ * @param {any} file  элемент .task
+ * @returns {string | null}
+ */
 export function taskRole(file) {
     try {
         const point = file.$owner || file.$class;
@@ -459,7 +482,10 @@ function applyOffline(body, reply) {
 
 /**
  * Сообщение человека. Идёт работа: ответ на вопрос/отказ с комментарием на подтверждение,
- * иначе «занят». Нет работы: реплика в ленту и запуск.
+ * иначе «занёт». Нет работы: реплика в ленту и запуск.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
  */
 export async function prompt(file, params = {}) {
     params = argsOf(params);
@@ -510,7 +536,11 @@ export async function prompt(file, params = {}) {
     return { ok: true };
 }
 
-/** Сообщение продолжимому агенту: вопрос человеку не подменяем ответом другого агента. */
+/** Сообщение продолжимому агенту: вопрос человеку не подменяем ответом другого агента.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function message(file, params = {}) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -560,7 +590,11 @@ function normAttachments(list) {
     return arr.map(a => typeof a === 'string' ? { path: a, name: a.split('/').pop() } : a).filter(a => a?.path);
 }
 
-/** Подтверждение вызова / ответ формой. { call, accept, always, content, values } */
+/** Подтверждение вызова / ответ формой. { call, accept, always, content, values }
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function approve(file, params = {}) {
     const s = stateOf(file);
     const p = argsOf(params);
@@ -586,7 +620,11 @@ export async function approve(file, params = {}) {
     return { ok: true, resumed: true };
 }
 
-/** Стоп: оборвать стрим/инструмент, снять ожидания. */
+/** Стоп: оборвать стрим/инструмент, снять ожидания.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function stop(file, params = {}) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -615,6 +653,9 @@ export async function stop(file, params = {}) {
  *   dry: true   — ничего не менять, вернуть { files: [{path, op}], manual: [...] } — что агент изменил в этом диапазоне
  *                 (интерфейс спрашивает про файлы только если есть что откатывать);
  *   files: true — заодно вернуть файлы, изменённые агентом (undo.js): { reverted, skipped } в ответе.
+ * @param {any} file  элемент .task
+ * @param {{ id?: string, dry?: boolean, files?: boolean, [key: string]: any }} params
+ * @returns {Promise<any>}
  */
 export async function revert(file, params = {}) {
     params = argsOf(params);
@@ -678,6 +719,9 @@ function lastTodos(items) {
  * Подключение аккаунта из карточки connect_service (данные вводит человек, в ленту не пишутся):
  * { call, origin, client_id?, client_secret?, token?, base_url? } → { auth_url } (окно входа) | { ok } (токен сохранён).
  * По завершении входа (OAuth callback) ожидание вызова снимается с accept:true — агент продолжает.
+ * @param {any} file  элемент .task
+ * @param {{ call?: string, origin?: string, client_id?: string, client_secret?: string, token?: string, base_url?: string }} params
+ * @returns {Promise<any>}
  */
 export async function connectStart(file, params = {}) {
     const p = argsOf(params);
@@ -700,7 +744,11 @@ export async function connectStart(file, params = {}) {
     }
 }
 
-/** Отменить реплику из очереди. { id } */
+/** Отменить реплику из очереди. { id }
+ * @param {any} file  элемент .task
+ * @param {{ id?: string }} params
+ * @returns {Promise<any>}
+ */
 export async function unqueue(file, params = {}) {
     const p = argsOf(params);
     const s = stateOf(file);
@@ -713,7 +761,11 @@ export async function unqueue(file, params = {}) {
     return { ok: (body.queue || []).length < before };
 }
 
-/** Настройки задачи: model / effort / mode. */
+/** Настройки задачи: model / effort / mode.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function configure(file, params = {}) {
     const s = stateOf(file);
     const p = argsOf(params);
@@ -731,7 +783,11 @@ export async function configure(file, params = {}) {
     return { ok: true, model: body.model, effort: body.effort, mode: body.mode };
 }
 
-/** Принудительное сжатие контекста. */
+/** Принудительное сжатие контекста.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function compact(file, params = {}) {
     const s = stateOf(file);
     if (s.running)
@@ -745,7 +801,10 @@ export async function compact(file, params = {}) {
     return { ok: done };
 }
 
-/** Для тестов/диагностики: дождаться окончания текущей петли. */
+/** Для тестов/диагностики: дождаться окончания текущей петли.
+ * @param {any} file  элемент .task
+ * @returns {Promise<void>}
+ */
 export async function idle(file) {
     const s = stateOf(file);
     while (s.running)
@@ -753,6 +812,10 @@ export async function idle(file) {
     return s.body;
 }
 
+/** Идёт ли петля задачи.
+ * @param {any} file  элемент .task
+ * @returns {boolean}
+ */
 export function isRunning(file) {
     return !!stateOf(file).running;
 }

@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Политика разрешений инструментов.
  *
@@ -17,7 +18,10 @@ import { isOutbound } from './taint.js';
 /** Зоны самоизменения системы: правки только с подтверждением. */
 export const PROTECTED_PREFIXES = ['/$server', '/sources', '/oda', '/MODELS', '/SERVICES', '/NODES', '/torus'];
 
-/** Путь относится к коду/конфигурации системы. */
+/** Путь относится к коду/конфигурации системы.
+ * @param {string} path
+ * @returns {boolean}
+ */
 export function isProtectedPath(path) {
     const p = String(path || '').trim();
     if (!p)
@@ -33,12 +37,16 @@ export function isProtectedPath(path) {
 }
 
 /**
- * @returns {Promise<{verdict:'allow'|'ask'|'deny', reason?:string}>}
+ * Решение политики для вызова инструмента (режим сессии, правила инструмента, защищённые зоны).
+ * @param {Tool} tool
+ * @param {object} args
+ * @param {ToolCtx} ctx
+ * @returns {Promise<Verdict>}
  */
 export async function decide(tool, args, ctx) {
     if (tool.readonly)
         return { verdict: 'allow' };
-    const host = ctx.host || {};
+    const host = ctx.host || /** @type {Host} */ ({});
     const mode = host.mode || 'auto';
     if (mode === 'plan' && !tool.planSafe)
         return { verdict: 'deny', reason: 'режим «План»: изменения запрещены — предложи план и попроси переключить режим' };

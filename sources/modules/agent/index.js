@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Ядро агента WORK: окружение (модель, system, инструменты, субагенты, навыки) и точки входа.
  *
@@ -64,7 +65,10 @@ function restrictCall(tool, methods) {
     };
 }
 
-/** Модель WORK → адаптер llm для цикла. */
+/** Модель WORK → адаптер llm для цикла.
+ * @param {string} modelPath
+ * @returns {Promise<LLM>}
+ */
 export async function llmFor(modelPath) {
     const path = String(modelPath || '').trim();
     if (!path)
@@ -84,6 +88,7 @@ export async function llmFor(modelPath) {
         contextTokens: Number(item.maxTokens) || 32000,
         vision: caps.includes('vision'),
         stream({ messages, tools, signal, effort }) {
+            /** @type {{ messages: any, temperature?: number, signal?: AbortSignal, tools?: any, maxOutput?: number, effort?: string }} */
             const req = { messages, temperature: 0.3, signal };
             if (tools?.length)
                 req.tools = tools;
@@ -163,10 +168,8 @@ export const VOICE_NOTE = `# Голосовой режим
 
 /**
  * Окружение агента для места (класса) и пользователя.
- * @param {object} p
- * @param {object} p.place  класс исполнения ($context)
- * @param {object} [p.session]
- * @param {object} [p.host]  для mode
+ * @param {EnvParams} [p]
+ * @returns {Promise<any>} env: { place, session, config, hooks, agents, skills, role, … }
  */
 export async function createEnv({ place, session, host, tz, location, role, voice } = {}) {
     // ОС и сеть — администратору, работающему в роли ADMIN (или без выбранной роли: REST, расписание)
@@ -398,14 +401,18 @@ function nowLine(tzIn) {
     return '# Время\n- Сейчас: ' + local + ' (' + tz + ')';
 }
 
-/** Детерминированный порядок инструментов по имени (JS-сортировка, без локали): одинаковый tools-префикс для кэша. */
+/** Детерминированный порядок инструментов по имени (JS-сортировка, без локали): одинаковый tools-префикс для кэша.
+ * @param {Tool[]} tools
+ * @returns {Tool[]}
+ */
 export function stableToolOrder(tools) {
     return [...tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /**
  * Разовый запуск (REST: /КЛАСС?prompt&prompt=…): без ленты на диске, без вопросов человеку.
- * @returns {Promise<{status:string, content:string, items:Array}>}
+ * @param {RunOnceParams} [p]
+ * @returns {Promise<RunResult & { items: any[] }>}
  */
 export async function runOnce({ place, session, prompt, model, agent, mode = 'auto', signal, role } = {}) {
     const host = {

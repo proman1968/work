@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Цикл агента на нативном tool calling.
  *
@@ -42,6 +43,8 @@ export const VOLATILE_HEAD = '[Служебный контекст среды н
  * system → { stable, volatile }. Строка (разовые вызовы, сжатие) — только стабильная часть.
  * stable идёт первым сообщением system и почти не меняется (префикс для кэша провайдера),
  * volatile (время, режим) — отдельным сообщением в КОНЦЕ: изменение в начале сломало бы кэш всей истории.
+ * @param {string | { stable?: string, volatile?: string } | Function} system
+ * @returns {{ stable: string, volatile: string }}
  */
 export function splitSystem(system) {
     if (system && typeof system === 'object')
@@ -49,7 +52,10 @@ export function splitSystem(system) {
     return { stable: String(system || ''), volatile: '' };
 }
 
-/** Весь текст system одной строкой (оценка токенов). */
+/** Весь текст system одной строкой (оценка токенов).
+ * @param {string | { stable?: string, volatile?: string } | Function} system
+ * @returns {string}
+ */
 export function systemText(system) {
     const { stable, volatile } = splitSystem(system);
     return volatile ? stable + '\n\n' + volatile : stable;
@@ -60,15 +66,8 @@ export const EMPTY_NUDGE = '[Система] Твой предыдущий от�
 
 /**
  * Выполнить агента до ответа без вызовов инструментов (или стопа/лимита).
- * @param {object} opts
- * @param {object} opts.llm  { name, contextTokens, stream(req) → AsyncIterable }
- * @param {string|{stable:string,volatile:string}|Function} opts.system  system-промпт: строка, части или async () => то же (splitSystem)
- * @param {Array} opts.items  лента (мутируется)
- * @param {Array} opts.tools  инструменты { name, description, parameters, readonly?, risk?, run(args, ctx) }
- * @param {object} opts.host
- * @param {object} [opts.ctx]  доп. поля в ctx инструментов (session, place, …)
- * @param {string[]} [opts.taintedFrom]  внешнее содержимое в контексте родителя (для субагента, см. taint.js)
- * @returns {Promise<{status:'done'|'limit'|'stopped'|'error', content?:string}>}
+ * @param {LoopOpts} opts
+ * @returns {Promise<RunResult>}
  */
 export async function runLoop(opts) {
     let res;
@@ -369,6 +368,11 @@ function stripThink(text) {
     return String(text || '').replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '');
 }
 
+/**
+ * @param {number} ms
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<void>}
+ */
 function sleep(ms, signal) {
     return new Promise(resolve => {
         const t = setTimeout(resolve, ms);
@@ -376,7 +380,10 @@ function sleep(ms, signal) {
     });
 }
 
-/** Вызовы хода: подряд идущие read-only — параллельно, остальные — по одному. */
+/**
+ * Вызовы хода: подряд идущие read-only — параллельно, остальные — по одному.
+ * @param {{ it: any, byName: Map<string, Tool>, host: Host, llm: LLM, opts: LoopOpts }} o
+ */
 async function runCalls({ it, byName, host, llm, opts }) {
     const entries = it.tools;
     let i = 0;
@@ -423,6 +430,10 @@ async function noteAudit(tool, entry, ctx, verdict, outcome, extra = {}) {
     catch (e) { log.debug('audit', e); /* журнал не должен ронять цикл */ }
 }
 
+/**
+ * Один вызов инструмента: хуки → политика → (подтверждение) → инструмент → аудит.
+ * @param {{ entry: Entry, tool: Tool, it: any, host: Host, llm: LLM, opts: LoopOpts, preapproved?: boolean }} o
+ */
 async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     if (!tool) {
         entry.status = 'error';
@@ -486,6 +497,7 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         if (pre.verdict === 'ask' && !preapproved)
             hookAsk = pre;
     }
+    /** @type {Verdict} */
     let decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
     if (hookAsk && decision.verdict === 'allow')
         decision = { verdict: 'ask', noAlways: true, reason: 'правило организации (' + hookAsk.scope + '): ' + hookAsk.reason };
@@ -504,6 +516,7 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         return;
     }
     // подтверждение человека (или пред-подтверждение после рестарта) — в аудит попадает пометкой
+    /** @type {{ preapproved?: boolean, reason?: string, always?: boolean } | null} */
     let approved = preapproved ? { preapproved: true } : null;
     if (decision.verdict === 'ask') {
         entry.status = 'approval';

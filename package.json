@@ -13,7 +13,8 @@
     "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1",
     "test:ui": "node tests/ui/run.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -43,7 +44,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
     "eslint": "^10.12.0",
-    "globals": "^17.13.0"
+    "globals": "^17.13.0",
+    "typescript": "^7.0.2"
   }
 }

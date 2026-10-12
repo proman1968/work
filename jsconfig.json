@@ -1,0 +1,26 @@
+{
+    "compilerOptions": {
+        "target": "es2023",
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "allowJs": true,
+        "checkJs": false,
+        "strict": false,
+        "noEmit": true,
+        "skipLibCheck": true,
+        "types": ["node"],
+        "maxNodeModuleJsDepth": 0
+    },
+    // Ядро агента (hardening 4.3). checkJs выключен, а аннотированные файлы несут директиву
+    // `// @ts-check`: транзитивные импорты (ядро сервера, host, инструменты) попадают в программу
+    // для разбора ссылок, но не проверяются — проверяются только корни ниже.
+    "include": [
+        "sources/modules/agent/loop.js",
+        "sources/modules/agent/session.js",
+        "sources/modules/agent/permissions.js",
+        "sources/modules/agent/index.js",
+        "sources/modules/agent/util.js",
+        "sources/modules/agent/types.d.ts"
+    ],
+    "exclude": ["node_modules"]
+}

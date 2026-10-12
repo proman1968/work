@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Общие мелочи ядра агента: id, обрезка, оценка токенов, фронтматтер.
  */
@@ -8,6 +9,10 @@ const SNAPSHOT_RE = /\/\.([^/]+)\/history\/\d{4}-\d{2}-\d{2}\/[^/]+$/;
 /**
  * Снимки из результата вызова call → save_files: JSON-строка { includes: [...] }.
  * Только снимки (/history/), живой путь файла сюда не попадает.
+ */
+/** Снимки из результата вызова в ленте.
+ * @param {Entry} entry
+ * @returns {string[]}
  */
 export function callSnapshots(entry) {
     if (entry?.name !== 'call' || entry?.status !== 'ok')
@@ -30,12 +35,19 @@ export function callSnapshots(entry) {
 }
 
 /** Имя файла по пути снимка (то, что перед /.имя/history/). */
+/** Имя файла снимка из WORK-пути.
+ * @param {string} snapshot
+ * @returns {string}
+ */
 export function snapshotName(snapshot) {
     const m = String(snapshot || '').match(SNAPSHOT_RE);
     return m ? m[1] : String(snapshot || '').split('/').pop();
 }
 
 /** guid элемента ленты/вызова. */
+/** Короткий идентификатор (лента, вызовы).
+ * @returns {string}
+ */
 export function genId() {
     const uuid = globalThis.crypto?.randomUUID?.();
     if (uuid)
@@ -44,6 +56,11 @@ export function genId() {
 }
 
 /** Обрезка длинного текста с пометкой (голова + хвост — хвост часто самый полезный). */
+/** Урезать текст до лимита с хвостом-пометкой.
+ * @param {any} text
+ * @param {number} [max]
+ * @returns {string}
+ */
 export function clip(text, max = 20000) {
     const s = String(text ?? '');
     if (s.length <= max)
@@ -54,12 +71,20 @@ export function clip(text, max = 20000) {
 }
 
 /** Грубая оценка токенов (кириллица ~3 символа/токен, латиница ~4). */
+/** Оценка токенов текста/структуры (4 символа ≈ токен).
+ * @param {any} value
+ * @returns {number}
+ */
 export function estimateTokens(value) {
     const s = typeof value === 'string' ? value : JSON.stringify(value ?? '');
     return Math.ceil(s.length / 3.2);
 }
 
 /** Результат инструмента → текст для модели. Богатый результат { text, images } → text (картинки кладутся рядом, см. loop.js). */
+/** Текст из результата инструмента/вызова (объекты — JSON, строки — как есть).
+ * @param {any} value
+ * @returns {string}
+ */
 export function resultText(value) {
     if (value == null)
         return 'ok';
@@ -81,6 +106,10 @@ export function resultText(value) {
  * Markdown с YAML-фронтматтером (подмножество: `key: value`, списки `[a, b]`).
  * @returns {{ meta: object, body: string }}
  */
+/** Разобрать markdown с фронтматтером (значения: строки, числа, булевы, списки).
+ * @param {string} text
+ * @returns {{ meta: { [key: string]: any }, body: string }}
+ */
 export function parseFrontmatter(text) {
     const s = String(text ?? '').replace(/^\uFEFF/, '');
     const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -91,6 +120,7 @@ export function parseFrontmatter(text) {
         const kv = line.match(/^\s*([\w-]+)\s*:\s*(.*)$/);
         if (!kv)
             continue;
+        /** @type {any} */
         let v = kv[2].trim();
         if (/^\[.*\]$/.test(v))
             v = v.slice(1, -1).split(',').map(x => unquote(x.trim())).filter(Boolean);
@@ -110,6 +140,11 @@ function unquote(v) {
 }
 
 /** Собрать markdown с фронтматтером. */
+/** Собрать markdown с фронтматтером.
+ * @param {{ [key: string]: any }} meta
+ * @param {string} body
+ * @returns {string}
+ */
 export function stringifyFrontmatter(meta, body) {
     const lines = Object.entries(meta || {})
         .filter(([, v]) => v != null && v !== '')
@@ -118,6 +153,10 @@ export function stringifyFrontmatter(meta, body) {
 }
 
 /** Ошибка отказа в доступе (текст ядра WORK). */
+/** Ошибка «Доступ запрещён» (права ядра).
+ * @param {any} e
+ * @returns {boolean}
+ */
 export function isAccessDenied(e) {
     return /access denied|доступ|ACCESS_DENIED|forbidden/i.test(String(e?.message || e));
 }
@@ -130,6 +169,10 @@ export class StopError extends Error {
     }
 }
 
+/** Бросить StopError, если сигнал уже прерван.
+ * @param {AbortSignal} [signal]
+ * @returns {void}
+ */
 export function throwIfStopped(signal) {
     if (signal?.aborted)
         throw new StopError();
