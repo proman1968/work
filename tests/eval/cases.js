@@ -8,6 +8,8 @@
  * { feed: '/ТОЧКА', match } — запись в ленте точки; { status } — итог цикла (done).
  */
 const U = { boss: 'EB00000000000001', user: 'EU00000000000001', petrov: 'EU00000000000002', admin: 'EA00000000000001' };
+// срок поручения — послезавтра (зашитая дата устаревала, и кейс флапал с прошедшим сроком)
+const DUE = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
 
 const base = {
     [`USERS/${U.boss}/$user/class.js`]: `export default { label: 'Сидоров Сергей' }`,
@@ -33,8 +35,8 @@ export const CASES = [
         name: 'delegate',
         about: 'поручение с получателем и сроком через ленту',
         files: base, as: U.boss, place: '/ORG',
-        prompt: 'Поручи Иванову Ивану подготовить акт сверки с поставщиком до 2026-10-10.',
-        checks: [{ tool: 'send' }, { feed: '/ORG', match: /"kind":\s*"order"[\s\S]*"due":\s*"2026-10-10"|"due":\s*"2026-10-10"[\s\S]*"kind":\s*"order"/ }],
+        prompt: 'Поручи Иванову Ивану подготовить акт сверки с поставщиком до ' + DUE + '.',
+        checks: [{ tool: 'send' }, { feed: '/ORG', match: new RegExp('"kind":\\s*"order"[\\s\\S]*"due":\\s*"' + DUE + '"|"due":\\s*"' + DUE + '"[\\s\\S]*"kind":\\s*"order"') }],
     },
     {
         name: 'report-table',
