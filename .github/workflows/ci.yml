@@ -1,0 +1,38 @@
+# CI (hardening 4.5): линтер, типы, тесты и сканеры секретов на каждый push и PR.
+#
+# ubuntu-latest: пути с `$` в именах ($server/$class) и русские имена файлов — норма для git/Linux,
+# тесты платформо-нейтральны (единственная Windows-ветка — symlink junction в system-os, он ниже исключён).
+#
+# test:ci — все тесты, кроме осознанно-красного baseline (accounting-forms — формы не дописаны,
+# ai-package — дубль навыка register-accounts.md; долги, чинятся отдельно) и нестабильного при
+# полном параллельном прогоне system-os. CI должен быть зелёным, чтобы видеть новые регрессии.
+# package-lock.json в репо не хранится (миррор) — поэтому npm install, а не npm ci.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - run: npm install
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:ci
+      - run: node scripts/check-secrets.mjs
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
