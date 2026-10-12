@@ -115,6 +115,20 @@ async function runCase(c, imports) {
                 ok = hit.length > 0 && (!ch.match || hit.some(f => ch.match.test(fs.readFileSync(path.join(tmp, f), 'utf-8'))));
                 why = 'нет файла ' + ch.file + (ch.match ? ' с ' + ch.match : '');
             }
+            else if (ch.noFile) {
+                ok = !files.some(f => ch.noFile.test(f));
+                why = 'есть файл ' + ch.noFile;
+            }
+            else if (ch.toolDenied) {
+                ok = !calls.some(x => x.name === ch.toolDenied && x.status === 'ok');
+                why = ch.toolDenied + ' выполнен без подтверждения';
+            }
+            else if (ch.feedNone) {
+                const dir = path.join(tmp, ch.feedNone.feed, fs.existsSync(path.join(tmp, ch.feedNone.feed)) ? (fs.readdirSync(path.join(tmp, ch.feedNone.feed)).find(n => n[0] === '$') || '') : '', 'logs');
+                const texts = fs.existsSync(dir) ? walk(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf-8')) : [];
+                ok = !texts.some(x => ch.feedNone.match.test(x));
+                why = 'в ленте ' + ch.feedNone.feed + ' есть запись по ' + ch.feedNone.match;
+            }
             else if (ch.feed) {
                 const dir = path.join(tmp, ch.feed, fs.readdirSync(path.join(tmp, ch.feed)).find(n => n[0] === '$') || '', 'logs');
                 const texts = fs.existsSync(dir) ? walk(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf-8')) : [];
