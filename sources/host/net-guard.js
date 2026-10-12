@@ -33,7 +33,11 @@ export function isPrivateAddress(ip) {
         const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
         if (mapped)
             return isPrivateAddress(mapped[1]);
-        return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(v) || v.startsWith('::ffff:') || v.startsWith('64:ff9b:') || v.startsWith('2001:db8') || v.startsWith('2002:');
+        // ::/96 (IPv4-совместимые ::a.b.c.d), fc00::/7, fe80::/10 и fec0::/10 (site-local), ff00::/8, ::ffff:/96,
+        // NAT64 64:ff9b::/96, Teredo 2001:0::/32, документационный 2001:db8::/32, 6to4 2002::/16
+        return /^::([0-9a-f]{1,4}(:[0-9a-f]{1,4})?)?$/.test(v)
+            || /^(fc|fd|fe[89abcdef]|ff)/.test(v) || v.startsWith('::ffff:') || v.startsWith('64:ff9b:')
+            || /^2001:(0{1,4})?:/.test(v) || v.startsWith('2001:db8') || v.startsWith('2002:');
     }
     const [a, b] = ip.split('.').map(Number);
     return a === 0 || a === 10 || a === 127

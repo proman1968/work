@@ -3,13 +3,18 @@
  *
  * Запись об изменении (`entry.undo`, ставят инструменты write/append/edit/delete и writeBinary):
  *   { path, dir, op: 'create'|'modify'|'delete', before, hash }
- *   dir    — путь файла на диске (проверки идут по диску, не по кэшу дерева WORK);
+ *   dir    — путь файла на диске на момент записи (справочно: при откате НЕ используется — см. ниже);
  *   before — прежнее состояние: { snapshot, dir } снимок истории (если он совпал с файлом до записи) |
  *            { text } небольшой файл (≤ INLINE_MAX) текстом | { lost: true } восстановить нечем | null (create);
  *   hash   — sha1 байтов файла на диске ПОСЛЕ записи (нет у delete).
  *
  * Откат идёт от новых изменений к старым. Файл, изменённый после агента (хеш не совпал, удалён, создан заново),
  * не трогается — попадает в `skipped` с причиной. Права — те же, что у пользователя задачи (callAs).
+ *
+ * Записям ленты НЕ доверяем: ленту .task может править её владелец, поэтому пути на диске берутся из дерева WORK
+ * (элемент по `path`; для удалённого файла — папка-родитель + имя), а снимок истории принимается только из истории
+ * этого же файла (и по WORK-пути, и по пути на диске). Иначе подделанная запись превращала бы откат в чтение любого
+ * файла сервера с записью его содержимого в файл пользователя.
  * Зависимости (getItem, callAs, writeFile) передаются снаружи: модуль не импортирует tools/work.js (цикл).
  */
 import { log } from './log.js';
@@ -26,6 +31,32 @@ const readOrNull = async dir => { try { return dir ? await fs.readFile(dir) : nu
 
 /** Байты файла на диске (null — нет файла). */
 export const bytesOf = item => readOrNull(item?.dir);
+
+/** Папка истории файла на диске: <папка>/.<имя>/history. */
+const historyDirOf = dir => pathMod.join(pathMod.dirname(dir), '.' + pathMod.basename(dir), 'history');
+
+/** WORK-префикс снимков файла: <папка>/.<имя>/history/ — как его строит snapshotsOf. */
+const historyPrefixOf = path => String(path).replace(/[^/]+$/, '') + '.' + String(path).split('/').pop() + '/history/';
+
+/** child лежит строго внутри parent (после нормализации; без «..» и абсолютных обходов). */
+function within(child, parent) {
+    const rel = pathMod.relative(pathMod.resolve(parent), pathMod.resolve(String(child)));
+    return !!rel && !rel.startsWith('..') && !pathMod.isAbsolute(rel);
+}
+
+/**
+ * Путь файла на диске по WORK-пути — из дерева, не из ленты. Есть элемент — его dir; файла уже нет (откат удаления) —
+ * папка-родитель из дерева + имя листа. null — путь не разобрать.
+ */
+async function diskDirOf(path, item, deps) {
+    if (item?.dir)
+        return item.dir;
+    const leaf = String(path).split('/').pop();
+    if (!leaf || leaf === '.' || leaf === '..' || leaf.includes('\\'))
+        return null;
+    const parent = await deps.getItem(String(path).replace(/\/[^/]*$/, '') || '/').catch(() => null);
+    return parent && !Array.isArray(parent) && parent.dir ? pathMod.join(parent.dir, leaf) : null;
+}
 
 /**
  * Снимки истории файла по возрастанию времени: [{ path, dir }].
@@ -148,17 +179,22 @@ export async function applyUndo(list, deps) {
     for (const u of [...list].reverse()) {
         const skip = reason => skipped.push({ path: u.path, op: u.op, reason });
         try {
-            // существование и содержимое — по диску (кэш дерева WORK может отставать); дерево нужно для самого вызова
-            const current = await readOrNull(u.dir);
+            // существование и содержимое — по диску (кэш дерева WORK может отставать), но путь на диске — из дерева, не из ленты
             const found = await deps.getItem(u.path).catch(() => null);
             const item = found && !Array.isArray(found) ? found : null;
+            const dir = await diskDirOf(u.path, item, deps);
+            if (!dir) {
+                skip('путь не найден в дереве WORK');
+                continue;
+            }
+            const current = await readOrNull(dir);
             if (u.op === 'delete') {
                 if (current)
                     skip('файл уже создан заново');
                 else if (u.before?.lost || (!u.before?.snapshot && u.before?.text == null))
                     skip('прежняя версия не сохранена');
                 else {
-                    await restore(u, null, deps);
+                    await restore(u, null, dir, deps);
                     reverted.push({ path: u.path, op: u.op });
                 }
             }
@@ -175,7 +211,7 @@ export async function applyUndo(list, deps) {
             else if (u.before?.lost || (!u.before?.snapshot && u.before?.text == null))
                 skip('прежняя версия не сохранена');
             else {
-                await restore(u, item, deps);
+                await restore(u, item, dir, deps);
                 reverted.push({ path: u.path, op: u.op });
             }
         }
@@ -186,16 +222,21 @@ export async function applyUndo(list, deps) {
     return { reverted, skipped };
 }
 
-/** Вернуть прежнее содержимое: снимок истории (его метод), иначе — байты снимка/текст через сохранение файла. */
-async function restore(u, item, deps) {
-    if (u.before.snapshot) {
-        const snap = await deps.getItem(u.before.snapshot).catch(() => null);
+/**
+ * Вернуть прежнее содержимое: снимок истории (его метод), иначе — байты снимка/текст через сохранение файла.
+ * dir — путь файла на диске (из дерева). Снимок принимается только из истории этого же файла.
+ */
+async function restore(u, item, dir, deps) {
+    const snapshot = typeof u.before.snapshot === 'string' && u.before.snapshot.startsWith(historyPrefixOf(u.path)) ? u.before.snapshot : null;
+    if (snapshot) {
+        const snap = await deps.getItem(snapshot).catch(() => null);
         if (snap && !Array.isArray(snap)) {
             await deps.callAs(snap, 'restore_from_history', {});
             return;
         }
     }
-    const bytes = u.before.text != null ? Buffer.from(u.before.text, 'utf-8') : await readOrNull(u.before.dir);
+    const bytes = u.before.text != null ? Buffer.from(String(u.before.text), 'utf-8')
+        : (snapshot && within(u.before.dir, historyDirOf(dir)) ? await readOrNull(u.before.dir) : null);
     if (!bytes)
         throw new Error('снимок истории не найден');
     const post = isText(bytes) ? bytes.toString('utf-8') : bytes;

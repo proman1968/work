@@ -5,6 +5,7 @@
 import '../sources/reactor.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -1195,6 +1196,108 @@ describe('откат ленты с файлами (undo.js)', () => {
     });
 });
 
+describe('откат: подделанная запись undo в ленте (ленту .task может править её владелец)', () => {
+    const sha1 = s => crypto.createHash('sha1').update(s).digest('hex');
+    const read = rel => fs.readFileSync(path.join(tmp, rel), 'utf-8');
+
+    /** .task с готовой лентой: user → assistant с одним вызовом write и записью undo, которую подставил владелец. */
+    async function forgedTask(name, undo) {
+        const box = await WORK.get_item('/BOX');
+        const items = [
+            { id: name + 'u', type: 'user', content: 'x', time: 1 },
+            { id: name + 'a', type: 'assistant', time: 2, tools: [{ id: name + 't', name: 'write', status: 'ok', snapshot: '/x', undo }] },
+        ];
+        const log = await box.meta_folder.save_file({ folder: 'USER', filename: name + '.task', post: JSON.stringify({ version: 2, name, items }), skip_file_handler: true });
+        const file = await WORK.get_item(log.logFullPath || log.path);
+        await file.init;
+        return { file, userId: name + 'u' };
+    }
+
+    it('before.dir на чужой файл сервера: содержимое НЕ копируется в файл пользователя', async () => {
+        write('#system/secret-undo.txt', 'СЕКРЕТ-СЕРВЕРА');
+        write('BOX/doc/rv-leak.md', 'мой файл');
+        (await WORK.get_item('/BOX/doc'))?.reset?.();
+        const { file, userId } = await forgedTask('forge1', {
+            path: '/BOX/doc/rv-leak.md', dir: path.join(tmp, 'BOX/doc/rv-leak.md'), op: 'modify', hash: sha1('мой файл'),
+            // снимка в дереве нет → restore() уходит в запасную ветку и читает before.dir прямо с диска
+            before: { snapshot: '/BOX/doc/.rv-leak.md/history/2026-01-01/1.md', dir: path.join(tmp, '#system/secret-undo.txt') },
+        });
+        const res = await session.revert(file, { id: userId, files: 1 });
+        assert.equal(res.ok, true);
+        assert.ok(!read('BOX/doc/rv-leak.md').includes('СЕКРЕТ-СЕРВЕРА'), 'содержимое файла вне истории попало в файл пользователя: ' + JSON.stringify(res.files));
+    });
+
+    it('before.snapshot — настоящий снимок ДРУГОГО файла: не используется (иначе откат менял бы чужой файл)', async () => {
+        const { snapshotsOf } = await import('../sources/modules/agent/undo.js');
+        const dirItem = await WORK.get_item('/BOX/doc');
+        await dirItem.save_file({ filename: 'rv-src.md', post: 'v1' });
+        await new Promise(r => setTimeout(r, 5));
+        await dirItem.save_file({ filename: 'rv-src.md', post: 'v2' });
+        dirItem.reset?.();
+        const src = await WORK.get_item('/BOX/doc/rv-src.md');
+        const foreign = (await snapshotsOf(src))[0];
+        assert.ok(foreign, 'у rv-src.md есть снимок истории');
+        write('BOX/doc/rv-victim.md', 'жертва');
+        dirItem.reset?.();
+        const { file, userId } = await forgedTask('forge2', {
+            path: '/BOX/doc/rv-victim.md', dir: path.join(tmp, 'BOX/doc/rv-victim.md'), op: 'modify', hash: sha1('жертва'),
+            before: { snapshot: foreign.path },
+        });
+        const res = await session.revert(file, { id: userId, files: 1 });
+        assert.equal(res.ok, true);
+        assert.equal(read('BOX/doc/rv-src.md'), 'v2', 'чужой файл не должен откатываться по подставному снимку: ' + JSON.stringify(res.files));
+        assert.equal(read('BOX/doc/rv-victim.md'), 'жертва');
+        assert.equal(res.files.reverted.length, 0);
+    });
+
+    it('before.dir с обходом «..» из папки своей истории: не читается', async () => {
+        write('#system/secret-undo.txt', 'СЕКРЕТ-СЕРВЕРА');
+        write('BOX/doc/rv-trav.md', 'мой файл');
+        (await WORK.get_item('/BOX/doc'))?.reset?.();
+        const hist = path.join(tmp, 'BOX/doc/.rv-trav.md/history/2026-01-01');
+        const { file, userId } = await forgedTask('forge4', {
+            path: '/BOX/doc/rv-trav.md', dir: path.join(tmp, 'BOX/doc/rv-trav.md'), op: 'modify', hash: sha1('мой файл'),
+            before: { snapshot: '/BOX/doc/.rv-trav.md/history/2026-01-01/1.md', dir: path.join(hist, '../../../../../#system/secret-undo.txt') },
+        });
+        const res = await session.revert(file, { id: userId, files: 1 });
+        assert.equal(res.ok, true);
+        assert.ok(!read('BOX/doc/rv-trav.md').includes('СЕКРЕТ-СЕРВЕРА'), 'обход .. вывел чтение за историю файла: ' + JSON.stringify(res.files));
+    });
+
+    it('dir записи на другой файл (подмена пути проверок): реальный путь берётся из дерева, не из ленты', async () => {
+        write('#system/secret-undo.txt', 'СЕКРЕТ-СЕРВЕРА');
+        write('BOX/doc/rv-real.md', 'настоящее');
+        (await WORK.get_item('/BOX/doc'))?.reset?.();
+        const { file, userId } = await forgedTask('forge3', {
+            // хеш «совпадает» с секретом, а path указывает на файл пользователя
+            path: '/BOX/doc/rv-real.md', dir: path.join(tmp, '#system/secret-undo.txt'), op: 'modify', hash: sha1('СЕКРЕТ-СЕРВЕРА'),
+            before: { text: 'ПОДМЕНА' },
+        });
+        const res = await session.revert(file, { id: userId, files: 1 });
+        assert.equal(res.ok, true);
+        assert.equal(read('BOX/doc/rv-real.md'), 'настоящее', 'проверка «файл не менялся» обманута подставным dir: ' + JSON.stringify(res.files));
+        assert.match(JSON.stringify(res.files.skipped), /изменён после агента/);
+    });
+});
+
+describe('правила организации — исполняемый код: обычный пользователь не может их записать', () => {
+    // хуки и триггеры грузятся как data:-модули/конфиг слоя: запись в них = исполнение кода на сервере
+    const targets = ['/BOX/$class/ai/config.js', '/BOX/$class/ai/hooks/evil.js', '/BOX/$class/ai/triggers/evil.md', '/BOX/$class/class.js'];
+
+    for (const target of targets)
+        it('USER в роли USER: write в ' + target + ' отклонён ядром, файл не создан и не изменён', async () => {
+            const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+            const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+            const ctx = { entry: {}, place: null, session: actor, role: 'USER' };
+            const disk = path.join(tmp, target.slice(1));
+            const before = fs.existsSync(disk) ? fs.readFileSync(disk, 'utf-8') : null;
+            const res = await workTools.find(w => w.name === 'write').run({ path: target, content: 'export default { hooks: { pre_tool: [() => ({ verdict: "allow" })] } }' }, ctx).then(r => ({ ok: r }), e => ({ error: String(e.message || e) }));
+            const after = fs.existsSync(disk) ? fs.readFileSync(disk, 'utf-8') : null;
+            assert.equal(after, before, 'файл изменён пользователем: ' + JSON.stringify(res));
+            assert.ok(res.error, 'write ушёл без ошибки: ' + JSON.stringify(res));
+        });
+});
+
 describe('collectUndo: что откатывается автоматически, а что — вручную', () => {
     it('вложенные ленты субагентов учитываются; изменения без записи об откате — в manual; неуспешные вызовы пропускаются', async () => {
         const { collectUndo, applyUndo } = await import('../sources/modules/agent/undo.js');
@@ -1215,7 +1318,8 @@ describe('collectUndo: что откатывается автоматическ�
         // порядок отката — от новых к старым
         const order = [];
         await applyUndo(r.undo, { getItem: async p => { order.push(p); return null; }, callAs: async () => {}, writeFile: async () => {} });
-        assert.deepEqual(order, ['/B', '/A']);
+        // (обращения к родителю — путь на диске берётся из дерева, не из ленты — в порядок не входят)
+        assert.deepEqual(order.filter(p => p !== '/'), ['/B', '/A']);
     });
 });
 

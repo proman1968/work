@@ -394,6 +394,30 @@ describe('MCP: инструменты WORK с правами пользоват�
         assert.match(textOf(await c.call('history', { path: real })), /history/, 'снимки истории есть');
     });
 
+    it('роль токена выше реальных ролей пользователя (USER выпустил токен с ролью ADMIN) не даёт ничего сверх обычного токена', async () => {
+        const esc = await issueToken(ALICE, { role: 'ADMIN', label: 'повышение' });
+        try {
+            const plain = await connect(alice.token);
+            const high = await connect(esc.token);
+            // запись: файл ложится в ту же зону, что у обычного токена, а не в зону ADMIN
+            const wp = textOf(await plain.call('write', { path: '/BOX/mcp-cmp-plain.md', content: 'x' }));
+            const wh = textOf(await high.call('write', { path: '/BOX/mcp-cmp-high.md', content: 'x' }));
+            const zone = s => s.match(/(?:создан|перезаписан) (\S+)/)?.[1]?.replace(/mcp-cmp-\w+\.md/, '') ?? s;
+            assert.equal(zone(wh), zone(wp), 'зона записи отличается: ' + wp + ' ≠ ' + wh);
+            assert.ok(!/ADMIN/.test(wh), wh);
+            // чтение: то же, что обычному токену (в т.ч. отказ там, где отказ)
+            for (const path of ['/BOX/$class/class.js', '/BOX/doc/note.md', '/$server/class.js']) {
+                const a = await plain.call('read', { path });
+                const b = await high.call('read', { path });
+                assert.equal(b.result.isError, a.result.isError, 'read ' + path + ' с ролью ADMIN отличается от обычного токена');
+                assert.equal(textOf(b), textOf(a), 'read ' + path + ': содержимое отличается');
+            }
+        }
+        finally {
+            await revokeToken(ALICE, esc.id);
+        }
+    });
+
     it('политика: запись в код/систему (*.js) требует подтверждения; клиент без elicitation получает понятный отказ, файл не создан', async () => {
         const c = await connect(alice.token);
         const r = await c.call('write', { path: '/BOX/doc/danger.js', content: 'export default {}' });

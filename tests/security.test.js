@@ -288,6 +288,13 @@ describe('исходящие запросы (SSRF)', () => {
         for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.0.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1'])
             assert.equal(isPrivateAddress(ip), true, ip);
         assert.equal(isPrivateAddress('8.8.8.8'), false);
+        // редкие формы IPv6, которые тоже ведут во внутренние адреса: IPv4-совместимые (::/96), site-local (fec0::/10), Teredo (2001:0::/32)
+        for (const ip of ['::7f00:1', '::127.0.0.1', '::a00:1', 'fec0::1', 'feff::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001::1'])
+            assert.equal(isPrivateAddress(ip), true, ip);
+        // публичные IPv6 рядом не задеты
+        for (const ip of ['2606:4700:4700::1111', '2001:4860:4860::8888', '2a00:1450:4001:81b::200e'])
+            assert.equal(isPrivateAddress(ip), false, ip);
+        await assert.rejects(resolvePublicUrl('http://[::7f00:1]/'), /внутренняя сеть/);
         await assert.rejects(resolvePublicUrl('http://localhost/'), /внутренняя сеть/);
         await assert.rejects(resolvePublicUrl('file:///etc/passwd'), /http и https/);
     });
