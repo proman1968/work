@@ -132,6 +132,13 @@ export const connectTools = [
                     throw new Error('относительный url без подключения — укажи полный адрес');
                 href = base.replace(/\/+$/, '') + '/' + href.replace(/^\/+/, '');
             }
+            else if (args.connection) {
+                // авторизация подключения не покидает его адрес: абсолютный url — только origin подключения
+                const baseOrigin = base ? new URL(base).origin : null;
+                if (!baseOrigin || new URL(href).origin !== baseOrigin)
+                    throw new Error('запрос с connection — только на адрес подключения' + (baseOrigin ? ' (' + baseOrigin + ')' : '')
+                        + '; для другого адреса вызывай http_request без connection');
+            }
             const url = C.assertPublicUrl(href);
             for (const [k, v] of Object.entries(args.query || {}))
                 url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));

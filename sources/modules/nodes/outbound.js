@@ -18,6 +18,9 @@ export async function nodeFetch(node, req = {}) {
     if (!node?.origin || !node?.host_id)
         throw new Error('nodeFetch: у узла нет адреса или id');
     const url = new URL(String(req.path || '/').replace(/^\/*/, '/'), node.origin);
+    // `\\хост` и `//хост` в пути не уводят подписанный запрос с адреса узла
+    if (url.origin !== new URL(node.origin).origin)
+        throw new Error('nodeFetch: путь уводит с адреса узла');
     if (req.method)
         url.search = '?' + encodeURIComponent(req.method);
     for (const [k, v] of Object.entries(req.params || {}))

@@ -6,6 +6,7 @@ import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
 import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-node-name.js';
+import { isUpload } from './upload-mark.js';
 import { DEV_MODE } from '../host/config.js';
 
 /**
@@ -1484,6 +1485,9 @@ export class $folder extends $item{
         const path = dir + '/' + params.filename;
         assertInside(this.dir, path);
         if (params?.post?.path) {
+            // путь на диске доверяем только настоящей загрузке из формы (upload-mark.js): объект из JSON-тела не принимается
+            if (!isUpload(params.post))
+                throw new Error('save_file: файл принимается только из формы загрузки (multipart/form-data)');
             if (params?.post?.originalFilename) {
                 let isRenamed = true;
                 try {
@@ -1850,8 +1854,12 @@ async function readDataPost(post) {
     if (isPlainDataBody(post))
         return { ...post };
     let raw = '';
-    if (post?.path)
+    if (post?.path) {
+        // путь — только из формы загрузки (upload-mark.js); JSON-тело с path не читает файлы сервера
+        if (!isUpload(post))
+            throw new Error('save_file: файл данных принимается только из формы загрузки (multipart/form-data)');
         raw = await fsp.readFile(post.path, { encoding: 'utf-8' });
+    }
     else
         raw = dataPostText(post);
     if (!String(raw).trim())

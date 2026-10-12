@@ -94,7 +94,7 @@ export default {
      */
     async list_remote(params = {}) {
         const ai = params.$ai || this;
-        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
         const where = ai.short || ai.path || ai.id || '?';
         if (!base)
             return { error: 'list_remote: нет baseUrl у ' + where };
@@ -345,7 +345,7 @@ export default {
         const tag = String(params.model || ai.model || '').trim();
         if (!tag)
             throw new Error('generateImage: нет model');
-        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
         if (!base)
             throw new Error('generateImage: нет baseUrl у ' + (ai.short || ai.path || '?'));
         let origin;
@@ -456,7 +456,7 @@ export default {
 };
 
 function speechOrigin(params, ai, who) {
-    const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+    const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
     if (!base)
         throw new Error(who + ': нет baseUrl у ' + (ai.short || ai.path || '?'));
     try {

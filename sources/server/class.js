@@ -288,7 +288,8 @@ export class $class extends $folder{
             } break;
             case 'String': {
                 if (key === 'template')
-                    value = '`' + value + '`';
+                    // экранируем то, что исполняется в шаблонной строке: \ `
+                    value = '`' + String(value).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`';
                 else
                     value = JSON.stringify(value);
             } break;
@@ -298,7 +299,8 @@ export class $class extends $folder{
         }
         if (key){
            if(!this.validateVarName(key)){
-                key = '"'+key+'"'
+                // ключ с кавычками/кодом остаётся строкой (JSON.stringify экранирует)
+                key = JSON.stringify(key);
            }
            value = key + ': ' + value;
         }
@@ -2585,7 +2587,14 @@ export class $class extends $folder{
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
-        if (this.id === uid && params.session?.principal?.kind !== 'node') return true;
+        // цель записи с именем файла: у save_file проверяем фактический файл (folder + filename), не только папку
+        const rel = [params.folder, params.filename].filter(Boolean).join('/');
+        const target = rel && item.path ? item.path.replace(/\/+$/, '') + '/' + rel : item.path;
+        const protectedTarget = POLICY.isExecutablePath(target, this.path) || POLICY.isAgentControlPath(target, this.path);
+        // владелец кабинета пишет свои данные, но не системную часть: class.js/#… исполняются,
+        // ai/ (кроме личной памяти), hooks, triggers загружаются движком агента как код/инструкции
+        if (this.id === uid && params.session?.principal?.kind !== 'node' && !protectedTarget)
+            return true;
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
         if (this._isSystemItem(item))
@@ -2685,6 +2694,8 @@ export class $class extends $folder{
         const filename = params.filename;
         if (!filename)
             throw new Error('Не указано имя файла');
+        if (!/^[\p{L}\p{N}_.-]+$/u.test(filename) || filename.includes('..'))
+            throw new Error('Имя файла секрета: буквы, цифры, точка и дефис, без обхода каталогов');
         for (const path of [this._secretPath(filename), this._legacySecretPath(filename)]) {
             if (!path || !fs.existsSync(path))
                 continue;
@@ -2710,6 +2721,8 @@ export class $class extends $folder{
         await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         if (!params.filename)
             throw new Error('Не указано имя файла');
+        if (!/^[\p{L}\p{N}_.-]+$/u.test(params.filename) || params.filename.includes('..'))
+            throw new Error('Имя файла секрета: буквы, цифры, точка и дефис, без обхода каталогов');
         if (params.post == null)
             throw new Error('Не указано тело файла');
         if (!this.meta_folder)

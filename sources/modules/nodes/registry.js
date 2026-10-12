@@ -58,6 +58,21 @@ export async function findNode(hostId) {
     return (await listNodes()).find(n => n.host_id === id) || null;
 }
 
+/**
+ * Карточка узла извне: оставляем только ожидаемые типы (строки; роли — массив объектов со строковыми полями).
+ * Всё прочее (в т.ч. вложенные объекты в label) отбрасывается до сохранения в class.js узла.
+ */
+export function sanitizeCard(card) {
+    const str = v => typeof v === 'string' || typeof v === 'number' ? String(v) : '';
+    const roles = (Array.isArray(card?.roles) ? card.roles : [])
+        .filter(r => r && typeof r === 'object' && !Array.isArray(r))
+        .map(r => ({ id: str(r.id).slice(0, 64), label: str(r.label).slice(0, 200) }));
+    const peers = (Array.isArray(card?.peers) ? card.peers : [])
+        .filter(p => typeof p === 'string')
+        .map(p => p.slice(0, 300));
+    return { ...card, label: str(card?.label).slice(0, 200), roles, peers };
+}
+
 /** Получить карточку узла по адресу (только для ADMIN: адрес может быть в локальной сети). */
 export async function fetchCard(origin) {
     let url;
@@ -80,7 +95,7 @@ export async function fetchCard(origin) {
         throw new Error('Это не узел WORK (' + PROTOCOL + ')');
     card.fingerprint = fingerprint(card.publicKey);
     card.origin = url.origin;
-    return card;
+    return sanitizeCard(card);
 }
 
 function rolesFrom(card) {

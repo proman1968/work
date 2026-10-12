@@ -9,6 +9,7 @@ import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
+import { markUpload } from './upload-mark.js';
 
 const SHEET_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
 
@@ -157,7 +158,8 @@ export class $file extends $folder{
             throw new Error('Восстановить можно только файл из истории');
         let target_folder = this.parent.parent.parent;
         params.filename = target_folder.id.slice(1);
-        params.post = {path: this.dir};
+        // доверенный внутренний путь (снимок истории) — помечаем, как загрузку из формы (upload-mark.js)
+        params.post = markUpload({ path: this.dir });
         return target_folder.parent.save_file(params);
     }
     /**

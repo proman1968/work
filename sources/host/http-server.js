@@ -11,6 +11,7 @@ import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE, MAX_BODY_BYTES, M
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import * as GATEWAY from '../server/access/gateway.js';
+import { markUpload } from '../server/upload-mark.js';
 
 /** Активное содержимое из пользовательских зон (html/svg/xml/js) — в песочнице: нельзя исполнить на нашем домене. */
 const ACTIVE_TYPE = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)/i;
@@ -443,6 +444,12 @@ export function createRequestHandler() {
                                         params.message = String(fields.message[0]);
 
                                     params.post = {};
+
+                                    // помечаем объекты файлов формы: только им save_file доверяет post.path (upload-mark.js)
+                                    for (const list of [files?.file, files?.url, files?.message])
+                                        if (Array.isArray(list))
+                                            for (const f of list)
+                                                markUpload(f);
 
                                     if (files?.file) {
                                         params.post.files = files.file;

@@ -372,6 +372,29 @@ export function taskRole(file) {
     }
 }
 
+/** Владелец задачи по имени файла `<время>.<uid>.task` (как создаёт UI); null — имя не этого формата. */
+export function taskOwnerUid(file) {
+    const m = /(\d{10,16})\.([0-9A-F]{16})\.task$/i.exec(String(file?.id || file?.path || ''));
+    return m ? m[2].toUpperCase() : null;
+}
+
+/**
+ * Методы .task, меняющие ход работы (реплика, подтверждение, стоп, откат, настройки, подключение),
+ * — владельцу задачи или админу WORK. Чтение ленты — как обычно, по правам роли.
+ */
+async function assertTaskOwner(file, params) {
+    const owner = taskOwnerUid(file);
+    if (!owner)
+        return;
+    const uid = String(params?.session?.uid || '').toUpperCase();
+    if (uid === owner)
+        return;
+    // админ WORK может вмешиваться в любую задачу (роли корня; assertAccess на самом WORK всегда отказывает)
+    if (await WORK.roles?.({ session: params?.session }).then(r => r?.includes?.('ADMIN')).catch(() => false))
+        return;
+    throw new Error('Доступ запрещён: задача принадлежит ' + owner);
+}
+
 /** Запуск петли (фоном). Возвращает сразу; ход работы — событиями и сохранениями. */
 function start(s, session, file) {
     const body = s.body;
@@ -489,6 +512,7 @@ function applyOffline(body, reply) {
  */
 export async function prompt(file, params = {}) {
     params = argsOf(params);
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const session = params.session;
     const body = await getBody(file);
@@ -542,6 +566,7 @@ export async function prompt(file, params = {}) {
  * @returns {Promise<any>}
  */
 export async function message(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const body = await getBody(file);
     const text = String(params.prompt || '').trim();
@@ -596,6 +621,7 @@ function normAttachments(list) {
  * @returns {Promise<any>}
  */
 export async function approve(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const p = argsOf(params);
     const body = await getBody(file);
@@ -626,6 +652,7 @@ export async function approve(file, params = {}) {
  * @returns {Promise<any>}
  */
 export async function stop(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const body = await getBody(file);
     if (s.controller) {
@@ -659,6 +686,7 @@ export async function stop(file, params = {}) {
  */
 export async function revert(file, params = {}) {
     params = argsOf(params);
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const id = params.id ?? params.post?.id;
     if (!id)
@@ -724,6 +752,7 @@ function lastTodos(items) {
  * @returns {Promise<any>}
  */
 export async function connectStart(file, params = {}) {
+    await assertTaskOwner(file, params);
     const p = argsOf(params);
     const body = await getBody(file);
     const hit = findCall(body.items, p.call);
@@ -750,6 +779,7 @@ export async function connectStart(file, params = {}) {
  * @returns {Promise<any>}
  */
 export async function unqueue(file, params = {}) {
+    await assertTaskOwner(file, params);
     const p = argsOf(params);
     const s = stateOf(file);
     const body = await getBody(file);
@@ -767,6 +797,7 @@ export async function unqueue(file, params = {}) {
  * @returns {Promise<any>}
  */
 export async function configure(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const p = argsOf(params);
     const body = await getBody(file);
@@ -789,6 +820,7 @@ export async function configure(file, params = {}) {
  * @returns {Promise<any>}
  */
 export async function compact(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     if (s.running)
         return { ok: false, error: 'задача выполняется' };

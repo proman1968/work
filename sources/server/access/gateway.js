@@ -225,6 +225,8 @@ export async function authorize(item, name, level, params, ctx = {}) {
  * @param {object} [ctx] {transport: 'http'|'agent'|'node', request, post}
  */
 export async function invoke(item, name, params = {}, ctx = {}) {
+    if ('skipAccess' in params)
+        delete params.skipAccess;   // внутренний флаг ядра (query/read_link), извне не задаётся
     const member = resolveMember(item, name);
     if (!member) {
         if (name && name in (item || {}))
