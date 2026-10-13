@@ -461,6 +461,49 @@ describe('сеть WORK: узлы', () => {
         assert.ok(row, 'nonce не записан в БД — окно повтора после рестарта открыто');
     });
 
+    it('fetchCard: доверенный адрес (реестр) — LAN разрешена; недоверенный (peers чужих карточек) — частная сеть отрезана (F19)', async () => {
+        const { fetchCard } = await import('../sources/modules/nodes/registry.js');
+        // наш тестовый сервер — loopback: для реестрового адреса (LAN узлы легальны) — карточка читается
+        const card = await fetchCard(base, { trusted: true });
+        assert.equal(card.id, serverId);
+        assert.ok(card.publicKey);
+        // тот же адрес как недоверенный peer чужой карточки — SSRF отрезан
+        await assert.rejects(() => fetchCard(base), /внутренняя сеть|частной|недоступен/i);
+    });
+
+    it('fetchCard: бесконечное тело обрывается по потолку, а не копится в памяти (F19)', async () => {
+        const { fetchCard } = await import('../sources/modules/nodes/registry.js');
+        // сервер, который льёт карточку без конца и не закрывает соединение
+        const flood = http.createServer((_req, res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.write('{"protocol":"work-node/2","id":"' + 'A'.repeat(15) + '","publicKey":"K"');
+            const iv = setInterval(() => res.write('x'.repeat(64 * 1024)), 5);
+            res.on('close', () => clearInterval(iv)); // никогда не end()
+        });
+        await new Promise(r => flood.listen(0, '127.0.0.1', r));
+        try {
+            const t0 = Date.now();
+            // доверенный (реестровый) адрес: потолок CARD_MAX рвёт соединение быстро,
+            // а не ждёт таймаута с гигабайтами в памяти
+            await assert.rejects(
+                () => fetchCard('http://127.0.0.1:' + flood.address().port, { trusted: true }),
+                e => /размер|больш|size|allowed/i.test(String(e?.message || e)) && Date.now() - t0 < 9000,
+                'бесконечная карточка не оборвана по размеру');
+        }
+        finally {
+            flood.close();
+            flood.closeAllConnections?.();
+        }
+    });
+
+    it('networkGraph: реестровые узлы читаются (LAN легальна), peers чужих карточек — через щит (F19)', async () => {
+        const { networkGraph } = await import('../sources/modules/nodes/registry.js');
+        const g = await networkGraph({ depth: 2 });
+        const self = g.nodes.find(n => n.id === serverId && n.known);
+        assert.ok(self, 'узел SELF не попал в граф');
+        assert.equal(self.error, undefined, 'карточка реестрового узла не прочиталась: ' + self.error);
+    });
+
     it('роли только для пользователей узлу не выдаются', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const session = { uid: serverId, principal: { kind: 'node', id: serverId, roles: [] } };
