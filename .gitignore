@@ -8,13 +8,13 @@ node_modules/
 /#system/settings.json
 /#system/os.json
 /#system/lan/
-/services/AI/GigaChat/$service/#system/settings.json
 .env
 **/#secret/
+**/#system/email.json
 
 # Local user profiles (runtime data)
-users/*/
-!users/$users/
+USERS/*/
+!USERS/$users/
 
 # Runtime data (keep structure, ignore volatile content)
 **/logs/
