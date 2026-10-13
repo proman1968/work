@@ -116,11 +116,46 @@ function mcpRoots(opts = {}) {
 
 /** Remote MCP поверх Streamable HTTP: сессия кэшируется на сервис (сброс и повтор при потере),
  *  запросы сервера в SSE-потоке (roots/list → корни места задачи, остальное — честный отказ). */
+/** Потолки remote-MCP (F21): JSON-ответ, SSE-событие, тело ошибки (КБ/МБ; env — настройка/тесты). */
+const httpMax = () => Number(process.env.WORK_MCP_HTTP_MAX) || 32 * 1024 * 1024;
+const sseMax = () => Number(process.env.WORK_MCP_SSE_MAX) || 4 * 1024 * 1024;
+const MCP_ERR_MAX = 1024 * 1024;
+
+/**
+ * POST к remote-MCP (F21, final 8.14): редиректы запрещены — заголовки подключения
+ * (Authorization, Mcp-Session-Id) не уезжают на чужой origin вслед за 3xx.
+ */
+async function mcpPost(url, headers, body, timeoutMs) {
+    return fetch(url, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+}
+
+/** Тело ответа строкой, потоком с потолком max — гигантский ответ рвётся, а не копится. */
+async function readCapped(res, max) {
+    const dec = new TextDecoder();
+    let out = '', size = 0;
+    for await (const c of res.body) {
+        size += c.length;
+        if (size > max)
+            throw new Error('ответ MCP больше ' + Math.round(max / 1048576) + ' МБ');
+        out += dec.decode(c, { stream: true });
+    }
+    return out + dec.decode();
+}
+
 async function mcpHttpRpc(owner, method, params, opts = {}) {
     const cfg = owner?.mcp || {};
     const url = String(cfg.url || '').trim();
     if (!/^https?:\/\//i.test(url))
         return { error: 'mcp: плохой mcp.url: ' + url };
+    // F21: без учётных данных в адресе (они уехали бы с каждым запросом); ключи — headers
+    try {
+        const u = new URL(url);
+        if (u.username || u.password)
+            return { error: 'mcp.url с учётными данными в адресе — ключи задаются в headers (secret:ФАЙЛ)' };
+    }
+    catch {
+        return { error: 'mcp: плохой mcp.url: ' + url };
+    }
     const env = await mcpEnv(owner, cfg.headers);
     if (env.error)
         return env;
@@ -139,40 +174,26 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
             ? { jsonrpc: '2.0', id: msg.id, result: { roots } }
             : { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'not supported by work-mcp' } };
         try {
-            await fetch(url, {
-                method: 'POST',
-                headers: sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(15_000),
-            });
+            await mcpPost(url, sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers, JSON.stringify(body), 15_000);
         }
         catch { /* ответ серверу не критичен для нашего вызова */ }
     };
 
     const notify = async (m, sessionId) => {
         try {
-            await fetch(url, {
-                method: 'POST',
-                headers: sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
-                body: JSON.stringify({ jsonrpc: '2.0', method: m }),
-                signal: AbortSignal.timeout(10_000),
-            });
+            await mcpPost(url, sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers, JSON.stringify({ jsonrpc: '2.0', method: m }), 10_000);
         }
         catch { /* уведомление — не критично */ }
     };
 
     const call = async (m, p, sessionId, timeout = MCP_CALL_TIMEOUT) => {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
-            body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: m, params: p || {} }),
-            signal: AbortSignal.timeout(timeout),
-        });
+        const res = await mcpPost(url, sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
+            JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: m, params: p || {} }), timeout);
         if (res.status === 401 || res.status === 403)
             throw new Error('HTTP ' + res.status + ' — нужен ключ (secret:ФАЙЛ в headers)');
         if (!res.ok) {
             let text = '';
-            try { text = await res.text(); } catch { /* пусто */ }
+            try { text = await readCapped(res, MCP_ERR_MAX); } catch { /* пусто */ }
             let msg = null;
             try { msg = JSON.parse(text); } catch { /* не JSON */ }
             const e = new Error(msg?.error?.message ? String(msg.error.message) : 'HTTP ' + res.status);
@@ -181,7 +202,8 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
         }
         const sid = res.headers.get('mcp-session-id') || sessionId || null;
         if (!/event-stream/i.test(String(res.headers.get('content-type') || ''))) {
-            const msg = parseHttpRpc(await res.text());
+            // F21: ответ читается потоком с потолком — гигантский JSON не оседает в памяти
+            const msg = parseHttpRpc(await readCapped(res, httpMax()));
             if (!msg)
                 throw new Error('пустой ответ');
             if (msg.error)
@@ -193,6 +215,9 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
         let buf = '';
         for await (const chunk of res.body) {
             buf = (buf + dec.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
+            // F21: незавершённое SSE-событие сверх потолка — мусорный поток, не копим
+            if (buf.length > sseMax())
+                throw new Error('SSE-событие MCP больше ' + Math.round(sseMax() / 1024) + ' КБ');
             let i;
             while ((i = buf.indexOf('\n\n')) >= 0) {
                 const raw = buf.slice(0, i);
