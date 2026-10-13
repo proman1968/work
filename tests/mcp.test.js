@@ -156,7 +156,8 @@ describe('MCP: токены доступа', () => {
         assert.ok(!raw.includes(secret), 'секрет лежит открытым текстом');
         assert.equal(JSON.parse(raw).v, 2, 'файл зашифрован (secret-box)');
         const list = await listTokens(ALICE);
-        assert.deepEqual(Object.keys(list[0]).sort(), ['created', 'id', 'label', 'lastUsed', 'role']);
+        assert.deepEqual(Object.keys(list[0]).sort(), ['created', 'expired', 'expires', 'id', 'label', 'lastUsed', 'role']);
+        assert.ok(list[0].expires > Date.now(), 'срок жизни задан');
         assert.ok(!JSON.stringify(list).includes(secret));
         await revokeToken(ALICE, 'all');
     });
@@ -186,6 +187,24 @@ describe('MCP: токены доступа', () => {
         await revokeToken(ALICE, 'all');
         await assert.rejects(issueToken(ALICE, { role: 'admin; drop' }), /роль/);
         await assert.rejects(issueToken('../x', {}), /после входа/);
+    });
+
+    it('срок жизни: истёкший токен не проходит, в списке помечен истёкшим (8.2)', async () => {
+        const a = await issueToken(ALICE, { days: 1 });
+        assert.ok(await verifyToken(a.token));
+        assert.ok(a.expires > Date.now());
+        const realNow = Date.now;
+        try {
+            Date.now = () => realNow() + 2 * 864e5; // двое суток спустя
+            assert.equal(await verifyToken(a.token), null, 'просроченный токен прошёл проверку');
+            const list = await listTokens(ALICE);
+            assert.ok(list.some(x => x.id === a.id && x.expired === true), 'в списке не помечен истёкшим');
+        }
+        finally {
+            Date.now = realNow;
+        }
+        assert.ok(await verifyToken(a.token), 'до истечения — работает');
+        await revokeToken(ALICE, 'all');
     });
 
     it('файл токенов подменили под другого пользователя (AAD) — токены не читаются', async () => {
@@ -514,5 +533,24 @@ describe('MCP: подтверждение человека через elicitatio
         const events = await callSse(alice.token, c.sid, 'ls', { path: '/BOX' }, () => { throw new Error('вопросов быть не должно'); });
         assert.equal(events.length, 1);
         assert.match(events[0].result.content[0].text, /doc\//);
+    });
+
+    it('подтверждение человеком сбрасывает заражение сессии: следующее внешнее действие — без вопроса (8.2)', async () => {
+        const c = await connect(alice.token, { elicitation: {} });
+        // чужое содержимое → сессия заражена
+        await rpc(alice.token, 'tools/call', { name: 'read', arguments: { path: '/BOX/doc/mail.eml' } }, { sid: c.sid });
+        // внешний ход спрашивает, человек подтверждает → действие выполнено
+        const events = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт', to: [BOB] }, () => true);
+        assert.equal(events.at(-1).result.isError, false, JSON.stringify(events.at(-1)));
+        assert.ok(events.some(e => e.method === 'elicitation/create'), 'вопроса не было');
+        // заражение сброшено: тот же внешний ход в этой сессии — без вопроса
+        const events2 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 2', to: [BOB] }, () => { throw new Error('повторного вопроса быть не должно'); });
+        assert.equal(events2.length, 1, 'появился повторный вопрос: ' + JSON.stringify(events2));
+        assert.equal(events2[0].result.isError, false);
+        // новая порция чужого текста снова заражает
+        await rpc(alice.token, 'tools/call', { name: 'read', arguments: { path: '/BOX/doc/mail.eml' } }, { sid: c.sid });
+        const events3 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 3', to: [BOB] }, () => false);
+        assert.ok(events3.some(e => e.method === 'elicitation/create'), 'после нового чужого текста вопроса нет');
+        assert.equal(events3.at(-1).result.isError, true, 'отклонённый ход выполнился');
     });
 });

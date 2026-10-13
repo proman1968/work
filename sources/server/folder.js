@@ -1399,6 +1399,17 @@ export class $folder extends $item{
         }) || []
 
         logs = await Promise.all(logs);
+
+        // скачанные по URL — внешний источник (8.2): агент читает их как чужой текст
+        {
+            const urlCount = post?.urls?.length || 0;
+            if (urlCount) {
+                const { markExternal } = await import('./external-source.js');
+                for (let i = 0; i < urlCount && i < logs.length; i++)
+                    if (logs[i]?.path)
+                        markExternal(logs[i].path, 'web');
+            }
+        }
         if (params.ignore_save_logs)
             return logs;
 
@@ -1484,6 +1495,8 @@ export class $folder extends $item{
         // полный путь к файлу
         const path = dir + '/' + params.filename;
         assertInside(this.dir, path);
+        // файл из формы загрузки — внешний источник: агент будет читать его как чужой текст (external-source.js)
+        const fromUpload = !!params?.post?.path;
         if (params?.post?.path) {
             // путь на диске доверяем только настоящей загрузке из формы (upload-mark.js): объект из JSON-тела не принимается
             if (!isUpload(params.post))
@@ -1523,6 +1536,10 @@ export class $folder extends $item{
         const file = await holder._get_next_item(params.filename, FS.$file);
         file.reset();
         this.reset();
+        if (fromUpload) {
+            const { markExternal } = await import('./external-source.js');
+            markExternal(file.path, 'upload');
+        }
         globalThis.WORK_RAG?.invalidate?.(path);
         // Правка слоя обязана менять поведение без рестарта: сносим кэши сборки class.js
         if (params.filename === 'class.js')

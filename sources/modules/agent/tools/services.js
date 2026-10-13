@@ -7,6 +7,7 @@
  */
 import { log } from '../log.js';
 import { clip } from '../util.js';
+import { urlCarriesData } from '../taint.js';
 import { callAs } from './work.js';
 import { askEach } from '../system.js';
 
@@ -156,9 +157,10 @@ export const webTools = [
     },
     {
         name: 'web_fetch',
-        readonly: true,
+        planSafe: true,             // чтение: в «Плане» и «auto» — сразу; readonly нельзя: данные в адресе — см. outbound
+        outbound: urlCarriesData,   // адрес уносит данные контекста (длинные/текстовые параметры) — с подтверждения (8.2)
         untrusted: true,
-        description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url).',
+        description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url). Если в адресе есть данные (длинные или текстовые параметры) — попрошу подтверждение.',
         parameters: {
             type: 'object',
             properties: { url: { type: 'string', description: 'Полный http(s) URL' } },

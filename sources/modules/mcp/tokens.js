@@ -61,31 +61,35 @@ function checkUid(uid) {
 
 /**
  * Выпустить токен. Возвращает токен ОДИН раз.
- * @returns {Promise<{ token: string, id: string, role: string|null, label: string }>}
+ * @param {{ role?: string, label?: string, days?: number }} [o] days — срок жизни (по умолчанию 90 дней, 1…3650)
+ * @returns {Promise<{ token: string, id: string, role: string|null, label: string, expires: number }>}
  */
-export async function issueToken(uid, { role, label } = {}) {
+export async function issueToken(uid, { role, label, days } = {}) {
     uid = checkUid(uid);
     const r = role == null || role === '' ? null : String(role).toUpperCase();
     if (r && !ROLE_RE.test(r))
         throw new Error('роль: заглавные латинские буквы, цифры и _ (например USER)');
     const name = String(label || 'MCP-клиент').replace(/[\r\n]+/g, ' ').trim().slice(0, 60) || 'MCP-клиент';
+    const ttlDays = Math.min(3650, Math.max(1, Number(days) || 90));
     return exclusive(uid, async () => {
         const data = await load(uid);
         if (data.tokens.length >= MAX_TOKENS)
             throw new Error('не больше ' + MAX_TOKENS + ' токенов: отзовите ненужные');
         const secret = crypto.randomBytes(32).toString('base64url');
         const hash = sha(secret);
-        const rec = { id: hash.slice(0, 10), hash, role: r, label: name, created: Date.now(), lastUsed: null };
+        const rec = { id: hash.slice(0, 10), hash, role: r, label: name, created: Date.now(), lastUsed: null, expires: Date.now() + ttlDays * 864e5 };
         data.tokens.push(rec);
         await save(uid, data);
-        return { token: 'wmcp.' + uid + '.' + secret, id: rec.id, role: r, label: name };
+        return { token: 'wmcp.' + uid + '.' + secret, id: rec.id, role: r, label: name, expires: rec.expires };
     });
 }
 
-/** Список токенов пользователя без секретов и хешей. */
+/** Список токенов пользователя без секретов и хешей (просроченные — на месте, но не работают). */
 export async function listTokens(uid) {
     uid = checkUid(uid);
-    return (await load(uid)).tokens.map(({ id, role, label, created, lastUsed }) => ({ id, role, label, created, lastUsed }));
+    const now = Date.now();
+    return (await load(uid)).tokens.map(({ id, role, label, created, lastUsed, expires }) =>
+        ({ id, role, label, created, lastUsed, expires: expires || null, expired: !!(expires && expires < now) }));
 }
 
 /** Отозвать токен по id (или все: id = 'all'). @returns {Promise<number>} сколько отозвано */
@@ -121,6 +125,8 @@ export async function verifyToken(raw) {
     const hit = data.tokens.find(t => /^[0-9a-f]{64}$/.test(t.hash || '') && crypto.timingSafeEqual(Buffer.from(t.hash, 'hex'), hash));
     if (!hit)
         return null;
+    if (hit.expires && Date.now() > hit.expires)
+        return null; // срок жизни истёк — токен мёртв, как отозванный (причину не раскрываем)
     if (!hit.lastUsed || Date.now() - hit.lastUsed > TOUCH_MS)
         exclusive(uid, async () => {
             const fresh = await load(uid);

@@ -438,7 +438,12 @@ export async function handleMcp(request, response) {
                 sess.pending.set(id, r => {
                     clearTimeout(timer);
                     sess.pending.delete(id);
-                    resolve(r?.result?.action === 'accept' && r.result?.content?.approve === true);
+                    const approved = r?.result?.action === 'accept' && r.result?.content?.approve === true;
+                    // человек подтвердил действие и видел контекст — состояние сессии проверено (8.2):
+                    // заражение (бесконечные вопросы наружу) сбрасываем; новая порция чужого текста пометит снова
+                    if (approved)
+                        sess.taint.clear();
+                    resolve(approved);
                 });
                 sseSend(response, {
                     jsonrpc: '2.0', id, method: 'elicitation/create',

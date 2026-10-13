@@ -9,6 +9,7 @@
 import { log } from '../log.js';
 import * as C from '../connections.js';
 import { clip } from '../util.js';
+import { urlCarriesData } from '../taint.js';
 import { guardedRequest } from '../../../host/net-guard.js';
 import { assertPageUrl } from './browse.js';
 
@@ -90,8 +91,8 @@ export const connectTools = [
         name: 'http_request',
         risk: 'danger',
         untrusted: true,
-        outbound: args => !READ.has(String(args?.method || 'GET').toUpperCase()),
-        description: 'Запрос к API внешнего сервиса. connection — подключённый аккаунт (авторизация подставится сама), url — полный или путь от base_url подключения. Пример Google Calendar: POST /calendar/v3/calendars/primary/events. Любое изменение (не GET) пользователь подтверждает явно — опиши в reason, что именно сделаешь.',
+        outbound: args => !READ.has(String(args?.method || 'GET').toUpperCase()) || urlCarriesData(args),
+        description: 'Запрос к API внешнего сервиса. connection — подключённый аккаунт (авторизация подставится сама), url — полный или путь от base_url подключения. Пример Google Calendar: POST /calendar/v3/calendars/primary/events. Любое изменение (не GET) пользователь подтверждает явно — опиши в reason, что именно сделаешь. GET с данными в адресе (длинные или текстовые параметры) — тоже с подтверждения.',
         parameters: {
             type: 'object',
             properties: {
@@ -107,8 +108,12 @@ export const connectTools = [
         },
         permission(args) {
             const m = String(args?.method || 'GET').toUpperCase();
-            if (READ.has(m))
+            if (READ.has(m)) {
+                // чтение, но адрес уносит данные контекста — человек должен видеть, что уходит (8.2)
+                if (urlCarriesData(args))
+                    return { verdict: 'ask', noAlways: true, reason: 'в адресе запроса уходят данные (параметры URL): ' + String(args?.url || '') };
                 return { verdict: 'allow' };
+            }
             return { verdict: 'ask', noAlways: true, reason: (args?.reason ? args.reason + ' — ' : '') + 'действие во внешнем сервисе: ' + m + ' ' + (args?.url || '') };
         },
         async run(args, ctx) {

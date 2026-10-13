@@ -191,6 +191,23 @@ it('инструменты: видны всем при Docker, скрыты бе
     assert.ok(!(await env2.makeTools()).some(t => t.name.startsWith('sandbox_') || t.name.startsWith('computer_')));
 });
 
+it('exec с включённым интернетом помечает вывод чужим (untrusted); без сети — свой (8.2)', async () => {
+    const docker = fakeDocker();
+    setDockerForTests(docker);
+    const exec = sandboxTools.find(t => t.name === 'sandbox_exec');
+    const ctx = { session: { uid: 'user1' }, host: { mode: 'auto', allowed: new Set() }, signal: new AbortController().signal };
+    await exec.run({ command: 'echo ok' }, ctx); // создаёт компьютер
+    const clean = {};
+    await exec.run({ command: 'echo ok' }, { ...ctx, entry: clean });
+    assert.equal(clean.untrusted, undefined, 'без сети вывод помечен чужим');
+    const pc = await findComputer(docker, 'user1', 'main');
+    await setNetwork(docker, pc.id, true, loadSandboxConfig());
+    const tainted = {};
+    await exec.run({ command: 'echo ok' }, { ...ctx, entry: tainted });
+    assert.equal(tainted.untrusted, true, 'с включённым интернетом вывод не помечен чужим');
+    resetDockerForTests(); resetRegistryForTests();
+});
+
 it('разрешения: exec без вопросов в auto, запрет в plan; сеть — всегда вопрос', async () => {
     setDockerForTests(fakeDocker());
     const exec = sandboxTools.find(t => t.name === 'sandbox_exec');

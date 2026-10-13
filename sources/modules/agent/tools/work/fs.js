@@ -64,6 +64,12 @@ export const read = {
                 // письмо — текст чужого автора: в контексте оборачивается в <untrusted> (taint.js)
                 if (/\.eml$/i.test(String(item.path || '')))
                     ctx.entry.untrusted = true;
+                else {
+                    // файл из формы загрузки или скачивания по URL — внешний источник (external-source.js)
+                    const { externalSourceOf } = await import('../../../../server/external-source.js');
+                    if (await externalSourceOf(item.path))
+                        ctx.entry.untrusted = true;
+                }
             }
             if (isContainer(item))
                 return describeClass(item, ctx);
@@ -152,6 +158,11 @@ export const write = {
             const pre = await beforeWrite(existing);
             const log = await writeFile(args.path, args.content, ctx);
             const real = realPathOf(log, absPath(args.path, ctx));
+            // файл целиком перезаписан своим текстом — внешний источник снимается
+            {
+                const { unmarkExternal } = await import('../../../../server/external-source.js');
+                unmarkExternal(real);
+            }
             if (ctx.entry) {
                 ctx.entry.path = real;
                 ctx.entry.snapshot = log?.logFullPath || log?.path || undefined;

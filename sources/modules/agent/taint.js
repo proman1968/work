@@ -73,3 +73,27 @@ export function isOutbound(tool, args, ctx) {
     }
     return o === true;
 }
+
+/**
+ * Уносит ли адрес читающего запроса данные контекста (8.2): GET/web_fetch формально «чтение»,
+ * но длинная или не-ASCII строка параметров — это текст пользователя/чужого файла, уходящий на сервер.
+ * Эвристика: суммарные параметры длиннее 80 символов или содержат не-ASCII (после декодирования).
+ * @param {{ url?: string, query?: object }} args
+ */
+export function urlCarriesData(args) {
+    const parts = [];
+    try {
+        const u = new URL(String(args?.url || ''), 'http://work.invalid');
+        for (const [k, v] of u.searchParams)
+            parts.push([k, v]);
+    }
+    catch { /* не URL — решают другие проверки */ }
+    for (const [k, v] of Object.entries(args?.query || {}))
+        parts.push([String(k), typeof v === 'object' ? JSON.stringify(v) : String(v)]);
+    if (!parts.length)
+        return false;
+    const text = parts.map(([k, v]) => k + '=' + v).join('&');
+    if (text.length > 80)
+        return true;
+    return parts.some(([, v]) => /\P{ASCII}/u.test(v));
+}

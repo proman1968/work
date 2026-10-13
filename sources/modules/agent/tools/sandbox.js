@@ -168,6 +168,13 @@ export const sandboxTools = [
                 throw new Error('нужна команда');
             const { cfg, docker, pc } = await useComputer(args, ctx);
             const wd = args?.workdir ? assertSandboxPath(args.workdir, cfg.workdir) : (cfg.workdir || '/workspace');
+            // с включённым интернетом вывод команды — чужой текст (сайты): помечаем <untrusted> (8.2)
+            try {
+                const st = await statusOf(docker, pc.id);
+                if (st?.networks?.includes(cfg.network?.egressName || 'work-egress') && ctx.entry)
+                    ctx.entry.untrusted = true;
+            }
+            catch (e) { log.debug('sandbox.exec.net', e); /* статуса нет — не помечаем */ }
             const r = await execCommand(docker, pc.id, cmd, {
                 workdir: wd,
                 timeoutSec: Math.min(600, Math.max(1, Number(args?.timeout) || Number(cfg.execTimeoutSec) || 120)),

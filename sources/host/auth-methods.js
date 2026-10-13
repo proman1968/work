@@ -271,9 +271,9 @@ export const authMethods = {
      */
     async mcp_token_create(params = {}) {
         const uid = mcpUser(params);
-        const { role, label } = params.post || {};
+        const { role, label, days } = params.post || {};
         const { issueToken } = await import('../modules/mcp/tokens.js');
-        const rec = await issueToken(uid, { role, label });
+        const rec = await issueToken(uid, { role, label, days });
         audit('mcp_token', { action: 'create', id: rec.id, role: rec.role, params });
         return { ...rec, endpoint: '/mcp' };
     },
