@@ -12,7 +12,7 @@ import { parseCidr, allowedCidr } from '../sources/modules/lan/subnet.js';
 import { lanRequest, resolveHost } from '../sources/modules/lan/net.js';
 import { scan, probe } from '../sources/modules/lan/scan.js';
 import { decodeIpp, ippRequest } from '../sources/modules/lan/ipp.js';
-import { parseDns, dnsCandidates, parseAnnouncement } from '../sources/modules/lan/discovery.js';
+import { parseDns, dnsCandidates, parseAnnouncement, announcementUrlOk } from '../sources/modules/lan/discovery.js';
 import { execute } from '../sources/modules/lan/connectors.js';
 import { register } from '../sources/modules/lan/register.js';
 import * as store from '../sources/modules/lan/store.js';
@@ -164,4 +164,56 @@ it('IPP печать проверяет доступ к документу и MI
     assert.equal(printCount, 1);
     await assert.rejects(execute(service, 'print', { session: { uid: 'outsider' }, path: '/TARGET/$class/USER/doc.pdf' }), /Доступ запрещён/);
     assert.equal(printCount, 1);
+});
+
+// ── F27 (final 8.20): объявления не водят по сети, чужой текст урезается ────
+
+it('F27: адрес из объявления (SSDP Location / XAddrs) — только само устройство или IP в разрешённых', () => {
+    const permitted = ip => ip.startsWith('127.');
+    // само устройство — ок
+    assert.equal(announcementUrlOk('http://127.0.0.7:8080/desc.xml', '127.0.0.7', permitted), true);
+    // другой IP в разрешённых подсетях — ок
+    assert.equal(announcementUrlOk('http://127.0.0.9:80/desc.xml', '127.0.0.7', permitted), true);
+    // IP вне разрешённых — мимо
+    assert.equal(announcementUrlOk('http://192.168.1.5:80/desc.xml', '127.0.0.7', permitted), false);
+    // DNS-имя из чужого заголовка — мимо (SSRF через Location)
+    assert.equal(announcementUrlOk('http://printer.example.com:8080/x', '127.0.0.7', permitted), false);
+    assert.equal(announcementUrlOk('http://169.254.169.254/latest', '127.0.0.7', permitted), false);
+    // не-http и мусор — мимо
+    assert.equal(announcementUrlOk('ftp://127.0.0.7/x', '127.0.0.7', permitted), false);
+    assert.equal(announcementUrlOk('не адрес', '127.0.0.7', permitted), false);
+    // IPv6-устройство (само устройство)
+    assert.equal(announcementUrlOk('http://[::1]:80/x', '::1', () => true), true);
+    // проводка: discover обязан фильтровать адреса из объявлений (файл читаем — UDP в тесте не подняешь)
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, '../sources/modules/lan/discovery.js'), 'utf8');
+    assert.match(src, /announcementUrlOk\(c\.url, c\.host, permitted\)/, 'discover не фильтрует адреса из объявлений');
+});
+
+it('F27: склад находок урезает чужой текст (объявления, возможности, имена)', () => {
+    const long = 'X'.repeat(5000);
+    const fresh = store.merge([{
+        host: '127.0.0.42', port: 80, kind: 'scanner', url: 'http://127.0.0.42/eSCL/',
+        label: 'Д' + 'л'.repeat(500),
+        info: { announcement: long, capabilities: long, ok: 'короткое' },
+    }]);
+    assert.equal(fresh, 1);
+    const saved = store.load();
+    const key = Object.keys(saved).find(k => k.includes('127.0.0.42'));
+    assert.ok(key, 'находка не сохранена');
+    const c = saved[key];
+    assert.ok(c.label.length <= 200, 'имя устройства не урезано: ' + c.label.length);
+    assert.ok(c.info.announcement.length <= 402, 'объявление не урезано: ' + c.info.announcement.length);
+    assert.ok(c.info.capabilities.length <= 402, 'возможности не урезаны');
+    assert.equal(c.info.ok, 'короткое', 'короткое поле искажено');
+    assert.ok(c.info.announcement.endsWith('…'), 'нет пометки об обрезке');
+    store.clear();
+});
+
+it('F27: net_discover и net_candidates помечены untrusted — объявления это чужой текст', async () => {
+    const { netTools } = await import('../sources/modules/agent/tools/net.js');
+    for (const name of ['net_discover', 'net_candidates'])
+        assert.equal(netTools.find(t => t.name === name)?.untrusted, true, name + ' не помечен untrusted');
+    // свои данные (net_info о сервере) — не помечены
+    assert.equal(netTools.find(t => t.name === 'net_info')?.untrusted, undefined);
+    assert.equal(netTools.find(t => t.name === 'net_scan')?.untrusted, undefined, 'скан портов — адреса, не чужой текст');
 });

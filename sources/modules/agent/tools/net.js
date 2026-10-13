@@ -22,7 +22,8 @@ export const netTools = [
             return { hostname: os.hostname(), interfaces: os.networkInterfaces(), dns: dns.getServers(), subnets: localNets(), configured: loadConfig().subnets, info: info.stdout || info.stderr,
                 neighbors: neighbors?.stdout || neighbors?.stderr, routes: routes?.stdout || routes?.stderr };
         } },
-    { name: 'net_discover', readonly: true, concurrent: false, description: 'Обнаружить устройства через mDNS/DNS-SD, SSDP и WS-Discovery (поисковые multicast-запросы без сканирования портов)',
+    // F27: объявления устройств (mDNS TXT, SSDP XML, имена) — чужой текст: <untrusted> + заражение
+    { name: 'net_discover', readonly: true, untrusted: true, concurrent: false, description: 'Обнаружить устройства через mDNS/DNS-SD, SSDP и WS-Discovery (поисковые multicast-запросы без сканирования портов); имена и описания — со слов самих устройств',
         parameters: schema({ duration: { type: 'integer', description: 'Окно ответов, мс (500–10000)' } }),
         async run(args, ctx) { const res = await discover(loadConfig(), { ...args, signal: ctx.signal }); candidates.merge(res.candidates); return res; } },
     { name: 'net_scan', permission: askEach(a => 'TCP-проверка локальной сети ' + a.cidr + ' (' + (a.profile || 'common') + ')'),
@@ -35,7 +36,7 @@ export const netTools = [
     { name: 'net_http', readonly: true, untrusted: true, description: 'GET к устройству в разрешённой локальной сети (до 2 МБ, редиректы не выполняются)',
         parameters: schema({ url: { type: 'string' } }, ['url']),
         async run(args, ctx) { const res = await lanRequest(args.url, loadConfig(), { signal: ctx.signal }); return { status: res.status, headers: res.headers, text: res.body.toString('utf8').slice(0, 20000) }; } },
-    { name: 'net_candidates', readonly: true, description: 'Найденные устройства и сервисы: id для net_register, адреса, предполагаемый/подтверждённый тип и способ обнаружения',
+    { name: 'net_candidates', readonly: true, untrusted: true, description: 'Найденные устройства и сервисы: id для net_register, адреса, предполагаемый/подтверждённый тип и способ обнаружения (имена — со слов устройств)',
         parameters: schema({ kind: { type: 'string' }, limit: { type: 'integer' } }),
         async run(args) { return Object.values(candidates.load()).filter(c => !args.kind || c.kind === args.kind).sort((a, b) => b.seen - a.seen).slice(0, Math.min(500, Math.max(1, Number(args.limit) || 100))); } },
     { name: 'net_register', permission: askEach(a => 'Зарегистрировать LAN-сервис в WORK: ' + (a.name || a.id)),
