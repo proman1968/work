@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseCookies } from '../../host/http-server.js';
+import { sameOrigin } from '../../host/websocket.js';
 import { $server } from '../../server/server.js';
 import { createDemuxStream } from './stream.js';
 import { getDocker } from './driver.js';
@@ -224,6 +225,9 @@ export async function handleComputerHttp(req, res, url, readBody) {
         return true;
     }
     if (m[2] === '/takeover' && req.method === 'POST') {
+        // F24: смена управления экраном — только со своей страницы (чужой origin — отказ)
+        if (!sameOrigin(req))
+            return respondJson(res, 403, { error: 'чужой origin' });
         let body = {};
         try {
             body = JSON.parse(String(await readBody(req, 4096)) || '{}');
