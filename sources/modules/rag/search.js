@@ -5,7 +5,7 @@
  * Одинаковое содержимое (снимки, копии записей лент) сворачивается: чанк один на hash,
  * он приписывается ближайшему видимому документу.
  */
-import { CONFIG } from './config.js';
+import { CONFIG, queryInput } from './config.js';
 import * as store from './store.js';
 import { embed } from './embedder.js';
 import { buildContexts, scopeDocs, feedDocs, layerWeight } from './scope.js';
@@ -95,7 +95,7 @@ export async function search(point, params = {}) {
     if (!byHash.size)
         return { query, results: [], contexts: summary, pending: pending() };
 
-    const [qvec] = await embed([query]);
+    const [qvec] = await embed([queryInput(query)]);
     const vec = [];
     for (const hash of byHash.keys()) {
         for (const { id, vec: v } of store.vectorsOf(hash)) {

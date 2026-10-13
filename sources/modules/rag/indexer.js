@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { CONFIG, contentVersion } from './config.js';
+import { CONFIG, contentVersion, docInput } from './config.js';
 import * as store from './store.js';
 import { chunkText } from './chunker.js';
 import { embedAll } from './embedder.js';
@@ -143,7 +143,7 @@ export async function indexPath(p, { force = false } = {}) {
     const hash = hashOf(kind, doc.text);
     if (!store.hasContent(hash)) {
         const chunks = chunkText(doc.text);
-        const inputs = chunks.map(c => doc.title + (c.heading ? ' › ' + c.heading : '') + '\n' + c.text);
+        const inputs = chunks.map(c => docInput(doc.title + (c.heading ? ' › ' + c.heading : ''), c.text));
         const vecs = await embedAll(inputs);
         store.putContent(hash, chunks, vecs);
     }

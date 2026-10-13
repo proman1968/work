@@ -42,7 +42,7 @@ export function embed(texts) {
     const id = ++seq;
     return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        worker.postMessage({ id, texts, model: CONFIG.model });
+        worker.postMessage({ id, texts, model: CONFIG.model, dtype: CONFIG.dtype });
     });
 }
 

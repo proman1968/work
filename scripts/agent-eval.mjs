@@ -23,6 +23,8 @@ const keep = args.includes('--keep');
 
 process.env.WORK_TEST ??= '1';
 process.env.WORK_AUDIT = '0';
+// общий кэш моделей эмбеддингов между прогонами (иначе каждый прогон качал бы сотни МБ)
+process.env.WORK_RAG_CACHE ??= path.join(os.tmpdir(), 'opencode', 'work-hf-cache');
 
 const SKIP = /[\\/](node_modules|history|logs|\.RAG|\.index)([\\/]|$)/;
 
