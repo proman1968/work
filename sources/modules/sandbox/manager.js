@@ -19,11 +19,17 @@ const registry = new Map();
 const control = new Map();
 /** Сериализация операций дисплея: id → цепочка промисов. */
 const displayLocks = new Map();
+/** Сериализация создания контейнеров (квоты maxPerUser/maxRunning без гонки). */
+let createChain = Promise.resolve();
+/** Подмена iptables для тестов (see setIptablesForTests). */
+let iptablesForTests = null;
 export function resetRegistryForTests() {
     registry.clear();
     control.clear();
     displayLocks.clear();
     netEnabled.clear();
+    iptablesForTests = null;
+    createChain = Promise.resolve();
 }
 function touch(owner, name, id) {
     registry.set(owner + '/' + name, { id, lastUsed: Date.now() });
@@ -119,10 +125,11 @@ export function buildCreateOptions(owner, name, cfg) {
             Env: ['DEBIAN_FRONTEND=noninteractive', 'WORK_PC=1'],
             Labels: { [LABEL]: '1', 'work.owner': String(owner).slice(0, 128), 'work.name': name },
             HostConfig: {
-                // Изолированная внутренняя сеть (без внешнего маршрута). Контейнер на NetworkMode:none
+                // Изолированная внутренняя сеть БЕЗ внешнего маршрута — своя на владельца (F13:
+                // контейнеры разных пользователей друг друга не видят). Контейнер на NetworkMode:none
                 // Docker вообще запрещает цеплять к сетям — поэтому изоляция через Internal:true,
                 // а интернет — горячей заменой сети (setNetwork), а не подключением второй.
-                NetworkMode: sandboxNetName(cfg),
+                NetworkMode: sandboxNetName(cfg, owner),
                 Memory: Math.max(64, Number(lim.memoryMb) || 1024) * 1024 * 1024,
                 NanoCpus: Math.max(1, Math.round((Number(lim.cpus) || 1) * 1e9)),
                 PidsLimit: Math.max(32, Number(lim.pids) || 256),
@@ -138,18 +145,119 @@ export function buildCreateOptions(owner, name, cfg) {
     };
 }
 
-/** Имя изолированной внутренней сети. */
-export function sandboxNetName(cfg) {
-    return cfg.network?.sandboxName || 'work-sandbox';
+/** Имя изолированной внутренней сети (F13: своя на владельца — чужие контейнеры не видны). */
+export function sandboxNetName(cfg, owner) {
+    const base = cfg.network?.sandboxName || 'work-sandbox';
+    return owner ? base + '-' + slugOwner(owner) : base;
 }
 
-/** Изолированная сеть (Internal — без внешнего маршрута), создать при отсутствии. */
-export async function ensureIsolatedNetwork(docker, cfg = loadSandboxConfig()) {
-    const name = sandboxNetName(cfg);
+/** Изолированная сеть владельца (Internal — без внешнего маршрута), создать при отсутствии. */
+export async function ensureIsolatedNetwork(docker, cfg = loadSandboxConfig(), owner = null) {
+    const name = sandboxNetName(cfg, owner);
     const nets = await docker.listNetworks({ filters: JSON.stringify({ name: [name] }) }).catch(() => []);
     if (!(nets || []).some(n => n.Name === name))
         await docker.createNetwork({ Name: name, Labels: { [LABEL]: '1' }, Internal: true, CheckDuplicate: true }).catch(e => { throw friendly(e); });
     return name;
+}
+
+/** Владелец контейнера по id из реестра (для setNetwork без явного владельца). */
+function ownerOfId(id) {
+    for (const [key, v] of registry)
+        if (v.id === id)
+            return key.split('/')[0];
+    return 'shared';
+}
+
+/**
+ * Egress-фильтр (F13): выход в интернет — только в интернет. Частные адреса (LAN хоста,
+ * соседние docker-сети, link-local/метаданные облаков) из egress-моста не отвечают.
+ * Правила живут в DOCKER-USER (цепочка Docker для внешних политик), применяются идемпотентно.
+ */
+const PRIVATE_CIDRS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '224.0.0.0/4'];
+
+/** Правила фильтра для egress-моста (чистая функция — покрыта тестами). */
+export function buildEgressRules(bridge) {
+    const b = String(bridge || '').replace(/[^\w-]/g, '');
+    return PRIVATE_CIDRS.map(cidr => ({ bridge: b, cidr }));
+}
+
+/** Подменить исполнение iptables в тестах: fn(rules) → Promise. */
+export function setIptablesForTests(fn) {
+    iptablesForTests = fn;
+}
+
+/** Имя bridge-интерфейса egress-сети (br-<первые 12 символов id сети>). */
+async function egressBridgeName(docker, egress) {
+    const info = await docker.getNetwork(egress).inspect().catch(() => null);
+    const id = String(info?.Id || egress).replace(/[^0-9a-f]/gi, '');
+    return 'br-' + (id.slice(0, 12) || 'egress');
+}
+
+/** Применить правила: привилегированный контейнер в net:host хоста Docker
+ *  (на рабочей станции с Docker Desktop «хост» — ВМ Docker; на сервере — сам сервер).
+ *  Образ обязан содержать iptables (work-computer содержит). */
+async function applyEgressRules(docker, cfg, rules) {
+    if (iptablesForTests)
+        return iptablesForTests(rules);
+    const script = rules.map(r =>
+        `iptables -C DOCKER-USER -i ${r.bridge} -d ${r.cidr} -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -i ${r.bridge} -d ${r.cidr} -j DROP`).join('; ');
+    // без LABEL: хелпер не должен считаться в квотах и подметаться как «компьютер»
+    const helper = await docker.createContainer({
+        Image: cfg.image, Cmd: ['sh', '-c', script],
+        HostConfig: { Privileged: true, NetworkMode: 'host', AutoRemove: false },
+    });
+    const hid = helper.id || helper.Id;
+    let last = null;
+    for (let i = 0; i < 40; i++) {
+        const insp = await docker.getContainer(hid).inspect().catch(() => null);
+        last = insp;
+        if (!insp || !insp.State?.Running) {
+            const code = Number(insp?.State?.ExitCode ?? 0);
+            await docker.getContainer(hid).remove({ Force: true }).catch(() => {});
+            if (code !== 0)
+                throw new Error('iptables в хелпере завершился с кодом ' + code + ' (в образе ' + cfg.image + ' нет iptables?)');
+            return;
+        }
+        await new Promise(r => setTimeout(r, 250));
+    }
+    await docker.getContainer(hid).remove({ Force: true }).catch(() => {});
+    throw new Error('хелпер iptables не завершился: ' + JSON.stringify(last?.State || {}).slice(0, 120));
+}
+
+/** Установить фильтр egress. Отказ = не включать интернет (fail-closed: песочница остаётся изолированной). */
+export async function ensureEgressFilter(docker, cfg = loadSandboxConfig()) {
+    const egress = cfg.network?.egressName || 'work-egress';
+    const bridge = await egressBridgeName(docker, egress);
+    const rules = buildEgressRules(bridge);
+    try {
+        await applyEgressRules(docker, cfg, rules);
+    }
+    catch (e) {
+        throw new Error('не удалось ограничить выход в интернет (фильтр частных сетей не установлен): '
+            + String(e?.message || e).slice(0, 200) + '. Интернет не включён — песочница осталась изолированной');
+    }
+    return { bridge, rules: rules.length };
+}
+
+/** Мягкая квота рабочей папки (F13): du при создании/старте и включении сети.
+ *  Не жёсткая: между проверками записать сверх лимита можно (см. rules/threats.md). */
+export async function checkVolumeQuota(docker, id, cfg = loadSandboxConfig()) {
+    const limitMb = Number(cfg.limits?.volumeMb) || 10_240;
+    const r = await execRaw(docker, id, {
+        cmd: ['sh', '-c', 'du -sm "$1" 2>/dev/null | cut -f1', 'sh', cfg.workdir || '/workspace'],
+        timeoutSec: 30, maxBytes: 100,
+    }).catch(() => null);
+    const mb = Number(String(r?.stdout || '').trim());
+    if (r && r.code === 0 && Number.isFinite(mb) && mb > limitMb)
+        throw new Error('рабочая папка компьютера ' + mb + ' МБ превышает лимит ' + limitMb + ' МБ (limits.volumeMb) — почистите ' + (cfg.workdir || '/workspace') + ' или поднимите лимит');
+}
+
+/** Сериализовать создание (секция «проверка квот → create → start»): параллельные ensure
+ *  не проходят лимит вдвоём (F13: гонка квот). */
+function withCreateLock(fn) {
+    const job = createChain.catch(() => {}).then(fn);
+    createChain = job.catch(() => {});
+    return job;
 }
 
 /** Починить права на рабочей папке: том мог быть создан другим образом (root-владелец). */
@@ -267,54 +375,60 @@ export async function ensureComputer(docker, owner, name, cfg = loadSandboxConfi
         const insp = await c.inspect().catch(() => null);
         if (insp && !insp.State?.Running) {
             await c.start().catch(e => { throw friendly(e); });
+            await checkVolumeQuota(docker, found.id, cfg);
             return { id: found.id, name, state: 'running', created: false, image: cfg.image, started: true };
         }
-        if (insp)
+        if (insp) {
+            await checkVolumeQuota(docker, found.id, cfg);
             return { id: found.id, name, state: 'running', created: false, image: cfg.image };
+        }
         registry.delete(owner + '/' + name);
     }
-    // квоты
-    const all = await docker.listContainers({ all: true, filters: labelFilters() }).catch(e => { throw friendly(e); });
-    const running = (all || []).filter(c => c.State === 'running');
-    if (running.length >= (Number(cfg.maxRunning) || 4))
-        throw new Error('достигнут общий лимит запущенных компьютеров (' + cfg.maxRunning + ') — остановите чужой или попросите админа');
-    const mine = (all || []).filter(c => c.Labels?.['work.owner'] === owner);
-    if (mine.length >= (Number(cfg.maxPerUser) || 2))
-        throw new Error('у вас уже ' + mine.length + ' компьютер(а,ов) (лимит maxPerUser:' + cfg.maxPerUser + ')');
-    // образ, том, сети, создание
-    try {
-        await pullImage(docker, cfg.image);
-    }
-    catch (e) {
-        throw new Error('образ «' + cfg.image + '» недоступен: ' + String(e?.message || e).slice(0, 200)
-            + (cfg.image.startsWith('work-') ? ' — соберите локально: docker build -t ' + cfg.image + ' sources/modules/sandbox/images/work-computer' : ' — проверьте сеть Docker'));
-    }
-    await ensureIsolatedNetwork(docker, cfg);
-    const { volume, options } = buildCreateOptions(owner, name, cfg);
-    await docker.createVolume({ Name: volume, Labels: { [LABEL]: '1' } }).catch(e => {
-        if (!/exists|conflict|409/i.test(String(e?.message || e)))
+    // секция квот и создания — строго по очереди (F13: гонка квот)
+    return withCreateLock(async () => {
+        // квоты
+        const all = await docker.listContainers({ all: true, filters: labelFilters() }).catch(e => { throw friendly(e); });
+        const running = (all || []).filter(c => c.State === 'running');
+        if (running.length >= (Number(cfg.maxRunning) || 4))
+            throw new Error('достигнут общий лимит запущенных компьютеров (' + cfg.maxRunning + ') — остановите чужой или попросите админа');
+        const mine = (all || []).filter(c => c.Labels?.['work.owner'] === owner);
+        if (mine.length >= (Number(cfg.maxPerUser) || 2))
+            throw new Error('у вас уже ' + mine.length + ' компьютер(а,ов) (лимит maxPerUser:' + cfg.maxPerUser + ')');
+        // образ, том, сеть владельца, создание
+        try {
+            await pullImage(docker, cfg.image);
+        }
+        catch (e) {
+            throw new Error('образ «' + cfg.image + '» недоступен: ' + String(e?.message || e).slice(0, 200)
+                + (cfg.image.startsWith('work-') ? ' — соберите локально: docker build -t ' + cfg.image + ' sources/modules/sandbox/images/work-computer' : ' — проверьте сеть Docker'));
+        }
+        await ensureIsolatedNetwork(docker, cfg, owner);
+        const { volume, options } = buildCreateOptions(owner, name, cfg);
+        await docker.createVolume({ Name: volume, Labels: { [LABEL]: '1' } }).catch(e => {
+            if (!/exists|conflict|409/i.test(String(e?.message || e)))
+                throw friendly(e);
+        });
+        let created;
+        try {
+            created = await docker.createContainer(options);
+        }
+        catch (e) {
             throw friendly(e);
+        }
+        await created.start().catch(e => { throw friendly(e); });
+        touch(owner, name, created.id);
+        // рабочая папка: том может быть от другого образа и принадлежать root
+        const wd = cfg.workdir || '/workspace';
+        await fixWorkspacePerms(docker, created.id, wd, owner, name, cfg);
+        // графический образ: дождаться дисплея и VNC, иначе первые скриншоты чёрные, а просмотр пуст
+        if ((cfg.graphical || []).includes(cfg.image)) {
+            const waitSec = Number(cfg.displayWaitSec) || 30;
+            await waitDisplay(docker, created.id, { timeoutSec: waitSec }).catch(() => {});
+            await waitVnc(docker, created.id, { timeoutSec: waitSec }).catch(() => {});
+        }
+        sweepIdle(docker, cfg).catch(() => {});
+        return { id: created.id, name, state: 'running', created: true, image: cfg.image };
     });
-    let created;
-    try {
-        created = await docker.createContainer(options);
-    }
-    catch (e) {
-        throw friendly(e);
-    }
-    await created.start().catch(e => { throw friendly(e); });
-    touch(owner, name, created.id);
-    // рабочая папка: том может быть от другого образа и принадлежать root
-    const wd = cfg.workdir || '/workspace';
-    await fixWorkspacePerms(docker, created.id, wd, owner, name, cfg);
-    // графический образ: дождаться дисплея и VNC, иначе первые скриншоты чёрные, а просмотр пуст
-    if ((cfg.graphical || []).includes(cfg.image)) {
-        const waitSec = Number(cfg.displayWaitSec) || 30;
-        await waitDisplay(docker, created.id, { timeoutSec: waitSec }).catch(() => {});
-        await waitVnc(docker, created.id, { timeoutSec: waitSec }).catch(() => {});
-    }
-    sweepIdle(docker, cfg).catch(() => {});
-    return { id: created.id, name, state: 'running', created: true, image: cfg.image };
 }
 
 /**
@@ -419,12 +533,15 @@ export async function listDir(docker, id, spath) {
  * поэтому изоляция через Internal-сеть, а не NetworkMode:none). */
 const netEnabled = new Map(); // id → timestamp when enabled
 
-export async function setNetwork(docker, id, on, cfg = loadSandboxConfig()) {
+export async function setNetwork(docker, id, on, cfg = loadSandboxConfig(), owner = null) {
     const egress = cfg.network?.egressName || 'work-egress';
     const nets = await docker.listNetworks({ filters: JSON.stringify({ name: [egress] }) }).catch(() => []);
     if (!(nets || []).some(n => n.Name === egress))
         await docker.createNetwork({ Name: egress, Labels: { [LABEL]: '1' }, CheckDuplicate: true }).catch(e => { throw friendly(e); });
-    const iso = await ensureIsolatedNetwork(docker, cfg);
+    // выход в интернет — только после установки фильтра частных сетей (F13, fail-closed)
+    if (on)
+        await ensureEgressFilter(docker, cfg);
+    const iso = await ensureIsolatedNetwork(docker, cfg, owner || ownerOfId(id));
     const swap = async (connect, disconnect) => {
         await docker.getNetwork(connect).connect({ Container: id }).catch(e => {
             if (!/already connected|already exists/i.test(String(e?.message || e)))
@@ -436,6 +553,7 @@ export async function setNetwork(docker, id, on, cfg = loadSandboxConfig()) {
         });
     };
     if (on) {
+        await checkVolumeQuota(docker, id, cfg);
         await swap(egress, iso);
         netEnabled.set(id, Date.now());
     } else {
@@ -497,7 +615,8 @@ export async function destroyComputer(docker, id) {
     return 'компьютер удалён (данные в томе тоже, новый создастся с нуля)';
 }
 
-/** Остановить простаивающие компьютеры. */
+/** Остановить простаивающие компьютеры и убрать пустые сети владельцев
+ *  (адресное пространство Docker не бесконечно — F13). */
 export async function sweepIdle(docker, cfg = loadSandboxConfig()) {
     const idleMs = Math.max(5, Number(cfg.idleStopMin) || 30) * 60_000;
     const now = Date.now();
@@ -514,6 +633,17 @@ export async function sweepIdle(docker, cfg = loadSandboxConfig()) {
             await docker.getContainer(c.Id).stop().catch(() => {});
             stopped++;
         }
+    }
+    // пустые внутренние сети владельцев: префикс «<sandboxName>-» отличает их от легаси-общей
+    const prefix = (cfg.network?.sandboxName || 'work-sandbox') + '-';
+    for (const n of await docker.listNetworks({}).catch(() => [])) {
+        const name = n.Name || String(n);
+        if (!name.startsWith(prefix))
+            continue;
+        const info = await docker.getNetwork(name).inspect?.().catch(() => null);
+        // сети без контейнеров убираем; inspect недоступен — не трогаем (перестраховка)
+        if (info && !Object.keys(info.Containers || {}).length)
+            await docker.getNetwork(name).remove?.().catch(() => {});
     }
     return stopped;
 }

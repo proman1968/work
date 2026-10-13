@@ -50,6 +50,9 @@ export function fakeDocker(o = {}) {
         // зонд прав на workspace
         if (script && script.includes('.probe_') && script.includes('echo ok'))
             return { code: 0, out: 'ok', err: '' };
+        // размер рабочей папки (мягкая квота тома)
+        if (script && script.includes('du -sm'))
+            return { code: 0, out: String(Number(o.workspaceMb) || 42) + '\n', err: '' };
         if (script === 'scrot -o -') {
             if (o.noGraphics) {
                 code = 127; err = 'sh: scrot: command not found';
@@ -158,14 +161,29 @@ export function fakeDocker(o = {}) {
                 Labels: opts.Labels || {}, Created: Math.floor(Date.now() / 1000),
                 files: new Map(), nets: new Set(), hostCfg: opts.HostConfig, createOpts: opts,
             });
-            // авто-остановка для «одноразовых» команд (chown, fix-perms хелпер)
-            const autoExit = opts.Cmd?.[0] === 'chown';
+            // авто-остановка для «одноразовых» команд (chown, fix-perms и iptables-хелпер egress)
+            const isChown = opts.Cmd?.[0] === 'chown';
+            const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables');
+            const autoExit = isChown || isIptables;
+            const exitCode = isIptables && o.iptablesFail ? 1 : 0;
+            if (autoExit) {
+                if (isIptables)
+                    (api.iptables ||= []).push(opts.Cmd[2]);
+                containers.get(id).exitCode = exitCode;
+            }
             return {
                 id,
                 async start() {
-                    containers.get(id).State = 'running';
+                    const c = containers.get(id);
+                    c.State = 'running';
+                    // как настоящий Docker: NetworkMode подключает контейнер к сети
+                    const mode = c.hostCfg?.NetworkMode;
+                    if (mode && networks.has(mode)) {
+                        networks.get(mode).add(id);
+                        c.nets.add(mode);
+                    }
                     if (autoExit)
-                        setImmediate(() => { const c = containers.get(id); if (c) c.State = 'exited'; });
+                        setImmediate(() => { const x = containers.get(id); if (x) x.State = 'exited'; });
                 },
             };
         },
@@ -182,7 +200,7 @@ export function fakeDocker(o = {}) {
                     const volName = bind.split(':')[0] || 'vol';
                     return {
                         Id: c.Id, Name: '/' + c.Name, Config: { Image: c.Image },
-                        State: { Running: c.State === 'running', Status: c.State, StartedAt: new Date().toISOString() },
+                        State: { Running: c.State === 'running', Status: c.State, StartedAt: new Date().toISOString(), ExitCode: c.exitCode ?? (c.State === 'running' ? null : 0) },
                         NetworkSettings: { Networks: nets },
                         HostConfig: { Memory: c.hostCfg?.Memory || 0 },
                         Mounts: volName ? [{ Destination: '/workspace', Name: volName }] : [],
@@ -190,7 +208,12 @@ export function fakeDocker(o = {}) {
                 },
                 async start() { if (!c) no(); c.State = 'running'; },
                 async stop() { if (!c) no(); c.State = 'exited'; },
-                async remove() { if (!c) no(); containers.delete(id); },
+                async remove() { if (!c) no();
+                    // как настоящий Docker: удаление контейнера отключает его от сетей
+                    for (const s of networks.values())
+                        s.delete(id);
+                    containers.delete(id);
+                },
                 async exec(execOpts) {
                     if (!c) no();
                     if (c.State !== 'running') { const e = new Error('container not running'); e.statusCode = 409; throw e; }
@@ -222,6 +245,21 @@ export function fakeDocker(o = {}) {
         },
         getNetwork(name) {
             return {
+                async inspect() {
+                    if (!networks.has(name))
+                        throw new Error('no such network');
+                    const Containers = {};
+                    for (const id of networks.get(name))
+                        Containers[id] = { Name: containers.get(id)?.Name };
+                    return { Name: name, Id: 'e' + name.replace(/\W/g, '').padEnd(12, '0').slice(0, 12), Containers };
+                },
+                async remove() {
+                    if (!networks.has(name))
+                        throw new Error('no such network');
+                    if (networks.get(name).size)
+                        throw new Error('network has active endpoints');
+                    networks.delete(name);
+                },
                 async connect({ Container }) {
                     const s = networks.get(name);
                     if (!s) throw new Error('no such network');

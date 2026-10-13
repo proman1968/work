@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xdotool scrot imagemagick \
         git curl ca-certificates \
         fonts-noto-core \
-        procps net-tools \
+        procps net-tools iptables \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 1000 -s /bin/bash agent \
     && mkdir -p /workspace /opt/work \

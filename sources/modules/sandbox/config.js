@@ -8,7 +8,7 @@
  *     images: ['python:3.12-slim', 'node:22-slim'],          // белый список образов
  *     workdir: '/workspace',                // рабочая папка внутри (единственная доступная агенту)
  *     user: '',                             // пользователь внутри ('': по умолчанию образа)
- *     limits: { memoryMb: 1024, cpus: 1, pids: 256 },
+ *     limits: { memoryMb: 1024, cpus: 1, pids: 256, volumeMb: 10240 },
  *     maxPerUser: 2,                        // компьютеров на пользователя
  *     maxRunning: 4,                        // запущенных компьютеров всего
  *     idleStopMin: 30,                      // остановка при простое
@@ -39,7 +39,7 @@ const DEFAULTS = {
     images: ['work-computer:latest', 'python:3.12-slim', 'node:22-slim'],
     workdir: '/workspace',
     user: '',
-    limits: { memoryMb: 1024, cpus: 1, pids: 256 },
+    limits: { memoryMb: 1024, cpus: 1, pids: 256, volumeMb: 10_240 },
     maxPerUser: 2,
     maxRunning: 4,
     idleStopMin: 30,
