@@ -26,6 +26,13 @@ import { guarded, systemAllowed } from './system.js';
 
 /** ОС сервера и локальная сеть — инструменты только для администраторов WORK. */
 const SYSTEM_TOOLS = guarded([...osFileTools, ...osProcTools, ...netTools]);
+
+/** Абзац system о недоступных MCP-серверах (F17): только идентификаторы, без чужого текста.
+ *  Запись срезается до части до «:» — даже сырая строка «id: ошибка…stderr» не просочится. */
+export function mcpErrorNote(ids) {
+    const uniq = [...new Set((ids || []).map(x => String(x).split(':')[0].trim()).filter(Boolean))];
+    return uniq.length ? '# Недоступные MCP-серверы\n' + uniq.map(id => '- ' + id + ': не отвечает (подробности — в журнале сервера)').join('\n') : '';
+}
 import { loadDocs, loadSystem, loadConfig, loadHooks } from './resources.js';
 import { auditHook } from './hooks.js';
 import { clip } from './util.js';
@@ -205,7 +212,12 @@ export async function createEnv({ place, session, host, tz, location, role, voic
         llmFor,
         imageModel: () => findImageModel(config),
         async extTools() {
-            extTools ??= Promise.all([serviceTools(session), mcpTools({ onError: (s, e) => mcpErrors.push(s.id + ': ' + e.message) })])
+            extTools ??= Promise.all([serviceTools(session), mcpTools({ onError: (s, e) => {
+                // F17: текст ошибки несёт stderr чужого процесса — в промпт только id,
+                // подробности — в журнал сервера
+                console.warn('[mcp] ' + s.id + ': ' + (e?.message || e));
+                mcpErrors.push(s.id);
+            } })])
                 // svc_*/mcp_* собираются параллельно и в порядке завершения запросов — сортируем по имени:
                 // порядок tools должен совпадать между ходами (префикс кэша провайдера)
                 .then(([a, b]) => stableToolOrder([...a, ...b]))
@@ -305,7 +317,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             if (!def && agents.size)
                 parts.push('# Субагенты (поручай через task)\n' + listing(agents));
             if (mcpErrors.length)
-                parts.push('# Недоступные MCP-серверы\n' + mcpErrors.map(e => '- ' + e).join('\n'));
+                parts.push(mcpErrorNote(mcpErrors));
             return { stable: parts.filter(Boolean).join('\n\n'), volatile: tail.filter(Boolean).join('\n\n') };
         },
         /** system одной строкой (части подряд): сжатие, тесты, внешние вызовы без разделения на кэш. */

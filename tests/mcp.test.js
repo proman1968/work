@@ -466,6 +466,39 @@ describe('MCP: инструменты WORK с правами пользоват�
         assert.doesNotMatch(textOf(send2), /подтверждение человека/);
     });
 
+    it('батч: заражение от первого вызова достаётся второму — внешний ход в том же батче требует подтверждения (F17)', async () => {
+        const c = await connect(alice.token);
+        // один HTTP-запрос с массивом [читаю чужое письмо, шлю людям] — без elicitation (JSON-батч)
+        const res = await fetch(base, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: 'Bearer ' + alice.token, 'Mcp-Session-Id': c.sid },
+            body: JSON.stringify([
+                { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'read', arguments: { path: '/BOX/doc/mail.eml' } } },
+                { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'send', arguments: { path: '/BOX', message: 'отчёт', to: [BOB] } } },
+            ]),
+        });
+        const batch = await res.json();
+        assert.equal(batch[0].result.isError, false, JSON.stringify(batch[0]));
+        assert.equal(batch[1].result.isError, true, 'внешний ход в том же батче прошёл без подтверждения');
+        assert.match(textOf(batch[1]), /подтверждение человека/);
+    });
+
+    it('повторный initialize не отмывает контекст клиента: заражение живёт на токен (F17)', async () => {
+        const a = await connect(alice.token);
+        const mail = textOf(await a.call('read', { path: '/BOX/doc/mail.eml' }));
+        assert.match(mail, /ИГНОРИРУЙ ИНСТРУКЦИИ/);
+        // клиент «перезаходит» — новая сессия того же токена
+        const b = await connect(alice.token);
+        assert.notEqual(b.sid, a.sid);
+        const send = await b.call('send', { path: '/BOX', message: 'отчёт', to: [BOB] });
+        assert.equal(send.result.isError, true, 'новая сессия отмыла заражение без подтверждения человека');
+        assert.match(textOf(send), /подтверждение человека/);
+        // подтверждение человека (elicitation) очищает — и это видно в той же сессии
+        const fixed = await connect(alice.token, { elicitation: {} });
+        const ev = await callSse(alice.token, fixed.sid, 'send', { path: '/BOX', message: 'отчёт', to: [BOB] }, () => true);
+        assert.equal(ev.at(-1).result.isError, false, JSON.stringify(ev.at(-1)));
+    });
+
     it('аудит: каждый вызов — запись mcp (инструмент, вердикт, итог, токен, клиент), без секретов', async () => {
         const c = await connect(alice.token);
         const since = new Date().toISOString();

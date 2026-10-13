@@ -317,10 +317,28 @@ function newSession(auth, core, params) {
     const sess = {
         id, uid: auth.uid, role: auth.role, tokenId: auth.tokenId, label: auth.label, core,
         caps: params?.capabilities || {}, client: String(params?.clientInfo?.name || '').slice(0, 60) || undefined,
-        taint: new Set(), pending: new Map(), seq: 0, created: Date.now(), lastSeen: Date.now(),
+        // F17: заражение живёт на КЛИЕНТА (uid+токен), не на сессию — повторный initialize
+        // не отмывает контекст: чистым его делает только подтверждение человека (elicitation)
+        taint: clientTaintOf(auth),
+        pending: new Map(), seq: 0, created: Date.now(), lastSeen: Date.now(),
     };
     sessions.set(id, sess);
     return sess;
+}
+
+/** Заражение клиента (uid+токен): одна на все его сессии; сброс — elicitation-подтверждение. */
+const clientTaints = new Map();
+const MAX_CLIENT_TAINTS = 1000;
+function clientTaintOf(auth) {
+    const key = auth.uid + ':' + auth.tokenId;
+    let set = clientTaints.get(key);
+    if (!set) {
+        if (clientTaints.size >= MAX_CLIENT_TAINTS)
+            clientTaints.delete(clientTaints.keys().next().value);
+        set = new Set();
+        clientTaints.set(key, set);
+    }
+    return set;
 }
 
 function handleInitialize(auth, core, params) {
@@ -456,7 +474,11 @@ export async function handleMcp(request, response) {
             sseSend(response, res);
         return response.end();
     }
-    const out = (await Promise.all(messages.filter(isRequest).map(m => handle(m, {}))));
+    // F17: батч — строго по очереди: заражение от первого вызова должно достаться второму
+    // (параллельные вызовы вычисляли taint до пометки — чужой текст обходил подтверждение)
+    const out = [];
+    for (const m of messages.filter(isRequest))
+        out.push(await handle(m, {}));
     return reply(response, 200, batch ? out : out[0]);
 }
 
@@ -465,4 +487,5 @@ export function resetForTests() {
     sessions.clear();
     failures.clear();
     hookCache.clear();
+    clientTaints.clear();
 }

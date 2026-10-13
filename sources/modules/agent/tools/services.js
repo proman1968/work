@@ -237,26 +237,39 @@ export async function mcpTools({ onError } = {}) {
         for (const t of cached.tools) {
             if (!t?.name)
                 continue;
-            const ro = t.annotations?.readOnlyHint === true;
-            out.push({
-                name: toolId('mcp', s.id, t.name),
-                readonly: ro,
-                untrusted: true, // ответ MCP-сервера — чужой текст (taint.js)
-                outbound: !ro,
-                risk: ro ? undefined : (t.annotations?.destructiveHint ? 'danger' : 'write'),
-                description: '[MCP ' + (s.data.label || s.id) + '] ' + String(t.description || t.name).slice(0, 1000),
-                parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
-                source: { service: s.path, mcp: t.name },
-                async run(args, ctx) {
-                    const res = await callAs(s.item, 'mcp_call_tool', { name: t.name, arguments: args || {} }, ctx);
-                    if (res?.error)
-                        return { error: String(res.error) };
-                    const parts = (res?.content || []).map(c => c.type === 'text' ? c.text : (c.type === 'image' ? '[изображение ' + (c.mimeType || '') + ']' : JSON.stringify(c)));
-                    const text = parts.join('\n') || JSON.stringify(res?.structuredContent ?? res ?? '');
-                    return res?.isError ? { error: text } : text;
-                },
-            });
+            out.push(mcpToolDef(s, t));
         }
     }));
     return out;
+}
+
+/**
+ * Инструмент из декларации MCP-сервера (F17, final 8.10): чужой сервер не решает,
+ * что «только чтение» — readOnlyHint это заявка автора кода, который мы не контролируем,
+ * а readonly обходит даже подтверждения заражённого хода. Вызов чужого кода — всегда
+ * «наружу» (outbound): в заражённом ходе человек подтверждает, destructiveHint — danger.
+ * @param {{id:string, path:string, data:object, item:object}} s сервис
+ * @param {{name:string, description?:string, inputSchema?:object, annotations?:object}} t декларация
+ */
+export function mcpToolDef(s, t) {
+    const ro = t.annotations?.readOnlyHint === true; // подсказка — только в описании, не в правах
+    return {
+        name: toolId('mcp', s.id, t.name),
+        untrusted: true, // ответ MCP-сервера — чужой текст (taint.js)
+        outbound: true,  // вызов чужого кода — действие наружу
+        risk: t.annotations?.destructiveHint ? 'danger' : 'write',
+        description: '[MCP ' + (s.data.label || s.id) + ']'
+            + (ro ? ' (читающий, по заявлению сервера)' : '') + ' '
+            + String(t.description || t.name).slice(0, 1000),
+        parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
+        source: { service: s.path, mcp: t.name },
+        async run(args, ctx) {
+            const res = await callAs(s.item, 'mcp_call_tool', { name: t.name, arguments: args || {} }, ctx);
+            if (res?.error)
+                return { error: String(res.error) };
+            const parts = (res?.content || []).map(c => c.type === 'text' ? c.text : (c.type === 'image' ? '[изображение ' + (c.mimeType || '') + ']' : JSON.stringify(c)));
+            const text = parts.join('\n') || JSON.stringify(res?.structuredContent ?? res ?? '');
+            return res?.isError ? { error: text } : text;
+        },
+    };
 }
