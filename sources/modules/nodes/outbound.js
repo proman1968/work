@@ -44,9 +44,11 @@ export async function nodeFetch(node, req = {}) {
     const roles = (req.roles || []).join(',');
     const pathQuery = url.pathname + url.search;
     const digest = digestOf(body);
+    // метка представителя входит в подпись (F18): значение заголовка как есть
+    const actorLabel = req.actorLabel ? encodeURIComponent(String(req.actorLabel).slice(0, 200)) : '';
     const fields = {
         method: body ? 'POST' : 'GET', url: pathQuery, audience: String(node.host_id).toUpperCase(),
-        date, nonce, node: serverId, actor: req.actor || '', roles, digest,
+        date, nonce, node: serverId, actor: req.actor || '', actorLabel, roles, digest,
     };
     const headers = {
         [HEADERS.node]: serverId,
@@ -59,8 +61,8 @@ export async function nodeFetch(node, req = {}) {
     };
     if (req.actor)
         headers[HEADERS.actor] = req.actor;
-    if (req.actorLabel)
-        headers[HEADERS.actorLabel] = encodeURIComponent(String(req.actorLabel).slice(0, 200));
+    if (actorLabel)
+        headers[HEADERS.actorLabel] = actorLabel;
     if (roles)
         headers[HEADERS.roles] = roles;
     if (contentType)

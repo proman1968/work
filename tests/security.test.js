@@ -303,7 +303,7 @@ describe('исходящие запросы (SSRF)', () => {
 describe('сеть WORK: узлы', () => {
     it('карточка узла публикуется', async () => {
         const card = JSON.parse((await req('/.well-known/work-node')).text);
-        assert.equal(card.protocol, 'work-node/1');
+        assert.equal(card.protocol, 'work-node/2');
         assert.equal(card.id, serverId);
         assert.ok(card.publicKey && card.fingerprint);
         assert.ok(card.roles.some(r => r.id === 'USER'));
@@ -356,6 +356,109 @@ describe('сеть WORK: узлы', () => {
         nodeItem.reset();
         const notes = await nodeItem.meta_folder.get_item('CUSTOMER/notes.md');
         assert.equal(await nodeItem.canSee(notes, { session }), false);
+    });
+
+    it('метка представителя подписана: подмена и удаление ломают подпись (F18)', async () => {
+        const { HEADERS, canonical, digestOf } = await import('../sources/modules/nodes/signing.js');
+        const { sign } = await import('../sources/modules/nodes/identity.js');
+        const url = '/ORG/DEPT/$class/CUSTOMER/price.md?read_text&role=CUSTOMER';
+        const mk = (label) => {
+            const fields = { method: 'GET', url, audience: serverId, date: new Date().toISOString(),
+                nonce: crypto.randomBytes(16).toString('base64url'), node: serverId, actor: USER,
+                actorLabel: label, roles: 'CUSTOMER', digest: digestOf(null) };
+            const headers = {
+                [HEADERS.node]: serverId, [HEADERS.audience]: serverId, [HEADERS.date]: fields.date,
+                [HEADERS.nonce]: fields.nonce, [HEADERS.digest]: fields.digest, [HEADERS.actor]: USER,
+                [HEADERS.roles]: 'CUSTOMER', [HEADERS.signature]: sign(canonical(fields)),
+            };
+            if (label)
+                headers[HEADERS.actorLabel] = label;
+            return headers;
+        };
+        const send = h => fetch(base + encodeURI(url.split('?')[0]) + '?' + url.split('?')[1], { headers: h }).then(r => r.text());
+        // подписана с меткой, отправлена с меткой — проходит
+        assert.equal(JSON.parse(await send(mk(encodeURIComponent('Иванов Иван')))), 'прайс для покупателей');
+        // подмена метки после подписи — отказ
+        const tampered = { ...mk(encodeURIComponent('Иванов Иван')), [HEADERS.actorLabel]: encodeURIComponent('Директор Иванов') };
+        assert.match(await send(tampered), /Доступ запрещён/, 'подменённая метка прошла');
+        // удаление метки (подпись была с ней) — отказ
+        const stripped = mk(encodeURIComponent('Иванов Иван'));
+        delete stripped[HEADERS.actorLabel];
+        assert.match(await send(stripped), /Доступ запрещён/, 'удалённая метка прошла');
+    });
+
+    it('content-length больше лимита отсекается до чтения тела — иначе бы запрос прошёл (F18)', async () => {
+        const { HEADERS, canonical, digestOf } = await import('../sources/modules/nodes/signing.js');
+        const { sign } = await import('../sources/modules/nodes/identity.js');
+        const url = '/ORG/DEPT/$class/CUSTOMER/price.md?read_text&role=CUSTOMER';
+        // честная подпись ПУСТОГО тела: без отсечки по content-length сервер бы прочитал (пустое)
+        // тело и выполнил запрос
+        const fields = { method: 'POST', url, audience: serverId, date: new Date().toISOString(),
+            nonce: crypto.randomBytes(16).toString('base64url'), node: serverId, actor: USER,
+            actorLabel: '', roles: 'CUSTOMER', digest: digestOf(Buffer.alloc(0)) };
+        const headers = { [HEADERS.node]: serverId, [HEADERS.audience]: serverId, [HEADERS.date]: fields.date,
+            [HEADERS.nonce]: fields.nonce, [HEADERS.digest]: fields.digest, [HEADERS.actor]: USER,
+            [HEADERS.roles]: 'CUSTOMER', [HEADERS.signature]: sign(canonical(fields)) };
+        const text = await new Promise((resolve, reject) => {
+            const u = new URL(base + encodeURI(url.split('?')[0]) + '?' + url.split('?')[1]);
+            const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'POST',
+                headers: { ...headers, 'content-length': String(10 * 1024 * 1024 * 1024) } }, res => {
+                let buf = '';
+                res.setEncoding('utf-8');
+                res.on('data', c => { buf += c; });
+                res.on('end', () => resolve(buf));
+            });
+            req.on('error', reject);
+            req.end(); // тела не шлём: отсечка обязана сработать раньше чтения
+        });
+        assert.match(text, /Доступ запрещён/, 'гигантский content-length не отсечён до чтения');
+        assert.ok(!text.includes('прайс'), 'запрос с гигантским content-length выполнился');
+    });
+
+    it('readBody: до порога — в память, дальше — на диск; хез и буфер верны (F18)', async () => {
+        const { readBody, SPOOL_BYTES, BODY_MAX } = await import('../sources/modules/nodes/inbound.js');
+        const { digestOf } = await import('../sources/modules/nodes/signing.js');
+        const streamOf = (buf, chunk = 64 * 1024) => {
+            let i = 0;
+            return (async function* () {
+                while (i < buf.length) {
+                    yield buf.subarray(i, i + chunk);
+                    i += chunk;
+                }
+            })();
+        };
+        // маленькое тело — в памяти
+        const small = Buffer.from('привет узел');
+        const s = await readBody(streamOf(small));
+        assert.equal(s.spooled, false);
+        assert.equal(s.digest, digestOf(small));
+        assert.equal((await s.load()).toString('utf-8'), 'привет узел');
+        // большое (9 МБ) — спул на диск, load возвращает целиком, хез совпадает
+        const big = crypto.randomBytes(SPOOL_BYTES + 1024 * 1024);
+        const b = await readBody(streamOf(big));
+        assert.equal(b.spooled, true, 'большое тело не ушло на диск');
+        assert.equal(b.digest, digestOf(big));
+        const loaded = await b.load();
+        assert.equal(loaded.length, big.length);
+        assert.ok(loaded.equals(big), 'буфер с диска повреждён');
+        // перебор лимита — ошибка и уборка
+        const chunks = [];
+        for (let i = 0; i <= BODY_MAX / (1024 * 1024); i++)
+            chunks.push(Buffer.alloc(1024 * 1024));
+        await assert.rejects(readBody(streamOf(Buffer.concat(chunks))), /больше допустимого/);
+    });
+
+    it('nonce переживает рестарт: хранится в БД индексов, не в памяти (F18)', async () => {
+        const { rememberNonce } = await import('../sources/modules/nodes/signing.js');
+        const { indexDb } = await import('../sources/host/index-db.js');
+        const node = 'A'.repeat(15);
+        const nonce = 'nonce-' + crypto.randomBytes(8).toString('hex');
+        assert.equal(await rememberNonce(node, nonce), true);
+        assert.equal(await rememberNonce(node, nonce), false, 'повтор в той же сессии не пойман');
+        // строка обязана лежать в ПЕРСИСТЕНТНОЙ БД (память чистится рестартом — БД нет)
+        const db = await indexDb();
+        const row = db.prepare('SELECT 1 FROM node_nonces WHERE node = ? AND nonce = ?').get(node, nonce);
+        assert.ok(row, 'nonce не записан в БД — окно повтора после рестарта открыто');
     });
 
     it('роли только для пользователей узлу не выдаются', async () => {

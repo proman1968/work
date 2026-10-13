@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { serverId } from '../../host/server-id.js';
 import { PUBLIC_ORIGIN, LOCAL_ORIGIN } from '../../host/config.js';
 
-export const PROTOCOL = 'work-node/1';
+export const PROTOCOL = 'work-node/2';
 const KEY_PATH = './#system/node-key.json';
 
 let keys = null;
