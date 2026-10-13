@@ -21,7 +21,7 @@ import {
     ownerOf, computerName, slugOwner, containerName, assertSandboxPath, buildCreateOptions,
     ensureComputer, findComputer, listComputers, execCommand, readText, writeText, listDir,
     setNetwork, statusOf, destroyComputer, sweepIdle, resetRegistryForTests,
-    sandboxNetName, buildEgressRules, setIptablesForTests,
+    sandboxNetName, buildEgressRules, setIptablesForTests, helperOptions,
 } from '../sources/modules/sandbox/manager.js';
 
 let tmp, root, previous;
@@ -337,6 +337,58 @@ it('F13 уборка сетей: пустая сеть владельца уда
     assert.ok(st.networks.includes(sandboxNetName(cfg, 'user2')));
     resetRegistryForTests();
 });
+
+// ── F26 (final 8.19): мелочи песочницы ────────────────────────────────────
+
+it('F26: интернет, включённый до рестарта, выключается первым же обходом TTL', async () => {
+    const docker = fakeDocker();
+    const cfg = { ...loadSandboxConfig(), network: { ...loadSandboxConfig().network, ttlMin: 0.001 } };
+    const pc = await ensureComputer(docker, 'user1', 'main', cfg);
+    await setNetwork(docker, pc.id, true, cfg);
+    // «рестарт сервера»: память процессов чиста, контейнер на egress остался
+    resetRegistryForTests();
+    const again = await ensureComputer(docker, 'user1', 'main', cfg); // реестр поднялся заново
+    const { sweepNetworkTTL } = await import('../sources/modules/sandbox/manager.js');
+    const n = await sweepNetworkTTL(docker, cfg);
+    assert.equal(n, 1, 'контейнер с интернетом до рестарта не выключен');
+    const st = await statusOf(docker, again.id);
+    assert.ok(!st.networks.includes(cfg.network.egressName), 'интернет остался после рестарта');
+    assert.ok(st.networks.includes(sandboxNetName(cfg, 'user1')));
+    resetRegistryForTests();
+});
+
+it('F26: хелпер прав — только нужные возможности, без сети, лимиты, no-new-privileges', () => {
+    const o = helperOptions('vol-1', '/workspace', loadSandboxConfig());
+    assert.deepEqual(o.HostConfig.CapDrop, ['ALL']);
+    assert.deepEqual(o.HostConfig.CapAdd, ['CHOWN', 'DAC_OVERRIDE', 'FOWNER']);
+    assert.equal(o.HostConfig.NetworkMode, 'none', 'хелперу chown сеть не нужна');
+    assert.ok(o.HostConfig.SecurityOpt.includes('no-new-privileges:true'));
+    assert.equal(o.HostConfig.PidsLimit, 64);
+    assert.equal(o.HostConfig.Memory, 256 * 1024 * 1024);
+    assert.deepEqual(o.Cmd.slice(0, 2), ['chown', '-R']);
+    assert.ok(o.HostConfig.AutoRemove);
+});
+
+it('F26: computer_destroy говорит правду — том с данными удаляется', async () => {
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, '../sources/modules/agent/tools/sandbox.js'), 'utf8');
+    assert.doesNotMatch(src, /computer_destroy[\s\S]{0,600}?том сохранится/, 'текст подтверждения врёт про том');
+    const d = sandboxTools.find(t => t.name === 'computer_destroy');
+    assert.match(d.description, /пропадут насовсем/, 'описание не предупреждает об удалении данных');
+    const ask = d.permission({ name: 'main' });
+    assert.match(ask.reason, /пропадут насовсем|том с данными/, 'вопрос подтверждения не про удаление данных');
+    // сам факт: destroyComputer действительно удаляет том (фиск) — уже проверено выше
+});
+
+it('F26: застрявший хелпер прав убивается — не остаётся висеть root-контейнером', async () => {
+    // зонд падает (том «чужой»), хелпер зависает — ensureComputer обязан отказаться и убить хелпера
+    const docker = fakeDocker({ probeFails: true, stuckHelper: true });
+    const cfg = loadSandboxConfig();
+    await assert.rejects(ensureComputer(docker, 'user1', 'main', cfg), /хелпер прав не завершился|не починил/);
+    // хелпер остановлен/убран: живых контейнеров с командой chown нет
+    const helpers = [...docker.containers.values()].filter(c => c.createOpts?.Cmd?.[0] === 'chown');
+    assert.ok(helpers.every(c => c.State !== 'running'), 'хелпер остался жить (running: ' + helpers.filter(c => c.State === 'running').length + ')');
+    resetRegistryForTests();
+}, 30000);
 
 it('destroyComputer: удаляет контейнер и том', async () => {
     setDockerForTests(fakeDocker());

@@ -132,8 +132,8 @@ export const sandboxTools = [
     },
     {
         name: 'computer_destroy',
-        permission: askEach(a => 'удалить компьютер «' + (a?.name || 'main') + '»' + (a?.owner ? ' пользователя ' + a.owner : '') + ' (файлы в нём пропадут из контейнера, том сохранится)'),
-        description: 'Удалить свой компьютер (например, чтобы пересоздать чистый). Админ может удалить чужой через owner. Данные в томе сохраняются.',
+        permission: askEach(a => 'удалить компьютер «' + (a?.name || 'main') + '»' + (a?.owner ? ' пользователя ' + a.owner : '') + ' — контейнер и том с данными /workspace (файлы пропадут насовсем)'),
+        description: 'Удалить свой компьютер вместе с томом: файлы в /workspace пропадут насовсем, новый создастся пустым. Сначала заберите нужное (sandbox_read). Админ может удалить чужой через owner.',
         parameters: { type: 'object', properties: { ...NAME_PROP, owner: { type: 'string', description: 'Только админу: чей компьютер (uid)' } } },
         run: ctxRun('computer_destroy', async (args, ctx) => {
             const docker = await getDocker();

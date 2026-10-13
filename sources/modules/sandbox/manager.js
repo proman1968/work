@@ -260,6 +260,20 @@ function withCreateLock(fn) {
     return job;
 }
 
+/** Опции контейнера-хелпера прав (F26): root, но только CHOWN-возможности, без сети, лимиты. */
+export function helperOptions(vol, wd, cfg = loadSandboxConfig()) {
+    return {
+        Image: cfg.image, Cmd: ['chown', '-R', '1000:1000', wd],
+        HostConfig: {
+            Binds: [vol + ':' + wd], AutoRemove: true,
+            CapDrop: ['ALL'], CapAdd: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER'],
+            SecurityOpt: ['no-new-privileges:true'],
+            NetworkMode: 'none',
+            PidsLimit: 64, Memory: 256 * 1024 * 1024,
+        },
+    };
+}
+
 /** Починить права на рабочей папке: том мог быть создан другим образом (root-владелец). */
 export async function fixWorkspacePerms(docker, id, wd, owner, name, cfg = loadSandboxConfig()) {
     // Проверяем, что папка доступна для записи: попытка создать файл
@@ -272,11 +286,10 @@ export async function fixWorkspacePerms(docker, id, wd, owner, name, cfg = loadS
 
     // Том создан другим образом и принадлежит root.
     // Контейнер с CapDrop ALL не может chown — нужен временный контейнер-хелпер с root.
+    // F26: хелперу — только нужные capabilities (CHOWN + обход прав), без сети (chown её
+    // не требует), лимит процессов/памяти; застрял — убиваем, а не ждём вечно.
     const vol = volumeName(owner, name);
-    const helperOpts = {
-        Image: cfg.image, Cmd: ['chown', '-R', '1000:1000', wd],
-        HostConfig: { Binds: [vol + ':' + wd], AutoRemove: true },
-    };
+    const helperOpts = helperOptions(vol, wd, cfg);
     let helper;
     try {
         helper = await docker.createContainer(helperOpts);
@@ -289,15 +302,22 @@ export async function fixWorkspacePerms(docker, id, wd, owner, name, cfg = loadS
     await helper.start();
     // Ждём завершения хелпера (chown быстрый) — через docker API, т.к. createContainer может вернуть что угодно
     const helperId = helper.id || helper.Id;
+    let exited = false;
     for (let i = 0; i < 30; i++) {
         const insp = await docker.getContainer(helperId).inspect().catch(() => null);
         if (insp && insp.State && !insp.State.Running) {
-            if (insp.State.ExitCode !== 0) {
+            if (insp.State.ExitCode !== 0)
                 throw new Error('хелпер не починил права на ' + wd + ' (exit ' + insp.State.ExitCode + ')');
-            }
+            exited = true;
             break;
         }
         await new Promise(r => setTimeout(r, 500));
+    }
+    if (!exited) {
+        // застрял — убить и убрать (AutoRemove подберёт)
+        await docker.getContainer(helperId).stop({ t: 1 }).catch(() => {});
+        await docker.getContainer(helperId).remove({ Force: true }).catch(() => {});
+        throw new Error('хелпер прав не завершился за 15 с — проверьте том ' + vol);
     }
     // Повторная проверка
     const check = await execRaw(docker, id, {
@@ -586,19 +606,30 @@ export async function sweepNetworkTTL(docker, cfg = loadSandboxConfig()) {
     const ttlMin = Number(cfg.network?.ttlMin);
     if (!ttlMin || ttlMin <= 0)
         return 0;
+    const egress = cfg.network?.egressName || 'work-egress';
     const now = Date.now();
     const ttlMs = ttlMin * 60_000;
     let disabled = 0;
-    for (const [id, ts] of netEnabled) {
-        if (now - ts > ttlMs) {
-            await setNetwork(docker, id, false, cfg).catch(() => {});
-            disabled++;
-        }
+    // известные включения (в памяти)
+    const expired = new Set([...netEnabled].filter(([, ts]) => now - ts > ttlMs).map(([id]) => id));
+    // F26: контейнер на egress, которого нет в памяти — интернет включён до рестарта
+    // (или руками в Docker): мы не знаем, когда, — fail-closed, выключаем
+    const list = await docker.listContainers({ filters: labelFilters() }).catch(() => []);
+    for (const c of list || []) {
+        if (c.State !== 'running' || netEnabled.has(c.Id))
+            continue;
+        const insp = await docker.getContainer(c.Id).inspect().catch(() => null);
+        if (insp && Object.keys(insp.NetworkSettings?.Networks || {}).includes(egress))
+            expired.add(c.Id);
+    }
+    for (const id of expired) {
+        await setNetwork(docker, id, false, cfg).catch(() => {});
+        disabled++;
     }
     return disabled;
 }
 
-/** Удалить контейнер (том с данными сохраняется — пересоздание подхватит файлы). */
+/** Удалить контейнер И том с данными (новый компьютер создастся с нуля). */
 export async function destroyComputer(docker, id) {
     const c = docker.getContainer(id);
     const insp = await c.inspect().catch(() => null);

@@ -49,7 +49,7 @@ export function fakeDocker(o = {}) {
         const argv = isSh ? Cmd.slice(3) : [];
         // зонд прав на workspace
         if (script && script.includes('.probe_') && script.includes('echo ok'))
-            return { code: 0, out: 'ok', err: '' };
+            return o.probeFails ? { code: 1, out: '', err: 'отказано' } : { code: 0, out: 'ok', err: '' };
         // размер рабочей папки (мягкая квота тома)
         if (script && script.includes('du -sm'))
             return { code: 0, out: String(Number(o.workspaceMb) || 42) + '\n', err: '' };
@@ -164,7 +164,7 @@ export function fakeDocker(o = {}) {
             // авто-остановка для «одноразовых» команд (chown, fix-perms и iptables-хелпер egress)
             const isChown = opts.Cmd?.[0] === 'chown';
             const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables');
-            const autoExit = isChown || isIptables;
+            const autoExit = (isChown && !o.stuckHelper) || isIptables;
             const exitCode = isIptables && o.iptablesFail ? 1 : 0;
             if (autoExit) {
                 if (isIptables)
