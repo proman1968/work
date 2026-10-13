@@ -58,6 +58,48 @@ export function findPdfBrowser(env = process.env, platform = process.platform, e
 }
 
 /**
+ * Ссылки file: в HTML-документе (F11): рендер идёт headless-браузером с правами процесса
+ * сервера — file:///… в src/href/url() дотянулся бы до локальных файлов за пределами прав
+ * вызвавшего. Скан — диагностика для честных документов (энтити-кодирование обойдёт его);
+ * гарантия — CSP рендерной копии (sandboxHtml): браузер сам не загрузит file:.
+ */
+const FILE_URL
+    = /(?:src|href|data|poster|action|formaction|background|cite|longdesc|srcset|codebase)\s*=\s*["']?\s*file:|url\(\s*["']?\s*file:|@import\s+["']?file:/i;
+
+/** CSP рендерной копии: только инлайн-стили/скрипты и data: картинки/шрифты; всё остальное (file:, http:, iframe, object) — не грузится. */
+const PDF_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+    + 'img-src data:; style-src \'unsafe-inline\' data:; font-src data:; script-src \'unsafe-inline\'">';
+
+/**
+ * Защитить HTML для рендера PDF (F11): явные file: ссылки — ошибка; в остальное —
+ * вставить CSP-мету ДО контента (политики CSP пересекаются: позже авторская мета
+ * не может ослабить нашу; file:///C:/… больше не читается браузером ни в каком виде).
+ * @param {string} html
+ * @returns {string} HTML с CSP
+ */
+export function sandboxHtml(html) {
+    const text = String(html || '');
+    if (FILE_URL.test(text))
+        throw new Error('export_pdf: ссылки file:// запрещены (рендер идёт с правами сервера и не должен читать локальные файлы) — вставь содержимое как data: URL');
+    // мета — до контента: парсер положит её в head и применит до первой загрузки ресурса;
+    // doctype не трогаем (мета до него уронила бы документ в quirks mode)
+    const lead = text.match(/^\s*(?:<!--[\s\S]*?-->\s*)*/);
+    const at = lead ? lead[0].length : 0;
+    const rest = text.slice(at);
+    const doctype = rest.match(/^<!DOCTYPE[^>]*>/i);
+    const pos = at + (doctype ? doctype[0].length : 0);
+    return text.slice(0, pos) + PDF_CSP + '\n' + text.slice(pos);
+}
+
+/** Выписать защищённую копию HTML-файла для рендера (CSP + запрет file:). @returns {string} путь копии */
+async function prepareSandboxHtml(htmlFile) {
+    const html = await fsp.readFile(htmlFile, 'utf-8');
+    const sandboxFile = htmlFile + '.sandbox.html';
+    await fsp.writeFile(sandboxFile, sandboxHtml(html), 'utf-8');
+    return sandboxFile;
+}
+
+/**
  * HTML-файл → PDF через headless-браузер. Сеть при рендере заблокирована
  * (мёртвый прокси + без DNS), поэтому документ должен быть самодостаточным.
  */
@@ -71,7 +113,9 @@ export async function renderPdf(htmlFile, pdfFile, { browser, timeoutMs = PDF_RE
     // молча передаёт команду уже запущенному экземпляру и выходит за ~30 мс без PDF.
     const profile = profileDir
         || path.join(path.dirname(pdfFile), 'profile-' + process.pid + '-' + (++pdfProfileSeq) + '-' + Date.now().toString(36));
-    const url = pathToFileURL(htmlFile).href;
+    // рендер только защищённой копии: CSP запрещает file: и внешние ресурсы (F11)
+    const sandboxFile = await prepareSandboxHtml(htmlFile);
+    const url = pathToFileURL(sandboxFile).href;
     const r = await run(exe, [
         '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
         '--user-data-dir=' + profile,
@@ -79,6 +123,10 @@ export async function renderPdf(htmlFile, pdfFile, { browser, timeoutMs = PDF_RE
         '--proxy-server=http://127.0.0.1:9', '--host-resolver-rules=MAP * ~NOTFOUND',
         url,
     ], { timeout: timeoutMs, signal });
+    try {
+        await fsp.rm(sandboxFile, { force: true });
+    }
+    catch { /* копия во временном каталоге и так уйдёт */ }
     if (r.timedOut)
         throw new Error('export_pdf: таймаут рендера PDF');
     const buf = await waitPdf(pdfFile, signal);
@@ -386,7 +434,7 @@ export const docTools = [
         name: 'export_pdf',
         risk: 'write',
         target: args => absPath(args?.path, null),
-        description: 'Сохранить HTML-документ WORK как настоящий PDF: source — путь .html/.htm, path — путь результата .pdf. Формат страницы задай в HTML (@page { size: A4 }). Внешние сетевые ресурсы при рендере заблокированы — верстай самодостаточно (инлайн-CSS, системные шрифты). Проверь результат через read.',
+        description: 'Сохранить HTML-документ WORK как настоящий PDF: source — путь .html/.htm, path — путь результата .pdf. Формат страницы задай в HTML (@page { size: A4 }). Внешние ресурсы при рендере заблокированы: ни сеть, ни file:// — верстай самодостаточно (инлайн-CSS, системные шрифты, картинки — data: URL). Проверь результат через read.',
         parameters: {
             type: 'object',
             properties: {
@@ -407,6 +455,7 @@ export const docTools = [
                 throw new Error('export_pdf: пустой источник');
             if (html.length > PDF_SOURCE_MAX)
                 throw new Error('export_pdf: источник больше 5 МБ — упрости документ');
+            sandboxHtml(html); // явные file: ссылки — отказ до рендера (гарантия — CSP в renderPdf)
             const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-pdf-'));
             try {
                 const htmlFile = path.join(dir, 'doc.html');
