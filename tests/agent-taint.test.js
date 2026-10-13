@@ -421,6 +421,45 @@ describe('аудит вызовов инструментов (server/access/audi
     });
 });
 
+describe('F22: маскированные пути не обходят защищённые зоны (8.15)', () => {
+    it('isProtectedPath: //, /./, ../, обратные слэши и скрытые # распознаются после нормализации', async () => {
+        const { isProtectedPath, normalizeWorkPath } = await import('../sources/modules/agent/permissions.js');
+        for (const bad of [
+            '//sources/x.md',            // двойной слеш
+            '/./sources/x.md',           // «текущий каталог»
+            '/sources/./x.md',
+            '/DATA/../sources/x.md',     // переход через незащищённый префикс
+            '\\sources\\x.md',       // обратные слэши
+            '//BOX/$class/#secret/k.json',
+            '/./BOX/$class/#system/s.json',
+            '/ORG/../../$server/x.md',
+            '..',                        // выше корня — fail-closed
+        ])
+            assert.equal(isProtectedPath(bad), true, 'маскировка прошла: ' + JSON.stringify(bad));
+        // прежние случаи работают как раньше
+        assert.equal(isProtectedPath('/$server/x.md'), true);
+        assert.equal(isProtectedPath('/BOX/$class/class.js'), true);
+        assert.equal(isProtectedPath('/NODES/n/x.yaml'), true);
+        // свои данные — не защищены (нет ложной тревоги)
+        for (const ok of ['/ORG/Отчёты/x.md', '/DATA/CATALOGS/x.csv', '/ORG/$class/USER/x.md', '/BOX/doc/a.md'])
+            assert.equal(isProtectedPath(ok), false, 'ложная тревога: ' + ok);
+        assert.equal(normalizeWorkPath('/./a//b/../c/'), '/a/c');
+        assert.equal(normalizeWorkPath('a/b'), '/a/b');
+    });
+
+    it('decide: правка системного файла через маскированный путь — с вопроса человека (F22)', async () => {
+        const write = workTools.find(t => t.name === 'write');
+        const host = { mode: 'auto', allowed: new Set() };
+        for (const p of ['//sources/x.md', '/./oda/x.md', '/DATA/../MODELS/x.md', '\\NODES\\n.md']) {
+            const v = await decide(write, { path: p, content: 'x' }, { host });
+            assert.equal(v.verdict, 'ask', 'маскированный путь ' + JSON.stringify(p) + ' прошёл без вопроса');
+        }
+        // обычный файл в рабочей зоне — как раньше, без вопроса в auto
+        const ok = await decide(write, { path: '/ORG/Отчёты/x.md', content: 'x' }, { host });
+        assert.equal(ok.verdict, 'allow');
+    });
+});
+
 describe('F17: недоверенный MCP-сервер не решает про права и не пишет в промпт (8.10)', () => {
     it('mcpToolDef: readOnlyHint не даёт readonly; вызов чужого кода — всегда наружу; destructiveHint — danger', async () => {
         const { mcpToolDef } = await import('../sources/modules/agent/tools/services.js');

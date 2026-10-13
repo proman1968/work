@@ -18,14 +18,37 @@ import { isOutbound } from './taint.js';
 /** Зоны самоизменения системы: правки только с подтверждением. */
 export const PROTECTED_PREFIXES = ['/$server', '/sources', '/oda', '/MODELS', '/SERVICES', '/NODES', '/torus'];
 
-/** Путь относится к коду/конфигурации системы.
+/** Канонический WORK-путь для проверок: прямые слэши, без пустых и «.» сегментов, «..» свёрнуты.
+ *  null — путь вылезает выше корня (неканонизируемый): проверки обязаны считать его защищённым. */
+export function normalizeWorkPath(raw) {
+    const segs = [];
+    for (const s of String(raw ?? '').replace(/\\/g, '/').split('/')) {
+        if (!s || s === '.')
+            continue;
+        if (s === '..') {
+            if (segs.length && segs[segs.length - 1] !== '..')
+                segs.pop();
+            else
+                return null;
+            continue;
+        }
+        segs.push(s);
+    }
+    return '/' + segs.join('/');
+}
+
+/**
+ * Путь относится к коду/конфигурации системы.
+ * Проверяется КАНОНИЧЕСКИЙ путь (F22): «//sources», «/./sources», «/DATA/../sources»,
+ * обратные слэши и прочие маскировки не обходят распознавание — ядро нормализует их
+ * при записи, и политика обязана видеть ту же цель, что ядро.
  * @param {string} path
  * @returns {boolean}
  */
 export function isProtectedPath(path) {
-    const p = String(path || '').trim();
+    const p = normalizeWorkPath(path);
     if (!p)
-        return false;
+        return true; // выше корня — недопустимая цель, считаем защищённой (fail-closed)
     if (PROTECTED_PREFIXES.some(pre => p === pre || p.startsWith(pre + '/')))
         return true;
     // код и конфиг классов: class.js / *.js / #security / #secret — где угодно
