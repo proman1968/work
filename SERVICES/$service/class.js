@@ -38,7 +38,7 @@ export default {
      * @returns {Promise<object>} {tools: [{name, description, inputSchema}]}
      */
     async mcp_list_tools(params = {}) {
-        return mcpRpc(this, 'tools/list', {}, { place: params.place });
+        return mcpRpc(this, 'tools/list', {}, { place: params.place, owner: callerOf(params) });
     },
 
     /**
@@ -55,7 +55,7 @@ export default {
         const result = await mcpRpc(this, 'tools/call', {
             name,
             arguments: params.arguments && typeof params.arguments === 'object' ? params.arguments : {},
-        }, { place: params.place });
+        }, { place: params.place, owner: callerOf(params) });
         if (result?.error)
             return result;
         return result?.result ?? result;
@@ -80,7 +80,7 @@ async function mcpRpc(owner, method, params, opts = {}) {
     // Пул ядра (sources/modules/agent/mcp-pool.js): процесс живёт между вызовами, initialize — один раз
     try {
         const pool = await WORK_MCP();
-        return await pool.rpc({ command, args, env: env.vars, cwd: cfg.cwd }, method, params || {}, MCP_CALL_TIMEOUT, { roots: mcpRoots(opts) });
+        return await pool.rpc({ command, args, env: env.vars, cwd: cfg.cwd, envPass: cfg.envPass }, method, params || {}, MCP_CALL_TIMEOUT, { roots: mcpRoots(opts), owner: opts.owner });
     }
     catch (e) {
         return { error: 'mcp ' + method + ': ' + String(e.message || e) };
@@ -100,6 +100,13 @@ const INIT_PARAMS = {
 
 /** Ошибка «сессия потеряна» (наш сервер: 404/400 «Сессия не найдена» / «Mcp-Session-Id»). */
 const isLostSession = e => (e?.status === 404 || e?.status === 400) && /session|сесси/i.test(String(e?.message || ''));
+
+/** Кто вызвал (uid): пул MCP-процессов изолирован по вызывающему (F20) — чужой процесс
+ *  не видит корни и контекст другого пользователя; системные вызовы — общий 'shared'. */
+function callerOf(params = {}) {
+    const uid = params?.session?.uid;
+    return (typeof uid === 'string' && /^[A-Za-z0-9_-]{2,64}$/.test(uid)) ? uid : 'shared';
+}
 
 /** Корни WORK для запроса roots/list сервера: место задачи (place от call агента, не из аргументов модели). */
 function mcpRoots(opts = {}) {

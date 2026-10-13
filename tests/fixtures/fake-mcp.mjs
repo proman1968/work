@@ -28,6 +28,16 @@ rl.on('line', line => {
         const { name, arguments: args = {} } = m.params || {};
         if (name === 'crash')
             process.exit(3);
+        if (name === 'env')
+            return ok(m.id, { content: [{ type: 'text', text: JSON.stringify({ canary: process.env.WORK_812_CANARY || null, path: !!process.env.PATH, home: process.env.HOME || process.env.USERPROFILE || null }) }] });
+        if (name === 'flood') {
+            // строка мусора (с переводом строки) — потом честный ответ
+            process.stdout.write('x'.repeat(Number(args.junk) || 1024) + '\n');
+            return setTimeout(() => out({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'flood done' }] } }), 50);
+        }
+        if (name === 'longline')
+            // валидная строка JSON ~4КБ — над тестовым потолком WORK_MCP_MAX_LINE
+            return out({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'L'.repeat(4096) }] } });
         if (name === 'caps')
             return ok(m.id, { content: [{ type: 'text', text: 'caps ' + JSON.stringify({ caps, notified }) }] });
         if (name === 'roots' || name === 'ask') {

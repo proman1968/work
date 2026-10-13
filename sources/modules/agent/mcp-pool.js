@@ -3,6 +3,12 @@
  * initialize — один раз; простой IDLE_MS или смерть процесса — закрыть, следующий вызов поднимет заново.
  * Вызовы к одному серверу идут по одному каналу параллельно (JSON-RPC id), таймауты — на запрос.
  * Модуль-синглтон (слои дерева грузятся data:-модулями и пересоздаются — состояние держим здесь).
+ *
+ * F20 (final 8.12): процесс изолирован по вызывающему (owner в ключе — чужой пользователь
+ * не делит процесс и его roots-контекст с другим); дочернему процессу отдаётся только
+ * базовое безопасное окружение + env конфига (секреты сервера больше не утекают всем
+ * MCP-процессам); строка stdout сверх WORK_MCP_MAX_LINE (10 МБ) сбрасывается — поток
+ * чужого мусора не растит память.
  */
 import { log } from './log.js';
 import { spawn } from 'node:child_process';
@@ -13,9 +19,31 @@ export const CALL_TIMEOUT = 60_000;
 
 const POOL = new Map();
 
-function keyOf(cfg) {
-    return JSON.stringify([cfg.command, cfg.args || [], cfg.env || {}, cfg.cwd || '']);
+function keyOf(cfg, owner) {
+    return JSON.stringify([cfg.command, cfg.args || [], cfg.env || {}, [].concat(cfg.envPass || []), cfg.cwd || '', owner || 'shared']);
 }
+
+/** Базовое безопасное окружение дочернего процесса (F20): минимум для запуска,
+ *  БЕЗ переменных сервера (ключи, пароли, WORK_*). Расширение — cfg.envPass (имена) и cfg.env. */
+const ENV_BASE = process.platform === 'win32'
+    ? ['PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA', 'NUMBER_OF_PROCESSORS', 'OS']
+    : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TMPDIR', 'SHELL', 'USER', 'LOGNAME'];
+
+function childEnv(cfg) {
+    const out = {};
+    for (const k of ENV_BASE)
+        if (process.env[k] != null)
+            out[k] = process.env[k];
+    for (const k of [].concat(cfg?.envPass || [])) {
+        const name = String(k);
+        if (name && process.env[name] != null)
+            out[name] = process.env[name];
+    }
+    return { ...out, ...(cfg.env || {}) };
+}
+
+/** Потолок накапливаемой строки stdout (WORK_MCP_MAX_LINE — настройка/тесты). */
+export const MAX_LINE = Number(process.env.WORK_MCP_MAX_LINE) || 10 * 1024 * 1024;
 
 function channel(child) {
     let seq = 1;
@@ -30,6 +58,11 @@ function channel(child) {
         while ((i = buf.indexOf('\n')) >= 0) {
             const line = buf.slice(0, i).trim();
             buf = buf.slice(i + 1);
+            // F20: строка сверх потолка (даже одним куском) — мусор чужого потока, не разбираем
+            if (line.length > MAX_LINE) {
+                log.warn('mcp-pool: строка stdout сверх ' + MAX_LINE + ' байт — пропущена');
+                continue;
+            }
             if (!line)
                 continue;
             let msg;
@@ -55,6 +88,11 @@ function channel(child) {
                     write({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'not supported by work-mcp' } });
             }
             // ответ клиента на наш запрос (roots/…) приходит после resolve — совпадений нет, игнорируется
+        }
+        // F20: незавершённая строка сверх потолка сбрасывается — чужой поток не растит память
+        if (buf.length > MAX_LINE) {
+            log.warn('mcp-pool: строка stdout сверх ' + MAX_LINE + ' байт — сброшена');
+            buf = '';
         }
     });
     child.stderr.on('data', chunk => {
@@ -111,7 +149,7 @@ function start(key, cfg) {
     if (process.platform === 'win32' && /^(npx|npm|pnpm|yarn)$/i.test(command))
         command += '.cmd';
     const child = spawn(command, (cfg.args || []).map(String), {
-        env: { ...process.env, ...(cfg.env || {}) },
+        env: childEnv(cfg),
         cwd: cfg.cwd || undefined,
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: process.platform === 'win32' && /\.cmd$/i.test(command),
@@ -173,7 +211,7 @@ function touch(entry) {
  * @returns {Promise<any>} result (бросает при ошибке)
  */
 export async function rpc(cfg, method, params, timeout = CALL_TIMEOUT, opts = {}) {
-    const key = keyOf(cfg);
+    const key = keyOf(cfg, opts.owner);
     let entry = POOL.get(key);
     if (!entry || entry.dead)
         entry = start(key, cfg);
@@ -203,8 +241,8 @@ export function closeAll() {
 }
 
 /** pid процесса для конфига (тесты). */
-export function pidOf(cfg) {
-    return POOL.get(keyOf(cfg))?.child?.pid;
+export function pidOf(cfg, owner) {
+    return POOL.get(keyOf(cfg, owner))?.child?.pid;
 }
 
 for (const sig of ['exit', 'SIGINT', 'SIGTERM'])
