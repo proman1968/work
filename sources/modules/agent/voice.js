@@ -77,6 +77,40 @@ export function resetVoiceProbes() {
     probes.clear();
 }
 
+/**
+ * F25 (final 8.18): лимит частоты голосовых вызовов — синтез и распознавание
+ * ходят с платными ключами; тот, кто видит задачу (право чтения), не должен
+ * выжигать счётчик бесконечными запросами. Ведро на субъекта, окно 1 минута.
+ */
+export const VOICE_RATE = Object.freeze({
+    speak: Number(process.env.WORK_VOICE_RATE_TTS) || 20,
+    transcribe: Number(process.env.WORK_VOICE_RATE_STT) || 20,
+});
+const rateBuckets = new Map(); // kind:uid → { count, at }
+const RATE_WINDOW_MS = 60_000;
+
+/** Забыть счётчики (тесты). */
+export function resetVoiceRate() {
+    rateBuckets.clear();
+}
+
+function voiceRateOk(kind, uid) {
+    const limit = Number(VOICE_RATE[kind]) || 20;
+    const key = kind + ':' + (String(uid || 'anon').slice(0, 40));
+    const now = Date.now();
+    let b = rateBuckets.get(key);
+    if (!b || now - b.at >= RATE_WINDOW_MS) {
+        if (rateBuckets.size > 10_000)
+            rateBuckets.clear(); // страховка от роста
+        b = { count: 0, at: now };
+        rateBuckets.set(key, b);
+    }
+    if (b.count >= limit)
+        return false;
+    b.count++;
+    return true;
+}
+
 const DOT_EYES = ['round', 'sleepy', 'happy'];
 const DOT_ACCESSORIES = ['none', 'glasses', 'cap'];
 
@@ -116,10 +150,12 @@ export async function voiceConfig(file) {
     };
 }
 /** Синтез: текст → WAV (Buffer). Бросает ошибку, если модели нет или шлюз ответил ошибкой. */
-export async function speak(file, { text, language, instructions } = {}) {
+export async function speak(file, { text, language, instructions, uid } = {}) {
     const input = speechInput(text);
     if (!input)
         throw new Error('voice_speak: пустой текст');
+    if (!voiceRateOk('speak', uid))
+        throw new Error('voice_speak: слишком часто (лимит ' + VOICE_RATE.speak + '/мин) — попробуйте через минуту');
     const m = await modelFor(file, 'ttsModel', 'tts');
     if (!m)
         throw new Error('voice_speak: модель синтеза речи не настроена (ai/config.js ttsModel)');
@@ -132,9 +168,11 @@ export async function speak(file, { text, language, instructions } = {}) {
 }
 
 /** Распознавание: аудио (Buffer, WAV) → { text }. */
-export async function transcribe(file, { audio, language } = {}) {
+export async function transcribe(file, { audio, language, uid } = {}) {
     if (!Buffer.isBuffer(audio) || !audio.length)
         throw new Error('voice_transcribe: нет аудио');
+    if (!voiceRateOk('transcribe', uid))
+        throw new Error('voice_transcribe: слишком часто (лимит ' + VOICE_RATE.transcribe + '/мин) — попробуйте через минуту');
     if (audio.length > MAX_AUDIO_BYTES)
         throw new Error('voice_transcribe: запись слишком длинная (' + Math.round(audio.length / 1024) + ' КБ)');
     const m = await modelFor(file, 'sttModel', 'stt');

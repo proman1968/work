@@ -673,6 +673,39 @@ describe('голосовой режим: модели речи на сервер
         await assert.rejects(() => voice.transcribe(place, { audio: Buffer.alloc(voice.MAX_AUDIO_BYTES + 1) }), /слишком длинная/);
     });
 
+    it('F25: лимит частоты — ведро на субъекта, окно 1 минута; чужой субъект не мешает', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        voice.resetVoiceRate();
+        const place = await WORK.get_item('/BOX');
+        // speak: до лимита — работает, сверх — отказ с пояснением
+        for (let i = 0; i < voice.VOICE_RATE.speak; i++)
+            await voice.speak(place, { text: 'тест ' + i, uid: 'EU11111111111111' });
+        await assert.rejects(
+            () => voice.speak(place, { text: 'ещё', uid: 'EU11111111111111' }),
+            /слишком часто.*20\/мин/,
+            'сверх лимита — не отказано');
+        // другой субъект — своё ведро
+        await voice.speak(place, { text: 'чужой', uid: 'EU22222222222222' });
+        // transcribe: отдельное ведро
+        await voice.transcribe(place, { audio: Buffer.alloc(10), uid: 'EU11111111111111' });
+        for (let i = 1; i < voice.VOICE_RATE.transcribe; i++)
+            await voice.transcribe(place, { audio: Buffer.alloc(10), uid: 'EU11111111111111' });
+        await assert.rejects(
+            () => voice.transcribe(place, { audio: Buffer.alloc(10), uid: 'EU11111111111111' }),
+            /слишком часто/,
+            'распознавание сверх лимита — не отказано');
+        // speak и transcribe не делят ведро: speak забит, transcribe у ДРУГОГО — работает
+        await voice.transcribe(place, { audio: Buffer.alloc(10), uid: 'EU22222222222222' });
+        // окно истекает — ведро обнуляется (сдвигаем время вёдер напрямую не можем —
+        // проверяем reset: тесты и смена настроек очищают счётчики)
+        voice.resetVoiceRate();
+        await voice.speak(place, { text: 'после сброса', uid: 'EU11111111111111' });
+        // проводка: методы .task передают субъекта в лимит (файл читаем — метод зовёт глобаль ядра)
+        const src = fs.readFileSync(path.join(ROOT, '$server/$folder/$file/$task/class.js'), 'utf8');
+        assert.match(src, /voice\.speak\(this, \{[^}]*uid: params\.session/, 'voice_speak не передаёт субъекта');
+        assert.match(src, /voice\.transcribe\(this, \{[^}]*uid: params\.session/, 'voice_transcribe не передаёт субъекта');
+    });
+
     it('реплика голосом: агент получает VOICE_NOTE, обычная — нет', async () => {
         const { VOICE_NOTE } = await import('../sources/modules/agent/index.js');
         const place = await WORK.get_item('/BOX');
