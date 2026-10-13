@@ -78,6 +78,8 @@ before(async () => {
 
 after(async () => {
     await new Promise(r => setTimeout(r, 300));
+    const { closeIndexDb } = await import('../sources/host/index-db.js');
+    closeIndexDb(); // открытый .index/work.db не даёт удалить tmp на Windows
     process.chdir(prevCwd);
     try { await fsp.rm(tmp, { recursive: true, force: true }); } catch { /* windows */ }
 });
@@ -297,6 +299,38 @@ describe('R13 журнал безопасности: цепочка хешей �
             if (prevA == null) delete process.env.WORK_AUDIT; else process.env.WORK_AUDIT = prevA;
             if (prevT == null) delete process.env.WORK_TEST; else process.env.WORK_TEST = prevT;
         }
+    });
+});
+
+describe('R15 подложная запись в ленте не открывает чужие пути (F10)', () => {
+    it('RAG-индексация ленты кабинета не создаёт ссылок доступа; системная запись — создаёт', async () => {
+        const { indexPath, hashOf } = await import('../sources/modules/rag/indexer.js');
+        const store = await import('../sources/modules/rag/store.js');
+        const { chunkText } = await import('../sources/modules/rag/chunker.js');
+        const { CONFIG } = await import('../sources/modules/rag/config.js');
+        const { readDocument } = await import('../sources/modules/rag/extract.js');
+        const REFS = await import('../sources/server/access/refs.js');
+        // секрет класса BOX: ALICE его не видит (роль USER)
+        const target = '/BOX/$class/#secret/ok.json';
+        // подложная запись в ленте СВОЕГО кабинета: владелец дописал чужой путь руками
+        const rel = `USERS/${ALICE}/$user/logs/2026-10-13/1790000000000.${ALICE}.logs`;
+        write(rel, JSON.stringify({ time: Date.now(), sender: ALICE, content: 'смотри секрет', path: target }));
+        const p = '/' + rel;
+        await store.open();
+        // пред-наполняем контент хеша: indexPath не должен качать модель эмбеддинга
+        const doc = await readDocument(p, 'log');
+        assert.ok(doc?.text?.trim(), 'запись ленты не прочиталась');
+        const h = hashOf('log', doc.text);
+        if (!store.hasContent(h)) {
+            const chunks = chunkText(doc.text);
+            store.putContent(h, chunks, chunks.map(() => new Float32Array(CONFIG.dims)));
+        }
+        await indexPath(p, { force: true });
+        assert.ok(store.getDoc(p), 'запись ленты не проиндексирована (поиск по лентам сломан)');
+        assert.equal(await REFS.visible(ALICE, target), false, 'подложная запись открыла чужой секрет');
+        // контроль: системный путь (как logs.appendRow → writeLogTo) — открывает; сама функция жива
+        await REFS.addRow(ALICE, { time: Date.now(), path: target });
+        assert.equal(await REFS.visible(ALICE, target), true, 'системная запись больше не открывает вложение');
     });
 });
 
