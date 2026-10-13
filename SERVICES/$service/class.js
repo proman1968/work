@@ -16,6 +16,8 @@
 export default {
     icon: 'carbon:api',
     description: 'Внешние сервисы и коннекторы',
+    // F23: чтение объявлено явно (имя метода больше не считается гарантией)
+    ACCESS: { mcp_list_tools: 'read' },
 
     METADATA: {
         STATIC: [{

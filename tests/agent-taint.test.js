@@ -3,8 +3,27 @@
  * Сценарная модель и фейковые инструменты (без сети и дерева WORK).
  */
 import '../sources/reactor.js';
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+// аудит пишется в свою песочницу (раньше — в общий .index репозитория: файл дня
+// рос от прогона к прогону, превысил лимит чтения и ломал формулу «новые записи сверху»)
+let tmpAudit, prevCwd;
+before(async () => {
+    prevCwd = process.cwd();
+    tmpAudit = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-taint-'));
+    process.chdir(tmpAudit);
+});
+after(async () => {
+    const { closeIndexDb } = await import('../sources/host/index-db.js');
+    closeIndexDb();
+    await new Promise(r => setTimeout(r, 300));
+    process.chdir(prevCwd);
+    try { await fsp.rm(tmpAudit, { recursive: true, force: true }); } catch { /* windows */ }
+});
 import { runLoop, toMessages, toolContent } from '../sources/modules/agent/loop.js';
 import { decide } from '../sources/modules/agent/permissions.js';
 import { readAudit } from '../sources/server/access/audit.js';

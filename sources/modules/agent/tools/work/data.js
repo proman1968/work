@@ -2,7 +2,7 @@
  * Данные WORK: search (RAG), write_table, create_class, schema, call, query.
  * Тела — из прежнего tools/work.js (байт-в-байт); общие вызовы — ./common.js.
  */
-import { forceTaskContext, absPath, mustItem, callAs, formatSize, writeBinary, target, READ_METHOD, DANGER_METHODS, BLOCKED_METHODS } from './common.js';
+import { forceTaskContext, absPath, mustItem, callAs, formatSize, writeBinary, target, DANGER_METHODS, BLOCKED_METHODS } from './common.js';
 import { clip } from '../../util.js';
 import { FS } from '../../../../server/index.js';
 import * as GATEWAY from '../../../../server/access/gateway.js';
@@ -177,16 +177,31 @@ export const call = {
             },
             required: ['path', 'method'],
         },
-        permission(args) {
+        // F23 (final 8.16): имя метода пишет автор class.js — «get_…» ничего не гарантирует.
+        // Без вопроса проходят только ОБЪЯВЛЕННЫЕ чтения: реестр ядра (GATEWAY.MEMBERS) или
+        // явное ACCESS: {метод: 'read'} в class.js; геттер — чтение по своей природе.
+        // Остальное решает decide (риск write: защищённая цель — вопрос; ask-режим — вопрос).
+        async permission(args, ctx) {
             const m = String(args?.method || '');
             const level = GATEWAY.MEMBERS[m];
             if (DANGER_METHODS.has(m))
                 return { verdict: 'ask', reason: 'метод ' + m + ' — опасная операция' };
-            // чтение (в т.ч. security_log для ADMIN) — без вопроса; право проверит ядро
-            if (READ_METHOD.test(m) || level === GATEWAY.LEVEL.READ)
+            if (level === GATEWAY.LEVEL.READ)
                 return { verdict: 'allow' };
             if (level === GATEWAY.LEVEL.ADMIN)
                 return { verdict: 'ask', reason: 'метод ' + m + ' — операция администратора' };
+            if (level)
+                return null; // пишущий метод ядра — дальше decide
+            // свой метод класса: уровень — из объявления (DATA.ACCESS), не из имени
+            try {
+                const item = await mustItem(args?.path, ctx);
+                if (!Array.isArray(item)) {
+                    const member = GATEWAY.resolveMember(item, m);
+                    if (member?.level === GATEWAY.LEVEL.READ)
+                        return { verdict: 'allow' };
+                }
+            }
+            catch { /* путь не нашёлся — run даст понятную ошибку */ }
             return null;
         },
         async run(args, ctx) {

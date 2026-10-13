@@ -102,6 +102,11 @@ before(async () => {
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');
     write('BOX/doc/note.md', 'строка 1\nстрока 2\nстрока 3\n');
+    // F23: самодельные методы — «читающее» имя (без объявления) и явно объявленный читатель
+    write('BOX/W/$class/class.js', `export default { label: 'W',
+        async get_wipe(params = {}) { return 'стерто'; },
+        async my_reader(params = {}) { return 'прочитано'; },
+        ACCESS: { my_reader: 'read' } }`);
     write('BOX/$class/ai/system.md', 'ПРАВИЛА-МЕСТА');
     write('REPL/$class/class.js', `export default { label: 'Замена' }`);
     write('REPL/$class/ai/system.md', '---\nreplace: true\n---\nТОЛЬКО-ЭТО');
@@ -341,6 +346,26 @@ describe('permissions', () => {
         const call = workTools.find(t => t.name === 'call');
         assert.equal((await decide(call, { path: '/BOX', method: 'delete' }, { host: { mode: 'auto' } })).verdict, 'ask');
         assert.equal((await decide(call, { path: '/BOX', method: 'get_schema' }, { host: { mode: 'ask' } })).verdict, 'allow');
+    });
+
+    it('F23: «читающее» имя метода — не гарантия: вопрос; объявленное ACCESS read — без вопроса', async () => {
+        const call = workTools.find(t => t.name === 'call');
+        const ask = { mode: 'ask', allowed: new Set() };
+        const auto = { mode: 'auto', allowed: new Set() };
+        // метод ядра (реестр MEMBERS = read) — как раньше, без вопроса
+        assert.equal((await decide(call, { path: '/BOX', method: 'get_schema' }, { host: ask })).verdict, 'allow');
+        // самодельный метод с «читающим» именем — имя пишет автор class.js: в ask — вопрос
+        assert.equal((await decide(call, { path: '/BOX/W', method: 'get_wipe' }, { host: ask })).verdict, 'ask',
+            '«читающее» имя прошло без объявления');
+        // auto + своя точка — без вопроса (права и запись проверит ядро — как у пишущих методов)
+        assert.equal((await decide(call, { path: '/BOX/W', method: 'get_wipe' }, { host: auto })).verdict, 'allow');
+        // явно объявленный читатель (ACCESS: {метод: 'read'} в class.js) — без вопроса
+        assert.equal((await decide(call, { path: '/BOX/W', method: 'my_reader' }, { host: ask })).verdict, 'allow',
+            'объявленное ACCESS read не работает');
+        // объявление $service: перечисление MCP-инструментов — чтение
+        const { pathToFileURL } = await import('node:url');
+        const svc = await import(pathToFileURL(path.join(ROOT, 'SERVICES/$service/class.js')).href);
+        assert.equal(svc.default.ACCESS?.mcp_list_tools, 'read', 'mcp_list_tools не объявлен чтением');
     });
 });
 

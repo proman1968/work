@@ -429,6 +429,7 @@ export async function resolvePeople(list) {
     return out;
 }
 
-export const READ_METHOD = /^(get_|list|read|load|info|find|search|fetch|logs|members|schema|services_schema|semantic_search|query_objects|rag_status|declared_roles|work_zone|roles|mcp_list_tools|security_log|network_graph|assignedUsers|allAdmins|allBosses)/;
+// (F23, removed) READ_METHOD — угадывание «чтения» по имени метода: имя пишет автор class.js,
+// «get_…» ничего не гарантирует. Уровень берётся из реестра ядра или объявления ACCESS в class.js.
 export const DANGER_METHODS = new Set(['delete', 'npm', 'proxy', 'restart_normal', 'save_secret', 'read_secret', 'clear_rag', 'send_push_notification', 'save', 'restore_from_history']);
 export const BLOCKED_METHODS = new Set(['constructor', 'execute', 'reset', 'fire', 'listen', 'assertAccess', 'canSee', 'canWrite', 'user_register_start', 'user_register_process', 'user_register_finish', 'user_login_start', 'user_login_finish']);
