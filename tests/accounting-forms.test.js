@@ -84,7 +84,7 @@ describe('форма объектов', () => {
         await h.save();
         assert.deepEqual(calls.find(c => c.method === 'update_object'), { method: 'update_object', params: { id: '1.X' }, post: { name: 'Новая' } });
         h.editing = { id: '1.X', name: 'Старая' };
-        await h.remove();
+        await h.removeObject();
         assert.deepEqual(calls.find(c => c.method === 'delete_object'), { method: 'delete_object', params: { id: '1.X' }, post: undefined });
         h.$item.fetch = async (method, params) => {
             calls.push({ method, params });

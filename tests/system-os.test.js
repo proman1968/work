@@ -24,7 +24,14 @@ before(async () => {
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file']) write(path.join(root, p, 'class.js'), 'export default {}');
     process.chdir(root); globalThis.WORK = new $server();
 });
-after(async () => { await new Promise(r => setTimeout(r, 300)); process.chdir(previous); await fsp.rm(tmp, { recursive: true, force: true }); });
+after(async () => {
+    process.chdir(previous);
+    // повтор rm: каталог был cwd убитого процесса — Windows может держать его доли секунды
+    for (let i = 0; i < 30; i++) {
+        try { await fsp.rm(tmp, { recursive: true, force: true }); return; }
+        catch { await new Promise(r => setTimeout(r, 100)); }
+    }
+});
 
 it('админ получает os/net, пользователь и узел — нет; wildcard субагента не расширяет доступ', async () => {
     const admin = await createEnv({ place: WORK, session: { uid: 'admin' } });

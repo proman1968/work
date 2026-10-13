@@ -247,11 +247,15 @@ export function run(file, args = [], o = {}) {
             windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], shell: !!o.shell,
         });
         const kill = () => {
+            // дерево (внучата при shell: true) — taskkill /T; он может сработать с большой
+            // задержкой или не найти процесс, поэтому прямое убийство делаем сразу и сами
             try {
                 if (IS_WIN && child.pid)
                     spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-                else
-                    child.kill('SIGKILL');
+            }
+            catch (e) { log.debug('shell.kill.tree', e); /* уже завершён */ }
+            try {
+                child.kill('SIGKILL');
             }
             catch (e) { log.debug('shell.kill', e); /* уже завершён */ }
         };

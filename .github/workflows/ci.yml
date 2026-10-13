@@ -1,11 +1,12 @@
 # CI (hardening 4.5): линтер, типы, тесты и сканеры секретов на каждый push и PR.
 #
-# ubuntu-latest: пути с `$` в именах ($server/$class) и русские имена файлов — норма для git/Linux,
-# тесты платформо-нейтральны (единственная Windows-ветка — symlink junction в system-os, он ниже исключён).
+# ubuntu-latest: пути с `# CI (hardening 4.5): линтер, типы, тесты и сканеры секретов на каждый push и PR.
 #
-# test:ci — все тесты, кроме осознанно-красного baseline (accounting-forms — формы не дописаны,
-# ai-package — дубль навыка register-accounts.md; долги, чинятся отдельно) и нестабильного при
-# полном параллельном прогоне system-os. CI должен быть зелёным, чтобы видеть новые регрессии.
+ в именах ($server/$class) и русские имена файлов — норма для git/Linux,
+# тесты платформо-нейтральны (Windows-ветка junction в system-os на Linux — обычная dir-ссылка).
+#
+# test:ci = npm test (final 8.1): красных долгов нет — accounting-forms и ai-package починены,
+# system-os стабилен (таймаут run() теперь убивает процесс сразу, а не ждёт медленный taskkill).
 # package-lock.json в репо не хранится (миррор) — поэтому npm install, а не npm ci.
 name: CI
 
