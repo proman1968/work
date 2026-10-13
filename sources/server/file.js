@@ -5,6 +5,7 @@ import * as mime from "mime-types";
 import * as kreuzberg from '@kreuzberg/node';
 import { DOMParser } from 'linkedom';
 import * as XLSX from 'xlsx';
+import { assertZipSafe } from './zip-guard.js';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
@@ -74,6 +75,9 @@ function sheetText(buf) {
 
 async function extractText(buf, ext, path) {
     const kind = sniffKind(buf, ext);
+    // zip-архивы (docx/xlsx/pptx/odt) — проверить до любого распаковщика (F16)
+    if (kind === 'zip')
+        assertZipSafe(buf);
     if (kind === 'text' || kind === 'html' || kind === 'xml')
         return markupText(buf, kind);
     let lastErr;

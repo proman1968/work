@@ -57,6 +57,16 @@ before(async () => {
     write('ORG/$class/USER/work.md', 'рабочее');
     write('ORG/$class/USER/tpl/letter.md', 'Уважаемый {{client.name}}! Счёт №{{number}} на {{sum}} руб.');
     write('ORG/$class/BOSS/plan.md', 'план');
+    // «бомба»-таблица: 2 МБ нулей, сжатых в ~1 КБ (степень сжатия >200) — до старта WORK
+    {
+        const AdmZip = (await import('adm-zip')).default;
+        const z = new AdmZip();
+        z.addFile('xl/worksheets/sheet1.xml', Buffer.alloc(2 * 1024 * 1024));
+        write('ORG/$class/USER/бомба.xlsx', z.toBuffer());
+        const zd = new AdmZip();
+        zd.addFile('word/document.xml', Buffer.alloc(2 * 1024 * 1024));
+        write('ORG/$class/USER/бомба.docx', zd.toBuffer());
+    }
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -189,6 +199,24 @@ describe('документы и таблицы', () => {
         const bodies = files.map(f => JSON.parse(fs.readFileSync(path.join(tmp, 'ORG/$class/DATA', f), 'utf-8')));
         assert.deepEqual(bodies.map(b => b.code).sort(), ['A1', 'A2', 'A3']);
         await assert.rejects(tool('import_objects').run({ path: '/ORG', type: 'nope', rows: [{}] }, as(PETR)), /нет типа данных \$nope/);
+    });
+
+    it('read_table: архивная бомба .xlsx — отказ до разбора (F16)', async () => {
+        await assert.rejects(tool('read_table').run({ path: '/ORG/$class/USER/бомба.xlsx' }, as(PETR)), /бомбу|отклонён/);
+    });
+
+    it('render_doc: архивная бомба .docx — отказ до разбора (F16)', async () => {
+        await assert.rejects(tool('render_doc').run({
+            template: '/ORG/$class/USER/бомба.docx',
+            path: '/ORG/из-бомбы.docx',
+            data: { x: 1 },
+        }, as(PETR)), /бомбу|отклонён/);
+    });
+
+    it('read_table: таблица больше 25 МБ — отказ до разбора (F16)', async () => {
+        const big = await tool('write').run({ path: '/ORG/таблица-гигант.csv', content: 'a\n' + 'x'.repeat(26 * 1024 * 1024) }, as(PETR));
+        const src = String(big).match(/(?:создан|сохранено|перезаписан) (\S+)/)[1];
+        await assert.rejects(tool('read_table').run({ path: src }, as(PETR)), /25 МБ/);
     });
 
     it('render_doc: md с вложенными полями; docx с меткой, разрезанной Word на куски, и экранированием', async () => {

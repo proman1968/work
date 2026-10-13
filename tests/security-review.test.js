@@ -302,6 +302,67 @@ describe('R13 журнал безопасности: цепочка хешей �
     });
 });
 
+describe('R16 xlsx — исправленная версия из репозитория, не уязвимый реестр npm (F15)', () => {
+    it('установлен SheetJS >= 0.20.3 (закрыты загрязнение прототипа и ReDoS) из vendor/, spec не указывает на npm', () => {
+        const installed = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules/xlsx/package.json'), 'utf-8'));
+        const [maj, min] = String(installed.version).split('.').map(Number);
+        assert.ok(maj > 0 || min >= 20, 'установлен уязвимый xlsx ' + installed.version + ' (npm-реестр застрял на 0.18.5)');
+        const spec = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).dependencies.xlsx;
+        assert.match(String(spec), /^file:vendor\/|cdn\.sheetjs\.com/, 'зависимость указывает на уязвимый npm-реестр: ' + spec);
+    });
+});
+
+describe('R17 страж zip-архивов: бомба и ложные заголовки не доходят до распаковщиков (F16)', () => {
+    it('бомба (2 МБ нулей, сжатых в ~1 КБ) — отклонена; не-zip буфер и нормальный архив — пропущены', async () => {
+        const { assertZipSafe, isZip } = await import('../sources/server/zip-guard.js');
+        const AdmZip = (await import('adm-zip')).default;
+        // adm-zip сжимает сам: честный заголовок — 2 МБ в ~1 КБ, степень >200
+        const bomb = new AdmZip();
+        bomb.addFile('word/document.xml', Buffer.alloc(2 * 1024 * 1024));
+        assert.throws(() => assertZipSafe(bomb.toBuffer()), /бомбу/);
+        assert.doesNotThrow(() => assertZipSafe(Buffer.from('id=xlsx, обычный текст')));
+        assert.equal(isZip(Buffer.from('PK\u0003\u0004x')), true);
+    });
+    it('лживый заголовок (обещан 5 КБ, внутри 2 МБ) — отклонён до разбора', async () => {
+        const { assertZipSafe } = await import('../sources/server/zip-guard.js');
+        const AdmZip = (await import('adm-zip')).default;
+        // честный архив с 2 МБ данных; затем патчим объявленный размер в заголовках до 5 КБ
+        const name = 'word/document.xml';
+        const z = new AdmZip();
+        z.addFile(name, Buffer.alloc(2 * 1024 * 1024));
+        const buf = z.toBuffer();
+        const lfh = buf.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+        const cdh = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+        assert.ok(lfh === 0 && cdh > 0, 'архив не собрался');
+        buf.writeUInt32LE(5000, lfh + 22);  // несжатый размер в локальном заголовке
+        buf.writeUInt32LE(5000, cdh + 24);  // …и в центральном каталоге
+        // распаковка с потолком 5000 упрётся в реальные 2 МБ → отказ
+        assert.throws(() => assertZipSafe(buf), /бомба|объявлен/);
+    });
+    it('проводка: извлечение текста $file отвергает бомбу до kreuzberg и SheetJS', async () => {
+        const { assertZipSafe } = await import('../sources/server/zip-guard.js');
+        const AdmZip = (await import('adm-zip')).default;
+        const { $file } = await import('../sources/server/file.js');
+        const z = new AdmZip();
+        z.addFile('word/document.xml', Buffer.alloc(2 * 1024 * 1024));
+        await assert.rejects($file.extractText(z.toBuffer(), 'docx', 'бомба.docx'), /бомбу|отклонён/);
+        // пустой архив (только EOCD-запись) — валиден и проходит
+        const empty = Buffer.alloc(22);
+        empty.writeUInt32LE(0x06054b50, 0);
+        assert.doesNotThrow(() => assertZipSafe(empty));
+    });
+
+    it('лимит записей: архив из 10001 мелких файлов — отклонён', async () => {
+        const { assertZipSafe } = await import('../sources/server/zip-guard.js');
+        const AdmZip = (await import('adm-zip')).default;
+        const zlib = await import('node:zlib');
+        const z = new AdmZip();
+        for (let i = 0; i <= 10_000; i++)
+            z.addFile('f' + i + '.txt', Buffer.from('x'));
+        assert.throws(() => assertZipSafe(z.toBuffer()), /слишком много записей/);
+    });
+});
+
 describe('R15 подложная запись в ленте не открывает чужие пути (F10)', () => {
     it('RAG-индексация ленты кабинета не создаёт ссылок доступа; системная запись — создаёт', async () => {
         const { indexPath, hashOf } = await import('../sources/modules/rag/indexer.js');

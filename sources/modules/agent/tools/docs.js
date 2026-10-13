@@ -16,9 +16,12 @@ import { pathToFileURL } from 'node:url';
 import { FS } from '../../../server/index.js';
 import { getItem, callAs, writeBinary, absPath } from './work.js';
 import { run } from '../system.js';
+import { assertZipSafe } from '../../../server/zip-guard.js';
 
 const IMPORT_MAX = 1000;
 const PDF_SOURCE_MAX = 5 * 1024 * 1024;
+/** Потолок файла таблицы для инструментов агента (F16). */
+const TABLE_MAX_BYTES = 25 * 1024 * 1024;
 const PDF_RENDER_TIMEOUT = 60000;
 
 /** Кандидаты headless-браузера для рендера PDF по платформам. */
@@ -179,6 +182,9 @@ async function tableRows(file, ctx, sheet) {
     const buf = await callAs(file, 'load', { encoding: null }, ctx);
     if (!Buffer.isBuffer(buf))
         throw new Error('таблица: файл не читается как двоичный');
+    if (buf.length > TABLE_MAX_BYTES)
+        throw new Error('таблица больше ' + Math.round(TABLE_MAX_BYTES / 1048576) + ' МБ — упрости или разреж (F16)');
+    assertZipSafe(buf); // xlsx/ods — zip: бомба не должна дойти до разбора
     const XLSX = await import('xlsx');
     const wb = ext === 'csv' || ext === 'tsv'
         ? XLSX.read(buf.toString('utf-8').replace(/^\uFEFF/, ''), { type: 'string', raw: false, FS: ext === 'tsv' ? '\t' : undefined })
@@ -257,6 +263,7 @@ export function fillText(text, data, esc = s => String(s ?? ''), missing = new S
  * сначала склеиваем метку, убирая теги внутри неё, затем подставляем с XML-экранированием.
  */
 export function fillDocx(buf, data, missing = new Set()) {
+    assertZipSafe(buf); // docx — zip: лимиты распаковки до adm-zip (F16)
     const zip = new AdmZip(buf);
     const parts = zip.getEntries().filter(e => /^word\/(document|header\d*|footer\d*)\.xml$/.test(e.entryName));
     if (!parts.length)
