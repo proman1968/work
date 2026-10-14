@@ -230,8 +230,12 @@ export const metaTools = [
             const def = ctx.env.agents.get(String(args.agent));
             if (!def)
                 throw new Error('нет субагента «' + args.agent + '»');
-            if (!(await ctx.env.makeTools(def, depth, ctx.tools)).length)
+            const preview = await ctx.env.makeTools(def, depth, ctx.tools);
+            if (!preview.length)
                 throw new Error('субагенту в этой роли недоступны инструменты');
+            // R3 (8.31): ограничение call родителя переживает перезапуск дочерней задачи —
+            // в теле (body.callRestrict); применяется при каждом запуске (session.js → makeTools)
+            const pcall = preview.find(t => t.name === 'call' && t.restrictedMethods);
             const point = ctx.env.place;
             if (!point || typeof point.save_file !== 'function')
                 throw new Error('нет рабочей точки для дочерней задачи');
@@ -247,7 +251,8 @@ export const metaTools = [
             const name = String(args.description || args.agent).slice(0, 80);
             const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle', mode: parentMode,
                 parentTask: ctx.task.path, ownerUid: ctx.session.uid, childAgent: def.name, childDepth: depth,
-                model: def.meta.model || ctx.llm.name, role: ctx.role };
+                model: def.meta.model || ctx.llm.name, role: ctx.role,
+                ...(pcall ? { callRestrict: [...pcall.restrictedMethods] } : {}) };
             // skip_file_handler: не запускать триггер одновременно с явным prompt ниже.
             const log = await callAs(point, 'save_file', {
                 filename: name.replace(/[<>:"/\\|?*\r\n]/g, ' ').trim() + '.task',

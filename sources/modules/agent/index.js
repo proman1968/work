@@ -228,8 +228,9 @@ export async function createEnv({ place, session, host, tz, location, role, voic
         /**
          * Инструменты агента (def — субагент или undefined для основного).
          * parent — инструменты вызывающего агента: субагент никогда не получает больше, чем есть у него.
+         * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
-        async makeTools(def, depth = 0, parent = null) {
+        async makeTools(def, depth = 0, parent = null, restrict = null) {
             let all = [...workTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
@@ -273,7 +274,12 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             }
             // фронтматтер call: [members, …] — субагенту разрешены только эти методы call (аудитор, ревьюер: чтение без записи)
             const methods = Array.isArray(def.meta.call) ? new Set(def.meta.call.map(String)) : null;
-            return methods ? picked.map(t => t.name === 'call' ? restrictCall(t, methods) : t) : picked;
+            let out = methods ? picked.map(t => t.name === 'call' ? restrictCall(t, methods) : t) : picked;
+            // R3 (8.31): ограничение call родителя, пережившее перезапуск — в теле дочерней задачи
+            // (agent_start записывает body.callRestrict; запуск задачи применяет его здесь)
+            if (Array.isArray(restrict) && restrict.length)
+                out = out.map(t => t.name === 'call' ? restrictCall(t, new Set(restrict.map(String))) : t);
+            return out;
         },
         /**
          * system-промпт по частям для кэша провайдера (loop.js splitSystem/toMessages):

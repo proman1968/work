@@ -699,6 +699,21 @@ describe('окружение: слои ai/, system, навыки, субаген
         assert.ok(!free.find(t2 => t2.name === 'call')?.restrictedMethods, 'лишнего ограничения нет');
     });
 
+    it('R3 (8.31): ограничение из тела задачи (callRestrict) применяется и без родительского набора', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        // после перезапуска живых родительских инструментов нет — только тело дочерней задачи
+        const child = await env.makeTools(env.agents.get('general'), 1, null, ['members']);
+        const call = child.find(t2 => t2.name === 'call');
+        assert.ok(call, 'у субагента есть call');
+        assert.ok(call.restrictedMethods?.has('members'), 'ограничение из тела задачи применено');
+        assert.equal((await call.permission({ method: 'save_file' }, {}))?.verdict, 'deny');
+        await assert.rejects(() => call.run({ path: '/BOX', method: 'save_file', args: {} }, { entry: {} }),
+            /только методы call: members/);
+        // без ограничения в теле — полный call
+        const free = await env.makeTools(env.agents.get('general'), 1, null, null);
+        assert.ok(!free.find(t2 => t2.name === 'call')?.restrictedMethods, 'лишнего ограничения нет');
+    });
+
     it('субагент task: своя лента внутри вызова, отчёт — результат', async () => {
         const place = await WORK.get_item('/BOX');
         globalThis.__MOCK_STREAM__ = scripted([
@@ -1130,6 +1145,36 @@ describe('сессия .task', () => {
         finally {
             await closeIndexDb();
         }
+    });
+
+    it('R3 (8.31): agent_start от родителя с ограниченным call — ограничение переживает перезапуск дочерней задачи', async () => {
+        const parent = await newTask('parent-r3');
+        const point = await WORK.get_item('/BOX');
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const env = await createEnv({ place: point, session: actor, host: mkHost(), role: 'USER' });
+        // родитель — аудитор: call только members (набор как у работающей задачи)
+        const parentTools = await env.makeTools({ name: 'auditor', meta: { tools: ['call'], call: ['members'] } }, 0);
+        const ctx = { task: parent, session: actor, role: 'USER', place: point, env, depth: 0, host: mkHost(),
+            tools: parentTools, entry: {}, llm: { name: '/MODELS/mock' } };
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'call', args: { path: '/BOX', method: 'save_file', args: { filename: 'x.md', post: 'чужое' } } }] },
+            { text: 'отказ получен, работаю только чтением' },
+        ]).stream;
+        const start = metaTools.find(t2 => t2.name === 'agent_start');
+        const result = await start.run({ agent: 'general', prompt: 'Работай', description: 'Ограниченное дитя' }, ctx);
+        assert.match(result, /Продолжимый агент/);
+        const child = await WORK.get_item(ctx.entry.path);
+        const body0 = await session.getBody(child);
+        assert.deepEqual(body0.callRestrict, ['members'], 'ограничение записано в тело дочерней задачи');
+        await session.idle(child);
+        const done = await session.getBody(child);
+        // запрещённый метод в дочерней задаче — отказ с причиной, запись не исполнена
+        const entry = done.items.flatMap(i => i.tools || []).find(e => e.name === 'call');
+        assert.ok(entry, 'в ленте есть вызов call');
+        assert.equal(entry.status, 'denied', 'запрещённый метод прошёл в дочерней задаче после запуска');
+        assert.match(String(entry.error || ''), /только методы call: members/);
+        assert.equal(done.items.at(-1).content, 'отказ получен, работаю только чтением');
     });
 
     it('подтверждение, пережившее рестарт: approve применяется к ленте и работа продолжается', async () => {

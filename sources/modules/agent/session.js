@@ -423,7 +423,8 @@ function start(s, session, file) {
                 system: () => env.makeSystemParts(def),
                 hooks: env.hooks,
                 items: body.items,
-                tools: await env.makeTools(def, depth),
+                // R3 (8.31): ограничение call родителя из тела задачи (agent_start записал callRestrict)
+                tools: await env.makeTools(def, depth, undefined, body.callRestrict),
                 host,
                 depth,
                 ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
