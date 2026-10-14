@@ -22,16 +22,22 @@ import { netTools } from '../sources/modules/agent/tools/net.js';
 import { sandboxTools } from '../sources/modules/agent/tools/sandbox.js';
 import { computerTools } from '../sources/modules/agent/tools/computer.js';
 import { browserTools } from '../sources/modules/agent/tools/browser.js';
+import { devSearchTools } from '../sources/modules/agent/tools/dev/search.js';
+import { devPatchTools } from '../sources/modules/agent/tools/dev/patch.js';
+import { devGitTools } from '../sources/modules/agent/tools/dev/git.js';
+import { devCheckTools } from '../sources/modules/agent/tools/dev/checks.js';
+import { devLspTools } from '../sources/modules/agent/tools/dev/lsp.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const AI = path.join(ROOT, '$server/$folder/$class/ai');
 const PLACE_SKILLS = [path.join(ROOT, 'DATA/REGISTER/$register/ai/skills')];
 const MAX_DESCRIPTION = 400; // список в system обрезается: смысл должен уместиться
-const SUBAGENT_DENY = ['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule'];
+const SUBAGENT_DENY = ['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push'];
 const REQUIRES = ['system', 'sandbox'];
 
 const TOOLS = [...workTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools,
-    ...scheduleTools, ...osFileTools, ...osProcTools, ...netTools, ...sandboxTools, ...computerTools, ...browserTools];
+    ...scheduleTools, ...osFileTools, ...osProcTools, ...netTools, ...sandboxTools, ...computerTools, ...browserTools,
+    ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools];
 const BY_NAME = new Map(TOOLS.map(t => [t.name, t]));
 /** Инструменты, имена которых зависят от установленных сервисов (svc_<сервис>_<метод>, mcp_…). */
 const dynamic = name => /^(svc|mcp)_/.test(name);

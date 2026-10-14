@@ -27,6 +27,7 @@ import { ensureComputer, writeText, setNetwork } from '../sources/modules/sandbo
 import { loadSandboxConfig } from '../sources/modules/sandbox/config.js';
 import { markExternal, unmarkExternal, resetExternalSources } from '../sources/server/external-source.js';
 
+const ROOT = path.resolve(import.meta.dirname, '..');
 const UID = 'DU00000000000001';
 const ADMIN = 'admin';
 let tmp, root, previous;
@@ -83,6 +84,9 @@ before(async () => {
     write(path.join(root, 'SRC/mod.ts'), 'export function hello() { return 1; }\nexport const num: number = "not a number";\nconst y = hello();\n');
     // ловушка границы слова: helloWorld — НЕ вхождение hello
     write(path.join(root, 'SRC/other.ts'), 'const helloWorld = 1;\nconst other = 2;\n');
+    // 6.7: агент-разработчик — настоящий файл движка (копия, как $task в agent-core)
+    write(path.join(root, '$server/$folder/$class/ai/agents/developer.md'),
+        fs.readFileSync(path.join(ROOT, '$server', '$folder', '$class', 'ai', 'agents', 'developer.md'), 'utf-8'));
     process.chdir(root);
     globalThis.WORK = new $server();
     // 6.4: git-репозиторий в корне тестового дерева (арена work) — скрытая .git в обходы не попадает
@@ -720,5 +724,56 @@ describe('lsp: арена sandbox', () => {
         const names = (await env.makeTools()).map(t => t.name);
         for (const n of ['lsp_diagnostics', 'lsp_definition', 'lsp_references', 'lsp_rename'])
             assert.ok(names.includes(n), n);
+    });
+});
+
+// ── 6.7 (final): агент-разработчик ─────────────────────────────────────────
+
+describe('developer: субагент-разработчик', () => {
+    const devFile = () => fs.readFileSync(path.join(ROOT, '$server', '$folder', '$class', 'ai', 'agents', 'developer.md'), 'utf-8');
+    const devDef = async () => (await import('../sources/modules/agent/util.js')).parseFrontmatter(devFile());
+
+    it('фронтматтер: маски инструментов, requires — обе арены', async () => {
+        const def = await devDef();
+        assert.equal(def.meta.name, 'developer');
+        assert.ok(Array.isArray(def.meta.tools) && def.meta.tools.length > 5, 'маски — список');
+        assert.deepEqual(def.meta.requires, ['system', 'sandbox'], 'требуется хотя бы одна арена');
+        assert.ok(def.body.includes('apply_patch'), 'тело не ведёт к правкам инструментами правки');
+    });
+
+    it('виден, когда доступна ХОТЯ БЫ ОДНА арена; без арен — скрыт', async () => {
+        // админ без Docker: арена work есть — виден
+        setDockerForTests(null); // «Docker недоступен» (подмена сбрасывает кэш доступности)
+        const adm = await createEnv({ place: WORK, session: { uid: ADMIN } });
+        assert.ok(adm.agents.has('developer'), 'админ без Docker не видит developer (арена work недоступна?)');
+        // не-админ без Docker: ни одной арены — скрыт
+        const user = await createEnv({ place: WORK, session: { uid: UID } });
+        assert.ok(!user.agents.has('developer'), 'без арен developer всё равно виден');
+        // не-админ С Docker: арена sandbox есть — виден (ИЛИ, не И)
+        setDockerForTests(fakeDocker());
+        const dockerUser = await createEnv({ place: WORK, session: { uid: UID } });
+        assert.ok(dockerUser.agents.has('developer'), 'не-админ с Docker не видит developer (требуется И вместо ИЛИ?)');
+        resetDockerForTests();
+    });
+
+    it('набор: инструменты разработчика есть, git_push и os_* — нет', async () => {
+        const env = await createEnv({ place: WORK, session: { uid: ADMIN } });
+        const def = await devDef();
+        const names = (await env.makeTools(def, 0)).map(t => t.name);
+        for (const want of ['grep', 'glob', 'apply_patch', 'git_commit', 'git_status', 'run_checks', 'lsp_diagnostics', 'lsp_rename', 'read', 'edit'])
+            assert.ok(names.includes(want), want + ' нет в наборе developer');
+        assert.ok(!names.includes('git_push'), 'push выдан субагенту');
+        assert.ok(!names.some(n => n.startsWith('os_')), 'инструменты ОС попали в набор без requires: system');
+        // skill добавляется всегда
+        assert.ok(names.includes('skill'));
+    });
+
+    it('пересечение с родителем: readonly-родитель не даёт developer правку', async () => {
+        const env = await createEnv({ place: WORK, session: { uid: ADMIN } });
+        const def = await devDef();
+        const parent = await env.makeTools({ meta: { tools: 'readonly' } });
+        const names = (await env.makeTools(def, 1, parent)).map(t => t.name);
+        assert.ok(names.includes('grep') && names.includes('read'), 'чтение должно остаться');
+        assert.ok(!names.includes('apply_patch') && !names.includes('edit'), 'делегирование расширило права записи');
     });
 });

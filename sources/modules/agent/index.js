@@ -195,8 +195,13 @@ export async function createEnv({ place, session, host, tz, location, role, voic
         loadSystem(place),
         Promise.all([system(), sandboxAvailable()]).then(([sys, box]) => ({ system: !!sys, sandbox: !!box })),
     ]);
-    // фронтматтер requires: [system | sandbox] — агент/навык виден, только если возможность есть у этой сессии
-    const usable = docs => new Map([...docs].filter(([, d]) => [].concat(d.meta.requires ?? []).every(r => caps[r] !== false)));
+    // фронтматтер requires: system | sandbox (или список) — агент/навык виден, когда доступна
+    // ХОТЯ БЫ ОДНА перечисленная арена (6.7: агент-разработчик — код сервера ИЛИ песочница);
+    // ни одной — скрыт: нечего предлагать без арен
+    const usable = docs => new Map([...docs].filter(([, d]) => {
+        const req = [].concat(d.meta.requires ?? []);
+        return !req.length || req.some(r => caps[r] !== false);
+    }));
     const agents = usable(allAgents);
     const skills = usable(allSkills);
     let extTools = null;
