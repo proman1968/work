@@ -214,11 +214,29 @@ function auditCall(sess, name, args, verdict, outcome, extra = {}) {
 
 /**
  * Выполнить tools/call: хуки → политика → (подтверждение) → инструмент → хуки → аудит.
+ * R5 (8.33): запросы сессии исполняются ПО ОЧЕРЕДИ — параллельные вызовы одного клиента
+ * не вычисляют заражение до его пометки (read в одном запросе успевает пометить контекст,
+ * и параллельный send спрашивает подтверждение). Батч уже был последовательным (F17) —
+ * теперь и отдельные параллельные HTTP-запросы.
  * @param {object} sess сессия MCP
  * @param {{name: string, arguments?: object}} params
  * @param {{ askHuman?: (message: string) => Promise<boolean> }} io askHuman — подтверждение через elicitation (если есть)
  */
 export async function callTool(sess, params, io = {}) {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const tail = (sess.queue || Promise.resolve()).catch(() => {});
+    sess.queue = gate;
+    await tail;
+    try {
+        return await runToolCall(sess, params, io);
+    }
+    finally {
+        release();
+    }
+}
+
+async function runToolCall(sess, params, io = {}) {
     const name = String(params?.name || '');
     const tool = tools.get(name);
     if (!tool)

@@ -489,6 +489,33 @@ describe('MCP: инструменты WORK с правами пользоват�
         assert.match(textOf(batch[1]), /подтверждение человека/);
     });
 
+    it('R5 (8.33): запрос в ожидании подтверждения держит очередь сессии — параллельный запрос не исполняется до ответа человека', async () => {
+        const c = await connect(alice.token, { elicitation: {} });
+        // write в код — подтверждение; человек «думает» (elicitation висит)
+        let answer;
+        const gate = new Promise(r => { answer = r; });
+        let asked = false;
+        const writeSse = callSse(alice.token, c.sid, 'write', { path: '/BOX/doc/hold.js', content: 'export default {}' },
+            async () => { asked = true; await gate; return false; });
+        for (let k = 0; k < 100 && !asked; k++)
+            await new Promise(r => setTimeout(r, 10));
+        assert.ok(asked, 'подтверждение не спросилось');
+        // параллельный запрос ТОЙ ЖЕ сессии: пока человек не ответил — не исполняется
+        let done = false;
+        const readP = callSse(alice.token, c.sid, 'read', { path: '/BOX/doc/mail.eml' },
+            () => { throw new Error('вопросов быть не должно'); })
+            .then(ev => { done = true; return ev; });
+        await new Promise(r => setTimeout(r, 300));
+        assert.equal(done, false, 'параллельный запрос исполнился, пока человек не ответил — гонка не закрыта');
+        // человек отвечает «нет» → write отклонён, очередь отпускается, read выполняется
+        answer(false);
+        const ev = await writeSse;
+        const readEv = await readP;
+        assert.equal(readEv.at(-1).result.isError, false, JSON.stringify(readEv.at(-1)));
+        assert.match(textOf(ev.at(-1)), /отклонил действие/i);
+        assert.equal(fs.existsSync(path.join(tmp, 'BOX/doc/hold.js')), false, 'файл создан без подтверждения');
+    });
+
     it('повторный initialize не отмывает контекст клиента: заражение живёт на токен (F17)', async () => {
         const a = await connect(alice.token);
         const mail = textOf(await a.call('read', { path: '/BOX/doc/mail.eml' }));
