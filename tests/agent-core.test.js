@@ -15,6 +15,7 @@ import { runLoop, toMessages, maybeCompact, VOLATILE_HEAD } from '../sources/mod
 import { readAudit } from '../sources/server/access/audit.js';
 import { decide, isProtectedPath } from '../sources/modules/agent/permissions.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
+import { webTools } from '../sources/modules/agent/tools/services.js';
 import { createEnv, runOnce } from '../sources/modules/agent/index.js';
 import { metaTools } from '../sources/modules/agent/tools/meta.js';
 import * as session from '../sources/modules/agent/session.js';
@@ -116,6 +117,76 @@ before(async () => {
     write('SERVICES/$class/class.js', `export default {}`);
     write('SERVICES/zeta/$class/class.js', `export default { SCHEMA: { zrun: { description: 'z', readonly: true }, arun: { description: 'a', readonly: true } } }`);
     write('SERVICES/alpha/$class/class.js', `export default { SCHEMA: { zmid: { description: 'm', readonly: true }, abeg: { description: 'b', readonly: true } } }`);
+    // фейковые сервисы для web_search / svc_* / mcp_* (покрытие C3): поиск с разным поведением,
+    // SCHEMA-методы (readonly и нет), LAN-сервис, вложенный, выключенный, ломающийся при импорте, фейковый MCP
+    write('SERVICES/plainfind/$class/class.js', `export default {
+        label: 'PlainFind',
+        SCHEMA: { search: { description: 'поиск без capability' } },
+        async search({ query }) {
+            if (query === 'пусто')
+                return { results: [] };
+            return { results: ['запасной: ' + query] };
+        },
+    }`);
+    write('SERVICES/searchy/$class/class.js', `export default {
+        label: 'Searchy', capabilities: 'search',
+        SCHEMA: { search: { description: 'поиск' }, broken: { description: 'ломается' } },
+        async search({ query }) {
+            if (query === 'пусто')
+                return { results: [] };
+            if (query === 'отказ')
+                return { error: 'сервис сломался' };
+            if (query === 'полуотказ')
+                return { error: 'частичная ошибка', abstract: 'нашлось-вопреки' };
+            if (query === 'сломайся')
+                throw new Error('внутренняя ошибка Searchy');
+            return { abstract: 'нашлось: ' + query, results: [
+                { title: 'Первый', url: 'https://x.test/1', snippet: 'сниппет' },
+                'просто строка результата',
+            ] };
+        },
+        async broken() { return { error: 'метод сломался' }; },
+    }`);
+    write('SERVICES/lanthing/$class/class.js', `export default {
+        label: 'LAN-вещь', lanKind: true, '#security': { USER: ['${CHILD_UID}'] },
+        SCHEMA: { weather: { description: 'погода' }, print: { description: 'печать' } },
+        async weather() { return 'ясно'; },
+        async print(args) { return 'напечатано ' + JSON.stringify(args || {}); },
+    }`);
+    write('SERVICES/outer/$class/class.js', `export default {}`);
+    write('SERVICES/outer/inner/$class/class.js', `export default {
+        label: 'Вложенный', SCHEMA: { doit: { description: 'действие' } },
+        async doit(args) { return 'сделано ' + JSON.stringify(args || {}); },
+    }`);
+    write('SERVICES/off/$class/class.js', `export default { enabled: false, SCHEMA: { x: { description: 'выключен' } } }`);
+    write('SERVICES/boom/$class/class.js', `throw new Error('класс не импортируется');
+export default {};`);
+    write('SERVICES/fakemcp/$class/class.js', `export default {
+        label: 'FakeMCP', mcp: true,
+        async mcp_list_tools() {
+            return { tools: [
+                { name: 'peek', description: 'чтение', annotations: { readOnlyHint: true } },
+                { name: 'nuke', description: 'разрушение', annotations: { destructiveHint: true } },
+                { name: 'boom', description: 'ломается при вызове' },
+                { description: 'без имени — пропустить' },
+            ] };
+        },
+        async mcp_call_tool({ name, arguments: a }) {
+            if (name === 'nuke')
+                return { isError: true, content: [{ type: 'text', text: 'провал разрушения' }] };
+            if (name === 'boom')
+                return { error: 'MCP сломался' };
+            return { content: [
+                { type: 'text', text: 'ответ MCP ' + JSON.stringify(a) },
+                { type: 'image', mimeType: 'image/png' },
+                { type: 'embedded', x: 1 },
+            ] };
+        },
+    }`);
+    write('SERVICES/badmcp/$class/class.js', `export default {
+        label: 'BadMCP', mcp: true,
+        async mcp_list_tools() { throw new Error('список инструментов не вышел'); },
+    }`);
     // хуки организации (hooks.js): корневой класс, вложенный (слои складываются) и класс с ошибочными описаниями
     write('HOOKY/$class/class.js', `export default { label: 'Хуки' }`);
     write('HOOKY/$class/ai/config.js', `export default { hooks: {
@@ -1236,7 +1307,7 @@ describe('порядок внешних инструментов (svc_*) в ок
         resetServiceRegistry();
         const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
         const names = (await env.extTools()).map(t => t.name);
-        assert.deepEqual(names.filter(n => n.startsWith('svc_')), ['svc_alpha_abeg', 'svc_alpha_zmid', 'svc_zeta_arun', 'svc_zeta_zrun']);
+        assert.deepEqual(names.filter(n => n.startsWith('svc_')), ['svc_alpha_abeg', 'svc_alpha_zmid', 'svc_outer_inner_doit', 'svc_searchy_broken', 'svc_zeta_arun', 'svc_zeta_zrun']);
         assert.deepEqual(names, [...names].sort());
         resetServiceRegistry();
     });
@@ -1706,5 +1777,112 @@ describe('hooks.js: выполнение хуков', () => {
         const mutated = { tool: 't', args: { a: [1, 2] } };
         await callHook({ fn: p => { p.args.a.push(3); p.tool = 'другое'; } }, mutated);
         assert.deepEqual(mutated, { tool: 't', args: { a: [1, 2] } }, 'хук получает копию, исходные данные не меняет');
+    });
+});
+
+describe('внешние инструменты: web_search / svc_* / mcp_* (services.js)', () => {
+    const session = { uid: CHILD_UID, principal: { kind: 'user', id: CHILD_UID } };
+    const ctx = () => ({ entry: {}, session });
+
+    it('web_search: capability-сервис первым; пусто/ошибка/исключение перебираются; все пусты — итог с ошибками; формат', async () => {
+        const { resetServiceRegistry } = await import('../sources/modules/agent/tools/services.js');
+        resetServiceRegistry();
+        const search = webTools.find(t => t.name === 'web_search');
+        const ok = await search.run({ query: 'найди' }, ctx());
+        assert.match(ok, /Источник: searchy/, 'сервис с capability отвечает первым');
+        assert.match(ok, /нашлось: найди/);
+        assert.match(ok, /\[Первый\]\(https:\/\/x\.test\/1\)/);
+        assert.match(ok, /сниппет/);
+        assert.match(ok, /- просто строка результата/);
+        const byError = await search.run({ query: 'отказ' }, ctx()); // сервис вернул {error} — перебор дальше
+        assert.match(byError, /запасной: отказ/);
+        // ошибка вместе с результатом: ошибка главнее — результат не выдаётся за успех
+        const byBoth = await search.run({ query: 'полуотказ' }, ctx());
+        assert.match(byBoth, /запасной: полуотказ/, 'ошибка не выдана за результат');
+        const byThrow = await search.run({ query: 'сломайся' }, ctx()); // сервис бросил — перебор дальше
+        assert.match(byThrow, /запасной: сломайся/);
+        const none = await search.run({ query: 'пусто' }, ctx()); // все пусты
+        assert.ok(typeof none === 'object' && none.error, 'итог — объект с ошибкой');
+        assert.match(none.error, /поиск не дал результатов: searchy: пусто; plainfind: пусто/);
+        resetServiceRegistry();
+    });
+
+    it('web_fetch: не-http URL — отказ; внутренняя сеть — щит; остановлен — сразу; адрес — в ленту', async () => {
+        const webFetch = webTools.find(t => t.name === 'web_fetch');
+        await assert.rejects(() => webFetch.run({ url: 'ftp://x.test/' }, ctx()), /полный http\(s\) URL/);
+        await assert.rejects(() => webFetch.run({ url: 'http://127.0.0.1:1/' }, ctx()), /внутренняя сеть/i);
+        await assert.rejects(() => webFetch.run({ url: 'https://x.test/' }, { ...ctx(), signal: AbortSignal.abort() }), /остановлено/);
+        const entry = {};
+        await assert.rejects(() => webFetch.run({ url: 'http://10.0.0.1/x' }, { entry, session }), /внутренняя сеть/i);
+        assert.equal(entry.url, 'http://10.0.0.1/x', 'адрес зафиксирован в ленте');
+    });
+
+    it('svc_*: методы SCHEMA вызываются; читающее имя — readonly; LAN-сервисы — свои и с разрешения; выключенный и ломающийся не видны', async () => {
+        const { serviceTools, resetServiceRegistry } = await import('../sources/modules/agent/tools/services.js');
+        resetServiceRegistry();
+        const tools = await serviceTools(session);
+        // не-читающий метод: исходящее действие, риск danger
+        const broken = tools.find(t => t.name === 'svc_searchy_broken');
+        assert.ok(broken, 'метод-не-читатель стал инструментом');
+        assert.equal(broken.readonly, false);
+        assert.equal(broken.untrusted, true, 'ответ внешнего сервиса — чужой текст');
+        assert.equal(broken.outbound, true);
+        assert.equal(broken.risk, 'danger');
+        assert.deepEqual(await broken.run({ x: 1 }, ctx()), { error: 'метод сломался' });
+        // вложенный сервис (два уровня) — параметры + сессия доходят до метода
+        const nested = tools.find(t => t.name === 'svc_outer_inner_doit');
+        assert.ok(nested, 'вложенный сервис в реестре');
+        assert.match(await nested.run({ a: 1 }, ctx()), /^сделано \{"a":1,/);
+        // выключенный (enabled: false) и не импортирующийся — не в реестре
+        assert.ok(!tools.some(t => t.name.startsWith('svc_off_')), 'выключенный сервис скрыт');
+        assert.ok(!tools.some(t => t.name.startsWith('svc_boom_')), 'ломающийся сервис скрыт');
+        // LAN-сервис: читающий метод — свои данные (не untrusted), без разрешения
+        const weather = tools.find(t => t.name === 'svc_lanthing_weather');
+        assert.ok(weather, 'LAN-сервис с читающим методом');
+        assert.equal(weather.readonly, true);
+        assert.equal(weather.untrusted, false);
+        assert.equal(await weather.run({}, ctx()), 'ясно');
+        // LAN-сервис, не-читающий метод: каждый раз с разрешения, без «разрешить всегда»
+        const print = tools.find(t => t.name === 'svc_lanthing_print');
+        assert.ok(print, 'LAN-сервис с методом печати');
+        assert.equal(print.readonly, false);
+        assert.equal(print.untrusted, false);
+        const p = print.permission({}, {});
+        assert.equal(p.verdict, 'ask');
+        assert.equal(p.noAlways, true);
+        assert.match(p.reason, /LAN-вещь: print/);
+        assert.match(await print.run({ n: 1 }, ctx()), /^напечатано \{"n":1,/);
+        resetServiceRegistry();
+    });
+
+    it('mcp_*: декларации от MCP-сервиса; вызов с текстом/картинкой/прочим; ошибка и провал сервера; безымянные пропускаются; onError', async () => {
+        const { mcpTools, resetServiceRegistry } = await import('../sources/modules/agent/tools/services.js');
+        resetServiceRegistry();
+        // методы из class.js появляются на элементе после init — как в живом дереве
+        await (await WORK.get_item('/SERVICES/fakemcp')).init;
+        await (await WORK.get_item('/SERVICES/badmcp')).init;
+        const errors = [];
+        const tools = await mcpTools({ onError: (s, e) => errors.push(s.id + ': ' + e.message) });
+        assert.deepEqual(errors, ['badmcp: список инструментов не вышел'], 'ошибка списка — в onError');
+        const peek = tools.find(t => t.name === 'mcp_fakemcp_peek');
+        assert.ok(peek);
+        assert.equal(peek.untrusted, true);
+        assert.equal(peek.outbound, true);
+        assert.equal(peek.risk, 'write');
+        assert.match(peek.description, /читающий, по заявлению сервера/);
+        const nuke = tools.find(t => t.name === 'mcp_fakemcp_nuke');
+        assert.ok(nuke);
+        assert.equal(nuke.risk, 'danger');
+        assert.equal(tools.filter(t => t.name.startsWith('mcp_fakemcp_')).length, 3, 'безымянная декларация пропущена');
+        // вызов: текст + картинка + прочее содержимое
+        const text = await peek.run({ q: 1 }, ctx());
+        assert.match(text, /ответ MCP/);
+        assert.match(text, /\[изображение image\/png\]/);
+        assert.match(text, /\{"type":"embedded","x":1\}/);
+        // провал (isError) и ошибка сервера
+        assert.deepEqual(await nuke.run({}, ctx()), { error: 'провал разрушения' });
+        const boom = tools.find(t => t.name === 'mcp_fakemcp_boom');
+        assert.deepEqual(await boom.run({}, ctx()), { error: 'MCP сломался' });
+        resetServiceRegistry();
     });
 });
