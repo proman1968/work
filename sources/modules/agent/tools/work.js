@@ -12,7 +12,7 @@ import * as ACCESS_TOOLS from './work/access.js';
 import * as FEED_TOOLS from './work/feed.js';
 
 // общие вызовы для остальных модулей (session.js, mcp/server.js, tools/sandbox.js, os-files.js, meta.js, docs.js)
-export { forceTaskContext, TASK_WRITE_METHODS, absPath, getItem, callAs, writeFile, writeBinary, resolvePeople } from './work/common.js';
+export { forceTaskContext, TASK_WRITE_METHODS, absPath, getItem, callAs, writeFile, writeBinary, resolvePeople, markUntrustedByPaths } from './work/common.js';
 
 export const workTools = [
     FS_TOOLS.ls, FS_TOOLS.read, FS_TOOLS.find, DATA_TOOLS.search,

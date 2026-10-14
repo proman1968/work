@@ -253,9 +253,36 @@ export async function loadText(file, ctx) {
     }
 }
 
+/**
+ * R15 (8.38): пометить ход untrusted, если в результатах чтения чужой файл:
+ * письмо (.eml) или файл, пришедший извне (загрузка из формы, скачивание по URL —
+ * server/external-source.js). Ставят все читатели: read, find, search (RAG-куски),
+ * read_table, import_objects, grep (dev/search.js) — содержимое читается как чужой текст
+ * (<untrusted> + заражение хода, taint.js), действия наружу после него — с подтверждения.
+ * @param {Array<string>} paths WORK-пути прочитанного
+ */
+export async function markUntrustedByPaths(paths, ctx) {
+    if (!ctx?.entry || !paths?.length)
+        return;
+    const list = paths.map(p => String(p || '')).filter(Boolean);
+    if (list.some(p => /\.eml$/i.test(p))) {
+        ctx.entry.untrusted = true;
+        return;
+    }
+    try {
+        const { externalSourceOf } = await import('../../../../server/external-source.js');
+        for (const p of list) {
+            if (await externalSourceOf(p)) {
+                ctx.entry.untrusted = true;
+                return;
+            }
+        }
+    }
+    catch { /* реестра нет — не заражаем */ }
+}
+
 /** Родитель по пути и имя листа; недостающие промежуточные папки → folder для save_file. */
-export async function resolveParent(path, ctx) {
-    const p = absPath(path, ctx);
+export async function resolveParent(path, ctx) {    const p = absPath(path, ctx);
     const parts = p.split('/').filter(Boolean);
     const filename = parts.pop();
     if (!filename)

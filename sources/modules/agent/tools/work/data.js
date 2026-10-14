@@ -2,7 +2,7 @@
  * Данные WORK: search (RAG), write_table, create_class, schema, call, query.
  * Тела — из прежнего tools/work.js (байт-в-байт); общие вызовы — ./common.js.
  */
-import { forceTaskContext, absPath, mustItem, callAs, formatSize, writeBinary, target, DANGER_METHODS, BLOCKED_METHODS } from './common.js';
+import { forceTaskContext, absPath, mustItem, callAs, formatSize, writeBinary, target, DANGER_METHODS, BLOCKED_METHODS, markUntrustedByPaths } from './common.js';
 import { clip } from '../../util.js';
 import { FS } from '../../../../server/index.js';
 import * as GATEWAY from '../../../../server/access/gateway.js';
@@ -33,8 +33,8 @@ export const search = {
                 rings: args.rings,
             }, ctx);
             const rows = res?.results || [];
-            if (ctx.entry && rows.some(r => /\.eml$/i.test(String(r?.path || ''))))
-                ctx.entry.untrusted = true;
+            // R15 (8.38): RAG-кучки из чужих файлов (письмо/загрузка) — чужой текст в контексте
+            await markUntrustedByPaths(rows.map(r => r?.path), ctx);
             if (!rows.length)
                 return 'ничего не найдено' + (res?.pending ? ' (индексация ещё идёт: ' + res.pending + ' в очереди)' : '');
             const out = rows.map((r, i) => {

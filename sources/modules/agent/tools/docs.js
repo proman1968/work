@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FS } from '../../../server/index.js';
-import { getItem, callAs, writeBinary, absPath } from './work.js';
+import { getItem, callAs, writeBinary, absPath, markUntrustedByPaths } from './work.js';
 import { run } from '../system.js';
 import { assertZipSafe } from '../../../server/zip-guard.js';
 
@@ -293,7 +293,10 @@ export const docTools = [
             required: ['path'],
         },
         async run(args, ctx) {
-            const { sheet, sheets, rows } = await tableRows(await fileAt(args.path, ctx), ctx, args.sheet);
+            const file = await fileAt(args.path, ctx);
+            // R15 (8.38): загруженная таблица — чужой текст (внешний источник/письмо): <untrusted> + заражение хода
+            await markUntrustedByPaths([file?.path], ctx);
+            const { sheet, sheets, rows } = await tableRows(file, ctx, args.sheet);
             const offset = Math.max(0, Number(args.offset) || 0);
             const limit = Math.min(2000, Math.max(1, Number(args.limit) || 200));
             return JSON.stringify({
@@ -332,8 +335,12 @@ export const docTools = [
             const fields = await fieldsOf(cls, ext);
             const byId = new Map(fields.filter(f => f?.id).map(f => [f.id, f]));
             let rows = args.rows;
-            if (args.source)
-                rows = (await tableRows(await fileAt(args.source, ctx), ctx, args.sheet)).rows;
+            if (args.source) {
+                const src = await fileAt(args.source, ctx);
+                // R15 (8.38): загруженная таблица — чужой текст (внешний источник/письмо)
+                await markUntrustedByPaths([src?.path], ctx);
+                rows = (await tableRows(src, ctx, args.sheet)).rows;
+            }
             if (!Array.isArray(rows) || !rows.length)
                 throw new Error('import_objects: нет строк (source или rows)');
             if (rows.length > IMPORT_MAX)

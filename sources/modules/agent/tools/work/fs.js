@@ -2,7 +2,7 @@
  * Файлы и дерево WORK: ls, read, find, write, append, edit, history, restore, delete.
  * Тела — из прежнего tools/work.js (байт-в-байт); общие вызовы — ./common.js.
  */
-import { absPath, mustItem, callAs, kindOf, isContainer, lineFor, formatSize, listTree, describeClass, numbered, loadText, writeFile, realPathOf, fileAt, trackWrite, target } from './common.js';
+import { absPath, mustItem, callAs, kindOf, isContainer, lineFor, formatSize, listTree, describeClass, numbered, loadText, writeFile, realPathOf, fileAt, trackWrite, target, markUntrustedByPaths } from './common.js';
 import { isAccessDenied } from '../../util.js';
 import { lineDiff } from '../../diff.js';
 import { beforeWrite, recordDelete } from '../../undo.js';
@@ -70,15 +70,8 @@ export const read = {
             }
             if (ctx.entry) {
                 ctx.entry.path = item.path;
-                // письмо — текст чужого автора: в контексте оборачивается в <untrusted> (taint.js)
-                if (/\.eml$/i.test(String(item.path || '')))
-                    ctx.entry.untrusted = true;
-                else {
-                    // файл из формы загрузки или скачивания по URL — внешний источник (external-source.js)
-                    const { externalSourceOf } = await import('../../../../server/external-source.js');
-                    if (await externalSourceOf(item.path))
-                        ctx.entry.untrusted = true;
-                }
+                // письмо или файл из загрузки/сети — чужой текст: <untrusted> + заражение хода (taint.js)
+                await markUntrustedByPaths([item.path], ctx);
             }
             if (isContainer(item))
                 return describeClass(item, ctx);
@@ -142,6 +135,8 @@ export const find = {
             }, ctx);
             if (!res?.length)
                 return 'ничего не найдено';
+            // R15 (8.38): найденные строки чужого файла (письмо/загрузка) — чужой текст в контексте
+            await markUntrustedByPaths(res.map(r => r?.path), ctx);
             return res.map(r => r.path + ':' + r.line + ': ' + r.text).join('\n');
         },
     };

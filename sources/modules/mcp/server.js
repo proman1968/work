@@ -475,10 +475,9 @@ export async function handleMcp(request, response) {
                     clearTimeout(timer);
                     sess.pending.delete(id);
                     const approved = r?.result?.action === 'accept' && r.result?.content?.approve === true;
-                    // человек подтвердил действие и видел контекст — состояние сессии проверено (8.2):
-                    // заражение (бесконечные вопросы наружу) сбрасываем; новая порция чужого текста пометит снова
-                    if (approved)
-                        sess.taint.clear();
+                    // R14 (8.38): одобрение относится к ОДНОМУ вызову — заражение сессии НЕ снимается:
+                    // чужой текст в контексте остаётся чужим, следующее действие наружу снова спросит человека.
+                    // Снимается заражение только концом сессии (отзыв токена); повторный initialize не отмывает (F17)
                     resolve(approved);
                 });
                 sseSend(response, {

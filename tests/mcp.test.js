@@ -526,7 +526,7 @@ describe('MCP: инструменты WORK с правами пользоват�
         const send = await b.call('send', { path: '/BOX', message: 'отчёт', to: [BOB] });
         assert.equal(send.result.isError, true, 'новая сессия отмыла заражение без подтверждения человека');
         assert.match(textOf(send), /подтверждение человека/);
-        // подтверждение человека (elicitation) очищает — и это видно в той же сессии
+        // подтверждение человека (elicitation) выполняет действие (заражение при этом НЕ снимается — R14/8.38)
         const fixed = await connect(alice.token, { elicitation: {} });
         const ev = await callSse(alice.token, fixed.sid, 'send', { path: '/BOX', message: 'отчёт', to: [BOB] }, () => true);
         assert.equal(ev.at(-1).result.isError, false, JSON.stringify(ev.at(-1)));
@@ -601,7 +601,7 @@ describe('MCP: подтверждение человека через elicitatio
         assert.match(events[0].result.content[0].text, /doc\//);
     });
 
-    it('подтверждение человеком сбрасывает заражение сессии: следующее внешнее действие — без вопроса (8.2)', async () => {
+    it('R14 (8.38): подтверждение относится к ОДНОМУ вызову — заражение сессии не снимается', async () => {
         const c = await connect(alice.token, { elicitation: {} });
         // чужое содержимое → сессия заражена
         await rpc(alice.token, 'tools/call', { name: 'read', arguments: { path: '/BOX/doc/mail.eml' } }, { sid: c.sid });
@@ -609,14 +609,13 @@ describe('MCP: подтверждение человека через elicitatio
         const events = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт', to: [BOB] }, () => true);
         assert.equal(events.at(-1).result.isError, false, JSON.stringify(events.at(-1)));
         assert.ok(events.some(e => e.method === 'elicitation/create'), 'вопроса не было');
-        // заражение сброшено: тот же внешний ход в этой сессии — без вопроса
-        const events2 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 2', to: [BOB] }, () => { throw new Error('повторного вопроса быть не должно'); });
-        assert.equal(events2.length, 1, 'появился повторный вопрос: ' + JSON.stringify(events2));
-        assert.equal(events2[0].result.isError, false);
-        // новая порция чужого текста снова заражает
-        await rpc(alice.token, 'tools/call', { name: 'read', arguments: { path: '/BOX/doc/mail.eml' } }, { sid: c.sid });
+        // заражение НЕ сброшено: то же внешнее действие в этой сессии — снова вопрос
+        const events2 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 2', to: [BOB] }, () => true);
+        assert.ok(events2.some(e => e.method === 'elicitation/create'), 'повторного вопроса не было — одобрение одного вызова отмыло всю сессию');
+        assert.equal(events2.at(-1).result.isError, false, 'второй подтверждённый ход не выполнился');
+        // и третий — тоже спрашивает: пока чужой текст в контексте, каждое действие наружу — с подтверждением
         const events3 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 3', to: [BOB] }, () => false);
-        assert.ok(events3.some(e => e.method === 'elicitation/create'), 'после нового чужого текста вопроса нет');
+        assert.ok(events3.some(e => e.method === 'elicitation/create'), 'вопроса не было');
         assert.equal(events3.at(-1).result.isError, true, 'отклонённый ход выполнился');
     });
 });

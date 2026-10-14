@@ -68,6 +68,12 @@ before(async () => {
     write(path.join(root, 'BOX/doc/bin.dat'), '\0\0\0' + 'UNIQUE' + '\0');
     write(path.join(root, 'BOX/doc/trash.md'), 'мусор для удаления\n');
     write(path.join(root, 'BOX/doc/big.md'), 'x'.repeat(300 * 1024) + '\nUNIQUE внутри большого\n');
+    // 6.5: TypeScript для диагностики и навигации
+    write(path.join(root, 'SRC/mod.ts'), 'export function hello() { return 1; }\nexport const num: number = "not a number";\nconst y = hello();\n');
+    // ловушка границы слова: helloWorld — НЕ вхождение hello
+    write(path.join(root, 'SRC/other.ts'), 'const helloWorld = 1;\nconst other = 2;\n');
+    // R15 (8.38): таблица для читателей чужих файлов
+    write(path.join(root, 'BOX/doc/table.csv'), 'имя,возраст\nАнна,30\n');
     write(path.join(root, 'PRIV/$class/class.js'), `export default { label: 'Ч', '#security': { ADMIN: ['admin'] } }`);
     write(path.join(root, 'PRIV/x.md'), 'здесь HIDDENWORD\n');
     write(path.join(root, `USERS/${UID}/$user/class.js`), `export default { label: 'U' }`);
@@ -775,5 +781,55 @@ describe('developer: субагент-разработчик', () => {
         const names = (await env.makeTools(def, 1, parent)).map(t => t.name);
         assert.ok(names.includes('grep') && names.includes('read'), 'чтение должно остаться');
         assert.ok(!names.includes('apply_patch') && !names.includes('edit'), 'делегирование расширило права записи');
+    });
+});
+
+// ── R15 (final 8.38): читатели чужих файлов помечают ход ──────────────────
+
+describe('R15: чужой текст помечают все читатели', () => {
+    it('юнит markUntrustedByPaths: письмо и внешний источник; свои файлы — чисто', async () => {
+        const { markUntrustedByPaths } = await import('../sources/modules/agent/tools/work/common.js');
+        const eml = { entry: {} };
+        await markUntrustedByPaths(['/BOX/doc/mail.eml'], eml);
+        assert.equal(eml.entry.untrusted, true, 'письмо не помечено');
+        markExternal('/BOX/doc/uploaded.csv', 'upload');
+        const ext = { entry: {} };
+        await markUntrustedByPaths(['/BOX/doc/uploaded.csv'], ext);
+        assert.equal(ext.entry.untrusted, true, 'файл из загрузки не помечен');
+        unmarkExternal('/BOX/doc/uploaded.csv');
+        const own = { entry: {} };
+        await markUntrustedByPaths(['/BOX/doc/a.md'], own);
+        assert.equal(own.entry.untrusted, undefined, 'свой файл заражает ход');
+        const empty = { entry: {} };
+        await markUntrustedByPaths([], empty);
+        await markUntrustedByPaths([null, ''], empty);
+        assert.equal(empty.entry.untrusted, undefined, 'пустые пути заражают');
+    });
+    it('find: найденные строки письма — чужой текст', async () => {
+        const { find } = await import('../sources/modules/agent/tools/work/fs.js');
+        const e = {};
+        const out = await find.run({ path: '/BOX/doc', text: 'UNIQUE' }, mkCtx(ADMIN, { entry: e }));
+        assert.match(out, /letter\.eml:\d+:/, 'в результатах нет письма — тест пуст');
+        assert.equal(e.untrusted, true, 'find не помечает чужой файл');
+        const own = {};
+        await find.run({ path: '/BOX/doc', text: 'мусор' }, mkCtx(ADMIN, { entry: own }));
+        assert.equal(own.untrusted, undefined, 'свои файлы заражают');
+    });
+    it('read_table и import_objects: загруженная таблица — чужой текст', async () => {
+        const { docTools } = await import('../sources/modules/agent/tools/docs.js');
+        const readTable = docTools.find(t => t.name === 'read_table');
+        const importObjects = docTools.find(t => t.name === 'import_objects');
+        markExternal('/BOX/doc/table.csv', 'upload');
+        const e1 = {};
+        const rows = await readTable.run({ path: '/BOX/doc/table.csv' }, mkCtx(ADMIN, { entry: e1 }));
+        assert.match(JSON.stringify(rows), /Анна/);
+        assert.equal(e1.untrusted, true, 'read_table читает загруженную таблицу как свою');
+        const e2 = {};
+        await importObjects.run({ path: '/BOX', type: 'data', source: '/BOX/doc/table.csv', dry_run: true }, mkCtx(ADMIN, { entry: e2 }));
+        assert.equal(e2.untrusted, true, 'import_objects читает загруженную таблицу как свою');
+        unmarkExternal('/BOX/doc/table.csv');
+        const own = {};
+        await readTable.run({ path: '/BOX/doc/table.csv' }, mkCtx(ADMIN, { entry: own }));
+        assert.equal(own.untrusted, undefined, 'своя таблица заражает ход');
     });
 });
