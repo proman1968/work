@@ -22,6 +22,7 @@ import { memoryTools, memoryBlock } from './tools/memory.js';
 import { sandboxTools, sandboxAvailable } from './tools/sandbox.js';
 import { devSearchTools } from './tools/dev/search.js';
 import { devPatchTools } from './tools/dev/patch.js';
+import { devGitTools } from './tools/dev/git.js';
 import { browserTools } from './tools/browser.js';
 import { computerTools } from './tools/computer.js';
 import { guarded, systemAllowed } from './system.js';
@@ -47,7 +48,7 @@ export { resetServiceRegistry } from './tools/services.js';
 export const DEFAULT_MODEL = '/MODELS/odant/Qwen3.8 27b';
 
 /** Инструменты, которых у субагентов нет: диалог с человеком, план, настройки подключений и расписаний. */
-const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule']);
+const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push']);
 
 /** Имя инструмента против маски: `os_*`, `svc_*_query` (звёздочка — любая подстрока). */
 function toolMatches(pattern, name) {
@@ -233,7 +234,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);

@@ -128,6 +128,27 @@ export function fakeDocker(o = {}) {
             if (!c.files.has(Cmd[2])) { code = 1; err = "rm: cannot remove '" + Cmd[2] + "'"; }
             else c.files.delete(Cmd[2]);
         }
+        // 6.4 (final): git в песочнице — эмуляция по подкоманде (массив аргументов, без sh)
+        else if (Cmd[0] === 'git') {
+            const sub = Cmd[1] || '';
+            if (sub === 'status')
+                out = '## main...origin/main\n';
+            else if (sub === 'log')
+                out = 'abc1234 (HEAD -> main) initial commit\n';
+            else if (sub === 'show')
+                out = 'commit ' + (Cmd[Cmd.length - 1] || 'HEAD') + '\n BOX/doc/a.md | 1 +\n';
+            else if (sub === 'blame') {
+                const at = Cmd.indexOf('--');
+                out = '(HEAD) строка 1 ' + (Cmd[at + 1] || '?') + '\n';
+            }
+            else if (sub === 'commit') {
+                const at = Cmd.indexOf('-m');
+                out = '[main 1234567] ' + (Cmd[at + 1] || '') + '\n';
+            }
+            else if (['diff', 'add', 'branch', 'push'].includes(sub))
+                out = '';
+            else { code = 1; err = "fake git: не умею '" + sub + "'"; }
+        }
         else if (Cmd[0] === 'ls') {
             const dir = Cmd[3].replace(/\/+$/, '') || '/';
             const kids = [...c.files.keys()].filter(k => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'));

@@ -10,9 +10,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { $server } from '../sources/server/server.js';
 import { devSearchTools, globToRegExp } from '../sources/modules/agent/tools/dev/search.js';
 import { apply_patch, parsePatch, applyHunks } from '../sources/modules/agent/tools/dev/patch.js';
+import { git_status, git_diff, git_log, git_show, git_blame, git_branch, git_commit, git_push } from '../sources/modules/agent/tools/dev/git.js';
 import { createEnv } from '../sources/modules/agent/index.js';
 import { decide } from '../sources/modules/agent/permissions.js';
 import { collectUndo, applyUndo } from '../sources/modules/agent/undo.js';
@@ -71,6 +73,12 @@ before(async () => {
     write(path.join(root, 'MODELS/m1/$ai/class.js'), `export default { model: 'm1' } // MODELWORD\n`);
     process.chdir(root);
     globalThis.WORK = new $server();
+    // 6.4: git-репозиторий в корне тестового дерева (арена work) — скрытая .git в обходы не попадает
+    execSync('git init -b main', { cwd: root });
+    execSync('git config user.email work@test', { cwd: root });
+    execSync('git config user.name "Work Test"', { cwd: root });
+    execSync('git add BOX/doc/a.md', { cwd: root });
+    execSync('git commit -m initial', { cwd: root });
 });
 
 after(async () => {
@@ -472,6 +480,99 @@ describe('apply_patch: арена sandbox', () => {
         await assert.rejects(apply_patch.run({ where: 'sandbox', patch }, mkCtx('sbx-user')), /не найден/);
         const files = await glob.run({ where: 'sandbox', pattern: 'solo.js' }, mkCtx('sbx-user'));
         assert.match(files, /ничего не найдено/, 'из упавшего патча ничего не создано');
+        resetDockerForTests();
+    });
+});
+
+// ── 6.4 (final): git ───────────────────────────────────────────────────────
+
+describe('git: арена work', () => {
+    it('чтения: status/diff/log/show/blame — сразу, вывод git', async () => {
+        const st = await git_status.run({}, mkCtx(ADMIN));
+        assert.match(st, /## main/);
+        const log = await git_log.run({ limit: 5 }, mkCtx(ADMIN));
+        assert.match(log, /initial/, 'коммит в истории');
+        const show = await git_show.run({ ref: 'HEAD' }, mkCtx(ADMIN));
+        assert.match(show, /BOX\/doc\/a\.md/, 'файл коммита');
+        const blame = await git_blame.run({ path: 'BOX/doc/a.md' }, mkCtx(ADMIN));
+        assert.match(blame, /первая UNIQUE строка/, 'строки файла с авторством');
+        const diff = await git_diff.run({ path: 'BOX/doc/a.md' }, mkCtx(ADMIN));
+        assert.match(diff, /(пусто|diff|UNIQUE)/, 'diff без ошибок');
+        assert.equal((await decide(git_status, {}, { host: { mode: 'plan' } })).verdict, 'allow', 'readonly — в plan-режиме');
+    });
+    it('только администратору: USER — отказ с подсказкой песочницы', async () => {
+        await assert.rejects(git_status.run({}, mkCtx(UID)), /только администратору/);
+        assert.equal((await decide(git_branch, { branch: 'x' }, { host: { mode: 'auto' } })).verdict, 'allow', 'создание ветки — risk write');
+    });
+    it('валидации: ref-инъекция опций, пути вне репозитория, имена веток', async () => {
+        await assert.rejects(git_show.run({ ref: '--upload-pack=x' }, mkCtx(ADMIN)), /недопустимое значение ref/);
+        await assert.rejects(git_show.run({ ref: '../.git/config' }, mkCtx(ADMIN)), /недопустимое значение ref/);
+        await assert.rejects(git_diff.run({ path: '../../secret' }, mkCtx(ADMIN)), /недопустимый путь/);
+        await assert.rejects(git_blame.run({ path: '-опция' }, mkCtx(ADMIN)), /недопустимый путь/);
+        await assert.rejects(git_branch.run({ branch: '../evil' }, mkCtx(ADMIN)), /недопустимое значение имя ветки/);
+        await assert.rejects(git_commit.run({ message: 'x', paths: ['../evil'] }, mkCtx(ADMIN)), /недопустимый путь/);
+        await assert.rejects(git_push.run({ remote: '-oОпция' }, mkCtx(ADMIN)), /недопустимый remote/);
+    });
+    it('git_commit: коммит создаётся, хеш в ответе, появляется в log; подтверждение каждый раз', async () => {
+        assert.equal((await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto', allowed: new Set(['git_commit']) } })).verdict, 'ask',
+            'даже с «разрешить всегда» — вопрос');
+        assert.equal((await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto' } })).noAlways, true, 'без «разрешить всегда»');
+        const before = await git_log.run({ limit: 1 }, mkCtx(ADMIN));
+        const out = await git_commit.run({ message: 'коммит из теста', paths: ['BOX/doc/deep/b.js'] }, mkCtx(ADMIN));
+        assert.match(out, /коммит из теста/);
+        assert.match(out, /\([0-9a-f]{7,}\)/, 'хеш в ответе');
+        const after = await git_log.run({ limit: 1 }, mkCtx(ADMIN));
+        assert.notEqual(before, after, 'новый коммит в истории');
+        const branch = await git_branch.run({ branch: 'feature-x' }, mkCtx(ADMIN));
+        assert.match(branch, /пусто|создана|\(пусто\)/);
+    });
+    it('git_push: настоящий push в bare-репозиторий; подтверждение без «всегда», заражённый ход — вопрос', async () => {
+        const v = await decide(git_push, { remote: 'origin' }, { host: { mode: 'auto', allowed: new Set(['git_push']) } });
+        assert.equal(v.verdict, 'ask');
+        assert.equal(v.noAlways, true, 'без «разрешить всегда»');
+        const tainted = await decide(git_push, { remote: 'origin' }, { host: { mode: 'auto', allowed: new Set(['git_push']) }, tainted: ['web_fetch'] });
+        assert.equal(tainted.verdict, 'ask', 'в заражённом ходе — вопрос');
+        assert.equal(tainted.noAlways, true);
+        const bareRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'dev-bare-'));
+        const bare = path.join(bareRoot, 'bare.git');
+        execSync('git init --bare -b main bare.git', { cwd: bareRoot });
+        execSync('git remote add origin "' + bare + '"', { cwd: root });
+        try {
+            const out = await git_push.run({ remote: 'origin', ref: 'main' }, mkCtx(ADMIN));
+            assert.match(out, /отправлено|main|→|пусто|\(пусто\)/);
+            const head = execSync('git --git-dir="' + bare + '" rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+            assert.match(head, /^[0-9a-f]{7,}$/, 'коммит дошёл до bare-репозитория');
+        }
+        finally {
+            execSync('git remote remove origin', { cwd: root }).toString();
+            await fsp.rm(bareRoot, { recursive: true, force: true }).catch(() => {});
+        }
+    });
+    it('субагенту push не выдаётся, остальные git_* — по явной маске', async () => {
+        const env = await createEnv({ place: WORK, session: { uid: ADMIN } });
+        const main = (await env.makeTools()).map(t => t.name);
+        assert.ok(main.includes('git_push') && main.includes('git_commit'), 'в основном наборе');
+        const sub = (await env.makeTools({ meta: { tools: 'git_*' } })).map(t => t.name);
+        assert.ok(sub.includes('git_commit') && sub.includes('git_status'), 'по маске — остальные git');
+        assert.ok(!sub.includes('git_push'), 'push субагенту не выдаётся');
+        const all = (await env.makeTools({ meta: { tools: '*' } })).map(t => t.name);
+        assert.ok(!all.includes('git_push'), 'даже «*» не включает push');
+    });
+});
+
+describe('git: арена sandbox', () => {
+    it('те же инструменты через docker exec (массив аргументов без sh)', async () => {
+        const docker = fakeDocker();
+        setDockerForTests(docker);
+        const st = await git_status.run({ where: 'sandbox' }, mkCtx('sbx-user'));
+        assert.match(st, /## main/, 'вывод git песочницы');
+        const log = await git_log.run({ where: 'sandbox' }, mkCtx('sbx-user'));
+        assert.match(log, /initial commit/, 'история песочницы');
+        const commit = await git_commit.run({ where: 'sandbox', message: 'sandbox коммит', paths: ['src/app.js'] }, mkCtx('sbx-user'));
+        assert.match(commit, /1234567|sandbox коммит/, 'коммит в песочнице');
+        const show = await git_show.run({ where: 'sandbox', ref: 'HEAD' }, mkCtx('sbx-user'));
+        assert.match(show, /commit HEAD/, 'ref передаётся аргументом');
+        await assert.rejects(git_show.run({ where: 'sandbox', ref: '--upload-pack=x' }, mkCtx('sbx-user')), /недопустимое значение ref/);
         resetDockerForTests();
     });
 });
