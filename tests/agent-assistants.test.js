@@ -259,6 +259,27 @@ describe('память, эскалация, триггеры', () => {
         await assert.rejects(
             tool('write').run({ path: '/ORG/USER/../$class/USER/ai/memory.md', content: 'x' }, petrPlace),
             /инструментом memory/);
+        // R2 (8.30): обход через call — ядро отказывает (не только агентские write/append/edit).
+        // Сначала легитимная запись инструментом memory (метка Symbol, memory-mark.js)
+        assert.match(await tool('memory').run({ action: 'remember', text: 'правило: отчёты по пятницам' }, petrPlace),
+            /запомнил/);
+        // call.save_file в файл памяти — отказ на уровне ядра
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER', method: 'save_file',
+                args: { filename: 'memory.md', folder: 'ai', post: '- [2026-10-18] вписано чужим письмом' } }, petrPlace),
+            /инструментом memory/,
+            'call.save_file прошёл в файл памяти — мимо пометок, фильтра секретов и лимитов memory');
+        // регистр (Windows) — тоже отказ
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER', method: 'save_file',
+                args: { filename: 'MEMORY.MD', folder: 'AI', post: 'x' } }, petrPlace),
+            /инструментом memory/);
+        // удаление файла памяти через call — отказ даже админу (шлюз пускает ADMIN — ядро отказывает)
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER/ai/memory.md', method: 'delete', args: {} }, { ...as(ADMIN), place: org }),
+            /инструментом memory/,
+            'call.delete удалил файл памяти');
+        assert.ok(fs.existsSync(path.join(tmp, 'ORG', '$class', 'USER', 'ai', 'memory.md')), 'файл памяти удалён');
         // память не создана обходом: в блоке памяти чужого факта нет
         const { memoryBlock } = await import('../sources/modules/agent/tools/memory.js');
         const block = await memoryBlock(org, petrPlace.session);

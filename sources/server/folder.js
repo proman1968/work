@@ -8,6 +8,7 @@ import { buildAiSchema } from '../modules/ai-schema.js';
 import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-node-name.js';
 import { isUpload } from './upload-mark.js';
 import { DEV_MODE } from '../host/config.js';
+import { assertNotMemory } from './memory-mark.js';
 
 /**
  * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
@@ -1495,6 +1496,9 @@ export class $folder extends $item{
         // полный путь к файлу
         const path = dir + '/' + params.filename;
         assertInside(this.dir, path);
+        // R2 (final 8.30): файл памяти — только инструмент memory (метка Symbol, memory-mark.js);
+        // call/агентские записи/writeBinary/restore_from_history метки не имеют — отказ
+        assertNotMemory(path, params);
         // файл из формы загрузки — внешний источник: агент будет читать его как чужой текст (external-source.js)
         const fromUpload = !!params?.post?.path;
         if (params?.post?.path) {

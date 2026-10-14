@@ -11,6 +11,7 @@ import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
 import { markUpload } from './upload-mark.js';
+import { assertNotMemory } from './memory-mark.js';
 
 const SHEET_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
 
@@ -277,6 +278,8 @@ export class $file extends $folder{
         return data?.isDataFile ?? false;
     }
     async delete(params = {}){
+        // R2 (final 8.30): файл памяти не удаляется руками (даже админом) — только инструмент memory
+        assertNotMemory(this.dir, params);
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
         globalThis.WORK_RAG?.invalidate?.(this.dir);

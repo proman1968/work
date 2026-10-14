@@ -142,15 +142,17 @@ describe('R3/R4 save_file: путь файла — только из формы 
 });
 
 describe('R5 владелец кабинета: свои данные — да, исполняемое — нет', () => {
-    it('class.js в свой кабинет — отказ; note.txt — можно; ai/config.js — отказ; ai/memory.md — можно', async () => {
+    it('class.js в свой кабинет — отказ; note.txt — можно; ai/config.js — отказ; ai/memory.md — только инструмент memory (R2/8.30)', async () => {
         const alice = await sessionOf(ALICE);
         const root = await WORK.get_item(`/USERS/${ALICE}/$user`);
         await assert.rejects(httpCall(root, 'save_file', { session: alice, filename: 'class.js', post: 'export default {}' }), /Доступ запрещён/);
         await assert.rejects(httpCall(root, 'save_file', { session: alice, filename: 'config.js', folder: 'ai', post: 'export default {}' }), /Доступ запрещён/);
         await httpCall(root, 'save_file', { session: alice, filename: 'note.txt', post: 'моя заметка' });
         assert.equal(fs.readFileSync(path.join(tmp, `USERS/${ALICE}/$user/note.txt`), 'utf-8'), 'моя заметка');
-        await httpCall(root, 'save_file', { session: alice, filename: 'memory.md', folder: 'ai', post: 'факт' });
-        assert.equal(fs.readFileSync(path.join(tmp, `USERS/${ALICE}/$user/ai/memory.md`), 'utf-8'), 'факт');
+        // R2 (8.30): файл памяти правится только инструментом memory — прямая запись в кабинете отказана
+        await assert.rejects(httpCall(root, 'save_file', { session: alice, filename: 'memory.md', folder: 'ai', post: 'факт' }),
+            /инструментом memory/);
+        assert.equal(fs.existsSync(path.join(tmp, `USERS/${ALICE}/$user/ai/memory.md`)), false, 'файл памяти создан мимо memory');
     });
 });
 
