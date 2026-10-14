@@ -1,4 +1,5 @@
 import '../sources/reactor.js';
+import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import aiDef, { resolveKey, gigachatToken, toGigaChatMessages } from '../MODELS/$ai/$folder/$class/$ai/class.js';
@@ -192,5 +193,70 @@ describe('ключи моделей', () => {
         ]);
         assert.deepEqual(out[1].function_call, { name: 'ls', arguments: { path: '/' } });
         assert.deepEqual(out[2], { role: 'function', name: 'ls', content: 'ok' });
+    });
+});
+
+
+// ── F28 (final 8.21): потолки тел и буферов ответа провайдера ──────────────
+
+describe('F28: память не отдана провайдеру — потолки тел и SSE-буфера', () => {
+    function installStatus(statusCode, chunks) {
+        // Readable: и события on('data'/'end') (ветка ошибки), и async-итерация (SSE)
+        const fakeRes = () => {
+            const res = Readable.from(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c)));
+            res.statusCode = statusCode;
+            return res;
+        };
+        globalThis.WORK = {
+            https: {
+                request(_opts, cb) {
+                    queueMicrotask(() => cb(fakeRes()));
+                    return { on() {}, setTimeout() {}, destroy() {}, write(b) { lastBody = JSON.parse(b); }, end() {} };
+                },
+            },
+        };
+    }
+
+    it('тело ошибки 500 сверх 64 КБ — обрезано, а не скопировано целиком', async () => {
+        installStatus(500, ['x'.repeat(200 * 1024)]);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            e => /stream error 500/.test(e.message) && /обрезано на 64 КБ/.test(e.message) && e.message.length < 70_000,
+            'гигантское тело ошибки прошло в сообщение целиком');
+    });
+
+    it('тело ошибки 500 короткое — целиком, без пометки об обрезке', async () => {
+        installStatus(503, ['плата не оплачена']);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            e => /stream error 503: плата не оплачена$/.test(e.message),
+            'короткое тело ошибки искажено');
+    });
+
+    it('SSE-поток без переводов строк сверх 1 МБ — обрыв, а не вечный рост буфера', async () => {
+        installStatus(200, ['data: ' + 'x'.repeat(2 * 1024 * 1024)]);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            /строка потока превысила 1 МБ/,
+            'поток без переводов строк не оборван');
+    });
+
+    it('JSON-ответ (generateImage) больше 16 МБ — отказ, а не копирование', async () => {
+        // generateImage → httpsPostJson: чужой гигабайтный «ответ» не оседает в памяти
+        installStatus(200, ['{"junk":"' + 'z'.repeat(20 * 1024 * 1024) + '}']);
+        const imageAi = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test', capabilities: 'image' };
+        await assert.rejects(
+            () => aiDef.generateImage.call(imageAi, { prompt: 'кот' }),
+            /тело ответа больше 16 МБ/,
+            'гигабайтный JSON-ответ принят');
+    });
+
+    it('SSE-поток anthropic без переводов строк — тот же потолок', async () => {
+        installStatus(200, ['data: ' + 'y'.repeat(2 * 1024 * 1024)]);
+        const anthropicAi = { protocol: 'anthropic', baseUrl: 'https://x.test/v1/messages', model: 'm', apiKey: 'sk-test' };
+        await assert.rejects(
+            () => collect(anthropicAi, { messages }),
+            /строка потока превысила 1 МБ/,
+            'anthropic-поток без переводов строк не оборван');
     });
 });

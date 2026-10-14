@@ -14,6 +14,10 @@
  *   capabilities, functionCalling, accessToken
  */
 
+const ERROR_BODY_MAX = 64 * 1024;        // F28: тело ошибки потока — хватит для диагностики
+const SSE_LINE_MAX = 1024 * 1024;        // F28: незавершённая строка SSE (data-JSON много меньше)
+const JSON_BODY_MAX = 16 * 1024 * 1024;  // F28: JSON-ответ (картинка b64 — мегабайты; чужой мусор — нет)
+
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
@@ -200,10 +204,33 @@ export default {
                 headers,
             }, (res) => {
                 if (res.statusCode < 200 || res.statusCode >= 300) {
+                    // F28: тело ошибки — с потолком (чужой сервер не решает, сколько мы держим в памяти)
                     const chunks = [];
-                    res.on('data', c => chunks.push(c));
+                    let errSize = 0;
+                    let overflow = false;
+                    res.on('data', c => {
+                        errSize += c.length;
+                        if (errSize <= ERROR_BODY_MAX)
+                            chunks.push(c);
+                        else {
+                            overflow = true;
+                            res.destroy();
+                        }
+                    });
+                    const text = () => Buffer.concat(chunks).toString('utf-8').slice(0, ERROR_BODY_MAX);
                     res.on('end', () => {
-                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + Buffer.concat(chunks).toString('utf-8')));
+                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                            + (overflow ? ' (тело ошибки обрезано на ' + (ERROR_BODY_MAX / 1024) + ' КБ)' : '')));
+                    });
+                    res.on('error', () => {
+                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                            + ' (соединение оборвано' + (overflow ? ' на потолке тела' : '') + ')'));
+                    });
+                    // destroy() без ошибки не всегда даёт 'error'/'end' — 'close' приходит всегда
+                    res.on('close', () => {
+                        if (overflow)
+                            reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                                + ' (тело ошибки обрезано на ' + (ERROR_BODY_MAX / 1024) + ' КБ)'));
                     });
                     return;
                 }
@@ -306,6 +333,9 @@ export default {
         const decoder = new TextDecoder('utf-8');
         for await (const chunk of res) {
             buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+            // F28: чужой поток без переводов строк не копится в памяти бесконечно
+            if (buf.length > SSE_LINE_MAX)
+                throw new Error('LLM ' + body.model + ': строка потока превысила ' + Math.round(SSE_LINE_MAX / 1048576) + ' МБ — обрыв');
             const lines = buf.split('\n');
             buf = lines.pop();
             for (const line of lines)
@@ -1136,6 +1166,9 @@ async function* anthropicStream(res, model) {
     };
     for await (const chunk of res) {
         buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        // F28: чужой поток без переводов строк не копится в памяти бесконечно
+        if (buf.length > SSE_LINE_MAX)
+            throw new Error('LLM ' + model + ': строка потока превысила ' + Math.round(SSE_LINE_MAX / 1048576) + ' МБ — обрыв');
         const lines = buf.split('\n');
         buf = lines.pop();
         for (const l of lines)
@@ -1220,9 +1253,32 @@ function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
             headers: { Accept: 'application/json', ...headers, 'Content-Length': Buffer.byteLength(payload) },
             timeout: timeoutMs,
         }, (res) => {
+            // F28: тело ответа — с потолком (картинки b64 — мегабайты, влезают; чужие гигабайты — нет)
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            res.on('data', c => {
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    res.destroy();
+                    return;
+                }
+                chunks.push(c);
+            });
+            res.on('error', () => reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                + Math.round(JSON_BODY_MAX / 1048576) + ' МБ (или соединение оборвано)')));
+            // destroy() без ошибки не всегда даёт 'error'/'end' — 'close' приходит всегда
+            res.on('close', () => {
+                if (size > JSON_BODY_MAX)
+                    reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                        + Math.round(JSON_BODY_MAX / 1048576) + ' МБ'));
+            });
             res.on('end', () => {
+                // F28: даже если 'end' пришёл после destroy — переполненное тело не парсим
+                if (size > JSON_BODY_MAX) {
+                    reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                        + Math.round(JSON_BODY_MAX / 1048576) + ' МБ'));
+                    return;
+                }
                 const text = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + text.slice(0, 160)));
