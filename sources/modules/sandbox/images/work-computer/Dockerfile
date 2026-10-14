@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         x11-xserver-utils xterm \
         chromium chromium-driver \
         xdotool scrot imagemagick \
-        git curl ca-certificates \
+        git curl ca-certificates ripgrep \
         fonts-noto-core \
         procps net-tools iptables \
     && rm -rf /var/lib/apt/lists/* \

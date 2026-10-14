@@ -88,6 +88,30 @@ export function fakeDocker(o = {}) {
             c.files.set(argv[2], text);
             out = String(Buffer.byteLength(text, 'utf-8'));
         }
+        // 6.2 (final): grep/glob в песочнице (tools/dev/search.js) — rg/grep/find по файлам контейнера
+        else if (script.includes('rg --no-heading') || script.includes('grep -rn')) {
+            const pat = String(argv[2] ?? '');
+            const mask = String(argv[3] ?? '');
+            const ci = /\s-i\s/.test(script);
+            const needle = ci ? pat.toLowerCase() : pat;
+            const found = [];
+            for (const [p, text] of c.files) {
+                if (mask && !p.endsWith(mask.replace(/^\*+/, '')))
+                    continue;
+                String(text).split('\n').forEach((l, i) => {
+                    const hay = ci ? l.toLowerCase() : l;
+                    if (needle && hay.includes(needle))
+                        found.push('./' + p.replace(/^\/+/, '') + ':' + (i + 1) + ': ' + l);
+                });
+            }
+            out = found.join('\n') + (found.length ? '\n' : '');
+            code = found.length ? 0 : 1;
+        }
+        else if (script.includes('rg --files') || script.includes('find . -type f')) {
+            const mask = String(argv[2] ?? '').replace(/^.*\//, '').replace(/\*/g, '');
+            const keys = [...c.files.keys()].filter(k => !mask || k.split('/').pop().includes(mask));
+            out = keys.map(k => './' + k.replace(/^\/+/, '')).join('\n') + (keys.length ? '\n' : '');
+        }
         else if (Cmd[0] === 'ls') {
             const dir = Cmd[3].replace(/\/+$/, '') || '/';
             const kids = [...c.files.keys()].filter(k => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'));
