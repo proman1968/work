@@ -613,6 +613,21 @@ describe('окружение: слои ai/, system, навыки, субаген
         await assert.rejects(() => call.run({ path: '/BOX', method: 'save_file', args: {} }, { entry: {} }), /только методы call: members/);
     });
 
+    it('F31: ограничение call родителя наследуется субагентом — запрещённые методы отклоняются и после делегирования', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' }, role: 'USER' });
+        const parent = await env.makeTools({ name: 'auditor', meta: { tools: ['call'], call: ['members'] } }, 1);
+        const child = await env.makeTools(env.agents.get('general'), 2, parent);
+        const call = child.find(t2 => t2.name === 'call');
+        assert.ok(call, 'у субагента есть call');
+        assert.ok(call.restrictedMethods?.has('members'), 'ограничение родителя перешло субагенту');
+        assert.equal((await call.permission({ method: 'save_file' }, {}))?.verdict, 'deny');
+        await assert.rejects(() => call.run({ path: '/BOX', method: 'save_file', args: {} }, { entry: {} }),
+            /только методы call: members/);
+        // без ограничения у родителя субагент получает полный call
+        const free = await env.makeTools(env.agents.get('general'), 2, await env.makeTools({ name: 'wide', meta: { tools: ['call'] } }, 1));
+        assert.ok(!free.find(t2 => t2.name === 'call')?.restrictedMethods, 'лишнего ограничения нет');
+    });
+
     it('субагент task: своя лента внутри вызова, отчёт — результат', async () => {
         const place = await WORK.get_item('/BOX');
         globalThis.__MOCK_STREAM__ = scripted([
@@ -752,6 +767,34 @@ describe('сессия .task', () => {
         const anotherParent = await newTask('other-parent');
         const outsider = { ...ctx, task: anotherParent };
         await assert.rejects(() => status.run({ path: child.path }, outsider), /не принадлежит/);
+    });
+
+    it('F31: дочерняя задача наследует режим родителя (ask) и ограничена потолком дочерних задач', async () => {
+        const parent = await newTask('parent-f31');
+        const point = await WORK.get_item('/BOX');
+        const user = await (await WORK.$users).get_item('//' + CHILD_UID);
+        const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
+        const env = await createEnv({ place: point, session: actor, host: mkHost({ mode: 'ask' }), role: 'USER' });
+        const ctx = { task: parent, session: actor, role: 'USER', place: point, env, depth: 0,
+            host: mkHost({ mode: 'ask' }), // как в реальной петле: инструмент видит режим задачи
+            entry: {}, llm: { name: '/MODELS/mock' } };
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Отчёт' }]).stream;
+        const start = metaTools.find(t2 => t2.name === 'agent_start');
+        await start.run({ agent: 'general', prompt: 'Работай', description: 'Режим и потолок' }, ctx);
+        const child = await WORK.get_item(ctx.entry.path);
+        await session.idle(child);
+        const body = await session.getBody(child);
+        assert.equal(body.mode, 'ask'); // дочерняя задача не мягче родителя
+        // потолок: в зоне уже есть задачи — новый агент_start с лимитом 1 отказывает
+        process.env.WORK_AGENT_START_MAX = '1';
+        try {
+            globalThis.__MOCK_STREAM__ = scripted([{ text: 'x' }]).stream;
+            await assert.rejects(() => start.run({ agent: 'general', prompt: 'Ещё работа', description: 'Второй' }, ctx),
+                /потолок/);
+        }
+        finally {
+            delete process.env.WORK_AGENT_START_MAX;
+        }
     });
     it('после рестарта находит задачи только в рабочей зоне, не в history', async () => {
         const rel = 'RECOVERY/$class/USER/task/2026-10-01/1790800000000.EU00000000000001.task';

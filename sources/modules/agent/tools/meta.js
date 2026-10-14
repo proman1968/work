@@ -10,6 +10,34 @@ import { untrustedNames } from '../taint.js';
 const TODO_STATUS = ['pending', 'in_progress', 'completed'];
 export const MAX_DEPTH = 2;
 
+/** F31 (final 8.24): потолок дочерних задач на зону роли (env WORK_AGENT_START_MAX). */
+const MAX_CHILD_TASKS = Number(process.env.WORK_AGENT_START_MAX) || 20;
+
+/** Сколько .task уже лежит в зоне роли — прежде чем заводить ещё одного. */
+async function countChildTasks(point, role) {
+    try {
+        const zone = await point.work_zone({ role });
+        const dir = zone?.dir;
+        if (!dir)
+            return 0;
+        const fs = await import('node:fs');
+        let n = 0;
+        const walk = d => {
+            for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+                if (e.isDirectory())
+                    walk(d + '/' + e.name);
+                else if (/\.task$/i.test(e.name))
+                    n++;
+            }
+        };
+        walk(dir);
+        return n;
+    }
+    catch {
+        return 0; /* зона недоступна — путь agent_start сам откажет ниже */
+    }
+}
+
 /** Снимки, созданные записями этой задачи (включая вложенные ленты субагентов). */
 function collectSnapshots(items, out = []) {
     for (const it of items || []) {
@@ -207,8 +235,17 @@ export const metaTools = [
             const point = ctx.env.place;
             if (!point || typeof point.save_file !== 'function')
                 throw new Error('нет рабочей точки для дочерней задачи');
+            // F31: дочерняя задача не мягче родителя — наследует его режим (ask/plan);
+            // у auto родителя остаётся auto (человек уже разрешил свободный режим)
+            const parentMode = ['ask', 'plan'].includes(String(ctx.host?.mode || '')) ? ctx.host.mode : 'auto';
+            // F31: потолок дочерних задач в зоне роли (живое чтение — настроить можно без рестарта)
+            const max = Number(process.env.WORK_AGENT_START_MAX) || MAX_CHILD_TASKS;
+            const existing = await countChildTasks(point, ctx.role);
+            if (existing >= max)
+                throw new Error('agent_start: в зоне роли уже ' + existing + ' дочерних задач (потолок ' + max
+                    + ') — останови ненужные (agent_stop) или используй разовых субагентов (task)');
             const name = String(args.description || args.agent).slice(0, 80);
-            const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle',
+            const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle', mode: parentMode,
                 parentTask: ctx.task.path, ownerUid: ctx.session.uid, childAgent: def.name, childDepth: depth,
                 model: def.meta.model || ctx.llm.name, role: ctx.role };
             // skip_file_handler: не запускать триггер одновременно с явным prompt ниже.

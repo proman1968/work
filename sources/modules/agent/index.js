@@ -60,6 +60,7 @@ function restrictCall(tool, methods) {
     const reason = 'этому агенту разрешены только методы call: ' + [...methods].join(', ');
     return {
         ...tool,
+        restrictedMethods: methods, // F31: наследуется субагентом (makeTools)
         description: tool.description + ' Для тебя разрешены только методы: ' + [...methods].join(', ') + '.',
         permission: (args, ctx) => methods.has(String(args?.method || ''))
             ? tool.permission?.(args, ctx)
@@ -264,6 +265,11 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             if (parent) {
                 const allowed = new Set(parent.map(t => t.name));
                 picked = picked.filter(t => allowed.has(t.name));
+                // F31: ограничение call родителя (frontmatter call: [методы]) наследуется:
+                // субагент не возвращает родителю запрещённые ему методы
+                const pcall = parent.find(t => t.name === 'call' && t.restrictedMethods);
+                if (pcall)
+                    picked = picked.map(t => t.name === 'call' ? restrictCall(t, pcall.restrictedMethods) : t);
             }
             // фронтматтер call: [members, …] — субагенту разрешены только эти методы call (аудитор, ревьюер: чтение без записи)
             const methods = Array.isArray(def.meta.call) ? new Set(def.meta.call.map(String)) : null;
