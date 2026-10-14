@@ -72,9 +72,25 @@ export async function nodeFetch(node, req = {}) {
         redirect: 'error',
         signal: AbortSignal.timeout(req.timeoutMs || 30_000),
     });
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > RESPONSE_MAX)
-        throw new Error('Ответ узла слишком большой');
+    // R8 (8.35): тело читается ПОТОКОМ с потолком — гигабайты от узла не оседают в памяти
+    // целиком до проверки (так было с arrayBuffer())
+    const chunks = [];
+    let size = 0;
+    if (res.body) {
+        const reader = res.body.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            size += value.length;
+            if (size > RESPONSE_MAX) {
+                reader.cancel().catch(() => {});
+                throw new Error('Ответ узла слишком большой');
+            }
+            chunks.push(Buffer.from(value));
+        }
+    }
+    const buf = Buffer.concat(chunks);
     const text = buf.toString('utf-8');
     if (!res.ok)
         throw new Error('Узел ' + node.host_id + ': HTTP ' + res.status + ' ' + text.slice(0, 300));

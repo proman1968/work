@@ -259,4 +259,40 @@ describe('F28: память не отдана провайдеру — пото�
             /строка потока превысила 1 МБ/,
             'anthropic-поток без переводов строк не оборван');
     });
+
+    // ── R7 (8.35): оставшиеся пути чтения тела провайдера — тоже с потолком ──
+
+    it('речь (speak): бинарный ответ больше 32 МБ — обрыв, а не копирование в память', async () => {
+        installStatus(200, [Buffer.alloc(33 * 1024 * 1024, 1)]);
+        const tts = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test', capabilities: 'tts' };
+        await assert.rejects(
+            () => aiDef.speak.call(tts, { text: 'прочти' }),
+            /ответ превысил 32 МБ/,
+            'гигантский «WAV» скопирован в память');
+    });
+
+    it('list_remote: JSON-ответ больше 16 МБ — отказ, а не копирование', async () => {
+        installStatus(200, ['{"junk":"' + 'z'.repeat(20 * 1024 * 1024) + '}']);
+        const listAi = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test' };
+        const res = await aiDef.list_remote.call(listAi, {});
+        assert.match(res.error, /list_remote: не удалось/);
+        assert.ok(res.tried.some(u => /JSON-ответ превысил 16 МБ/.test(String(u))), 'потолок не сработал: ' + JSON.stringify(res.tried));
+    });
+
+    it('gigachat auth: ответ больше 16 МБ — обрыв, а не копирование', async () => {
+        // свой фек-транспорт: gigachat пишет form-urlencoded (scope=…), а не JSON
+        const fakeRes = () => {
+            const res = Readable.from([Buffer.from('{"junk":"' + 'y'.repeat(20 * 1024 * 1024) + '"}')]);
+            res.statusCode = 200;
+            return res;
+        };
+        globalThis.WORK = {
+            https: { request(_o, cb) { queueMicrotask(() => cb(fakeRes())); return { on() {}, setTimeout() {}, destroy() {}, write() {}, end() {} }; } },
+        };
+        const giga = { protocol: 'gigachat', baseUrl: 'https://x.test/v1/chat/completions', authUrl: 'https://a.x.test', model: 'm', token: 'k', scope: 'x' };
+        await assert.rejects(
+            () => collect(giga, { messages }),
+            /GigaChat auth: ответ превысил 16 МБ/,
+            'гигантский auth-ответ скопирован в память');
+    });
 });

@@ -18,6 +18,8 @@ const ERROR_BODY_MAX = 64 * 1024;        // F28: тело ошибки пото�
 const SSE_LINE_MAX = 1024 * 1024;        // F28: незавершённая строка SSE (data-JSON много меньше)
 const JSON_BODY_MAX = 16 * 1024 * 1024;  // F28: JSON-ответ (картинка b64 — мегабайты; чужой мусор — нет)
 
+const REMOTE_BODY_MAX = 32 * 1024 * 1024; // R7 (8.35): бинарный ответ провайдера (WAV речи/распознавания)
+
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
@@ -527,8 +529,25 @@ function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 
             timeout: timeoutMs,
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): бинарный ответ (WAV) — потолок: чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > REMOTE_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('ответ превысил ' + Math.round(REMOTE_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const buf = Buffer.concat(chunks);
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + buf.toString('utf-8', 0, 200)));
@@ -1370,8 +1389,25 @@ function httpsGetJson(urlStr, headers, ai) {
             timeout: 15000,
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): JSON-ответ — потолок (как generateImage): чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('JSON-ответ превысил ' + Math.round(JSON_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const body = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + body.slice(0, 120)));
@@ -1442,8 +1478,25 @@ async function gigachatAuth(ai) {
             },
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): ответ auth — JSON-потолок: чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('GigaChat auth: ответ превысил ' + Math.round(JSON_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const body = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode >= 400)
                     console.warn('[gigachat-auth] error:', res.statusCode, body.slice(0, 200));

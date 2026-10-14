@@ -224,6 +224,23 @@ describe('R9 nodeFetch: путь не уводит с адреса узла', ()
     });
 });
 
+describe('R8 (8.35) nodeFetch: тело читается потоком с потолком', () => {
+    it('ответ больше 32 МБ — отказ по ходу чтения, а не копирование целиком в память', async () => {
+        const big = 'x'.repeat(40 * 1024 * 1024);
+        const srv = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(big); });
+        await new Promise(r => srv.listen(0, '127.0.0.1', r));
+        try {
+            const { nodeFetch } = await import('../sources/modules/nodes/outbound.js');
+            const node = { origin: `http://127.0.0.1:${srv.address().port}`, host_id: 'B'.repeat(15) };
+            await assert.rejects(nodeFetch(node, { path: '/big' }), /слишком большой/i,
+                'гигантский ответ узла принят');
+        }
+        finally {
+            srv.close();
+        }
+    });
+});
+
 describe('R10 read_secret: имя файла без обхода каталогов', () => {
     it('«..» в имени — отказ; простое имя читает свой секрет', async () => {
         const box = await WORK.get_item('/BOX');
