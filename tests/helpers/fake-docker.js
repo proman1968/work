@@ -268,7 +268,7 @@ export function fakeDocker(o = {}) {
                     const bind = (c.hostCfg?.Binds || [])[0] || '';
                     const volName = bind.split(':')[0] || 'vol';
                     return {
-                        Id: c.Id, Name: '/' + c.Name, Config: { Image: c.Image },
+                        Id: c.Id, Name: '/' + c.Name, Config: { Image: c.Image, Labels: { ...c.Labels } },
                         State: { Running: c.State === 'running', Status: c.State, StartedAt: new Date().toISOString(), ExitCode: c.exitCode ?? (c.State === 'running' ? null : 0) },
                         NetworkSettings: { Networks: nets },
                         HostConfig: { Memory: c.hostCfg?.Memory || 0 },

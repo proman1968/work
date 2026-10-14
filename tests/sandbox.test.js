@@ -276,6 +276,8 @@ it('F13 egress-фильтр: правила DOCKER-USER режут частны�
     for (const cidr of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16'])
         assert.ok(joined.includes('-d ' + cidr), 'нет запрета ' + cidr);
     assert.ok(joined.includes('DOCKER-USER'), 'правила не в DOCKER-USER');
+    assert.ok(joined.includes('INPUT'), 'R17: сам хост (INPUT) не закрыт для песочницы');
+    assert.ok(joined.includes('ip6tables'), 'R17: IPv6 не закрыт');
     const st = await statusOf(docker, pc.id);
     assert.ok(st.networks.includes(cfg.network.egressName), 'интернет не включён');
     await setNetwork(docker, pc.id, false, cfg);
@@ -307,12 +309,18 @@ it('R1: правило iptables ставит только ЗАПУЩЕННЫЙ �
     assert.equal(after.State.ExitCode, 0);
 });
 
-it('F13 buildEgressRules: полный набор частных диапазонов и имя моста', () => {
+it('F13/R17 buildEgressRules: частные диапазоны в DOCKER-USER и INPUT, IPv6 целиком', () => {
     const rules = buildEgressRules('br-abc123def456');
     const cidrs = rules.map(r => r.cidr);
-    for (const cidr of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '224.0.0.0/4'])
+    for (const cidr of ['0.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '198.18.0.0/15', '224.0.0.0/4'])
         assert.ok(cidrs.includes(cidr), 'нет ' + cidr);
     assert.ok(rules.every(r => r.bridge === 'br-abc123def456'));
+    for (const cidr of ['10.0.0.0/8', '127.0.0.0/8']) {
+        assert.ok(rules.some(r => r.cidr === cidr && r.chain === 'DOCKER-USER'), cidr + ' без DOCKER-USER');
+        assert.ok(rules.some(r => r.cidr === cidr && r.chain === 'INPUT'), cidr + ' без INPUT — сам хост открыт');
+    }
+    assert.ok(rules.some(r => r.v6 && r.cidr === '::/0' && r.chain === 'DOCKER-USER'), 'IPv6 FORWARD не закрыт');
+    assert.ok(rules.some(r => r.v6 && r.cidr === '::/0' && r.chain === 'INPUT'), 'IPv6 INPUT не закрыт');
 });
 
 it('F13 гонка квот: параллельные ensure одного владельца не пробивают maxPerUser', async () => {
@@ -421,5 +429,88 @@ it('destroyComputer: удаляет контейнер и том', async () => {
     // фейк удаляет том — проверяем через inspect
     const insp = await docker.getContainer(pc.id).inspect().catch(() => null);
     assert.equal(insp, null);
+    resetRegistryForTests();
+});
+
+// ── R12+R17 (final 8.37): fail-open ветки песочницы ────────────────────────
+
+it('R12: ошибка Docker в обходе TTL не глотается (fail-closed)', async () => {
+    const docker = fakeDocker();
+    const cfg = { ...loadSandboxConfig(), network: { ...loadSandboxConfig().network, ttlMin: 0.001 } };
+    const pc = await ensureComputer(docker, 'user1', 'main', cfg);
+    await setNetwork(docker, pc.id, true, cfg);
+    const orig = docker.listContainers.bind(docker);
+    docker.listContainers = async () => { throw new Error('docker API умер'); };
+    const { sweepNetworkTTL } = await import('../sources/modules/sandbox/manager.js');
+    await assert.rejects(sweepNetworkTTL(docker, cfg), /docker API умер|ECONNREFUSED|умер/i,
+        'сбой перечисления контейнеров проглочен — обход «пропущен» (fail-open)');
+    docker.listContainers = orig;
+    resetRegistryForTests();
+});
+
+it('R12: неудача отключения не считается успехом — обход TTL падает с перечнем', async () => {
+    const docker = fakeDocker();
+    const cfg = { ...loadSandboxConfig(), network: { ...loadSandboxConfig().network, ttlMin: 0.001 } };
+    const pc = await ensureComputer(docker, 'user1', 'main', cfg);
+    await setNetwork(docker, pc.id, true, cfg);
+    await new Promise(r => setTimeout(r, 80)); // TTL истёк
+    // ломаем сам setNetwork: перечисление сетей падает — отключить нечем
+    const orig = docker.listNetworks.bind(docker);
+    docker.listNetworks = async () => { throw new Error('сети не видны'); };
+    const { sweepNetworkTTL } = await import('../sources/modules/sandbox/manager.js');
+    await assert.rejects(sweepNetworkTTL(docker, cfg), /не удалось выключить 1/,
+        'неудача отключения посчитана успехом (fail-open)');
+    docker.listNetworks = orig;
+    const st = await statusOf(docker, pc.id);
+    assert.ok(st.networks.includes(cfg.network.egressName), 'интернет остался включённым — изоляция не восстановлена');
+    resetRegistryForTests();
+});
+
+it('R17: посторонний контейнер после рестарта уходит в сеть владельца по метке, не в общую', async () => {
+    const docker = fakeDocker();
+    const cfg = { ...loadSandboxConfig(), network: { ...loadSandboxConfig().network, ttlMin: 0.001 } };
+    const pc = await ensureComputer(docker, 'user9', 'main', cfg);
+    await setNetwork(docker, pc.id, true, cfg);
+    // «рестарт сервера»: ни реестра, ни памяти — владелец только в метке контейнера
+    resetRegistryForTests();
+    const { sweepNetworkTTL } = await import('../sources/modules/sandbox/manager.js');
+    await sweepNetworkTTL(docker, cfg);
+    const st = await statusOf(docker, pc.id);
+    assert.ok(st.networks.includes(sandboxNetName(cfg, 'user9')), 'пересажен не в сеть своего владельца');
+    const shared = [...docker.networks.keys()].filter(n => /shared/.test(n));
+    assert.ok(shared.every(n => !(docker.networks.get(n) || new Set()).has(pc.id)),
+        'посторонний контейнер вернулся в ОБЩУЮ сеть (изоляция потеряна)');
+    resetRegistryForTests();
+});
+
+it('R17: легаси-контейнер из общей сети мигрирует в сеть владельца при обращении', async () => {
+    const docker = fakeDocker();
+    const cfg = loadSandboxConfig();
+    const pc = await ensureComputer(docker, 'user1', 'main', cfg);
+    // «старый» контейнер: руками пересажен в общую сеть (как до изоляции по владельцам)
+    await docker.createNetwork({ Name: 'work-sandbox' });
+    await docker.getNetwork('work-sandbox').connect({ Container: pc.id });
+    await docker.getNetwork(sandboxNetName(cfg, 'user1')).disconnect({ Container: pc.id });
+    const st0 = await statusOf(docker, pc.id);
+    assert.ok(st0.networks.includes('work-sandbox'), 'подготовка не удалась');
+    // любое обращение к компьютеру мигрирует его обратно в свою сеть
+    await ensureComputer(docker, 'user1', 'main', cfg);
+    const st = await statusOf(docker, pc.id);
+    assert.ok(st.networks.includes(sandboxNetName(cfg, 'user1')), 'своя сеть не подключена');
+    assert.ok(!st.networks.includes('work-sandbox'), 'легаси-общая сеть не отключена');
+    resetRegistryForTests();
+});
+
+it('R17: запуск остановленного тоже под общим лимитом запущенных', async () => {
+    const docker = fakeDocker();
+    const cfg = { ...loadSandboxConfig(), maxRunning: 1, maxPerUser: 5 };
+    const a = await ensureComputer(docker, 'u1', 'main', { ...cfg, maxRunning: 5 });
+    const b = await ensureComputer(docker, 'u2', 'main', { ...cfg, maxRunning: 5 });
+    await docker.getContainer(a.id).stop();
+    await docker.getContainer(b.id).stop();
+    // оба остановлены; лимит 1: первый запуск проходит, второй — отказ
+    await ensureComputer(docker, 'u1', 'main', cfg);
+    await assert.rejects(ensureComputer(docker, 'u2', 'main', cfg), /общий лимит запущенных/,
+        'запуск остановленного обошёл maxRunning');
     resetRegistryForTests();
 });

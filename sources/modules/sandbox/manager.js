@@ -160,25 +160,42 @@ export async function ensureIsolatedNetwork(docker, cfg = loadSandboxConfig(), o
     return name;
 }
 
-/** Владелец контейнера по id из реестра (для setNetwork без явного владельца). */
-function ownerOfId(id) {
+/** Владелец контейнера по id для setNetwork без явного владельца: реестр → метки контейнера →
+ *  «сирота» (R17/8.37: никогда 'shared' — посторонний контейнер не должен возвращаться в общую сеть;
+ *  сирота получает СВОЮ изолированную сеть, пустые убирает sweepIdle). */
+async function ownerOfContainer(docker, id) {
     for (const [key, v] of registry)
         if (v.id === id)
             return key.split('/')[0];
-    return 'shared';
+    const insp = await docker.getContainer(id).inspect().catch(() => null);
+    const label = insp?.Config?.Labels?.['work.owner'];
+    if (label)
+        return String(label);
+    return 'orphan-' + slugOwner(String(id).slice(0, 12));
 }
 
 /**
  * Egress-фильтр (F13): выход в интернет — только в интернет. Частные адреса (LAN хоста,
  * соседние docker-сети, link-local/метаданные облаков) из egress-моста не отвечают.
  * Правила живут в DOCKER-USER (цепочка Docker для внешних политик), применяются идемпотентно.
+ * R17 (8.37): FORWARD — не единственный путь: контейнер может стучать и в САМ хост
+ * (сервис WORK, БД на localhost/LAN) — те же диапазоны режутся и в INPUT;
+ * IPv6 целиком (fail-closed: v4-список не страхует, если у моста есть v6).
  */
-const PRIVATE_CIDRS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '224.0.0.0/4'];
+const PRIVATE_CIDRS = ['0.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '198.18.0.0/15', '224.0.0.0/4'];
 
 /** Правила фильтра для egress-моста (чистая функция — покрыта тестами). */
 export function buildEgressRules(bridge) {
     const b = String(bridge || '').replace(/[^\w-]/g, '');
-    return PRIVATE_CIDRS.map(cidr => ({ bridge: b, cidr }));
+    const v4 = PRIVATE_CIDRS.flatMap(cidr => ([
+        { bridge: b, cidr, chain: 'DOCKER-USER' },
+        { bridge: b, cidr, chain: 'INPUT' },
+    ]));
+    const v6 = [
+        { bridge: b, cidr: '::/0', chain: 'DOCKER-USER', v6: true },
+        { bridge: b, cidr: '::/0', chain: 'INPUT', v6: true },
+    ];
+    return [...v4, ...v6];
 }
 
 /** Подменить исполнение iptables в тестах: fn(rules) → Promise. */
@@ -199,8 +216,11 @@ async function egressBridgeName(docker, egress) {
 async function applyEgressRules(docker, cfg, rules) {
     if (iptablesForTests)
         return iptablesForTests(rules);
-    const script = rules.map(r =>
-        `iptables -C DOCKER-USER -i ${r.bridge} -d ${r.cidr} -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -i ${r.bridge} -d ${r.cidr} -j DROP`).join('; ');
+    // R17 (8.37): правила и в DOCKER-USER (FORWARD), и в INPUT (сам хост); IPv6 — ip6tables
+    const script = rules.map(r => {
+        const cmd = r.v6 ? 'ip6tables' : 'iptables';
+        return `${cmd} -C ${r.chain} -i ${r.bridge} -d ${r.cidr} -j DROP 2>/dev/null || ${cmd} -I ${r.chain} 1 -i ${r.bridge} -d ${r.cidr} -j DROP`;
+    }).join('; ');
     // без LABEL: хелпер не должен считаться в квотах и подметаться как «компьютер»
     const helper = await docker.createContainer({
         Image: cfg.image, Cmd: ['sh', '-c', script],
@@ -390,6 +410,30 @@ export async function listComputers(docker, owner = null) {
     }));
 }
 
+/** R17 (8.37): контейнер обязан жить в сети СВОЕГО владельца (+ egress при включённом интернете).
+ *  Контейнеры, созданные до изоляции по владельцам (или руками в Docker), сидят в общей
+ *  легаси-сети или чужой — пересаживаем: своя сеть подключается, посторонние отключаются.
+ *  Не удалось — отказ (fail-closed: пользоваться в общей сети нельзя). */
+export async function migrateNetworks(docker, id, owner, cfg = loadSandboxConfig()) {
+    const insp = await docker.getContainer(id).inspect().catch(e => { throw friendly(e); });
+    const nets = Object.keys(insp.NetworkSettings?.Networks || {});
+    const own = await ensureIsolatedNetwork(docker, cfg, owner);
+    const egress = cfg.network?.egressName || 'work-egress';
+    if (!nets.includes(own))
+        await docker.getNetwork(own).connect({ Container: id }).catch(e => {
+            if (!/already connected|already exists/i.test(String(e?.message || e)))
+                throw friendly(e);
+        });
+    for (const n of nets) {
+        if (n === own || n === egress)
+            continue;
+        await docker.getNetwork(n).disconnect({ Container: id, Force: true }).catch(e => {
+            if (!/not connected|no such endpoint|not found/i.test(String(e?.message || e)))
+                throw friendly(e);
+        });
+    }
+}
+
 /**
  * Компьютер пользователя: найти, поднять остановленный или создать. Проверяет квоты.
  * @returns {{ id, name, state, created:boolean, image:string }}
@@ -403,11 +447,22 @@ export async function ensureComputer(docker, owner, name, cfg = loadSandboxConfi
         const c = docker.getContainer(found.id);
         const insp = await c.inspect().catch(() => null);
         if (insp && !insp.State?.Running) {
-            await c.start().catch(e => { throw friendly(e); });
-            await checkVolumeQuota(docker, found.id, cfg);
-            return { id: found.id, name, state: 'running', created: false, image: cfg.image, started: true };
+            // R17 (8.37): запуск остановленного — под замком создания и с общим лимитом
+            // запущенных (раньше лимит проверялся только при создании — остановленные
+            // обходили maxRunning просто запуском)
+            return withCreateLock(async () => {
+                const all = await docker.listContainers({ all: true, filters: labelFilters() }).catch(e => { throw friendly(e); });
+                const running = (all || []).filter(x => x.State === 'running');
+                if (running.length >= (Number(cfg.maxRunning) || 4))
+                    throw new Error('достигнут общий лимит запущенных компьютеров (' + cfg.maxRunning + ') — остановите чужой или попросите админа');
+                await c.start().catch(e => { throw friendly(e); });
+                await migrateNetworks(docker, found.id, owner, cfg);
+                await checkVolumeQuota(docker, found.id, cfg);
+                return { id: found.id, name, state: 'running', created: false, image: cfg.image, started: true };
+            });
         }
         if (insp) {
+            await migrateNetworks(docker, found.id, owner, cfg);
             await checkVolumeQuota(docker, found.id, cfg);
             return { id: found.id, name, state: 'running', created: false, image: cfg.image };
         }
@@ -570,7 +625,7 @@ export async function setNetwork(docker, id, on, cfg = loadSandboxConfig(), owne
     // выход в интернет — только после установки фильтра частных сетей (F13, fail-closed)
     if (on)
         await ensureEgressFilter(docker, cfg);
-    const iso = await ensureIsolatedNetwork(docker, cfg, owner || ownerOfId(id));
+    const iso = await ensureIsolatedNetwork(docker, cfg, owner || await ownerOfContainer(docker, id));
     const swap = async (connect, disconnect) => {
         await docker.getNetwork(connect).connect({ Container: id }).catch(e => {
             if (!/already connected|already exists/i.test(String(e?.message || e)))
@@ -618,12 +673,12 @@ export async function sweepNetworkTTL(docker, cfg = loadSandboxConfig()) {
     const egress = cfg.network?.egressName || 'work-egress';
     const now = Date.now();
     const ttlMs = ttlMin * 60_000;
-    let disabled = 0;
     // известные включения (в памяти)
     const expired = new Set([...netEnabled].filter(([, ts]) => now - ts > ttlMs).map(([id]) => id));
     // F26: контейнер на egress, которого нет в памяти — интернет включён до рестарта
     // (или руками в Docker): мы не знаем, когда, — fail-closed, выключаем
-    const list = await docker.listContainers({ filters: labelFilters() }).catch(() => []);
+    // R12 (8.37): ошибка Docker НЕ глотается — «пропустим обход» здесь как раз fail-open
+    const list = await docker.listContainers({ filters: labelFilters() }).catch(e => { throw friendly(e); });
     for (const c of list || []) {
         if (c.State !== 'running' || netEnabled.has(c.Id))
             continue;
@@ -631,10 +686,22 @@ export async function sweepNetworkTTL(docker, cfg = loadSandboxConfig()) {
         if (insp && Object.keys(insp.NetworkSettings?.Networks || {}).includes(egress))
             expired.add(c.Id);
     }
+    // R12 (8.37): неудача отключения не считается успехом — счёт только за реально выключенные,
+    // накопленные сбои роняют обход (сигнал «изоляция не восстановлена»), а не глотаются
+    let disabled = 0;
+    const failures = [];
     for (const id of expired) {
-        await setNetwork(docker, id, false, cfg).catch(() => {});
-        disabled++;
+        try {
+            await setNetwork(docker, id, false, cfg);
+            netEnabled.delete(id);
+            disabled++;
+        }
+        catch (e) {
+            failures.push(String(id).slice(0, 12) + ': ' + String(e?.message || e).slice(0, 120));
+        }
     }
+    if (failures.length)
+        throw new Error('TTL интернета: не удалось выключить ' + failures.length + ' компьютер(ов) — ' + failures.join('; ').slice(0, 400));
     return disabled;
 }
 
