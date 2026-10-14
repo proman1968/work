@@ -15,6 +15,7 @@ import { $server } from '../sources/server/server.js';
 import { devSearchTools, globToRegExp } from '../sources/modules/agent/tools/dev/search.js';
 import { apply_patch, parsePatch, applyHunks } from '../sources/modules/agent/tools/dev/patch.js';
 import { git_status, git_diff, git_log, git_show, git_blame, git_branch, git_commit, git_push } from '../sources/modules/agent/tools/dev/git.js';
+import { run_checks } from '../sources/modules/agent/tools/dev/checks.js';
 import { createEnv } from '../sources/modules/agent/index.js';
 import { decide } from '../sources/modules/agent/permissions.js';
 import { collectUndo, applyUndo } from '../sources/modules/agent/undo.js';
@@ -71,6 +72,12 @@ before(async () => {
     write(path.join(root, `USERS/${UID}/$user/#secret/notes.md`), 'мой HIDDENWORD в заметках\n');
     write(path.join(root, 'MODELS/$class/class.js'), `export default { label: 'М', '#security': { USER: ['${UID}'] } }`);
     write(path.join(root, 'MODELS/m1/$ai/class.js'), `export default { model: 'm1' } // MODELWORD\n`);
+    // 6.6: проверки сервера — скрипты package.json + #system/dev.json
+    write(path.join(root, 'package.json'), JSON.stringify({
+        name: 'dev-tools-test', private: true,
+        scripts: { 'echo-ok': 'node -e "console.log(42)"', 'boom': 'node -e "process.exit(3)"' },
+    }, null, 2));
+    write(path.join(root, '#system/dev.json'), JSON.stringify({ checks: { hello: 'node -e "console.log(7)"' } }));
     process.chdir(root);
     globalThis.WORK = new $server();
     // 6.4: git-репозиторий в корне тестового дерева (арена work) — скрытая .git в обходы не попадает
@@ -574,5 +581,64 @@ describe('git: арена sandbox', () => {
         assert.match(show, /commit HEAD/, 'ref передаётся аргументом');
         await assert.rejects(git_show.run({ where: 'sandbox', ref: '--upload-pack=x' }, mkCtx('sbx-user')), /недопустимое значение ref/);
         resetDockerForTests();
+    });
+});
+
+// ── 6.6 (final): run_checks ────────────────────────────────────────────────
+
+describe('run_checks', () => {
+    it('арена work: список без name; проверки из dev.json и package.json; код возврата', async () => {
+        const list = await run_checks.run({ where: 'work' }, mkCtx(ADMIN));
+        assert.match(list, /доступные проверки/);
+        assert.match(list, /hello/);
+        assert.match(list, /echo-ok/);
+        const dev = await run_checks.run({ where: 'work', name: 'hello' }, mkCtx(ADMIN));
+        assert.match(dev, /код возврата 0/);
+        assert.match(dev, /7/, 'вывод проверки из #system/dev.json');
+        const script = await run_checks.run({ where: 'work', name: 'echo-ok' }, mkCtx(ADMIN));
+        assert.match(script, /код возврата 0/);
+        assert.match(script, /42/, 'вывод скрипта package.json');
+        const fail = await run_checks.run({ where: 'work', name: 'boom' }, mkCtx(ADMIN));
+        assert.match(fail, /код возврата 3/, 'код возврата не провала');
+    });
+    it('только администратору; неизвестная проверка — отказ со списком', async () => {
+        await assert.rejects(run_checks.run({ where: 'work', name: 'echo-ok' }, mkCtx(UID)), /только администратору/);
+        await assert.rejects(run_checks.run({ where: 'work', name: 'no-such-check' }, mkCtx(ADMIN)), /нет проверки/);
+    });
+    it('подтверждение: work — вопрос каждый раз (без «всегда»), список и песочница — свободно', async () => {
+        const v = await decide(run_checks, { where: 'work', name: 'echo-ok' }, { host: { mode: 'auto', allowed: new Set(['run_checks']) } });
+        assert.equal(v.verdict, 'ask', 'даже с «разрешить всегда» — вопрос');
+        assert.equal(v.noAlways, true, '«разрешить всегда» не предлагается');
+        assert.equal((await decide(run_checks, { where: 'work' }, { host: { mode: 'ask' } })).verdict, 'allow', 'список — чтение, не запуск');
+        assert.equal((await decide(run_checks, { where: 'sandbox', command: 'npm test' }, { host: { mode: 'auto' } })).verdict, 'allow');
+    });
+    it('арена sandbox: свободная команда, вывод с потолком (начало+конец), интернет — untrusted', async () => {
+        const docker = fakeDocker();
+        setDockerForTests(docker);
+        const cfg = loadSandboxConfig();
+        const pc = await ensureComputer(docker, 'sbx-user', 'main', cfg);
+        const e1 = {};
+        const ok = await run_checks.run({ where: 'sandbox', command: 'echo multi' }, mkCtx('sbx-user', { entry: e1 }));
+        assert.match(ok, /код возврата 0/);
+        assert.match(ok, /line1/);
+        assert.match(ok, /\[stderr\]/, 'stderr не показан');
+        assert.equal(e1.untrusted, undefined, 'без интернета вывод не чужой');
+        const big = await run_checks.run({ where: 'sandbox', command: 'echo ' + 'x'.repeat(40 * 1024) }, mkCtx('sbx-user'));
+        assert.match(big, /пропущено \d+ символов вывода/, 'потолок вывода не работает');
+        const hang = await run_checks.run({ where: 'sandbox', command: 'hang' }, mkCtx('sbx-user'));
+        assert.match(hang, /таймаут/, 'код 124 не показан как таймаут');
+        await setNetwork(docker, pc.id, true, cfg);
+        const e2 = {};
+        await run_checks.run({ where: 'sandbox', command: 'echo ok' }, mkCtx('sbx-user', { entry: e2 }));
+        assert.equal(e2.untrusted, true, 'с включённым интернетом чужой код не помечен');
+        await setNetwork(docker, pc.id, false, cfg);
+        resetDockerForTests();
+    });
+    it('run_checks в основном наборе; субагенту — по явной маске run_checks', async () => {
+        const env = await createEnv({ place: WORK, session: { uid: UID } });
+        const names = (await env.makeTools()).map(t => t.name);
+        assert.ok(names.includes('run_checks'), 'в основном наборе');
+        const sub = (await env.makeTools({ meta: { tools: 'run_checks' } })).map(t => t.name);
+        assert.ok(sub.includes('run_checks'), 'по маске');
     });
 });
