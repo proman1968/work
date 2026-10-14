@@ -226,6 +226,12 @@ describe('MCP: токены доступа', () => {
         assert.equal(created.endpoint, '/mcp');
         assert.equal((await authMethods.mcp_token_list({ session })).length, 1);
         assert.deepEqual(await authMethods.mcp_token_revoke({ session, post: { id: created.id } }), { revoked: 1 });
+        // без post — значения по умолчанию; отзыв всех сразу; пустой отзыв — ноль
+        const def = await authMethods.mcp_token_create({ session });
+        assert.match(def.token, /^wmcp\./);
+        await authMethods.mcp_token_create({ session, post: { label: 'второй' } });
+        assert.equal((await authMethods.mcp_token_revoke({ session, post: { all: true } })).revoked, 2);
+        assert.equal((await authMethods.mcp_token_revoke({ session, post: {} })).revoked, 0);
         await assert.rejects(authMethods.mcp_token_create({ session: undefined }), /Доступ запрещён/);
         await assert.rejects(authMethods.mcp_token_create({ session: { ...session, ephemeral: true } }), /Доступ запрещён/);
         await assert.rejects(authMethods.mcp_token_create({ session: { uid: 'node', principal: { kind: 'node' } } }), /Доступ запрещён/);
