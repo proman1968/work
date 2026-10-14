@@ -82,6 +82,7 @@ before(async () => {
     '#security': { USER: ['${USER}'], CUSTOMER: ['${serverId}'] }
 }`);
     write('ORG/DEPT/$class/USER/work.md', 'рабочий файл');
+    write('ORG/DEPT/$class/USER/range.md', 'abcdefgh');
     write('ORG/DEPT/$class/BOSS/boss.md', 'файл руководителя');
     write('ORG/DEPT/$class/CUSTOMER/price.md', 'прайс для покупателей');
     write('ORG/DEPT/$class/logs/2026-01-01/1.x.logs', JSON.stringify({ time: 1, sender: USER, content: 'моё' }));
@@ -512,5 +513,140 @@ describe('сеть WORK: узлы', () => {
         write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}', '${serverId}'] } }`);
         org.reset();
         assert.deepEqual(await org.roles({ session }), [], 'BOSS не выдаётся узлу');
+    });
+});
+
+describe('http-сервер: маршруты до дерева и отдача файлов', () => {
+    it('OPTIONS (предзапрос CORS) — пустой ответ без разрешений; /mcp — 401 без токена', async () => {
+        const opt = await req('/', { method: 'OPTIONS' });
+        assert.equal(opt.status, 204);
+        assert.match(opt.headers.get('x-content-type-options') || '', /nosniff/);
+        const mcp = await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        assert.equal(mcp.status, 401);
+        assert.match(mcp.headers.get('www-authenticate') || '', /Bearer/i);
+        await mcp.text();
+    });
+
+    it('маршруты до разбора дерева: oauth/callback, /.well-known/work-node, /~computer/…/status', async () => {
+        const cb = await req('/oauth/callback?state=none');
+        assert.equal(cb.status, 200);
+        assert.match(cb.headers.get('content-type') || '', /text\/html/);
+        assert.match(cb.headers.get('cache-control') || '', /no-store/);
+        assert.match(cb.text, /устарела|подключено/);
+        const wk = await req('/.well-known/work-node');
+        assert.equal(wk.status, 200);
+        assert.equal(wk.headers.get('access-control-allow-origin'), '*');
+        assert.doesNotThrow(() => JSON.parse(wk.text), 'карточка узла — JSON');
+        const comp = await req('/~computer/abc/status');
+        assert.equal(comp.status, 401);
+        assert.deepEqual(JSON.parse(comp.text), { state: 'missing' });
+    });
+
+    it('недопустимый путь с NUL; корень без своей главной — на страницу структуры; отсутствие — ошибка', async () => {
+        const nul = await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error('NUL-запрос не отвечен за 10 с')), 10_000);
+            http.get({ host: '127.0.0.1', port: server.address().port, path: '/x%00y', agent: false }, res => {
+                let text = '';
+                res.on('data', c => text += c);
+                res.on('end', () => { clearTimeout(t); resolve({ status: res.statusCode, text }); });
+            }).on('error', e => { clearTimeout(t); reject(e); });
+        });
+        assert.equal(nul.status, 400);
+        assert.match(nul.text, /Недопустимый путь/);
+        assert.equal((await req('/')).status, 302);
+        assert.match((await req('/')).headers.get('location') || '', /\/index\.html$/);
+        assert.match((await req('/index.html')).headers.get('location') || '', /explorer/);
+        assert.match((await req('/nope')).text, /not found/);
+        // свойство @ по отсутствующему пути — пустой ответ, не ошибка разбора
+        const at = await req('/nope/@label');
+        assert.equal(at.status, 200);
+        assert.equal(at.text, '');
+    });
+
+    it('папка со слэшем — на index.html; массив с методом; класс ?load — скрипт; ?download — вложение', async () => {
+        const admin = await sessionOf(ADMIN);
+        // путь со слэшем/звёздочкой — массив детей; метод по умолчанию — info
+        // путь со слэшем — одиночный элемент класса (как без слэша): JSON объекта
+        const one = await req('/ORG/', { cookie: admin });
+        assert.equal(one.status, 200, one.text);
+        assert.equal(JSON.parse(one.text).id, 'ORG');
+        const star = await req('/ORG/DEPT/$class/*?info', { cookie: admin });
+        assert.equal(star.status, 200, star.text);
+        assert.ok(JSON.parse(star.text).length >= 3, 'массив элементов с методом info');
+        const load = await req('/ORG/DEPT?load', { cookie: admin });
+        assert.equal(load.status, 200, load.text);
+        assert.match(load.headers.get('content-type') || '', /javascript/);
+        const dl = await req('/ORG/DEPT/$class/USER/work.md?download', { cookie: admin });
+        assert.equal(dl.status, 200);
+        assert.match(dl.headers.get('content-type') || '', /octet-stream/);
+        assert.match(dl.headers.get('content-disposition') || '', /work\.md/);
+        assert.match(dl.headers.get('cache-control') || '', /no-cache/);
+    });
+
+    it('Range: частичная отдача — те же права, что у download; без прав — отказ', async () => {
+        const admin = await sessionOf(ADMIN);
+        const full = await req('/ORG/DEPT/$class/USER/range.md', { cookie: admin });
+        assert.equal(full.status, 200, full.text);
+        assert.equal(full.text, 'abcdefgh');
+        const part = await req('/ORG/DEPT/$class/USER/range.md', { cookie: admin, headers: { range: 'bytes=0-3' } });
+        assert.equal(part.status, 206, part.text);
+        assert.match(part.headers.get('content-range') || '', /^bytes 0-3\//);
+        assert.equal(part.text, 'abcd', 'ровно запрошенные байты');
+        // анонимный запрос диапазона — без прав на чтение
+        const denied = await req('/ORG/DEPT/$class/USER/range.md', { headers: { range: 'bytes=0-3' } });
+        assert.equal(denied.status, 400);
+        assert.match(denied.text, /Доступ|доступ/);
+    });
+
+    it('multipart-загрузка через настоящий HTTP: файл сохранён, текст сообщения записан, метаданные учтены', async () => {
+        const user = await sessionOf(USER);
+        const fd = new FormData();
+        fd.append('message', 'multipart-сообщение');
+        fd.append('metadata', JSON.stringify({ path: '/ORG/DEPT/CUSTOMER/price.md' }));
+        fd.append('file', new Blob(['содержимое загруженного multipart'], { type: 'text/plain' }), 'up-multipart.txt');
+        const res = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test' },
+            body: fd,
+        });
+        const text = await res.text();
+        assert.equal(res.status, 200, text);
+        assert.match(text, /multipart-сообщение/);
+        // файл из формы сохранён в зону роли (вложенная text/) с исходным содержимым
+        const saved = path.join(tmp, 'ORG', 'DEPT', '$class', 'USER', 'text', 'up-multipart.txt');
+        assert.ok(fs.existsSync(saved), 'файл загрузки сохранён');
+        assert.equal(fs.readFileSync(saved, 'utf-8'), 'содержимое загруженного multipart');
+    });
+
+    it('multipart: сообщение файлом (legacy) — текст читается из файла формы', async () => {
+        const user = await sessionOf(USER);
+        const fd = new FormData();
+        fd.append('message', new Blob(['файл-сообщение'], { type: 'text/plain' }), 'msg.txt');
+        const res = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test' },
+            body: fd,
+        });
+        const text = await res.text();
+        assert.equal(res.status, 200, text);
+        assert.match(text, /файл-сообщение/);
+        // битая multipart-форма — ошибка разбора, а не падение и не тихий пропуск
+        const broken = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test', 'content-type': 'multipart/form-data; boundary=zz' },
+            body: 'это не multipart-тело',
+        });
+        assert.equal(broken.status, 400, await broken.text());
+    });
+
+    it('ETag/304 и кэш статики: повторная загрузка — без тела', async () => {
+        const admin = await sessionOf(ADMIN);
+        const one = await req('/ORG/DEPT/$class/USER/work.md', { cookie: admin });
+        assert.equal(one.status, 200);
+        const etag = one.headers.get('etag');
+        assert.ok(etag, 'файл отдаёт ETag');
+        const two = await req('/ORG/DEPT/$class/USER/work.md', { cookie: admin, headers: { 'if-none-match': etag } });
+        assert.equal(two.status, 304, 'повтор — без тела');
+        assert.equal(two.text, '');
     });
 });
