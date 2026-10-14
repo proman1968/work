@@ -974,6 +974,93 @@ describe('сессия .task', () => {
         assert.equal(body.items.at(-1).content, 'Выбран синий.');
     });
 
+    it('F32: реплика расписания не отвечает на ждущий вопрос — в очередь; отвечает человек', async () => {
+        const file = await newTask('t-sched-live');
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'ask_user', args: { question: 'Какой цвет?', options: ['красный', 'синий'] } }] },
+            { text: 'Синий выбран, сводку принял.' },
+        ]).stream;
+        await session.prompt(file, { prompt: 'нарисуй' });
+        for (let k = 0; k < 50 && (await session.getBody(file)).status !== 'waiting'; k++)
+            await new Promise(r => setTimeout(r, 10));
+        assert.equal((await session.getBody(file)).waiting.kind, 'question');
+        // сессия расписания (scheduled: true): текст НЕ становится ответом человека
+        const sched = { uid: CHILD_UID, principal: { kind: 'user', id: CHILD_UID }, scheduled: true, send() {} };
+        const res = await session.prompt(file, { session: sched, prompt: '[по расписанию] сделай сводку' });
+        assert.equal(res.queued, true);
+        assert.equal(res.answered, undefined);
+        const body = await session.getBody(file);
+        assert.equal(body.waiting.kind, 'question', 'вопрос всё ещё ждёт человека');
+        // человек отвечает сам — своим текстом, не текстом расписания
+        assert.equal((await session.prompt(file, { prompt: 'синий' })).answered, 'question');
+        await session.idle(file);
+        const done = await session.getBody(file);
+        assert.equal(done.items[1].tools[0].answer, 'синий');
+        // реплика расписания вошла в ленту ДО следующего хода модели — она её увидела и отработала
+        const qi = done.items.findIndex(i => i.type === 'user' && /сводк/.test(i.content || ''));
+        assert.ok(qi > 0, 'реплика расписания в ленте');
+        const ai = done.items.findLastIndex(i => i.type === 'assistant' && i.content);
+        assert.ok(qi < ai, 'реплика вошла до ответа модели');
+        assert.equal(done.items.at(-1).content, 'Синий выбран, сводку принял.');
+    });
+
+    it('F32: реплика расписания не отвечает на ожидание после рестарта — в очередь', async () => {
+        const file = await newTask('t-sched-off');
+        const body = await session.getBody(file);
+        body.items.push(
+            { id: 'u1', type: 'user', content: 'спроси', time: 1 },
+            { id: 'a1', type: 'assistant', content: '', time: 1, tools: [{ id: 'q1', name: 'ask_user', status: 'waiting', args: { question: 'Какой цвет?' } }] },
+        );
+        body.waiting = { kind: 'question', call: 'q1', item: 'a1' };
+        body.status = 'waiting';
+        fs.writeFileSync(file.dir, JSON.stringify(body));
+        const sched = { uid: CHILD_UID, principal: { kind: 'user', id: CHILD_UID }, scheduled: true, send() {} };
+        const res = await session.prompt(file, { session: sched, prompt: '[по расписанию] сводка' });
+        assert.equal(res.queued, true);
+        const after = await session.getBody(file);
+        assert.equal(after.waiting.call, 'q1', 'вопрос всё ещё ждёт человека');
+        assert.equal(after.items.find(i => i.id === 'a1').tools[0].status, 'waiting', 'ответ не подставлен');
+        assert.ok((after.queue || []).some(i => /сводк/.test(i.content || '')), 'текст расписания в очереди');
+        // человек отвечает — его ответ применяется к ленте
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Принял.' }, { text: 'Сводку сделал.' }]).stream;
+        assert.equal((await session.prompt(file, { prompt: 'синий' })).ok, true);
+        await session.idle(file);
+        const done = await session.getBody(file);
+        assert.equal(done.items.find(i => i.id === 'a1').tools[0].status, 'ok');
+        assert.equal(done.items.find(i => i.id === 'a1').tools[0].answer, 'синий');
+    });
+
+    it('F32: запуск расписания (runDue/defaultRunner) не отвечает на ждущий вопрос — сессия scheduled', async () => {
+        const file = await newTask('t-sched-runner');
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'ask_user', args: { question: 'Какой цвет?', options: ['красный', 'синий'] } }] },
+            { text: 'Готово.' },
+        ]).stream;
+        await session.prompt(file, { prompt: 'нарисуй' });
+        for (let k = 0; k < 50 && (await session.getBody(file)).status !== 'waiting'; k++)
+            await new Promise(r => setTimeout(r, 10));
+        const S = await import('../sources/modules/agent/scheduler.js');
+        const { closeIndexDb } = await import('../sources/host/index-db.js');
+        try {
+            const row = await S.createSchedule({ uid: CHILD_UID, task: file.path, prompt: 'сделай сводку', label: 'Сводка', rule: { every: 60 } });
+            const done = await S.runDue(Date.parse(row.next) + 1000);
+            assert.equal(done.length, 1);
+            assert.equal(done[0].error, null, 'запуск от имени владельца прошёл');
+            const body = await session.getBody(file);
+            assert.equal(body.waiting.kind, 'question', 'вопрос всё ещё ждёт человека — расписание не ответило за него');
+            assert.ok((body.queue || []).some(i => /сводк/.test(i.content || '')), 'текст расписания в очереди');
+            // человек отвечает сам — вопрос закрыт его ответом
+            assert.equal((await session.prompt(file, { prompt: 'синий' })).answered, 'question');
+            await session.idle(file);
+            const fin = await session.getBody(file);
+            assert.equal(fin.items[1].tools[0].answer, 'синий');
+            await S.cancelSchedule({ uid: CHILD_UID, id: row.id });
+        }
+        finally {
+            await closeIndexDb();
+        }
+    });
+
     it('подтверждение, пережившее рестарт: approve применяется к ленте и работа продолжается', async () => {
         const file = await newTask('t3');
         const body = await session.getBody(file);

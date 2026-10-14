@@ -518,9 +518,12 @@ export async function prompt(file, params = {}) {
     const body = await getBody(file);
     const text = String(params.prompt ?? params.post?.prompt ?? params.text ?? '').trim();
     const attachments = normAttachments(params.attachments ?? params.post?.attachments ?? params.includes ?? params.post?.includes);
+    // F32: реплика из расписания (сессия с scheduled: true) не отвечает за человека:
+    // ждущий вопрос/подтверждение продолжает ждать ЕГО ответа, текст встаёт в очередь
+    const scheduled = params.session?.scheduled === true;
     if (s.running) {
         const w = body.waiting;
-        if (w && s.waiters.has(w.call)) {
+        if (w && s.waiters.has(w.call) && !scheduled) {
             const resolve = s.waiters.get(w.call);
             s.waiters.delete(w.call);
             resolve(w.kind === 'question' ? { content: text } : { accept: false, content: text });
@@ -535,6 +538,13 @@ export async function prompt(file, params = {}) {
     }
     if (body.status === 'needs_review' && !text)
         return { ok: false, error: 'Сначала проверьте результат прерванного действия и напишите его в ответе; пустое «продолжить» недоступно.' };
+    if (body.waiting && scheduled) {
+        // F32: и на ожидании после рестарта расписание не подменяет ответ человека:
+        // текст — в очередь, вопрос продолжает ждать владельца
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true });
+        await save(s, session);
+        return { ok: true, queued: true };
+    }
     if (body.waiting) {
         // ожидание пережило рестарт: текст — ответ на вопрос или отказ с комментарием
         const w = body.waiting;
