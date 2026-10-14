@@ -207,6 +207,15 @@ async function applyEgressRules(docker, cfg, rules) {
         HostConfig: { Privileged: true, NetworkMode: 'host', AutoRemove: false },
     });
     const hid = helper.id || helper.Id;
+    // R1 (8.29): контейнер ОБЯЗАН запуститься — правило ставит выполненная команда;
+    // созданный, но не запущенный контейнер ничего не делает (раньше это выглядело как успех)
+    try {
+        await helper.start();
+    }
+    catch (e) {
+        await docker.getContainer(hid).remove({ Force: true }).catch(() => {});
+        throw e;
+    }
     let last = null;
     for (let i = 0; i < 40; i++) {
         const insp = await docker.getContainer(hid).inspect().catch(() => null);

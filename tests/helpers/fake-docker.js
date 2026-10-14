@@ -161,16 +161,25 @@ export function fakeDocker(o = {}) {
                 Labels: opts.Labels || {}, Created: Math.floor(Date.now() / 1000),
                 files: new Map(), nets: new Set(), hostCfg: opts.HostConfig, createOpts: opts,
             });
-            // авто-остановка для «одноразовых» команд (chown, fix-perms и iptables-хелпер egress)
+            // одноразовые команды (chown, iptables-хелпер egress) ВЫПОЛНЯЮТСЯ при start,
+            // не при создании: правило iptables ставит только запущенный контейнер (R1/8.29 —
+            // раньше правило записывалось при createContainer и маскировало пропущенный start)
             const isChown = opts.Cmd?.[0] === 'chown';
             const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables');
             const autoExit = (isChown && !o.stuckHelper) || isIptables;
-            const exitCode = isIptables && o.iptablesFail ? 1 : 0;
-            if (autoExit) {
-                if (isIptables)
+            const runOnce = () => {
+                const c = containers.get(id);
+                if (!c || c.State !== 'running' || c.ranOnce)
+                    return;
+                c.ranOnce = true;
+                if (isIptables) {
+                    c.exitCode = o.iptablesFail ? 1 : 0;
                     (api.iptables ||= []).push(opts.Cmd[2]);
-                containers.get(id).exitCode = exitCode;
-            }
+                }
+                if (autoExit)
+                    setImmediate(() => { const x = containers.get(id); if (x) x.State = 'exited'; });
+            };
+            containers.get(id).runOnce = runOnce;
             return {
                 id,
                 async start() {
@@ -182,8 +191,7 @@ export function fakeDocker(o = {}) {
                         networks.get(mode).add(id);
                         c.nets.add(mode);
                     }
-                    if (autoExit)
-                        setImmediate(() => { const x = containers.get(id); if (x) x.State = 'exited'; });
+                    runOnce();
                 },
             };
         },
@@ -206,7 +214,7 @@ export function fakeDocker(o = {}) {
                         Mounts: volName ? [{ Destination: '/workspace', Name: volName }] : [],
                     };
                 },
-                async start() { if (!c) no(); c.State = 'running'; },
+                async start() { if (!c) no(); c.State = 'running'; c.runOnce?.(); },
                 async stop() { if (!c) no(); c.State = 'exited'; },
                 async remove() { if (!c) no();
                     // как настоящий Docker: удаление контейнера отключает его от сетей

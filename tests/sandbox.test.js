@@ -266,7 +266,8 @@ it('F13 egress-фильтр: правила DOCKER-USER режут частны�
     const cfg = loadSandboxConfig();
     const pc = await ensureComputer(docker, 'user1', 'main', cfg);
     docker.iptables = [];
-    // фейк эмулирует iptables-хелпер: правила записываются в docker.iptables
+    // фейк эмулирует iptables-хелпер: правило записывает ЗАПУЩЕННЫЙ контейнер (R1/8.29);
+    // раньше правило писалось при создании и маскировало пропущенный в менеджере start()
     const r = await setNetwork(docker, pc.id, true, cfg);
     assert.equal(r.network, true);
     // хелпер выполняет ОДНУ sh-команду со всеми правилами через '; '
@@ -286,6 +287,24 @@ it('F13 egress-фильтр: правила DOCKER-USER режут частны�
     assert.ok(!st2.networks.includes(cfg.network.egressName), 'интернет включился без фильтра');
     assert.ok(st2.networks.includes(sandboxNetName(cfg, 'user1')), 'песочница не осталась изолированной');
     resetRegistryForTests();
+});
+
+it('R1: правило iptables ставит только ЗАПУЩЕННЫЙ хелпер — заглушка честная, как настоящий Docker', async () => {
+    const docker = fakeDocker();
+    // созданный, но не запущенный контейнер ничего не делает
+    const created = await docker.createContainer({
+        Image: 'node:22-slim', Cmd: ['sh', '-c', 'iptables -I DOCKER-USER 1 -d 10.0.0.0/8 -j DROP'],
+        HostConfig: { Privileged: true, NetworkMode: 'host' },
+    });
+    await new Promise(r => setTimeout(r, 20));
+    assert.equal((docker.iptables || []).length, 0, 'правило появилось без запуска — заглушка маскирует');
+    assert.equal((await docker.getContainer(created.id).inspect()).State.Running, false);
+    await created.start();
+    await new Promise(r => setTimeout(r, 20));
+    assert.equal((docker.iptables || []).length, 1, 'запущенный хелпер ставит правило');
+    const after = await docker.getContainer(created.id).inspect();
+    assert.equal(after.State.Running, false, 'одноразовый хелпер завершается');
+    assert.equal(after.State.ExitCode, 0);
 });
 
 it('F13 buildEgressRules: полный набор частных диапазонов и имя моста', () => {
