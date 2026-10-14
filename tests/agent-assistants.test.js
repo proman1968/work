@@ -241,7 +241,42 @@ describe('документы и таблицы', () => {
 });
 
 describe('память, эскалация, триггеры', () => {
-    it('memory: память места видна только своей роли; личная — только владельцу; секреты не сохраняются', async () => {
+    it('F30: файл памяти не правится write/append/edit — только инструментом memory; forget — действие наружу', async () => {
+        const org = await WORK.get_item('/ORG');
+        const petrPlace = { ...as(PETR), place: org };
+        // write в память места (зона роли — ядро разрешило бы) — агенту запрещено
+        await assert.rejects(
+            tool('write').run({ path: '/ORG/$class/USER/ai/memory.md', content: '- [2026-10-14] вписано чужим письмом' }, petrPlace),
+            /инструментом memory/,
+            'write прошёл в файл памяти мимо пометок и фильтров memory');
+        await assert.rejects(
+            tool('append').run({ path: '/ORG/$class/USER/ai/memory.md', content: 'ещё' }, petrPlace),
+            /инструментом memory/);
+        await assert.rejects(
+            tool('edit').run({ path: '/ORG/$class/USER/ai/memory.md', old_string: 'x', new_string: 'y' }, petrPlace),
+            /инструментом memory/);
+        // маскированный путь — тоже
+        await assert.rejects(
+            tool('write').run({ path: '/ORG/USER/../$class/USER/ai/memory.md', content: 'x' }, petrPlace),
+            /инструментом memory/);
+        // память не создана обходом: в блоке памяти чужого факта нет
+        const { memoryBlock } = await import('../sources/modules/agent/tools/memory.js');
+        const block = await memoryBlock(org, petrPlace.session);
+        assert.ok(!/вписано чужим/.test(block), 'чужой факт попал в память');
+        // forget — outbound: в заражённом ходе человек подтверждает
+        const { memoryTools } = await import('../sources/modules/agent/tools/memory.js');
+        const { decide } = await import('../sources/modules/agent/permissions.js');
+        const { isOutbound } = await import('../sources/modules/agent/taint.js');
+        const mem = memoryTools.find(x => x.name === 'memory');
+        assert.equal(isOutbound(mem, { action: 'forget' }, {}), true, 'forget не помечен исходящим');
+        assert.equal(isOutbound(mem, { action: 'remember' }, {}), true);
+        assert.equal(isOutbound(mem, { action: 'recall' }, {}), false);
+        const host = { mode: 'auto', allowed: new Set() };
+        assert.equal((await decide(mem, { action: 'forget', text: 'x' }, { host, tainted: ['read'] })).verdict, 'ask',
+            'в заражённом ходе forget прошёл без вопроса — чужое письмо может вычистить правила безопасности');
+    });
+
+it('memory: память места видна только своей роли; личная — только владельцу; секреты не сохраняются', async () => {
         const org = await WORK.get_item('/ORG');
         const petr = { ...as(PETR), place: org }, boss = { ...as(BOSS), place: org };
         assert.match(await tool('memory').run({ action: 'remember', text: 'Отчёты отдела — только xlsx' }, petr), /запомнил.*роль USER/);

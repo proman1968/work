@@ -6,6 +6,15 @@ import { absPath, mustItem, callAs, kindOf, isContainer, lineFor, formatSize, li
 import { isAccessDenied } from '../../util.js';
 import { lineDiff } from '../../diff.js';
 import { beforeWrite, recordDelete } from '../../undo.js';
+import { normalizeWorkPath } from '../../permissions.js';
+
+/** F30: файл долговременной памяти (system будущих задач) — правится только инструментом
+ *  memory (remember/forget: пометки outbound, фильтр секретов, лимиты), не write/append/edit. */
+function assertNotMemory(path) {
+    const p = normalizeWorkPath(path) || '';
+    if (p.endsWith('/ai/memory.md') || p === '/ai/memory.md')
+        throw new Error('файл памяти ai/memory.md правится только инструментом memory (remember/forget) — с подтверждением после чужого текста');
+}
 import { FS } from '../../../../server/index.js';
 
 export const ls = {
@@ -151,6 +160,7 @@ export const write = {
             required: ['path', 'content'],
         },
         async run(args, ctx) {
+            assertNotMemory(absPath(args.path, ctx));
             let before = null;
             const existing = await fileAt(args.path, ctx);
             if (existing)
@@ -189,6 +199,7 @@ export const append = {
             required: ['path', 'content'],
         },
         async run(args, ctx) {
+            assertNotMemory(absPath(args.path, ctx));
             const file = await mustItem(args.path, ctx);
             if (Array.isArray(file) || isContainer(file))
                 throw new Error('append — только для существующего файла; ' + absPath(args.path, ctx) + ' не файл');
@@ -227,6 +238,7 @@ export const edit = {
             required: ['path', 'old_string', 'new_string'],
         },
         async run(args, ctx) {
+            assertNotMemory(absPath(args.path, ctx));
             const file = await mustItem(args.path, ctx);
             if (Array.isArray(file) || isContainer(file))
                 throw new Error('edit — только для файла; ' + absPath(args.path, ctx) + ' не файл');
