@@ -10,7 +10,7 @@ import { normalizeWorkPath } from '../../permissions.js';
 
 /** F30: файл долговременной памяти (system будущих задач) — правится только инструментом
  *  memory (remember/forget: пометки outbound, фильтр секретов, лимиты), не write/append/edit. */
-function assertNotMemory(path) {
+export function assertNotMemory(path) {
     const p = normalizeWorkPath(path) || '';
     if (p.endsWith('/ai/memory.md') || p === '/ai/memory.md')
         throw new Error('файл памяти ai/memory.md правится только инструментом memory (remember/forget) — с подтверждением после чужого текста');

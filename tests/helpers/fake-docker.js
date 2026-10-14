@@ -15,6 +15,7 @@ export function fakeDocker(o = {}) {
     const volumes = new Set();
     const networks = new Map(); // name -> Set(containerId)
     let n = 0;
+    let mvCount = 0; // 6.3: подмена для теста сбоя mv (failMvOn)
     const matchLabels = (labels, wanted) => (wanted || []).every(f => {
         const [k, v] = f.split('=');
         return v === undefined ? labels[k] !== undefined : labels[k] === v;
@@ -111,6 +112,21 @@ export function fakeDocker(o = {}) {
             const mask = String(argv[2] ?? '').replace(/^.*\//, '').replace(/\*/g, '');
             const keys = [...c.files.keys()].filter(k => !mask || k.split('/').pop().includes(mask));
             out = keys.map(k => './' + k.replace(/^\/+/, '')).join('\n') + (keys.length ? '\n' : '');
+        }
+        // 6.3 (final): apply_patch в песочнице — cp/mv/rm по файлам контейнера
+        else if (Cmd[0] === 'cp' && Cmd[1] === '--') {
+            if (!c.files.has(Cmd[2])) { code = 1; err = "cp: cannot stat '" + Cmd[2] + "'"; }
+            else c.files.set(Cmd[3], c.files.get(Cmd[2]));
+        }
+        else if (Cmd[0] === 'mv' && Cmd[1] === '--') {
+            mvCount++;
+            if (o.failMvOn === mvCount) { code = 1; err = "mv: cannot move '" + Cmd[2] + "'"; }
+            else if (!c.files.has(Cmd[2])) { code = 1; err = "mv: cannot stat '" + Cmd[2] + "'"; }
+            else { c.files.set(Cmd[3], c.files.get(Cmd[2])); c.files.delete(Cmd[2]); }
+        }
+        else if (Cmd[0] === 'rm' && Cmd[1] === '--') {
+            if (!c.files.has(Cmd[2])) { code = 1; err = "rm: cannot remove '" + Cmd[2] + "'"; }
+            else c.files.delete(Cmd[2]);
         }
         else if (Cmd[0] === 'ls') {
             const dir = Cmd[3].replace(/\/+$/, '') || '/';

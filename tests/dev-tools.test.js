@@ -12,8 +12,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { devSearchTools, globToRegExp } from '../sources/modules/agent/tools/dev/search.js';
+import { apply_patch, parsePatch, applyHunks } from '../sources/modules/agent/tools/dev/patch.js';
 import { createEnv } from '../sources/modules/agent/index.js';
 import { decide } from '../sources/modules/agent/permissions.js';
+import { collectUndo, applyUndo } from '../sources/modules/agent/undo.js';
+import { getItem, writeFile, callAs } from '../sources/modules/agent/tools/work/common.js';
 import { fakeDocker } from './helpers/fake-docker.js';
 import { setDockerForTests, resetDockerForTests } from '../sources/modules/sandbox/driver.js';
 import { ensureComputer, writeText, setNetwork } from '../sources/modules/sandbox/manager.js';
@@ -52,11 +55,13 @@ before(async () => {
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(path.join(root, p, 'class.js'), 'export default {}');
     write(path.join(root, 'BOX/$class/class.js'), `export default { label: 'К', '#security': { USER: ['${UID}'] } }`);
+    write(path.join(root, 'BOX/$class/ai/memory.md'), 'память места\n');
     write(path.join(root, 'BOX/doc/a.md'), 'первая UNIQUE строка\nобычная строка\nтретья UNIQUE строка\n');
     write(path.join(root, 'BOX/doc/deep/b.js'), 'function greet() { return "UNIQUE"; } // case test\n');
     write(path.join(root, 'BOX/doc/letter.eml'), 'текст письма UNIQUE\n');
     write(path.join(root, 'BOX/doc/upl.md'), 'загруженный UNIQUE файл\n');
     write(path.join(root, 'BOX/doc/bin.dat'), '\0\0\0' + 'UNIQUE' + '\0');
+    write(path.join(root, 'BOX/doc/trash.md'), 'мусор для удаления\n');
     write(path.join(root, 'BOX/doc/big.md'), 'x'.repeat(300 * 1024) + '\nUNIQUE внутри большого\n');
     write(path.join(root, 'PRIV/$class/class.js'), `export default { label: 'Ч', '#security': { ADMIN: ['admin'] } }`);
     write(path.join(root, 'PRIV/x.md'), 'здесь HIDDENWORD\n');
@@ -213,5 +218,260 @@ describe('состав и режимы', () => {
         assert.ok(names.includes('grep') && names.includes('glob'), 'в основном наборе');
         const ro = (await env.makeTools({ meta: { tools: 'readonly' } })).map(t => t.name);
         assert.ok(ro.includes('grep') && ro.includes('glob'), 'в readonly-наборе субагента');
+    });
+});
+
+// ── 6.3 (final): apply_patch ───────────────────────────────────────────────
+
+const P = lines => lines.join('\n');
+
+describe('parsePatch / applyHunks: разбор и применение', () => {
+    it('секции Add/Update/Delete/Move; ханки применяются к строкам точно', () => {
+        const ops = parsePatch(P([
+            '*** Begin Patch',
+            '*** Add File: a.md',
+            '+один',
+            '',
+            '+два',
+            '*** End Patch',
+        ]));
+        assert.equal(ops.length, 1);
+        assert.equal(ops[0].kind, 'add');
+        assert.equal(ops[0].path, 'a.md');
+        assert.equal(ops[0].content.join('|'), 'один||два');
+        const after = applyHunks('x\ny\nz\n', [{ lines: [
+            { k: ' ', v: 'x' },
+            { k: '-', v: 'y' },
+            { k: '+', v: 'Y' },
+            { k: ' ', v: 'z' },
+        ] }], 't');
+        assert.equal(after, 'x\nY\nz\n');
+    });
+    it('ошибки формата понятные', () => {
+        assert.throws(() => parsePatch('нет начала'), /Begin Patch/);
+        assert.throws(() => parsePatch('*** Begin Patch\n*** Add File: a\n+x'), /End Patch/);
+        assert.throws(() => parsePatch(P(['*** Begin Patch', '*** Add File: a', 'без плюса', '*** End Patch'])), /без «\+»/);
+        assert.throws(() => parsePatch(P(['*** Begin Patch', '*** Move File: a', '*** End Patch'])), /Move to/);
+        assert.throws(() => parsePatch(P(['*** Begin Patch', '*** Add File: a', '+x', '*** Add File: a', '+y', '*** End Patch'])), /дважды/);
+        assert.throws(() => parsePatch(P(['*** Begin Patch', '*** Update File: a', '@@', '+только плюс', '*** End Patch'])), /без строк для замены/);
+    });
+    it('ханк не найден или неоднозначен — ошибка, текст не меняется', () => {
+        assert.throws(() => applyHunks('a\nb\n', [{ lines: [{ k: ' ', v: 'нет' }] }], 'f'), /не найден/);
+        assert.throws(() => applyHunks('q\nq\n', [{ lines: [{ k: ' ', v: 'q' }] }], 'f'), /встречается 2 раз/);
+        assert.throws(() => applyHunks('b\nb\nb\n', [{ lines: [
+            { k: ' ', v: 'b' }, { k: '-', v: 'b' }, { k: '+', v: 'c' },
+        ] }], 'f'), /встречается 2 раз/);
+    });
+});
+
+describe('apply_patch: арена work', () => {
+    let patchEntry = null; // карточка применения из первого теста: второй откатывает её
+    const FULL = P([
+        '*** Begin Patch',
+        '*** Add File: /BOX/doc/added.md',
+        '+новый файл',
+        '+вторая строка',
+        '*** Update File: /BOX/doc/a.md',
+        '@@',
+        ' первая UNIQUE строка',
+        '-обычная строка',
+        '+обычная строка (правка)',
+        '*** Move File: /BOX/doc/upl.md',
+        '*** Move to: /BOX/doc/renamed.md',
+        '*** Delete File: /BOX/doc/trash.md',
+        '*** End Patch',
+    ]);
+
+    it('создать/изменить/переместить/удалить одним вызовом; карточка с diff и записями отката на каждый файл', async () => {
+        const entry = {};
+        patchEntry = entry; // следующий тест откатывает именно это применение
+        const out = await apply_patch.run({ patch: FULL }, mkCtx(ADMIN, { entry }));
+        assert.match(out, /применён патч: 4 файлов/);
+        assert.match(out, /создан .*added\.md/);
+        assert.match(out, /изменён .*a\.md \(\+\d+ −\d+\)/);
+        assert.match(out, /перемещён .*upl\.md → .*renamed\.md/);
+        assert.match(out, /удалён .*trash\.md/);
+        assert.equal(entry.undoList.length, 5, 'create + modify + (move: create+delete) + delete');
+        assert.match(entry.diff, /## .*added\.md/);
+        assert.match(entry.diff, /## .*a\.md/);
+        // содержимое: правка применена, новый файл на месте, старое имя исчезло
+        const g = await grep.run({ path: '/BOX', text: 'обычная строка (правка)' }, mkCtx(UID));
+        assert.match(g, /a\.md:2:/);
+        const found = await glob.run({ path: '/BOX', pattern: '**/*.md' }, mkCtx(UID));
+        assert.match(found, /renamed\.md/);
+        assert.doesNotMatch(found, /upl\.md/);
+        assert.match(found, /added\.md/);
+    });
+
+    it('откат ленты (collectUndo + applyUndo) возвращает все файлы патча', async () => {
+        assert.ok(patchEntry, 'предыдущий тест применил патч');
+        const items = [{ id: 'a', type: 'assistant', time: 1, tools: [{ id: 't1', name: 'apply_patch', status: 'ok', ...patchEntry }] }];
+        const { undo } = collectUndo(items);
+        assert.equal(undo.length, 5, 'undoList разворачивается в записи по файлам');
+        const uctx = mkCtx(ADMIN);
+        const rep = await applyUndo(undo, {
+            getItem: p => getItem(p, uctx),
+            callAs: (item, method, args) => callAs(item, method, args, uctx),
+            writeFile: (p, text) => writeFile(p, text, uctx),
+        });
+        assert.equal(rep.skipped.length, 0, 'пропусков нет: ' + JSON.stringify(rep.skipped));
+        assert.equal(rep.reverted.length, 5);
+        // всё как было: правки нет, добавленного нет, переименование отменено, удалённый вернулся
+        const g = await grep.run({ path: '/BOX', text: 'обычная строка (правка)' }, mkCtx(UID));
+        assert.equal(g, 'ничего не найдено');
+        const found = await glob.run({ path: '/BOX', pattern: '**/*.md' }, mkCtx(UID));
+        assert.match(found, /upl\.md/, 'перемещённый вернулся на старое имя');
+        assert.doesNotMatch(found, /renamed\.md/);
+        assert.doesNotMatch(found, /added\.md/, 'созданный удалён откатом');
+        const dat = await glob.run({ path: '/BOX', pattern: '**/trash.md' }, mkCtx(UID));
+        assert.match(dat, /trash\.md/, 'удалённый восстановлен');
+    });
+
+    it('права: USER не правит папки класса; атомарно и при отказе прав', async () => {
+        const mem = P([
+            '*** Begin Patch',
+            '*** Update File: /BOX/doc/a.md',
+            '@@',
+            ' первая UNIQUE строка',
+            '*** End Patch',
+        ]);
+        await assert.rejects(apply_patch.run({ patch: mem }, mkCtx(UID)), /Доступ запрещён|сбой/);
+        const g = await grep.run({ path: '/BOX', text: 'обычная строка' }, mkCtx(UID));
+        assert.match(g, /a\.md:2:/, 'файл не тронут');
+    });
+
+    it('атомарно: один битый ханк — ничего не записано', async () => {
+        const bad = P([
+            '*** Begin Patch',
+            '*** Add File: /BOX/doc/broken-added.md',
+            '+появлюсь?',
+            '*** Update File: /BOX/doc/a.md',
+            '@@',
+            ' строки, которой нет',
+            '*** End Patch',
+        ]);
+        await assert.rejects(apply_patch.run({ patch: bad }, mkCtx(ADMIN)), /не найден/);
+        const found = await glob.run({ path: '/BOX', pattern: '**/broken-added.md' }, mkCtx(UID));
+        assert.match(found, /ничего не найдено/, 'файл из упавшего патча не создан');
+        const g = await grep.run({ path: '/BOX', text: 'обычная строка' }, mkCtx(UID));
+        assert.match(g, /a\.md:2:/, 'исходный файл не тронут');
+    });
+
+    it('файл памяти ai/memory.md — отказ (F30); защищённая зона — подтверждение', async () => {
+        const mem = P([
+            '*** Begin Patch',
+            '*** Update File: /BOX/$class/ai/memory.md',
+            '@@',
+            ' память места',
+            '+новое правило из патча',
+            '*** End Patch',
+        ]);
+        await assert.rejects(apply_patch.run({ patch: mem }, mkCtx(ADMIN)), /memory/);
+        const sys = P([
+            '*** Begin Patch',
+            '*** Update File: /sources/x.js',
+            '@@',
+            '*** End Patch',
+        ]);
+        assert.equal((await decide(apply_patch, { patch: sys }, { host: { mode: 'auto' } })).verdict, 'ask',
+            'системный код — с вопроса (как у write/edit)');
+        const sbxVerdict = await decide(apply_patch, { where: 'sandbox', patch: sys }, { host: { mode: 'auto' } });
+        assert.equal(sbxVerdict.verdict, 'allow', 'песочница — без вопроса в auto');
+    });
+
+    it('Add поверх существующего файла — отказ (не перезаписывает молча)', async () => {
+        const over = P([
+            '*** Begin Patch',
+            '*** Add File: /BOX/doc/a.md',
+            '+перезапись без спроса?',
+            '*** End Patch',
+        ]);
+        await assert.rejects(apply_patch.run({ patch: over }, mkCtx(ADMIN)), /уже есть/);
+    });
+});
+
+describe('apply_patch: арена sandbox', () => {
+    it('добавить/изменить/переместить/удалить; баки вычищены', async () => {
+        const docker = fakeDocker();
+        setDockerForTests(docker);
+        const cfg = loadSandboxConfig();
+        const pc = await ensureComputer(docker, 'sbx-user', 'main', cfg);
+        await writeText(docker, pc.id, '/workspace/src/app.js', 'function hello() {}\n', cfg);
+        await writeText(docker, pc.id, '/workspace/src/old.md', 'старый текст\n', cfg);
+        await writeText(docker, pc.id, '/workspace/src/extra.md', 'лишний\n', cfg);
+        const patch = P([
+            '*** Begin Patch',
+            '*** Add File: new.js',
+            '+console.log("hi");',
+            '*** Update File: src/app.js',
+            '@@',
+            ' function hello() {}',
+            '+function world() {}',
+            '*** Move File: src/old.md',
+            '*** Move to: src/moved.md',
+            '*** Delete File: src/extra.md',
+            '*** End Patch',
+        ]);
+        const entry = {};
+        const out = await apply_patch.run({ where: 'sandbox', patch }, mkCtx('sbx-user', { entry }));
+        assert.match(out, /применён патч: 4 файлов/);
+        assert.match(out, /изменён .*src\/app\.js/);
+        const g = await grep.run({ where: 'sandbox', text: 'world' }, mkCtx('sbx-user'));
+        assert.match(g, /src\/app\.js:2:/);
+        const files = await glob.run({ where: 'sandbox', pattern: '*' }, mkCtx('sbx-user'));
+        assert.match(files, /new\.js/);
+        assert.match(files, /moved\.md/);
+        assert.doesNotMatch(files, /extra\.md/, 'удалённого нет');
+        assert.doesNotMatch(files, /old\.md/, 'перемещённого нет');
+        for (const junk of ['**/*.ap-bak', '**/*.ap-tmp'])
+            assert.match(await glob.run({ where: 'sandbox', pattern: junk }, mkCtx('sbx-user')), /ничего не найдено/, junk + ' вычищен');
+        assert.match(entry.diff, /## .*src\/app\.js/);
+        resetDockerForTests();
+    });
+
+    it('сбой записи в песочнице — записанное откачено из баков', async () => {
+        const docker = fakeDocker({ failMvOn: 2 }); // первый mv (app.js) проходит, второй (gone.js) падает
+        setDockerForTests(docker);
+        const cfg = loadSandboxConfig();
+        const pc = await ensureComputer(docker, 'sbx-user', 'main', cfg);
+        await writeText(docker, pc.id, '/workspace/src/app.js', 'function hello() {}\n', cfg);
+        const patch = P([
+            '*** Begin Patch',
+            '*** Update File: src/app.js',
+            '@@',
+            ' function hello() {}',
+            '+function world() {}',
+            '*** Add File: gone.js',
+            '+создамусь и исчезну',
+            '*** End Patch',
+        ]);
+        // app.js применён, gone.js падает: откат возвращает app.js из бака и убирает мусор
+        await assert.rejects(apply_patch.run({ where: 'sandbox', patch }, mkCtx('sbx-user')), /откачено/);
+        const files = await glob.run({ where: 'sandbox', pattern: '*' }, mkCtx('sbx-user'));
+        assert.doesNotMatch(files, /gone\.js/, 'созданное убрано откатом');
+        assert.doesNotMatch(files, /\.ap-bak|\.ap-tmp/, 'баки и временные вычищены и после сбоя');
+        const g = await grep.run({ where: 'sandbox', text: 'world' }, mkCtx('sbx-user'));
+        assert.equal(g, 'ничего не найдено', 'app.js вернулся к прежнему виду из бака');
+        resetDockerForTests();
+    });
+
+    it('валидация до записи: обновление несуществующего — отказ без изменений', async () => {
+        const docker = fakeDocker();
+        setDockerForTests(docker);
+        const cfg = loadSandboxConfig();
+        const pc = await ensureComputer(docker, 'sbx-user', 'main', cfg);
+        const patch = P([
+            '*** Begin Patch',
+            '*** Add File: solo.js',
+            '+x',
+            '*** Update File: src/no-such.js',
+            '@@',
+            ' контекст',
+            '*** End Patch',
+        ]);
+        await assert.rejects(apply_patch.run({ where: 'sandbox', patch }, mkCtx('sbx-user')), /не найден/);
+        const files = await glob.run({ where: 'sandbox', pattern: 'solo.js' }, mkCtx('sbx-user'));
+        assert.match(files, /ничего не найдено/, 'из упавшего патча ничего не создано');
+        resetDockerForTests();
     });
 });

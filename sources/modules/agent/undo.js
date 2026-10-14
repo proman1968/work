@@ -161,6 +161,12 @@ export function collectUndo(items) {
             return;
         if (t.undo)
             undo.push({ ...t.undo, tool: t.name, call: t.id });
+        else if (Array.isArray(t.undoList)) {
+            // многофайловый патч (apply_patch): одна карточка вызова, записи отката — на каждый файл
+            for (const u of t.undoList)
+                if (u && u.path)
+                    undo.push({ ...u, tool: t.name, call: t.id });
+        }
         else if (t.snapshot)
             manual.push({ path: t.path || t.snapshot, tool: t.name, call: t.id });
     });

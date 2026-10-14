@@ -251,7 +251,7 @@ function basenameMask(pattern) {
     return last.includes('*') ? last : '*' + last + '*';
 }
 
-async function useSandbox(args, ctx) {
+export async function useSandbox(args, ctx) {
     const cfg = loadSandboxConfig();
     if (cfg.enabled === false)
         throw new Error('песочницы выключены (#system/sandbox.json enabled:false)');
@@ -267,7 +267,7 @@ async function useSandbox(args, ctx) {
 }
 
 /** С включённым интернетом вывод песочницы — чужой текст (правило sandbox_exec, 8.2). */
-async function markSandboxTaint(docker, pc, cfg, ctx) {
+export async function markSandboxTaint(docker, pc, cfg, ctx) {
     try {
         const st = await statusOf(docker, pc.id);
         if (st?.networks?.includes(cfg.network?.egressName || 'work-egress') && ctx.entry)
