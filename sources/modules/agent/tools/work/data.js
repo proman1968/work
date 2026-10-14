@@ -74,14 +74,19 @@ export const writeTable = {
                     throw new Error('write_table: пустая таблица');
                 if (rows.length > 100_000)
                     throw new Error('write_table: больше 100 000 строк');
-                return Array.isArray(rows[0]) ? XLSX.utils.aoa_to_sheet(rows) : XLSX.utils.json_to_sheet(rows);
+                // R4 (8.32): щит формул — КАЖДАЯ строковая ячейка (=,+,-,@ в начале Excel исполняет
+                // при открытии; данные приходят из чужих писем/таблиц). Числа не трогаем:
+                // -5 остаётся числом, строка '-5' становится текстом '-5
+                const cell = v => typeof v === 'string' && /^[=+@-]/.test(v) ? "'" + v : v;
+                const shielded = rows.map(r => Array.isArray(r) ? r.map(cell)
+                    : (r && typeof r === 'object' ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, cell(v)])) : r));
+                return Array.isArray(shielded[0]) ? XLSX.utils.aoa_to_sheet(shielded) : XLSX.utils.json_to_sheet(shielded);
             };
             let buf;
             if (ext === 'csv') {
                 const first = Object.values(sheets)[0];
-                // F29: данные приходят из чужих писем/таблиц — формулы Excel (=,+,-,@) не исполняются при открытии
-                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first))
-                    .split('\n').map(line => /^("?)[=+@-]/.test(line) ? '\'' + line : line).join('\n'), 'utf-8');
+                // щит уже в каждой ячейке (toSheet) — сюда чужие значения не попадают
+                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first)), 'utf-8');
             }
             else {
                 const wb = XLSX.utils.book_new();

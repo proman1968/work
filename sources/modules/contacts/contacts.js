@@ -54,15 +54,18 @@ export async function pickContacts(options = {}) {
 /** CSV-ячейка: формула (=,+,-,@) не исполняется в Excel; кавычки удваиваются. */
 export function escapeCsvValue(v) {
     const s = String(v ?? '');
-    const safe = '"' + s.replace(/"/g, '""') + '"';
+    // R4 (8.32): апостроф ВНУТРИ кавычек — Excel видит текст, строгий парсер — одно поле
+    // (снаружи: значение вне кавычек, запятая внутри резала бы колонки; тест 8.22 закрепил неверный порядок)
+    const body = (/^[=+@-]/.test(s) ? "'" : '') + s.replace(/"/g, '""');
     // =CMD(...) из имени контакта не должна исполняться при открытии файла
-    return /^[=+@-]/.test(s) ? "'" + safe : safe;
+    return '"' + body + '"';
 }
 
-/** vCard-значение (RFC 2426): \, перевод строки, запятая, точка с запятой экранируются. */
+/** vCard-значение (RFC 2426): \, переводы строк (в т.ч. одиночный \r), запятая, точка с запятой экранируются. */
 export function escapeVCardValue(v) {
     return String(v ?? '')
         .replace(/\\/g, '\\\\')
+        .replace(/\r/g, '\\r')
         .replace(/\n/g, '\\n')
         .replace(/,/g, '\\,')
         .replace(/;/g, '\\;');
