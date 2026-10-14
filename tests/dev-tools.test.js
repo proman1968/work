@@ -16,6 +16,7 @@ import { devSearchTools, globToRegExp } from '../sources/modules/agent/tools/dev
 import { apply_patch, parsePatch, applyHunks } from '../sources/modules/agent/tools/dev/patch.js';
 import { git_status, git_diff, git_log, git_show, git_blame, git_branch, git_commit, git_push } from '../sources/modules/agent/tools/dev/git.js';
 import { run_checks } from '../sources/modules/agent/tools/dev/checks.js';
+import { lsp_diagnostics, lsp_definition, lsp_references, lsp_rename, symbolAt } from '../sources/modules/agent/tools/dev/lsp.js';
 import { createEnv } from '../sources/modules/agent/index.js';
 import { decide } from '../sources/modules/agent/permissions.js';
 import { collectUndo, applyUndo } from '../sources/modules/agent/undo.js';
@@ -78,6 +79,10 @@ before(async () => {
         scripts: { 'echo-ok': 'node -e "console.log(42)"', 'boom': 'node -e "process.exit(3)"' },
     }, null, 2));
     write(path.join(root, '#system/dev.json'), JSON.stringify({ checks: { hello: 'node -e "console.log(7)"' } }));
+    // 6.5: TypeScript для диагностики и навигации
+    write(path.join(root, 'SRC/mod.ts'), 'export function hello() { return 1; }\nexport const num: number = "not a number";\nconst y = hello();\n');
+    // ловушка границы слова: helloWorld — НЕ вхождение hello
+    write(path.join(root, 'SRC/other.ts'), 'const helloWorld = 1;\nconst other = 2;\n');
     process.chdir(root);
     globalThis.WORK = new $server();
     // 6.4: git-репозиторий в корне тестового дерева (арена work) — скрытая .git в обходы не попадает
@@ -640,5 +645,80 @@ describe('run_checks', () => {
         assert.ok(names.includes('run_checks'), 'в основном наборе');
         const sub = (await env.makeTools({ meta: { tools: 'run_checks' } })).map(t => t.name);
         assert.ok(sub.includes('run_checks'), 'по маске');
+    });
+});
+
+// ── 6.5 (final): lsp ───────────────────────────────────────────────────────
+
+describe('lsp: символ под позицией (юнит)', () => {
+    it('слово под колонкой; пробел/конец строки — пусто', () => {
+        const at = symbolAt('const y = hello();\n', 1, 11);
+        assert.equal(at?.symbol, 'hello', 'идентификатор под позицией');
+        assert.equal(symbolAt('const y =  hello();\n', 1, 9), null, 'позиция в пробеле — не слово');
+        assert.equal(symbolAt('abc def\n', 1, 1)?.symbol, 'abc', 'начало строки');
+        assert.equal(symbolAt('abc\n', 2, 1), null, 'нет строки');
+        assert.equal(symbolAt('abc def\n', 1, 99), null, 'за концом строки');
+    });
+});
+
+describe('lsp: арена work', () => {
+    it('диагностика настоящим tsc: ошибка с позицией', async () => {
+        const out = await lsp_diagnostics.run({ path: '/SRC/mod.ts' }, mkCtx(ADMIN));
+        assert.match(out, /TS2322/, 'компилятор не нашёл ошибку типов');
+        assert.match(out, /mod\.ts\(2,/, 'позиция ошибки');
+    }, 90_000);
+    it('определение и вхождения символа под позицией', async () => {
+        const def = await lsp_definition.run({ path: '/SRC/mod.ts', line: 3, column: 11 }, mkCtx(ADMIN));
+        assert.match(def, /hello/, 'символ не распознан');
+        assert.match(def, /mod\.ts:1/, 'объявление не найдено');
+        const refs = await lsp_references.run({ path: '/SRC/mod.ts', line: 3, column: 11 }, mkCtx(ADMIN));
+        assert.match(refs, /вхождения «hello»: 2/, 'объявление + использование');
+        assert.match(refs, /\[объявление\]/, 'объявление не помечено');
+    }, 60_000);
+    it('rename — только план: файл не меняется', async () => {
+        const plan = await lsp_rename.run({ path: '/SRC/mod.ts', line: 3, column: 11, new_name: 'greeting' }, mkCtx(ADMIN));
+        assert.match(plan, /hello» → «greeting/, 'план не назван');
+        assert.match(plan, /edit или apply_patch/, 'нет подсказки о применении');
+        const g = await grep.run({ path: '/SRC', text: 'hello' }, mkCtx(ADMIN));
+        assert.match(g, /mod\.ts:1:/, 'файл изменён rename-ом — а он readonly');
+    }, 60_000);
+    it('только администратору; язык файла и позиция проверяются', async () => {
+        await assert.rejects(lsp_diagnostics.run({ path: '/SRC/mod.ts' }, mkCtx(UID)), /только администратору/);
+        await assert.rejects(lsp_definition.run({ path: '/SRC/mod.ts', line: 3, column: 11 }, mkCtx(UID)), /только администратору/);
+        await assert.rejects(lsp_definition.run({ path: '/BOX/doc/a.md', line: 1, column: 5 }, mkCtx(ADMIN)), /не поддерживается/);
+        await assert.rejects(lsp_definition.run({ path: '/SRC/mod.ts', line: 1, column: 7 }, mkCtx(ADMIN)), /нет идентификатора/,
+            'позиция в пробеле должна отказать');
+    }, 60_000);
+});
+
+describe('lsp: арена sandbox', () => {
+    it('диагностика, определение, вхождения; интернет — untrusted', async () => {
+        const docker = fakeDocker();
+        setDockerForTests(docker);
+        const cfg = loadSandboxConfig();
+        const pc = await ensureComputer(docker, 'sbx-user', 'main', cfg);
+        await writeText(docker, pc.id, '/workspace/src/mod.ts',
+            'export function hello() { return 1; }\nexport const num: number = "not a number";\nconst y = hello();\n', cfg);
+        const diag = await lsp_diagnostics.run({ where: 'sandbox', path: 'src/mod.ts' }, mkCtx('sbx-user'));
+        assert.match(diag, /TS-test/, 'эмуляция tsc не вызвана');
+        assert.match(diag, /mod\.ts\(2,/, 'позиция ошибки');
+        const def = await lsp_definition.run({ where: 'sandbox', path: 'src/mod.ts', line: 3, column: 11 }, mkCtx('sbx-user'));
+        assert.match(def, /mod\.ts:1/, 'объявление не найдено (rg --column --word-match)');
+        const refs = await lsp_references.run({ where: 'sandbox', path: 'src/mod.ts', line: 3, column: 11 }, mkCtx('sbx-user'));
+        assert.match(refs, /вхождения «hello»: 2/);
+        await assert.rejects(lsp_rename.run({ where: 'sandbox', path: '../../etc/x.ts', line: 1, column: 1 }, mkCtx('sbx-user')), /вне рабочей папки|нужен путь/,
+            'путь вне песочницы не отбит');
+        await setNetwork(docker, pc.id, true, cfg);
+        const e = {};
+        await lsp_references.run({ where: 'sandbox', path: 'src/mod.ts', line: 3, column: 11 }, mkCtx('sbx-user', { entry: e }));
+        assert.equal(e.untrusted, true, 'с включённым интернетом чужой код не помечен');
+        await setNetwork(docker, pc.id, false, cfg);
+        resetDockerForTests();
+    });
+    it('lsp-инструменты в основном наборе', async () => {
+        const env = await createEnv({ place: WORK, session: { uid: UID } });
+        const names = (await env.makeTools()).map(t => t.name);
+        for (const n of ['lsp_diagnostics', 'lsp_definition', 'lsp_references', 'lsp_rename'])
+            assert.ok(names.includes(n), n);
     });
 });

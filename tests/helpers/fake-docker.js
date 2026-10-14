@@ -94,15 +94,33 @@ export function fakeDocker(o = {}) {
             const pat = String(argv[2] ?? '');
             const mask = String(argv[3] ?? '');
             const ci = /\s-i\s/.test(script);
+            const col = script.includes('--column');
+            const word = script.includes('--word-match');
+            const globs = [...script.matchAll(/--glob "([^"]+)"/g)].map(m => m[1]).filter(g => !g.includes('$'));
+            const masks = globs.filter(g => !g.startsWith('!'));
+            const excl = globs.filter(g => g.startsWith('!')).map(g => g.replace(/^\*+/, '').replace(/\*+$/, ''));
             const needle = ci ? pat.toLowerCase() : pat;
+            const wordRe = word && pat ? new RegExp('\\b' + pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b') : null;
             const found = [];
             for (const [p, text] of c.files) {
+                const base = p.split('/').pop();
+                if (masks.length && !masks.some(m => base.endsWith(m.replace(/^\*+/, ''))))
+                    continue;
+                if (excl.some(m => p.includes(m)))
+                    continue;
                 if (mask && !p.endsWith(mask.replace(/^\*+/, '')))
                     continue;
                 String(text).split('\n').forEach((l, i) => {
                     const hay = ci ? l.toLowerCase() : l;
-                    if (needle && hay.includes(needle))
-                        found.push('./' + p.replace(/^\/+/, '') + ':' + (i + 1) + ': ' + l);
+                    let at = -1;
+                    if (wordRe) {
+                        const m = wordRe.exec(l);
+                        at = m ? m.index : -1;
+                    }
+                    else if (needle && hay.includes(needle))
+                        at = hay.indexOf(needle);
+                    if (at >= 0)
+                        found.push('./' + p.replace(/^\/+/, '') + ':' + (i + 1) + (col ? ':' + (at + 1) : '') + ': ' + l);
                 });
             }
             out = found.join('\n') + (found.length ? '\n' : '');
@@ -112,6 +130,21 @@ export function fakeDocker(o = {}) {
             const mask = String(argv[2] ?? '').replace(/^.*\//, '').replace(/\*/g, '');
             const keys = [...c.files.keys()].filter(k => !mask || k.split('/').pop().includes(mask));
             out = keys.map(k => './' + k.replace(/^\/+/, '')).join('\n') + (keys.length ? '\n' : '');
+        }
+        // 6.5 (final): tsc в песочнице — эмуляция диагностики (--noEmit по файлу)
+        else if (script.includes('command -v tsc') && script.includes('--noEmit')) {
+            const file = argv[1];
+            if (!c.files.has(file)) { code = 1; err = 'нет файла: ' + file; }
+            else {
+                const rel = file.replace(/^\/+/, '').replace(/^workspace\//, '');
+                const diags = [];
+                String(c.files.get(file)).split('\n').forEach((l, i) => {
+                    if (l.includes('"not a number"'))
+                        diags.push(rel + '(' + (i + 1) + ',7): error TS-test: Type \'string\' is not assignable to type \'number\'.');
+                });
+                out = diags.join('\n') + (diags.length ? '\n' : '');
+                code = diags.length ? 1 : 0;
+            }
         }
         // 6.3 (final): apply_patch в песочнице — cp/mv/rm по файлам контейнера
         else if (Cmd[0] === 'cp' && Cmd[1] === '--') {

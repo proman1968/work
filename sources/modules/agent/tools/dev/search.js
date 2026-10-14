@@ -60,8 +60,9 @@ export function globToRegExp(glob) {
  * системные #-зоны и скрытые элементы не перечисляются и не читаются.
  * Имена — на уровне ls (дети доступной папки); в папку без прав на чтение не заходим,
  * содержимое файлов проверяется правами по файлу при чтении (loadText).
+ * 6.5: общий обход для поиска (grep/glob) и символьной навигации (lsp).
  */
-async function* walkItems(root, deadline, ctx) {
+export async function* walkItems(root, deadline, ctx) {
     const seen = new Set();
     const walk = async function* (it, level) {
         let kids;
