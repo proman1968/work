@@ -357,7 +357,8 @@
             groupContactsByLetter,
             exportToVCard,
             exportToCSV,
-            downloadContacts
+            downloadContacts,
+            escapeHtml
         } from './contacts.js';
 
         // ========== СОСТОЯНИЕ ==========
@@ -437,7 +438,7 @@
             let html = '';
 
             Object.keys(groups).sort().forEach(letter => {
-                html += `<div class="letter-group"><div class="letter-title">${letter}</div>`;
+                html += `<div class="letter-group"><div class="letter-title">${escapeHtml(letter)}</div>`;
                 groups[letter].forEach(contact => {
                     const formatted = formatContact(contact);
                     // доп. информация о кол-ве телефонов/email
@@ -493,7 +494,7 @@
                     // не выдаём громкую ошибку, просто показываем
                     contactsContainer.innerHTML = `<div class="error-message">🔒 Доступ к контактам запрещён. Разрешите доступ в настройках браузера.</div>`;
                 } else if (error.message && !error.message.includes('cancel')) {
-                    contactsContainer.innerHTML = `<div class="error-message">⚠️ Ошибка: ${error.message}</div>`;
+                    contactsContainer.innerHTML = `<div class="error-message">⚠️ Ошибка: ${escapeHtml(error.message)}</div>`;
                 }
                 // если просто отмена — ничего не делаем
             } finally {

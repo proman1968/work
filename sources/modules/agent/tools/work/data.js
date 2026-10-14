@@ -79,7 +79,9 @@ export const writeTable = {
             let buf;
             if (ext === 'csv') {
                 const first = Object.values(sheets)[0];
-                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first)), 'utf-8');
+                // F29: данные приходят из чужих писем/таблиц — формулы Excel (=,+,-,@) не исполняются при открытии
+                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first))
+                    .split('\n').map(line => /^("?)[=+@-]/.test(line) ? '\'' + line : line).join('\n'), 'utf-8');
             }
             else {
                 const wb = XLSX.utils.book_new();

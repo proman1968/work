@@ -63,7 +63,7 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
             </div>
     </div>
         <div flex style="text-align: center;" ~html="state.legend"></div>
-        <div flex style="text-align: center;" ~html="text" :error="!!error" @tap="fill_code"></div>
+        <div flex style="text-align: center;" :error="!!error" @tap="fill_code">{{text}}</div>
     </div>
     `,
     error: null,
