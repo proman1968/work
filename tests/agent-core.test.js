@@ -1116,6 +1116,35 @@ describe('сессия .task', () => {
         assert.equal(done.items.find(i => i.id === 'a1').tools[0].answer, 'синий');
     });
 
+    it('R6 (8.34): расписание не возобновляет действие, требующее ручной проверки — в очередь; человек возобновляет сам', async () => {
+        const file = await newTask('t-sched-review');
+        const body = await session.getBody(file);
+        body.items.push(
+            { id: 'u1', type: 'user', content: 'удали', time: 1 },
+            { id: 'a1', type: 'assistant', content: '', time: 1, tools: [
+                { id: 'w1', name: 'write', args: { path: '/BOX/doc/x.md', content: 'x' }, status: 'interrupted' },
+            ] },
+        );
+        body.status = 'needs_review';
+        fs.writeFileSync(file.dir, JSON.stringify(body));
+        // реплика расписания (scheduled: true) не возобновляет — текст в очередь, статус прежний
+        const sched = { uid: CHILD_UID, principal: { kind: 'user', id: CHILD_UID }, scheduled: true, send() {} };
+        const res = await session.prompt(file, { session: sched, prompt: '[по расписанию] продолжай' });
+        assert.equal(res.queued, true);
+        const after = await session.getBody(file);
+        assert.equal(after.status, 'needs_review', 'расписание возобновило действие без человека');
+        assert.equal(after.items.find(i => i.id === 'a1').tools[0].status, 'interrupted', 'вызов изменился без проверки');
+        assert.ok((after.queue || []).some(i => /продолжай/.test(i.content || '')), 'текст расписания не в очереди');
+        // человек проверяет и возобновляет — задача выполняется (очередь расписания забирается после хода)
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Готово после проверки.' }, { text: 'Продолжаю по расписанию.' }]).stream;
+        const ok = await session.prompt(file, { prompt: 'проверил, продолжай' });
+        assert.equal(ok.ok, true);
+        await session.idle(file);
+        const fin = await session.getBody(file);
+        assert.equal(fin.status, 'idle');
+        assert.equal(fin.items.at(-1).content, 'Продолжаю по расписанию.');
+    });
+
     it('F32: запуск расписания (runDue/defaultRunner) не отвечает на ждущий вопрос — сессия scheduled', async () => {
         const file = await newTask('t-sched-runner');
         globalThis.__MOCK_STREAM__ = scripted([

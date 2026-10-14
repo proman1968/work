@@ -539,6 +539,13 @@ export async function prompt(file, params = {}) {
     }
     if (body.status === 'needs_review' && !text)
         return { ok: false, error: 'Сначала проверьте результат прерванного действия и напишите его в ответе; пустое «продолжить» недоступно.' };
+    if (body.status === 'needs_review' && scheduled) {
+        // R6 (8.34): результат прерванного изменяющего действия проверяет человек — расписание
+        // не возобновляет задачу: текст в очередь, старт — только ответом владельца
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true });
+        await save(s, session);
+        return { ok: true, queued: true };
+    }
     if (body.waiting && scheduled) {
         // F32: и на ожидании после рестарта расписание не подменяет ответ человека:
         // текст — в очередь, вопрос продолжает ждать владельца
