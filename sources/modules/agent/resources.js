@@ -1,7 +1,8 @@
 /**
  * Данные агента из дерева (не код ядра):
  *   ai/system.md        — правила агента (слои дописываются; `replace: true` во фронтматтере — заменить)
- *   ai/config.js        — { model, imageModel, maxTurns, hooks }; hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
+ *   ai/config.js        — { model, fallbackModels, imageModel, maxTurns, hooks }; hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
+ *                          (fallbackModels — 9.1: запасные модели при сбое основной до первого токена)
  *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model, maxTurns, requires)
  *   ai/skills/*.md      — навыки (фронтматтер: name, description, requires; тело — инструкция)
  *

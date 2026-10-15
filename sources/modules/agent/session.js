@@ -19,7 +19,7 @@
  */
 import { log } from './log.js';
 import { runLoop, maybeCompact } from './loop.js';
-import { createEnv, llmFor } from './index.js';
+import { createEnv } from './index.js';
 import { genId } from './util.js';
 import { collectUndo, applyUndo } from './undo.js';
 import { getItem, callAs, writeFile } from './tools/work.js';
@@ -417,7 +417,7 @@ function start(s, session, file) {
             const depth = Math.max(0, Number(body.childDepth) || 0);
             const model = body.model || def?.meta.model || await env.defaultModel();
             body.model = model;
-            const llm = await llmFor(model);
+            const llm = await env.llmFor(model); // 9.1: с запасными моделями (fallbackModels)
             const res = await runLoop({
                 llm,
                 system: () => env.makeSystemParts(def),
@@ -846,7 +846,7 @@ export async function compact(file, params = {}) {
     const place = file.$class || file.$owner || null;
     const host = { mode: body.mode, signal: undefined, save: () => save(s, params.session) };
     const env = await createEnv({ place, session: params.session, host });
-    const llm = await llmFor(body.model || await env.defaultModel());
+    const llm = await env.llmFor(body.model || await env.defaultModel()); // 9.1: с запасными моделями
     const done = await maybeCompact({ llm, items: body.items, host, system: await env.makeSystemParts(), hooks: env.hooks, task: file, force: true });
     return { ok: done };
 }

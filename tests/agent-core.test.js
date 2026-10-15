@@ -218,6 +218,26 @@ export default {};`);
         maxTokens: 50000,
         streamChat(req) { return globalThis.__MOCK_STREAM__(req); },
     }`);
+    // 9.1: модели для проверки запасных (fallback): падает до токенов, в середине, с ключом; рабочая запасная
+    write('MODELS/mock-fail/$ai/class.js', `export default {
+        maxTokens: 100000,
+        async *streamChat() { throw new Error('провайдер упал (до токенов)'); },
+    }`);
+    write('MODELS/mock-mid/$ai/class.js', `export default {
+        maxTokens: 100000,
+        async *streamChat() { yield 'часть ответа'; throw new Error('обрыв в середине потока'); },
+    }`);
+    write('MODELS/mock-auth/$ai/class.js', `export default {
+        maxTokens: 100000,
+        async *streamChat() { throw new Error('401 unauthorized virtual key'); },
+    }`);
+    write('MODELS/mock2/$ai/class.js', `export default {
+        maxTokens: 50000,
+        async *streamChat() { yield 'запасной ответ'; yield { type: 'usage', prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }; },
+    }`);
+    // 9.1: точка с запасными моделями в конфиге слоя
+    write('BOX2/$class/class.js', `export default { label: 'С запасом' }`);
+    write('BOX2/$class/ai/config.js', `export default { fallbackModels: ['/MODELS/mock2'] }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -1958,5 +1978,70 @@ describe('внешние инструменты: web_search / svc_* / mcp_* (ser
         const boom = tools.find(t => t.name === 'mcp_fakemcp_boom');
         assert.deepEqual(await boom.run({}, ctx()), { error: 'MCP сломался' });
         resetServiceRegistry();
+    });
+});
+
+// ── 9.1 (final): резервная модель при сбое (fallback) ──────────────────────
+
+describe('fallback: резервная модель при сбое до первого токена', () => {
+    const collect = async (llm, req = { messages: [] }) => {
+        let text = '';
+        for await (const ch of llm.stream(req)) {
+            if (typeof ch === 'string')
+                text += ch;
+        }
+        return text;
+    };
+
+    it('основная падает до токенов — запасная отвечает; переключение — в журнал', async () => {
+        const { llmWithFallback } = await import('../sources/modules/agent/index.js');
+        const since = new Date().toISOString();
+        const llm = await llmWithFallback('/MODELS/mock-fail', ['/MODELS/mock2']);
+        assert.equal(await collect(llm), 'запасной ответ');
+        assert.equal(llm.used, '/MODELS/mock2', 'запасная не зафиксирована');
+        const rows = (await readAudit()).filter(r => r.event === 'agent_fallback' && r.time >= since);
+        assert.ok(rows.length === 1, 'переключение не в журнале: ' + JSON.stringify(rows));
+        assert.deepEqual([rows[0].from, rows[0].to, rows[0].ok], ['/MODELS/mock-fail', '/MODELS/mock2', true]);
+    });
+    it('ответ уже начался — не переключаемся; ошибка ключа — не переключаемся', async () => {
+        const { llmWithFallback } = await import('../sources/modules/agent/index.js');
+        const mid = await llmWithFallback('/MODELS/mock-mid', ['/MODELS/mock2']);
+        let text = '';
+        await assert.rejects(async () => {
+            for await (const ch of mid.stream({ messages: [] })) {
+                if (typeof ch === 'string')
+                    text += ch;
+            }
+        }, /обрыв в середине потока/, 'после начала ответа переключились на запасную');
+        assert.equal(text, 'часть ответа', 'часть ответа потеряна');
+        const auth = await llmWithFallback('/MODELS/mock-auth', ['/MODELS/mock2']);
+        await assert.rejects(collect(auth), /401/, 'ошибка ключа переключена на запасную');
+        assert.equal(auth.used, null, 'ошибка ключа не должна тратить запасную');
+    });
+    it('битый запасной путь — пропуск с предупреждением, не роняет запуск', async () => {
+        const { llmWithFallback } = await import('../sources/modules/agent/index.js');
+        const llm = await llmWithFallback('/MODELS/mock-fail', ['/MODELS/нет-такой', '/MODELS/mock2']);
+        assert.equal(await collect(llm), 'запасной ответ');
+        assert.equal(llm.used, '/MODELS/mock2', 'битый путь не пропущен или не дошёл до рабочей');
+    });
+    it('цикл: ход выполняется на запасной модели (runLoop + fallback)', async () => {
+        const { llmWithFallback } = await import('../sources/modules/agent/index.js');
+        globalThis.__MOCK_STREAM__ = async function* () {
+            yield 'готово';
+            yield { type: 'usage', prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
+        };
+        const items = [{ id: 'u', type: 'user', content: 'работай' }];
+        const llm = await llmWithFallback('/MODELS/mock-fail', ['/MODELS/mock']);
+        await runLoop({ llm, system: 'S', items, tools: workTools, host: mkHost() });
+        assert.match(items.at(-1).content, /готово/, 'запасная модель не ответила');
+        assert.equal(llm.used, '/MODELS/mock');
+    });
+    it('конфиг: fallbackModels слоя виден в env; env.llmFor — с запасом', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX2'), host: { mode: 'auto' } });
+        assert.deepEqual(await env.fallbackModels(), ['/MODELS/mock2']);
+        const llm = await env.llmFor('/MODELS/mock-fail');
+        assert.equal(await collect(llm), 'запасной ответ', 'env.llmFor не подставил запасную из конфига');
+        const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
+        assert.deepEqual(await plain.fallbackModels(), [], 'без конфига запас должен быть пуст');
     });
 });

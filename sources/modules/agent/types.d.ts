@@ -121,13 +121,15 @@ interface Host {
     [key: string]: any;
 }
 
-/** Адаптер модели (index.js llmFor). */
+/** Адаптер модели (index.js llmFor; llmWithFallback — 9.1: запасные модели). */
 interface LLM {
     name: string;
     /** элемент дерева MODELS (streamChat, generateImage, capabilities…) */
     item?: any;
     contextTokens?: number;
     vision?: boolean;
+    /** 9.1: какая модель реально ответила после переключения на запасную (null — основная) */
+    used?: string | null;
     stream: (req: { messages?: any, tools?: any, signal?: AbortSignal, effort?: string, [key: string]: any }) => AsyncIterable<LLMEvent>;
 }
 

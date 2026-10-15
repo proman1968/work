@@ -41,6 +41,7 @@ export function mcpErrorNote(ids) {
 import { loadDocs, loadSystem, loadConfig, loadHooks } from './resources.js';
 import { auditHook } from './hooks.js';
 import { clip } from './util.js';
+import { audit } from '../../server/access/audit.js';
 
 export { runLoop } from './loop.js';
 export * as voice from './voice.js';
@@ -112,6 +113,70 @@ export async function llmFor(modelPath) {
             return item.streamChat(req);
         },
     };
+}
+
+/**
+ * 9.1: адаптер с резервными моделями (`ai/config.js fallbackModels: [путь, …]`).
+ * Сбой основной модели ДО первого токена переключает на следующую — запрос повторяется с
+ * начала (ответа ещё не было); ответ уже начался или ошибка ключа (401/403) — не переключаем;
+ * битый запасной путь — пропуск с предупреждением (запас не должен ронять запуск);
+ * каждое переключение — в журнал безопасности (`agent_fallback`). Ретраи той же модели
+ * (loop.js STREAM_RETRIES) остаются внутри: обёртка видит ошибку после их исчерпания.
+ * @param {string} primaryPath
+ * @param {Array<string>|string} [fallbackPaths]
+ * @returns {Promise<LLM>}
+ */
+export async function llmWithFallback(primaryPath, fallbackPaths = []) {
+    const primary = await llmFor(primaryPath);
+    const paths = (Array.isArray(fallbackPaths) ? fallbackPaths : String(fallbackPaths || '').split(/[\s,]+/))
+        .map(s => String(s || '').trim()).filter(Boolean)
+        .filter(p => p !== String(primaryPath).trim());
+    const llms = [{ llm: primary, path: String(primaryPath).trim() }];
+    for (const p of paths) {
+        try {
+            const f = await llmFor(p);
+            if (!llms.some(x => x.path === p))
+                llms.push({ llm: f, path: p });
+        }
+        catch (e) {
+            log.warn('fallback-модель «' + p + '» недоступна — пропущена: ' + String(e?.message || e).slice(0, 120));
+        }
+    }
+    if (llms.length === 1)
+        return primary; // запаса нет — прежнее поведение
+    const adapter = {
+        ...primary, // name/item/contextTokens/vision — от основной (её окно и считаем)
+        used: null, // какая модель реально ответила (после переключения)
+        stream(req) {
+            return (async function* () {
+                let idx = 0;
+                while (true) {
+                    let got = false;
+                    try {
+                        for await (const ch of llms[idx].llm.stream(req)) {
+                            got = true;
+                            yield ch;
+                        }
+                        return;
+                    }
+                    catch (e) {
+                        if (req.signal?.aborted)
+                            throw e;
+                        const auth = /401|403|virtual key|ключ/i.test(String(e?.message || e));
+                        if (got || auth || idx + 1 >= llms.length)
+                            throw e;
+                        // 9.1: сбой до первого токена — резервная модель, запрос заново
+                        adapter.used = llms[idx + 1].path;
+                        log.warn('модель ' + llms[idx].path + ' сбой до ответа (' + String(e?.message || e).slice(0, 100)
+                            + ') — переключаюсь на ' + llms[idx + 1].path);
+                        audit('agent_fallback', { from: llms[idx].path, to: llms[idx + 1].path, ok: true, error: String(e?.message || e).slice(0, 200) });
+                        idx++;
+                    }
+                }
+            })();
+        },
+    };
+    return adapter;
 }
 
 /** Первая модель с capability image (или ai/config.js imageModel). */
@@ -220,7 +285,10 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             return item?.load ? item.load({ session }) : null;
         },
         mcpErrors,
-        llmFor,
+        /** 9.1: адаптер модели с запасом из ai/config.js fallbackModels (сбой до первого токена — переключение). */
+        llmFor: (modelPath) => llmWithFallback(modelPath, config.fallbackModels),
+        /** 9.1: список запасных моделей из ai/config.js слоёв (ближний перекрывает). */
+        fallbackModels: () => [].concat(config.fallbackModels || []),
         imageModel: () => findImageModel(config),
         async extTools() {
             extTools ??= Promise.all([serviceTools(session), mcpTools({ onError: (s, e) => {
@@ -460,7 +528,7 @@ export async function runOnce({ place, session, prompt, model, agent, mode = 'au
     const def = agent ? env.agents.get(agent) : undefined;
     if (agent && !def)
         throw new Error('нет субагента ' + agent);
-    const llm = await llmFor(model || def?.meta.model || await env.defaultModel());
+    const llm = await env.llmFor(model || def?.meta.model || await env.defaultModel()); // 9.1: с запасными моделями
     const items = [{ id: 'u0', type: 'user', time: Date.now(), content: String(prompt || '') }];
     const res = await runLoop({
         llm,
