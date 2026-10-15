@@ -153,6 +153,44 @@ await test('connect: signup раскрывается в тот же предпр
     }
 });
 
+// 9.7 (final): карточка разрешения — что именно, причина, три кнопки; noAlways убирает «всегда»
+const approvalEntry = (noAlways) => ({
+    id: 'c3', name: 'write', status: 'approval', noAlways,
+    args: { path: '/ORG/Отчёты/годовой.md' },
+    reason: 'изменение системы: /ORG/Отчёты/годовой.md',
+});
+
+await test('approval: что именно и причина видны; три кнопки; noAlways убирает «всегда»', async () => {
+    const el = mount(approvalEntry(false));
+    try {
+        const ask = await waitFor(() => el.$$('.ask').find(a => a.textContent.includes('Разрешить')), 'карточка разрешения');
+        const text = ask.textContent;
+        assert(/Разрешить «[^»]+»/.test(text), 'название действия: ' + text);
+        assert(text.includes('/ORG/Отчёты/годовой.md'), 'цель: ' + text);
+        assert(text.includes('изменение системы'), 'причина: ' + text);
+        assert(ask.querySelector('textarea'), 'нет поля комментария');
+        const labels = el.$$('oda-button').map(b => b.getAttribute('label')).filter(Boolean);
+        for (const want of ['Разрешить', 'Разрешить всегда', 'Отклонить'])
+            assert(labels.includes(want), 'нет кнопки «' + want + '»: ' + labels.join('|'));
+    }
+    finally {
+        el.remove();
+    }
+    const no = mount(approvalEntry(true));
+    try {
+        await waitFor(() => el2labels(no).includes('Разрешить'), 'карточка без «всегда»');
+        const labels = el2labels(no);
+        assert(labels.includes('Разрешить') && labels.includes('Отклонить'), 'кнопки: ' + labels.join('|'));
+        assert(!labels.includes('Разрешить всегда'), '«всегда» показана при noAlways: ' + labels.join('|'));
+    }
+    finally {
+        no.remove();
+    }
+});
+function el2labels(el) {
+    return el.$$('oda-button').map(b => b.getAttribute('label')).filter(Boolean);
+}
+
 await test('doc: видеоснимок — <video> с controls, без текстовой загрузки', async () => {
     const el = document.createElement('microchat-doc');
     el.doc = {

@@ -2185,3 +2185,38 @@ describe('панель наблюдаемости (9.3)', () => {
         }
     });
 });
+
+// ── 9.7 (final): уведомление разрешения — кнопки «Разрешить/Отклонить» ─────
+
+describe('push-сообщение задачи (9.7)', () => {
+    const pushMessageOf = () => { throw new Error('not loaded'); };
+    const st = () => ({ body: { title: 'Годовой отчёт' }, file: { path: '/ORG/task/2026-10-15/1.A000000000000001.task' } });
+
+    it('разрешение: кнопки «Разрешить/Отклонить» + id вызова и причина для sw; done/error — без кнопок', async () => {
+        const { pushMessageOf: build } = await import('../sources/modules/agent/session.js');
+        const m = build(st(), 'waiting', 'разрешить: изменение системы', { waitingKind: 'approval', call: 'c42', reason: 'изменение системы' });
+        assert.equal(m.title, 'Задача ждёт вас');
+        assert.match(m.body, /Годовой отчёт/);
+        assert.match(m.body, /разрешить: изменение системы/, 'что ждёт — в теле уведомления');
+        assert.ok(m.actions.some(a => a.action === 'task-approve' && a.title === 'Разрешить'), 'нет кнопки Разрешить');
+        assert.ok(m.actions.some(a => a.action === 'task-reject' && a.title === 'Отклонить'), 'нет кнопки Отклонить');
+        assert.equal(m.data.approval.call, 'c42', 'sw не узнает вызов');
+        assert.match(m.data.approval.reason, /изменение системы/, 'причина не передана');
+        assert.equal(m.data.task, '/ORG/task/2026-10-15/1.A000000000000001.task', 'нет пути задачи для POST file?approve');
+        assert.equal(m.requireInteraction, true, 'разрешение не держит уведомление');
+        // вопрос — без кнопок (клик открывает задачу, ответ требует контекста)
+        const q = build(st(), 'waiting', 'Какой год?', { waitingKind: 'question', call: 'c43' });
+        assert.equal(q.actions, undefined, 'вопросу дали кнопки разрешения');
+        assert.equal(q.data.approval, undefined, 'вопросу дали признак approval');
+        assert.equal(q.requireInteraction, true);
+        // прочее — без кнопок и без взаимодействия
+        const d = build(st(), 'done', 'готово');
+        assert.equal(d.actions, undefined);
+        assert.equal(d.requireInteraction, false);
+        assert.equal(d.data.approval, undefined);
+        // разрешение без id вызова (после рестарта не нашли) — без кнопок: клик открывает задачу
+        const bare = build(st(), 'waiting', 'разрешить: x', { waitingKind: 'approval' });
+        assert.equal(bare.actions, undefined, 'без вызова кнопки не показывать (POST не по чему)');
+        assert.equal(bare.data.approval, undefined);
+    });
+});

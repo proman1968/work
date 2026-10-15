@@ -182,6 +182,41 @@
                     if (data.data?.state === 'done' && target && wins.some(c => c.visibilityState === 'visible' && c.focused
                         && new URL(c.url).pathname === target))
                         return;
+                    // 9.7: ожидающее разрешение — кнопки «Разрешить/Отклонить» прямо в уведомлении:
+                    // подтверждение уходит на сервер (POST file?approve — те же права, что в интерфейсе),
+                    // без кнопок (вопрос/прочее) — клик открывает задачу, как раньше
+                    const approval = data.data?.approval;
+                    if (approval && approval.call && data.data?.task && !pushHandlers[data.tag]) {
+                        const tag = data.tag;
+                        const approveOnServer = async (accept) => {
+                            const res = await fetch(data.data.task + '?approve', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ call: approval.call, accept }),
+                            });
+                            const out = await res.json().catch(() => null);
+                            if (!res.ok || out?.ok === false)
+                                throw new Error(out?.error || 'HTTP ' + res.status);
+                        };
+                        const pushHandler = {
+                            actions: [
+                                { action: 'task-approve', title: 'Разрешить', fn: () => approveOnServer(true) },
+                                { action: 'task-reject', title: 'Отклонить', fn: () => approveOnServer(false) },
+                            ],
+                            remove: () => { if (pushHandlers[tag] === pushHandler) delete pushHandlers[tag]; },
+                        };
+                        pushHandlers[tag] = pushHandler;
+                        await self.registration.showNotification(data.title || 'Задача ждёт вас', {
+                            tag,
+                            icon: '/icon-192.png',
+                            badge: '/badge-72.png',
+                            vibrate: [200, 100, 200],
+                            requireInteraction: true,
+                            renotify: true,
+                            ...data,
+                        });
+                        return;
+                    }
                 }
                 await self.registration.showNotification(data.title || 'Внимание!', {
                     tag,

@@ -175,30 +175,53 @@ function findCall(items, callId) {
 /** Работа короче — без push о завершении (человек, скорее всего, ещё смотрит). */
 export const PUSH_DONE_MIN_MS = 20_000;
 
+/** 9.7: кнопки «Разрешить/Отклонить» в уведомлении разрешения (обрабатывает sw.js: POST file?approve). */
+const APPROVAL_ACTIONS = [
+    { action: 'task-approve', title: 'Разрешить' },
+    { action: 'task-reject', title: 'Отклонить' },
+];
+
+/**
+ * Push-сообщение о задаче (чистая — покрыта тестами): заголовок, тело, данные для
+ * service worker (url для клика, состояние, задача). Ожидающее РАЗРЕШЕНИЕ — с кнопками
+ * «Разрешить/Отклонить» (service worker подтверждает через POST file?approve) и
+ * признаком approval с id вызова; вопрос и прочее — без кнопок (клик открывает задачу).
+ * @param {{ body?: any, file?: { path?: string } }} s состояние задачи
+ * @param {'waiting'|'done'|'error'|'review'} kind
+ * @param {string} [text] что ждёт / что вышло
+ * @param {{ waitingKind?: string, call?: string, reason?: string }} [detail] 9.7: вид ожидания
+ */
+export function pushMessageOf(s, kind, text, detail = {}) {
+    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
+    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
+    const path = String(s.file?.path || '');
+    const url = encodeURI(path + '/~/handlers//form/index.html');
+    const isApproval = kind === 'waiting' && detail.waitingKind === 'approval' && !!detail.call;
+    return {
+        type: 'task:' + path, tag: 'task:' + path, title,
+        body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
+        data: {
+            url, kind: 'task', state: kind, task: path,
+            ...(isApproval ? { approval: { call: detail.call, reason: detail.reason || '' } } : {}),
+        },
+        ...(isApproval ? { actions: APPROVAL_ACTIONS } : {}),
+        requireInteraction: kind === 'waiting' || kind === 'review',
+        renotify: kind === 'waiting' || kind === 'review',
+    };
+}
+
 /**
  * Push пользователю: задача ждёт его / закончила долгую работу / упала.
  * Показывать ли — решает service worker: если вкладка WORK видима и в фокусе, уведомление не показывается.
+ * 9.7: ожидающее разрешение — с кнопками «Разрешить/Отклонить» прямо в уведомлении.
  */
-async function pushNotify(s, session, kind, text) {
+async function pushNotify(s, session, kind, text, detail = {}) {
     const uid = session?.uid;
     if (!uid || process.env.WORK_TEST)
         return;
-    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
-    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
-    const path = String(s.file.path || '');
-    const url = encodeURI(path + '/~/handlers//form/index.html');
     try {
         const { sendPushNotification, removePushSubscription } = await import('../../host/push.js');
-        await sendPushNotification({
-            receivers: [uid],
-            message: {
-                type: 'task:' + path, tag: 'task:' + path, title,
-                body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
-                data: { url, kind: 'task', state: kind, task: path },
-                requireInteraction: kind === 'waiting' || kind === 'review',
-                renotify: kind === 'waiting' || kind === 'review',
-            },
-        }, removePushSubscription);
+        await sendPushNotification({ receivers: [uid], message: pushMessageOf(s, kind, text, detail) }, removePushSubscription);
     }
     catch (e) {
         console.warn('[task push]', e.message);
@@ -241,7 +264,9 @@ export async function recover(file, session) {
     if (body.status === 'waiting' && body.waiting) {
         const call = findCall(body.items, body.waiting.call)?.entry;
         if (call) {
-            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name);
+            // 9.7: подтверждение после рестарта — тоже с кнопками в уведомлении
+            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name,
+                { waitingKind: body.waiting.kind, call: body.waiting.call, reason: call.reason || call.name || '' });
             return { status: 'waiting' };
         }
         body.status = 'needs_review';
@@ -294,9 +319,11 @@ function makeHost(s, session) {
             const p = new Promise(resolve => s.waiters.set(req.call, resolve));
             save(s, session);
             const hit = findCall(body.items, req.call)?.entry;
+            // 9.7: разрешение — с кнопками «Разрешить/Отклонить» в уведомлении (reason — что именно)
             pushNotify(s, session, 'waiting', req.kind === 'question' ? req.question
                 : req.kind === 'connect' ? 'подключить ' + (hit?.connect?.label || hit?.connect?.provider || 'сервис')
-                    : 'разрешить: ' + (req.reason || req.tool || ''));
+                    : 'разрешить: ' + (req.reason || req.tool || ''),
+                { waitingKind: req.kind, call: req.call, reason: req.reason || req.tool || '' });
             return p.then(res => {
                 delete body.waiting;
                 if (!s.controller?.signal.aborted) {
