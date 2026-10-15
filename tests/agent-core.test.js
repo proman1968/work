@@ -2189,11 +2189,10 @@ describe('панель наблюдаемости (9.3)', () => {
 // ── 9.7 (final): уведомление разрешения — кнопки «Разрешить/Отклонить» ─────
 
 describe('push-сообщение задачи (9.7)', () => {
-    const pushMessageOf = () => { throw new Error('not loaded'); };
-    const st = () => ({ body: { title: 'Годовой отчёт' }, file: { path: '/ORG/task/2026-10-15/1.A000000000000001.task' } });
 
     it('разрешение: кнопки «Разрешить/Отклонить» + id вызова и причина для sw; done/error — без кнопок', async () => {
         const { pushMessageOf: build } = await import('../sources/modules/agent/session.js');
+        const st = () => ({ body: { title: 'Годовой отчёт' }, file: { path: '/ORG/task/2026-10-15/1.A000000000000001.task' } });
         const m = build(st(), 'waiting', 'разрешить: изменение системы', { waitingKind: 'approval', call: 'c42', reason: 'изменение системы' });
         assert.equal(m.title, 'Задача ждёт вас');
         assert.match(m.body, /Годовой отчёт/);
@@ -2218,5 +2217,66 @@ describe('push-сообщение задачи (9.7)', () => {
         const bare = build(st(), 'waiting', 'разрешить: x', { waitingKind: 'approval' });
         assert.equal(bare.actions, undefined, 'без вызова кнопки не показывать (POST не по чему)');
         assert.equal(bare.data.approval, undefined);
+    });
+});
+
+// ── 9.5 (final): самопроверка агента перед завершением ─────────────────────
+
+describe('самопроверка перед завершением (9.5)', () => {
+    const todoState = (list) => {
+        const todos = list;
+        return { todos, setTodos: t => { todos.length = 0; todos.push(...t); }, getTodos: () => todos };
+    };
+    it('openTodosOf: незавершённые с содержанием; завершённые и мусор — нет', async () => {
+        const { openTodosOf } = await import('../sources/modules/agent/loop.js');
+        assert.deepEqual(openTodosOf([
+            { content: 'написать отчёт', status: 'pending' },
+            { content: 'проверить', status: 'in_progress' },
+            { content: 'сделано', status: 'completed' },
+            { content: '', status: 'pending' },
+            null,
+            { status: 'completed' },
+        ]), [
+            { content: 'написать отчёт', status: 'pending' },
+            { content: 'проверить', status: 'in_progress' },
+        ], 'открытые пункты посчитаны неверно');
+        assert.deepEqual(openTodosOf(null), []);
+    });
+    it('цикл: перед завершением с открытым пунктом — реплика-подсказка и ещё ход; после закрытия — done', async () => {
+        const { SELF_CHECK_NUDGE } = await import('../sources/modules/agent/loop.js');
+        const ts = todoState([]);
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'todo_write', args: { todos: [{ content: 'написать отчёт', status: 'in_progress' }] } }] },
+            { text: 'готово' },
+            { calls: [{ name: 'todo_write', args: { todos: [{ content: 'написать отчёт', status: 'completed' }] } }] },
+            { text: 'итог: отчёт написан' },
+        ]).stream;
+        const items = [{ id: 'u', type: 'user', content: 'сделай отчёт' }];
+        const res = await runLoop({ llm: await llmFor('/MODELS/mock'), system: 'S', items, tools: metaTools, host: mkHost(ts), maxTurns: 10 });
+        assert.equal(res.status, 'done');
+        const check = items.find(i => i.type === 'user' && String(i.content).includes(SELF_CHECK_NUDGE));
+        assert.ok(check, 'реплика самопроверки не появилась при открытом пункте');
+        assert.match(check.content, /написать отчёт/, 'открытый пункт не перечислен');
+        assert.equal(ts.getTodos()[0].status, 'completed', 'пункт не закрыт после подсказки');
+    });
+    it('подсказка — один раз: модель дважды отвечает без действий — done, без зацикливания', async () => {
+        const ts = todoState([{ content: 'написать отчёт', status: 'pending' }]);
+        globalThis.__MOCK_STREAM__ = scripted([
+            { text: 'не могу' },
+            { text: 'всё равно не могу: нет данных' },
+        ]).stream;
+        const items = [{ id: 'u', type: 'user', content: 'сделай отчёт' }];
+        const res = await runLoop({ llm: await llmFor('/MODELS/mock'), system: 'S', items, tools: metaTools, host: mkHost(ts), maxTurns: 10 });
+        assert.equal(res.status, 'done', 'цикл не завершился после одной подсказки — зацикливание');
+        assert.match(res.content, /не могу: нет данных/);
+        const checks = items.filter(i => i.type === 'user' && String(i.content).includes('Самопроверка'));
+        assert.equal(checks.length, 1, 'подсказка самопроверки не единожды: ' + checks.length);
+    });
+    it('старый хост без getTodos — обычное done без подсказки', async () => {
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'готово' }]).stream;
+        const items = [{ id: 'u', type: 'user', content: 'работай' }];
+        const res = await runLoop({ llm: await llmFor('/MODELS/mock'), system: 'S', items, tools: metaTools, host: mkHost(), maxTurns: 5 });
+        assert.equal(res.status, 'done');
+        assert.ok(!items.some(i => String(i.content || '').includes('Самопроверка')), 'лишняя подсказка');
     });
 });

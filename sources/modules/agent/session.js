@@ -304,6 +304,7 @@ function makeHost(s, session) {
         save: () => save(s, session),
         emit: e => send(s, session, { ...e, type: 'task.delta' }),
         setTodos: todos => { body.todos = todos; },
+        getTodos: () => body.todos, // 9.5: самопроверка открытых пунктов перед завершением
         /** Очередь реплик, пришедших во время работы: цикл забирает их между ходами. */
         takeQueue: () => {
             const q = body.queue || [];

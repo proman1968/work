@@ -28,6 +28,16 @@ import { newNonce, wrapUntrusted, taintSources } from './taint.js';
 import { runPreTool, runAppend, runNotify } from './hooks.js';
 import { costOf, recordUsage, budgetExceeded } from './cost.js';
 
+/** 9.5: самопроверка перед завершением — открытые пункты плана (todo_write). */
+export const SELF_CHECK_NUDGE = '[Самопроверка] Перед завершением: в плане задачи остались незакрытые пункты';
+
+/** Открытые пункты плана (не завершённые) с непустым содержанием — для самопроверки (9.5). */
+export function openTodosOf(todos) {
+    return (Array.isArray(todos) ? todos : [])
+        .filter(t => t && String(t?.content || '').trim() && String(t?.status || '') !== 'completed')
+        .map(t => ({ content: String(t.content), status: String(t.status || 'pending') }));
+}
+
 export const MAX_TURNS = 60;
 export const RESULT_MAX = 24000;
 export const OLD_RESULT_MAX = 1500;
@@ -108,6 +118,7 @@ async function runLoopCore(opts) {
                 await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
         await recoverInterrupted(items, host);
         let empty = 0;
+        let selfChecked = false; // 9.5: самопроверка — не чаще одного раза на задачу (без зацикливания)
         for (let turn = 0; ; turn++) {
             throwIfStopped(host.signal);
             if (turn >= maxTurns) {
@@ -177,6 +188,21 @@ async function runLoopCore(opts) {
                     it.content = emptyReason(it);
                     await host.save();
                     return { status: 'error', content: it.content };
+                }
+                // 9.5: самопроверка — в плане остались незакрытые пункты: реплика-подсказка и ещё ход
+                // (модель либо завершает их инструментами, либо объясняет в ответе, почему нельзя);
+                // даётся один раз — иначе цикл не завершился бы никогда
+                const open = openTodosOf(host.getTodos?.());
+                if (open.length && !selfChecked) {
+                    selfChecked = true;
+                    items.push({
+                        id: genId(), type: 'user', time: Date.now(),
+                        content: SELF_CHECK_NUDGE + ':\n'
+                            + open.slice(0, 20).map(t => '- ' + t.content + (t.status !== 'pending' ? ' (' + t.status + ')' : '')).join('\n')
+                            + '\nЗаверши их инструментами или объясни в итоговом ответе, почему пункт не выполнен.',
+                    });
+                    await host.save();
+                    continue;
                 }
                 await host.save();
                 return { status: 'done', content: it.content };
