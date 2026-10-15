@@ -303,7 +303,10 @@ export async function start({ uid, name, provider, scopes, base_url, token, head
         return { ok: true, connected: name };
     }
     const app = appClient(provider) || {};
-    const client = { client_id: client_id || app.client_id, client_secret: client_secret || app.client_secret };
+    // 7.2б (S5): пользовательский client_id никогда не смешивается с системным app.client_secret
+    const client = client_id
+        ? { client_id: String(client_id), client_secret: client_secret ? String(client_secret) : undefined }
+        : { client_id: app.client_id, client_secret: app.client_secret };
     if (!client.client_id)
         return { ok: false, need_client: true, console: p.console, error: 'нет OAuth-клиента: создайте его в ' + p.console + ' и введите client_id/secret' };
     if (!/^https?:\/\//.test(String(origin || '')))
@@ -347,7 +350,7 @@ async function tokenRequest(p, body) {
 }
 
 /** /oauth/callback?code&state → HTML ответа окну входа. */
-export async function callback(query = {}) {
+export async function callback(query = {}, session = null) {
     const pend = PENDING.get(String(query.state || ''));
     const page = (ok, msg) => `<!doctype html><meta charset="utf-8"><title>WORK</title>
 <body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;text-align:center">
@@ -355,6 +358,9 @@ export async function callback(query = {}) {
 <script>try{window.opener&&window.opener.postMessage({workOAuth:${ok ? 'true' : 'false'}},'*')}catch(e){};${ok ? 'setTimeout(()=>window.close(),1500)' : ''}</script></body>`;
     if (!pend || pend.expires < Date.now())
         return page(false, 'Сессия входа устарела — нажмите «Подключить» ещё раз.');
+    // 7.2б (S5): если в браузере открыта сессия другого пользователя — не привязывать чужой OAuth-аккаунт
+    if (session?.uid && String(session.uid) !== String(pend.uid))
+        return page(false, 'Сессия браузера принадлежит другому пользователю — войдите под своим аккаунтом.');
     PENDING.delete(String(query.state));
     if (query.error)
         return page(false, 'Провайдер ответил: ' + query.error);

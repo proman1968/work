@@ -213,7 +213,12 @@ export function parseCookies(request) {
         if (!name) return;
         const value = rest.join(`=`).trim();
         if (!value) return;
-        list[name] = decodeURIComponent(value);
+        try {
+            list[name] = decodeURIComponent(value);
+        }
+        catch {
+            list[name] = value;
+        }
     });
     return list;
 }
@@ -296,7 +301,7 @@ export function createRequestHandler() {
         // Возврат со страницы входа провайдера (OAuth подключения агента) — до разбора дерева
         if (path === '/oauth/callback') {
             const { callback } = await import('../modules/agent/connections.js');
-            const html = await callback(Object.fromEntries(url.searchParams));
+            const html = await callback(Object.fromEntries(url.searchParams), session);
             response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
             response.end(html);
             return;
@@ -415,11 +420,16 @@ export function createRequestHandler() {
                 if(range){
                     // частичная отдача — те же права, что у download
                     await item.assertAccess(params, CORE.$class.ACCESS_LEVEL.READ);
-                    const fileSize = item.size;
-                    const parts = range.replace(/bytes=/, "").split("-");
+                    const fileSize = Number(item.size) || 0;
+                    const parts = String(range).replace(/bytes=/, "").split("-");
                     const start = parseInt(parts[0], 10);
                     let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
                     end = Math.max(0, Math.min(end, fileSize - 1));
+                    if (!Number.isInteger(start) || start < 0 || start >= fileSize || !Number.isInteger(end) || end < start) {
+                        response.writeHead(416, { 'Content-Range': `bytes */${fileSize}`, 'X-Content-Type-Options': 'nosniff' });
+                        response.end();
+                        return;
+                    }
                     const chunksize = (end - start) + 1;
                     const file = fs.createReadStream(item.dir, { start, end });
 
@@ -530,8 +540,9 @@ export function createRequestHandler() {
             header["Content-Type"] = 'application/javascript; charset=utf-8';
         else if (item?.constructor === CORE.$file) {
             if (method === 'download') {
+                const safeAscii = String(item.id || 'file').replace(/[\r\n"\\;]/g, '_');
                 header["Content-Type"] = "application/octet-stream";
-                header["Content-Disposition"] = "attachment; filename=" + item.id;
+                header["Content-Disposition"] = `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(String(item.id || 'file'))}`;
                 header["Cache-Control"] = 'no-cache';
             }
             else if (isFileBodyMethod(method)) {

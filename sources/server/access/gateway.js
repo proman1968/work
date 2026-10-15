@@ -117,6 +117,12 @@ export function resolveMember(item, name) {
     }
     const own = owner === item;
     let level = MEMBERS[name];
+    // 7.2б (S4 / R11): если class.js переопределил собственным методом имя из MEMBERS с уровнем READ
+    // (например get_schema / members) без явного ACCESS: { [name]: 'read' } — это прикладной вызов CALL, а не чтение ядра
+    if (level === L.READ && (own || !isCoreProto(owner)) && typeof desc.value === 'function') {
+        const declared = item?.DATA?.ACCESS?.[name];
+        level = Object.values(LEVEL).includes(declared) ? declared : L.CALL;
+    }
     if (!level) {
         if (own || !isCoreProto(owner)) {
             // методы из class.js (DATA / $method) и прикладных подклассов

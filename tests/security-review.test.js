@@ -441,3 +441,101 @@ describe('R14 данные в адресе читающего запроса —
         assert.equal((await decide(wf, leaky, { host })).verdict, 'allow', 'чистый ход: чтение без вопроса');
     });
 });
+
+describe('7.2б вычитка «секреты и вход» (S1–S5 + R11)', () => {
+    it('S1/S2 auth-methods: одноразовый challenge при ошибке подписи в user_register_finish и проверка uid в user_login_finish', async () => {
+        const { authMethods } = await import('../sources/host/auth-methods.js');
+        const sess = {
+            credentials: {
+                uid: ALICE,
+                email: 'alice@example.com',
+                challenge: 'ch-test-123',
+                verified: true,
+            },
+        };
+        // первая попытка с невалидным ключом/подписью падает и обязана сбросить session.credentials
+        await assert.rejects(
+            authMethods.user_register_finish.call(WORK, {
+                session: sess,
+                post: {
+                    credentials: { uid: ALICE, publicKey: 'bad-key', time: 1 },
+                    signature: 'bad-sig',
+                },
+            }),
+            /registration failed/
+        );
+        assert.equal(sess.credentials, undefined, 'session.credentials не сброшен после неверной подписи (перебор challenge)');
+
+        // user_login_finish отвергает невалидный uid до обращения к дереву
+        await assert.rejects(
+            authMethods.user_login_finish.call(WORK, { uid: '../etc/passwd', session: {}, time: 1, challengeId: 'c1' }),
+            /uid required/
+        );
+    });
+
+    it('S3 http-server: parseCookies устойчив к битой %-последовательности в сторонней cookie', async () => {
+        const { parseCookies } = await import('../sources/host/http-server.js');
+        const parsed = parseCookies({ headers: { cookie: 'broken=%E0%A4%A; ssid=valid_session_123' } });
+        assert.equal(parsed.ssid, 'valid_session_123');
+        assert.equal(parsed.broken, '%E0%A4%A');
+    });
+
+    it('S4 / R11 gateway + call: переопределённый в class.js метод с именем из MEMBERS (get_schema) без ACCESS:{read} получает уровень CALL, а не READ', async () => {
+        write('SNEAKY/$class/class.js', `export default {
+            label: 'Хитрая точка',
+            '#security': { USER: ['${ALICE}'] },
+            async get_schema() { return 'mutated'; },
+            async honest_read() { return 'ok'; },
+            ACCESS: { honest_read: 'read' }
+        }`);
+        WORK.reset?.();
+        const item = await WORK.get_item('/SNEAKY');
+        await item.init;
+        const sneakyMember = GATEWAY.resolveMember(item, 'get_schema');
+        assert.equal(sneakyMember?.level, GATEWAY.LEVEL.CALL, 'переопределённый get_schema без ACCESS:{read} получил уровень READ вместо CALL');
+        const honestMember = GATEWAY.resolveMember(item, 'honest_read');
+        assert.equal(honestMember?.level, GATEWAY.LEVEL.READ);
+
+        const { workTools } = await import('../sources/modules/agent/tools/work.js');
+        const callTool = workTools.find(t => t.name === 'call');
+        const permSneaky = await callTool.permission({ path: '/SNEAKY', method: 'get_schema' }, { session: await sessionOf(ALICE) });
+        assert.equal(permSneaky, null, 'call.permission выдал allow переопределённому методу без ACCESS:{read}');
+    });
+
+    it('S5 connections: чужой client_id не смешивается с системным client_secret; callback проверяет сессию браузера', async () => {
+        const C = await import('../sources/modules/agent/connections.js');
+        write('#system/oauth/google.json', JSON.stringify({ client_id: 'sys-client-id', client_secret: 'SYS-TOP-SECRET' }));
+        // запускаем OAuth со своим client_id без client_secret
+        const started = await C.start({
+            uid: ALICE,
+            provider: 'google',
+            name: 'g-custom',
+            client_id: 'attacker-client-id',
+            origin: 'https://work.example.com',
+        });
+        assert.equal(started.ok, true);
+        const state = new URL(started.auth_url).searchParams.get('state');
+        assert.ok(state);
+
+        // 1. Попытка завершить callback из браузерной сессии ДРУГОГО пользователя (VICTIM) — отклоняется, state не сгорает
+        const wrongUserHtml = await C.callback({ state, code: 'code-1' }, { uid: VICTIM });
+        assert.match(wrongUserHtml, /другому пользователю/);
+
+        // 2. Завершение самим владельцем (ALICE): перехватываем fetch, чтобы убедиться, что SYS-TOP-SECRET не утёк
+        let postedBody = '';
+        const origFetch = globalThis.fetch;
+        globalThis.fetch = async (_url, init) => {
+            postedBody = String(init?.body || '');
+            return new Response(JSON.stringify({ access_token: 'at-1', expires_in: 3600 }), { status: 200 });
+        };
+        try {
+            const okHtml = await C.callback({ state, code: 'code-1' }, { uid: ALICE });
+            assert.match(okHtml, /Подключено/);
+            assert.ok(!postedBody.includes('SYS-TOP-SECRET'), 'системный client_secret утёк к пользовательскому client_id');
+        }
+        finally {
+            globalThis.fetch = origFetch;
+            await C.remove(ALICE, 'g-custom');
+        }
+    });
+});

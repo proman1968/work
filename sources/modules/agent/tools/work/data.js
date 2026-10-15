@@ -193,22 +193,25 @@ export const call = {
             const level = GATEWAY.MEMBERS[m];
             if (DANGER_METHODS.has(m))
                 return { verdict: 'ask', reason: 'метод ' + m + ' — опасная операция' };
-            if (level === GATEWAY.LEVEL.READ)
-                return { verdict: 'allow' };
             if (level === GATEWAY.LEVEL.ADMIN)
                 return { verdict: 'ask', reason: 'метод ' + m + ' — операция администратора' };
-            if (level)
+            if (level && level !== GATEWAY.LEVEL.READ)
                 return null; // пишущий метод ядра — дальше decide
-            // свой метод класса: уровень — из объявления (DATA.ACCESS), не из имени
+            // 7.2б (S4 / R11): даже если имя есть в GATEWAY.MEMBERS как READ, сверяем через resolveMember на реальном элементе
+            // (если class.js переопределил get_schema/members без ACCESS:{read} — он получит CALL, а не READ)
             try {
                 const item = await mustItem(args?.path, ctx);
                 if (!Array.isArray(item)) {
+                    await item.init;
                     const member = GATEWAY.resolveMember(item, m);
                     if (member?.level === GATEWAY.LEVEL.READ)
                         return { verdict: 'allow' };
                 }
             }
-            catch { /* путь не нашёлся — run даст понятную ошибку */ }
+            catch {
+                if (level === GATEWAY.LEVEL.READ)
+                    return { verdict: 'allow' };
+            }
             return null;
         },
         async run(args, ctx) {
