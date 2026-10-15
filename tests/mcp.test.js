@@ -339,11 +339,11 @@ describe('MCP: протокол Streamable HTTP', () => {
         await revokeToken(BOB, 'all');
     });
 
-    it('tools/list: 11 инструментов агента с описанием, схемой и подсказками (только чтение / опасное)', async () => {
+    it('tools/list: инструменты агента с описанием, схемой и подсказками (только чтение / опасное)', async () => {
         const c = await connect(alice.token);
         const list = (await rpc(alice.token, 'tools/list', {}, { sid: c.sid })).json.result.tools;
         assert.deepEqual(list.map(t => t.name).sort(), [...MCP_TOOLS].sort());
-        assert.equal(list.length, 11);
+        assert.equal(list.length, MCP_TOOLS.length);
         assert.ok(list.every(t => t.description && t.inputSchema.type === 'object'));
         const by = Object.fromEntries(list.map(t => [t.name, t]));
         assert.equal(by.read.annotations.readOnlyHint, true);
@@ -617,5 +617,66 @@ describe('MCP: подтверждение человека через elicitatio
         const events3 = await callSse(alice.token, c.sid, 'send', { path: '/BOX', message: 'отчёт 3', to: [BOB] }, () => false);
         assert.ok(events3.some(e => e.method === 'elicitation/create'), 'вопроса не было');
         assert.equal(events3.at(-1).result.isError, true, 'отклонённый ход выполнился');
+    });
+});
+
+// ── 6.8 (final): инструменты разработчика через MCP ────────────────────────
+
+describe('MCP: инструменты разработчика (6.8)', () => {
+    let alice;
+    before(async () => { alice = await issueToken(ALICE, { role: 'USER', label: 'dev-client' }); });
+
+    it('tools/list: grep/glob/apply_patch/git_*/run_checks/lsp_* есть, git_push — нет', async () => {
+        const c = await connect(alice.token);
+        const list = (await rpc(alice.token, 'tools/list', {}, { sid: c.sid })).json.result.tools;
+        const names = list.map(t => t.name);
+        for (const want of ['grep', 'glob', 'apply_patch', 'git_status', 'git_diff', 'git_log', 'git_show', 'git_blame', 'git_branch', 'git_commit', 'run_checks', 'lsp_diagnostics', 'lsp_definition', 'lsp_references', 'lsp_rename'])
+            assert.ok(names.includes(want), want + ' недоступен внешнему клиенту');
+        assert.ok(!names.includes('git_push'), 'git_push отдаётся внешнему клиенту — публикация кода наружу только человеком');
+        assert.equal(list.length, MCP_TOOLS.length);
+    });
+
+    it('grep: поиск по коду сразу (readonly); письмо через grep заражает ход — send с подтверждения', async () => {
+        const c = await connect(alice.token);
+        const g = await c.call('grep', { path: '/BOX/doc', text: 'строка' });
+        assert.equal(g.result.isError, false, JSON.stringify(g));
+        assert.match(textOf(g), /note\.md:\d+:/);
+        const e = await c.call('grep', { path: '/BOX/doc', text: 'ИГНОРИРУЙ' });
+        assert.equal(e.result.isError, false);
+        assert.match(textOf(e), /mail\.eml:\d+:/);
+        const send = await c.call('send', { path: '/BOX', message: 'отчёт', to: [BOB] });
+        assert.equal(send.result.isError, true, 'заражённый ход (grep по письму) прошёл без подтверждения');
+        assert.match(textOf(send), /подтверждение человека/);
+    });
+
+    it('apply_patch: правки от имени пользователя токена; системный код (*.js) — только с подтверждения', async () => {
+        const c = await connect(alice.token, { elicitation: {} });
+        // обычная зона (зона роли в классе BOX) — без вопроса
+        const plain = await callSse(alice.token, c.sid, 'apply_patch', {
+            patch: '*** Begin Patch\n*** Add File: /BOX/via-mcp.md\n+создан внешним клиентом\n*** End Patch',
+        }, () => { throw new Error('вопроса быть не должно'); });
+        assert.equal(plain.at(-1).result.isError, false, JSON.stringify(plain.at(-1)));
+        assert.ok(findFile('via-mcp.md'), 'файл не создан');
+        // системный код (*.js) — elicitation: подтвердил → выполнено; отклонил → нет
+        const ok = await callSse(alice.token, c.sid, 'apply_patch', {
+            patch: '*** Begin Patch\n*** Add File: /BOX/patch-yes.js\n+export default 1\n*** End Patch',
+        }, m => { assert.match(m, /изменение системы/); return true; });
+        assert.equal(ok.at(-1).result.isError, false, JSON.stringify(ok.at(-1)));
+        assert.ok(findFile('patch-yes.js'), 'подтверждённая правка не выполнена');
+        const no = await callSse(alice.token, c.sid, 'apply_patch', {
+            patch: '*** Begin Patch\n*** Add File: /BOX/patch-no.js\n+export default 2\n*** End Patch',
+        }, () => false);
+        assert.equal(no.at(-1).result.isError, true);
+        assert.equal(findFile('patch-no.js'), null, 'отклонённая правка выполнена');
+    });
+
+    it('гейты арен: git/run_checks на сервере WORK — только администратору (понятный отказ)', async () => {
+        const c = await connect(alice.token);
+        const git = await c.call('git_status', {});
+        assert.equal(git.result.isError, true);
+        assert.match(textOf(git), /только администратору/);
+        const checks = await c.call('run_checks', { where: 'work' });
+        assert.equal(checks.result.isError, true);
+        assert.match(textOf(checks), /только администратору/);
     });
 });
