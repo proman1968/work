@@ -246,6 +246,21 @@ export default {};`);
     }`);
     write('BOX3/$class/class.js', `export default { label: 'С дешёвыми' }`);
     write('BOX3/$class/ai/config.js', `export default { subagentModel: '/MODELS/mock2', compactModel: '/MODELS/mock2' }`);
+    // 9.6: приватное место — private: true в ai/config.js слоя
+    write('PRIV1/$class/class.js', `export default { label: 'Личное' }`);
+    write('PRIV1/$class/ai/config.js', `export default { private: true }`);
+    // 9.6: глубже приватного — private нельзя снять (липкость)
+    write('PRIV1/inner/$class/class.js', `export default { label: 'Глубже' }`);
+    write('PRIV1/inner/$class/ai/config.js', `export default { private: false }`);
+    // 9.6: приватное место с внешней запасной моделью (fallbackModels)
+    write('PRIV1/ext/$class/class.js', `export default { label: 'С внешней запасной' }`);
+    write('PRIV1/ext/$class/ai/config.js', `export default { private: true, fallbackModels: ['/MODELS/mock-ext'] }`);
+    // 9.6: модель с внешним baseUrl (частный случай сервиса)
+    write('MODELS/mock-ext/$ai/class.js', `export default {
+        maxTokens: 50000,
+        baseUrl: 'https://api.example.com/v1',
+        async *streamChat() { yield 'внешний ответ'; },
+    }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -2278,5 +2293,56 @@ describe('самопроверка перед завершением (9.5)', () 
         const res = await runLoop({ llm: await llmFor('/MODELS/mock'), system: 'S', items, tools: metaTools, host: mkHost(), maxTurns: 5 });
         assert.equal(res.status, 'done');
         assert.ok(!items.some(i => String(i.content || '').includes('Самопроверка')), 'лишняя подсказка');
+    });
+});
+
+// ── 9.6 (final): режим «данные не покидают сервер» ─────────────────────────
+
+describe('приватный режим места (9.6)', () => {
+    it('egressToolName/isLocalBaseUrl: исходящие имена и локальные адреса', async () => {
+        const { egressToolName, isLocalBaseUrl } = await import('../sources/modules/agent/index.js');
+        for (const n of ['web_search', 'web_fetch', 'http_request', 'connections', 'connect_service', 'computer_network', 'browser_open', 'svc_x_query', 'mcp_x'])
+            assert.ok(egressToolName(n), n + ' не признан исходящим');
+        for (const n of ['ls', 'read', 'write', 'call', 'sandbox_exec', 'computer_status', 'grep', 'apply_patch', 'git_commit', 'run_checks'])
+            assert.ok(!egressToolName(n), n + ' ошибочно признан исходящим');
+        for (const u of ['', undefined, 'http://localhost:8001', 'http://127.0.0.1:11433', 'http://10.0.0.5/v1', 'http://192.168.1.4', 'http://172.20.0.3'])
+            assert.ok(isLocalBaseUrl(u), JSON.stringify(u) + ' не признан локальным');
+        for (const u of ['https://api.example.com/v1', 'http://8.8.8.8', 'https://openrouter.ai/api/v1', '://кривой'])
+            assert.ok(!isLocalBaseUrl(u), JSON.stringify(u) + ' ошибочно признан локальным');
+    });
+    it('private: true липкий — глубже не снимается; без настройки — false', async () => {
+        const { isPrivatePlace } = await import('../sources/modules/agent/resources.js');
+        assert.equal(await isPrivatePlace(await WORK.get_item('/PRIV1')), true, 'слой не сработал');
+        assert.equal(await isPrivatePlace(await WORK.get_item('/PRIV1/inner')), true, 'глубже снял приватность (fail-open)');
+        assert.equal(await isPrivatePlace(await WORK.get_item('/BOX')), false, 'без настройки приватно');
+    });
+    it('makeTools в приватном месте: исходящие вырезаны, локальные на месте; субагенту тоже', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/PRIV1'), host: { mode: 'auto' } });
+        assert.equal(env.private, true);
+        const names = (await env.makeTools()).map(t => t.name);
+        for (const n of ['web_search', 'web_fetch', 'http_request', 'connect_service', 'connections', 'computer_network', 'browser_open'])
+            assert.ok(!names.includes(n), n + ' доступен в приватном месте');
+        assert.ok(!names.some(n => n.startsWith('svc_') || n.startsWith('mcp_')), 'внешние сервисы/MCP доступны в приватном месте');
+        for (const n of ['ls', 'read', 'write', 'edit', 'call', 'send', 'sandbox_exec', 'computer_status', 'grep', 'apply_patch', 'git_commit', 'run_checks', 'lsp_diagnostics'])
+            assert.ok(names.includes(n), n + ' вырезан из приватного места (нужен для работы)');
+        // субагент с маской * — пересечение тоже без исходящих
+        const sub = (await env.makeTools({ meta: { tools: '*' } })).map(t => t.name);
+        assert.ok(!sub.includes('web_fetch') && !sub.includes('http_request'), 'субагент с маской * получил исходящие');
+        // обычное место — инструменты на месте
+        const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
+        const plainNames = (await plain.makeTools()).map(t => t.name);
+        assert.ok(plainNames.includes('web_search') && plainNames.includes('http_request'), 'обычному месту отрезали веб');
+    });
+    it('llmFor в приватном месте: внешняя модель — отказ; локальная — работает; запасная внешняя — тоже отказ', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/PRIV1'), host: { mode: 'auto' } });
+        await assert.rejects(env.llmFor('/MODELS/mock-ext'), /данные не покидают сервер.*api\.example\.com/, 'внешняя модель прошла в приватном месте');
+        const llm = await env.llmFor('/MODELS/mock');
+        assert.equal(llm.name, '/MODELS/mock');
+        // запасная внешняя модель — отказ (контекст уйдёт ей при сбое основной)
+        const envExt = await createEnv({ place: await WORK.get_item('/PRIV1/ext'), host: { mode: 'auto' } });
+        await assert.rejects(envExt.llmFor('/MODELS/mock'), /данные не покидают сервер.*api\.example\.com/, 'внешняя запасная модель прошла в приватном месте');
+        // обычное место — внешняя модель работает как раньше
+        const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
+        assert.equal((await plain.llmFor('/MODELS/mock-ext')).name, '/MODELS/mock-ext', 'обычному месту отрезали внешнюю модель');
     });
 });

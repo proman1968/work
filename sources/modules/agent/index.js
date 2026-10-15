@@ -38,7 +38,7 @@ export function mcpErrorNote(ids) {
     const uniq = [...new Set((ids || []).map(x => String(x).split(':')[0].trim()).filter(Boolean))];
     return uniq.length ? '# Недоступные MCP-серверы\n' + uniq.map(id => '- ' + id + ': не отвечает (подробности — в журнале сервера)').join('\n') : '';
 }
-import { loadDocs, loadSystem, loadConfig, loadHooks } from './resources.js';
+import { loadDocs, loadSystem, loadConfig, loadHooks, isPrivatePlace } from './resources.js';
 import { auditHook } from './hooks.js';
 import { clip } from './util.js';
 import { audit } from '../../server/access/audit.js';
@@ -52,6 +52,51 @@ export const DEFAULT_MODEL = '/MODELS/odant/Qwen3.8 27b';
 
 /** Инструменты, которых у субагентов нет: диалог с человеком, план, настройки подключений и расписаний. */
 const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push']);
+
+/** 9.6: исходящие инструменты — вырезаются в режиме «данные не покидают сервер» (private места):
+ *  поиск/запросы в интернете, внешние сервисы и MCP, подключения и запросы с их заголовками,
+ *  браузер песочницы (ходит в интернет) и включение ей интернета. Песочница остаётся (локальная,
+ *  интернет выключен), экран/файлы компьютера — локальные. */
+export function egressToolName(name) {
+    const n = String(name || '');
+    return n === 'web_search' || n === 'web_fetch' || n === 'http_request' || n === 'connections'
+        || n === 'connect_service' || n === 'disconnect_service'
+        || n === 'computer_network'
+        || n.startsWith('browser_')
+        || n.startsWith('svc_')
+        || n.startsWith('mcp_');
+}
+
+/** 9.6: адрес локальный (данные не покидают сервер): нет адреса или localhost/LAN. */
+export function isLocalBaseUrl(url) {
+    const s = String(url || '').trim();
+    if (!s)
+        return true; // встроенная/локальная модель без baseUrl
+    try {
+        const host = new URL(s).hostname.toLowerCase();
+        return host === 'localhost' || host === '::1' || host === '[::1]'
+            || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)
+            || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host);
+    }
+    catch {
+        return false; // кривой адрес — не признаём локальным (fail-closed)
+    }
+}
+
+/** 9.6: в приватном месте модель обязана быть локальной (нет baseUrl или локальный адрес) —
+ *  иначе контекст задачи уходит внешнему провайдеру; запасные модели цепочки — тоже. */
+function assertLocalModel(llm) {
+    const check = item => {
+        const base = String(item?.baseUrl || item?.DATA?.baseUrl || '').trim();
+        if (!isLocalBaseUrl(base))
+            throw new Error('режим «данные не покидают сервер» (ai/config.js private:true): модель «' + (item?.short || item?.path || '?')
+                + '» уходит наружу (' + base + ') — используйте локальную модель (нет baseUrl или localhost/LAN)');
+    };
+    check(llm.item);
+    for (const it of (llm.fallbackItems || []))
+        check(it);
+    return llm;
+}
 
 /** Имя инструмента против маски: `os_*`, `svc_*_query` (звёздочка — любая подстрока). */
 function toolMatches(pattern, name) {
@@ -149,6 +194,8 @@ export async function llmWithFallback(primaryPath, fallbackPaths = []) {
     const adapter = {
         ...primary, // name/item/contextTokens/vision — от основной (её окно и считаем)
         used: null, // какая модель реально ответила (после переключения)
+        /** 9.6: карточки всех моделей цепочки (в приватном месте каждая обязана быть локальной). */
+        fallbackItems: llms.map(x => x.llm.item),
         stream(req) {
             return (async function* () {
                 let idx = 0;
@@ -180,7 +227,6 @@ export async function llmWithFallback(primaryPath, fallbackPaths = []) {
     };
     return adapter;
 }
-
 /** Первая модель с capability image (или ai/config.js imageModel). */
 async function findImageModel(config) {
     if (config.imageModel) {
@@ -254,13 +300,14 @@ export const VOICE_NOTE = `# Голосовой режим
 export async function createEnv({ place, session, host, tz, location, role, voice } = {}) {
     // ОС и сеть — администратору, работающему в роли ADMIN (или без выбранной роли: REST, расписание)
     const system = async () => (!role || role === 'ADMIN') && await systemAllowed(session);
-    const [config, hooks, allAgents, allSkills, baseSystem, caps] = await Promise.all([
+    const [config, hooks, allAgents, allSkills, baseSystem, caps, privatePlace] = await Promise.all([
         loadConfig(place),
         loadHooks(place),
         loadDocs(place, 'agents'),
         loadDocs(place, 'skills'),
         loadSystem(place),
         Promise.all([system(), sandboxAvailable()]).then(([sys, box]) => ({ system: !!sys, sandbox: !!box })),
+        isPrivatePlace(place),
     ]);
     // фронтматтер requires: system | sandbox (или список) — агент/навык виден, когда доступна
     // ХОТЯ БЫ ОДНА перечисленная арена (6.7: агент-разработчик — код сервера ИЛИ песочница);
@@ -287,8 +334,16 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             return item?.load ? item.load({ session }) : null;
         },
         mcpErrors,
-        /** 9.1: адаптер модели с запасом из ai/config.js fallbackModels (сбой до первого токена — переключение). */
-        llmFor: (modelPath) => llmWithFallback(modelPath, config.fallbackModels),
+        /** 9.6: режим «данные не покидают сервер» (private: true в ai/config.js слоя, липкий). */
+        private: privatePlace,
+        /** 9.1: адаптер модели с запасом из ai/config.js fallbackModels (сбой до первого токена — переключение).
+         *  9.6: в приватном месте модель обязана быть локальной (нет baseUrl или локальный адрес). */
+        llmFor: async (modelPath) => {
+            const llm = await llmWithFallback(modelPath, config.fallbackModels);
+            if (privatePlace)
+                await assertLocalModel(llm);
+            return llm;
+        },
         /** 9.1: список запасных моделей из ai/config.js слоёв (ближний перекрывает). */
         fallbackModels: () => [].concat(config.fallbackModels || []),
         imageModel: () => findImageModel(config),
@@ -321,6 +376,10 @@ export async function createEnv({ place, session, host, tz, location, role, voic
                     all.push(...sandboxTools, ...computerTools, ...browserTools);
             }
             catch (e) { log.debug('env.tools', e); /* Docker недоступен — без песочницы */ }
+            // 9.6: режим «данные не покидают сервер» — исходящие инструменты вырезаны:
+            // контекст не уходит провайдерам поиска/сервисов/MCP, подключений и браузера
+            if (privatePlace)
+                all = all.filter(t => !egressToolName(t.name));
             if (depth >= MAX_DEPTH)
                 all = all.filter(t => t.name !== 'task');
             if (!def)

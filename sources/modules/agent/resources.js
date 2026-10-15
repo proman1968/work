@@ -4,7 +4,8 @@
  *   ai/config.js        — { model, fallbackModels, subagentModel, compactModel, limits, imageModel, maxTurns, hooks };
  *                          hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
  *                          (fallbackModels — 9.1: запасные модели при сбое основной до первого токена;
- *                          subagentModel/compactModel/limits — 9.2: дешёвая модель субагентов/сжатия и дневные лимиты)
+ *                          subagentModel/compactModel/limits — 9.2: дешёвая модель субагентов/сжатия и дневные лимиты;
+ *                          private — 9.6: режим «данные не покидают сервер», ЛИПКИЙ — включение нельзя снять ниже)
  *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model, maxTurns, requires)
  *   ai/skills/*.md      — навыки (фронтматтер: name, description, requires; тело — инструкция)
  *
@@ -120,6 +121,20 @@ export async function loadConfig(place) {
         Object.assign(cfg, rest);
     }
     return cfg;
+}
+
+/**
+ * 9.6: режим «данные не покидают сервер» места (`private: true` в ai/config.js слоя).
+ * ЛИПКИЙ: включение на любом слое (движок → классы → место) нельзя снять ниже —
+ * чувствительное место не «раззамывается» более глубокой настройкой (fail-closed).
+ * @param {any} place место задачи
+ * @returns {Promise<boolean>}
+ */
+export async function isPrivatePlace(place) {
+    for (const { data } of await configLayers(place))
+        if (data.private === true)
+            return true;
+    return false;
 }
 
 /** Модуль хука — только из папки hooks/ того же слоя ai/ (системная область: писать может лишь ADMIN). */
