@@ -539,3 +539,52 @@ describe('7.2б вычитка «секреты и вход» (S1–S5 + R11)', 
         }
     });
 });
+
+describe('Ф.1 независимое ревью (R10, R13, R18, R19, R20)', () => {
+    it('R19 append_log_includes: подложный row.path в файле .logs кабинета не попадает в feed_refs при дописывании вложений', async () => {
+        const REFS = await import('../sources/server/access/refs.js');
+        const secretTarget = '/BOX/$class/#secret/r19-secret.json';
+        write('BOX/$class/#secret/r19-secret.json', '{"s":1}');
+        write(`USERS/${ALICE}/$user/my-att.txt`, 'моё вложение');
+        const day = '2026-10-14';
+        const logRel = `USERS/${ALICE}/$user/logs/${day}/1791000000000.${ALICE}.logs`;
+        write(logRel, JSON.stringify({
+            time: 1791000000000,
+            sender: ALICE,
+            content: 'запись с подложным path',
+            path: secretTarget,
+        }));
+        const userFolder = await (await WORK.$users).get_item('//' + ALICE);
+        userFolder?.reset?.();
+        await httpCall(userFolder, 'append_log_includes', {
+            session: await sessionOf(ALICE),
+            entryPath: '/' + logRel,
+            includePaths: [`/USERS/${ALICE}/$user/my-att.txt`],
+        });
+        assert.equal(await REFS.visible(ALICE, secretTarget), false, 'append_log_includes открыл подложный row.path из файла .logs');
+        assert.equal(await REFS.visible(ALICE, `/USERS/${ALICE}/$user/my-att.txt`), true, 'честное вложение не записалось в feed_refs');
+    });
+
+    it('R10 + R20 permissions: относительный путь внутри защищённого места ($server) и верхний регистр (/SOURCES) требуют подтверждения', async () => {
+        const { decide, isProtectedPath } = await import('../sources/modules/agent/permissions.js');
+        const { workTools } = await import('../sources/modules/agent/tools/work.js');
+        assert.equal(isProtectedPath('/SOURCES/readme.md'), true, 'верхний регистр /SOURCES обошёл isProtectedPath');
+        assert.equal(isProtectedPath('/BOX/$class/#SECURITY/x'), true, 'верхний регистр #SECURITY обошёл isProtectedPath');
+
+        const writeTool = workTools.find(t => t.name === 'write');
+        // относительный путь 'readme.md' при месте задачи /$server обязан распознаваться как /$server/readme.md → ask
+        const v = await decide(writeTool, { path: 'readme.md', content: 'x' }, {
+            host: { mode: 'auto', allowed: new Set() },
+            place: { path: '/$server' },
+        });
+        assert.equal(v.verdict, 'ask', 'относительный путь в защищённом месте прошёл без подтверждения (R10)');
+    });
+
+    it('R18 export_pdf sandboxHtml: блокирует meta-refresh и скрипты с file:// и задаёт form-action/base-uri none', async () => {
+        const { sandboxHtml } = await import('../sources/modules/agent/tools/docs.js');
+        assert.throws(() => sandboxHtml('<meta http-equiv="refresh" content="0; url=file:///C:/secret.txt">'), /file:\/\//);
+        assert.throws(() => sandboxHtml('<script>location.href="file:///etc/passwd"</script>'), /file:\/\//);
+        const safe = sandboxHtml('<!DOCTYPE html><html><body>Привет</body></html>');
+        assert.match(safe, /form-action 'none'; base-uri 'none'/);
+    });
+});

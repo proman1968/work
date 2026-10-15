@@ -203,6 +203,8 @@ export const branchTools = [
                     const src = await mustItem(args.path, ctx);
                     if (Array.isArray(src) || src instanceof FS.$file || !(src instanceof FS.$folder))
                         throw new Error('branch: путь — папка или класс (файл копировать бессмысленно)');
+                    if (src === globalThis.WORK || String(src.id || '').startsWith(BRANCH_PREFIX))
+                        throw new Error('branch: нельзя создавать ветку от корня WORK или от другой ветки');
                     // чтение оригинала и запись в его родителя — минимальные права на ветку
                     await callAs(src, 'assertAccess', { level: 'read' }, ctx);
                     const stats = await treeStats(src.dir);

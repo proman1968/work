@@ -407,8 +407,12 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
             f.reset();
             storage.reset();
             globalThis.WORK_RAG?.invalidate?.(disk);
-            if (storage instanceof FS.$user || storage instanceof FS.$node)
-                await REFS.addRow(storage.principalId ?? storage.id, row, f.path).catch(() => {});
+            if (storage instanceof FS.$user || storage instanceof FS.$node) {
+                // Ф.1 (R19): в REFS.addRow идут только проверенные в этом вызове includePaths —
+                // старый row.path с диска владелец кабинета мог подделать руками в файле .logs (см. F10)
+                const safeIncludes = includePaths.map(p => p.startsWith('/') ? p : '/' + p);
+                await REFS.addRow(storage.principalId ?? storage.id, { time: row.time, includes: safeIncludes }, f.path).catch(() => {});
+            }
             return row;
         }
     }

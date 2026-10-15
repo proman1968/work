@@ -67,11 +67,11 @@ export function findPdfBrowser(env = process.env, platform = process.platform, e
  * гарантия — CSP рендерной копии (sandboxHtml): браузер сам не загрузит file:.
  */
 const FILE_URL
-    = /(?:src|href|data|poster|action|formaction|background|cite|longdesc|srcset|codebase)\s*=\s*["']?\s*file:|url\(\s*["']?\s*file:|@import\s+["']?file:/i;
+    = /(?:src|href|data|poster|action|formaction|background|cite|longdesc|srcset|codebase|url)\s*=\s*["']?\s*file:|url\(\s*["']?\s*file:|@import\s+["']?file:|\bfile:\/\/\/?/i;
 
-/** CSP рендерной копии: только инлайн-стили/скрипты и data: картинки/шрифты; всё остальное (file:, http:, iframe, object) — не грузится. */
+/** CSP рендерной копии: только инлайн-стили/скрипты и data: картинки/шрифты; всё остальное (file:, http:, iframe, object, form-action, base-uri) — не грузится. */
 const PDF_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
-    + 'img-src data:; style-src \'unsafe-inline\' data:; font-src data:; script-src \'unsafe-inline\'">';
+    + 'img-src data:; style-src \'unsafe-inline\' data:; font-src data:; script-src \'unsafe-inline\'; form-action \'none\'; base-uri \'none\'">';
 
 /**
  * Защитить HTML для рендера PDF (F11): явные file: ссылки — ошибка; в остальное —

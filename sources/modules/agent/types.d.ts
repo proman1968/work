@@ -34,7 +34,7 @@ interface Tool {
     /** правило инструмента поверх политики (permissions.js) */
     permission?: (args: object, ctx: ToolCtx) => Verdict | null | Promise<Verdict | null>;
     /** WORK-путь цели вызова (для проверки защищённых зон) */
-    target?: (args: object) => string | string[] | null | undefined;
+    target?: (args: object, ctx?: ToolCtx) => string | string[] | null | undefined;
     run: (args: object, ctx: ToolCtx) => any;
 }
 

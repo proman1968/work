@@ -13,7 +13,7 @@ export const MAX_DEPTH = 2;
 /** F31 (final 8.24): потолок дочерних задач на зону роли (env WORK_AGENT_START_MAX). */
 const MAX_CHILD_TASKS = Number(process.env.WORK_AGENT_START_MAX) || 20;
 
-/** Сколько .task уже лежит в зоне роли — прежде чем заводить ещё одного. */
+/** Сколько ДОЧЕРНИХ .task (с полем parentTask, вне history/) уже лежит в зоне роли — прежде чем заводить ещё одного (R13). */
 async function countChildTasks(point, role) {
     try {
         const zone = await point.work_zone({ role });
@@ -24,10 +24,18 @@ async function countChildTasks(point, role) {
         let n = 0;
         const walk = d => {
             for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+                if (e.name === 'history' || e.name === '.index')
+                    continue;
                 if (e.isDirectory())
                     walk(d + '/' + e.name);
-                else if (/\.task$/i.test(e.name))
-                    n++;
+                else if (/\.task$/i.test(e.name)) {
+                    try {
+                        const raw = fs.readFileSync(d + '/' + e.name, 'utf-8');
+                        if (raw.includes('"parentTask"'))
+                            n++;
+                    }
+                    catch { /* пропуск битого файла */ }
+                }
             }
         };
         walk(dir);

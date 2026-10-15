@@ -52,7 +52,7 @@ function recordLog(session, entry) {
 export function assertBridgePath(rootDir, relPath) {
     if (!rootDir)
         throw new Error('bridge: не задана корневая папка моста (rootDir)');
-    const base = path.resolve(rootDir);
+    const base = fs.existsSync(rootDir) ? fs.realpathSync(rootDir) : path.resolve(rootDir);
     const raw = String(relPath ?? '.').trim() || '.';
     if (raw.includes('\0'))
         throw new Error('bridge: недопустимый путь');
@@ -60,6 +60,14 @@ export function assertBridgePath(rootDir, relPath) {
     const rel = path.relative(base, resolved);
     if (rel.startsWith('..') || path.isAbsolute(rel))
         throw new Error('bridge: выход за пределы разрешённой папки компьютера запрещён: ' + raw);
+    // Ф.1: если файл или его родитель существует — проверяем realpathSync против обхода через символическую ссылку
+    const checkReal = fs.existsSync(resolved) ? resolved : (fs.existsSync(path.dirname(resolved)) ? path.dirname(resolved) : null);
+    if (checkReal) {
+        const realTarget = fs.realpathSync(checkReal);
+        const realRel = path.relative(base, realTarget);
+        if (realRel.startsWith('..') || path.isAbsolute(realRel))
+            throw new Error('bridge: символическая ссылка уводит за пределы разрешённой папки компьютера: ' + raw);
+    }
     if (rel && SENSITIVE_FILE.test(rel))
         throw new Error('bridge: доступ к чувствительным файлам и ключам запрещён: ' + rel);
     return { base, resolved, rel: rel.replace(/\\/g, '/') || '.' };

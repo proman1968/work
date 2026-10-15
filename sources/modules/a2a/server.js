@@ -264,7 +264,8 @@ async function handleA2aRpc(request, response) {
         if (userTasks.length >= MAX_TASKS_PER_USER)
             a2aTasks.delete(userTasks[0].id);
 
-        const taskId = String(params.id || ('a2a-' + randomBytes(6).toString('hex')));
+        const rawTaskId = String(params.id || '').trim();
+        const taskId = /^[a-zA-Z0-9._:-]{1,128}$/.test(rawTaskId) ? rawTaskId : ('a2a-' + randomBytes(6).toString('hex'));
         const controller = new AbortController();
         const record = {
             id: taskId,

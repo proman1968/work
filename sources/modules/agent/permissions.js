@@ -49,10 +49,11 @@ export function isProtectedPath(path) {
     const p = normalizeWorkPath(path);
     if (!p)
         return true; // выше корня — недопустимая цель, считаем защищённой (fail-closed)
-    if (PROTECTED_PREFIXES.some(pre => p === pre || p.startsWith(pre + '/')))
+    const low = p.toLowerCase();
+    if (PROTECTED_PREFIXES.some(pre => low === pre.toLowerCase() || low.startsWith(pre.toLowerCase() + '/')))
         return true;
     // код и конфиг классов: class.js / *.js / #security / #secret — где угодно
-    if (/(^|\/)(#security|#secret|#system)(\/|$)/.test(p))
+    if (/(^|\/)(#security|#secret|#system)(\/|$)/i.test(p))
         return true;
     if (/\.(m?js|cjs|ts)$/i.test(p))
         return true;
@@ -101,7 +102,7 @@ export async function decide(tool, args, ctx) {
         return { verdict: 'ask', reason: 'режим «Спрашивать»' };
     if (tool.risk === 'danger')
         return { verdict: 'ask', reason: 'необратимое или внешнее действие' };
-    const target = typeof tool.target === 'function' ? tool.target(args) : null;
+    const target = typeof tool.target === 'function' ? tool.target(args, ctx) : null;
     const targets = (Array.isArray(target) ? target : [target]).filter(Boolean);
     const hit = targets.find(isProtectedPath);
     if (hit)

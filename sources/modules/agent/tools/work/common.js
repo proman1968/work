@@ -428,7 +428,7 @@ export async function trackWrite(ctx, realPath, log, pre) {
     catch (e) { log.debug('undo.record', e); /* откат не поставится — изменение попадёт в список «вручную» */ }
 }
 
-export const target = key => args => absPath(args?.[key], null);
+export const target = key => (args, ctx) => absPath(args?.[key], ctx);
 
 /** Получатели по uid или ФИО (однозначное совпадение среди пользователей сервера). */
 export async function resolvePeople(list) {
