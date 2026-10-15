@@ -476,6 +476,60 @@ export class $server extends $class {
         return readAudit(params.day || undefined, Math.min(5000, Number(params.limit) || 500));
     }
     /**
+     * Панель наблюдаемости агентов (9.3, ADMIN): задачи в работе и ожидающие человека,
+     * стоимость за день и месяц (по пользователям), последние записи журнала безопасности,
+     * песочницы. Данные одним вызовом — рисует UI и докладывает агент (инструмент panel).
+     * @param {object} [params]
+     * @returns {Promise<object>} сводка
+     */
+    async agent_panel(params = {}) {
+        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN);
+        const out = { time: new Date().toISOString() };
+        // задачи: незаконченные .task (в работе / ждут человека)
+        try {
+            const { findPendingTasks } = await import('../modules/agent/recovery.js');
+            const found = await findPendingTasks('.', 2000);
+            out.tasks = {
+                running: found.filter(t => t.status === 'running').map(t => t.path),
+                waiting: found.filter(t => t.status === 'waiting').map(t => t.path),
+            };
+        }
+        catch (e) { out.tasks = { error: String(e?.message || e).slice(0, 120) }; }
+        // стоимость: сегодня и месяц (по всем и по пользователям)
+        try {
+            const { usageTotals, usageByUser } = await import('../modules/agent/cost.js');
+            const day = out.time.slice(0, 10);
+            out.cost = {
+                day: await usageTotals({ day }),
+                month: await usageTotals({ month: day }),
+                byUserDay: await usageByUser({ day }),
+                byUserMonth: await usageByUser({ month: day }),
+            };
+        }
+        catch (e) { out.cost = { error: String(e?.message || e).slice(0, 120) }; }
+        // журнал безопасности: последние записи сегодня + счётчики по событиям
+        try {
+            const { readAudit } = await import('./access/audit.js');
+            const rows = await readAudit(out.time.slice(0, 10), 20);
+            const counts = {};
+            for (const r of rows)
+                counts[r.event] = (counts[r.event] || 0) + 1;
+            out.audit = { last: (rows || []).slice(0, 10).map(r => ({ time: r.time, event: r.event, subject: r.subject, tool: r.tool, verdict: r.verdict, outcome: r.outcome })), counts };
+        }
+        catch (e) { out.audit = { error: String(e?.message || e).slice(0, 120) }; }
+        // песочницы: все контейнеры (Docker недоступен — так и скажем)
+        try {
+            const { listComputers } = await import('../modules/sandbox/manager.js');
+            const { dockerAvailable, getDocker } = await import('../modules/sandbox/driver.js');
+            const ok = await dockerAvailable();
+            out.sandbox = ok.ok
+                ? { computers: (await listComputers(await getDocker(), null)).map(c => ({ name: c.name, owner: c.owner, state: c.state, image: c.image })) }
+                : { unavailable: String(ok.error || 'Docker недоступен').slice(0, 120) };
+        }
+        catch (e) { out.sandbox = { error: String(e?.message || e).slice(0, 120) }; }
+        return out;
+    }
+    /**
      * Перезапустить сервер в обычном режиме (без WORK_DEV).
      * Проверка — явно здесь, а не через assertAccess: в режиме отладки
      * assertAccess ничего не проверяет. Только вошедший ADMIN корня;

@@ -427,6 +427,55 @@ export const metaTools = [
         },
     },
     {
+        name: 'panel',
+        readonly: true,
+        description: 'Панель наблюдаемости (только админ): задачи в работе и ожидающие человека, стоимость агентов за день и месяц (по пользователям), последние записи журнала безопасности, песочницы.',
+        parameters: {
+            type: 'object',
+            properties: {},
+        },
+        async run(args, ctx) {
+            const { isAdmin } = await import('../system.js');
+            if (!(await isAdmin(ctx?.session)))
+                throw new Error('панель наблюдаемости — только администратору WORK (задачи и траты всех)');
+            const p = await globalThis.WORK.agent_panel({}); // права проверены выше (isAdmin); вызов системный
+            const { money } = await import('../cost.js');
+            const out = ['Панель агентов (' + p.time.replace('T', ' ').slice(0, 16) + ')'];
+            if (p.tasks?.running || p.tasks?.waiting) {
+                out.push('Задачи: ' + (p.tasks.running?.length || 0) + ' в работе, ' + (p.tasks.waiting?.length || 0) + ' ждут человека');
+                for (const t of (p.tasks.running || []).slice(0, 10))
+                    out.push('- [работает] ' + t);
+                for (const t of (p.tasks.waiting || []).slice(0, 10))
+                    out.push('- [ждёт человека] ' + t);
+                const more = (p.tasks.running?.length || 0) + (p.tasks.waiting?.length || 0) - 20;
+                if (more > 0)
+                    out.push('… ещё ' + more);
+            }
+            else
+                out.push('Задачи: незаконченных нет');
+            if (p.cost?.day) {
+                const c = p.cost;
+                out.push('Стоимость: сегодня ' + c.day.tokens.toLocaleString('ru-RU') + ' токенов, ' + (c.day.cost ? money(c.day.cost) : 'без тарифов')
+                    + '; месяц ' + c.month.tokens.toLocaleString('ru-RU') + ' токенов, ' + (c.month.cost ? money(c.month.cost) : 'без тарифов'));
+                if (c.byUserDay?.length)
+                    out.push('По пользователям (сегодня): ' + c.byUserDay.slice(0, 10).map(u => u.uid + ' ' + u.tokens.toLocaleString('ru-RU') + ' ток.' + (u.cost ? ' ' + money(u.cost) : '')).join(', '));
+            }
+            if (p.audit?.last) {
+                const counts = Object.entries(p.audit.counts || {}).map(([k, v]) => k + ' ' + v).join(', ');
+                out.push('Журнал безопасности (сегодня, последние): '
+                    + (p.audit.last.map(r => r.event + (r.tool ? '/' + r.tool : '') + ' → ' + (r.verdict || '') + (r.outcome ? ' ' + r.outcome : '')).slice(0, 5).join('; ') || 'записей нет'));
+                if (counts)
+                    out.push('События сегодня: ' + counts);
+            }
+            if (p.sandbox?.computers)
+                out.push('Песочницы: ' + p.sandbox.computers.length + ' (' + p.sandbox.computers.filter(c => c.state === 'running').length + ' запущено)'
+                    + (p.sandbox.computers.length ? ': ' + p.sandbox.computers.slice(0, 10).map(c => (c.owner || '?') + '/' + (c.name || '?') + ' ' + c.state).join(', ') : ''));
+            else if (p.sandbox?.unavailable)
+                out.push('Песочницы: Docker недоступен (' + p.sandbox.unavailable + ')');
+            return out.join('\n');
+        },
+    },
+    {
         name: 'budget',
         readonly: true,
         description: 'Стоимость и бюджет: потрачено в этой задаче (ходы, токены, деньги по тарифам моделей), дневной лимит пользователя и трата сегодня, оценка следующего хода. all:true (админу) — траты всех пользователей за сегодня.',

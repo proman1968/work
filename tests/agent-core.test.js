@@ -2142,3 +2142,46 @@ describe('стоимость и бюджеты (9.2)', () => {
         assert.match(res.items[1].tools[0].result, /запасной ответ/, 'субагент не на дешёвой модели из конфига');
     });
 });
+
+// ── 9.3 (final): панель наблюдаемости ──────────────────────────────────────
+
+describe('панель наблюдаемости (9.3)', () => {
+    it('agent_panel: задачи, стоимость (день/месяц, по пользователям), журнал, песочницы — одним вызовом', async () => {
+        const { recordUsage } = await import('../sources/modules/agent/cost.js');
+        const { audit } = await import('../sources/server/access/audit.js');
+        // свой расход сегодня + ждущая человека задача + запись журнала — панель обязана их показать
+        await recordUsage({ uid: 'P000000000000095', place: '/BOX', task: '/BOX/task/x.task', model: '/MODELS/mock', usage: { prompt: 100, completion: 50, cached: 0 }, cost: 0.001 });
+        audit('agent', { note: 'panel-test' });
+        write('BASE/task/' + new Date().toISOString().slice(0, 10) + '/1.P000000000000095.task',
+            JSON.stringify({ version: 2, status: 'waiting', items: [] }));
+        const p = await WORK.agent_panel({}); // системный вызов (права инструмента/метода — отдельно)
+        assert.ok(p.time);
+        assert.ok(Array.isArray(p.tasks?.running) && Array.isArray(p.tasks?.waiting));
+        assert.ok(p.tasks.waiting.some(t => t.includes('P000000000000095.task')), 'ждущая задача не найдена панелью');
+        assert.ok(p.cost?.day && p.cost?.month, 'стоимость дня/месяца не собрана');
+        assert.ok(p.cost.day.tokens >= 150, 'учёт не виден панели (день)');
+        assert.ok(p.cost.byUserDay.some(u => u.uid === 'P000000000000095'), 'разбивка по пользователям пуста');
+        assert.ok(p.cost.byUserMonth.length >= 1, 'месячная разбивка пуста');
+        assert.ok(Array.isArray(p.audit?.last) && p.audit.last.length >= 1, 'записи журнала не собраны');
+        assert.ok(p.sandbox && (p.sandbox.computers !== undefined || p.sandbox.unavailable !== undefined), 'состояние песочниц не собрано');
+    });
+    it('agent_panel: только администратору (права метода)', async () => {
+        await assert.rejects(WORK.agent_panel({ session: { uid: 'X000000000000096' } }), /Доступ запрещён|доступ/i);
+    });
+    it('panel (инструмент): только админ; сводка текстом', async () => {
+        const panel = metaTools.find(t => t.name === 'panel');
+        await assert.rejects(panel.run({}, { entry: {}, session: { uid: 'X000000000000096' }, host: mkHost() }), /только администратору/);
+        const { setAdminCheck } = await import('../sources/modules/agent/system.js');
+        setAdminCheck(() => true);
+        try {
+            const text = await panel.run({}, { entry: {}, session: { uid: 'admin' }, host: mkHost() });
+            assert.match(text, /Панель агентов/);
+            assert.match(text, /Задачи:/);
+            assert.match(text, /Стоимость:/);
+            assert.match(text, /Песочницы:/);
+        }
+        finally {
+            setAdminCheck(null);
+        }
+    });
+});

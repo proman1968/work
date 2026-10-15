@@ -62,20 +62,54 @@ export async function recordUsage({ uid, place, task, model, usage, cost }) {
     }
 }
 
-/** Суммы расхода за день (uid не задан — по всем пользователям). */
-export async function usageTotals({ day = new Date().toISOString().slice(0, 10), uid } = {}) {
+/** Суммы расхода за период: day ('YYYY-MM-DD') или month ('YYYY-MM-DD'/'YYYY-MM'); uid не задан — по всем. */
+export async function usageTotals({ day, month, uid } = {}) {
     const db = await indexDb();
     if (!db)
         return { tokens: 0, cost: 0, rows: 0 };
+    const when = [];
+    const args = [];
+    if (day) {
+        when.push('day = ?');
+        args.push(String(day));
+    }
+    else if (month) {
+        when.push('day LIKE ?');
+        args.push(String(month).slice(0, 7) + '%');
+    }
+    else {
+        when.push('day = ?');
+        args.push(new Date().toISOString().slice(0, 10));
+    }
+    if (uid) {
+        when.push('uid = ?');
+        args.push(String(uid));
+    }
     try {
-        const row = uid
-            ? db.prepare('SELECT COUNT(*) AS rows, SUM(prompt + completion + cached) AS tokens, SUM(cost) AS cost FROM agent_usage WHERE day = ? AND uid = ?').get(day, String(uid))
-            : db.prepare('SELECT COUNT(*) AS rows, SUM(prompt + completion + cached) AS tokens, SUM(cost) AS cost FROM agent_usage WHERE day = ?').get(day);
+        const row = db.prepare('SELECT COUNT(*) AS rows, SUM(prompt + completion + cached) AS tokens, SUM(cost) AS cost FROM agent_usage WHERE ' + when.join(' AND ')).get(...args);
         return { tokens: Number(row?.tokens) || 0, cost: Number(row?.cost) || 0, rows: Number(row?.rows) || 0 };
     }
     catch (e) {
         log.warn('учёт стоимости: чтение не вышло: ' + String(e?.message || e).slice(0, 120));
         return { tokens: 0, cost: 0, rows: 0 };
+    }
+}
+
+/** Разбивка расхода по пользователям за период (9.3, панель): [{ uid, turns, tokens, cost }]. */
+export async function usageByUser({ day, month, limit = 10 } = {}) {
+    const db = await indexDb();
+    if (!db)
+        return [];
+    const where = day ? 'day = ?' : 'day LIKE ?';
+    const arg = day ? String(day) : (String(month || new Date().toISOString().slice(0, 7)).slice(0, 7) + '%');
+    try {
+        const rows = db.prepare('SELECT uid, COUNT(*) AS turns, SUM(prompt + completion + cached) AS tokens, SUM(cost) AS cost FROM agent_usage WHERE ' + where + ' GROUP BY uid ORDER BY cost DESC, tokens DESC LIMIT ?')
+            .all(arg, Math.min(100, Math.max(1, Number(limit) || 10)));
+        return rows.map(r => ({ uid: r.uid, turns: Number(r.turns) || 0, tokens: Number(r.tokens) || 0, cost: Number(r.cost) || 0 }));
+    }
+    catch (e) {
+        log.warn('учёт стоимости: разбивка не вышла: ' + String(e?.message || e).slice(0, 120));
+        return [];
     }
 }
 

@@ -60,7 +60,7 @@ export const MEMBERS = Object.freeze({
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
-    save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN,
+    save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN, agent_panel: L.ADMIN,
 });
 
 /** Никогда не вызываются снаружи, даже если объявлены в class.js. */
