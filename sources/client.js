@@ -573,6 +573,12 @@ WORK.top = (() => {
     return top;
 })();
 if (WORK.top === window) {
+    // 9.11: сервис-воркер — при старте (офлайн-экран навигации и установленное приложение PWA),
+    // не только при включении уведомлений; без сети регистрация повторится при загрузке онлайн
+    try {
+        navigator.serviceWorker?.register('/sw.js').catch?.(err => console.warn('[sw] register', err));
+    }
+    catch (err) { console.warn('[sw] register', err); }
     /** Кнопка в задаче вызывает с user gesture; при входе уже выданное разрешение переиспользуется. */
     WORK.enableTaskNotifications = async function (ask = true) {
         if (!WORK.uid || !navigator.serviceWorker || typeof Notification === 'undefined')

@@ -14,6 +14,12 @@
     self.addEventListener(
         'fetch',
         (event) => {
+            // 9.11: офлайн-заглушка навигации: страницы WORK не открываются без сети —
+            // честный экран «нет сети» вместо зависшей пустой вкладки (данные — только онлайн)
+            if (event.request.mode === 'navigate' && !self.navigator.onLine) {
+                event.respondWith(new Response(OFFLINE_PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+                return;
+            }
             if (event.request.method !== "GET") return;
             const url = new URL(event.request.url);
             const { method, params } = Array.from(url.searchParams)
@@ -92,9 +98,29 @@
             }
         });
 
+const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WORK — нет сети</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: 'Segoe UI', Arial, sans-serif; background: #f5f6fa; color: #1a2333; }
+  .card { max-width: 420px; padding: 32px 36px; border-radius: 16px; background: #fff;
+    box-shadow: 0 8px 32px rgba(20, 30, 60, .12); text-align: center; }
+  h1 { margin: 0 0 12px; font-size: 22px; }
+  p { margin: 0; color: #5a6b85; line-height: 1.5; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #2f6fed; margin: 0 auto 18px; }
+  button { margin-top: 20px; padding: 10px 22px; border: 0; border-radius: 999px;
+    background: #2f6fed; color: #fff; font-size: 15px; cursor: pointer; }
+</style></head><body>
+<div class="card"><div class="dot"></div>
+<h1>Нет сети</h1>
+<p>WORK работает с сервером организации — данные доступны только при подключении.</p>
+<p style="margin-top:10px">Сообщения, написанные без сети, сохранятся и отправятся при подключении (если задача открыта).</p>
+<button onclick="location.reload()">Повторить</button>
+</div></body></html>`;
+
     /**@param {{type: string, [key: string]: any}} data  */
-    async function handleNotification(data) {
-        if (!(self.Notification && self.Notification.permission === "granted")) {
+    async function handleNotification(data) {        if (!(self.Notification && self.Notification.permission === "granted")) {
             return;
         }
         console.log('push:', data);
