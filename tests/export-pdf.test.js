@@ -37,6 +37,7 @@ before(async () => {
     write(`USERS/${IVAN}/$user/class.js`, `export default { label: 'Иванов Иван' }`);
     write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USER: ['${IVAN}'] } }`);
     write('ORG/doc/note.md', 'заметка');
+    write('ORG/doc/table.html', '<p>не слайды</p>');
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -220,5 +221,55 @@ describe('навык office-documents', () => {
         assert.match(body, /export_pdf/);
         assert.match(body, /@page/);
         assert.match(body, /по запросу/);
+    });
+});
+
+// ── 9.10 (final): презентации — слайды → PDF ───────────────────────────────
+
+describe('export_presentation: слайды (9.10)', () => {
+    const hasBrowser = !!findPdfBrowser();
+
+    it('slidesOfMarkdown/slidesHtml: разделитель ---, заголовки, «- пункт» — список; текст — данные, не разметка', async () => {
+        const { slidesOfMarkdown, slidesHtml } = await import('../sources/modules/agent/tools/docs.js');
+        const slides = slidesOfMarkdown('# Итоги года\n- Доход 100\n- Расход 40\n---\nПланы\nтекст абзаца\n');
+        assert.deepEqual(slides, [
+            { title: 'Итоги года', bullets: ['Доход 100', 'Расход 40'], paras: [] },
+            { title: 'Планы', bullets: [], paras: ['текст абзаца'] },
+        ], 'разбор слайдов');
+        assert.deepEqual(slidesOfMarkdown('---\n\n---'), [], 'пустые блоки не считаются слайдами');
+        // текст слайдов — данные: разметка экранируется, не исполняется
+        const html = slidesHtml([{ title: 'X <img src=x onerror=alert(1)>', bullets: ['<b>пункт</b>'], paras: [] }], { title: '«Титул»' });
+        assert.ok(!html.includes('<img src=x'), 'заголовок слайда стал разметкой');
+        assert.match(html, /&lt;b&gt;пункт/, 'пункт слайда не экранирован');
+        assert.match(html, /«Титул»/, 'титул не попал в HTML');
+        assert.match(html, /size: 1280px 720px/, 'формат слайда не 16:9');
+    });
+    it('валидация: формат источника/результата, лимиты слайдов и текста', async () => {
+        await assert.rejects(tool('export_presentation').run({ slides: [{ title: 'Один' }], path: '/ORG/н.html' }, as(IVAN)), /\.pdf/);
+        await assert.rejects(tool('export_presentation').run({ source: '/ORG/doc/table.html', path: '/ORG/н.pdf' }, as(IVAN)), /\.md\/\.txt/);
+        await assert.rejects(tool('export_presentation').run({ source: '/ORG/doc/нет-такого.md', path: '/ORG/н.pdf' }, as(IVAN)), /не найдено|нужен файл/);
+        await assert.rejects(tool('export_presentation').run({ slides: [], path: '/ORG/н.pdf' }, as(IVAN)), /нет слайдов/);
+        await assert.rejects(tool('export_presentation').run({ path: '/ORG/н.pdf' }, as(IVAN)), /нет слайдов/);
+        const tooMany = Array.from({ length: 31 }, (_, i) => ({ title: 'Слайд ' + i }));
+        await assert.rejects(tool('export_presentation').run({ slides: tooMany, path: '/ORG/н.pdf' }, as(IVAN)), /больше 30 слайдов/);
+        const tooBig = [{ title: 'Т', bullets: ['x'.repeat(4100)] }];
+        await assert.rejects(tool('export_presentation').run({ slides: tooBig, path: '/ORG/н.pdf' }, as(IVAN)), /слайд 1 больше/);
+        await assert.rejects(tool('export_presentation').run({ slides: 'не массив', path: '/ORG/н.pdf' }, as(IVAN)), /slides — массив/);
+    });
+    (hasBrowser ? it : it.skip)('рендер: презентация из слайдов → PDF с извлекаемым текстом', async () => {
+        const res = await tool('export_presentation').run({
+            title: 'Итоги квартала',
+            slides: [
+                { title: 'Доходы', bullets: ['Продажи 100', 'Сервисы 40'] },
+                { title: 'Расходы', bullets: ['Зарплата 60'] },
+            ],
+            path: '/ORG/итоги.pdf',
+        }, as(IVAN));
+        assert.match(res, /сохранено/);
+        assert.match(res, /3 слайдов/);
+        const text = await tool('read').run({ path: res.match(/сохранено (\S+)/)[1] }, as(IVAN));
+        assert.match(text, /Итоги квартала/);
+        assert.match(text, /Продажи 100/);
+        assert.match(text, /Зарплата 60/);
     });
 });

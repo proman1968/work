@@ -168,6 +168,113 @@ async function fileAt(path, ctx) {
     return item;
 }
 
+// ── 9.10 (final): презентации — слайды → PDF (16:9, по слайду на страницу) ──
+
+export const SLIDES_MAX = 30;          // слайдов в презентации
+export const SLIDE_TEXT_MAX = 4000;    // символов текста на слайд
+export const SLIDES_SOURCE_MAX = 1024 * 1024; // источник-файл
+
+/**
+ * Разбор markdown-текста на слайды (9.10): слайды разделены строкой «---»;
+ * первая строка слайда — заголовок (решётки снимаются), «- пункт» — список,
+ * прочие строки — абзацы. Чистая функция — покрыта тестами.
+ * @param {string} text
+ * @returns {Array<{ title: string, bullets: string[], paras: string[] }>}
+ */
+export function slidesOfMarkdown(text) {
+    // слайды — строки «---» (одна, возможно с пробелами); сборка построчно, чтобы «---»
+    // в начале/конце файла и несколько подряд тоже были разделителями
+    const slides = [];
+    let cur = [];
+    const flush = () => {
+        const lines = cur.map(s => s.replace(/\s+$/, ''));
+        cur = [];
+        while (lines.length && !lines[0].trim())
+            lines.shift();
+        while (lines.length && !lines[lines.length - 1].trim())
+            lines.pop();
+        if (!lines.length)
+            return;
+        const title = lines[0].replace(/^#+\s*/, '').trim() || '';
+        const bullets = [];
+        const paras = [];
+        for (const line of lines.slice(1)) {
+            if (/^\s*[-*•]\s+/.test(line))
+                bullets.push(line.replace(/^\s*[-*•]\s+/, '').trim());
+            else if (line.trim())
+                paras.push(line.trim());
+        }
+        if (!title && !bullets.length && !paras.length)
+            return;
+        slides.push({ title, bullets, paras });
+    };
+    for (const line of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
+        if (/^\s*-{3,}\s*$/.test(line))
+            flush();
+        else
+            cur.push(line);
+    }
+    flush();
+    return slides;
+}
+
+/** Слайд из аргумента инструмента: строка («заголовок») или {title, bullets, text}. */
+function slideOfArg(s) {
+    if (s == null)
+        return null;
+    if (typeof s === 'string')
+        return { title: s.trim(), bullets: [], paras: [] };
+    if (typeof s === 'object') {
+        const title = String(s.title ?? '').trim();
+        const bullets = (Array.isArray(s.bullets) ? s.bullets : []).map(b => String(b).trim()).filter(Boolean);
+        const paras = String(s.text ?? '').trim() ? [String(s.text).trim()] : [];
+        if (!title && !bullets.length && !paras.length)
+            return null;
+        return { title, bullets, paras };
+    }
+    return null;
+}
+
+/** HTML презентации (9.10): слайд 1280×720 (16:9), по слайду на страницу.
+ *  Текст слайдов — ДАННЫЕ: экранируются escHtml, разметкой не становятся. */
+export function slidesHtml(slides, { title: deckTitle, date } = {}) {
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const items = [];
+    if (deckTitle)
+        items.push({ title: String(deckTitle).trim(), bullets: [], paras: date ? [String(date)] : [] });
+    const css = `
+        @page { size: 1280px 720px; margin: 0; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: 'Segoe UI', Arial, sans-serif; color: #1a2333; }
+        .slide { width: 1280px; height: 720px; padding: 70px 90px; page-break-after: always;
+            display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
+        .slide:last-child { page-break-after: auto; }
+        .slide h1 { margin: 0 0 34px; font-size: 54px; line-height: 1.15; letter-spacing: -0.5px; }
+        .slide h1::after { content: ''; display: block; width: 110px; height: 6px; margin-top: 22px;
+            background: #2f6fed; border-radius: 3px; }
+        .slide ul { margin: 0; padding: 0; list-style: none; }
+        .slide li { font-size: 30px; line-height: 1.4; margin: 14px 0; padding-left: 40px; position: relative; }
+        .slide li::before { content: ''; position: absolute; left: 6px; top: 15px; width: 12px; height: 12px;
+            border-radius: 50%; background: #2f6fed; }
+        .slide p { font-size: 26px; line-height: 1.45; margin: 10px 0; }
+        .slide.muted li, .slide.muted p { font-size: 24px; color: #5a6b85; }
+    `;
+    const body = [...items, ...slides].map(s => {
+        const parts = ['<section class="slide' + (s.title ? '' : ' muted') + '">'];
+        if (s.title)
+            parts.push('<h1>' + esc(s.title) + '</h1>');
+        if (s.bullets.length)
+            parts.push('<ul>' + s.bullets.map(b => '<li>' + esc(b) + '</li>').join('') + '</ul>');
+        for (const p of s.paras)
+            parts.push('<p>' + esc(p) + '</p>');
+        parts.push('</section>');
+        return parts.join('');
+    }).join('\n');
+    return '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>'
+        + esc(deckTitle || 'Презентация') + '</title><style>' + css + '</style></head><body>\n'
+        + body + '\n</body></html>';
+}
+
 /** Результат записи: фактический путь отдельно от запрошенного (файл класса уходит в зону роли). */
 export function savedNote(requested, real) {
     return real && real !== requested
@@ -480,6 +587,68 @@ export const docTools = [
                 if (ctx.entry)
                     ctx.entry.path = real;
                 return savedNote(absPath(args.path, ctx), real) + ', PDF ' + (buf.length / 1024).toFixed(1) + ' КБ';
+            }
+            finally {
+                await fsp.rm(dir, { recursive: true, force: true });
+            }
+        },
+    },
+    {
+        name: 'export_presentation',
+        risk: 'write',
+        target: args => absPath(args?.path, null),
+        description: 'Презентация PDF (16:9) из слайдов: source — WORK-путь .md/.txt (слайды через «---», первая строка — заголовок, «- пункт» — список) или slides — [{title, bullets}]. path — результат .pdf; title — титульный слайд. Слайды ≤30, текст слайда ≤4000 символов. Проверь результат через read.',
+        parameters: {
+            type: 'object',
+            properties: {
+                source: { type: 'string', description: 'WORK-путь .md/.txt со слайдами (разделитель «---»)' },
+                slides: { type: 'array', items: { type: 'object' }, description: 'Или список: [{title: «…», bullets: [«…»]}] (или строки-заголовки)' },
+                path: { type: 'string', description: 'WORK-путь результата .pdf' },
+                title: { type: 'string', description: 'Название презентации (титульный слайд)' },
+            },
+            required: ['path'],
+        },
+        async run(args, ctx) {
+            if (String(args.path).split('.').pop().toLowerCase() !== 'pdf')
+                throw new Error('export_presentation: результат — .pdf');
+            let slides = [];
+            if (args.source) {
+                const src = await fileAt(args.source, ctx);
+                const sext = String(src.ext || '').toLowerCase();
+                if (!['md', 'txt'].includes(sext))
+                    throw new Error('export_presentation: источник — .md/.txt (сейчас .' + (sext || '?') + '); слайды списком — параметр slides');
+                const text = String(await callAs(src, 'load', { encoding: 'utf-8' }, ctx));
+                if (!text.trim())
+                    throw new Error('export_presentation: пустой источник');
+                if (text.length > SLIDES_SOURCE_MAX)
+                    throw new Error('export_presentation: источник больше 1 МБ — упростить');
+                slides = slidesOfMarkdown(text);
+            }
+            if (args.slides != null) {
+                if (!Array.isArray(args.slides))
+                    throw new Error('export_presentation: slides — массив [{title, bullets}] или строк-заголовков');
+                slides = [...slides, ...args.slides.map(slideOfArg).filter(Boolean)];
+            }
+            if (!slides.length)
+                throw new Error('export_presentation: нет слайдов (source или slides)');
+            if (slides.length + (args.title ? 1 : 0) > SLIDES_MAX)
+                throw new Error('export_presentation: больше ' + SLIDES_MAX + ' слайдов (' + slides.length + (args.title ? ' + титул' : '') + ') — раздели на части');
+            for (const [i, s] of slides.entries()) {
+                const size = String(s.title || '').length + s.bullets.join('').length + s.paras.join('').length;
+                if (size > SLIDE_TEXT_MAX)
+                    throw new Error('export_presentation: слайд ' + (i + 1) + ' больше ' + SLIDE_TEXT_MAX + ' символов — сократи');
+            }
+            const html = slidesHtml(slides, { title: args.title, date: args.title ? new Date().toLocaleDateString('ru-RU') : undefined });
+            const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-slides-'));
+            try {
+                const htmlFile = path.join(dir, 'deck.html');
+                const pdfFile = path.join(dir, 'deck.pdf');
+                await fsp.writeFile(htmlFile, html, 'utf-8');
+                const buf = await renderPdf(htmlFile, pdfFile, { signal: ctx?.signal });
+                const real = await writeBinary(args.path, buf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ': ' + (slides.length + (args.title ? 1 : 0)) + ' слайдов, PDF ' + (buf.length / 1024).toFixed(1) + ' КБ';
             }
             finally {
                 await fsp.rm(dir, { recursive: true, force: true });
