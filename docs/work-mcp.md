@@ -105,3 +105,20 @@ claude mcp add --transport http work http://localhost:8001/mcp \
 | Действия отклоняются «нужно подтверждение… не поддерживает elicitation» | включите elicitation в клиенте (или выполняйте подтверждаемое в интерфейсе WORK) |
 | `только администратору` | git/проверки/диагностика на сервере WORK — права администратора; выпускайте токен администратору |
 | `доступ запрещён` на чтение/запись | права пользователя токена: попросите доступ в WORK (escalade) |
+
+## 9. Протокол A2A, SDK встраивания и мост компьютера пользователя
+
+Тот же персональный токен (`wmcp.<uid>.<секрет>`) используется ещё в трёх точках интеграции:
+
+1. **Протокол A2A (общение агентов между системами)**:
+   - Карточка агента: `GET /.well-known/agent.json`
+   - JSON-RPC 2.0 эндпоинт: `POST /a2a` (`Authorization: Bearer <токен>`), методы `tasks/send` (`message/send`), `tasks/get`, `tasks/cancel`. Входящие промпты автоматически оборачиваются в `<untrusted>`.
+2. **REST API и JS SDK для встраивания в порталы и CRM**:
+   - REST: `POST /api/agent` с телом `{ "place": "/ORG", "prompt": "…", "agent": "analyst", "mode": "auto" }`
+   - Браузерный и Node.js SDK: `GET /sdk/work-agent.js` (`new WorkAgentClient({ baseUrl, token })` + встраиваемый виджет чата `mountWidget(container, { place })`).
+3. **Агент-«мост» на компьютере пользователя (`9.12`)**:
+   - Запуск на рабочей машине пользователя:
+     ```bash
+     node scripts/work-desktop-bridge.mjs --server http://localhost:8001 --token $WORK_MCP_TOKEN --root ./work-folder --readonly
+     ```
+   - Мост сам подключается к `/~bridge/*` без открытия входящих портов, ограничивает доступ папкой `--root`, поддерживает режим «только просмотр» (`--readonly` или инструмент `desktop_mode`) и требует подтверждения человека на каждое действие.
