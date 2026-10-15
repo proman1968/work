@@ -26,13 +26,27 @@ export const connectTools = [
     {
         name: 'connections',
         readonly: true,
-        description: 'Подключённые аккаунты пользователя во внешних сервисах (Google, Яндекс, Microsoft, GitHub, API по токену): имя, провайдер, доступы.',
-        parameters: { type: 'object', properties: {} },
-        async run(_args, ctx) {
+        description: 'Подключённые аккаунты пользователя во внешних сервисах и каталог готовых коннекторов (Google, Яндекс, Microsoft, GitHub, GitLab, Slack, Telegram, HubSpot, Битрикс24, amoCRM, Notion, API по токену). С параметром catalog=true или category показывает каталог готовых интеграций по категориям (mail, calendar, drive, messenger, crm, code, custom).',
+        parameters: {
+            type: 'object',
+            properties: {
+                catalog: { type: 'boolean', description: 'Показать каталог готовых коннекторов' },
+                category: { type: 'string', enum: C.CATEGORIES, description: 'Фильтр каталога: mail | calendar | drive | messenger | crm | code | custom' },
+            },
+        },
+        async run(args, ctx) {
             const list = await C.list(uidOf(ctx));
-            if (!list.length)
-                return 'Подключений нет. Для действий в сервисе попроси подключение: connect_service.';
-            return list.map(c => '- ' + c.name + ' — ' + c.label + (c.base_url ? ', API ' + c.base_url : '') + (c.scopes?.length ? ', доступ: ' + c.scopes.join(' ') : '') + (c.expires ? ', токен до ' + c.expires + (c.refreshable ? ' (обновляется)' : '') : '')).join('\n');
+            const connectedText = list.length
+                ? list.map(c => '- ' + c.name + ' — ' + c.label + (c.base_url ? ', API ' + c.base_url : '') + (c.scopes?.length ? ', доступ: ' + c.scopes.join(' ') : '') + (c.expires ? ', токен до ' + c.expires + (c.refreshable ? ' (обновляется)' : '') : '')).join('\n')
+                : 'Подключений нет. Для действий в сервисе попроси подключение: connect_service.';
+            if (!args?.catalog && !args?.category)
+                return connectedText;
+            const cat = C.catalog(args.category);
+            const catLines = cat.map(p => '- ' + p.provider + ' (' + p.label + ') [' + p.categories.join(', ') + '] — вход: ' + p.auth
+                + (p.base_url ? ', API: ' + p.base_url : '')
+                + (p.scopes.length ? ', доступы: ' + p.scopes.join(', ') : '')
+                + (p.docs ? ', док: ' + p.docs : ''));
+            return 'Подключено:\n' + connectedText + '\n\nКаталог готовых подключений' + (args.category ? ' (' + args.category + ')' : '') + ':\n' + (catLines.join('\n') || 'пусто');
         },
     },
     {
@@ -185,6 +199,118 @@ export const connectTools = [
         async run(args, ctx) {
             await C.remove(uidOf(ctx), String(args.name));
             return 'отключено: ' + args.name;
+        },
+    },
+    {
+        name: 'a2a_call',
+        risk: 'danger',
+        untrusted: true,
+        outbound: args => String(args?.action || 'send') !== 'discover' || urlCarriesData(args),
+        description: 'Общение с агентами других систем по протоколу A2A (Agent-to-Agent, 9.9): discover — прочитать карточку внешнего агента (/.well-known/agent.json); send — отправить поручение внешнему агенту (JSON-RPC tasks/send) и получить ответ. Отправка поручения всегда с подтверждения человека; ответ помечается как внешние данные.',
+        parameters: {
+            type: 'object',
+            properties: {
+                action: { type: 'string', enum: ['discover', 'send'], description: 'discover (карточка агента) | send (отправить поручение)' },
+                url: { type: 'string', description: 'Адрес внешнего агента (https://…)' },
+                prompt: { type: 'string', description: 'Текст поручения внешнему агенту (для action=send)' },
+                connection: { type: 'string', description: 'Имя подключения из connections для авторизации (необязательно)' },
+                reason: { type: 'string', description: 'Зачем обращаемся к внешнему агенту (для подтверждения человеком)' },
+            },
+            required: ['action', 'url'],
+        },
+        permission(args) {
+            if (args?.action === 'discover') {
+                if (urlCarriesData(args))
+                    return { verdict: 'ask', noAlways: true, reason: 'в адресе запроса карточки A2A уходят данные: ' + String(args?.url || '') };
+                return { verdict: 'allow' };
+            }
+            return {
+                verdict: 'ask',
+                noAlways: true,
+                reason: (args?.reason ? args.reason + ' — ' : '') + 'поручение внешнему агенту (A2A): ' + String(args?.url || ''),
+            };
+        },
+        async run(args, ctx) {
+            let headers = { Accept: 'application/json', 'User-Agent': 'ODANT-WORK-A2A/1.0' };
+            let sensitiveHeaders = [];
+            let base = '';
+            if (args.connection) {
+                const a = await C.authHeaders(uidOf(ctx), String(args.connection));
+                headers = { ...headers, ...a.headers };
+                sensitiveHeaders = Object.keys(a.headers || {});
+                base = a.base_url || '';
+            }
+            let href = String(args.url || '').trim();
+            if (!/^https?:\/\//i.test(href)) {
+                if (!base)
+                    throw new Error('a2a_call: укажи полный http(s) URL или connection с base_url');
+                href = base.replace(/\/+$/, '') + '/' + href.replace(/^\/+/, '');
+            }
+            else if (args.connection) {
+                const baseOrigin = base ? new URL(base).origin : null;
+                if (!baseOrigin || new URL(href).origin !== baseOrigin)
+                    throw new Error('a2a_call: запрос с connection — только на адрес подключения' + (baseOrigin ? ' (' + baseOrigin + ')' : ''));
+            }
+            const targetUrl = C.assertPublicUrl(href);
+            const sig = ctx.signal ? AbortSignal.any([ctx.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000);
+            if (args.action === 'discover') {
+                const cardUrl = targetUrl.pathname.endsWith('.json')
+                    ? targetUrl.href
+                    : targetUrl.origin + '/.well-known/agent.json';
+                if (ctx.entry)
+                    ctx.entry.url = cardUrl;
+                const res = await guardedRequest(cardUrl, { method: 'GET', headers, sensitiveHeaders, maxRedirects: 3, maxBytes: 1024 * 1024, timeoutMs: 20000, signal: sig });
+                if (res.status < 200 || res.status >= 300)
+                    return { error: 'A2A discover HTTP ' + res.status };
+                const card = JSON.parse(res.body.toString('utf-8'));
+                const skills = Array.isArray(card.skills) ? card.skills.map(s => s.name || s.id).filter(Boolean).join(', ') : '';
+                return 'Карточка A2A-агента «' + (card.name || targetUrl.host) + '»:\n'
+                    + (card.description ? card.description + '\n' : '')
+                    + 'URL: ' + (card.url || targetUrl.origin + '/a2a')
+                    + (skills ? '\nНавыки: ' + skills : '');
+            }
+            const promptText = String(args.prompt || '').trim();
+            if (!promptText)
+                throw new Error('a2a_call: для action=send нужен непустой prompt');
+            const rpcUrl = targetUrl.pathname === '/' || targetUrl.pathname === '' ? targetUrl.origin + '/a2a' : targetUrl.href;
+            if (ctx.entry)
+                ctx.entry.url = rpcUrl;
+            const rpcBody = JSON.stringify({
+                jsonrpc: '2.0',
+                id: 'a2a-' + Date.now(),
+                method: 'tasks/send',
+                params: {
+                    id: 'task-' + Date.now(),
+                    message: { role: 'user', parts: [{ type: 'text', text: promptText }] },
+                },
+            });
+            const res = await guardedRequest(rpcUrl, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8' },
+                body: rpcBody,
+                sensitiveHeaders,
+                maxRedirects: 2,
+                maxBytes: 2 * 1024 * 1024,
+                timeoutMs: 60000,
+                signal: sig,
+            });
+            const raw = res.body.toString('utf-8');
+            if (res.status < 200 || res.status >= 300)
+                return { error: 'A2A HTTP ' + res.status + ': ' + clip(raw, 1000) };
+            let rpc;
+            try {
+                rpc = JSON.parse(raw);
+            }
+            catch {
+                return clip(raw, 10000);
+            }
+            if (rpc?.error)
+                return { error: 'A2A error: ' + (rpc.error.message || JSON.stringify(rpc.error)) };
+            const task = rpc?.result || rpc;
+            const state = task?.status?.state || 'unknown';
+            const parts = task?.status?.message?.parts || task?.artifacts?.flatMap(a => a.parts || []) || [];
+            const text = parts.filter(p => p?.type === 'text' || p?.text).map(p => p.text).join('\n').trim();
+            return 'A2A [' + state + ']:\n' + clip(text || JSON.stringify(task, null, 2), 15000);
         },
     },
 ];

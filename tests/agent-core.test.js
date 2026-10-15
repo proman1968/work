@@ -100,6 +100,9 @@ before(async () => {
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
     write('BOX/$class/class.js', `export default { label: 'Коробка', '#security': { USER: ['${CHILD_UID}'] }, async mcp_probe(params = {}) { return { got: params.place ?? null, spoofed: params.spoof ?? null }; } }`);
     write(`USERS/${CHILD_UID}/$user/class.js`, `export default { label: 'Тестовый пользователь' }`);
+    write('USERS/A000000000000001/$user/class.js', `export default { label: 'Первый пользователь A2A' }`);
+    write('USERS/A000000000000002/$user/class.js', `export default { label: 'Второй пользователь A2A' }`);
+    write('CLOSED_A2A/$class/class.js', `export default { label: 'Закрытый A2A', '#security': { USER: ['A000000000000001'] } }`);
     write('BOX/$class/readme.md', '# Контракт BOX\nЗдесь лежат отчёты.');
     write('BOX/$class/ai/skills/local.md', '---\nname: local\ndescription: местный навык\n---\nТело.');
     write('BOX/doc/note.md', 'строка 1\nстрока 2\nстрока 3\n');
@@ -2448,5 +2451,269 @@ describe('приватный режим места (9.6)', () => {
         // обычное место — внешняя модель работает как раньше
         const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
         assert.equal((await plain.llmFor('/MODELS/mock-ext')).name, '/MODELS/mock-ext', 'обычному месту отрезали внешнюю модель');
+    });
+});
+
+// ── 9.9 (final): экосистема интеграций — каталог, плагины, A2A, SDK ────────
+
+describe('экосистема интеграций (9.9)', () => {
+    const UID_I = 'EU00000000000001'; // USER в /BOX
+
+    it('каталог готовых подключений: все категории (mail/calendar/drive/messenger/crm/code), фильтр и подключение с mode=token', async () => {
+        const C = await import('../sources/modules/agent/connections.js');
+        const { connectTools } = await import('../sources/modules/agent/tools/connect.js');
+        const all = C.catalog();
+        for (const cat of ['mail', 'calendar', 'drive', 'messenger', 'crm', 'code', 'custom'])
+            assert.ok(all.some(p => p.categories.includes(cat)), 'нет готового подключения для категории ' + cat);
+        const crm = C.catalog('crm');
+        assert.ok(crm.length >= 3 && crm.every(p => p.categories.includes('crm')), 'фильтр каталога crm неверен');
+        assert.ok(crm.some(p => p.provider === 'hubspot') && crm.some(p => p.provider === 'bitrix24') && crm.some(p => p.provider === 'amocrm'));
+
+        // провайдер с mode: 'token' и дефолтным base_url (telegram) сохраняет подключение без ручного base_url
+        const st = await C.start({ uid: UID_I, provider: 'telegram', name: 'tg-bot', token: 't1' });
+        assert.equal(st.ok, true);
+        const connTool = connectTools.find(t => t.name === 'connections');
+        const out = await connTool.run({ catalog: true, category: 'messenger' }, { session: { uid: UID_I } });
+        assert.match(out, /tg-bot — Telegram Bot API, API https:\/\/api\.telegram\.org/);
+        assert.match(out, /Каталог готовых подключений \(messenger\):/);
+        assert.match(out, /slack \(Slack\)/);
+        await C.remove(UID_I, 'tg-bot');
+    });
+
+    it('плагины: права ADMIN, валидация манифеста (запрет открытых секретов в MCP и SUBAGENT_DENY)', async () => {
+        const { validatePluginManifest } = await import('../sources/modules/agent/plugins.js');
+        const { pluginTools } = await import('../sources/modules/agent/tools/plugins.js');
+        const pTool = pluginTools[0];
+
+        // не-админ не может установить, выключить или удалить плагин
+        await assert.rejects(
+            pTool.run({ action: 'install', manifest: { name: 'p1', description: 'тестовый плагин' } }, { session: { uid: UID_I } }),
+            /только администратор/
+        );
+        await assert.rejects(
+            pTool.run({ action: 'disable', name: 'p1' }, { session: { uid: UID_I } }),
+            /только администратор/
+        );
+        await assert.rejects(
+            pTool.run({ action: 'remove', name: 'p1' }, { session: { uid: UID_I } }),
+            /только администратор/
+        );
+
+        // валидация имени (обход пути), запрещённых инструментов субагента и открытых секретов в MCP
+        assert.throws(() => validatePluginManifest({ name: '../evil', description: 'плохое имя' }), /недопустимое имя плагина/);
+        assert.throws(() => validatePluginManifest({
+            name: 'bad-agent',
+            description: 'субагент с запрещённым инструментом',
+            agents: { helper: '---\nname: helper\ndescription: помощник\ntools: [read, git_push]\nmaxTurns: 5\n---\nТело.' },
+        }), /запрещён инструмент «git_push»/);
+        assert.throws(() => validatePluginManifest({
+            name: 'bad-mcp',
+            description: 'открытый секрет в MCP',
+            mcp: { crm: { url: 'https://mcp.example.com', headers: { Authorization: 'Bearer raw-tok-123' } } },
+        }), /запрещены открытые секреты/);
+        // ссылка secret:<файл> проходит
+        const clean = validatePluginManifest({
+            name: 'good-mcp',
+            description: 'секрет по ссылке',
+            mcp: { crm: { url: 'https://mcp.example.com', headers: { Authorization: 'secret:crm.json' } } },
+        });
+        assert.equal(clean.mcp.crm.headers.Authorization, 'secret:crm.json');
+    });
+
+    it('плагины: установка пакетом (навык + субагент + хук + MCP), подхват в окружении, disable/enable/remove', async () => {
+        const { pluginTools } = await import('../sources/modules/agent/tools/plugins.js');
+        const { setAdminCheck } = await import('../sources/modules/agent/system.js');
+        const { loadDocs, loadHooks } = await import('../sources/modules/agent/resources.js');
+        const pTool = pluginTools[0];
+        const box = await WORK.get_item('/BOX');
+        setAdminCheck(() => true);
+        try {
+            const resText = await pTool.run({
+                action: 'install',
+                scope: '/BOX',
+                manifest: {
+                    name: 'crm-pack',
+                    version: '1.2.0',
+                    description: 'Пакет интеграции CRM',
+                    skills: {
+                        'crm-deal': '---\nname: crm-deal\ndescription: Ведение сделки в CRM\n---\nПроверь сделку и обнови статус.',
+                    },
+                    agents: {
+                        'crm-helper': '---\nname: crm-helper\ndescription: Помощник по карточкам CRM\ntools: [ls, read]\nmaxTurns: 4\n---\nЧитает карточки сделок.',
+                    },
+                    hooks: {
+                        pre_tool: 'export default async function crmGuard({ tool }) { if (tool === "delete") return { decision: "deny", reason: "удаление запрещено плагином CRM" }; }',
+                    },
+                    mcp: {
+                        hub: { url: 'https://mcp.hub.example.com/mcp', headers: { Authorization: 'secret:hub.json' } },
+                    },
+                },
+            }, { session: { uid: 'admin' }, place: box });
+            assert.match(resText, /Плагин «crm-pack» v1\.2\.0 установлен/);
+
+            // список плагинов видит установленный пакет
+            const listed = await pTool.run({ action: 'list' }, { session: { uid: UID_I }, place: box });
+            assert.match(listed, /crm-pack v1\.2\.0 \[включён/);
+
+            // навык, субагент и хук подхвачены слоем /BOX
+            const skills = await loadDocs(box, 'skills');
+            const agents = await loadDocs(box, 'agents');
+            const hooks = await loadHooks(box);
+            assert.ok(skills.has('crm-deal'), 'навык плагина не подхвачен');
+            assert.ok(agents.has('crm-helper'), 'субагент плагина не подхвачен');
+            assert.ok(hooks.pre_tool.some(h => h.scope.includes('plugin:crm-pack')), 'хук плагина не подхвачен');
+            assert.ok(fs.existsSync(path.join(tmp, 'SERVICES', 'plugin-crm-pack-hub', '$service', 'class.js')), 'MCP-сервис плагина не создан');
+
+            // выключение плагина убирает его навыки, субагентов и хуки из окружения
+            await pTool.run({ action: 'disable', scope: '/BOX', name: 'crm-pack' }, { session: { uid: 'admin' }, place: box });
+            assert.ok(!(await loadDocs(box, 'skills')).has('crm-deal'), 'выключенный навык остался');
+            assert.ok(!(await loadDocs(box, 'agents')).has('crm-helper'), 'выключенный субагент остался');
+            assert.ok(!(await loadHooks(box)).pre_tool.some(h => h.scope.includes('plugin:crm-pack')), 'выключенный хук остался');
+
+            // повторное включение возвращает, удаление вычищает
+            await pTool.run({ action: 'enable', scope: '/BOX', name: 'crm-pack' }, { session: { uid: 'admin' }, place: box });
+            assert.ok((await loadDocs(box, 'skills')).has('crm-deal'), 'включённый навык не вернулся');
+            await pTool.run({ action: 'remove', scope: '/BOX', name: 'crm-pack' }, { session: { uid: 'admin' }, place: box });
+            assert.ok(!(await loadDocs(box, 'skills')).has('crm-deal'), 'удалённый плагин остался');
+            assert.ok(!fs.existsSync(path.join(tmp, 'SERVICES', 'plugin-crm-pack-hub')), 'MCP-сервис плагина не удалён');
+        }
+        finally {
+            setAdminCheck(null);
+        }
+    });
+
+    it('протокол A2A и REST/SDK: карточка агента, авторизация по токену, права на место, <untrusted> входящего A2A, изоляция задач и XSS-безопасный виджет', async () => {
+        const { Readable } = await import('node:stream');
+        const { issueToken } = await import('../sources/modules/mcp/tokens.js');
+        const { handleA2aHttp, WorkAgentClient } = await import('../sources/modules/a2a/server.js');
+        const { egressToolName } = await import('../sources/modules/agent/index.js');
+
+        // a2a_call вырезается в приватном режиме
+        assert.equal(egressToolName('a2a_call'), true, 'a2a_call должен быть в списке исходящих инструментов');
+
+        // два пользователя с валидным 16-hex UID (созданы в before)
+        const USER1 = 'A000000000000001';
+        const USER2 = 'A000000000000002';
+
+        const tok1 = await issueToken(USER1, { role: 'USER', label: 'a2a-test-1' });
+        const tok2 = await issueToken(USER2, { role: 'USER', label: 'a2a-test-2' });
+
+        // вспомогательный вызов HTTP-обработчика в памяти
+        const callHttp = async (method, urlPath, bodyObj, { token, ip = '127.0.0.1' } = {}) => {
+            const raw = bodyObj != null ? Buffer.from(JSON.stringify(bodyObj), 'utf-8') : Buffer.alloc(0);
+            const req = Object.assign(Readable.from(raw.length ? [raw] : []), {
+                method,
+                url: urlPath,
+                headers: {
+                    host: 'localhost:8001',
+                    ...(token ? { authorization: 'Bearer ' + token } : {}),
+                    ...(bodyObj != null ? { 'content-type': 'application/json' } : {}),
+                },
+                socket: { remoteAddress: ip },
+            });
+            let status = 200;
+            let respHeaders = {};
+            const chunks = [];
+            const res = {
+                writeHead(st, h = {}) { status = st; respHeaders = h; },
+                write(c) { chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))); },
+                end(c) { if (c != null) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))); },
+            };
+            await handleA2aHttp(req, res);
+            const text = Buffer.concat(chunks).toString('utf-8');
+            let json = null;
+            try { json = JSON.parse(text); } catch { /* текст */ }
+            return { status, headers: respHeaders, text, json };
+        };
+
+        // 1. Публичная карточка /.well-known/agent.json (системные субагенты requires: system не светятся)
+        const cardRes = await callHttp('GET', '/.well-known/agent.json');
+        assert.equal(cardRes.status, 200);
+        assert.equal(cardRes.json.protocolVersion, '0.2.1');
+        assert.ok(Array.isArray(cardRes.json.skills) && cardRes.json.skills.some(s => s.id === 'explore'));
+        assert.ok(!cardRes.json.skills.some(s => s.id === 'sysonly'), 'системный субагент утек в публичную карточку A2A');
+
+        // 2. Внешний IP и запрос без токена отклоняются
+        const extIp = await callHttp('POST', '/a2a', { jsonrpc: '2.0', id: 1, method: 'tasks/send', params: {} }, { token: tok1.token, ip: '8.8.8.8' });
+        assert.equal(extIp.status, 403, 'внешний IP пропущен на /a2a');
+        const noAuth = await callHttp('POST', '/a2a', { jsonrpc: '2.0', id: 1, method: 'tasks/send', params: {} });
+        assert.equal(noAuth.status, 401, 'запрос без токена пропущен на /a2a');
+
+        // 3. Второй пользователь не имеет прав чтения на /CLOSED_A2A → отказ по правам ядра
+        const deniedPlace = await callHttp('POST', '/a2a', {
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tasks/send',
+            params: {
+                id: 't-denied',
+                message: { role: 'user', parts: [{ type: 'text', text: 'прочитай' }] },
+                metadata: { place: '/CLOSED_A2A' },
+            },
+        }, { token: tok2.token });
+        assert.ok(deniedPlace.json?.error, 'чужой класс пропущен без прав чтения');
+
+        // 4. Законный вызов A2A tasks/send оборачивает входящий промпт в <untrusted source="a2a_…">
+        const log = [];
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Ответ A2A готов' }], log).stream;
+        const okSend = await callHttp('POST', '/a2a', {
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'tasks/send',
+            params: {
+                id: 't-ok-1',
+                message: { role: 'user', parts: [{ type: 'text', text: 'Сводка по проекту' }] },
+                metadata: { place: '/CLOSED_A2A', sender: 'partner-crm' },
+            },
+        }, { token: tok1.token });
+        assert.equal(okSend.status, 200);
+        assert.equal(okSend.json?.result?.status?.state, 'completed');
+        assert.equal(okSend.json?.result?.status?.message?.parts?.[0]?.text, 'Ответ A2A готов');
+        const userMsg = log[0]?.messages?.find(m => m.role === 'user' && String(m.content || '').includes('Сводка по проекту'));
+        assert.match(String(userMsg?.content || ''), /<untrusted source="a2a_partner-crm"/, 'входящее сообщение A2A не обёрнуто в <untrusted>');
+
+        // 5. Изоляция задач между пользователями: tok2 не может прочитать или отменить задачу tok1
+        const foreignGet = await callHttp('POST', '/a2a', {
+            jsonrpc: '2.0', id: 4, method: 'tasks/get', params: { id: 't-ok-1' },
+        }, { token: tok2.token });
+        assert.match(String(foreignGet.json?.error?.message || ''), /принадлежит другому пользователю|не найдена/, 'чужая задача прочитана другим пользователем');
+        const ownGet = await callHttp('POST', '/a2a', {
+            jsonrpc: '2.0', id: 5, method: 'tasks/get', params: { id: 't-ok-1' },
+        }, { token: tok1.token });
+        assert.equal(ownGet.json?.result?.id, 't-ok-1');
+        const ownCancel = await callHttp('POST', '/a2a', {
+            jsonrpc: '2.0', id: 6, method: 'tasks/cancel', params: { id: 't-ok-1' },
+        }, { token: tok1.token });
+        assert.equal(ownCancel.json?.result?.status?.state, 'canceled');
+
+        // 6. JS SDK (WorkAgentClient) поверх REST /api/agent + виджет без innerHTML
+        globalThis.__MOCK_STREAM__ = scripted([{ text: 'Ответ через SDK <img src=x onerror=alert(1)>' }]).stream;
+        const sdk = new WorkAgentClient({
+            baseUrl: 'http://localhost:8001',
+            token: tok1.token,
+            fetchImpl: async (u, init = {}) => {
+                const parsed = new URL(u);
+                const r = await callHttp(init.method || 'GET', parsed.pathname, init.body ? JSON.parse(init.body) : null, { token: tok1.token });
+                return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.json };
+            },
+        });
+        const card = await sdk.agentCard();
+        assert.equal(card.protocolVersion, '0.2.1');
+        // минимальный DOM-контейнер для проверки отсутствия innerHTML
+        const makeEl = tag => ({
+            tag,
+            className: '',
+            textContent: '',
+            children: [],
+            appendChild(c) { this.children.push(c); return c; },
+            addEventListener() {},
+        });
+        const fakeDoc = { createElement: makeEl };
+        const hostEl = { ownerDocument: fakeDoc, children: [], appendChild(c) { this.children.push(c); return c; } };
+        const w = sdk.mountWidget(hostEl, { place: '/CLOSED_A2A', title: 'Чат' });
+        const replyRes = await w.send('проверка');
+        assert.equal(replyRes.status, 'done');
+        assert.equal(w.logBox.children.length, 2);
+        assert.equal(w.logBox.children[1].textContent, 'Ответ через SDK <img src=x onerror=alert(1)>');
+        assert.equal(w.logBox.children[1].innerHTML, undefined, 'виджет использовал innerHTML вместо textContent');
     });
 });

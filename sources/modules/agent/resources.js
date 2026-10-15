@@ -12,9 +12,13 @@
  * Слои: пакет движка /$server/$folder/$class/ai, затем метапапки классов от корня к месту задачи
  * (<класс>/$тип/ai/…). Ближний слой перекрывает дальний по имени — место уточняет общее.
  */
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseFrontmatter } from './util.js';
 import { FS } from '../../server/index.js';
 import { HOOK_EVENTS, emptyHooks } from './hooks.js';
+import { PLUGIN_ID } from './plugins.js';
 
 export const ENGINE_AI = '/$server/$folder/$class/ai';
 
@@ -60,10 +64,54 @@ async function textOf(file) {
     return String(await file.load({ encoding: 'utf-8' }) ?? '');
 }
 
-/** Документы *.md каталога sub по слоям → Map(name → { name, meta, body, path, scope }). */
+/** Включённые плагины слоя ai/plugins/<id> → [{ id, dir, scope, meta }]. */
+async function enabledPluginsOf(aiDir, scope) {
+    if (!aiDir?.dir)
+        return [];
+    const base = path.join(aiDir.dir, 'plugins');
+    let entries;
+    try {
+        entries = await fsp.readdir(base, { withFileTypes: true });
+    }
+    catch {
+        return [];
+    }
+    const out = [];
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (!e.isDirectory() || !PLUGIN_ID.test(e.name))
+            continue;
+        const pDir = path.join(base, e.name);
+        try {
+            const meta = JSON.parse(await fsp.readFile(path.join(pDir, 'plugin.json'), 'utf-8'));
+            if (meta && meta.enabled !== false)
+                out.push({ id: meta.name || e.name, dir: pDir, workPath: aiDir.path + '/plugins/' + e.name, scope: scope + ':plugin:' + (meta.name || e.name), meta });
+        }
+        catch { /* битый манифест — пропуск */ }
+    }
+    return out;
+}
+
+/** Документы *.md каталога sub по слоям (включая включённые плагины ai/plugins/<id>) → Map(name → { name, meta, body, path, scope }). */
 export async function loadDocs(place, sub) {
     const out = new Map();
     for (const { dir, scope } of await aiDirs(place)) {
+        // 9.9: сначала документы из включённых плагинов этого слоя, затем собственные файлы слоя (могут уточнить плагин)
+        for (const p of await enabledPluginsOf(dir, scope)) {
+            const subDir = path.join(p.dir, sub);
+            let files;
+            try {
+                files = await fsp.readdir(subDir);
+            }
+            catch { continue; }
+            for (const f of files.sort()) {
+                if (!/\.md$/i.test(f) || /^readme\.md$/i.test(f))
+                    continue;
+                const text = await safe(() => fsp.readFile(path.join(subDir, f), 'utf-8'), '');
+                const { meta, body } = parseFrontmatter(text);
+                const name = String(meta.name || f.replace(/\.md$/i, ''));
+                out.set(name, { name, meta, body, path: p.workPath + '/' + sub + '/' + f, scope: p.scope });
+            }
+        }
         const folder = await safe(() => dir.get_item(sub));
         if (!folder || Array.isArray(folder))
             continue;
@@ -148,6 +196,28 @@ const HOOK_MODULE = /^hooks\/[\w.-]+\.m?js$/;
  */
 export async function loadHooks(place) {
     const hooks = emptyHooks();
+    // 9.9: хуки из включённых плагинов ai/plugins/<id>/hooks/<event>.js
+    for (const { dir, scope } of await aiDirs(place)) {
+        for (const p of await enabledPluginsOf(dir, scope)) {
+            const hDir = path.join(p.dir, 'hooks');
+            for (const event of HOOK_EVENTS) {
+                let hFile = path.join(hDir, event + '.mjs');
+                let st = await safe(() => fsp.stat(hFile), null);
+                if (!st) {
+                    hFile = path.join(hDir, event + '.js');
+                    st = await safe(() => fsp.stat(hFile), null);
+                }
+                if (!st)
+                    continue;
+                const mod = await safe(() => import(pathToFileURL(hFile).href + '?t=' + st.mtimeMs), null);
+                const fn = typeof mod === 'function' ? mod : (typeof mod?.default === 'function' ? mod.default : (typeof mod?.[event] === 'function' ? mod[event] : null));
+                if (fn)
+                    hooks[event].push({ fn, name: 'plugin:' + p.id + '/' + event + '.js', scope: p.scope });
+                else
+                    hooks.errors.push({ scope: p.scope, event, error: 'модуль хука плагина ' + event + '.js не экспортирует функцию' });
+            }
+        }
+    }
     for (const { scope, dir, data } of await configLayers(place)) {
         const spec = data.hooks;
         if (spec == null)

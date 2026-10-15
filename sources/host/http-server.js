@@ -259,10 +259,17 @@ export function createRequestHandler() {
             return;
         }
         // WORK как MCP-сервер (внешние ИИ-клиенты, токен вместо cookie-сессии) — до разбора сессии и дерева
-        if (String(request.url).split('?')[0] === '/mcp') {
+        const reqPath = String(request.url).split('?')[0];
+        if (reqPath === '/mcp') {
             const { handleMcp } = await import('../modules/mcp/server.js');
             await handleMcp(request, response);
             return;
+        }
+        // 9.9: протокол A2A (/.well-known/agent.json, /a2a) и REST/SDK для встраивания (/api/agent, /sdk/work-agent.js)
+        if (reqPath === '/.well-known/agent.json' || reqPath === '/a2a' || reqPath === '/api/agent' || reqPath === '/sdk/work-agent.js') {
+            const { handleA2aHttp } = await import('../modules/a2a/server.js');
+            if (await handleA2aHttp(request, response))
+                return;
         }
         const cookies = parseCookies(request);
         let session;

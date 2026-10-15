@@ -18,9 +18,12 @@ import net from 'node:net';
 import { isPrivateAddress } from '../../host/net-guard.js';
 import * as SB from '../../host/secret-box.js';
 
+export const CATEGORIES = ['mail', 'calendar', 'drive', 'messenger', 'crm', 'code', 'custom'];
+
 export const PROVIDERS = {
     google: {
         label: 'Google',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
         token_url: 'https://oauth2.googleapis.com/token',
         base_url: 'https://www.googleapis.com',
@@ -38,30 +41,109 @@ export const PROVIDERS = {
     },
     yandex: {
         label: 'Яндекс',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://oauth.yandex.ru/authorize',
         token_url: 'https://oauth.yandex.ru/token',
         base_url: 'https://cloud-api.yandex.net',
         console: 'https://oauth.yandex.ru/client/new',
-        scopes: {},
+        scopes: {
+            disk: 'cloud_api:disk.read cloud_api:disk.write',
+            'disk.readonly': 'cloud_api:disk.read',
+            calendar: 'calendar:all',
+            mail: 'mail:imap_full mail:smtp',
+            info: 'login:info login:email',
+        },
     },
     microsoft: {
         label: 'Microsoft',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
         token_url: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
         base_url: 'https://graph.microsoft.com/v1.0',
         console: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps',
-        scopes: { calendar: 'Calendars.ReadWrite offline_access', mail: 'Mail.Send offline_access', files: 'Files.ReadWrite offline_access' },
+        scopes: {
+            calendar: 'Calendars.ReadWrite offline_access',
+            mail: 'Mail.Send offline_access',
+            'mail.readonly': 'Mail.Read offline_access',
+            files: 'Files.ReadWrite offline_access',
+        },
     },
     github: {
         label: 'GitHub',
+        categories: ['code'],
         auth_url: 'https://github.com/login/oauth/authorize',
         token_url: 'https://github.com/login/oauth/access_token',
         base_url: 'https://api.github.com',
         console: 'https://github.com/settings/developers',
         scopes: { repo: 'repo', issues: 'repo', gist: 'gist' },
     },
+    gitlab: {
+        label: 'GitLab',
+        categories: ['code'],
+        auth_url: 'https://gitlab.com/oauth/authorize',
+        token_url: 'https://gitlab.com/oauth/token',
+        base_url: 'https://gitlab.com/api/v4',
+        console: 'https://gitlab.com/-/user_settings/applications',
+        scopes: { api: 'api', read_api: 'read_api', read_repository: 'read_repository' },
+    },
+    slack: {
+        label: 'Slack',
+        categories: ['messenger'],
+        auth_url: 'https://slack.com/oauth/v2/authorize',
+        token_url: 'https://slack.com/api/oauth.v2.access',
+        base_url: 'https://slack.com/api',
+        console: 'https://api.slack.com/apps',
+        scopes: { chat: 'chat:write', channels: 'channels:read channels:history', users: 'users:read' },
+    },
+    telegram: {
+        label: 'Telegram Bot API',
+        categories: ['messenger'],
+        mode: 'token',
+        base_url: 'https://api.telegram.org',
+        docs: 'https://core.telegram.org/bots/api',
+        scopes: {},
+    },
+    hubspot: {
+        label: 'HubSpot CRM',
+        categories: ['crm'],
+        auth_url: 'https://app.hubspot.com/oauth/authorize',
+        token_url: 'https://api.hubapi.com/oauth/v1/token',
+        base_url: 'https://api.hubapi.com',
+        console: 'https://app.hubspot.com/developer',
+        scopes: {
+            contacts: 'crm.objects.contacts.read crm.objects.contacts.write',
+            'contacts.readonly': 'crm.objects.contacts.read',
+            deals: 'crm.objects.deals.read crm.objects.deals.write',
+            companies: 'crm.objects.companies.read',
+        },
+    },
+    bitrix24: {
+        label: 'Битрикс24 CRM',
+        categories: ['crm', 'messenger'],
+        mode: 'token',
+        docs: 'https://apidocs.bitrix24.ru/',
+        scopes: {},
+    },
+    amocrm: {
+        label: 'amoCRM',
+        categories: ['crm'],
+        mode: 'token',
+        docs: 'https://www.amocrm.ru/developers/content/crm_platform/platform-abilities',
+        scopes: {},
+    },
+    notion: {
+        label: 'Notion',
+        categories: ['drive'],
+        auth_url: 'https://api.notion.com/v1/oauth/authorize',
+        token_url: 'https://api.notion.com/v1/oauth/token',
+        base_url: 'https://api.notion.com/v1',
+        console: 'https://www.notion.com/my-integrations',
+        scopes: {},
+    },
     token: {
         label: 'API по токену',
+        categories: ['custom'],
+        mode: 'token',
         scopes: {},
     },
 };
@@ -171,7 +253,33 @@ export async function list(uid) {
 
 /** Нужно ли пользователю вводить свой OAuth-клиент (у системы нет настроенного). */
 export function needsClient(provider) {
-    return provider !== 'token' && !appClient(provider);
+    const p = PROVIDERS[provider];
+    return !!p && p.mode !== 'token' && !appClient(provider);
+}
+
+/**
+ * 9.9: каталог готовых подключений (почта, календарь, диск, мессенджеры, CRM, код, произвольный API).
+ * @param {string} [category] фильтр по категории (mail | calendar | drive | messenger | crm | code | custom)
+ */
+export function catalog(category) {
+    const cat = category ? String(category).trim().toLowerCase() : '';
+    const out = [];
+    for (const [id, p] of Object.entries(PROVIDERS)) {
+        const cats = p.categories || ['custom'];
+        if (cat && !cats.includes(cat))
+            continue;
+        out.push({
+            provider: id,
+            label: p.label,
+            categories: cats,
+            auth: p.mode === 'token' ? 'token' : 'oauth2',
+            base_url: p.base_url || null,
+            scopes: Object.keys(p.scopes || {}),
+            ready: !needsClient(id),
+            docs: p.docs || p.console || null,
+        });
+    }
+    return out;
 }
 
 /**
@@ -184,12 +292,13 @@ export async function start({ uid, name, provider, scopes, base_url, token, head
         throw new Error('неизвестный провайдер ' + provider + '; есть: ' + Object.keys(PROVIDERS).join(', '));
     name ||= provider;
     file(uid, name); // проверка имени и uid
-    if (provider === 'token') {
+    if (p.mode === 'token') {
+        const effBase = base_url || p.base_url;
         if (!token)
             throw new Error('нужен токен');
-        if (!/^https?:\/\//i.test(String(base_url || '')))
+        if (!/^https?:\/\//i.test(String(effBase || '')))
             throw new Error('нужен базовый URL API (https://…)');
-        await write(uid, name, { type: 'token', provider, token: String(token), header: header || 'Authorization', base_url, scopes: [], connected: Date.now() });
+        await write(uid, name, { type: 'token', provider, token: String(token), header: header || 'Authorization', base_url: effBase, scopes: [], connected: Date.now() });
         onDone?.();
         return { ok: true, connected: name };
     }

@@ -26,6 +26,7 @@ import { devGitTools } from './tools/dev/git.js';
 import { devCheckTools } from './tools/dev/checks.js';
 import { devLspTools } from './tools/dev/lsp.js';
 import { branchTools } from './tools/branch.js';
+import { pluginTools } from './tools/plugins.js';
 import { browserTools } from './tools/browser.js';
 import { computerTools } from './tools/computer.js';
 import { guarded, systemAllowed } from './system.js';
@@ -51,8 +52,8 @@ export { resetServiceRegistry } from './tools/services.js';
 /** Запасная модель, если ни один слой ai/config.js её не задал. */
 export const DEFAULT_MODEL = '/MODELS/odant/Qwen3.8 27b';
 
-/** Инструменты, которых у субагентов нет: диалог с человеком, план, настройки подключений и расписаний. */
-const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push']);
+/** Инструменты, которых у субагентов нет: диалог с человеком, план, настройки подключений, плагинов и расписаний. */
+const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push', 'plugin']);
 
 /** 9.6: исходящие инструменты — вырезаются в режиме «данные не покидают сервер» (private места):
  *  поиск/запросы в интернете, внешние сервисы и MCP, подключения и запросы с их заголовками,
@@ -61,7 +62,7 @@ const SUBAGENT_DENY = new Set(['ask_user', 'todo_write', 'save_skill', 'connect_
 export function egressToolName(name) {
     const n = String(name || '');
     return n === 'web_search' || n === 'web_fetch' || n === 'http_request' || n === 'connections'
-        || n === 'connect_service' || n === 'disconnect_service'
+        || n === 'connect_service' || n === 'disconnect_service' || n === 'a2a_call'
         || n === 'computer_network'
         || n.startsWith('browser_')
         || n.startsWith('svc_')
@@ -367,7 +368,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);
