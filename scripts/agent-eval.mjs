@@ -1,25 +1,44 @@
 /**
- * Прогон эталонных задач агента (tests/eval/cases.js) на настоящей модели в изолированной песочнице:
- * копия $server (типы, пакет ai) и MODELS (с ключами) во временную папку + файлы задачи.
- * Рабочее дерево WORK не трогается.
+ * Прогон эталонных задач агента (tests/eval/cases.js, 15 направлений scorecard) на настоящей модели
+ * в изолированной песочнице и сравнение версий «до/после» (9.14):
  *
- *   node scripts/agent-eval.mjs [--model /MODELS/odant/Qwen3.8 27b] [--case delegate] [--keep]
+ *   npm run eval -- [--model "/MODELS/odant/Qwen3.8 27b"] [--dimension 13] [--case delegate] [--baseline before.json]
+ *   npm run eval -- --compare .index/eval/before.json .index/eval/after.json
  *
- * Итог — таблица задач (ok/fail, какие проверки не прошли, ходов, время), суммарные токены
- * (вход/выход/кэш из usage лент, включая субагентов — для замера стоимости и доли кэша) и файл
- * .index/eval/<дата>.json для сравнения моделей и версий промптов.
+ * Итог — таблица задач, сводка по 15 направлениям, время (общая/средняя), токены и стоимость в $
+ * (из тарифов модели pricing или --price-in / --price-out), плюс сохранение в .index/eval/<дата>.json.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { summarizeEvalRun, compareEvalRuns, formatEvalSummary, formatEvalComparison } from '../sources/modules/agent/eval.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const args = process.argv.slice(2);
 const opt = name => { const i = args.indexOf('--' + name); return i >= 0 ? args[i + 1] : undefined; };
 const only = opt('case');
+const onlyDim = opt('dimension') ? Number(opt('dimension')) : undefined;
 const model = opt('model');
+const baselineFile = opt('baseline');
+const priceIn = opt('price-in');
+const priceOut = opt('price-out');
 const keep = args.includes('--keep');
+
+const cmpIdx = args.indexOf('--compare');
+if (cmpIdx >= 0) {
+    const f1 = args[cmpIdx + 1];
+    const f2 = args[cmpIdx + 2];
+    if (!f1 || !f2) {
+        console.error('Использование: node scripts/agent-eval.mjs --compare <до.json> <после.json>');
+        process.exit(2);
+    }
+    const beforeRun = JSON.parse(fs.readFileSync(path.resolve(f1), 'utf-8'));
+    const afterRun = JSON.parse(fs.readFileSync(path.resolve(f2), 'utf-8'));
+    const diff = compareEvalRuns(beforeRun, afterRun);
+    console.log(formatEvalComparison(diff));
+    process.exit(diff.regressions.length ? 1 : 0);
+}
 
 process.env.WORK_TEST ??= '1';
 process.env.WORK_AUDIT = '0';
@@ -56,13 +75,14 @@ function toolsCalled(items) {
 }
 
 /** usage всех ответов ленты (включая вложенные ленты субагентов) — для замера стоимости и доли кэша. */
-function usageOf(items, acc = { prompt: 0, completion: 0, cached: 0, cacheWrite: 0, answers: 0 }) {
+function usageOf(items, acc = { prompt: 0, completion: 0, cached: 0, cacheWrite: 0, cost: 0, answers: 0 }) {
     for (const it of items || []) {
         if (it?.type === 'assistant' && it.usage?.prompt) {
             acc.prompt += Number(it.usage.prompt) || 0;
             acc.completion += Number(it.usage.completion) || 0;
             acc.cached += Number(it.usage.cached) || 0;
             acc.cacheWrite += Number(it.usage.cacheWrite) || 0;
+            acc.cost += Number(it.usage.cost) || 0;
             acc.answers++;
         }
         for (const t of it?.tools || [])
@@ -80,7 +100,7 @@ async function runCase(c, imports) {
         write(tmp, rel, content);
     process.chdir(tmp);
     const t0 = Date.now();
-    const result = { name: c.name, about: c.about, failed: [], tools: [], ms: 0 };
+    const result = { name: c.name, dimension: c.dimension || 1, about: c.about, failed: [], tools: [], ms: 0 };
     try {
         globalThis.WORK = new imports.$server();
         await WORK.children;
@@ -102,8 +122,11 @@ async function runCase(c, imports) {
         result.turns = res.items.filter(i => i.type === 'assistant').length;
         result.answer = res.content;
         const u = usageOf(res.items);
-        if (u.answers)
+        if (u.answers) {
             result.tokens = { prompt: u.prompt, completion: u.completion, cached: u.cached, cacheWrite: u.cacheWrite, answers: u.answers };
+            if (u.cost > 0)
+                result.costUsd = +u.cost.toFixed(6);
+        }
         const files = walk(tmp);
         for (const ch of c.checks) {
             let ok = true, why = '';
@@ -162,14 +185,14 @@ const imports = {
     runOnce: (await import('../sources/modules/agent/index.js')).runOnce,
 };
 const { CASES } = await import('../tests/eval/cases.js');
-const list = CASES.filter(c => !only || c.name === only);
+const list = CASES.filter(c => (!only || c.name === only) && (!onlyDim || Number(c.dimension) === onlyDim));
 if (!list.length) {
-    console.error('нет задачи ' + only + '; есть: ' + CASES.map(c => c.name).join(', '));
+    console.error('нет подходящих задач; есть: ' + CASES.map(c => c.name + '[' + c.dimension + ']').join(', '));
     process.exit(2);
 }
 const results = [];
 for (const c of list) {
-    process.stdout.write('▶ ' + c.name + ' … ');
+    process.stdout.write('▶ [' + c.dimension + '] ' + c.name + ' … ');
     const r = await runCase(c, imports);
     results.push(r);
     console.log(r.failed.length ? 'FAIL' : 'ok', '(' + Math.round(r.ms / 1000) + ' с, ходов ' + (r.turns ?? '?') + ', инструменты: ' + (r.tools.join(', ') || '—') + ')');
@@ -178,20 +201,23 @@ for (const c of list) {
     for (const e of r.toolErrors || [])
         console.log('    ! ' + e);
 }
-const passed = results.filter(r => !r.failed.length).length;
-const tokens = results.reduce((a, r) => ({
-    prompt: a.prompt + (r.tokens?.prompt || 0),
-    completion: a.completion + (r.tokens?.completion || 0),
-    cached: a.cached + (r.tokens?.cached || 0),
-    cacheWrite: a.cacheWrite + (r.cacheWrite || 0),
-}), { prompt: 0, completion: 0, cached: 0, cacheWrite: 0 });
-const cacheShare = tokens.prompt ? Math.round(tokens.cached / tokens.prompt * 100) : 0;
-console.log('\nИтог: ' + passed + '/' + results.length + (model ? ' — модель ' + model : ''));
-console.log('Токены: вход ' + tokens.prompt.toLocaleString('ru-RU') + ', выход ' + tokens.completion.toLocaleString('ru-RU')
-    + ', из кэша ' + tokens.cached.toLocaleString('ru-RU') + ' (' + cacheShare + '%), запись кэша ' + tokens.cacheWrite.toLocaleString('ru-RU'));
+const pricing = priceIn != null && priceOut != null
+    ? { input: Number(priceIn), output: Number(priceOut) }
+    : null;
+const summary = summarizeEvalRun(results, { model: model || 'по умолчанию', pricing });
+console.log('\n' + formatEvalSummary(summary));
+
 const outDir = path.join(ROOT, '.index', 'eval');
 fs.mkdirSync(outDir, { recursive: true });
 const out = path.join(outDir, new Date().toISOString().replace(/[:.]/g, '-') + '.json');
-fs.writeFileSync(out, JSON.stringify({ model: model || 'по умолчанию', at: new Date().toISOString(), passed, total: results.length, tokens, results }, null, 2));
-console.log('Результаты: ' + out);
-process.exit(passed === results.length ? 0 : 1);
+fs.writeFileSync(out, JSON.stringify(summary, null, 2));
+console.log('\nРезультаты: ' + out);
+
+if (baselineFile) {
+    const beforeRun = JSON.parse(fs.readFileSync(path.resolve(baselineFile), 'utf-8'));
+    const diff = compareEvalRuns(beforeRun, summary);
+    console.log('\n' + formatEvalComparison(diff));
+    if (diff.regressions.length)
+        process.exit(1);
+}
+process.exit(summary.passed === summary.total ? 0 : 1);

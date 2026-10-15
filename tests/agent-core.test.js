@@ -2717,3 +2717,97 @@ describe('экосистема интеграций (9.9)', () => {
         assert.equal(w.logBox.children[1].innerHTML, undefined, 'виджет использовал innerHTML вместо textContent');
     });
 });
+
+// ── 9.14 (final): автоиспытания агента по 15 направлениям ───────────────────
+
+describe('автоиспытания агента по 15 направлениям (9.14)', () => {
+    it('CASES: покрытие всех 15 направлений scorecard, уникальные имена и проверки', async () => {
+        const { CASES, DIMENSIONS } = await import('../tests/eval/cases.js');
+        assert.equal(DIMENSIONS.length, 15, 'должно быть 15 направлений scorecard');
+        assert.ok(CASES.length >= 48, 'эталонных задач меньше 48: ' + CASES.length);
+        const names = new Set();
+        const byDim = new Map(DIMENSIONS.map(d => [d.id, 0]));
+        for (const c of CASES) {
+            assert.ok(c.name && !names.has(c.name), 'дубль или пустое имя задачи: ' + c.name);
+            names.add(c.name);
+            assert.ok(byDim.has(c.dimension), 'невалидный dimension у ' + c.name + ': ' + c.dimension);
+            byDim.set(c.dimension, byDim.get(c.dimension) + 1);
+            assert.ok(typeof c.prompt === 'string' && c.prompt.length > 5, 'пустой prompt у ' + c.name);
+            assert.ok(Array.isArray(c.checks) && c.checks.length >= 1, 'нет checks у ' + c.name);
+        }
+        for (const d of DIMENSIONS)
+            assert.ok(byDim.get(d.id) >= 1, 'направление [' + d.id + '] ' + d.title + ' не покрыто задачами');
+    });
+
+    it('summarizeEvalRun: расчёт стоимости ($), времени (totalMs/avgMs), доли кэша и разбивки по 15 направлениям', async () => {
+        const { summarizeEvalRun, formatEvalSummary } = await import('../sources/modules/agent/eval.js');
+        const summary = summarizeEvalRun([
+            { name: 'c1', dimension: 1, failed: [], ms: 1200, tokens: { prompt: 10000, completion: 2000, cached: 5000 } },
+            { name: 'c2', dimension: 1, failed: ['ошибка'], ms: 800, tokens: { prompt: 5000, completion: 1000, cached: 0 } },
+            { name: 'c3', dimension: 13, failed: [], ms: 1000, tokens: { prompt: 5000, completion: 1000, cached: 5000 } },
+        ], { model: '/MODELS/test', pricing: { input: 1, output: 2 } }); // $1/Мток вход+кэш, $2/Мток выход
+
+        assert.equal(summary.passed, 2);
+        assert.equal(summary.total, 3);
+        assert.equal(summary.passRate, 66.7);
+        assert.equal(summary.totalMs, 3000);
+        assert.equal(summary.avgMs, 1000);
+        assert.equal(summary.tokens.prompt, 20000);
+        assert.equal(summary.tokens.cached, 10000);
+        assert.equal(summary.tokens.cacheShare, 50);
+        // вход+кэш = 30000 * $1/1e6 = 0.03; выход = 4000 * $2/1e6 = 0.008 → итого $0.038
+        assert.equal(summary.costUsd, 0.038, 'стоимость прогона посчитана неверно: ' + summary.costUsd);
+        const dim1 = summary.byDimension.find(d => d.id === 1);
+        const dim13 = summary.byDimension.find(d => d.id === 13);
+        assert.equal(dim1.passed, 1);
+        assert.equal(dim1.total, 2);
+        assert.equal(dim13.passed, 1);
+        assert.equal(dim13.total, 1);
+        const text = formatEvalSummary(summary);
+        assert.match(text, /Итог: 2\/3 \(66\.7%\)/);
+        assert.match(text, /Стоимость: \$0\.0380/);
+    });
+
+    it('compareEvalRuns и CLI --compare: ловит регрессии (ok → FAIL), улучшения и дельты стоимости/времени', async () => {
+        const { summarizeEvalRun, compareEvalRuns, formatEvalComparison } = await import('../sources/modules/agent/eval.js');
+        const { spawnSync } = await import('node:child_process');
+        const beforeRun = summarizeEvalRun([
+            { name: 'read-contract', dimension: 2, failed: [], ms: 1000, costUsd: 0.01 },
+            { name: 'code-grep-search', dimension: 13, failed: ['не вызван grep'], ms: 2000, costUsd: 0.02 },
+        ], { model: 'v1' });
+        const afterRun = summarizeEvalRun([
+            { name: 'read-contract', dimension: 2, failed: ['ответ пуст'], ms: 900, costUsd: 0.008 },
+            { name: 'code-grep-search', dimension: 13, failed: [], ms: 1100, costUsd: 0.012 },
+        ], { model: 'v2' });
+
+        const diff = compareEvalRuns(beforeRun, afterRun);
+        assert.deepEqual(diff.regressions.map(r => r.name), ['read-contract'], 'регрессия не поймана');
+        assert.deepEqual(diff.improvements.map(r => r.name), ['code-grep-search'], 'улучшение не поймано');
+        assert.equal(diff.deltaMs, -1000);
+        assert.equal(diff.deltaCostUsd, -0.01);
+        const dim2 = diff.dimensions.find(d => d.id === 2);
+        const dim13 = diff.dimensions.find(d => d.id === 13);
+        assert.equal(dim2.deltaPassed, -1);
+        assert.equal(dim13.deltaPassed, 1);
+        assert.match(formatEvalComparison(diff), /РЕГРЕССИИ \(1\): read-contract/);
+
+        // CLI --compare возвращает код 1 при регрессиях и 0 без регрессий
+        const fBefore = path.join(tmp, 'eval-before.json');
+        const fAfter = path.join(tmp, 'eval-after.json');
+        fs.writeFileSync(fBefore, JSON.stringify(beforeRun));
+        fs.writeFileSync(fAfter, JSON.stringify(afterRun));
+        const scriptPath = path.join(ROOT, 'scripts', 'agent-eval.mjs');
+        const badExit = spawnSync(process.execPath, [scriptPath, '--compare', fBefore, fAfter], { cwd: ROOT, encoding: 'utf-8' });
+        assert.equal(badExit.status, 1, 'CLI --compare не вернул код 1 при регрессии');
+        assert.match(badExit.stdout, /РЕГРЕССИИ \(1\): read-contract/);
+
+        const cleanAfter = summarizeEvalRun([
+            { name: 'read-contract', dimension: 2, failed: [], ms: 800, costUsd: 0.008 },
+            { name: 'code-grep-search', dimension: 13, failed: [], ms: 1000, costUsd: 0.01 },
+        ], { model: 'v2-clean' });
+        fs.writeFileSync(fAfter, JSON.stringify(cleanAfter));
+        const okExit = spawnSync(process.execPath, [scriptPath, '--compare', fBefore, fAfter], { cwd: ROOT, encoding: 'utf-8' });
+        assert.equal(okExit.status, 0, 'CLI --compare должен вернуть 0 без регрессий');
+        assert.match(okExit.stdout, /Регрессий нет/);
+    });
+});
