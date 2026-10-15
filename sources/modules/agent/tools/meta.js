@@ -188,7 +188,9 @@ export const metaTools = [
             entry.agent = name;
             entry.items = [{ id: genId(), type: 'user', time: Date.now(), content: String(args.prompt) }];
             await ctx.host.save();
-            const llm = def.meta.model ? await env.llmFor(def.meta.model) : ctx.llm;
+            // 9.2: дешёвая модель для субагентов (ai/config.js subagentModel) — если у агента нет своей
+            const subModel = def.meta.model || env.config?.subagentModel;
+            const llm = subModel ? await env.llmFor(subModel) : ctx.llm;
             const res = await ctx.runLoop({
                 llm,
                 system: () => env.makeSystemParts(def),
@@ -422,6 +424,67 @@ export const metaTools = [
             ctx.entry.path = real;
             ctx.entry.image = true;
             return 'изображение сохранено: ' + real + ' (' + (pic.model || model.short) + ')';
+        },
+    },
+    {
+        name: 'budget',
+        readonly: true,
+        description: 'Стоимость и бюджет: потрачено в этой задаче (ходы, токены, деньги по тарифам моделей), дневной лимит пользователя и трата сегодня, оценка следующего хода. all:true (админу) — траты всех пользователей за сегодня.',
+        parameters: {
+            type: 'object',
+            properties: { all: { type: 'boolean', description: 'Только админу: траты всех пользователей за сегодня' } },
+        },
+        async run(args, ctx) {
+            const { usageTotals, money } = await import('../cost.js');
+            const { isAdmin } = await import('../system.js');
+            // сумма по ленте задачи (включая вложенные ленты субагентов)
+            const walk = (items, acc) => {
+                for (const it of items || []) {
+                    if (it?.type !== 'assistant')
+                        continue;
+                    if (it.usage) {
+                        acc.turns++;
+                        acc.prompt += Number(it.usage.prompt) || 0;
+                        acc.completion += Number(it.usage.completion) || 0;
+                        acc.cached += Number(it.usage.cached) || 0;
+                        acc.cost += Number(it.usage.cost ?? 0) || 0;
+                        acc.priced = acc.priced || it.usage.cost != null;
+                    }
+                    for (const t of it.tools || [])
+                        walk(t?.items, acc);
+                }
+                return acc;
+            };
+            const out = [];
+            const body = ctx?.task && typeof ctx.task.getBody === 'function' ? await ctx.task.getBody().catch(() => null) : null;
+            const t = body ? walk(body.items, { turns: 0, prompt: 0, completion: 0, cached: 0, cost: 0, priced: false }) : null;
+            if (t?.turns)
+                out.push('Задача: ' + t.turns + ' ход(ов), ' + (t.prompt + t.completion + t.cached).toLocaleString('ru-RU') + ' токенов'
+                    + (t.priced ? ', ' + money(t.cost) + ' (по тарифам моделей)' : ' (тарифы моделей не заданы — pricing в карточке MODELS)'));
+            else
+                out.push('Задача: расходов ещё нет (списание — после каждого хода с ответом модели)');
+            // дневной лимит пользователя
+            const limits = ctx?.env?.config?.limits || {};
+            const uid = ctx?.session?.uid || 'anonymous';
+            const spent = await usageTotals({ uid });
+            if (limits.dayTokens || limits.dayCost)
+                out.push('Дневной лимит: ' + (limits.dayTokens ? limits.dayTokens.toLocaleString('ru-RU') + ' токенов' : '')
+                    + (limits.dayTokens && limits.dayCost ? ' / ' : '') + (limits.dayCost ? '$' + limits.dayCost : '')
+                    + ' — потрачено сегодня: ' + spent.tokens.toLocaleString('ru-RU') + ' токенов, ' + (spent.cost ? money(spent.cost) : 'без тарифов'));
+            else
+                out.push('Дневной лимит: не задан (ai/config.js limits: { dayTokens, dayCost }); потрачено сегодня: '
+                    + spent.tokens.toLocaleString('ru-RU') + ' токенов' + (spent.cost ? ', ' + money(spent.cost) : ''));
+            if (args?.all) {
+                if (!(await isAdmin(ctx?.session)))
+                    throw new Error('траты всех пользователей видит только администратор WORK');
+                const every = await usageTotals({});
+                out.push('Все пользователи сегодня: ' + every.rows + ' ход(ов), ' + every.tokens.toLocaleString('ru-RU') + ' токенов, ' + (every.cost ? money(every.cost) : 'без тарифов'));
+            }
+            // оценка следующего хода: средний расход хода этой задачи
+            if (t?.turns)
+                out.push('Оценка следующего хода: ~' + Math.round((t.prompt + t.completion + t.cached) / t.turns).toLocaleString('ru-RU') + ' токенов'
+                    + (t.priced ? ', ~' + money(t.cost / t.turns) : ''));
+            return out.join('\n');
         },
     },
 ];

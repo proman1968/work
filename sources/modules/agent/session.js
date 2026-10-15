@@ -846,7 +846,8 @@ export async function compact(file, params = {}) {
     const place = file.$class || file.$owner || null;
     const host = { mode: body.mode, signal: undefined, save: () => save(s, params.session) };
     const env = await createEnv({ place, session: params.session, host });
-    const llm = await env.llmFor(body.model || await env.defaultModel()); // 9.1: с запасными моделями
+    // 9.2: compactModel — дешёвая модель для сжатия (ai/config.js), иначе — модель задачи
+    const llm = await env.llmFor(env.config.compactModel || body.model || await env.defaultModel());
     const done = await maybeCompact({ llm, items: body.items, host, system: await env.makeSystemParts(), hooks: env.hooks, task: file, force: true });
     return { ok: done };
 }

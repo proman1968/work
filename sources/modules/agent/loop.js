@@ -26,6 +26,7 @@ import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } fr
 import { decide } from './permissions.js';
 import { newNonce, wrapUntrusted, taintSources } from './taint.js';
 import { runPreTool, runAppend, runNotify } from './hooks.js';
+import { costOf, recordUsage, budgetExceeded } from './cost.js';
 
 export const MAX_TURNS = 60;
 export const RESULT_MAX = 24000;
@@ -114,6 +115,15 @@ async function runLoopCore(opts) {
                 await host.save();
                 return { status: 'limit' };
             }
+            // 9.2: дневной бюджет (ai/config.js limits: dayTokens/dayCost) — исчерпан: стоп с пояснением
+            if (opts.ctx?.session) {
+                const over = await budgetExceeded({ config: opts.ctx?.env?.config, uid: opts.ctx.session.uid });
+                if (over) {
+                    items.push({ id: genId(), type: 'error', time: Date.now(), content: 'Бюджет остановил задачу: ' + over.reason });
+                    await host.save();
+                    return { status: 'limit' };
+                }
+            }
             const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
             const toolsTokens = estimateTokens(schemas);
             await maybeCompact({ llm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task });
@@ -135,6 +145,20 @@ async function runLoopCore(opts) {
             items.push(it);
             await host.save();
             const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: opts.effort });
+            // 9.2: стоимость хода по тарифам модели (pricing) + учёт (agent_usage в .index/work.db)
+            if (it.usage) {
+                const cost = costOf(it.usage, llm.pricing);
+                if (cost != null)
+                    it.usage.cost = cost;
+                await recordUsage({
+                    uid: opts.ctx?.session?.uid,
+                    place: opts.ctx?.place?.path,
+                    task: opts.ctx?.task?.path,
+                    model: llm.used || llm.name,
+                    usage: it.usage,
+                    cost,
+                });
+            }
             if (!calls.length) {
                 // реплики, пришедшие во время хода, — в ленту и ещё один ход
                 if (takeQueued(items, host, opts.depth)) {

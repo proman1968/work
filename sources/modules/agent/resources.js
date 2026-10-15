@@ -1,8 +1,10 @@
 /**
  * Данные агента из дерева (не код ядра):
  *   ai/system.md        — правила агента (слои дописываются; `replace: true` во фронтматтере — заменить)
- *   ai/config.js        — { model, fallbackModels, imageModel, maxTurns, hooks }; hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
- *                          (fallbackModels — 9.1: запасные модели при сбое основной до первого токена)
+ *   ai/config.js        — { model, fallbackModels, subagentModel, compactModel, limits, imageModel, maxTurns, hooks };
+ *                          hooks слоёв складываются (см. hooks.js), остальное — ближний перекрывает
+ *                          (fallbackModels — 9.1: запасные модели при сбое основной до первого токена;
+ *                          subagentModel/compactModel/limits — 9.2: дешёвая модель субагентов/сжатия и дневные лимиты)
  *   ai/agents/*.md      — субагенты (фронтматтер: name, description, tools, model, maxTurns, requires)
  *   ai/skills/*.md      — навыки (фронтматтер: name, description, requires; тело — инструкция)
  *

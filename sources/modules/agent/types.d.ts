@@ -128,6 +128,8 @@ interface LLM {
     item?: any;
     contextTokens?: number;
     vision?: boolean;
+    /** 9.2: тарифы модели ($ за миллион токенов) — карточка MODELS pricing: { input, output } */
+    pricing?: { input: number, output: number } | null;
     /** 9.1: какая модель реально ответила после переключения на запасную (null — основная) */
     used?: string | null;
     stream: (req: { messages?: any, tools?: any, signal?: AbortSignal, effort?: string, [key: string]: any }) => AsyncIterable<LLMEvent>;

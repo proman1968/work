@@ -101,6 +101,8 @@ export async function llmFor(modelPath) {
         item,
         contextTokens: Number(item.maxTokens) || 32000,
         vision: caps.includes('vision'),
+        // 9.2: тарифы модели ($ за миллион токенов) — карточка MODELS pricing: { input, output }
+        pricing: item.pricing && typeof item.pricing === 'object' ? item.pricing : null,
         stream({ messages, tools, signal, effort }) {
             /** @type {{ messages: any, temperature?: number, signal?: AbortSignal, tools?: any, maxOutput?: number, effort?: string }} */
             const req = { messages, temperature: 0.3, signal };

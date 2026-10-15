@@ -16,7 +16,7 @@ import { readAudit } from '../sources/server/access/audit.js';
 import { decide, isProtectedPath } from '../sources/modules/agent/permissions.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
 import { webTools } from '../sources/modules/agent/tools/services.js';
-import { createEnv, runOnce } from '../sources/modules/agent/index.js';
+import { createEnv, runOnce, llmFor } from '../sources/modules/agent/index.js';
 import { metaTools } from '../sources/modules/agent/tools/meta.js';
 import * as session from '../sources/modules/agent/session.js';
 import { findPendingTasks } from '../sources/modules/agent/recovery.js';
@@ -238,6 +238,14 @@ export default {};`);
     // 9.1: точка с запасными моделями в конфиге слоя
     write('BOX2/$class/class.js', `export default { label: 'С запасом' }`);
     write('BOX2/$class/ai/config.js', `export default { fallbackModels: ['/MODELS/mock2'] }`);
+    // 9.2: модель с тарифами; точка с дешёвыми моделями для субагентов/сжатия
+    write('MODELS/mock-priced/$ai/class.js', `export default {
+        maxTokens: 50000,
+        pricing: { input: 1, output: 2 },
+        async *streamChat() { yield 'ок'; yield { type: 'usage', prompt_tokens: 1000000, completion_tokens: 500000, total_tokens: 1500000 }; },
+    }`);
+    write('BOX3/$class/class.js', `export default { label: 'С дешёвыми' }`);
+    write('BOX3/$class/ai/config.js', `export default { subagentModel: '/MODELS/mock2', compactModel: '/MODELS/mock2' }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -2043,5 +2051,94 @@ describe('fallback: резервная модель при сбое до пер�
         assert.equal(await collect(llm), 'запасной ответ', 'env.llmFor не подставил запасную из конфига');
         const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
         assert.deepEqual(await plain.fallbackModels(), [], 'без конфига запас должен быть пуст');
+    });
+});
+
+// ── 9.2 (final): стоимость и бюджеты ───────────────────────────────────────
+
+describe('стоимость и бюджеты (9.2)', () => {
+    const UID_B = 'B000000000000092';
+    const UID_L = 'L000000000000093';
+    const UID_M = 'M000000000000094';
+
+    it('costOf: тарифы $/Мток (кэш — по цене входа); без тарифа — null', async () => {
+        const { costOf } = await import('../sources/modules/agent/cost.js');
+        assert.equal(costOf({ prompt: 1_000_000, completion: 500_000, cached: 0 }, { input: 1, output: 2 }), 2);
+        assert.equal(costOf({ prompt: 0, completion: 0, cached: 1_000_000 }, { input: 1, output: 2 }), 1, 'кэш не по цене входа');
+        assert.equal(costOf({ prompt: 100, completion: 100 }, null), null, 'без тарифа считаем стоимость');
+        assert.equal(costOf(null, { input: 1, output: 2 }), null);
+    });
+
+    it('ход списывается: стоимость по тарифам в ленте + учёт в БД (токены и деньги)', async () => {
+        const { usageTotals } = await import('../sources/modules/agent/cost.js');
+        const llm = await llmFor('/MODELS/mock-priced');
+        const items = [{ id: 'u', type: 'user', content: 'работай' }];
+        await runLoop({ llm, system: 'S', items, tools: workTools, host: mkHost(),
+            ctx: { session: { uid: UID_B }, place: await WORK.get_item('/BOX'), env: { config: {} } } });
+        assert.equal(items[1].usage.cost, 2, 'стоимость хода не записана в ленту');
+        const totals = await usageTotals({ uid: UID_B });
+        assert.equal(totals.tokens, 1_500_000, 'учёт токенов в БД не ведётся');
+        assert.equal(totals.cost, 2, 'учёт денег в БД не ведётся');
+    });
+
+    it('дневной лимит останавливает цикл со статусом limit и пояснением', async () => {
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'ls', args: { path: '/BOX' } }] },
+            { calls: [{ name: 'ls', args: { path: '/BOX' } }] },
+            { text: 'этот ход не должен выполниться' },
+        ]).stream;
+        const llm = await llmFor('/MODELS/mock');
+        const items = [{ id: 'u', type: 'user', content: 'работай' }];
+        // каждый ход scripted ≈ 15 токенов: лимит 20 — после двух ходов исчерпан
+        const res = await runLoop({ llm, system: 'S', items, tools: workTools, host: mkHost(),
+            ctx: { session: { uid: UID_L }, env: { config: { limits: { dayTokens: 20 } } } } });
+        assert.equal(res.status, 'limit', 'цикл не остановился бюджетом');
+        assert.match(items.at(-1).content, /Бюджет остановил задачу: дневной лимит токенов/);
+        assert.doesNotMatch(JSON.stringify(items), /этот ход не должен выполниться/, 'ход после лимита выполнился');
+    });
+
+    it('budget: задача (токены/деньги), дневной лимит, оценка следующего хода; all — только админу', async () => {
+        const { setAdminCheck } = await import('../sources/modules/agent/system.js');
+        const budget = metaTools.find(t => t.name === 'budget');
+        const llm = await llmFor('/MODELS/mock-priced');
+        const items = [{ id: 'u', type: 'user', content: 'работай' }];
+        const ctx = {
+            entry: {}, session: { uid: UID_M }, host: mkHost(), depth: 0,
+            env: { config: { limits: { dayCost: 10 } } },
+            task: { getBody: async () => ({ items }) },
+        };
+        await runLoop({ llm, system: 'S', items, tools: workTools, host: mkHost(),
+            ctx: { session: { uid: UID_M }, place: null, env: { config: {} } } });
+        const text = await budget.run({}, ctx);
+        assert.match(text, /Задача: 1 ход/, text);
+        assert.match(text, /1.500.000 токенов, \$2/, text);
+        assert.match(text, /Дневной лимит: \$10/, text);
+        assert.match(text, /потрачено сегодня.*\$2/, text);
+        assert.match(text, /Оценка следующего хода/, text);
+        // не админ: траты всех — отказ
+        await assert.rejects(budget.run({ all: true }, ctx), /только администратор/);
+        // админ: траты всех пользователей
+        setAdminCheck(() => true);
+        try {
+            const every = await budget.run({ all: true }, ctx);
+            assert.match(every, /Все пользователи сегодня: \d+ ход\(ов\)/, every);
+        }
+        finally {
+            setAdminCheck(null);
+        }
+    });
+
+    it('subagentModel/compactModel: дешёвая модель субагентов и сжатия из конфига слоя', async () => {
+        const env = await createEnv({ place: await WORK.get_item('/BOX3'), host: { mode: 'auto' } });
+        assert.equal(env.config.subagentModel, '/MODELS/mock2');
+        assert.equal(env.config.compactModel, '/MODELS/mock2');
+        // субагент без своей модели — работает на subagentModel
+        globalThis.__MOCK_STREAM__ = scripted([
+            { calls: [{ name: 'task', args: { agent: 'explore', description: 'осмотр', prompt: 'посмотри' } }] },
+            { text: 'итог' },
+        ]).stream;
+        const res = await runOnce({ place: await WORK.get_item('/BOX3'), prompt: 'работай' });
+        assert.equal(res.status, 'done');
+        assert.match(res.items[1].tools[0].result, /запасной ответ/, 'субагент не на дешёвой модели из конфига');
     });
 });
