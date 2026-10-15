@@ -2811,3 +2811,173 @@ describe('автоиспытания агента по 15 направления
         assert.match(okExit.stdout, /Регрессий нет/);
     });
 });
+
+// ── 9.12 (final): управление компьютером пользователя (агент-«мост») ────────
+
+describe('управление компьютером пользователя: агент-мост (9.12)', () => {
+    const USER1 = 'A000000000000001';
+    const USER2 = 'A000000000000002';
+
+    it('assertBridgePath и executeLocalBridgeOp: песочница папки, запрет чувствительных файлов и белый список программ', async () => {
+        const { assertBridgePath, executeLocalBridgeOp } = await import('../sources/modules/bridge/hub.js');
+        const rootDir = path.join(tmp, 'pc-bridge-root');
+        fs.mkdirSync(rootDir, { recursive: true });
+        fs.writeFileSync(path.join(rootDir, 'notes.txt'), 'Привет с ПК!\n');
+
+        // выход за пределы rootDir и чувствительные файлы блокируются
+        assert.throws(() => assertBridgePath(rootDir, '../outside.txt'), /выход за пределы/);
+        assert.throws(() => assertBridgePath(rootDir, '.env'), /чувствительным файлам/);
+        assert.throws(() => assertBridgePath(rootDir, '.ssh/id_rsa'), /чувствительным файлам/);
+        assert.throws(() => assertBridgePath(rootDir, 'cert.pem'), /чувствительным файлам/);
+
+        // программа вне белого списка или с опасными аргументами блокируется
+        await assert.rejects(
+            executeLocalBridgeOp({ rootDir, readOnly: false, allowedApps: ['notepad'] }, { op: 'open_app', app: 'powershell' }),
+            /не входит в разрешённый список/
+        );
+        await assert.rejects(
+            executeLocalBridgeOp({ rootDir, readOnly: false, allowedApps: ['notepad'] }, { op: 'open_app', app: 'notepad', args: ['a.txt; rm -rf'] }),
+            /недопустимый аргумент/
+        );
+    });
+
+    it('мост: режим «только просмотр» (readOnly), изоляция между пользователями, подтверждения каждого действия и журнал', async () => {
+        const { registerBridge, unregisterBridge, executeLocalBridgeOp } = await import('../sources/modules/bridge/hub.js');
+        const { desktopTools } = await import('../sources/modules/agent/tools/desktop.js');
+        const rootDir = path.join(tmp, 'pc-user1-dir');
+        fs.mkdirSync(rootDir, { recursive: true });
+        fs.writeFileSync(path.join(rootDir, 'readme-pc.md'), 'Локальная заметка пользователя');
+
+        const byName = Object.fromEntries(desktopTools.map(t => [t.name, t]));
+        // каждое изменяющее действие требует подтверждения человека без «разрешить всегда»
+        for (const [toolName, sampleArgs] of [
+            ['desktop_mode', { readOnly: false }],
+            ['desktop_file', { action: 'write', path: 'a.txt', content: '1' }],
+            ['desktop_app', { action: 'open', app: 'notepad', reason: 'открыть блокнот' }],
+            ['desktop_app', { action: 'focus', title: 'Блокнот', reason: 'переключить окно' }],
+        ]) {
+            const p = byName[toolName].permission(sampleArgs);
+            assert.equal(p?.verdict, 'ask', toolName + ' не требует подтверждения человека');
+            assert.equal(p?.noAlways, true, toolName + ' не запретил «разрешить всегда»');
+        }
+
+        // регистрируем мост USER1 в режиме «только просмотр» (readOnly: true)
+        registerBridge({
+            uid: USER1,
+            hostname: 'WORKSTATION-01',
+            platform: 'win32',
+            rootDir,
+            readOnly: true,
+            allowedApps: ['notepad', 'calc'],
+            localHandler: (cmd, s) => executeLocalBridgeOp({
+                rootDir: s.rootDir,
+                readOnly: s.readOnly,
+                allowedApps: s.allowedApps,
+                spawnApp: async (app) => ({ pid: app === 'notepad' ? 4242 : 1111 }),
+            }, cmd),
+        });
+
+        try {
+            // чтение (status, windows, ls, read) в режиме readOnly работает
+            const st1 = await byName.desktop_status.run({}, { session: { uid: USER1 } });
+            assert.match(st1, /WORKSTATION-01/);
+            assert.match(st1, /ТОЛЬКО ПРОСМОТР/);
+            const winText = await byName.desktop_windows.run({}, { session: { uid: USER1 } });
+            assert.match(winText, /Окна на ПК пользователя/);
+            const lsText = await byName.desktop_file.run({ action: 'ls' }, { session: { uid: USER1 } });
+            assert.match(lsText, /readme-pc\.md/);
+            const readText = await byName.desktop_file.run({ action: 'read', path: 'readme-pc.md' }, { session: { uid: USER1 } });
+            assert.match(readText, /Локальная заметка пользователя/);
+
+            // запись и запуск программ в режиме «только просмотр» жёстко блокируются
+            await assert.rejects(
+                byName.desktop_file.run({ action: 'write', path: 'new.txt', content: 'нет' }, { session: { uid: USER1 } }),
+                /только просмотр/
+            );
+            await assert.rejects(
+                byName.desktop_app.run({ action: 'open', app: 'notepad', reason: 'тест' }, { session: { uid: USER1 } }),
+                /только просмотр/
+            );
+
+            // изоляция по пользователю: USER2 не видит и не может вызвать мост USER1
+            await assert.rejects(
+                byName.desktop_file.run({ action: 'ls' }, { session: { uid: USER2 } }),
+                /не запущен агент-«мост»/
+            );
+
+            // выключаем readOnly → запись и запуск разрешённой программы проходят и попадают в журнал моста
+            await byName.desktop_mode.run({ readOnly: false }, { session: { uid: USER1 } });
+            const wr = await byName.desktop_file.run({ action: 'write', path: 'out/result.txt', content: 'готово' }, { session: { uid: USER1 } });
+            assert.match(wr, /out\/result\.txt/);
+            assert.equal(fs.readFileSync(path.join(rootDir, 'out', 'result.txt'), 'utf-8'), 'готово');
+
+            const appRes = await byName.desktop_app.run({ action: 'open', app: 'notepad', args: ['out/result.txt'], reason: 'открыть результат' }, { session: { uid: USER1 } });
+            assert.match(appRes, /запущена программа «notepad» \(pid 4242\)/);
+
+            const st2 = await byName.desktop_status.run({}, { session: { uid: USER1 } });
+            assert.match(st2, /write \(out\/result\.txt\) → ok/);
+            assert.match(st2, /open_app \(notepad\) → ok/);
+        }
+        finally {
+            unregisterBridge(USER1);
+        }
+    });
+
+    it('HTTP-транспорт /~bridge/*: авторизация по токену и полный цикл register → poll → result', async () => {
+        const { Readable } = await import('node:stream');
+        const { issueToken } = await import('../sources/modules/mcp/tokens.js');
+        const { handleBridgeHttp, dispatchBridgeCommand, unregisterBridge } = await import('../sources/modules/bridge/hub.js');
+        const tok = await issueToken(USER1, { role: 'USER', label: 'bridge-http' });
+
+        const callBridge = async (method, urlPath, bodyObj, { token, ip = '127.0.0.1' } = {}) => {
+            const raw = bodyObj != null ? Buffer.from(JSON.stringify(bodyObj), 'utf-8') : Buffer.alloc(0);
+            const req = Object.assign(Readable.from(raw.length ? [raw] : []), {
+                method,
+                url: urlPath,
+                headers: {
+                    host: 'localhost:8001',
+                    ...(token ? { authorization: 'Bearer ' + token } : {}),
+                },
+                socket: { remoteAddress: ip },
+            });
+            let status = 200;
+            const chunks = [];
+            const res = {
+                writeHead(st) { status = st; },
+                end(c) { if (c != null) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))); },
+            };
+            await handleBridgeHttp(req, res);
+            return { status, json: JSON.parse(Buffer.concat(chunks).toString('utf-8')) };
+        };
+
+        try {
+            // внешний IP и запрос без токена отклоняются
+            const ext = await callBridge('POST', '/~bridge/register', {}, { token: tok.token, ip: '8.8.8.8' });
+            assert.equal(ext.status, 403);
+            const noTok = await callBridge('POST', '/~bridge/register', {});
+            assert.equal(noTok.status, 401);
+
+            // регистрация, постановка команды, poll и возврат результата
+            const reg = await callBridge('POST', '/~bridge/register', { hostname: 'LAPTOP-U1', platform: 'win32', rootDir: tmp, readOnly: false }, { token: tok.token });
+            assert.equal(reg.status, 200);
+            assert.equal(reg.json.ok, true);
+
+            const cmdPromise = dispatchBridgeCommand(USER1, { op: 'windows' });
+            const polled = await callBridge('GET', '/~bridge/poll', null, { token: tok.token });
+            assert.equal(polled.status, 200);
+            assert.equal(polled.json.command?.op, 'windows');
+
+            const posted = await callBridge('POST', '/~bridge/result', {
+                id: polled.json.command.id,
+                result: { windows: [{ id: 'w1', title: 'Браузер', app: 'edge' }] },
+            }, { token: tok.token });
+            assert.equal(posted.status, 200);
+
+            const resolved = await cmdPromise;
+            assert.equal(resolved.windows[0].title, 'Браузер');
+        }
+        finally {
+            unregisterBridge(USER1);
+        }
+    });
+});

@@ -271,6 +271,12 @@ export function createRequestHandler() {
             if (await handleA2aHttp(request, response))
                 return;
         }
+        // 9.12: агент-«мост» на компьютере пользователя (/~bridge/register, /~bridge/poll, /~bridge/result)
+        if (reqPath.startsWith('/~bridge/')) {
+            const { handleBridgeHttp } = await import('../modules/bridge/hub.js');
+            if (await handleBridgeHttp(request, response))
+                return;
+        }
         const cookies = parseCookies(request);
         let session;
         // Подписанный запрос узла сети WORK — эфемерная сессия субъекта-узла (без cookie)

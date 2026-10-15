@@ -27,6 +27,7 @@ import { devCheckTools } from './tools/dev/checks.js';
 import { devLspTools } from './tools/dev/lsp.js';
 import { branchTools } from './tools/branch.js';
 import { pluginTools } from './tools/plugins.js';
+import { desktopTools, desktopBridgeAvailable } from './tools/desktop.js';
 import { browserTools } from './tools/browser.js';
 import { computerTools } from './tools/computer.js';
 import { guarded, systemAllowed } from './system.js';
@@ -372,12 +373,16 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);
-            // персональный компьютер: всем, но только когда Docker отвечает
+            // персональный компьютер (Docker-песочница): всем, но только когда Docker отвечает
             try {
                 if (await sandboxAvailable())
                     all.push(...sandboxTools, ...computerTools, ...browserTools);
             }
             catch (e) { log.debug('env.tools', e); /* Docker недоступен — без песочницы */ }
+            // 9.12: агент-«мост» на настоящем компьютере пользователя: desktop_status всегда, остальные — когда мост подключён
+            all.push(desktopTools[0]);
+            if (desktopBridgeAvailable(session))
+                all.push(...desktopTools.slice(1));
             // 9.6: режим «данные не покидают сервер» — исходящие инструменты вырезаны:
             // контекст не уходит провайдерам поиска/сервисов/MCP, подключений и браузера
             if (privatePlace)
