@@ -404,6 +404,38 @@ describe('расписание', () => {
         assert.throws(() => S.normalizeRule({ at: '09:00', days: [0] }), /1–7/);
     });
 
+    it('9.8: календарные даты — однократно, ежемесячно, ежегодно; рабочие дни', () => {
+        const from = Date.parse('2026-09-28T10:00:00Z'); // пн 28.09.2026 13:00 МСК
+        // конкретная дата в будущем / прошедшая — null / дата без времени — ошибка
+        const once = S.normalizeRule({ date: '2026-10-20', at: '15:00' });
+        assert.equal(new Date(S.nextRun(once, 'Europe/Moscow', from)).toISOString(), '2026-10-20T12:00:00.000Z', 'однократная дата');
+        assert.equal(S.nextRun(once, 'Europe/Moscow', Date.parse('2026-10-21T00:00:00Z')), null, 'прошедшая дата не повторяется');
+        assert.throws(() => S.normalizeRule({ date: '2026-10-20' }), /нужно at/);
+        assert.throws(() => S.normalizeRule({ date: '20.10.2026', at: '09:00' }), /YYYY-MM-DD/);
+        assert.throws(() => S.normalizeRule({ date: '2026-10-20', at: '09:00', repeat: 'weekly' }), /repeat/);
+        // ежемесячно: от 28.09 следующий 20-й — 20.10; 31-е в коротком месяце — месяц пропускается (31.08 → 31.10)
+        const monthly = S.normalizeRule({ date: '2026-08-31', at: '09:00', repeat: 'monthly' });
+        assert.equal(new Date(S.nextRun(monthly, 'Europe/Moscow', from)).toISOString(), '2026-10-31T06:00:00.000Z', '31-е пропускает сентябрь');
+        const monthlyMid = S.normalizeRule({ date: '2026-01-20', at: '09:00', repeat: 'monthly' });
+        assert.equal(new Date(S.nextRun(monthlyMid, 'Europe/Moscow', from)).toISOString(), '2026-10-20T06:00:00.000Z', 'ежемесячно 20-го');
+        // ежегодно: 29 февраля в невисокосный год — 28 февраля
+        const yearly = S.normalizeRule({ date: '2024-02-29', at: '09:00', repeat: 'yearly' });
+        assert.equal(new Date(S.nextRun(yearly, 'UTC', from)).toISOString(), '2027-02-28T09:00:00.000Z', '29 февраля → 28 в невисокосный');
+        const yearlyOct = S.normalizeRule({ date: '2026-10-05', at: '09:00', repeat: 'yearly' });
+        assert.equal(new Date(S.nextRun(yearlyOct, 'Europe/Moscow', from)).toISOString(), '2026-10-05T06:00:00.000Z', 'ещё в этом году — этот год');
+        assert.equal(new Date(S.nextRun(yearlyOct, 'Europe/Moscow', Date.parse('2026-10-06T00:00:00Z'))).toISOString(), '2027-10-05T06:00:00.000Z', 'прошедшая в этом году — следующий год');
+        // рабочие дни: пн–пт
+        const wd = S.normalizeRule({ at: '09:00', workdays: true });
+        assert.deepEqual(wd.days, [1, 2, 3, 4, 5], 'workdays ≠ пн–пт');
+        assert.equal(wd.workdays, true);
+        assert.equal(new Date(S.nextRun(wd, 'Europe/Moscow', from)).toISOString(), '2026-09-29T06:00:00.000Z', 'пн 13:00 → вт 09:00');
+        // описания по-человечески
+        assert.equal(S.describeRule(once), '20.10.2026 в 15:00 (однократно)');
+        assert.equal(S.describeRule(monthlyMid), 'ежемесячно 20-го в 09:00');
+        assert.equal(S.describeRule(yearlyOct), 'ежегодно 10-05 в 09:00');
+        assert.equal(S.describeRule(wd), 'по рабочим дням в 09:00');
+    });
+
     it('schedule: создание из задачи, подтверждение, список, отмена; запуск от имени владельца', async () => {
         const t = tool('schedule');
         assert.equal(t.permission({ action: 'create', at: '09:00', prompt: 'сводка' }, { host: { allowed: new Set() } }).verdict, 'ask');

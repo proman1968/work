@@ -3,7 +3,10 @@
  * Запуск = новая реплика в ту же задачу (session.prompt): лента, подтверждения, push — как при ручном
  * сообщении. Автономно агент ничего опасного не сделает: действие с подтверждением ждёт человека.
  *
- * Правило: { at: 'HH:MM', days?: [1..7] (пн=1), tz? } | { every: минут (≥15) } | { once: ISO-время }.
+ * Правило: { at: 'HH:MM', days?: [1..7] (пн=1), workdays?: true } | { every: минут (≥15) } | { once: ISO-время }
+ *   | { date: 'YYYY-MM-DD', at: 'HH:MM', repeat?: 'once'|'monthly'|'yearly' } — календарные даты (9.8):
+ *     конкретный день (однократно), каждый месяц в это число (29–31 в коротком месяце — месяц пропускается),
+ *     каждый год в эту дату (29 февраля в невисокосный год — последний день февраля).
  * Хранение — общая БД индексов (таблица agent_schedules).
  */
 import { randomUUID } from 'node:crypto';
@@ -65,6 +68,9 @@ function utcOf(y, m, d, hh, mm, tz) {
     return guess;
 }
 
+/** Дней в месяце года (григорианский, по UTC — пояс не важен). */
+const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
 /** Нормализовать правило (бросает при ошибке). */
 export function normalizeRule(rule = {}) {
     if (rule.once) {
@@ -79,9 +85,25 @@ export function normalizeRule(rule = {}) {
             throw new Error('every: от ' + MIN_EVERY_MIN + ' минут до недели');
         return { every };
     }
+    // 9.8: календарная дата — конкретный день (однократно), ежемесячно или ежегодно
+    if (rule.date != null) {
+        const dm = String(rule.date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!dm || +dm[2] < 1 || +dm[2] > 12 || +dm[3] < 1 || +dm[3] > 31)
+            throw new Error('date: дата YYYY-MM-DD, например 2026-10-20');
+        const at = String(rule.at || '').match(/^(\d{1,2}):(\d{2})$/);
+        if (!at || +at[1] > 23 || +at[2] > 59)
+            throw new Error('для date нужно at "ЧЧ:ММ" — время запуска в этот день');
+        const repeat = rule.repeat == null || rule.repeat === '' ? 'once' : String(rule.repeat);
+        if (!['once', 'monthly', 'yearly'].includes(repeat))
+            throw new Error('repeat: once (по умолчанию) | monthly | yearly');
+        return { date: dm[0], at: at[1].padStart(2, '0') + ':' + at[2], repeat };
+    }
     const m = String(rule.at || '').match(/^(\d{1,2}):(\d{2})$/);
     if (!m || +m[1] > 23 || +m[2] > 59)
-        throw new Error('нужно at "ЧЧ:ММ", every (минуты) или once (дата-время)');
+        throw new Error('нужно at "ЧЧ:ММ", every (минуты), once (дата-время) или date (календарная дата)');
+    // 9.8: workdays — пн–пт (сахар над days)
+    if (rule.workdays === true)
+        return { at: m[1].padStart(2, '0') + ':' + m[2], days: [1, 2, 3, 4, 5], workdays: true };
     const days = rule.days == null ? [1, 2, 3, 4, 5, 6, 7] : [...new Set([].concat(rule.days).map(Number))];
     if (!days.length || days.some(d => !Number.isInteger(d) || d < 1 || d > 7))
         throw new Error('days: числа 1–7 (1 — понедельник)');
@@ -97,6 +119,38 @@ export function nextRun(rule, tz, from = Date.now()) {
     }
     if (rule.every)
         return from + rule.every * 60_000;
+    // 9.8: календарная дата — конкретный день / ежемесячно / ежегодно
+    if (rule.date) {
+        const [y, mo, dRaw] = rule.date.split('-').map(Number);
+        const [hh, mm] = rule.at.split(':').map(Number);
+        const now = local(from, tz);
+        if (rule.repeat === 'monthly') {
+            // 29–31 в коротком месяце — месяц пропускается (ищем ближайший существующий день)
+            for (let i = 0; i <= 13; i++) {
+                const t0 = new Date(Date.UTC(now.y, now.m - 1 + i, 1));
+                const yy = t0.getUTCFullYear();
+                const mm2 = t0.getUTCMonth() + 1;
+                if (dRaw > daysInMonth(yy, mm2))
+                    continue;
+                const t = utcOf(yy, mm2, dRaw, hh, mm, tz);
+                if (t > from)
+                    return t;
+            }
+            return null;
+        }
+        if (rule.repeat === 'yearly') {
+            // 29 февраля в невисокосный год — последний день февраля
+            for (const yy of [now.y, now.y + 1]) {
+                const d = Math.min(dRaw, daysInMonth(yy, mo));
+                const t = utcOf(yy, mo, d, hh, mm, tz);
+                if (t > from)
+                    return t;
+            }
+            return null;
+        }
+        const t = utcOf(y, mo, dRaw, hh, mm, tz);
+        return t > from ? t : null;
+    }
     const [hh, mm] = rule.at.split(':').map(Number);
     const today = local(from, tz);
     for (let i = 0; i <= 8; i++) {
@@ -116,6 +170,15 @@ export function describeRule(rule) {
         return 'однократно ' + rule.once;
     if (rule.every)
         return 'каждые ' + rule.every + ' мин';
+    if (rule.date) {
+        if (rule.repeat === 'monthly')
+            return 'ежемесячно ' + Number(rule.date.slice(8)) + '-го в ' + rule.at;
+        if (rule.repeat === 'yearly')
+            return 'ежегодно ' + rule.date.slice(5) + ' в ' + rule.at;
+        return rule.date.split('-').reverse().join('.') + ' в ' + rule.at + ' (однократно)';
+    }
+    if (rule.workdays)
+        return 'по рабочим дням в ' + rule.at;
     const names = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
     const days = rule.days.length === 7 ? 'ежедневно' : rule.days.map(d => names[d - 1]).join(',');
     return days + ' в ' + rule.at;
