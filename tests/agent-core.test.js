@@ -2158,6 +2158,110 @@ describe('стоимость и бюджеты (9.2)', () => {
     });
 });
 
+// ── 9.4 (final): оркестрация — изолированные ветки записи ────────────────
+
+describe('branch: изолированные ветки (9.4)', () => {
+    const A = 'EU00000000000001';       // CHILD_UID (USER в BOX)
+    const ROOT_ADMIN = 'admin';        // ADMIN в корне тестового дерева отсутствует — права через USER-зону
+    const btool = async () => (await import('../sources/modules/agent/tools/branch.js')).branchTools[0];
+    const userCtx = (uid = A) => ({ entry: {}, place: null, session: { uid }, host: { mode: 'auto', allowed: new Set() }, signal: new AbortController().signal });
+    const adminCtx = () => userCtx(ROOT_ADMIN);
+
+    it('diffBranches: добавлено/изменено/удалено; конфликт — оригинал менялся позже создания ветки', async () => {
+        const { diffBranches } = await import('../sources/modules/agent/tools/branch.js');
+        const orig = new Map([
+            ['a.md', { size: 1, mtime: 100, hash: 'ha' }],
+            ['b.md', { size: 2, mtime: 500, hash: 'hb' }],   // менялся в оригинале ПОСЛЕ создания ветки (200)
+            ['c.md', { size: 3, mtime: 50, hash: 'hc' }],
+            ['d.md', { size: 4, mtime: 60, hash: 'hd' }],    // тот же размер в ветке, но другой текст
+        ]);
+        const bran = new Map([
+            ['a.md', { size: 1, mtime: 100, hash: 'ha' }],    // не тронут
+            ['b.md', { size: 9, mtime: 300, hash: 'hb9' }],    // изменён и в ветке, и в оригинале → конфликт
+            ['d.md', { size: 4, mtime: 300, hash: 'hd-другой' }], // размер тот же — изменение видно только по хешу
+            ['new.md', { size: 5, mtime: 300, hash: 'hn' }], // добавлен в ветке
+        ]);
+        const d = diffBranches(orig, bran, 200);
+        assert.deepEqual(d, { added: ['new.md'], changed: ['b.md', 'd.md'], removed: ['c.md'], conflicts: ['b.md'] },
+            'разбор ветки: ' + JSON.stringify(d));
+    });
+    it('create/status/merge/drop: копия, параллельная запись, сбор с историей, очистка', async () => {
+        const b = await btool();
+        // зона для ветки — именованная папка в зоне роли BOX (запись ложится точно в существующую подпапку)
+        const orig = 'BOX/$class/USER/text/proekt';
+        write(orig + '/a.md', 'оригинал\n');
+        write(orig + '/b.md', 'общий\n');
+        write(orig + '/gone.md', 'файл на удаление\n');
+        const origPath = '/BOX/$class/USER/text/proekt';
+        // create: копия рядом с оригиналом (права наследуются — та же зона роли)
+        const created = await b.run({ action: 'create', path: origPath }, userCtx());
+        assert.match(created, /ветка создана: (\S+)/, 'нет пути ветки');
+        const branchPath = created.match(/ветка создана: (\S+)/)[1];
+        assert.match(branchPath, /branch-proekt-[0-9a-f]{6}$/);
+        try {
+            // «параллельная запись в ветке» — обычные write по пути ветки (не мешая оригиналу)
+            const w = workTools.find(t => t.name === 'write');
+            await w.run({ path: branchPath + '/a.md', content: 'изменено в ветке\n' }, { ...userCtx(), entry: {} });
+            await w.run({ path: branchPath + '/new.md', content: 'новый в ветке\n' }, { ...userCtx(), entry: {} });
+            await w.run({ path: branchPath + '/b.md', content: 'конфликтная правка ветки\n' }, { ...userCtx(), entry: {} });
+            fs.rmSync(path.join(tmp, branchPath.slice(1), 'gone.md'));   // субагент удалил файл в ветке
+            // конфликт: b.md менялся в ОРИГИНАЛЕ после создания ветки
+            fsSyncWrite(orig + '/b.md', 'оригинал изменился после создания ветки\n');
+            const st = await b.run({ action: 'status', path: branchPath }, userCtx());
+            assert.match(st, /изменено: .*a\.md/, 'изменённый не виден: ' + st);
+            assert.match(st, /добавлено: .*new\.md/, 'добавленный не виден: ' + st);
+            assert.match(st, /удалено: .*gone\.md/, 'удалённый не виден: ' + st);
+            assert.match(st, /КОНФЛИКТЫ.*b\.md/, 'конфликт не найден: ' + st);
+            assert.doesNotMatch(st, /branch-owner/, 'маркер владельца попал в diff: ' + st);
+            // merge БЕЗ allow_delete: удалённый в ветке файл остаётся в оригинале
+            const entry = {};
+            const merged = await b.run({ action: 'merge', path: branchPath }, { ...userCtx(), entry });
+            assert.match(merged, /~ .*proekt\/a\.md/, 'изменённый не перенесён: ' + merged);
+            assert.match(merged, /\+ .*proekt\/new\.md/, 'новый не перенесён');
+            assert.match(merged, /! конфликты перезаписаны.*b\.md/, 'конфликт не отражён');
+            assert.match(merged, /НЕ удалены.*gone\.md/, 'удалённый тронут без allow_delete: ' + merged);
+            assert.equal(entry.undoList?.length, 3, 'записи отката не на каждый файл: ' + entry.undoList?.length);
+            // оригинал принял изменения ветки; gone.md не тронут
+            assert.equal(fsSyncRead(orig + '/a.md'), 'изменено в ветке\n');
+            assert.equal(fsSyncRead(orig + '/new.md'), 'новый в ветке\n');
+            assert.equal(fsSyncRead(orig + '/b.md'), 'конфликтная правка ветки\n');
+            assert.ok(fs.existsSync(path.join(tmp, orig, 'gone.md')), 'gone.md удалён без allow_delete');
+            // merge С allow_delete: удаление — только через ядро (нужны права ADMIN) → без прав файл остаётся
+            const merged2 = await b.run({ action: 'merge', path: branchPath, allow_delete: true }, { ...userCtx(), entry: {} });
+            assert.match(merged2, /! не удалено \(нужны права ADMIN\).*gone\.md/, 'удаление без прав не отражено: ' + merged2);
+            assert.ok(fs.existsSync(path.join(tmp, orig, 'gone.md')), 'gone.md удалён в обход прав (нужны права ADMIN)');
+            // чужой пользователь не видит ветку (маркер владельца)
+            await assert.rejects(b.run({ action: 'status', path: branchPath }, { entry: {}, place: null, session: { uid: 'X1' }, host: { mode: 'auto' }, signal: new AbortController().signal }), /другим пользователем|владелец и ADMIN/);
+            // drop: владелец убирает ветку; оригинал цел
+            const dropped = await b.run({ action: 'drop', path: branchPath }, userCtx());
+            assert.match(dropped, /ветка .* удалена/);
+            assert.equal(fsSyncRead(orig + '/a.md'), 'изменено в ветке\n', 'drop тронул оригинал');
+        }
+        finally {
+            try { await fsp.rm(path.join(tmp, 'BOX', '$class', 'USER'), { recursive: true, force: true }); } catch { }
+        }
+    });
+    it('валидация: не-папка, не-ветка, не найдено', async () => {
+        const b = await btool();
+        await assert.rejects(b.run({ action: 'create', path: '/BOX/doc/note.md' }, adminCtx()), /папка или класс/);
+        await assert.rejects(b.run({ action: 'status', path: '/BOX/doc' }, adminCtx()), /не ветка/);
+        await assert.rejects(b.run({ action: 'status', path: '/BOX/нет' }, adminCtx()), /не найдено/);
+    });
+});
+
+/** Синхронные помощки для тестов веток (дерево уже в tmp). */
+function fsSyncWrite(rel, content) {
+    const { FS } = globalThis;
+    void FS;
+    const p = path.join(tmp, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content, 'utf-8');
+}
+function fsSyncRead(rel) {
+    return fs.readFileSync(path.join(tmp, rel), 'utf-8');
+}
+
+
 // ── 9.3 (final): панель наблюдаемости ──────────────────────────────────────
 
 describe('панель наблюдаемости (9.3)', () => {

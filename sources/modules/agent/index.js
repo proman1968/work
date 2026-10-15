@@ -25,6 +25,7 @@ import { devPatchTools } from './tools/dev/patch.js';
 import { devGitTools } from './tools/dev/git.js';
 import { devCheckTools } from './tools/dev/checks.js';
 import { devLspTools } from './tools/dev/lsp.js';
+import { branchTools } from './tools/branch.js';
 import { browserTools } from './tools/browser.js';
 import { computerTools } from './tools/computer.js';
 import { guarded, systemAllowed } from './system.js';
@@ -366,7 +367,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);
