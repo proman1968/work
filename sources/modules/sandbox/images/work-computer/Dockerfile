@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY entrypoint.sh /opt/work/entrypoint.sh
 COPY cdp.py /opt/work/cdp.py
-RUN chmod +x /opt/work/entrypoint.sh
+RUN sed -i 's/\r$//' /opt/work/entrypoint.sh /opt/work/cdp.py && chmod +x /opt/work/entrypoint.sh
 
 USER agent
 WORKDIR /workspace
