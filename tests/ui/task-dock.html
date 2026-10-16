@@ -132,7 +132,7 @@ await test('«Монитор»: компьютер удалён — подпис
         dock.select('monitor');
         const mon = await waitFor(() => inDock(shell, 'microchat-monitor'), 'монитор');
         await waitFor(() => mon.$('.off'), 'офлайн-вид');
-        await waitFor(() => /больше нет|выключен/.test(mon.$('.note').textContent), 'подпись о компьютере', 140);
+        await waitFor(() => /больше не запущен|выключен/.test(mon.$('.cap')?.textContent || mon.$('.note')?.textContent || ''), 'подпись о компьютере', 140);
         assert(mon.$('img.shot'), 'последний скриншот');
         assert(mon.$$('.cmd').length >= 1, 'команды агента');
         eq(shell.dockTab, 'monitor');

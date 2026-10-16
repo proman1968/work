@@ -340,22 +340,25 @@ ODA({ is: 'microchat-monitor',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .bar { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 36px; box-sizing: border-box; }
+            .bar { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--subtle-border); min-height: 38px; box-sizing: border-box; }
             .bar b { font-size: small; font-weight: 600; }
             .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
-            .state { @apply --chip; }
+            .state { @apply --chip; font-size: x-small; }
             .state[live] { background: var(--success-soft); border-color: transparent; }
             .body { overflow: hidden; min-height: 0; flex: 1; position: relative; }
             .live { background: #111; }
             iframe { border: none; width: 100%; height: 100%; position: absolute; inset: 0; }
-            .off { @apply --vertical; overflow-y: auto; gap: 12px; padding: 14px; font-size: small; }
+            .off { @apply --vertical; overflow-y: auto; align-items: center; justify-content: center; gap: 12px; padding: 24px 16px; font-size: small; }
+            .off[has-shot] { align-items: stretch; justify-content: flex-start; padding: 14px; }
+            .empty { @apply --vertical; align-items: center; gap: 8px; text-align: center; max-width: 320px; }
+            .empty oda-icon { opacity: .35; }
             .note { @apply --muted; line-height: 1.45; }
             .shot { width: 100%; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); background: #111; display: block; }
             .cap { @apply --muted; font-size: x-small; margin-top: 4px; }
             .thumbs { @apply --horizontal; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
             .thumb { flex: none; width: 96px; height: 60px; object-fit: cover; border-radius: var(--radius-xs); border: 2px solid transparent; cursor: pointer; background: #111; opacity: .7; }
             .thumb[on] { border-color: var(--accent-color); opacity: 1; }
-            .cmds { @apply --vertical; border: 1px solid var(--subtle-border); border-radius: var(--radius-m); overflow: hidden; }
+            .cmds { @apply --vertical; border: 1px solid var(--subtle-border); border-radius: var(--radius-m); overflow: hidden; display: none; }
             .cmd { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-width: 0; }
             .cmd:last-child { border-bottom: none; }
             .cmd b { font-weight: 600; white-space: nowrap; }
@@ -365,17 +368,21 @@ ODA({ is: 'microchat-monitor',
             <b>Компьютер «{{name}}»</b>
             <span class="state" :live="live">{{stateLabel}}</span>
             <div flex></div>
+            <oda-button no-flex icon="carbon:renew" :icon-size="15" title="Проверить экран" @tap="refresh"></oda-button>
             <oda-button no-flex ~if="live" icon="carbon:launch" :icon-size="16" title="Открыть в новой вкладке" @tap="launch"></oda-button>
         </div>
         <div class="body live" ~if="live"><iframe :src="src"></iframe></div>
-        <div class="body off" ~if="!live">
-            <div class="note">{{offNote}}</div>
+        <div class="body off" :has-shot="!!shot" ~if="!live">
             <div ~if="shot">
                 <img class="shot" :src="shot.url" :alt="shot.label">
-                <div class="cap">{{shot.label}} · {{fmtTime(shot.time)}}</div>
+                <div class="cap">{{shot.label}} · {{fmtTime(shot.time)}} · {{offNote}}</div>
             </div>
             <div class="thumbs" ~if="screens.length > 1">
                 <img class="thumb" ~for="screens" :src="$for.item.url" :on="$for.index === shotIndex" :title="$for.item.label" @tap="pick($for.index)">
+            </div>
+            <div class="empty" ~if="!shot">
+                <oda-icon icon="carbon:screen-off" :icon-size="36"></oda-icon>
+                <div class="note">{{offNote}}</div>
             </div>
             <div class="cmds" ~if="commands.length">
                 <div class="cmd" ~for="commands"><b>{{$for.item.label}}</b><span>{{$for.item.target}}</span></div>
@@ -392,23 +399,23 @@ ODA({ is: 'microchat-monitor',
         const s = this.shell?.computerState;
         if (!this.shell?.computerChecked)
             return 'проверяю…';
-        return s === 'running' ? 'работает' : s === 'stopped' ? 'выключен' : 'удалён или не создан';
+        return s === 'running' ? 'работает' : s === 'stopped' ? 'остановлен' : 'не запущен';
     },
     get offNote() {
         const s = this.shell?.computerState;
         if (!this.shell?.computerChecked)
-            return 'Проверяю состояние компьютера…';
-        return (s === 'stopped'
-            ? 'Компьютер выключен — живой экран не виден (он запустится при следующей команде агента).'
-            : 'Компьютера больше нет — живой экран недоступен.')
-            + (this.screens.length || this.commands.length ? ' Ниже — то, что агент на нём делал в этой задаче.' : '');
+            return 'Подключаюсь к экрану компьютера…';
+        return s === 'stopped'
+            ? 'Компьютер выключен — экран запустится при следующем действии агента.'
+            : 'Компьютер больше не запущен.';
     },
     get screens() { return this.computer.screens; },
     get commands() { return this.computer.commands.slice(-12).reverse(); },
     get shotIndex() { return this.picked >= 0 && this.picked < this.screens.length ? this.picked : this.screens.length - 1; },
     get shot() { return this.screens[this.shotIndex] || null; },
     pick(i) { this.picked = i; },
-    get src() { return location.origin + '/~computer/' + encodeURIComponent(this.name); },
+    refresh() { this.shell?._checkComputer?.(); },
+    get src() { return location.origin + '/~computer/' + encodeURIComponent(this.name) + (this.shell?.computerQuery || ''); },
     launch() { window.open(this.src, 'work-computer'); },
 });
 

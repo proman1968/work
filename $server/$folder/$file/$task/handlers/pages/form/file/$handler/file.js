@@ -304,6 +304,13 @@ export default {
     /** Статус компьютера уже получен (до первого ответа монитор пишет «проверяю…», а не «удалён»). */
     computerChecked: false,
     get computerName() { return this.computer.name; },
+    get computerOwner() {
+        const m = /(\d{10,16})\.([0-9A-F]{16})\.task$/i.exec(String(this.$item?.id || this.$item?.path || ''));
+        return m ? m[2].toUpperCase() : '';
+    },
+    get computerQuery() {
+        return this.computerOwner ? '?owner=' + encodeURIComponent(this.computerOwner) : '';
+    },
     _pcPoll: null,
     /** Проверка компьютера через пассивный статус: running|stopped|missing. */
     async _checkComputer() {
@@ -311,7 +318,7 @@ export default {
         if (!this.computer.used)
             return;
         try {
-            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status', { credentials: 'same-origin', signal: AbortSignal.timeout(6000) });
+            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status' + this.computerQuery, { credentials: 'same-origin', signal: AbortSignal.timeout(6000) });
             const data = await r.json().catch(() => ({}));
             const state = data.state || 'missing';
             if (state !== this.computerState)
@@ -376,7 +383,7 @@ export default {
                         this.status = data.status || 'idle';
                         this._lastDelta = Date.now();
                         this._noticeDocs(before);
-                        if (this.computer.used && !this.computerChecked)
+                        if (this.computer.used)
                             this._checkComputer();
                         if (this.starting)
                             this.async(() => this.invalidate?.('starting', 'feedItems', 'activity'), Math.max(50, 20100 - (Date.now() - (+data.created || 0))));

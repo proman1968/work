@@ -395,8 +395,10 @@ export async function findComputer(docker, owner, name) {
     const hit = (list || [])[0];
     if (!hit)
         return null;
-    touch(owner, name, hit.Id);
-    return { id: hit.Id, names: hit.Names, image: hit.Image, state: hit.State, status: hit.Status };
+    const realOwner = hit.Labels?.['work.owner'] || owner || '';
+    if (realOwner)
+        touch(realOwner, name, hit.Id);
+    return { id: hit.Id, owner: realOwner, names: hit.Names, image: hit.Image, state: hit.State, status: hit.Status };
 }
 
 /** Компьютеры пользователя (или все при owner=null). */

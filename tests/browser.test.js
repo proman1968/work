@@ -46,9 +46,12 @@ after(async () => {
 it('браузер: open/snapshot/click/type/select/nav по фейку; cdp-ошибки понятные', async () => {
     setDockerForTests(fakeDocker());
     const t = name => browserTools.find(t => t.name === name);
-    const open = await t('browser_open').run({ url: 'https://example.com' }, ctx());
+    const openRes = await t('browser_open').run({ url: 'https://example.com' }, ctx());
+    const open = typeof openRes === 'object' ? openRes.text : openRes;
     assert.match(open, /\[1\] button "Go"/);
     assert.match(open, /example\.com/);
+    if (typeof openRes === 'object')
+        assert.equal(openRes.images?.length, 1, 'browser_open захватывает скриншот для Монитора');
     await assert.rejects(t('browser_open').run({ url: 'ftp://x' }, ctx()), /только http/);
     const snap = await t('browser_snapshot').run({}, ctx());
     assert.match(snap, /\[1\] link "More"/);

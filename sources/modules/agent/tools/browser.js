@@ -11,7 +11,7 @@ import { getDocker } from '../../sandbox/driver.js';
 import { loadSandboxConfig } from '../../sandbox/config.js';
 import {
     ownerOf, computerName, ensureComputer, findComputer, cdp, ensureChromium,
-    touchComputer,
+    touchComputer, screenshotPng,
 } from '../../sandbox/manager.js';
 import { isAdmin } from '../system.js';
 import { assertPageUrl } from './browse.js';
@@ -93,7 +93,9 @@ export const browserTools = [
             const { docker, pc } = await useBrowser(args, ctx);
             const snap = await cdp(docker, pc.id, 'open', { url: href }, { timeoutSec: 120, signal: ctx?.signal });
             noteDomain(ctx, snap?.url || href);
-            return fmtSnapshot(snap) + '\n\nСкриншот — отдельно через computer_screenshot, если нужно увидеть страницу глазами.';
+            const text = fmtSnapshot(snap) + '\n\nСкриншот — отдельно через computer_screenshot, если нужно увидеть страницу глазами.';
+            const png = await screenshotPng(docker, pc.id, { signal: ctx?.signal }).catch(() => null);
+            return png ? { text, images: [{ png, label: snap?.title || href }] } : text;
         }),
     },
     {

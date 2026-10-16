@@ -21,6 +21,7 @@ import {
     computerName, findComputer, statusOf, screenshotPng, setControl, controlBy,
     waitVnc, touchComputer,
 } from './manager.js';
+import { DEV_MODE } from '../../host/config.js';
 import { isAdmin } from '../agent/system.js';
 
 const VNC_RE = /^\/~computer\/([^/]+)\/vnc$/;
@@ -54,18 +55,20 @@ function respondJson(res, code, obj) {
  */
 export async function computerAccess(req, rawName, ownerOverride) {
     const session = sessionOf(req);
-    const uid = session?.uid;
+    const uid = session?.uid || (DEV_MODE ? (ownerOverride || 'shared') : '');
     if (!uid)
         throw Object.assign(new Error('нет сессии — войдите в WORK'), { http: 401 });
     const name = computerName(rawName);
     const owner = ownerOverride || uid;
-    if (owner !== uid && !(await isAdmin(session)))
+    if (owner !== uid && !DEV_MODE && !(await isAdmin(session)))
         throw Object.assign(new Error('чужой компьютер — нужен ADMIN'), { http: 403 });
     const docker = await getDocker();
-    const found = await findComputer(docker, owner, name);
+    let found = await findComputer(docker, owner, name);
+    if (!found && DEV_MODE && !ownerOverride)
+        found = await findComputer(docker, undefined, name);
     if (!found)
         throw Object.assign(new Error('компьютера «' + name + '» нет — он создастся при первой команде агента'), { http: 404 });
-    return { session, owner, name, id: found.id, docker };
+    return { session, owner: found.owner || owner, name, id: found.id, docker };
 }
 
 /** Мост WS ↔ exec-поток (socat до x11vnc). Чистая функция для тестов: pipeSocket(a, b). */
@@ -176,20 +179,12 @@ export async function handleComputerHttp(req, res, url, readBody) {
     if (/^\/~computer\/([^/]+)\/status$/.test(pathname) && req.method === 'GET') {
         const name = pathname.split('/')[3];
         try {
-            const docker = await getDocker();
-            const session = sessionOf(req);
-            const uid = session?.uid;
-            if (!uid)
-                return respondJson(res, 401, { state: 'missing' });
-            const owner = uid;
-            const found = await findComputer(docker, owner, name).catch(() => null);
-            if (!found)
-                return respondJson(res, 404, { state: 'missing' });
-            const st = await statusOf(docker, found.id).catch(() => null);
+            const acc = await computerAccess(req, name, url.searchParams.get('owner') || '');
+            const st = await statusOf(acc.docker, acc.id).catch(() => null);
             return respondJson(res, 200, { state: st?.running ? 'running' : 'stopped' });
         }
-        catch {
-            return respondJson(res, 200, { state: 'missing' });
+        catch (e) {
+            return respondJson(res, e?.http === 401 ? 401 : e?.http === 403 ? 403 : 200, { state: 'missing' });
         }
     }
     const m = pathname.match(PAGE_RE);
