@@ -10,16 +10,16 @@ export const MERGE =
             const ast1 = parser.parse(code1, { sourceType: 'module' });
             const ast2 = parser.parse(code2, { sourceType: 'module' });
 
-            // РћР±СЉРµРґРёРЅСЏРµРј РЅРѕРґС‹ СЃ СЃРѕС…СЂР°РЅРµРЅРёРµРј РїРѕСЂСЏРґРєР°
+            // Объединяем ноды с сохранением порядка
             const mergedNodes = [];
 
-            // РРЅРґРµРєСЃС‹ РґР»СЏ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ РїРѕР·РёС†РёР№ export default
+            // Индексы для отслеживания позиций export default
             let exportDefaultIndex1 = -1;
             let exportDefaultIndex2 = -1;
             let exportDefault1 = null;
             let exportDefault2 = null;
 
-            // РќР°С…РѕРґРёРј РїРѕР·РёС†РёРё export default РІ РїРµСЂРІРѕРј С„Р°Р№Р»Рµ
+            // Находим позиции export default в первом файле
             ast1.program.body.forEach((node, index) => {
                 if (t.isExportDefaultDeclaration(node)) {
                     exportDefaultIndex1 = index;
@@ -27,7 +27,7 @@ export const MERGE =
                 }
             });
 
-            // РќР°С…РѕРґРёРј РїРѕР·РёС†РёРё export default РІРѕ РІС‚РѕСЂРѕРј С„Р°Р№Р»Рµ
+            // Находим позиции export default во втором файле
             ast2.program.body.forEach((node, index) => {
                 if (t.isExportDefaultDeclaration(node)) {
                     exportDefaultIndex2 = index;
@@ -35,13 +35,13 @@ export const MERGE =
                 }
             });
 
-            // РћР±СЉРµРґРёРЅСЏРµРј РЅРѕРґС‹, СЃРѕС…СЂР°РЅСЏСЏ РїРѕСЂСЏРґРѕРє
+            // Объединяем ноды, сохраняя порядок
             let i = 0, j = 0;
             const len1 = ast1.program.body.length;
             const len2 = ast2.program.body.length;
 
             while (i < len1 || j < len2) {
-                // Р•СЃР»Рё СЌС‚Рѕ export default, РїСЂРѕРїСѓСЃРєР°РµРј - РґРѕР±Р°РІРёРј РїРѕР·Р¶Рµ
+                // Если это export default, пропускаем — добавим позже
                 if (i === exportDefaultIndex1) {
                     i++;
                     continue;
@@ -51,9 +51,8 @@ export const MERGE =
                     continue;
                 }
 
-                // Р”РѕР±Р°РІР»СЏРµРј РЅРѕРґС‹ РІ РїРѕСЂСЏРґРєРµ РёС… РїРѕСЏРІР»РµРЅРёСЏ
+                // Добавляем ноды в порядке их появления
                 if (i < len1 && j < len2) {
-                    // РњРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ Р»РѕРіРёРєСѓ РїСЂРёРѕСЂРёС‚РµС‚Р° РёР»Рё С‡РµСЂРµРґРѕРІР°РЅРёСЏ
                     mergedNodes.push(ast1.program.body[i]);
                     mergedNodes.push(ast2.program.body[j]);
                     i++;
@@ -67,7 +66,7 @@ export const MERGE =
                 }
             }
 
-            // Р”РѕР±Р°РІР»СЏРµРј РѕР±СЉРµРґРёРЅРµРЅРЅС‹Р№ export default РІ РїРѕР·РёС†РёСЋ РёР· РїРµСЂРІРѕРіРѕ С„Р°Р№Р»Р° РёР»Рё РІ РєРѕРЅРµС†
+            // Добавляем объединённый export default
             let mergedExportDefault = null;
 
             if (exportDefault1 && exportDefault2) {
@@ -119,17 +118,16 @@ export const MERGE =
                     mergedArray.value.elements.splice(idx, 1, t.objectExpression(mergedInnerProps));
                 }
             } else {
-                // Р”Р»СЏ РѕР±СЉРµРєС‚Р° Р±РµР· ID РїСЂРѕСЃС‚Рѕ РґРѕР±Р°РІР»СЏРµРј
-               mergedArray.value.elements.push(t.cloneNode(prop, true))
+                // Для объекта без ID просто добавляем
+                mergedArray.value.elements.push(t.cloneNode(prop, true))
             }
         });
-        // console.log();
         return mergedArray;
     },
     deepMergeObjectExpressions(props1, props2) {
         const mergedMap = new Map();
 
-        // Р¤СѓРЅРєС†РёСЏ РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ РєР»СЋС‡Р° СЃРІРѕР№СЃС‚РІР°
+        // Функция для получения ключа свойства
         const getKey = (prop) => {
             if (!prop.key) return null;
 
@@ -140,32 +138,32 @@ export const MERGE =
             } else if (t.isNumericLiteral(prop.key)) {
                 return prop.key.value.toString();
             } else if (t.isTemplateLiteral(prop.key)) {
-                // Р”Р»СЏ С€Р°Р±Р»РѕРЅРЅС‹С… СЃС‚СЂРѕРє РёСЃРїРѕР»СЊР·СѓРµРј РёС… С‚РµРєСЃС‚РѕРІРѕРµ РїСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ
+                // Для шаблонных строк используем их текстовое представление
                 return prop.key.quasis.map(q => q.value.cooked).join('');
             }
             return null;
         };
 
-        // Р¤СѓРЅРєС†РёСЏ РґР»СЏ РіР»СѓР±РѕРєРѕРіРѕ РєР»РѕРЅРёСЂРѕРІР°РЅРёСЏ AST РЅРѕРґС‹
+        // Функция для глубокого клонирования AST ноды
         const cloneNode = (node) => t.cloneNode(node, true);
 
-        // Р”РѕР±Р°РІР»СЏРµРј СЃРІРѕР№СЃС‚РІР° РёР· РїРµСЂРІРѕРіРѕ РѕР±СЉРµРєС‚Р°
+        // Добавляем свойства из первого объекта
         props1.forEach(prop => {
             const key = getKey(prop);
             if (key) {
                 mergedMap.set(key, cloneNode(prop));
             } else {
-                // Р”Р»СЏ СЃРІРѕР№СЃС‚РІ Р±РµР· РєР»СЋС‡Р° (СЃРїСЂРµРґ РѕРїРµСЂР°С‚РѕСЂС‹) РїСЂРѕСЃС‚Рѕ РґРѕР±Р°РІР»СЏРµРј
+                // Для свойств без ключа (спред-операторы) просто добавляем
                 mergedMap.set(Symbol('spread'), prop);
             }
         });
 
-        // РћР±СЉРµРґРёРЅСЏРµРј СЃРѕ СЃРІРѕР№СЃС‚РІР°РјРё РІС‚РѕСЂРѕРіРѕ РѕР±СЉРµРєС‚Р°
+        // Объединяем со свойствами второго объекта
         props2.forEach(prop => {
             const key = getKey(prop);
 
             if (!key) {
-                // Р”Р»СЏ СЃРїСЂРµРґ РѕРїРµСЂР°С‚РѕСЂРѕРІ
+                // Для спред-операторов
                 mergedMap.set(Symbol('spread_' + mergedMap.size), prop);
                 return;
             }
@@ -173,14 +171,14 @@ export const MERGE =
             const existing = mergedMap.get(key);
 
             if (!existing) {
-                // РќРѕРІРѕРµ СЃРІРѕР№СЃС‚РІРѕ
+                // Новое свойство
                 mergedMap.set(key, cloneNode(prop));
             } else {
-                // РЎРІРѕР№СЃС‚РІРѕ СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚
+                // Свойство уже существует
                 if (t.isObjectProperty(existing) && t.isObjectProperty(prop)) {
-                    // Р•СЃР»Рё РѕР±Р° СЃРІРѕР№СЃС‚РІР° СЏРІР»СЏСЋС‚СЃСЏ РѕР±СЉРµРєС‚Р°РјРё СЃ РІР»РѕР¶РµРЅРЅС‹РјРё РѕР±СЉРµРєС‚Р°РјРё
+                    // Если оба свойства являются объектами с вложенными объектами
                     if (t.isObjectExpression(existing.value) && t.isObjectExpression(prop.value)) {
-                        // Р РµРєСѓСЂСЃРёРІРЅРѕРµ РіР»СѓР±РѕРєРѕРµ СЃР»РёСЏРЅРёРµ
+                        // Рекурсивное глубокое слияние
                         const mergedInnerProps = MERGE.deepMergeObjectExpressions(
                             existing.value.properties,
                             prop.value.properties
@@ -196,27 +194,23 @@ export const MERGE =
                             existing,
                             prop
                         );
-                        // const mergedProp = t.objectProperty(
-                        //     prop.key,
-                        //     t.objectExpression(mergedInnerProps)
-                        // );
                         mergedMap.set(key, mergedProp);
                     }
                     else {
-                        // РџРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј (РїСЂРёРѕСЂРёС‚РµС‚ Сѓ РІС‚РѕСЂРѕРіРѕ С„Р°Р№Р»Р°)
+                        // Перезаписываем (приоритет у второго файла)
                         mergedMap.set(key, cloneNode(prop));
                     }
                 } else if (t.isObjectMethod(existing) && t.isObjectMethod(prop)) {
-                    // Р”Р»СЏ РјРµС‚РѕРґРѕРІ - РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј
+                    // Для методов — перезаписываем
                     mergedMap.set(key, cloneNode(prop));
                 } else {
-                    // Р Р°Р·РЅС‹Рµ С‚РёРїС‹ СЃРІРѕР№СЃС‚РІ - РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј
+                    // Разные типы свойств — перезаписываем
                     mergedMap.set(key, cloneNode(prop));
                 }
             }
         });
 
-        // РџСЂРµРѕР±СЂР°Р·СѓРµРј Map РІ РјР°СЃСЃРёРІ, РёРіРЅРѕСЂРёСЂСѓСЏ Symbol РєР»СЋС‡Рё РґР»СЏ СЃРїСЂРµРґ РѕРїРµСЂР°С‚РѕСЂРѕРІ
+        // Преобразуем Map в массив
         return Array.from(mergedMap.values());
     },
 
@@ -224,7 +218,7 @@ export const MERGE =
         const declaration1 = exp1.declaration;
         const declaration2 = exp2.declaration;
 
-        // РЎР»СѓС‡Р°Р№ 1: РћР±Р° СЏРІР»СЏСЋС‚СЃСЏ РѕР±СЉРµРєС‚Р°РјРё
+        // Случай 1: Оба являются объектами
         if (t.isObjectExpression(declaration1) && t.isObjectExpression(declaration2)) {
             const mergedProps = MERGE.deepMergeObjectExpressions(
                 declaration1.properties,
@@ -233,9 +227,9 @@ export const MERGE =
             return t.exportDefaultDeclaration(t.objectExpression(mergedProps));
         }
 
-        // РЎР»СѓС‡Р°Р№ 2: РћР±Р° СЏРІР»СЏСЋС‚СЃСЏ С„СѓРЅРєС†РёСЏРјРё
+        // Случай 2: Оба являются функциями
         if (t.isFunction(declaration1) && t.isFunction(declaration2)) {
-            // РЎРѕР·РґР°РµРј РѕР±РµСЂС‚РєСѓ, РєРѕС‚РѕСЂР°СЏ РІС‹Р·С‹РІР°РµС‚ РѕР±Рµ С„СѓРЅРєС†РёРё
+            // Создаём обёртку, которая вызывает обе функции
             const wrapperFunction = t.functionDeclaration(
                 t.identifier('mergedDefault'),
                 [],
@@ -248,9 +242,8 @@ export const MERGE =
             return t.exportDefaultDeclaration(wrapperFunction);
         }
 
-        // РЎР»СѓС‡Р°Р№ 3: РћР±Р° СЏРІР»СЏСЋС‚СЃСЏ РєР»Р°СЃСЃР°РјРё - РЅРµР»СЊР·СЏ РїСЂРѕСЃС‚Рѕ РѕР±СЉРµРґРёРЅРёС‚СЊ
+        // Случай 3: Оба являются классами — объединяем в объект
         if (t.isClassDeclaration(declaration1) && t.isClassDeclaration(declaration2)) {
-            // РЎРѕР·РґР°РµРј РѕР±СЉРµРєС‚ СЃ РѕР±РѕРёРјРё РєР»Р°СЃСЃР°РјРё
             const classObject = t.objectExpression([
                 t.objectProperty(
                     t.identifier('Class1'),
@@ -264,7 +257,7 @@ export const MERGE =
             return t.exportDefaultDeclaration(classObject);
         }
 
-        // РЎР»СѓС‡Р°Р№ 4: Р Р°Р·РЅС‹Рµ С‚РёРїС‹ - СЃРѕР·РґР°РµРј РѕР±СЉРµРєС‚ СЃ РѕР±РµРёРјРё С‡Р°СЃС‚СЏРјРё
+        // Случай 4: Разные типы — создаём объект с обеими частями
         return t.exportDefaultDeclaration(
             t.objectExpression([
                 t.objectProperty(
@@ -284,18 +277,18 @@ export const MERGE =
         const allExports = new Map();
         const exportNodes = [];
 
-        // Р¤СѓРЅРєС†РёСЏ РґР»СЏ СЃР±РѕСЂР° РІСЃРµС… СЌРєСЃРїРѕСЂС‚РѕРІ СЃ СЃРѕС…СЂР°РЅРµРЅРёРµРј РїРѕР·РёС†РёРё
+        // Функция для сбора всех экспортов с сохранением позиции
         function collectExports(ast, sourceIndex) {
             ast.program.body.forEach((node, index) => {
                 if (t.isExportNamedDeclaration(node)) {
-                    // РЎРѕС…СЂР°РЅСЏРµРј РЅРѕРґСѓ СЌРєСЃРїРѕСЂС‚Р° С†РµР»РёРєРѕРј
+                    // Сохраняем ноду экспорта целиком
                     exportNodes.push({
                         node,
                         originalIndex: index,
                         sourceIndex
                     });
 
-                    // РўР°РєР¶Рµ СЃРѕР±РёСЂР°РµРј СЃРїРµС†РёС„РёРєР°С‚РѕСЂС‹ РґР»СЏ РїСЂРѕРІРµСЂРєРё РґСѓР±Р»РёРєР°С‚РѕРІ
+                    // Также собираем спецификаторы для проверки дубликатов
                     if (node.specifiers) {
                         node.specifiers.forEach(spec => {
                             if (t.isExportSpecifier(spec)) {
@@ -315,12 +308,12 @@ export const MERGE =
 
         return { allExports, exportNodes };
     },
-    // Р”РѕРїРѕР»РЅРёС‚РµР»СЊРЅР°СЏ С„СѓРЅРєС†РёСЏ РґР»СЏ РѕР±СЉРµРґРёРЅРµРЅРёСЏ РґСЂСѓРіРёС… С‚РёРїРѕРІ СЌРєСЃРїРѕСЂС‚РѕРІ
+    // Дополнительная функция для объединения других типов экспортов
     mergeOtherExports(ast1, ast2) {
         const namedExports1 = new Map();
         const namedExports2 = new Map();
 
-        // РЎРѕР±РёСЂР°РµРј РёРјРµРЅРѕРІР°РЅРЅС‹Рµ СЌРєСЃРїРѕСЂС‚С‹ РёР· РїРµСЂРІРѕРіРѕ С„Р°Р№Р»Р°
+        // Собираем именованные экспорты из первого файла
         traverse.default(ast1, {
             ExportNamedDeclaration(path) {
                 if (path.node.specifiers) {
@@ -333,7 +326,7 @@ export const MERGE =
             }
         });
 
-        // РЎРѕР±РёСЂР°РµРј РёРјРµРЅРѕРІР°РЅРЅС‹Рµ СЌРєСЃРїРѕСЂС‚С‹ РёР· РІС‚РѕСЂРѕРіРѕ С„Р°Р№Р»Р°
+        // Собираем именованные экспорты из второго файла
         traverse.default(ast2, {
             ExportNamedDeclaration(path) {
                 if (path.node.specifiers) {
@@ -346,10 +339,10 @@ export const MERGE =
             }
         });
 
-        // РћР±СЉРµРґРёРЅСЏРµРј РёРјРµРЅРѕРІР°РЅРЅС‹Рµ СЌРєСЃРїРѕСЂС‚С‹
+        // Объединяем именованные экспорты
         const mergedNamedExports = new Map([...namedExports1, ...namedExports2]);
 
-        // РЎРѕР·РґР°РµРј РѕР±СЉРµРґРёРЅРµРЅРЅС‹Р№ СЌРєСЃРїРѕСЂС‚
+        // Создаём объединённый экспорт
         if (mergedNamedExports.size > 0) {
             const specifiers = Array.from(mergedNamedExports.values());
             return t.exportNamedDeclaration(null, specifiers);
@@ -357,4 +350,4 @@ export const MERGE =
 
         return null;
     }
-}
+};

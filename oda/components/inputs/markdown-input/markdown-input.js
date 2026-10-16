@@ -5,7 +5,7 @@
 
 ODA({
     is: 'oda-markdown-input',
-    imports: 'oda//block.js, oda//markdown-viewer.js',
+    imports: 'oda//block.js, oda//markdown//markdown-viewer',
     extends: 'oda-block-input',
     template: /*html*/`
         <style>

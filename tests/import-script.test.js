@@ -49,4 +49,17 @@ ODA({ is: 'x' });`;
         assert.deepEqual(data.FIELDS.map(f => f.id), ['a', 'b'], 'шортхенд FIELDS доступен без TDZ');
         assert.equal(data.built, true);
     });
+
+    it('прикрепляет //# sourceURL к стектрейсу при передаче sourceUrl', async () => {
+        const script = 'export default { fail() { throw new Error("boom"); } };';
+        const data = await CORE.$folder.importScript(script, '/BOX/$class/class.js');
+        let stack = '';
+        try {
+            data.fail();
+        }
+        catch (e) {
+            stack = String(e.stack || '');
+        }
+        assert.match(stack, /work:\/\/BOX\/\$class\/class\.js/);
+    });
 });

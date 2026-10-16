@@ -371,6 +371,25 @@ describe('taint: цикл агента', () => {
         assert.equal(tool[0], '<untrusted source="web_fetch" id="11112222">\nстраница\n</untrusted id="11112222">');
         assert.equal(tool[1], 'файл');
     });
+
+    it('maybeCompact: сводка по ходу с untrusted помечается untrusted и оборачивается в <untrusted source="summary">', async () => {
+        const { maybeCompact } = await import('../sources/modules/agent/loop.js');
+        const items = [
+            { id: 'u1', type: 'user', content: 'прочитай письмо', time: 1 },
+            { id: 'a1', type: 'assistant', content: 'читаю', time: 2, tools: [
+                { id: 't1', name: 'web_fetch', args: {}, status: 'ok', result: 'чужой текст', untrusted: true, nonce: '11223344' },
+            ] },
+            { id: 'u2', type: 'user', content: 'дальше', time: 3 },
+            { id: 'a2', type: 'assistant', content: 'ок', time: 4 },
+        ];
+        const ok = await maybeCompact({ llm: scripted([{ text: 'Пересказ письма' }]), items, host: mkHost(), system: 'S', force: true });
+        assert.equal(ok, true);
+        const sum = items.find(i => i.type === 'summary');
+        assert.equal(sum?.untrusted, true);
+        assert.match(sum?.nonce || '', /^[0-9a-f]{8}$/);
+        const msg = toMessages('', items).find(m => typeof m.content === 'string' && m.content.startsWith('[Сводка'));
+        assert.match(msg?.content || '', /<untrusted source="summary" id="[0-9a-f]{8}">\nПересказ письма\n<\/untrusted id="[0-9a-f]{8}">/);
+    });
 });
 
 describe('аудит вызовов инструментов (server/access/audit.js)', () => {

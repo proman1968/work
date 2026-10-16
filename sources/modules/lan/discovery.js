@@ -90,9 +90,9 @@ export function dnsCandidates(records, permitted) {
 }
 
 export function parseAnnouncement(text, host, via) {
-    let urls = [];
-    if (via === 'ssdp') urls = [text.match(/^location:\s*(.+)$/im)?.[1]?.trim()].filter(Boolean);
-    else urls = (text.match(/<(?:\w+:)?XAddrs\b[^>]*>([^<]+)<\//i)?.[1] || '').trim().split(/\s+/).filter(Boolean);
+    const urls = via === 'ssdp'
+        ? [text.match(/^location:\s*(.+)$/im)?.[1]?.trim()].filter(Boolean)
+        : (text.match(/<(?:\w+:)?XAddrs\b[^>]*>([^<]+)<\//i)?.[1] || '').trim().split(/\s+/).filter(Boolean);
     return urls.flatMap(raw => {
         try {
             const u = new URL(raw);

@@ -295,7 +295,7 @@ it('R1: правило iptables ставит только ЗАПУЩЕННЫЙ �
     const docker = fakeDocker();
     // созданный, но не запущенный контейнер ничего не делает
     const created = await docker.createContainer({
-        Image: 'node:22-slim', Cmd: ['sh', '-c', 'iptables -I DOCKER-USER 1 -d 10.0.0.0/8 -j DROP'],
+        Image: 'node:22-slim', User: '0:0', Entrypoint: [], Cmd: ['sh', '-c', 'iptables -I DOCKER-USER 1 -d 10.0.0.0/8 -j DROP'],
         HostConfig: { Privileged: true, NetworkMode: 'host' },
     });
     await new Promise(r => setTimeout(r, 20));
@@ -384,8 +384,10 @@ it('F26: интернет, включённый до рестарта, выкл�
     resetRegistryForTests();
 });
 
-it('F26: хелпер прав — только нужные возможности, без сети, лимиты, no-new-privileges', () => {
+it('F26: хелпер прав — только нужные возможности, без сети, лимиты, no-new-privileges, root и пустой Entrypoint', () => {
     const o = helperOptions('vol-1', '/workspace', loadSandboxConfig());
+    assert.equal(o.User, '0:0', 'хелпер должен запускаться от root (в образе USER agent)');
+    assert.deepEqual(o.Entrypoint, [], 'Entrypoint образа (Xvfb + sleep infinity) должен сбрасываться');
     assert.deepEqual(o.HostConfig.CapDrop, ['ALL']);
     assert.deepEqual(o.HostConfig.CapAdd, ['CHOWN', 'DAC_OVERRIDE', 'FOWNER']);
     assert.equal(o.HostConfig.NetworkMode, 'none', 'хелперу chown сеть не нужна');

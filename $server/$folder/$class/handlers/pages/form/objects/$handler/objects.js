@@ -1,17 +1,36 @@
 /**
  * form/objects — список объектов класса и редактор.
- * Слева таблица (`index table`), справа `oda-editor-form` по METADATA.FIELDS.
+ * Сверху `oda-packets` — выбор периода, ниже слева таблица (`index table`),
+ * справа `oda-editor-form` по METADATA.FIELDS.
  * У операций с POSTINGS — колонка «Проведено», кнопки «Провести» / «Отменить».
+ *
+ * Период хранится здесь, а не в пакете: пакет stateless, состояние — per-point ($save).
+ * `packetsKey` хранит КЛЮЧ выбора, а не границы: у пункта «Сейчас» ключ 'now'
+ * относителен, поэтому нетронутый дефолт остаётся «сегодня», а не вчерашним днём.
  */
+
+// Дата по местному времени. 'YYYY-MM-DD' на сервере разбирается как UTC и в America/*
+// уезжает на предыдущий день — поэтому и здесь, и в границах периода время явное.
+function _day(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const _today = () => _day(new Date());
+
 export default {
-    imports: 'oda//button, ~/lib//editor-form',
+    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form',
     template: /*html*/`
     <style>
         :host {
-            @apply --horizontal;
+            @apply --vertical;
             @apply --flex;
             gap: 8px;
             padding: 8px;
+            overflow: hidden;
+        }
+        .body {
+            @apply --horizontal;
+            flex: 1;
+            gap: 8px;
             overflow: hidden;
         }
         .list {
@@ -25,27 +44,8 @@ export default {
             overflow: hidden;
             gap: 8px;
         }
-        .row {
-            @apply --horizontal;
-            gap: 8px;
-            padding: 4px 8px;
-            cursor: pointer;
-            align-items: center;
-        }
-        .row:hover {
-            background-color: var(--active-background, #e8e8e8);
-        }
-        .row.selected {
-            background-color: var(--active-background, #d8d8d8);
-        }
-        .head {
-            font-weight: bold;
-        }
-        .cell {
+        oda-table {
             flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
         .bar {
             @apply --horizontal;
@@ -59,28 +59,27 @@ export default {
             flex: 1;
         }
     </style>
-    <div class="list">
-        <div class="bar">
-            <oda-button icon="icons:plus" @tap="create">Создать</oda-button>
-            <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
+    <oda-packets no-flex mode="day" ~if="packetsStart"
+        :start="packetsStart" :end="packetsEnd"
+        ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
+    <div class="body">
+        <div class="list">
+            <div class="bar">
+                <oda-button icon="icons:plus" @tap="create">Создать</oda-button>
+                <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
+            </div>
+            <oda-table allow-focus ::focused-row="focusedRow" :metadata="tableMetadata" :data-set="tableRows"
+                :$save-key="$item?.short"></oda-table>
         </div>
-        <div class="row head">
-            <div class="cell" ~for="columns">{{$for.item.label}}</div>
-            <div class="cell" ~if="hasPostings">Проведено</div>
-        </div>
-        <div ~for="displayRows" class="row" ~class="{selected: $for.item.id === editing?.id}" @tap="select($for.item)">
-            <div class="cell" ~for="$for.item.cells">{{$for.$for.item}}</div>
-            <div class="cell" ~if="hasPostings">{{$for.item.posted ? 'да' : ''}}</div>
-        </div>
-    </div>
-    <div class="side" ~if="editing">
-        <oda-editor-form :metadata="schema" :data="editing"></oda-editor-form>
-        <div class="error" ~if="error">{{error}}</div>
-        <div class="bar">
-            <oda-button icon="editor:save" @tap="save">Сохранить</oda-button>
-            <oda-button icon="icons:delete" @tap="removeObject">Удалить</oda-button>
-            <oda-button ~if="hasPostings" @tap="post">Провести</oda-button>
-            <oda-button ~if="hasPostings && editing?.posted" @tap="unpost">Отменить</oda-button>
+        <div class="side" ~if="editing">
+            <oda-editor-form :metadata="schema" :data="editing"></oda-editor-form>
+            <div class="error" ~if="error">{{error}}</div>
+            <div class="bar">
+                <oda-button icon="editor:save" @tap="save">Сохранить</oda-button>
+                <oda-button icon="icons:delete" @tap="removeObject">Удалить</oda-button>
+                <oda-button ~if="hasPostings" @tap="post">Провести</oda-button>
+                <oda-button ~if="hasPostings && editing?.posted" @tap="unpost">Отменить</oda-button>
+            </div>
         </div>
     </div>
     `,
@@ -88,17 +87,33 @@ export default {
     columns: [],
     schema: null,
     editing: null,
+    focusedRow: null,
+    $observers: {
+        /** клик по строке таблицы открывает объект; повтор уже открытого не грузим */
+        select(focusedRow) {
+            if (focusedRow?.id && focusedRow.id !== this.editing?.id)
+                this.select(focusedRow);
+        }
+    },
     names: {},
     error: '',
+    /** Ключ выбранного пакета: 'now' | '*' | маска единицы | 'period:start:end'. */
+    packetsKey: { $def: 'now', $type: String, $save: true },
+    packetsStart: '',
+    packetsEnd: '',
+    /** Период, который показал пакет, — единственный источник границ для выборки. */
+    period: null,
     get hasPostings() {
         return Array.isArray(this.schema?.POSTINGS) && this.schema.POSTINGS.length > 0;
     },
-    get displayRows() {
-        return (this.rows || []).map(r => ({
-            id: r.id,
-            posted: r.posted,
-            cells: (this.columns || []).map(c => this.cellText(r, c)),
-        }));
+    /** Колонки таблицы: поля схемы, а при POSTINGS — синтетическая «Проведено». */
+    get tableMetadata() {
+        const cols = this.columns || [];
+        return this.hasPostings ? [...cols, { id: 'posted', label: 'Проведено' }] : cols;
+    },
+    /** Строки таблицы: копии с текстом «да» для «Проведено»; id сохраняется для выбора. */
+    get tableRows() {
+        return (this.rows || []).map(r => this.hasPostings ? { ...r, posted: r.posted ? 'да' : '' } : r);
     },
     /** Поля схемы (без системного time) — для колонок, редактора и отправки. */
     fieldList() {
@@ -113,6 +128,31 @@ export default {
     },
     async attached() {
         await this.loadSchema();
+        await this.loadRange();
+    },
+    /**
+     * Границы полосы — дни журнала точки (по убыванию, сегодня — первым).
+     * Даты журнала — надмножество дат объектов: создание объекта пишет запись в журнал,
+     * поэтому пакет может покрыть дни без объектов (таблица на них пустая).
+     * При недоступном журнале — сегодня, чтобы пакет смонтировался и отдал период.
+     */
+    async loadRange() {
+        if (!this.$item)
+            return;
+        const days = await this.$item.logs({ mode: 'dates' }).catch(() => []);
+        this.packetsEnd = days?.[0] || _today();
+        this.packetsStart = days?.[days.length - 1] || this.packetsEnd;
+    },
+    /**
+     * Смена периода в пакете — единственный повод грузить строки заново.
+     * Пакет шлёт selection-changed дважды: авто-событие пропа `selection`
+     * (detail — массив выбранных единиц) и явное при смене выбора (detail — объект).
+     * Учитываем только явное, иначе первая выборка ушла бы без границ.
+     */
+    async onPackets(e) {
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        if (Array.isArray(d)) return;
+        this.period = d.period || null;
         await this.reload();
     },
     async reload() {
@@ -122,8 +162,17 @@ export default {
         if (!this.$item)
             return;
         try {
-            const res = await this.$item.fetch('index', { id: 'table', limit: 200 });
+            const params = { id: 'table', limit: 200 };
+            if (this.period) {
+                // Время явное: сервер разбирает границу через new Date(), а голая
+                // 'YYYY-MM-DD' — это UTC и в America/* 'to' отсёк бы последний день.
+                params.from = this.period.start + 'T00:00:00';
+                params.to = this.period.end + 'T00:00:00';
+            }
+            const res = await this.$item.fetch('index', params);
             this.rows = Array.isArray(res?.rows) ? res.rows : [];
+            // строки пересозданы: выделение возвращаем на открытый объект по id
+            this.focusedRow = this.tableRows.find(r => r.id === this.editing?.id) ?? null;
             await this.resolveNames();
         }
         catch (e) {
@@ -147,7 +196,7 @@ export default {
             const f = linkFields.find(f => (this.rows || []).some(r => r[f.id] === id));
             try {
                 const one = await this.$item.fetch('read_link', { catalog: f.catalog, id });
-                names[id] = one?.name || id;
+                names[id] = one?.DATA?.name ?? one?.name ?? id;
             }
             catch {
                 names[id] = id;

@@ -11,6 +11,10 @@
 import '/oda/oda.js';
 import objectsProto from '/$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js';
 import postingsProto from '/DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
+// cloneProto обнуляет imports, поэтому компоненты из них стенд грузит сам.
+// oda-packets нужен как полоса периодов: без неё элемент остаётся обычным HTMLElement.
+await import('/oda//packets.js');
+await ODA.telemetry['oda-packets'];
 
 const results = [];
 window.__results = results;
@@ -211,9 +215,16 @@ const FIELDS = [
     { id: 'name', label: 'Название' },
     { id: 'client', label: 'Клиент', type: 'Link', catalog: '/DATA/CATALOGS/C' },
 ];
+const _day = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Журнал точки: сегодня и ещё два дня назад (по убыванию)
+const today = () => _day(new Date());
+const LOG_DAYS = [today(), _day(new Date(Date.now() - 13 * 864e5)), _day(new Date(Date.now() - 44 * 864e5))];
 function mockItem(calls, handlers, fields) {
     return {
         body: Promise.resolve({ label: 'Операции', METADATA: { FIELDS: fields || FIELDS } }),
+        // logs({mode:'dates'}) — дни журнала по убыванию, сегодня первым (как logs.datesList):
+        // из них form/objects берёт границы полосы периодов
+        logs: async () => LOG_DAYS,
         fetch: async (method, params, post) => {
             calls.push({ method, params, post });
             return handlers[method] ? handlers[method](params, post) : null;
@@ -246,6 +257,26 @@ await test('objects: шапка и ячейки — текст, без [object O
     const cells = [...el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head) div.cell')].map(text);
     eq(cells.join('|'), 'Продажа|Альфа|Оплата|');
     assert(!allText(el).includes('[object Object]'), 'нет [object Object]');
+    el.remove();
+});
+
+await test('objects: полоса периодов сверху, выборка идёт по пакету', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [{ id: '1.X', name: 'Продажа' }] }),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => el.$('oda-packets')?.items?.length), 'пакет отрисован');
+    eq(el.packetsEnd, LOG_DAYS[0], 'верхняя граница — первый день журнала');
+    eq(el.packetsStart, LOG_DAYS[2], 'нижняя граница — самый старый день');
+    assert(await until(() => calls.some(c => c.method === 'index')), 'строки загрузились по событию пакета');
+    eq(calls.filter(c => c.method === 'index').length, 1,
+        'одна выборка: авто-событие пропа selection не должно дублировать её');
+    eq(el.packetsKey, 'now', 'дефолт «Сегодня» не затирается пустым ключом пакета');
+    eq(el.$('oda-packets').mask, today() + '*', 'в пакете выбран сегодняшний день');
+    eq(calls.find(c => c.method === 'index').params.from, today() + 'T00:00:00', 'левая граница выборки');
+    eq(calls.find(c => c.method === 'index').params.to, today() + 'T00:00:00', 'правая граница выборки');
+    assert(el.rows.length, 'строки пришли: ' + JSON.stringify(el.rows));
     el.remove();
 });
 

@@ -53,7 +53,7 @@ const STATUS = {
 };
 
 ODA({ is: 'microchat-header',
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, ~/lib//prompt-bar',
     template: /*html*/`
         <style>
             :host { @apply --horizontal; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; }
@@ -66,6 +66,16 @@ ODA({ is: 'microchat-header',
             .chip[waiting] { background: var(--warning-soft); border-color: transparent; }
             .chip[bad] { background: var(--error-soft); border-color: transparent; }
             :host([inline]) .chip { background: var(--content-background); color: var(--content-color); }
+            .dialog-btn {
+                width: 30px; height: 30px; border-radius: 50%; padding: 0; border: none;
+                background: transparent; color: inherit; cursor: pointer;
+                display: flex; align-items: center; justify-content: center; opacity: .8;
+            }
+            .dialog-btn:hover { background: var(--accent-soft); opacity: 1; }
+            .dialog-btn:focus-visible { @apply --focus-ring; }
+            .dialog-btn[on] { background: var(--accent-soft); color: var(--accent-color); opacity: 1; }
+            :host([inline]) .dialog-btn:hover, :host([inline]) .dialog-btn[on] { background: rgba(255,255,255,.2); color: inherit; }
+            .dialog-btn work-voice-bars { width: 18px; height: 18px; }
             .ring {
                 position: relative; width: 30px; height: 30px; border: none; padding: 0; border-radius: 50%;
                 background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; color: inherit;
@@ -84,6 +94,9 @@ ODA({ is: 'microchat-header',
         <span class="chip" no-flex :running="status === 'running'" :waiting="status === 'waiting'" :bad="status === 'error' || status === 'limit' || status === 'needs_review'">
             <oda-icon :icon="statusMeta.icon" :icon-size="12"></oda-icon>{{statusMeta.label}}
         </span>
+        <button class="dialog-btn" no-flex ~if="canVoice" :on="voiceOn" :title="voiceOn ? 'Выключить голосовой диалог' : 'Голосовой диалог: говорите с агентом'" :aria-pressed="voiceOn ? 'true' : 'false'" @tap="toggleVoice">
+            <work-voice-bars :on="voiceOn"></work-voice-bars>
+        </button>
         <oda-button no-flex ~if="canEnablePush" icon="carbon:notification" :icon-size="17" title="Включить уведомления задач" @tap="enablePush"></oda-button>
         <button class="ring" no-flex :on="dockOpen" :title="ringTitle" @tap="toggleDock">
             <svg viewBox="0 0 24 24" width="24" height="24">
@@ -100,6 +113,36 @@ ODA({ is: 'microchat-header',
     inline: { $attr: true, $def: false },
     attached() {
         this.shell ??= findShell(this);
+        if (this.shell?.voiceOn && this.shell?._voice)
+            this.bindVoice(this.shell._voice);
+    },
+    detached() {
+        this.bindVoice(null);
+    },
+    get canVoice() {
+        return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
+    },
+    get voiceOn() { return !!this.shell?.voiceOn; },
+    toggleVoice() { this.shell?.toggleVoice(!this.voiceOn); },
+    setDialogLevel(v) { this.$('work-voice-bars')?.setLevel(v); },
+    /** Полосы кнопки в шапке движутся в такт голосу: свой голос, пока слушаем, и речь агента, пока он говорит. */
+    bindVoice(v) {
+        for (const [k, fn] of Object.entries(this._vOn || {}))
+            this._v?.removeEventListener(k, fn);
+        this._vOn = this._v = null;
+        this.setDialogLevel(0);
+        if (!v)
+            return;
+        let user = 0, speech = 0, state = v.state;
+        const push = () => this.setDialogLevel(state === 'speaking' ? speech : user);
+        this._v = v;
+        this._vOn = {
+            level: e => { user = e.detail; push(); },
+            speechlevel: e => { speech = e.detail; push(); },
+            state: e => { state = e.detail; push(); },
+        };
+        for (const [k, fn] of Object.entries(this._vOn))
+            v.addEventListener(k, fn);
     },
     get title() { return this.shell?.title || 'Задача'; },
     get status() { return this.shell?.status || 'idle'; },

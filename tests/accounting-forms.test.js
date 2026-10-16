@@ -23,6 +23,7 @@ function host(proto, calls, extra = {}) {
     }, extra.self || {});
     h.$item = {
         body: Promise.resolve(extra.body || {}),
+        logs: async params => (extra.logs ? extra.logs(params) : []),
         fetch: async (method, params, post) => {
             calls.push({ method, params, post });
             return extra.fetch ? extra.fetch(method, params, post) : null;
@@ -44,9 +45,12 @@ describe('форма объектов', () => {
         assert.ok(link, 'oda-link-input определён');
         assert.equal(typeof link.pick, 'function');
         const ef = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/components/layouts/editor-form/editor-form.js'), 'utf-8');
+        const map = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/components/structure/controls-map.js'), 'utf-8');
+        const controls = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/components/structure/controls.js'), 'utf-8');
         assert.ok(ef.includes("'Link'"), 'Link в EDITOR_FIELD_TYPES');
-        assert.ok(ef.includes('oda-link-input'), 'Link в EDITORS');
-        assert.ok(ef.includes('inputs/link/link.js'), 'импорт редактора');
+        assert.ok(ef.includes('controls-map.js'), 'editor-form берёт карту из controls-map.js');
+        assert.ok(map.includes("link: 'oda-link-input'"), 'link в общей карте CONTROLS');
+        assert.ok(controls.includes('inputs/link/link.js'), 'импорт редактора в controls.js');
     });
 
     it('reload грузит index table, select — read_object', async () => {
@@ -69,9 +73,25 @@ describe('форма объектов', () => {
         assert.deepEqual(calls[0], { method: 'index', params: { id: 'table', limit: 200 }, post: undefined });
         assert.equal(h.rows.length, 1);
         assert.equal(h.names['9.Y'], 'Альфа');
-        assert.deepEqual(h.displayRows, [{ id: '1.X', posted: undefined, cells: ['Оп', 'Альфа'] }]);
+        assert.deepEqual(h.tableRows, [{ id: '1.X', name: 'Оп', client: '9.Y' }], 'строки таблицы — сами данные без POSTINGS');
+        assert.deepEqual(h.tableMetadata, FIELDS, 'колонки таблицы — поля схемы');
         await h.select({ id: '1.X' });
         assert.deepEqual(h.editing, { name: 'Оп', client: '9.Y', id: '1.X' });
+    });
+
+    it('таблица: «Проведено» при POSTINGS, выделение возвращается по id после перезагрузки', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            body: { label: 'Операции', METADATA: { FIELDS, POSTINGS: [{}] } },
+            fetch: (method) => (method === 'index' ? { rows: [{ id: '1.X', name: 'Оп', posted: true }] } : null),
+        });
+        await h.loadSchema();
+        await h.reload();
+        assert.deepEqual(h.tableMetadata.at(-1), { id: 'posted', label: 'Проведено' });
+        assert.deepEqual(h.tableRows, [{ id: '1.X', name: 'Оп', posted: 'да' }]);
+        h.editing = { id: '1.X' };
+        await h.reload();
+        assert.equal(h.focusedRow?.id, '1.X', 'выделение восстановлено');
     });
 
     it('save/remove/post/unpost вызывают методы объекта', async () => {
@@ -99,6 +119,62 @@ describe('форма объектов', () => {
         assert.ok(calls.some(c => c.method === 'post' && c.params.id === '1.X'));
         await h.unpost();
         assert.ok(calls.some(c => c.method === 'unpost' && c.params.id === '1.X'));
+    });
+
+    it('раскладка: пакет главной панелью сверху, ряд списка и редактора под ним', () => {
+        assert.ok(objects.template.includes('oda-packets'), 'пакет в разметке');
+        assert.ok(objects.imports.includes('oda//packets'), 'пакет подключён импортом');
+        const style = objects.template.match(/<style>([\s\S]*?)<\/style>/)[1];
+        assert.ok(/--vertical[\s\S]*?--flex/.test(style.split('.list')[0]), 'хост — вертикальный');
+        assert.ok(/\.body\s*\{[^}]*@apply --horizontal[^}]*flex: 1[^}]*overflow: hidden/.test(style),
+            'ряд под пакетом: horizontal flex с overflow hidden');
+        // порядок в шаблоне: пакет раньше ряда
+        assert.ok(objects.template.indexOf('<oda-packets') < objects.template.indexOf('class="body"'),
+            'пакет над рядом');
+        assert.ok(/<oda-packets[^>]*\bno-flex\b/.test(objects.template), 'панель натуральной высоты');
+    });
+
+    it('границы полосы — крайние дни журнала точки', async () => {
+        let asked = null;
+        const h = host(objects, [], { logs: p => { asked = p; return ['2026-10-14', '2026-10-02', '2026-09-30']; } });
+        await h.loadRange();
+        assert.deepEqual(asked, { mode: 'dates' });
+        assert.equal(h.packetsEnd, '2026-10-14', 'по убыванию — первый день');
+        assert.equal(h.packetsStart, '2026-09-30', 'самый старый день');
+    });
+
+    it('недоступный журнал не оставляет вид без периода — границы сегодня', async () => {
+        const h = host(objects, [], { logs: () => { throw new Error('нет доступа'); } });
+        await h.loadRange();
+        assert.match(h.packetsStart, /^\d{4}-\d{2}-\d{2}$/);
+        assert.equal(h.packetsStart, h.packetsEnd);
+    });
+
+    it('attached грузит схему и границы, строки — только по событию пакета', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            body: { label: 'Операции', METADATA: { FIELDS } },
+            logs: () => ['2026-10-14', '2026-09-30'],
+        });
+        await h.attached();
+        assert.equal(h.columns.length, 2);
+        assert.equal(h.packetsStart, '2026-09-30');
+        assert.equal(calls.filter(c => c.method === 'index').length, 0, 'attached не дублирует выборку пакета');
+    });
+
+    it('смена периода в пакете ограничивает выборку границами с явным временем', async () => {
+        const calls = [];
+        const h = host(objects, calls, { fetch: m => (m === 'index' ? { rows: [{ id: '1.X' }] } : null) });
+        await h.onPackets({ detail: { value: { period: { start: '2026-10-01', end: '2026-10-14' } } } });
+        assert.deepEqual(h.period, { start: '2026-10-01', end: '2026-10-14' });
+        assert.deepEqual(calls.find(c => c.method === 'index').params,
+            { id: 'table', limit: 200, from: '2026-10-01T00:00:00', to: '2026-10-14T00:00:00' },
+            'время явное: голая дата на сервере разбирается как UTC');
+    });
+
+    it('дефолтный период «Сегодня» хранится в storage по точке', () => {
+        assert.deepEqual(objects.packetsKey, { $def: 'now', $type: String, $save: true },
+            'ключ относителен — дефолт не залипает на вчерашней дате');
     });
 });
 

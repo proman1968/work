@@ -216,7 +216,7 @@ export async function queryObjects(point, params = {}) {
     const { cands } = await collectCandidates(point, params, { kinds: new Set(['object']), prefix });
     const out = [];
     for (const { doc, context, weight } of cands.values()) {
-        let meta = null;
+        let meta;
         try { meta = doc.meta ? JSON.parse(doc.meta) : null; } catch { continue; }
         if (!meta || (type && meta.type !== type))
             continue;
@@ -236,5 +236,5 @@ export async function queryObjects(point, params = {}) {
     }
     out.sort((a, b) => (b.weight - a.weight) || ((b.time || 0) - (a.time || 0)));
     const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
-    return out.slice(offset, offset + limit).map(({ weight, ...o }) => o);
+    return out.slice(offset, offset + limit).map(({ weight: _weight, ...o }) => o);
 }

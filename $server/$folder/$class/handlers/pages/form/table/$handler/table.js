@@ -13,18 +13,23 @@ function logName(row) {
 }
 
 export default {
-    imports: 'oda//app-layout, oda//tree',
+    imports: 'oda//app-layout, oda//tree, oda//packets',
     template: /* html */ `
         <style>
             :host {
-                @apply --horizontal;
+                @apply --vertical;
                 @apply --flex;
             }
         </style>
-        <app-tabs accent-invert no-flex :items="tabItems" :horizontal="mobile" ::focused-index>
-        </app-tabs>
-        <oda-tree ~if="loading || logItems?.length" flex show-header :items="logItems" :columns="columns" :label="'Файл'"></oda-tree>
-        <div ~if="!loading && !logItems?.length" flex style="align-items: center; justify-content: center; opacity: .5;">Нет логов выбранного типа</div>
+        <oda-packets no-flex :mode="mode" ~if="packetsStart"
+            :start="packetsStart" :end="packetsEnd"
+            ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
+        <div horizontal flex style="overflow: hidden;">
+            <app-tabs accent-invert no-flex :items="tabItems" :horizontal="mobile" ::focused-index>
+            </app-tabs>
+            <oda-tree ~if="loading || logItems?.length" flex show-header :items="logItems" :columns="columns" :label="'Файл'"></oda-tree>
+            <div ~if="!loading && !logItems?.length" flex style="align-items: center; justify-content: center; opacity: .5;">Нет логов за выбранный период</div>
+        </div>
     `,
     focusedIndex: {
         $def: 0,
@@ -43,6 +48,15 @@ export default {
     columns: [],
     logItems: [],
     loading: false,
+    /** Гранулярность дерева дат пакета: day | month | quarter | year. Позже — настройка $class. */
+    mode: 'day',
+    /** Ключ выбранного пакета: 'now' | '*' | маска единицы | 'period:start:end'. */
+    packetsKey: { $def: 'now', $type: String, $save: true },
+    /** Границы полосы — крайние даты журнала точки. */
+    packetsStart: '',
+    packetsEnd: '',
+    /** Период, который показал пакет, — единственный источник границ для выборки. */
+    period: null,
     get dataTypes() {
         if (this._types)
             return this._types;
@@ -76,6 +90,24 @@ export default {
     async attached() {
         if (this.$item?.data_types instanceof Promise)
             this.dataTypes = await this.$item.data_types;
+        await this.loadRange();
+    },
+    /**
+     * Границы полосы — дни журнала точки (по убыванию, сегодня — первым).
+     * Даты журнала — надмножество дат выбранного типа, поэтому пакет может
+     * покрыть дни без записей этого типа (таблица на них пустая).
+     * При недоступном журнале — сегодня, чтобы пакет смонтировался и отдал период.
+     */
+    async loadRange() {
+        if (!this.$item)
+            return;
+        const days = await this.$item.logs({ mode: 'dates' }).catch(() => []);
+        this.packetsEnd = days?.[0] || new Date().toLocalDay();
+        this.packetsStart = days?.[days.length - 1] || this.packetsEnd;
+    },
+    /** Смена периода в пакете — единственный повод грузить строки заново. */
+    onPackets(e) {
+        this.period = (e?.detail?.value ?? e?.detail ?? {}).period || null;
         this.reload();
     },
     reload() {
@@ -85,7 +117,9 @@ export default {
     async _reload(token) {
         const type = this.currentType;
         const $item = this.$item;
-        if (!type || !$item) {
+        const start = this.period?.start || this.packetsStart;
+        const end = this.period?.end || this.packetsEnd;
+        if (!type || !$item || !start || !end) {
             this.columns = [];
             this.logItems = [];
             this.loading = false;
@@ -98,21 +132,7 @@ export default {
                 return;
             this.columns = this._buildColumns(fields);
             const ext = String(type.id || '').replace(/^\$/, '').toLowerCase();
-            let dates = [];
-            try {
-                dates = await $item.logs({ mode: 'dates' }) || [];
-            }
-            catch { /* нет журнала */ }
-            if (token !== this._reloadToken)
-                return;
-            const rows = [];
-            for (const day of dates) {
-                try {
-                    const dayRows = await $item.read_log_bodies({ day, ext }) || [];
-                    rows.push(...dayRows);
-                }
-                catch { /* skip */ }
-            }
+            const rows = await $item.logs({ mode: 'bodies', from: start, to: end, ext }) || [];
             if (token !== this._reloadToken)
                 return;
             this.logItems = this._groupByDay(rows, fields);

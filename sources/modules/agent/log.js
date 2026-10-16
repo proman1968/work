@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Лог агента WORK: log.debug/info/warn(scope, ...детали).
  *

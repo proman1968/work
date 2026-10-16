@@ -33,8 +33,8 @@ ODA({
         </div>
     `,
     $public: {
+        // без $def: пустое — undefined, иначе вечный цикл с привязкой (см. pitfalls §21)
         value: {
-            $def: '',
             $type: String
         },
     },

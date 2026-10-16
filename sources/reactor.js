@@ -298,6 +298,9 @@ export class Reactor extends EventTarget {
                         Reactor.collect_deps(target, key, target[R]);
                         return target._onEmpty(key);
                     }
+                    // Отсутствующий ключ — тоже чтение: без collect_deps его появление
+                    // никого не будит (поле формы читает data[field.id] до заполнения).
+                    Reactor.collect_deps(target, key, target[R]);
                 },
                 set(target, key, value) {
                     return Reactor.set(target, key, value);

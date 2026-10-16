@@ -103,7 +103,7 @@ after(async () => {
 
 describe('регистрация: первый пользователь', () => {
     it('весь цикл: код → подпись challenge → пользователь с ключом и иконкой, назначен во все роли WORK', async () => {
-        const icon = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+        const icon = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
         first = await register(EMAIL1, { name: 'Первый', surname: 'Пользователь', icon });
         assert.equal(first.res.status, 200, first.res.text);
         // вошёл: живая сессия с его uid

@@ -1,34 +1,9 @@
-import '/oda/components/inputs/text/text.js';
-import '/oda/components/inputs/textarea/textarea.js';
-import '/oda/components/inputs/date/date.js';
-import '/oda/components/inputs/select/select.js';
-import '/oda/components/inputs/radio/radio.js';
-import '/oda/components/inputs/table-input/table-input.js';
-import '/oda/components/inputs/link/link.js';
-import '/oda/components/inputs/numeric/numeric.js';
-import '/oda/components/inputs/checkbox/checkbox.js';
+import '/oda/components/structure/controls.js';
 import '/oda/components/icon/icon.js';
+import { CONTROLS, controlOf } from '/oda/components/structure/controls-map.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
 export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link'];
-
-/** Тип поля -> тег редактора. Number/Boolean — существующие oda-компоненты. */
-const EDITORS = {
-    String: 'oda-text-input',
-    Text: 'oda-textarea-input',
-    Number: 'oda-numeric-input',
-    Date: 'oda-date-input',
-    DateTime: 'oda-date-input',
-    Boolean: 'oda-checkbox',
-    Select: 'oda-select-input',
-    Radio: 'oda-radio-input',
-    Table: 'oda-table-input',
-    Link: 'oda-link-input',
-};
-
-export function editorForType(type) {
-    return EDITORS[type] || EDITORS.String;
-}
 
 function cleanField(f, seen) {
     if (!f || typeof f !== 'object')
@@ -245,7 +220,7 @@ ODA({is: 'oda-editor-form-field',
     data: null,
     expanded: true,
     get editor() {
-        return editorForType(this.field?.type);
+        return controlOf(CONTROLS, this.field);
     },
     get label() {
         return this.field?.label || this.field?.id || '';

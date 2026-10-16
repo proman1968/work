@@ -20,7 +20,18 @@
         "sources/modules/agent/permissions.js",
         "sources/modules/agent/index.js",
         "sources/modules/agent/util.js",
-        "sources/modules/agent/types.d.ts"
+        "sources/modules/agent/taint.js",
+        "sources/modules/agent/undo.js",
+        "sources/modules/agent/cost.js",
+        "sources/modules/agent/hooks.js",
+        "sources/modules/agent/log.js",
+        "sources/modules/agent/diff.js",
+        "sources/modules/agent/types.d.ts",
+        "sources/host/secret-box.js",
+        "sources/host/net-guard.js",
+        "sources/host/tls-ca.js",
+        "sources/server/zip-guard.js",
+        "sources/server/safe-node-name.js"
     ],
     "exclude": ["node_modules"]
 }

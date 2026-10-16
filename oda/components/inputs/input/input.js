@@ -173,7 +173,13 @@ ODA({
         return this.isValid;
     },
     focus() {
-        this.$('.control')?.focus();
+        // у части контролов нет внутреннего .control (рейтинг, файлы, медиа): тогда фокус на хост,
+        // иначе жест без фокусируемого элемента не проходит проверку :focus-within у потребителя (ячейка таблицы)
+        const inner = this.$('.control');
+        if (inner)
+            inner.focus();
+        else
+            HTMLElement.prototype.focus.call(this);
     },
     $listeners: {
         focusout() {

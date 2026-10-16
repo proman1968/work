@@ -257,9 +257,13 @@ export function fakeDocker(o = {}) {
             });
             // одноразовые команды (chown, iptables-хелпер egress) ВЫПОЛНЯЮТСЯ при start,
             // не при создании: правило iptables ставит только запущенный контейнер (R1/8.29 —
-            // раньше правило записывалось при createContainer и маскировало пропущенный start)
-            const isChown = opts.Cmd?.[0] === 'chown';
-            const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables');
+            // раньше правило записывалось при createContainer и маскировало пропущенный start).
+            // В work-computer заданы USER agent и ENTRYPOINT /opt/work/entrypoint.sh (sleep infinity),
+            // поэтому хелпер обязан явно передать User: '0:0' и сбросить Entrypoint: [].
+            const resetEntry = Array.isArray(opts.Entrypoint) && opts.Entrypoint.length === 0;
+            const isRoot = opts.User === '0:0' || opts.User === '0' || opts.User === 'root';
+            const isChown = opts.Cmd?.[0] === 'chown' && resetEntry && isRoot;
+            const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables') && resetEntry && isRoot;
             const autoExit = (isChown && !o.stuckHelper) || isIptables;
             const runOnce = () => {
                 const c = containers.get(id);

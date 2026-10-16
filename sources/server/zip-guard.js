@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Страж zip-архивов (F16, final 8.9): docx/xlsx/pptx/odt — это zip. Заведомо вредный архив
  * («бомба»: килобайты сжатого → гигабайты в памяти) не должен дойти до распаковщиков
@@ -38,7 +39,7 @@ export function assertZipSafe(buf, limits = {}) {
         entries = new AdmZip(buf).getEntries();
     }
     catch (e) {
-        throw new Error('архив повреждён: ' + String(e?.message || e).slice(0, 120));
+        throw new Error('архив повреждён: ' + String(e?.message || e).slice(0, 120), { cause: e });
     }
     if (entries.length > L.entries)
         throw new Error('архив отклонён: слишком много записей (' + entries.length + ', лимит ' + L.entries + ')');
@@ -69,7 +70,7 @@ export function assertZipSafe(buf, limits = {}) {
                 }
                 catch (err) {
                     if (/maxOutputLength|too large|buffer/i.test(String(err?.message || err)))
-                        throw new Error('архив отклонён: запись «' + e.entryName + '» разворачивается дальше объявленного размера (бомба?)');
+                        throw new Error('архив отклонён: запись «' + e.entryName + '» разворачивается дальше объявленного размера (бомба?)', { cause: err });
                     throw err;
                 }
                 if (honest.length !== size)

@@ -1,5 +1,5 @@
 /**
- * oda-table-input — блочное поле-таблица: value — массив строк, колонки — field.columns.
+ * oda-table-input — блочное поле-таблица: value — массив строк, колонки — field.children (structure/fields.js).
  * Колонка: {id, label, type, options, calc, total}; calc — выражение от полей строки (колонка только для чтения),
  * total — итог в строке-заголовке. Ячейки правятся контролами oda-table по стандартной карте типов.
  */
@@ -43,7 +43,7 @@ ODA({
     },
     focusedRow: undefined,
     get columns() {
-        return this.field?.columns ?? [];
+        return this.field?.children ?? [];
     },
     get tableColumns() {
         return this.columns.map(c => ({

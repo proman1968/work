@@ -75,8 +75,12 @@ export class $folder extends $item{
         return script.replace(/^\s*import\s+(['"])(\/[^'"]+)\1\s*;?\s*$/gm, '');
     }
 
-    static importScript(script) {
+    static importScript(script, sourceUrl = '') {
         script = this.stripAbsoluteImports(script);
+        if (sourceUrl) {
+            const safeUrl = String(sourceUrl).replace(/[\r\n]/g, '');
+            script += `\n//# sourceURL=work://${safeUrl.replace(/^\/+/, '')}`;
+        }
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
         return import('data:text/javascript;base64,' + b64).then(module => module.default || module).catch(err => {
             console.error(err, script);
@@ -167,7 +171,7 @@ export class $folder extends $item{
             }
             if (files.length) {
                 let script = await $server.mergeFiles(files);
-                script = await this.constructor.importScript(script);
+                script = await this.constructor.importScript(script, this.path || this.id);
                 if (script)
                     this.DATA = script;
             }

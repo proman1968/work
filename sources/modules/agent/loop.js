@@ -24,7 +24,7 @@
 import { log } from './log.js';
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
 import { decide } from './permissions.js';
-import { newNonce, wrapUntrusted, taintSources } from './taint.js';
+import { newNonce, wrapUntrusted, taintSources, untrustedNames } from './taint.js';
 import { runPreTool, runAppend, runNotify } from './hooks.js';
 import { costOf, recordUsage, budgetExceeded } from './cost.js';
 
@@ -720,9 +720,11 @@ export function toMessages(system, items, images = null) {
             case 'user':
                 out.push({ role: 'user', content: userContent(it, images) });
                 break;
-            case 'summary':
-                out.push({ role: 'user', content: '[Сводка предыдущей части работы]\n' + it.content });
+            case 'summary': {
+                const body = it.untrusted ? wrapUntrusted(it.content, 'summary', it.nonce || 'summary') : it.content;
+                out.push({ role: 'user', content: '[Сводка предыдущей части работы]\n' + body });
                 break;
+            }
             case 'assistant': {
                 const old = ai++ < fullFrom;
                 const tools = (it.tools || []).filter(t => t && t.name);
@@ -865,8 +867,12 @@ export async function maybeCompact({ llm, items, host, system, force = false, to
         return false;
     for (const it of old)
         it.compacted = true;
+    const wasUntrusted = untrustedNames(old).size > 0 || old.some(it => it.type === 'summary' && it.untrusted);
     const idx = items.indexOf(live[cut]);
-    const note = { id: genId(), type: 'summary', time: Date.now(), content: summary };
+    const note = {
+        id: genId(), type: 'summary', time: Date.now(), content: summary,
+        ...(wasUntrusted ? { untrusted: true, nonce: newNonce() } : {}),
+    };
     // on_compact: хук может дописать к сводке то, что обязано пережить сжатие (правила, ссылки)
     const extra = await runAppend(hooks, 'on_compact', { summary: clip(summary, 4000), compacted: old.length, task: task?.path || null }, { task });
     if (extra)

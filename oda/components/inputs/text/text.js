@@ -21,8 +21,9 @@ ODA({
         <oda-button ~if="clearable && !isEmpty && !isReadonly" class="affix" icon="icons:close" :icon-size title="Очистить" @tap.stop="value = ''"></oda-button>
     `,
     $public: {
+        // без $def: пустое значение — undefined (как в данных); $def: '' вечно спорил
+        // с привязкой и давал цикл запись→нотификация→рендер (см. pitfalls §21)
         value: {
-            $def: '',
             $type: String
         },
         /** text | password | email | url | tel | search; пусто — по field.type */

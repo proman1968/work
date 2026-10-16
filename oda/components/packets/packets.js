@@ -2,7 +2,9 @@
  * oda-packets — аналог odant-packets, только дата-часть (без contextItem и $item).
  * Генерирует дерево дат из диапазона [start, end] (всегда YYYY-MM-DD).
  * mode задаёт гранулярность: day | month | quarter | year.
- * Наружу: selected, selection, mask, period {start, end} + событие 'selection-changed'.
+ * Наружу: selected, selection, mask, period {start, end}, value (ключ выбора) + событие 'selection-changed'.
+ * value — обратный вход: потребитель хранит его у себя (например с $save) и отдаёт обратно,
+ * чтобы выбор переживал перезапуск и пересборку диапазона.
  * Подписи и служебные строки — на русском, локаль не переключается.
  */
 
@@ -119,6 +121,9 @@ function _leafSpan(name, type) {
 
 ODA({
     is: 'oda-packets',
+    // Явная зависимость: oda-menu-list нужен для меню выбора, а ODA.menuTag
+    // в приложении подменён (item-menu — контекстное меню WORK, items не рисует)
+    imports: '/oda//menu-list.js',
     template: /*html*/`
         <style>
             :host {
@@ -170,6 +175,20 @@ ODA({
         period: {
             $def: null,
             $type: Object
+        },
+        /**
+         * Ключ выбранного пакета — вход для восстановления выбора снаружи.
+         * 'now' → «Сейчас», '*' → «Все», 'маска' или 'маска|маска' (мульти-выбор),
+         * 'period:YYYY-MM-DD:YYYY-MM-DD'. У пункта «Сейчас» ключ относителен ('now'),
+         * а не его маска с датой: сохранённый дефолт остаётся «сегодня», а не вчерашним днём.
+         *
+         * $def здесь намеренно НЕ задан: значение по умолчанию публикуется наружу
+         * событием value-changed, и пустая строка записалась бы в потребителя раньше,
+         * чем придёт его собственный ключ. До первой сборки value — undefined,
+         * что _itemsByKey трактует как «выбор не задан» (прежнее поведение — «Все»).
+         */
+        value: {
+            $type: String
         }
     },
     error: '',
@@ -223,8 +242,10 @@ ODA({
         const bar = this._makeBar(years, mode, this._lo, this._hi);
         this.items = bar.items;
         this._allItem = bar.allItem;
-        // По умолчанию выбран весь диапазон; событие шлём — потребитель должен узнать о смене периода
-        if (this._allItem) this._applySelection([this._allItem]);
+        // Выбор восстанавливается по value, иначе — весь диапазон (прежнее поведение).
+        // value при неверном диапазоне НЕ сбрасывается: это намерение потребителя,
+        // иначе невалидный start/end затирал бы сохранённый выбор.
+        if (this._allItem) this._applySelection(this._itemsByKey(this.value) ?? [this._allItem]);
         else {
             this.selection = [];
             this.selected = null;
@@ -400,6 +421,51 @@ ODA({
             this._applySelection([item]);
         }
     },
+    // Выбор → ключ для value. «Сейчас» — относительный 'now', произвольный
+    // период — с границами, остальные единицы — своей маской.
+    _selectionKey(selection) {
+        return selection.map(i => {
+            if (i.is === 'oda-packets-now-selector') return 'now';
+            if (i.name === 'period') return `period:${i.start}:${i.end}`;
+            return i.mask || '';
+        }).filter(Boolean).join('|');
+    },
+    // Ключ → узел полосы или дерева; null — не найден либо отключён.
+    // '*' и 'now' разбираем по имени: у обоих маска '*' неоднозначна.
+    _findItem(key) {
+        const bar = this.items || [];
+        if (key === 'now') {
+            const now = bar.find(i => i.is === 'oda-packets-now-selector');
+            return now && !now.disabled ? now : null;
+        }
+        if (key === '*') return this._allItem || null;
+        if (key.startsWith('period:')) return this._restorePeriod(key.slice(7));
+        return [...this._leaves, ...bar]
+            .find(i => !i.disabled && i.name !== '<' && i.name !== '>' && i.mask === key) || null;
+    },
+    // Ключ (возможно мульти-выбор) → узлы; null — ключ пуст или ни один не найден.
+    _itemsByKey(key) {
+        if (!key) return null;
+        const found = String(key).split('|').map(k => this._findItem(k)).filter(Boolean);
+        return found.length ? found : null;
+    },
+    // Произвольный период 'YYYY-MM-DD:YYYY-MM-DD' → пункт «period» с границами,
+    // обрезанными по покрытию диапазона (как в диалоге периода).
+    _restorePeriod(spec) {
+        const p = this._periodItem;
+        const [rawStart, rawEnd] = String(spec).split(':');
+        if (!p || !this._lo || !rawStart || !rawEnd) return null;
+        let start = rawStart < this._lo ? this._lo : rawStart > this._hi ? this._hi : rawStart;
+        let end = rawEnd < this._lo ? this._lo : rawEnd > this._hi ? this._hi : rawEnd;
+        if (start > end) [start, end] = [end, start];
+        const mask = this._periodMask(start, end);
+        if (!mask) return null;
+        p.start = start;
+        p.end = end;
+        p.mask = mask;
+        this._periodBase = `${start} - ${end}`;
+        return p;
+    },
     _applySelection(selection) {
         this._clearSelected(this.items);
         for (const s of selection) s.selected = true;
@@ -412,6 +478,7 @@ ODA({
         this.selected = selection[0] || null;
         this.mask = selection.map(i => i.mask).filter(Boolean).join('|');
         this.period = this._resolvePeriod(selection);
+        this.value = this._selectionKey(selection);
         this.items = [...this.items]; // триггер перерисовки
         this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
     },
@@ -455,9 +522,12 @@ ODA({
             days: child.items?.map(d => ({ label: d.label, hint: d.fullLabel, value: d.name }))
         }));
         const { month, day } = this._menuFocus(item);
+        // Список всегда передаём явно, через params.menu: по умолчанию showMenu берёт
+        // ODA.menuTag, а приложение подменяет его на item-menu — контекстное меню WORK
+        // (tools + дерево handlers), которое items не рисует и открыло бы пустое окно
         const params = this.mode === 'day'
             ? { menu: ODA.createComponent('oda-packets-months', { items: menuItems, value: month, day }) }
-            : { items: menuItems, value: month };
+            : { menu: ODA.createComponent('oda-menu-list', { items: menuItems, value: month }) };
         let pickedName = null;
         try {
             pickedName = await ODA.showMenu(params, anchor || this);
@@ -674,7 +744,9 @@ ODA({
         if (!item.days?.length) return this.parentElement.close(item.value);
         this.value = item.value;
         const { right, top } = this.getBoundingClientRect();
-        const picked = await ODA.showMenu({ items: item.days, value: this.day },
+        // menu передаём явно — см. комментарий в _onOpenMenu: без него окно дней
+        // создавалось бы на подменённом приложением ODA.menuTag и вышло бы пустым
+        const picked = await ODA.showMenu({ menu: ODA.createComponent('oda-menu-list', { items: item.days, value: this.day }) },
             { target: this, x: right, y: top }).catch(() => null); // отмена окна дней — выбор не меняется
         if (picked) this.parentElement.close(picked?.value ?? picked);
     }

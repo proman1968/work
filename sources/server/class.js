@@ -1751,14 +1751,7 @@ export class $class extends $folder{
                     if (body?.deleted)
                         continue;
                     if (def.kind === 'table') {
-                        const row = { id: idOf(leaf), time: body.time };
-                        const fields = Array.isArray(def.fields) && def.fields.length ? def.fields
-                            : (this.METADATA?.FIELDS || []).filter(f => f?.id && !f.secret).map(f => f.id);
-                        for (const fid of fields) {
-                            if (fid !== 'id' && fid !== 'time' && body[fid] !== undefined)
-                                row[fid] = body[fid];
-                        }
-                        doc[idOf(leaf)] = row;
+                        doc[idOf(leaf)] = this._tableRow(def, body, idOf(leaf));
                     }
                     else {
                         const key = String(body[def.key] ?? '');
@@ -2060,6 +2053,23 @@ export class $class extends $folder{
         return body;
     }
     /**
+     * Строка индекса вида table: id, time, поля схемы (без secret) и признак разноски.
+     * posted — служебное тело $operation (в METADATA.FIELDS его нет), но строкам формы
+     * нужен: колонка «Проведено» читает его прямо из индекса, без запроса на объект.
+     */
+    _tableRow(def, body, id) {
+        const fields = Array.isArray(def.fields) && def.fields.length ? def.fields
+            : (this.METADATA?.FIELDS || []).filter(f => f?.id && !f.secret).map(f => f.id);
+        const row = { id, time: body.time };
+        for (const fid of fields) {
+            if (fid !== 'id' && fid !== 'time' && body[fid] !== undefined)
+                row[fid] = body[fid];
+        }
+        if (body.posted !== undefined)
+            row.posted = body.posted;
+        return row;
+    }
+    /**
      * Применить вклад тела к файлам индекса класса (без подъёма к предкам).
      * turnover — день/месяц/год; state — current.json; table/lookup — файл дня.
      */
@@ -2077,13 +2087,7 @@ export class $class extends $folder{
             await _lockedJson(this._indexFile(def, 'current'), doc => _addRows(doc, key, row, sign));
         }
         else if (def.kind === 'table') {
-            const fields = Array.isArray(def.fields) && def.fields.length ? def.fields
-                : (this.METADATA?.FIELDS || []).filter(f => f?.id && !f.secret).map(f => f.id);
-            const row = { id: body._id, time: body.time };
-            for (const fid of fields) {
-                if (fid !== 'id' && fid !== 'time' && body[fid] !== undefined)
-                    row[fid] = body[fid];
-            }
+            const row = this._tableRow(def, body, body._id);
             await _lockedJson(this._indexFile(def, day), doc => {
                 if (sign > 0)
                     doc[body._id] = row;

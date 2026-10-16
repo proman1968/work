@@ -48,7 +48,7 @@ export async function getDocker() {
         Docker = (await import('dockerode')).default;
     }
     catch (e) {
-        throw new Error('пакет dockerode не установлен: ' + e.message);
+        throw new Error('пакет dockerode не установлен: ' + e.message, { cause: e });
     }
     try {
         cached = new Docker(dockerOptions());
@@ -57,7 +57,7 @@ export async function getDocker() {
     catch (e) {
         cached = null;
         throw new Error('Docker недоступен (' + dockerWhere() + '): ' + shortError(e)
-            + '. Поставьте Docker Desktop с WSL2 — инструкция в sources/modules/sandbox/readme.md');
+            + '. Поставьте Docker Desktop с WSL2 — инструкция в sources/modules/sandbox/readme.md', { cause: e });
     }
     return cached;
 }

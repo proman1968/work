@@ -1,3 +1,4 @@
+// @ts-check
 import path from 'node:path';
 
 /**
@@ -24,6 +25,7 @@ export function safeNodeName(raw) {
 /** Имя — один безопасный сегмент (без разделителей, `.`/`..`, управляющих символов). */
 export function isPlainName(name) {
     const s = String(name ?? '');
+    // eslint-disable-next-line no-control-regex
     return !!s && s !== '.' && s !== '..' && !/[\\/\0<>:"|?*]/.test(s) && !/[\x00-\x1f]/.test(s);
 }
 

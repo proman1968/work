@@ -14,7 +14,26 @@ export default [
         ignores: ['**/node_modules/**'],
     },
     {
-        files: ['sources/modules/agent/**/*.js', 'sources/host/**/*.js'],
+        files: [
+            'sources/modules/agent/**/*.js',
+            'sources/modules/a2a/**/*.js',
+            'sources/modules/bridge/**/*.js',
+            'sources/modules/lan/**/*.js',
+            'sources/modules/mcp/**/*.js',
+            'sources/modules/nodes/**/*.js',
+            'sources/modules/rag/**/*.js',
+            'sources/modules/sandbox/**/*.js',
+            'sources/modules/ai-schema.js',
+            'sources/host/**/*.js',
+            'sources/server/access/**/*.js',
+            'sources/server/assert-class-id.js',
+            'sources/server/external-source.js',
+            'sources/server/logs.js',
+            'sources/server/memory-mark.js',
+            'sources/server/safe-node-name.js',
+            'sources/server/upload-mark.js',
+            'sources/server/zip-guard.js',
+        ],
         languageOptions: {
             ecmaVersion: 2025,
             sourceType: 'module',
@@ -23,8 +42,8 @@ export default [
         },
         rules: {
             ...js.configs.recommended.rules,
-            // переменные с префиксом _ — осознанно отбрасываемые (resources.js: _hooks)
-            'no-unused-vars': ['error', { varsIgnorePattern: '^_' }],
+            // переменные и аргументы с префиксом _ — осознанно отбрасываемые (resources.js: _hooks)
+            'no-unused-vars': ['error', { varsIgnorePattern: '^_', argsIgnorePattern: '^_' }],
             'no-empty': ['error', { allowEmptyCatch: false }],
         },
     },

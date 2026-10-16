@@ -221,9 +221,11 @@ async function applyEgressRules(docker, cfg, rules) {
         const cmd = r.v6 ? 'ip6tables' : 'iptables';
         return `${cmd} -C ${r.chain} -i ${r.bridge} -d ${r.cidr} -j DROP 2>/dev/null || ${cmd} -I ${r.chain} 1 -i ${r.bridge} -d ${r.cidr} -j DROP`;
     }).join('; ');
-    // без LABEL: хелпер не должен считаться в квотах и подметаться как «компьютер»
+    // без LABEL: хелпер не должен считаться в квотах и подметаться как «компьютер»;
+    // User '0:0' и Entrypoint [] обязательны: в work-computer заданы USER agent (uid 1000) и
+    // ENTRYPOINT /opt/work/entrypoint.sh, который поднимает Xvfb и зависает в sleep infinity
     const helper = await docker.createContainer({
-        Image: cfg.image, Cmd: ['sh', '-c', script],
+        Image: cfg.image, User: '0:0', Entrypoint: [], Cmd: ['sh', '-c', script],
         HostConfig: { Privileged: true, NetworkMode: 'host', AutoRemove: false },
     });
     const hid = helper.id || helper.Id;
@@ -263,7 +265,7 @@ export async function ensureEgressFilter(docker, cfg = loadSandboxConfig()) {
     }
     catch (e) {
         throw new Error('не удалось ограничить выход в интернет (фильтр частных сетей не установлен): '
-            + String(e?.message || e).slice(0, 200) + '. Интернет не включён — песочница осталась изолированной');
+            + String(e?.message || e).slice(0, 200) + '. Интернет не включён — песочница осталась изолированной', { cause: e });
     }
     return { bridge, rules: rules.length };
 }
@@ -289,10 +291,11 @@ function withCreateLock(fn) {
     return job;
 }
 
-/** Опции контейнера-хелпера прав (F26): root, но только CHOWN-возможности, без сети, лимиты. */
+/** Опции контейнера-хелпера прав (F26): root, но только CHOWN-возможности, без сети, лимиты.
+ *  User '0:0' и Entrypoint [] обходят USER agent и графический entrypoint образа work-computer. */
 export function helperOptions(vol, wd, cfg = loadSandboxConfig()) {
     return {
-        Image: cfg.image, Cmd: ['chown', '-R', '1000:1000', wd],
+        Image: cfg.image, User: '0:0', Entrypoint: [], Cmd: ['chown', '-R', '1000:1000', wd],
         HostConfig: {
             Binds: [vol + ':' + wd], AutoRemove: true,
             CapDrop: ['ALL'], CapAdd: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER'],
@@ -326,7 +329,7 @@ export async function fixWorkspacePerms(docker, id, wd, owner, name, cfg = loadS
     catch (e) {
         // Если и хелпер не может — пробуем без bind (Docker Desktop может иначе маппить)
         throw new Error('права на ' + wd + ': том создан другим образом — удалите том вручную и пересоздайте компьютер ('
-            + String(e?.message || e).slice(0, 200) + ')');
+            + String(e?.message || e).slice(0, 200) + ')', { cause: e });
     }
     await helper.start();
     // Ждём завершения хелпера (chown быстрый) — через docker API, т.к. createContainer может вернуть что угодно
@@ -484,7 +487,7 @@ export async function ensureComputer(docker, owner, name, cfg = loadSandboxConfi
         }
         catch (e) {
             throw new Error('образ «' + cfg.image + '» недоступен: ' + String(e?.message || e).slice(0, 200)
-                + (cfg.image.startsWith('work-') ? ' — соберите локально: docker build -t ' + cfg.image + ' sources/modules/sandbox/images/work-computer' : ' — проверьте сеть Docker'));
+                + (cfg.image.startsWith('work-') ? ' — соберите локально: docker build -t ' + cfg.image + ' sources/modules/sandbox/images/work-computer' : ' — проверьте сеть Docker'), { cause: e });
         }
         await ensureIsolatedNetwork(docker, cfg, owner);
         const { volume, options } = buildCreateOptions(owner, name, cfg);
@@ -903,7 +906,7 @@ export async function waitDisplay(docker, id, { timeoutSec = 30, windowSec = 15,
         cmd: ['sh', '-c', c], workdir: '/tmp', timeoutSec: 10, maxBytes: bytes, env: ['DISPLAY=' + display], signal,
     }).catch(e => ({ code: 1, stderr: String(e?.message || e), stdout: '' }));
     const deadline = Date.now() + Math.max(5, timeoutSec) * 1000;
-    let last = '', geometry = '';
+    let geometry;
     for (;;) {
         signal?.throwIfAborted();
         const r = await cmd('xdotool getdisplaygeometry');
@@ -911,7 +914,7 @@ export async function waitDisplay(docker, id, { timeoutSec = 30, windowSec = 15,
             geometry = r.stdout.trim();
             break;
         }
-        last = (r.stderr || r.stdout || '').trim().slice(0, 120);
+        const last = (r.stderr || r.stdout || '').trim().slice(0, 120);
         if (Date.now() >= deadline)
             throw new Error('дисплей не поднялся за ' + timeoutSec + ' с' + (last ? ': ' + last : ''));
         await new Promise(res => setTimeout(res, 1000));
@@ -1024,7 +1027,7 @@ export async function ensureChromium(docker, id, { timeoutSec = 60, signal } = {
                 await cdp(docker, id, 'version', {}, { timeoutSec: 10, signal });
                 return true;
             }
-            catch (e) {
+            catch (_e) {
                 // Быстрая проверка: если процесс уже умер — сразу ошибка с логом
                 const ps = await execRaw(docker, id, {
                     cmd: ['sh', '-c', 'pgrep -a chromium | head -1 || true'],
@@ -1036,7 +1039,7 @@ export async function ensureChromium(docker, id, { timeoutSec = 60, signal } = {
                         timeoutSec: 10, maxBytes: 1000, signal,
                     });
                     const tail = (log.stdout || '').trim().slice(-300);
-                    throw new Error('Chromium упал сразу: ' + tail.slice(0, 300));
+                    throw new Error('Chromium упал сразу: ' + tail.slice(0, 300), { cause: _e });
                 }
             }
             if (Date.now() >= deadline)

@@ -23,7 +23,7 @@ ODA({
                 border-bottom: 1px solid var(--subtle-border);
             }
         </style>
-        <oda-form-field ~for="fields" :field="$for.item" :data :dense></oda-form-field>
+        <oda-form-field ~for="nodes" :field="$for.item" :data :dense></oda-form-field>
     `,
     $public: {
         /** компактный вид (property-grid): контролы без рамки, строки с разделителями */

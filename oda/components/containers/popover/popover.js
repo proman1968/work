@@ -175,12 +175,16 @@ ODA({
         }
         left = Math.max(0, Math.min(left, window.innerWidth - this.offsetWidth));
         top = Math.max(0, Math.min(top, window.innerHeight - this.offsetHeight));
-        if (width !== undefined)
+        // гейты: layout зовётся из resize-наблюдателя, а каждая запись пропа — это
+        // notify + ререндер + новый замер; без гейтов размер гуляет и круг не рвётся
+        if (width !== undefined && !Object.is(this.width, width))
             this.width = width;
-        if (height !== undefined)
+        if (height !== undefined && !Object.is(this.height, height))
             this.height = height;
-        this.left = left;
-        this.top = top;
+        if (!Object.is(this.left, left))
+            this.left = left;
+        if (!Object.is(this.top, top))
+            this.top = top;
     },
     _show() {
         this.layout();

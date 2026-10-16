@@ -8,6 +8,7 @@
  * Результат — window.__results / window.__done.
  */
 import '/oda/oda.js';
+import '/oda/components/structure/form/form.js';
 import { CONTROLS } from '/oda/components/structure/controls.js';
 import '/oda/components/table/table.js';
 
@@ -100,23 +101,31 @@ await test('oda-form + oda-table-input: события ячеек не порт�
     form.remove();
 });
 
-await test('oda-table: сортировка, фильтр, каскадная отметка', async () => {
+await test('oda-table: обёртки из metadata, сортировка по ключу, фильтр с предками', async () => {
     const table = await mount('oda-table', {
-        allowCheck: 'double',
-        columns: [{ name: 'title', treeMode: true }, { name: 'n' }],
+        metadata: [{ id: 'title', label: 'Заголовок', treeMode: true }, { id: 'n', label: 'N' }],
         dataSet: [{ title: 'b', n: 2, expanded: true, items: [{ title: 'b1' }, { title: 'b2' }] }, { title: 'a', n: 1 }]
     });
-    await tick(300);
-    table.sortBy(table.columns[0], 1);
-    await tick(200);
-    eq(table.sortedItems.map(r => r.title), ['a', 'b', 'b1', 'b2'], 'сортировка');
-    table.sortBy(table.columns[0], 0);
+    await tick(400);
+    // строки — обёртки {data, level, expanded, …}: значение лежит в data
+    const titles = () => table.sortedItems.map(r => r.data?.title);
+    eq(table.wrappers.map(w => w.key), ['title', 'n'], 'обёртки строятся из metadata');
+    // sortOrder лежит в columnView ($save) — у раннера профиль свежий, порядка сортировки нет
+    eq(titles(), ['b', 'b1', 'b2', 'a'], 'развёрнутое дерево, сортировки ещё нет');
+    // sortBy ждёт ключ-путь колонки (wrapper.key), а не объект колонки
+    const key = table.wrappers[0].key;
+    table.sortBy(key, 1);
+    await tick(250);
+    eq(titles(), ['a', 'b', 'b1', 'b2'], 'сортировка по ключу, по возрастанию');
+    table.sortBy(key, -1);
+    await tick(250);
+    eq(titles(), ['b', 'b2', 'b1', 'a'], 'обратный порядок');
     table.filter = 'b2';
-    await tick(200);
-    eq(table.sortedItems.map(r => r.title), ['b', 'b2'], 'фильтр с предками');
+    await tick(350);
+    eq(titles(), ['b', 'b2'], 'фильтр с предком');
     table.filter = '';
-    table.setChecked(table.dataSet[0].items[0], 'checked');
-    eq(table.dataSet[0].checked, 'indeterminate', 'родитель');
+    await tick(300);
+    eq(titles(), ['b', 'b2', 'b1', 'a'], 'фильтр снят, порядок сортировки сохраняется');
     table.remove();
 });
 

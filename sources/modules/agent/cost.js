@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Стоимость и бюджеты (9.2):
  *   - тарифы моделей — `pricing: { input, output }` в карточке `MODELS/…` ($ за миллион токенов;
@@ -62,7 +63,10 @@ export async function recordUsage({ uid, place, task, model, usage, cost }) {
     }
 }
 
-/** Суммы расхода за период: day ('YYYY-MM-DD') или month ('YYYY-MM-DD'/'YYYY-MM'); uid не задан — по всем. */
+/**
+ * Суммы расхода за период: day ('YYYY-MM-DD') или month ('YYYY-MM-DD'/'YYYY-MM'); uid не задан — по всем.
+ * @param {{ day?: string, month?: string, uid?: string }} [opts]
+ */
 export async function usageTotals({ day, month, uid } = {}) {
     const db = await indexDb();
     if (!db)
@@ -95,7 +99,10 @@ export async function usageTotals({ day, month, uid } = {}) {
     }
 }
 
-/** Разбивка расхода по пользователям за период (9.3, панель): [{ uid, turns, tokens, cost }]. */
+/**
+ * Разбивка расхода по пользователям за период (9.3, панель): [{ uid, turns, tokens, cost }].
+ * @param {{ day?: string, month?: string, limit?: number }} [opts]
+ */
 export async function usageByUser({ day, month, limit = 10 } = {}) {
     const db = await indexDb();
     if (!db)

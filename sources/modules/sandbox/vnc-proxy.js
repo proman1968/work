@@ -17,9 +17,8 @@ import { sameOrigin } from '../../host/websocket.js';
 import { $server } from '../../server/server.js';
 import { createDemuxStream } from './stream.js';
 import { getDocker } from './driver.js';
-import { loadSandboxConfig } from './config.js';
 import {
-    ownerOf, computerName, findComputer, statusOf, screenshotPng, setControl, controlBy,
+    computerName, findComputer, statusOf, screenshotPng, setControl, controlBy,
     waitVnc, touchComputer,
 } from './manager.js';
 import { isAdmin } from '../agent/system.js';

@@ -93,11 +93,11 @@ export default {
     dockWidth: { $def: 520, $save: true },
     freshDocs: 0,
     extraFiles: [],
-    /** Голосовой режим включён; полосы кнопки в панели ввода подключаются к голосу при смене. */
+    /** Голосовой режим включён; полосы кнопки в шапке задачи подключаются к голосу при смене. */
     voiceOn: {
         $def: false,
         set(v) {
-            this.async(() => this.$('microchat-panel')?.bindVoice(v ? this._voice : null));
+            this.async(() => (this.$('microchat-header') || this._formHeader)?.bindVoice?.(v ? this._voice : null));
         },
     },
     inForm: false,

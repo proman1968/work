@@ -6,7 +6,6 @@
  * поддерево класса. Реестр строится лениво обходом структур, сбрасывается
  * при save() любой структуры.
  */
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { FS } from '../index.js';

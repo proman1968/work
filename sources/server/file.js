@@ -392,7 +392,7 @@ export class $file extends $folder{
     async importScript() {
         return this[R].cache['_import_script'] ??= new AsyncPromise(async () => {
             const script = await this.inherit();
-            return this.constructor.importScript(script);
+            return this.constructor.importScript(script, this.path || this.dir);
         });
     }
     /**

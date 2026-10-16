@@ -4,6 +4,8 @@
  * свойство только с геттером — только чтение. Данные формы — сам объект (запись — через его сеттеры).
  */
 
+import { CONTROLS } from '/oda/components/structure/controls-map.js';
+
 const typeOf = p => p.$list ? 'select' : { Boolean: 'boolean', Number: 'number' }[p.$type?.name] ?? (/^(icon|\w+Icon)$/.test(p.name) ? 'icon' : undefined);
 
 ODA({
@@ -33,13 +35,7 @@ ODA({
             $attr: true
         }
     },
-    controls: {
-        default: 'oda-text-input',
-        select: 'oda-select-input',
-        boolean: 'oda-checkbox',
-        number: 'oda-numeric-input',
-        icon: 'oda-icon-picker-input'
-    },
+    controls: CONTROLS,
     get label() {
         return this.inspected?.localName || this.inspected?.label || 'properties';
     },
