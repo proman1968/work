@@ -25,7 +25,8 @@ let processed = 0;
 let failures = 0;
 const recent = [];
 const reconcileState = { running: false, done: false, at: 0, files: 0, queued: 0, removed: 0 };
-let watcher = null;
+const WATCH_ROOTS = ['$server', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT', 'USERS', 'rules', 'docs'];
+let watchers = [];
 let watchTimer = null;
 const watchPending = new Set();
 
@@ -121,7 +122,7 @@ export async function indexPath(p, { force = false } = {}) {
         return;
     const mtime = Math.floor(stat.mtimeMs);
     const prev = store.getDoc(p);
-    if (prev && prev.mtime === mtime && prev.kind === kind && (prev.hash || prev.error === null))
+    if (prev && prev.mtime === mtime && prev.kind === kind)
         return;
     if (stat.size > CONFIG.maxFileBytes) {
         store.upsertDoc({ path: p, kind, hash: null, mtime, size: stat.size, class_dir: classDirOf(p), error: 'too large' });
@@ -261,28 +262,35 @@ export async function reconcile() {
     return reconcileState;
 }
 
-/** Наблюдение за изменениями на диске (внешние правки, SVN) — дебаунс 1 с. */
+/** Наблюдение за изменениями на диске (внешние правки, SVN) — дебаунс 1 с.
+ *  Наблюдаем только рабочие папки, а не '.' целиком: иначе fs.watch на Windows перехватывает
+ *  node_modules, .index/work.db-wal и .git на уровне ОС до JS-фильтра и крутит цикл событий. */
 function startWatch() {
-    try {
-        watcher = fs.watch('.', { recursive: true }, (_type, name) => {
-            if (!name)
-                return;
-            const p = workPathOf(String(name));
-            if (!p || isExcluded(p, { allowHidden: false }))
-                return;
-            watchPending.add(p);
-            clearTimeout(watchTimer);
-            watchTimer = setTimeout(() => {
-                const list = [...watchPending];
-                watchPending.clear();
-                for (const x of list)
-                    invalidate(x);
-            }, 1000);
-        });
-        watcher.unref?.();
-    }
-    catch (e) {
-        note('watch: ' + e.message);
+    for (const root of WATCH_ROOTS) {
+        if (!fs.existsSync(root))
+            continue;
+        try {
+            const w = fs.watch(root, { recursive: true }, (_type, name) => {
+                if (!name)
+                    return;
+                const p = workPathOf(root + '/' + String(name));
+                if (!p || isExcluded(p, { allowHidden: false }))
+                    return;
+                watchPending.add(p);
+                clearTimeout(watchTimer);
+                watchTimer = setTimeout(() => {
+                    const list = [...watchPending];
+                    watchPending.clear();
+                    for (const x of list)
+                        invalidate(x);
+                }, 1000);
+            });
+            w.unref?.();
+            watchers.push(w);
+        }
+        catch (e) {
+            note('watch ' + root + ': ' + e.message);
+        }
     }
 }
 
@@ -299,8 +307,10 @@ export function start({ watch = true, reconcileDelayMs = CONFIG.reconcileDelayMs
 export function stop() {
     started = false;
     queue.clear();
-    try { watcher?.close(); } catch { /* закрыт */ }
-    watcher = null;
+    for (const w of watchers) {
+        try { w.close(); } catch { /* закрыт */ }
+    }
+    watchers = [];
 }
 
 export function status() {
