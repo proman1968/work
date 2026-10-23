@@ -13,6 +13,7 @@
  *  - admin  — защита от CSRF + ADMIN.
  */
 import { FS } from '../index.js';
+import { DEV_MODE } from '../../host/config.js';
 import { audit } from './audit.js';
 
 export const LEVEL = Object.freeze({ PUBLIC: 'public', USER: 'user', READ: 'read', CALL: 'call', WRITE: 'write', ADMIN: 'admin' });
@@ -197,7 +198,7 @@ export async function authorize(item, name, level, params, ctx = {}) {
         case L.PUBLIC:
             return;
         case L.USER:
-            if (!uid && params?.session)
+            if (!DEV_MODE && !uid && params?.session)
                 deny(item, name, params, 'anonymous');
             return;
         case L.READ:
@@ -206,7 +207,7 @@ export async function authorize(item, name, level, params, ctx = {}) {
                 deny(item, name, params, 'read');
             return;
         case L.WRITE:
-            if (!uid && params?.session && params.session.$user !== globalThis.WORK)
+            if (!DEV_MODE && !uid && params?.session && params.session.$user !== globalThis.WORK)
                 deny(item, name, params, 'anonymous');
             return;
         case L.ADMIN:
@@ -278,9 +279,9 @@ function coreMemberKind(name) {
     return null;
 }
 
-/** Оставить в списке только видимое субъекту. */
+/** Оставить в списке только видимое субъекту (в режиме отладки DEV_MODE — видно всё). */
 export async function visibleOnly(list, params) {
-    if (!Array.isArray(list) || !params?.session)
+    if (!Array.isArray(list) || DEV_MODE || !params?.session)
         return list;
     const out = [];
     for (const it of list)

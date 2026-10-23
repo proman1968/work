@@ -85,20 +85,32 @@ await test('item-node: знака «?» в строке больше нет', as
 
 await test('tree.getItems: неадмину у корня предзагрузка только классов', async () => {
     const asked = [];
+    const prevDev = WORK.DEV_MODE;
+    WORK.DEV_MODE = false;
     const mk = (id, cls) => {
         const o = Object.create(cls ? CORE.$class.prototype : CORE.$file.prototype);
         Object.defineProperty(o, 'id', { value: id });
         Object.defineProperty(o, 'items', { get() { asked.push(id); return Promise.resolve([]); } });
         return o;
     };
-    const root = { type: '$server', isAdmin: Promise.resolve(false), items: Promise.resolve([mk('BASE', true), mk('config.json', false), mk('USERS', true)]) };
-    const tree = { itemsSelector: 'items', getItems: treeProto.getItems };
-    await treeProto.getItems.call(tree, root, 1);
-    eq(asked.sort(), ['BASE', 'USERS'], 'файл корня не запрашивался');
-    asked.length = 0;
-    root.isAdmin = Promise.resolve(true);
-    await treeProto.getItems.call(tree, root, 1);
-    eq(asked.sort(), ['BASE', 'USERS', 'config.json'], 'админу — всё как раньше');
+    try {
+        const root = { type: '$server', isAdmin: Promise.resolve(false), items: Promise.resolve([mk('BASE', true), mk('config.json', false), mk('USERS', true)]) };
+        const tree = { itemsSelector: 'items', getItems: treeProto.getItems };
+        await treeProto.getItems.call(tree, root, 1);
+        eq(asked.sort(), ['BASE', 'USERS'], 'файл корня не запрашивался');
+        asked.length = 0;
+        root.isAdmin = Promise.resolve(true);
+        await treeProto.getItems.call(tree, root, 1);
+        eq(asked.sort(), ['BASE', 'USERS', 'config.json'], 'админу — всё как раньше');
+        asked.length = 0;
+        root.isAdmin = Promise.resolve(false);
+        WORK.DEV_MODE = true;
+        await treeProto.getItems.call(tree, root, 1);
+        eq(asked.sort(), ['BASE', 'USERS', 'config.json'], 'в режиме отладки (DEV_MODE) — все классы и папки видны любому пользователю');
+    }
+    finally {
+        WORK.DEV_MODE = prevDev;
+    }
 });
 
 await test('__bind: пустой список из ответа — знание «детей нет», а не повод для @items', async () => {

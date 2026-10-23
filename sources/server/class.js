@@ -937,7 +937,7 @@ export class $class extends $folder{
         const sec = this.DATA?.['#security'];
         const { common, places } = WORKPLACES.normalizeSecurity(sec);
         const roles = await this.roles(params).catch(() => []);
-        const admin = roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
+        const admin = DEV_MODE || roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
         if (!roles.length && !admin)
             return [];
         const uid = $class.resolveUid(params);
@@ -1151,6 +1151,8 @@ export class $class extends $folder{
         if (params.session?.$user === globalThis.WORK)
             return globalThis.WORK?.id || 'system';
         const uid = this.constructor.resolveUid(params);
+        if (DEV_MODE)
+            return uid || globalThis.WORK?.id || 'dev';
         if (!uid || !(await this.canSee(this, params)))
             throw new Error(ACCESS_DENIED);
         const level = await this.data_access(params);

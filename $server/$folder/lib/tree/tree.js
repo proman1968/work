@@ -105,9 +105,9 @@ export default {
         if (deep < 1 && typeof $item?.DATA?.hasItems === 'boolean' && !Array.isArray($item[R]?.cache?.[this.itemsSelector]))
             return;
         let items = applyTreeFilters(await $item?.[this.itemsSelector], this);
-        // тот же фильтр, что у узла (oda-tree-node.items): неадмину корень показывает только классы —
+        // тот же фильтр, что у узла (oda-tree-node.items): вне отладки неадмину корень показывает только классы —
         // иначе предзагрузка тянет @items скрытых узлов (node_modules, USERS, файлов корня)
-        if ($item?.type === '$server' && items instanceof Array && !(await $item.isAdmin))
+        if ($item?.type === '$server' && items instanceof Array && !WORK?.DEV_MODE && !(await $item.isAdmin))
             items = items.filter(f => f instanceof CORE.$class);
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
@@ -375,7 +375,7 @@ ODA({is: 'oda-tree-node',
             let items = applyTreeFilters(raw, this.$pdp);
             if (this.$item?.type === '$server') {
                 //const allAdmins = await this.$item?.allAdmins;
-                if (!(await this.$item.isAdmin)) {
+                if (!WORK?.DEV_MODE && !(await this.$item.isAdmin)) {
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }

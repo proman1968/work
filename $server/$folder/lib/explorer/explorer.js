@@ -137,7 +137,7 @@ export default {
     focusedPage: '',
     attached() {
         this.async(()=>{
-            if(!WORK.uid){
+            if(!WORK.uid && !WORK.DEV_MODE){
                 this.visibleMode = 'user';
                 if(this.left_drawer)
                     this.left_drawer.closed = true;

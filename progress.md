@@ -1,15 +1,13 @@
 # Прогресс: WORK
 
 ## Последние изменения
-- [14:50] Презентация платформы и устранение замечаний сквозного аудита (блоки P0 и P1): подготовлена PDF-презентация `docs/WORK-presentation.pdf` (16:9, 12 слайдов) и план доработок `docs/audit-todo.md`; вынесены зашитые учётные данные TURN из `sources/modules/call/call.js`; закрыт обход пути в `_readById` (`sources/server/class.js`) и валидация получателей push (`sources/server/server.js`, `sources/host/push.js`); убран `shell: true` при вызове `npm` в `sources/host/package-install.js`; добавлена защита от перезаписи чужих задач в `sources/modules/a2a/server.js` и сохранение серверного `readOnly` при переподключении моста в `sources/modules/bridge/hub.js`; добавлена очистка ссылок `feed_refs` при удалении файла и проверка видимости вложений ленты в RAG (`sources/modules/rag/search.js`, `store.js`); исправлено закрытие потоков записи в `sources/server/folder.js`, добавлены атомарная запись и сериализация (`_withDataLock`, `_withOpLock`) объектов и проводок в `sources/server/class.js` и `DATA/OPERATIONS/…/class.js`, локальное форматирование дат в `DATA/REGISTER/…/class.js`, персистентное микросжатие результатов инструментов для сохранения префикса prompt-кэша в `sources/modules/agent/loop.js`, фильтрация SSE-уведомлений и изоляция сессий в `SERVICES/$service/class.js`, детерминированная сортировка `listing()` и учёт активных дочерних задач в `sources/modules/agent/tools/meta.js`. Причина: повышение безопасности, целостности данных и стабильности ядра по результатам аудита.
+- [15:05] Режим отладки сервера (`DEV_MODE`): сняты оставшиеся ограничения видимости классов и папок для любого пользователя (включая неназначенных и неавторизованных): в `sources/client/folder.js` при `WORK.DEV_MODE` геттер `isAdmin` возвращает `true`, а `selectableRoles`/`syncRole` дают все объявленные роли точки; в `$server/$folder/lib/tree/tree.js` отключена фильтрация корневых папок/файлов при `WORK.DEV_MODE`; в `$server/$folder/lib/explorer/explorer.js` отключено принудительное закрытие левой панели дерева при отсутствии `WORK.uid`; на сервере в `sources/server/access/gateway.js` (`visibleOnly`, `authorize`), `sources/server/access/links.js` (`dataAccess`), `sources/server/class.js` (`link_tree`, `_assertDataWrite`) и `sources/modules/rag/scope.js` (`rolesAt`) обеспечен полный доступ в `DEV_MODE`. Причина: в режиме отладки сервера пониженный уровень безопасности — все классы и папки должны быть видны любому пользователю.
 
 ## В работе
 - Поэтапное расширение типизации на `sources/server/` и перевод файловых индексов `$class` на `node:sqlite` (блок P2 из `docs/audit-todo.md`).
 
 ## Ключевые решения
-- Микросжатие старых результатов инструментов (`OLD_RESULT_MAX`) закрепляется флагом `t.clipped = true`, чтобы при последующих ходах префикс сообщений оставался неизменным для кэша провайдера.
-- Серверный режим `readOnly` моста ПК (`serverReadOnly`) имеет приоритет над параметрами переподключения клиента.
-- Запись JSON-индексов и объектов `.data` выполняется атомарно через временный файл и `rename` под внутрипроцессной блокировкой, а ошибки парсинга повреждённого JSON не затирают файл пустым объектом.
+- В режиме отладки (`DEV_MODE` на сервере / `WORK.DEV_MODE` на клиенте) любые списки элементов (`visibleOnly`, корневой узел `$server` в `item-tree`, `link_tree`, `data_access` и проекции `RAG`) отдаются полностью без отсечения папок и классов по ролям пользователя, при этом сам метод `roles()` сохраняет возврат фактических назначений `#security`.
 
 ## Блокеры / Открытые вопросы
 - Нет.

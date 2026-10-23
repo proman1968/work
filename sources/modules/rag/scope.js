@@ -8,6 +8,7 @@
  *    своя лента, другие роли в точке, точки на расстоянии 1…n по дереву.
  */
 import { CONFIG } from './config.js';
+import { DEV_MODE } from '../../host/config.js';
 import * as store from './store.js';
 import * as REFS from '../../server/access/refs.js';
 import * as POLICY from '../../server/access/policy.js';
@@ -219,7 +220,7 @@ export async function buildContexts(point, params = {}) {
     };
     const rolesAt = async (cls) => {
         const declared = await cls.declared_roles;
-        if (system)
+        if (system || DEV_MODE)
             return [OWNER_ROLE];
         if (uid && cls.id === uid)
             return [OWNER_ROLE];
