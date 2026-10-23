@@ -135,17 +135,12 @@ export class $server extends $class {
 
     async npm(p = {module: ""}){
         await this.assertAccess(p, $class.ACCESS_LEVEL.ADMIN);
-        if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.^~<>=*-]+)?$/i.test(String(p.module || '')))
+        if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[a-z0-9][\w.^~=-]*)?$/i.test(String(p.module || '')))
             throw new Error('npm: недопустимое имя пакета');
-        try{
-            const result = await installPackageSpawn(p.module, './node_modules', {
-                save: true
-            });
-            return `Installation "${p.module}" completed successfully!`;
-        }
-        catch(e){
-            return e;
-        }
+        const _result = await installPackageSpawn(p.module, './node_modules', {
+            save: true
+        });
+        return `Installation "${p.module}" completed successfully!`;
     }
     async get_public_vapid() {
         return getPublicVapid(vapidKeys);
@@ -162,17 +157,18 @@ export class $server extends $class {
         return removePushSubscription(params);
     }
     async send_push_notification(params) {
-        // только вошедший пользователь (или ядро); получатели — корректные uid
+        // только вошедший пользователь (или ядро); получатели — корректные uid (без '.' и '..')
         if (!$class.resolveUid(params) && params.session?.$user !== this)
             throw new Error('Доступ запрещён');
         const list = typeof params.receivers === 'string' ? params.receivers.split(',') : (params.receivers || []);
-        if (list.some(r => !/^[\w.-]{1,64}$/.test(String(r?.id || r).trim())))
+        const validUid = s => /^[\w.-]{1,64}$/.test(s) && !/^\.+$/.test(s) && !s.includes('..');
+        if (list.some(r => !validUid(String(r?.id || r).trim())))
             throw new Error('push: недопустимый получатель');
         return sendPushNotification(params, (o) => this.remove_push_subscription({ ...o, session: { uid: o.session.uid } }));
     }
     _assertPushSubject(params) {
-        const uid = params?.session?.uid;
-        if (!uid || !/^[\w.-]{1,64}$/.test(uid))
+        const uid = String(params?.session?.uid || '');
+        if (!uid || !/^[\w.-]{1,64}$/.test(uid) || /^\.+$/.test(uid) || uid.includes('..'))
             throw new Error('push: требуется вход');
     }
 

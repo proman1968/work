@@ -6,7 +6,7 @@ import * as mime from "mime-types";
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { assertClassId } from './assert-class-id.js';
-import { safeNodeName } from './safe-node-name.js';
+import { safeNodeName, isPlainName, assertInside } from './safe-node-name.js';
 import * as LOGS from './logs.js';
 import { DEV_MODE } from "../host/config.js";
 import * as POLICY from './access/policy.js';
@@ -163,30 +163,56 @@ function _addRows(into, key, row, sign) {
     return into;
 }
 
-/** Очередь записи по файлу индекса (один процесс — цепочки промисов). */
+/** Очередь записи по файлу индекса/объекта (один процесс — цепочки промисов). */
 const _indexLocks = new Map();
-async function _lockedJson(abs, fn) {
-    const prev = _indexLocks.get(abs) || Promise.resolve();
+let _tmpSeq = 0;
+
+async function _withLock(key, fn) {
+    const prev = _indexLocks.get(key) || Promise.resolve();
     let release;
     const cur = new Promise(r => { release = r; });
-    _indexLocks.set(abs, prev.then(() => cur));
+    const chain = prev.then(() => cur);
+    _indexLocks.set(key, chain);
     await prev;
     try {
-        let doc = {};
-        try {
-            doc = JSON.parse(await fsp.readFile(abs, 'utf-8'));
-        }
-        catch { /* нет файла */ }
-        const next = await fn(doc && typeof doc === 'object' ? doc : {});
-        fs.mkdirSync(path.dirname(abs), { recursive: true });
-        await fsp.writeFile(abs, JSON.stringify(next), 'utf-8');
-        return next;
+        return await fn();
     }
     finally {
         release();
-        if (_indexLocks.get(abs) === cur)
-            _indexLocks.delete(abs);
+        if (_indexLocks.get(key) === chain)
+            _indexLocks.delete(key);
     }
+}
+
+async function _writeAtomic(abs, content) {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    const tmp = abs + '.' + process.pid + '.' + (++_tmpSeq) + '.tmp';
+    try {
+        await fsp.writeFile(tmp, content, 'utf-8');
+        await fsp.rename(tmp, abs);
+    }
+    catch (e) {
+        await fsp.rm(tmp, { force: true }).catch(() => {});
+        throw e;
+    }
+}
+
+async function _lockedJson(abs, fn) {
+    return _withLock(abs, async () => {
+        let doc = {};
+        try {
+            const raw = await fsp.readFile(abs, 'utf-8');
+            if (raw.trim())
+                doc = JSON.parse(raw);
+        }
+        catch (e) {
+            if (e?.code !== 'ENOENT')
+                throw e;
+        }
+        const next = await fn(doc && typeof doc === 'object' ? doc : {});
+        await _writeAtomic(abs, JSON.stringify(next));
+        return next;
+    });
 }
 
 export class $class extends $folder{
@@ -869,6 +895,9 @@ export class $class extends $folder{
      * Прямая запись в DATA через save_file доступна только ADMIN.
      * @param {object} [params] {filename | name, type | ext, post | body, session}
      */
+    async _withDataLock(fn) {
+        return _withLock('data:' + this.meta_folder.dir, fn);
+    }
     async create_object(params = {}) {
         await this._assertDataWrite(params);
         await this._assertLeaf();
@@ -877,13 +906,15 @@ export class $class extends $folder{
         if (!this.constructor.DATA_EXTS.includes(ext) || !(await this.is_data_type('x.' + ext)))
             throw new Error('create_object: нет типа данных $' + ext);
         const stem = String(params.filename || params.name || 'obj').split('/').pop().replace(/\.[a-z0-9]+$/i, '').trim() || 'obj';
-        const body = await this._validateObject(this._readDataBody(params.post ?? params.body));
-        body.name ??= stem;
-        await this._checkUnique(this._indexDefs(), body, null);
-        const zone = await this.data_zone(params);
-        const res = await zone.save_data_file({ ...params, filename: stem + '.' + ext, post: body });
-        await this._indexWrite(null, { ...body, time: res.time }, res.id);
-        return res;
+        return this._withDataLock(async () => {
+            const body = await this._validateObject(this._readDataBody(params.post ?? params.body));
+            body.name ??= stem;
+            await this._checkUnique(this._indexDefs(), body, null);
+            const zone = await this.data_zone(params);
+            const res = await zone.save_data_file({ ...params, filename: stem + '.' + ext, post: body });
+            await this._indexWrite(null, { ...body, time: res.time }, res.id);
+            return res;
+        });
     }
     /**
      * Доступ пользователя к классу ('admin'|'write'|'read'|null): прямые назначения
@@ -1078,10 +1109,17 @@ export class $class extends $folder{
             throw new Error('overlay_read: только $virtual');
         await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
         try {
-            const doc = JSON.parse(await fsp.readFile(this._overlayFile(), 'utf-8'));
+            const raw = await fsp.readFile(this._overlayFile(), 'utf-8');
+            if (!raw.trim())
+                return {};
+            const doc = JSON.parse(raw);
             return doc && typeof doc === 'object' ? doc : {};
         }
-        catch { return {}; }
+        catch (e) {
+            if (e?.code === 'ENOENT')
+                return {};
+            throw e;
+        }
     }
     /**
      * Записать местные расширения объекта ({id, fields}).
@@ -1136,14 +1174,21 @@ export class $class extends $folder{
      * @returns {Promise<{abs, leaf, stem, ext, date, body}|null>}
      */
     async _readById(id, ext = 'data') {
-        let stem = String(id ?? '').split('/').pop().trim();
+        let stem = String(id ?? '').replace(/\\/g, '/').split('/').pop().trim();
         if (stem.endsWith('.' + ext))
             stem = stem.slice(0, -(ext.length + 1));
+        if (!isPlainName(stem) || !/^\d+\.[\p{L}\p{N}_.-]+$/u.test(stem))
+            return null;
         const time = Number(stem.split('.')[0]);
-        if (!stem || !Number.isFinite(time))
+        if (!stem || !Number.isFinite(time) || time <= 0)
             return null;
         const date = _dataDay(time);
-        const abs = this.meta_folder.dir + '/DATA/' + date + '/' + stem + '.' + ext;
+        const dataRoot = this.meta_folder.dir + '/DATA';
+        const abs = dataRoot + '/' + date + '/' + stem + '.' + ext;
+        try {
+            assertInside(dataRoot, abs);
+        }
+        catch { return null; }
         if (!fs.existsSync(abs))
             return null;
         let body;
@@ -1317,23 +1362,25 @@ export class $class extends $folder{
             .replace(/^\$/, '').toLowerCase();
         if (!this.constructor.DATA_EXTS.includes(ext))
             throw new Error('update_object: только объекты DATA (сейчас: ' + this.constructor.DATA_EXTS.join(', ') + ')');
-        const found = await this._readById(params.id, ext);
-        if (!found)
-            throw new Error('update_object: нет объекта ' + params.id);
-        if (found.body.deleted && !params.restore)
-            throw new Error('update_object: объект удалён (restore: true — восстановить)');
-        const patch = this._readDataBody(params.post ?? params.body);
-        const body = await this._validateObject({ ...found.body, ...patch, time: found.body.time });
-        if (params.restore) {
-            delete body.deleted;
-            delete body.deleted_at;
-        }
-        await this._checkUnique(this._indexDefs(), body, found.stem);
-        const json = JSON.stringify(body);
-        await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
-        await fsp.writeFile(found.abs, json, 'utf-8');
-        await this._indexWrite(found.body, body, found.stem);
-        return this._logDataFile(found, json, params, uid);
+        return this._withDataLock(async () => {
+            const found = await this._readById(params.id, ext);
+            if (!found)
+                throw new Error('update_object: нет объекта ' + params.id);
+            if (found.body.deleted && !params.restore)
+                throw new Error('update_object: объект удалён (restore: true — восстановить)');
+            const patch = this._readDataBody(params.post ?? params.body);
+            const body = await this._validateObject({ ...found.body, ...patch, time: found.body.time });
+            if (params.restore) {
+                delete body.deleted;
+                delete body.deleted_at;
+            }
+            await this._checkUnique(this._indexDefs(), body, found.stem);
+            const json = JSON.stringify(body);
+            await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
+            await _writeAtomic(found.abs, json);
+            await this._indexWrite(found.body, body, found.stem);
+            return this._logDataFile(found, json, params, uid);
+        });
     }
     /**
      * Удалить объект: отметка `deleted` (файл физически остаётся, прежняя версия — в истории).
@@ -1345,17 +1392,19 @@ export class $class extends $folder{
             .replace(/^\$/, '').toLowerCase();
         if (!this.constructor.DATA_EXTS.includes(ext))
             throw new Error('delete_object: только объекты DATA (сейчас: ' + this.constructor.DATA_EXTS.join(', ') + ')');
-        const found = await this._readById(params.id, ext);
-        if (!found)
-            throw new Error('delete_object: нет объекта ' + params.id);
-        if (found.body.deleted)
-            throw new Error('delete_object: объект уже удалён');
-        const body = { ...found.body, deleted: true, deleted_at: Date.now() };
-        const json = JSON.stringify(body);
-        await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
-        await fsp.writeFile(found.abs, json, 'utf-8');
-        await this._indexWrite(found.body, body, found.stem);
-        return this._logDataFile(found, json, params, uid);
+        return this._withDataLock(async () => {
+            const found = await this._readById(params.id, ext);
+            if (!found)
+                throw new Error('delete_object: нет объекта ' + params.id);
+            if (found.body.deleted)
+                throw new Error('delete_object: объект уже удалён');
+            const body = { ...found.body, deleted: true, deleted_at: Date.now() };
+            const json = JSON.stringify(body);
+            await this._archiveDataVersion(found, JSON.stringify(found.body), uid);
+            await _writeAtomic(found.abs, json);
+            await this._indexWrite(found.body, body, found.stem);
+            return this._logDataFile(found, json, params, uid);
+        });
     }
     /**
      * Прочитать текущую версию объекта (включая удалённый — по флагу `deleted` в теле).
@@ -1378,7 +1427,8 @@ export class $class extends $folder{
     async query(params = {}) {
         await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
         const ext = String(params.ext || params.type || 'data').replace(/^\$/, '').toLowerCase();
-        const limit = Math.max(1, Math.min(500, Number(params.limit) || 50));
+        const maxLimit = Number(params.maxLimit) > 500 ? Math.min(5000, Number(params.maxLimit)) : 500;
+        const limit = Math.max(1, Math.min(maxLimit, Number(params.limit) || 50));
         const desc = String(params.order || 'desc').toLowerCase() !== 'asc';
         const dayOf = (v) => {
             const t = new Date(v).getTime();

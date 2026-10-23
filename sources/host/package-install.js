@@ -1,10 +1,26 @@
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
+
+const SAFE_PKG_SPEC = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[a-z0-9][\w.^~=-]*)?$/i;
+
+function resolveNpmExec() {
+    if (process.platform === 'win32') {
+        const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+        if (fs.existsSync(cli))
+            return { cmd: process.execPath, prefixArgs: [cli] };
+    }
+    return { cmd: 'npm', prefixArgs: [] };
+}
 
 export function installPackageSpawn(packageName, installPath, options = {}) {
     return new Promise((resolve, reject) => {
+        const pkg = String(packageName ?? '').trim();
+        if (!SAFE_PKG_SPEC.test(pkg))
+            return reject(new Error('npm: недопустимое имя пакета'));
         const fullPath = path.resolve(installPath);
-        const args = ['install', packageName];
+        const { cmd, prefixArgs } = resolveNpmExec();
+        const args = [...prefixArgs, 'install', pkg];
 
         if (options.saveDev) args.push('--save-dev');
         if (options.save) args.push('--save');
@@ -12,10 +28,11 @@ export function installPackageSpawn(packageName, installPath, options = {}) {
         if (options.noSave) args.push('--no-save');
         if (options.force) args.push('--force');
 
-        const npmProcess = spawn('npm', args, {
+        const npmProcess = spawn(cmd, args, {
             cwd: fullPath,
             stdio: 'pipe',
-            shell: true,
+            shell: false,
+            windowsHide: true,
         });
 
         let stdout = '';

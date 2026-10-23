@@ -178,11 +178,11 @@ export function wrapColumns(metadata, { childrenKey = 'fields', valueKey = '@', 
             }
         });
         /**
-         * Значение узла в строке: путь по `id` предков (без своего), затем `container[field.id]`.
-         * Скаляр → сам; объект-узел → `valueKey` (для `fio: { '@', last, first }` → `'@'`).
-         * Отсутствие → `undefined` (не `null`).
+         * Контейнер своего значения в строке: путь по `id` предков (без своего). Общий для чтения
+         * (`valueOf`) и записи (`setValueOf`) — путь один, поэтому они симметричны.
+         * Путь не найден (на каком-то шаге не объект) → `undefined`.
          */
-        source.valueOf = data => {
+        const holderOf = data => {
             const ids = [];
             for (let p = source.parent; p; p = p.parent)
                 ids.unshift(p.field?.id);
@@ -192,12 +192,37 @@ export function wrapColumns(metadata, { childrenKey = 'fields', valueKey = '@', 
                     return undefined;
                 container = container[id];
             }
-            if (container === null || typeof container !== 'object')
-                return undefined;
-            const own = container[source.field?.id];
+            return (container === null || typeof container !== 'object') ? undefined : container;
+        };
+        /**
+         * Значение узла в строке: путь по `id` предков (без своего), затем `container[field.id]`.
+         * Скаляр и массив → сами; объект-узел → `valueKey` (для `fio: { '@', last, first }` → `'@'`).
+         * Отсутствие → `undefined` (не `null`).
+         */
+        source.valueOf = data => {
+            const own = holderOf(data)?.[source.field?.id];
             if (own === null || own === undefined)
                 return undefined;
-            return typeof own === 'object' ? own[valueKey] : own;
+            return isObj(own) ? own[valueKey] : own;
+        };
+        /**
+         * Запись значения узла в строку — обратная к `valueOf`: тот же путь по `id` предков, затем
+         * `container[field.id] = value`; если там объект-узел — пишется его `valueKey` (дети узла и
+         * сам узел остаются целы). Массив — значение, а не узел: заменяется целиком. Пишется только
+         * целевое поле; промежуточные узлы пути не создаются.
+         * @returns {boolean} `true` — записано; `false` — пути нет (писать некуда), данные не тронуты
+         */
+        source.setValueOf = (data, value) => {
+            const container = holderOf(data);
+            const id = source.field?.id;
+            if (container === undefined || id === undefined || id === null)
+                return false;
+            const own = container[id];
+            if (isObj(own))
+                own[valueKey] = value;
+            else
+                container[id] = value;
+            return true;
         };
         // явная активация: геттеры состояния становятся вычисляемыми свойствами Reactor — их кэш
         // сбрасывается, когда меняется прочитанное через `stateOf` состояние таблицы

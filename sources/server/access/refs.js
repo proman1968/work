@@ -65,7 +65,19 @@ export async function removeEntry(entry) {
     const db = await indexDb();
     if (!db || !entry)
         return;
-    db.prepare('DELETE FROM feed_refs WHERE entry = ?').run(String(entry));
+    const p = normPath(entry);
+    db.prepare('DELETE FROM feed_refs WHERE entry = ? OR target = ?').run(String(entry), p);
+}
+
+/** Убрать все ссылки ленты на удалённый файл или папку. */
+export async function removeTarget(target) {
+    const db = await indexDb();
+    if (!db || !target)
+        return;
+    const p = normPath(target);
+    if (!p || p === '/')
+        return;
+    db.prepare('DELETE FROM feed_refs WHERE target = ? OR target LIKE ?').run(p, p + '/%');
 }
 
 /**

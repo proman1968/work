@@ -2424,21 +2424,28 @@ describe('приватный режим места (9.6)', () => {
         assert.equal(await isPrivatePlace(await WORK.get_item('/BOX')), false, 'без настройки приватно');
     });
     it('makeTools в приватном месте: исходящие вырезаны, локальные на месте; субагенту тоже', async () => {
-        const env = await createEnv({ place: await WORK.get_item('/PRIV1'), host: { mode: 'auto' } });
-        assert.equal(env.private, true);
-        const names = (await env.makeTools()).map(t => t.name);
-        for (const n of ['web_search', 'web_fetch', 'http_request', 'connect_service', 'connections', 'computer_network', 'browser_open'])
-            assert.ok(!names.includes(n), n + ' доступен в приватном месте');
-        assert.ok(!names.some(n => n.startsWith('svc_') || n.startsWith('mcp_')), 'внешние сервисы/MCP доступны в приватном месте');
-        for (const n of ['ls', 'read', 'write', 'edit', 'call', 'send', 'sandbox_exec', 'computer_status', 'grep', 'apply_patch', 'git_commit', 'run_checks', 'lsp_diagnostics'])
-            assert.ok(names.includes(n), n + ' вырезан из приватного места (нужен для работы)');
-        // субагент с маской * — пересечение тоже без исходящих
-        const sub = (await env.makeTools({ meta: { tools: '*' } })).map(t => t.name);
-        assert.ok(!sub.includes('web_fetch') && !sub.includes('http_request'), 'субагент с маской * получил исходящие');
-        // обычное место — инструменты на месте
-        const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
-        const plainNames = (await plain.makeTools()).map(t => t.name);
-        assert.ok(plainNames.includes('web_search') && plainNames.includes('http_request'), 'обычному месту отрезали веб');
+        const { setDockerForTests, resetDockerForTests } = await import('../sources/modules/sandbox/driver.js');
+        setDockerForTests({ ping: async () => 'OK' });
+        try {
+            const env = await createEnv({ place: await WORK.get_item('/PRIV1'), host: { mode: 'auto' } });
+            assert.equal(env.private, true);
+            const names = (await env.makeTools()).map(t => t.name);
+            for (const n of ['web_search', 'web_fetch', 'http_request', 'connect_service', 'connections', 'computer_network', 'browser_open'])
+                assert.ok(!names.includes(n), n + ' доступен в приватном месте');
+            assert.ok(!names.some(n => n.startsWith('svc_') || n.startsWith('mcp_')), 'внешние сервисы/MCP доступны в приватном месте');
+            for (const n of ['ls', 'read', 'write', 'edit', 'call', 'send', 'sandbox_exec', 'computer_status', 'grep', 'apply_patch', 'git_commit', 'run_checks', 'lsp_diagnostics'])
+                assert.ok(names.includes(n), n + ' вырезан из приватного места (нужен для работы)');
+            // субагент с маской * — пересечение тоже без исходящих
+            const sub = (await env.makeTools({ meta: { tools: '*' } })).map(t => t.name);
+            assert.ok(!sub.includes('web_fetch') && !sub.includes('http_request'), 'субагент с маской * получил исходящие');
+            // обычное место — инструменты на месте
+            const plain = await createEnv({ place: await WORK.get_item('/BOX'), host: { mode: 'auto' } });
+            const plainNames = (await plain.makeTools()).map(t => t.name);
+            assert.ok(plainNames.includes('web_search') && plainNames.includes('http_request'), 'обычному месту отрезали веб');
+        }
+        finally {
+            resetDockerForTests();
+        }
     });
     it('llmFor в приватном месте: внешняя модель — отказ; локальная — работает; запасная внешняя — тоже отказ', async () => {
         const env = await createEnv({ place: await WORK.get_item('/PRIV1'), host: { mode: 'auto' } });

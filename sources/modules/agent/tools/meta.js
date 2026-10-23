@@ -13,7 +13,7 @@ export const MAX_DEPTH = 2;
 /** F31 (final 8.24): потолок дочерних задач на зону роли (env WORK_AGENT_START_MAX). */
 const MAX_CHILD_TASKS = Number(process.env.WORK_AGENT_START_MAX) || 20;
 
-/** Сколько ДОЧЕРНИХ .task (с полем parentTask, вне history/) уже лежит в зоне роли — прежде чем заводить ещё одного (R13). */
+/** Сколько ДОЧЕРНИХ .task (с полем parentTask и вне статуса stopped, вне history/) уже лежит в зоне роли — прежде чем заводить ещё одного (R13). */
 async function countChildTasks(point, role) {
     try {
         const zone = await point.work_zone({ role });
@@ -31,7 +31,10 @@ async function countChildTasks(point, role) {
                 else if (/\.task$/i.test(e.name)) {
                     try {
                         const raw = fs.readFileSync(d + '/' + e.name, 'utf-8');
-                        if (raw.includes('"parentTask"'))
+                        if (!raw.includes('"parentTask"'))
+                            continue;
+                        const parsed = JSON.parse(raw);
+                        if (parsed?.parentTask && parsed?.status !== 'stopped')
                             n++;
                     }
                     catch { /* пропуск битого файла */ }
@@ -548,6 +551,6 @@ export const metaTools = [
 
 /** Короткий листинг для system: имя — описание. */
 export function listing(map, max = 60) {
-    // выбор первых max — как раньше, но показ по имени: порядок не должен зависеть от порядка чтения файлов (префикс кэша)
-    return [...map.values()].slice(0, max).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
+    // сначала сортируем по имени, затем берём первые max: детерминированный набор и порядок независимо от обхода ФС
+    return [...map.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
 }

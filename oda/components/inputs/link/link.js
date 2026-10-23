@@ -40,10 +40,25 @@ ODA({is: 'oda-link-input',
         .variant:hover {
             background-color: var(--active-background, #e8e8e8);
         }
+        :host([disabled]) {
+            @apply --disabled;
+        }
+        /* без рамки и фона — ячейка таблицы, строка property-grid (как у oda-input) */
+        :host([borderless]) input,
+        :host([borderless]) .pick {
+            background-color: transparent;
+            border-radius: 0;
+            box-shadow: none;
+        }
+        :host([dense]) input,
+        :host([dense]) .pick {
+            padding: var(--space-xs) var(--space-s);
+            font-size: inherit;
+        }
     </style>
     <div class="row">
-        <input :value="text" :readonly="locked" :placeholder="meta?.placeholder || field?.placeholder || 'поиск…'" :disabled @input="onText($this.value)">
-        <button class="pick" ~if="value && !readonly" @tap="value = ''" title="Очистить">×</button>
+        <input :value="text" :readonly="locked" :placeholder="meta?.placeholder || field?.placeholder || 'поиск…'" :disabled="inputDisabled" @input="onText($this.value)">
+        <button class="pick" ~if="value && !readonly && !isDisabled" @tap="value = ''" title="Очистить">×</button>
     </div>
     <div class="variants" ~if="variants?.length">
         <div class="variant" ~for="variants" @tap="pick($for.item)">{{showName($for.item)}}</div>
@@ -57,12 +72,31 @@ ODA({is: 'oda-link-input',
     field: null,
     /** только чтение (ячейка таблицы): без выбора и очистки */
     readonly: false,
+    /** отключено: атрибут/проп `disabled` (у `oda-input` — то же имя); раньше был геттером без сеттера и записи терял */
+    disabled: {
+        $def: false,
+        $attr: true
+    },
+    /** без рамки и фона (ячейка таблицы, строка property-grid) */
+    borderless: {
+        $def: false,
+        $attr: true
+    },
+    dense: {
+        $def: false,
+        $attr: true
+    },
     text: '',
     /** id объекта справочника, найденного по value: пока он есть — поле только для показа */
     resolved: '',
     variants: [],
-    get disabled() {
-        return !!this.meta?.disabled || !!this.readonly;
+    /** отключено своим признаком или описанием поля (`meta.disabled`) */
+    get isDisabled() {
+        return this.disabled || !!this.meta?.disabled;
+    },
+    /** нативный input недоступен: отключено или только чтение (раньше это был «disabled») */
+    get inputDisabled() {
+        return this.isDisabled || !!this.readonly;
     },
     /** значение найдено в справочнике: показываем имя, текст не принимаем (смена — кнопка «×») */
     get locked() {

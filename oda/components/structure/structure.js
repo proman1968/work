@@ -53,5 +53,12 @@ ODA({
     },
     labelOf(field) {
         return field.label ?? field.id;
+    },
+    /**
+     * Значение поля: по умолчанию — data[id]. Потребитель переопределяет, когда источник истины не совпадает
+     * с кэшем реактора (property-grid читает DATA сущности: `update()` пишет туда мимо Reactor.set).
+     */
+    fieldValue(field, data) {
+        return data?.[field?.id];
     }
 });

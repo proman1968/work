@@ -552,11 +552,20 @@ describe('oda-packets: value (ключ выбора)', () => {
         build(unknown, '2024-01-01', '2024-12-31', 'month');
         assert.equal(unknown.selected.name, '*');
 
-        // «Сейчас» вне диапазона: узел отключён — откат, а не пустой выбор
+        // «Сейчас» вне диапазона: остаётся выбранным (подсвечен), период — сегодня, строки могут быть пустыми
         const stale = mount({ value: 'now' }).inst;
         build(stale, '2020-01-01', '2020-12-31', 'day');
         assert.equal(stale.items[0].disabled, true);
-        assert.equal(stale.selected.name, '*');
+        assert.equal(stale.selected.name, stale.items[0].name);
+        assert.equal(stale.period.start, stale.period.end);
+    });
+
+    it('год подсвечивается при частичном пересечении периода (ноябрь–январь)', () => {
+        const { inst } = mount();
+        build(inst, '2023-01-01', '2025-12-31', 'day');
+        inst._applySelection([{ name: 'period', start: '2024-11-01', end: '2025-01-31', mask: '2024-11*|2024-12*|2025-01*', _isRight: true }]);
+        const years = Object.fromEntries(inst._years.map(y => [y.name, !!y.active]));
+        assert.deepEqual(years, { '2025': true, '2024': true, '2023': false });
     });
 
     it('выбор переживает пересборку диапазона (раньше сбрасывался на «Все»)', () => {

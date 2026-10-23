@@ -51,6 +51,14 @@ ODA({
     $public: {
         multiple: false
     },
+    /**
+     * value не отражается в атрибут: сброс (undefined) возвращался бы из `attributeChangedCallback` как null,
+     * а число варианта — строкой. `$type: String` тут нельзя: value бывает числом и массивом (multiple).
+     * Начальный атрибут value="…" при создании по-прежнему применяется.
+     */
+    value: {
+        $public: false
+    },
     isOn(o) {
         const v = String(o.value);
         return this.multiple ? (this.value ?? []).some(i => String(i) === v) : !this.isEmpty && String(this.value) === v;

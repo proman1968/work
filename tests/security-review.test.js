@@ -587,4 +587,40 @@ describe('Ф.1 независимое ревью (R10, R13, R18, R19, R20)', () 
         const safe = sandboxHtml('<!DOCTYPE html><html><body>Привет</body></html>');
         assert.match(safe, /form-action 'none'; base-uri 'none'/);
     });
+
+    it('P0/P1 аудит: защита _readById от обхода пути, валидация push uid, авторитетный readOnly моста и липкое микросжатие toolContent', async () => {
+        // 1. _readById отвергает обратные слэши и ..
+        const box = await WORK.get_item('/BOX');
+        assert.equal(await box._readById('..\\..\\secret.data'), null, '_readById пропустил обратные слэши');
+        assert.equal(await box._readById('0.evil'), null, '_readById пропустил нулевой timestamp');
+
+        // 2. push uid без '..'
+        await assert.rejects(
+            () => WORK.send_push_notification({ session: { uid: ALICE }, receivers: ['..'] }),
+            /недопустимый получатель/
+        );
+
+        // 3. мост сохраняет серверный readOnly при перерегистрации клиента без флага
+        const { registerBridge, setBridgeReadOnly, getBridgeForUser, unregisterBridge } = await import('../sources/modules/bridge/hub.js');
+        registerBridge({ uid: ALICE, readOnly: false });
+        setBridgeReadOnly(ALICE, true);
+        registerBridge({ uid: ALICE, readOnly: false }); // переподключение клиента без --readonly
+        assert.equal(getBridgeForUser(ALICE)?.readOnly, true, 'переподключение моста сбросило серверный readOnly');
+        unregisterBridge(ALICE);
+
+        // 4. toolContent сохраняет флаг clipped (стабильность префикса prompt-кэша)
+        const { toolContent } = await import('../sources/modules/agent/loop.js');
+        const entry = { status: 'ok', name: 'read', result: 'A'.repeat(3000) };
+        const clippedOnce = toolContent(entry, true);
+        assert.equal(entry.clipped, true);
+        assert.equal(toolContent(entry, false), clippedOnce);
+
+        // 5. listing сортирует до среза max
+        const { listing } = await import('../sources/modules/agent/tools/meta.js');
+        const m = new Map([
+            ['z-skill', { name: 'z-skill', meta: { description: 'Z' }, body: '' }],
+            ['a-skill', { name: 'a-skill', meta: { description: 'A' }, body: '' }],
+        ]);
+        assert.match(listing(m, 1), /^- a-skill:/, 'listing обрезал карту до алфавитной сортировки');
+    });
 });

@@ -1,9 +1,14 @@
 /**
- * oda-table-input — блочное поле-таблица: value — массив строк, колонки — field.children (structure/fields.js).
+ * oda-table-input — блочное поле-таблица: value — массив строк, колонки — field.children (structure/fields.js) или field.columns.
  * Колонка: {id, label, type, options, calc, total}; calc — выражение от полей строки (колонка только для чтения),
  * total — итог в строке-заголовке. Ячейки правятся контролами oda-table по стандартной карте типов.
+ * Данные value не мутируются: таблица получает «линзу» над каждой строкой (поля читаются и пишутся в исходную
+ * строку, вычисляемые колонки считаются на лету и в данные не попадают).
+ * `@value-changed.stop` на oda-table оставлен намеренно: value-changed контролов ячеек всплывает (composed) и без
+ * остановки oda-form принял бы значение ячейки за значение всей таблицы.
  */
 import { CONTROLS } from '/oda/components/structure/controls.js';
+import { raw } from '/oda/components/table/lib/model.js';
 
 const CALC = Object.create(null);
 /** значение вычисляемой колонки: выражение от полей строки */
@@ -13,6 +18,27 @@ function calc(row, expr) {
     return typeof v === 'number' && !Number.isFinite(v) ? undefined : v;
 }
 const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
+
+/** исходная строка за линзой: скрытый ключ — в Object.keys и копирование не попадает */
+const SOURCE = Symbol('source');
+const sourceOf = row => row?.[SOURCE] ?? row;
+
+/**
+ * Строка для таблицы — «линза» над исходной: поля колонок читаются и пишутся сквозь неё в исходную строку,
+ * вычисляемые колонки считаются на лету и в данные не пишутся. Прототипа у линзы нет намеренно: иначе она
+ * унаследовала бы активацию Reactor исходной строки (`target[R]` через цепочку прототипов) и таблица
+ * получила бы саму исходную строку без вычисляемых колонок.
+ */
+function lens(row, columns) {
+    const view = {};
+    const calcs = new Map(columns.filter(c => c.calc).map(c => [c.id, c.calc]));
+    for (const key of new Set([...Object.keys(row), ...columns.map(c => c.id)]))
+        Object.defineProperty(view, key, calcs.has(key)
+            ? { enumerable: true, configurable: true, get: () => calc(view, calcs.get(key)) }
+            : { enumerable: true, configurable: true, get: () => row[key], set: v => { row[key] = v; } });
+    Object.defineProperty(view, SOURCE, { value: row });
+    return view;
+}
 
 ODA({
     is: 'oda-table-input',
@@ -28,7 +54,7 @@ ODA({
         </style>
         <div class="body">
             <oda-table flex show-header allow-focus col-lines row-lines allow-row-panel :editable="!isReadonly && !disabled"
-                :data-set="rows" :columns="tableColumns" :controls ::focused-row @cell-changed="changed()"
+                :data-set="rows" :metadata="tableColumns" :controls ::focused-row @cell-changed="changed()"
                 @value-changed.stop="true"></oda-table>
         </div>
     `,
@@ -43,21 +69,20 @@ ODA({
     },
     focusedRow: undefined,
     get columns() {
-        return this.field?.children ?? [];
+        // children — после нормализации (structure/fields.js); columns — как в readme и демо
+        return this.field?.children ?? this.field?.columns ?? [];
     },
+    /** метаданные колонок oda-table: ключ колонки — `id` (бывший `:columns` с `name` писал в чужое свойство хоста) */
     get tableColumns() {
         return this.columns.map(c => ({
-            name: c.id, label: c.label || c.id, type: c.type && String(c.type).toLowerCase(),
+            id: c.id, label: c.label || c.id, type: c.type && String(c.type).toLowerCase(),
             options: c.options ?? c.items, readonly: !!c.calc, width: c.width
         }));
     },
-    /** строки со значениями вычисляемых колонок */
+    /** строки для таблицы со значениями вычисляемых колонок; value при этом не меняется */
     get rows() {
-        const calcs = this.columns.filter(c => c.calc);
-        for (const row of this.value ?? [])
-            for (const c of calcs)
-                row[c.id] = calc(row, c.calc);
-        return this.value ?? [];
+        const columns = this.columns;
+        return (this.value ?? []).map(row => lens(row, columns));
     },
     get summary() {
         const n = (this.value ?? []).length;
@@ -69,13 +94,16 @@ ODA({
         return [
             { icon: 'icons:add', title: 'Добавить строку', edit: true, action: () => this.value = [...(this.value ?? []), {}] },
             { icon: 'icons:content-copy', title: 'Дублировать строку', edit: true, disabled: !this.focusedRow,
-                action: () => this.value = [...this.value, { ...this.focusedRow, level: undefined, expanded: undefined, checked: undefined }] },
+                action: () => this.value = [...(this.value ?? []), { ...sourceOf(this.focusedRow) }] },
             { icon: 'icons:delete', title: 'Удалить строку', edit: true, disabled: !this.focusedRow,
-                action: () => this.value = this.value.filter(r => r !== this.focusedRow) }
+                action: () => this.value = (this.value ?? []).filter(r => raw(r) !== raw(sourceOf(this.focusedRow))) }
         ];
     },
-    /** правка ячейки — новый массив (value-changed, пересчёт вычисляемых колонок) */
+    /** правка ячейки — новый массив (value-changed, пересчёт вычисляемых колонок); текущая строка остаётся текущей */
     changed() {
-        this.value = [...this.value];
+        const source = raw(sourceOf(this.focusedRow));
+        this.value = [...(this.value ?? [])];
+        if (source)
+            this.focusedRow = this.rows.find(r => raw(sourceOf(r)) === source);
     }
 });

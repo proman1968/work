@@ -61,6 +61,14 @@ ODA({
             $attr: true
         },
     },
+    /**
+     * value не отражается в атрибут: сброс (undefined) возвращался бы из `attributeChangedCallback` как null,
+     * а число варианта — строкой. `$type: String` тут нельзя: value бывает числом и массивом (multiple).
+     * Начальный атрибут value="…" при создании по-прежнему применяется.
+     */
+    value: {
+        $public: false
+    },
     /** пользователь выбрал «Своё значение…», но ещё ничего не ввёл */
     otherMode: false,
     get otherAllowed() {

@@ -55,6 +55,25 @@ export default {
         return v;
     },
 
+    async _withOpLock(id, fn) {
+        const locks = (this._opLocks ??= new Map());
+        const key = String(id || '');
+        const prev = locks.get(key) || Promise.resolve();
+        let release;
+        const cur = new Promise(r => { release = r; });
+        const chain = prev.then(() => cur);
+        locks.set(key, chain);
+        await prev;
+        try {
+            return await fn();
+        }
+        finally {
+            release();
+            if (locks.get(key) === chain)
+                locks.delete(key);
+        }
+    },
+
     /**
      * Провести операцию: 2×N проводок по счетам.
      * @param {object} [params] {id, session}
@@ -64,68 +83,70 @@ export default {
         const id = String(params.id || '');
         if (!id)
             throw new Error('post: нужен id операции');
-        const op = await this.read_object({ id, session: params.session });
-        if (op.body.deleted)
-            throw new Error('post: операция удалена');
-        if (op.body.posted)
-            await this.unpost({ id, session: params.session });
-        const rules = this.METADATA?.POSTINGS;
-        if (!Array.isArray(rules) || !rules.length)
-            throw new Error('post: нет METADATA.POSTINGS');
-        const opFields = this.METADATA?.FIELDS || [];
-        const sys = { session: { $user: WORK } };
-        const entry = Date.now() + '.' + Math.random().toString(36).slice(2, 8);
-        const plan = [];
-        for (const r of rules) {
-            if (!r?.id || !r.debit?.account || !r.credit?.account)
-                throw new Error('post: плохое правило ' + JSON.stringify(r?.id));
-            const D = await this._postingAccount(r.debit.account);
-            const C = await this._postingAccount(r.credit.account);
-            const dSlots = this._checkSide(D, r.debit, opFields);
-            const cSlots = this._checkSide(C, r.credit, opFields);
-            plan.push({ r, D, C, dSlots, cSlots });
-        }
-        const made = [];
-        try {
-            for (const { r, D, C, dSlots, cSlots } of plan) {
-                const sum = this._ruleVal(r.amount, op.body, 'суммы');
-                const qty = r.quantity == null || r.quantity === '' ? 0 : this._ruleVal(r.quantity, op.body, 'количества');
-                const base = { source: this.path + '/' + id, entry, rule: r.id, time: op.body.time, name: op.body.name };
-                const fill = (slots, body) => {
-                    const o = {};
-                    for (const [slot, field] of Object.entries(slots)) {
-                        const v = body[field];
-                        if (v == null || v === '')
-                            throw new Error('post: нет значения аналитики «' + slot + '»');
-                        o[slot] = v;
-                    }
-                    return o;
-                };
-                const d = await D.create_object({ ...sys, post: {
-                    ...base, corr_account: C.path,
-                    debit: sum, credit: 0, qty_in: qty, qty_out: 0,
-                    ...fill(dSlots, op.body),
-                } });
-                made.push({ cls: D, id: d.id, path: d.logFullPath || d.path });
-                const c = await C.create_object({ ...sys, post: {
-                    ...base, corr_account: D.path,
-                    debit: 0, credit: sum, qty_in: 0, qty_out: qty,
-                    ...fill(cSlots, op.body),
-                } });
-                made.push({ cls: C, id: c.id, path: c.logFullPath || c.path });
+        return this._withOpLock(id, async () => {
+            const op = await this.read_object({ id, session: params.session });
+            if (op.body.deleted)
+                throw new Error('post: операция удалена');
+            if (op.body.posted)
+                await this._unpostUnlocked({ id, session: params.session });
+            const rules = this.METADATA?.POSTINGS;
+            if (!Array.isArray(rules) || !rules.length)
+                throw new Error('post: нет METADATA.POSTINGS');
+            const opFields = this.METADATA?.FIELDS || [];
+            const sys = { session: { $user: WORK } };
+            const entry = Date.now() + '.' + Math.random().toString(36).slice(2, 8);
+            const plan = [];
+            for (const r of rules) {
+                if (!r?.id || !r.debit?.account || !r.credit?.account)
+                    throw new Error('post: плохое правило ' + JSON.stringify(r?.id));
+                const D = await this._postingAccount(r.debit.account);
+                const C = await this._postingAccount(r.credit.account);
+                const dSlots = this._checkSide(D, r.debit, opFields);
+                const cSlots = this._checkSide(C, r.credit, opFields);
+                plan.push({ r, D, C, dSlots, cSlots });
             }
-        }
-        catch (e) {
-            for (const m of made) {
-                try {
-                    await m.cls.delete_object({ ...sys, id: m.id });
+            const made = [];
+            try {
+                for (const { r, D, C, dSlots, cSlots } of plan) {
+                    const sum = this._ruleVal(r.amount, op.body, 'суммы');
+                    const qty = r.quantity == null || r.quantity === '' ? 0 : this._ruleVal(r.quantity, op.body, 'количества');
+                    const base = { source: this.path + '/' + id, entry, rule: r.id, time: op.body.time, name: op.body.name };
+                    const fill = (slots, body) => {
+                        const o = {};
+                        for (const [slot, field] of Object.entries(slots)) {
+                            const v = body[field];
+                            if (v == null || v === '')
+                                throw new Error('post: нет значения аналитики «' + slot + '»');
+                            o[slot] = v;
+                        }
+                        return o;
+                    };
+                    const d = await D.create_object({ ...sys, post: {
+                        ...base, corr_account: C.path,
+                        debit: sum, credit: 0, qty_in: qty, qty_out: 0,
+                        ...fill(dSlots, op.body),
+                    } });
+                    made.push({ cls: D, id: d.id, path: d.logFullPath || d.path });
+                    const c = await C.create_object({ ...sys, post: {
+                        ...base, corr_account: D.path,
+                        debit: 0, credit: sum, qty_in: 0, qty_out: qty,
+                        ...fill(cSlots, op.body),
+                    } });
+                    made.push({ cls: C, id: c.id, path: c.logFullPath || c.path });
                 }
-                catch { /* уже убрано */ }
             }
-            throw e;
-        }
-        await this.update_object({ ...sys, id, post: { posted: { entry, records: made.map(m => m.cls.path + '/' + m.id) } } });
-        return this.save_message({ session: params.session, message: 'Проведено: ' + (op.body.name || id) + ' (' + made.length + ')', includes: made.map(m => m.path).filter(Boolean) });
+            catch (e) {
+                for (const m of made) {
+                    try {
+                        await m.cls.delete_object({ ...sys, id: m.id });
+                    }
+                    catch { /* уже убрано */ }
+                }
+                throw e;
+            }
+            await this.update_object({ ...sys, id, post: { posted: { entry, records: made.map(m => m.cls.path + '/' + m.id) } } });
+            return this.save_message({ session: params.session, message: 'Проведено: ' + (op.body.name || id) + ' (' + made.length + ')', includes: made.map(m => m.path).filter(Boolean) });
+        });
     },
 
     /**
@@ -137,6 +158,11 @@ export default {
         const id = String(params.id || '');
         if (!id)
             throw new Error('unpost: нужен id операции');
+        return this._withOpLock(id, () => this._unpostUnlocked(params));
+    },
+
+    async _unpostUnlocked(params = {}) {
+        const id = String(params.id || '');
         const op = await this.read_object({ id, session: params.session });
         const posted = op.body.posted;
         if (!posted)

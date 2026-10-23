@@ -1683,11 +1683,8 @@ export class $folder extends $item{
 
         let obj = this.write_streams[params.filename];
         if (!obj) {
-            if (fs.existsSync(dir)) {
-                fs.rmSync(dir);
-            }
             obj = this.write_streams[params.filename] = {
-                stream: fs.createWriteStream(dir, { flags: 'a' }),
+                stream: fs.createWriteStream(dir, { flags: 'w' }),
                 check: null,
                 writing: null,
                 close: async () => {
@@ -1710,8 +1707,18 @@ export class $folder extends $item{
         return obj;
     }
   async close_write_stream(params) {
-      const obj = await this.get_write_stream(params);
-      return obj?.close();
+      await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+      await this._sanitizeWriteTarget(params);
+      if (params.folder) {
+          let holder = this;
+          for (const seg of params.folder.split('/').filter(Boolean))
+              holder = await holder._get_next_item(seg, FS.$folder);
+          return holder.close_write_stream({ ...params, folder: undefined });
+      }
+      const obj = this.write_streams[params.filename];
+      if (!obj)
+          return false;
+      return obj.close();
     }
   async write_to_stream(params) {
         const obj = await this.get_write_stream(params);

@@ -261,11 +261,20 @@ async function handleA2aRpc(request, response) {
             return;
         }
         const userTasks = [...a2aTasks.values()].filter(t => t.uid === auth.uid);
-        if (userTasks.length >= MAX_TASKS_PER_USER)
+        if (userTasks.length >= MAX_TASKS_PER_USER) {
+            userTasks[0].controller?.abort();
             a2aTasks.delete(userTasks[0].id);
+        }
 
         const rawTaskId = String(params.id || '').trim();
         const taskId = /^[a-zA-Z0-9._:-]{1,128}$/.test(rawTaskId) ? rawTaskId : ('a2a-' + randomBytes(6).toString('hex'));
+        const existingTask = a2aTasks.get(taskId);
+        if (existingTask && existingTask.uid !== auth.uid) {
+            reply(response, 200, failRpc(id, -32001, 'Задача с таким id уже принадлежит другому пользователю'));
+            return;
+        }
+        if (existingTask)
+            existingTask.controller?.abort();
         const controller = new AbortController();
         const record = {
             id: taskId,

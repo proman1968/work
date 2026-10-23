@@ -15,6 +15,22 @@ import postingsProto from '/DATA/REGISTER/$register/$folder/$class/$account/hand
 // oda-packets нужен как полоса периодов: без неё элемент остаётся обычным HTMLElement.
 await import('/oda//packets.js');
 await ODA.telemetry['oda-packets'];
+// oda-table — основной список; без него <oda-table> остаётся пустым HTMLElement.
+await import('/oda//table.js');
+await ODA.telemetry['oda-table'];
+// редактор окна и контейнеры: форма, popover и showModal/showDialog.
+await import('/oda/components/layouts/editor-form/editor-form.js');
+await import('/oda/components/containers/containers.js');
+// Стенд без sources/client.js: минимальный WORK для окна редактора и ссылок.
+window.WORK = {
+    CancelError: ODA.CancelError,
+    showModal: ODA.showModal,
+    showDialog: ODA.showDialog,
+    showConfirm: ODA.showConfirm,
+    get_item: async () => ({
+        fetch: async (method, params) => (method === 'read_link' ? { id: params.id, name: 'Альфа' } : null),
+    }),
+};
 
 const results = [];
 window.__results = results;
@@ -57,6 +73,49 @@ async function mount(tag, props = {}) {
 }
 const text = el => el?.textContent?.trim();
 const allText = el => el?.textContent || '';
+const shadowOf = el => el?.__shadowRoot__ || el?.shadowRoot || null;
+/** Все элементы по селектору, включая вложенные shadow DOM (oda-table). */
+function deepAll(root, selector) {
+    const out = [];
+    const walk = (node) => {
+        for (const el of node.querySelectorAll('*')) {
+            if (el.matches?.(selector))
+                out.push(el);
+            const sr = shadowOf(el);
+            if (sr)
+                walk(sr);
+        }
+    };
+    const sr = shadowOf(root);
+    if (sr)
+        walk(sr);
+    return out;
+}
+/** Текст с учётом shadow DOM: свой текст + текст всех теневых корней. */
+function deepText(root) {
+    let out = root?.textContent || '';
+    const sr = shadowOf(root);
+    if (sr)
+        out += deepText(sr);
+    for (const el of root?.querySelectorAll?.('*') || []) {
+        const esr = shadowOf(el);
+        if (esr)
+            out += deepText(esr);
+    }
+    return out;
+}
+// В стенде WORK.showModal — базовый ODA.showModal, поэтому тег oda-popover.
+const popovers = () => [...document.querySelectorAll('oda-popover')];
+const lastPopover = () => popovers().at(-1);
+const modalOf = pop => pop?.querySelector('item-object-editor');
+const modalButtons = modal => deepAll(modal, 'oda-button').map(b => b.textContent.trim());
+const promptOf = pop => popovers().find(p => p !== pop && deepText(p).includes('Сохранить перед закрытием?'));
+const popTitle = pop => pop?.__shadowRoot__?.querySelector('.title label')?.textContent?.trim();
+async function waitPopover() {
+    let pop = null;
+    assert(await until(() => !!(pop = lastPopover())), 'окно не открылось');
+    return pop;
+}
 
 await ODA(cloneProto(objectsProto, 'test-objects'));
 await ODA(cloneProto(postingsProto, 'test-postings'));
@@ -169,7 +228,7 @@ await test('objects без $item: данные вручную', async () => {
     el.columns = [{ id: 'name' }, { id: 'client', type: 'Link' }];
     el.names = { '9.Y': 'Альфа' };
     el.rows = [{ id: '1.X', name: 'Продажа', client: '9.Y' }];
-    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head)').length === 1),
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1),
         'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
     el.remove();
 });
@@ -182,7 +241,7 @@ await test('objects с висящим fetch: данные вручную', async
     const el = await mount('test-objects', { $item });
     el.columns = [{ id: 'name' }];
     el.rows = [{ id: '1.X', name: 'Продажа' }];
-    assert(await until(() => el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head)').length === 1),
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1),
         'строка: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 800));
     el.remove();
 });
@@ -242,21 +301,20 @@ await test('objects: шапка и ячейки — текст, без [object O
         read_link: () => ({ id: '9.Y', name: 'Альфа' }),
     });
     const el = await mount('test-objects', { $item });
-    const qsa = (sel) => el.__shadowRoot__?.querySelectorAll(sel)?.length || 0;
-    const html = () => {
-        const root = el.__shadowRoot__;
-        const all = [...root.querySelectorAll('*')].map(e => {
-            const cn = e.className && typeof e.className === 'string' ? e.className.split(' ').join('.') : '';
-            return e.nodeName.toLowerCase() + (cn ? '.' + cn : '');
-        }).join(' ');
-        return 'displayRows=' + JSON.stringify(el.displayRows) + ' tree=' + all.slice(0, 700);
+    const headers = () => deepAll(el, '.hcell .title').map(text);
+    const rows = () => deepAll(el, 'oda-table-row');
+    const html = () => 'headers=' + JSON.stringify(headers()) + ' rows=' + rows().length;
+    const cellText = (cell) => {
+        const t = deepText(cell).trim();
+        const v = deepAll(cell, 'input').map(i => i.value).join('');
+        return t || v;
     };
-    assert(await until(() => qsa('.row.head div.cell') === 2), 'шапка: ' + html());
-    eq([...el.__shadowRoot__.querySelectorAll('.row.head div.cell')].map(text).join('|'), 'Название|Клиент');
-    assert(await until(() => qsa('div.list div.row:not(.head)') === 2), 'строки: ' + html());
-    const cells = [...el.__shadowRoot__.querySelectorAll('div.list div.row:not(.head) div.cell')].map(text);
+    assert(await until(() => headers().length === 2), 'шапка: ' + html());
+    eq(headers().join('|'), 'Название|Клиент');
+    assert(await until(() => rows().length === 2), 'строки: ' + html());
+    const cells = rows().flatMap(row => deepAll(row, 'oda-table-cell').map(cellText));
     eq(cells.join('|'), 'Продажа|Альфа|Оплата|');
-    assert(!allText(el).includes('[object Object]'), 'нет [object Object]');
+    assert(!deepText(el).includes('[object Object]'), 'нет [object Object]');
     el.remove();
 });
 
@@ -280,31 +338,20 @@ await test('objects: полоса периодов сверху, выборка 
     el.remove();
 });
 
-await test('objects: сохранить шлёт тело третьим аргументом, ошибка видна', async () => {
+await test('objects: сохранить шлёт тело третьим аргументом', async () => {
     const calls = [];
     const $item = mockItem(calls, {
         index: () => ({ rows: [] }),
         create_object: (params, post) => ({ id: '3.X', path: '/p/3.X' }),
     });
     const el = await mount('test-objects', { $item });
-    assert(await until(() => el.$$('.row.head').length), 'шапка');
-    el.create();
+    assert(await until(() => deepAll(el, '.hcell').length), 'шапка');
     el.editing = { name: 'Новая' };
-    await el.save();
+    assert(await el.save(), 'save вернул true');
     const sent = calls.find(c => c.method === 'create_object');
     assert(sent, 'create_object вызван');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая' }));
-    assert(el.editing === null, 'редактор закрыт');
-    el.create();
-    el.editing = { name: 'Плохая' };
-    $item.fetch = async (method, params, post) => {
-        calls.push({ method, params, post });
-        if (method === 'index')
-            return { rows: [] };
-        throw new Error('сервер отказал: нет обязательного поля');
-    };
-    await el.save();
-    assert(await until(() => text(el.$('.error')).includes('сервер отказал')), 'ошибка показана: ' + text(el.$('.error')));
+    assert(el.editing?.name === 'Новая', 'редактор не обнуляется самим save');
     el.remove();
 });
 
@@ -316,15 +363,201 @@ await test('objects: правка шлёт только поля схемы', as
         update_object: () => ({}),
     });
     const el = await mount('test-objects', { $item });
-    const qsa = (sel) => el.__shadowRoot__?.querySelectorAll(sel)?.length || 0;
-    assert(await until(() => qsa('div.list div.row:not(.head)') === 1), 'строка');
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
     await el.select({ id: '1.X' });
     assert(await until(() => el.editing?.id === '1.X'), 'редактирование');
     el.editing = { ...el.editing, name: 'Новая' };
-    await el.save();
+    assert(await el.save(), 'save вернул true');
     const sent = calls.find(c => c.method === 'update_object');
     assert(sent, 'update_object вызван');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая', client: '' }));
+    el.remove();
+});
+
+await test('objects: кнопка Создать открывает окно с заголовком и кнопками', async () => {
+    const calls = [];
+    const $item = mockItem(calls, { index: () => ({ rows: [] }) });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => el.schema), 'схема');
+    const btn = [...el.__shadowRoot__.querySelectorAll('oda-button')].find(b => b.textContent.trim() === 'Создать');
+    assert(btn, 'кнопка Создать');
+    btn.click();
+    const pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · новый объект'), 'заголовок: ' + popTitle(pop));
+    const modal = modalOf(pop);
+    assert(modal, 'содержимое окна');
+    assert(await until(() => modalButtons(modal).includes('Сохранить')), 'кнопки: ' + modalButtons(modal).join('|'));
+    assert(modalButtons(modal).includes('Закрыть'), 'Закрыть');
+    assert(!modalButtons(modal).includes('Удалить'), 'у нового нет Удалить');
+    pop.close();
+    assert(await until(() => !pop.isConnected), 'окно закрыто');
+    assert(await until(() => el.editorOpen === false), 'editorOpen сброшен');
+    eq(el.editing, null, 'editing очищен');
+    el.remove();
+});
+
+await test('objects: клик по строке открывает окно; второго окна нет', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [
+            { id: '1.X', name: 'Первая', client: '' },
+            { id: '2.X', name: 'Вторая', client: '' },
+        ] }),
+        read_object: params => ({ body: { name: params.id === '1.X' ? 'Первая' : 'Вторая', client: '' } }),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 2), 'две строки');
+    deepAll(el, 'oda-table-row')[0].click();
+    const pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Первая'), 'заголовок: ' + popTitle(pop));
+    // клик по другой строке позади окна не открывает второе
+    deepAll(el, 'oda-table-row')[1].click();
+    await tick(80);
+    eq(popovers().length, 1, 'одно окно');
+    assert(pop.isConnected, 'первое окно открыто');
+    pop.close();
+    assert(await until(() => !pop.isConnected), 'окно закрыто');
+    assert(await until(() => el.editorOpen === false), 'editorOpen сброшен');
+    el.remove();
+});
+
+await test('objects: кнопка Сохранить сохраняет и закрывает', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
+        read_object: () => ({ body: { name: 'Старая', client: '' } }),
+        update_object: () => ({}),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+    const opening = el.openEditor({ id: '1.X' });
+    const pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок: ' + popTitle(pop));
+    await tick(60);
+    el.editing = { ...el.editing, name: 'Кнопка' };
+    const btn = deepAll(modalOf(pop), 'oda-button').find(b => b.textContent.trim() === 'Сохранить');
+    assert(btn, 'кнопка Сохранить');
+    btn.click();
+    assert(await until(() => !pop.isConnected), 'окно закрыто кнопкой');
+    await opening;
+    const sent = calls.find(c => c.method === 'update_object');
+    assert(sent, 'update_object вызван');
+    eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Кнопка', client: '' }));
+    el.remove();
+});
+
+await test('objects: Удалить спрашивает подтверждение', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
+        read_object: () => ({ body: { name: 'Старая', client: '' } }),
+        delete_object: () => null,
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+    const opening = el.openEditor({ id: '1.X' });
+    const pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок: ' + popTitle(pop));
+    await tick(60);
+    const btn = deepAll(modalOf(pop), 'oda-button').find(b => b.textContent.trim() === 'Удалить');
+    assert(btn, 'кнопка Удалить');
+
+    const confirmOf = () => popovers().find(p => p !== pop && deepText(p).includes('Удалить объект?'));
+    btn.click();
+    let confirm = null;
+    assert(await until(() => !!(confirm = confirmOf())), 'подтверждение');
+    confirm.close();
+    assert(await until(() => !confirm.isConnected), 'подтверждение закрыто');
+    assert(pop.isConnected, 'Отмена оставила окно');
+    assert(!calls.some(c => c.method === 'delete_object'), 'Отмена не удаляет');
+
+    btn.click();
+    confirm = null;
+    assert(await until(() => !!(confirm = confirmOf())), 'подтверждение 2');
+    confirm.ok();
+    assert(await until(() => !pop.isConnected), 'окно закрыто после удаления');
+    await opening;
+    assert(calls.some(c => c.method === 'delete_object'), 'delete_object вызван');
+    el.remove();
+});
+
+await test('objects: закрытие с изменениями — Да/Нет/Отмена', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
+        read_object: () => ({ body: { name: 'Старая', client: '', posted: { entry: 'e' }, deleted: false } }),
+        update_object: () => ({}),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+
+    let opening = el.openEditor({ id: '1.X' });
+    let pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок: ' + popTitle(pop));
+    await tick(60); // форма и начальный снимок уже отрисованы
+    el.editing = { ...el.editing, name: 'Новая' };
+    assert(el.isDirty(), 'есть изменения');
+
+    // Отмена — не сохранять и не закрывать
+    pop.close();
+    let prompt = null;
+    assert(await until(() => !!(prompt = promptOf(pop))), 'промпт');
+    prompt.close();
+    assert(await until(() => !prompt.isConnected), 'промпт закрыт');
+    assert(pop.isConnected, 'Отмена оставила окно');
+    eq(el.editing?.name, 'Новая', 'изменения остались в форме');
+
+    // Нет — не сохранять и закрыть
+    pop.close();
+    prompt = null;
+    assert(await until(() => !!(prompt = promptOf(pop))), 'промпт 2');
+    prompt.ok(2);
+    await opening;
+    assert(!pop.isConnected, 'Нет закрыла окно');
+    eq(el.editing, null, 'editing очищен');
+    assert(!calls.some(c => c.method === 'update_object'), 'Нет не сохраняет');
+
+    // Да — сохранить и закрыть
+    opening = el.openEditor({ id: '1.X' });
+    pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок 2');
+    await tick(60);
+    el.editing = { ...el.editing, name: 'Новая' };
+    pop.close();
+    prompt = null;
+    assert(await until(() => !!(prompt = promptOf(pop))), 'промпт 3');
+    prompt.ok(1);
+    await opening;
+    const sent = calls.find(c => c.method === 'update_object');
+    assert(sent, 'Да сохранила');
+    eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая', client: '' }));
+    assert(!pop.isConnected, 'Да закрыла окно');
+
+    // Ошибка сохранения видна в окне, закрытие не происходит
+    opening = el.openEditor({ id: '1.X' });
+    pop = await waitPopover();
+    assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок 3');
+    await tick(60);
+    el.editing = { ...el.editing, name: 'Плохая' };
+    const fetch = $item.fetch;
+    $item.fetch = async (method, params, post) => {
+        if (method === 'update_object')
+            throw new Error('сервер отказал: нет обязательного поля');
+        return fetch(method, params, post);
+    };
+    pop.close();
+    prompt = null;
+    assert(await until(() => !!(prompt = promptOf(pop))), 'промпт 4');
+    prompt.ok(1);
+    assert(await until(() => deepAll(modalOf(pop), '.error').some(e => e.textContent.includes('сервер отказал'))),
+        'ошибка в окне: ' + deepText(modalOf(pop)));
+    assert(pop.isConnected, 'ошибка не закрыла окно');
+    pop.close();
+    prompt = null;
+    assert(await until(() => !!(prompt = promptOf(pop))), 'промпт 5');
+    prompt.ok(2);
+    await opening;
+    assert(!pop.isConnected, 'окно закрыто после ошибки');
     el.remove();
 });
 

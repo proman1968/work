@@ -150,6 +150,12 @@ ODA({
             $type: Boolean,
             $attr: true
         },
+        /** вся таблица только для чтения: все ячейки получают readonly (контроллы прячут кнопки правки) */
+        readonly: {
+            $def: false,
+            $type: Boolean,
+            $attr: true
+        },
         /** индекс верхней строки окна; скролл подключит этап 14 */
         screenTopRowIndex: {
             $def: 0

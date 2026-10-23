@@ -226,7 +226,7 @@ async function applyEgressRules(docker, cfg, rules) {
     // ENTRYPOINT /opt/work/entrypoint.sh, который поднимает Xvfb и зависает в sleep infinity
     const helper = await docker.createContainer({
         Image: cfg.image, User: '0:0', Entrypoint: [], Cmd: ['sh', '-c', script],
-        HostConfig: { Privileged: true, NetworkMode: 'host', AutoRemove: false },
+        HostConfig: { CapAdd: ['NET_ADMIN', 'NET_RAW'], Privileged: true, NetworkMode: 'host', AutoRemove: false },
     });
     const hid = helper.id || helper.Id;
     // R1 (8.29): контейнер ОБЯЗАН запуститься — правило ставит выполненная команда;

@@ -238,6 +238,7 @@ ODA({
         this._dayIndex = this._buildIndex(days);
         this._units = this._buildUnits(days, mode);
         const years = this._makeDateStructure(days, mode);
+        this._years = years;
         this._leaves = this._collectLeaves(years, mode);
         const bar = this._makeBar(years, mode, this._lo, this._hi);
         this.items = bar.items;
@@ -434,10 +435,8 @@ ODA({
     // '*' и 'now' разбираем по имени: у обоих маска '*' неоднозначна.
     _findItem(key) {
         const bar = this.items || [];
-        if (key === 'now') {
-            const now = bar.find(i => i.is === 'oda-packets-now-selector');
-            return now && !now.disabled ? now : null;
-        }
+        if (key === 'now')
+            return bar.find(i => i.is === 'oda-packets-now-selector') || null;
         if (key === '*') return this._allItem || null;
         if (key.startsWith('period:')) return this._restorePeriod(key.slice(7));
         return [...this._leaves, ...bar]
@@ -478,14 +477,23 @@ ODA({
         this.selected = selection[0] || null;
         this.mask = selection.map(i => i.mask).filter(Boolean).join('|');
         this.period = this._resolvePeriod(selection);
+        this._markYears(this.period);
         this.value = this._selectionKey(selection);
         this.items = [...this.items]; // триггер перерисовки
         this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
+    },
+    // Год подсвечивается, если выбранный период пересекает его (даже частично: ноябрь–январь)
+    _markYears(period) {
+        const from = period?.start?.slice(0, 4);
+        const to = period?.end?.slice(0, 4);
+        for (const y of this._years || [])
+            y.active = !!from && y.name >= from && y.name <= to;
     },
     // Сброс отметки по всему дереву, иначе вложенный месяц/день остаётся подсвеченным в меню
     _clearSelected(items) {
         for (const i of items || []) {
             i.selected = false;
+            i.active = false;
             if (i.items?.length) this._clearSelected(i.items);
         }
     },
@@ -498,7 +506,9 @@ ODA({
             if (only.name === 'period') return { start: only.start, end: only.end };
             const [s, e] = only.name === '*' ? [this._lo, this._hi] : _leafSpan(only.name, only.type);
             const clipped = this._clipRange(s, e);
-            return clipped ? { start: clipped[0], end: clipped[1] } : null;
+            if (clipped) return { start: clipped[0], end: clipped[1] };
+            // «Сейчас» вне диапазона журнала: выбор остаётся на сегодня, таблица пустая
+            return only.is === 'oda-packets-now-selector' ? { start: s, end: e } : null;
         }
         let min = null, max = null;
         for (const item of selection) {
@@ -630,13 +640,13 @@ ODA({
         <div class="left">
             <div ~is="$for.item.is || 'oda-packets-selector'" ~for="leftItems"
                 :item="$for.item" :label="$for.item?.label" :title="$for.item?.fullLabel"
-                :disabled="$for.item?.disabled" :invert="$for.item?.selected"
+                :disabled="$for.item?.disabled" :error="$for.item?.selected || $for.item?.active"
                 @tap="_onTap($for.item, $event)"></div>
         </div>
         <div class="right">
             <div style="font-weight: bold;" ~is="$for.item.is || 'oda-packets-selector'" ~for="rightItems"
                 :item="$for.item" :label="$for.item?.label" :title="$for.item?.fullLabel"
-                :disabled="$for.item?.disabled" :invert="$for.item?.selected"
+                :disabled="$for.item?.disabled" :error="$for.item?.selected || $for.item?.active"
                 @tap="_onTap($for.item, $event)"></div>
         </div>
     `,
@@ -685,7 +695,7 @@ ODA({
                 @apply --horizontal;
                 align-items: center;
             }
-            :host([invert]) {
+            :host([error]) {
                 @apply --active;
                 font-weight: bold;
             }
@@ -711,7 +721,7 @@ ODA({
             $def: '',
             $type: String
         },
-        invert: {
+        error: {
             $def: false,
             $type: Boolean,
             $attr: true

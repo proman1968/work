@@ -492,7 +492,12 @@ function speechOrigin(params, ai, who) {
     if (!base)
         throw new Error(who + ': нет baseUrl у ' + (ai.short || ai.path || '?'));
     try {
-        return new URL(base).origin;
+        const u = new URL(base);
+        const prefix = u.pathname
+            .replace(/\/+$/, '')
+            .replace(/\/v1\/(?:chat\/completions|audio\/(?:speech|transcriptions)|images\/generations|models)$/i, '')
+            .replace(/\/v1$/i, '');
+        return u.origin + prefix;
     }
     catch {
         throw new Error(who + ': некорректный baseUrl: ' + base);

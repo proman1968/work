@@ -10,6 +10,7 @@ import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
+import * as REFS from './access/refs.js';
 import { markUpload } from './upload-mark.js';
 import { assertNotMemory } from './memory-mark.js';
 
@@ -282,6 +283,7 @@ export class $file extends $folder{
         assertNotMemory(this.dir, params);
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
+        await REFS.removeTarget(this.path).catch(() => {});
         globalThis.WORK_RAG?.invalidate?.(this.dir);
         this.parent.reset();
         this.reset();

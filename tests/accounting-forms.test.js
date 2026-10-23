@@ -39,7 +39,7 @@ const FIELDS = [
 
 describe('форма объектов', () => {
     it('exports: мета, компонент ссылки и регистрация Link в editor-form', async () => {
-        assert.ok(objects.template.includes('oda-editor-form'));
+        assert.ok(defs.find(d => d.is === 'item-object-editor')?.template.includes('oda-editor-form'));
         assert.ok(objects.imports.includes('editor-form'));
         const link = defs.find(d => d.is === 'oda-link-input');
         assert.ok(link, 'oda-link-input определён');
@@ -96,16 +96,21 @@ describe('форма объектов', () => {
 
     it('save/remove/post/unpost вызывают методы объекта', async () => {
         const calls = [];
-        const h = host(objects, calls, { form: { result: { name: 'Новая' } } });
+        const h = host(objects, calls);
         h.schema = { FIELDS: [{ id: 'name' }] };
-        await h.save();
+        h.editing = { name: 'Новая' };
+        assert.equal(await h.save(), true);
         assert.deepEqual(calls.find(c => c.method === 'create_object'), { method: 'create_object', params: {}, post: { name: 'Новая' } });
-        h.editing = { id: '1.X', name: 'Старая' };
-        await h.save();
+        h.editing = { id: '1.X', name: 'Новая' };
+        assert.equal(await h.save(), true);
         assert.deepEqual(calls.find(c => c.method === 'update_object'), { method: 'update_object', params: { id: '1.X' }, post: { name: 'Новая' } });
+        // удаление подтверждается диалогом; отмена — не удаляем
+        WORK.showConfirm = async () => 'ok';
         h.editing = { id: '1.X', name: 'Старая' };
-        await h.removeObject();
+        assert.equal(await h.removeObject(), true);
         assert.deepEqual(calls.find(c => c.method === 'delete_object'), { method: 'delete_object', params: { id: '1.X' }, post: undefined });
+        WORK.showConfirm = async () => { throw new Error('cancel'); };
+        assert.equal(await h.removeObject(), false, 'отмена подтверждения не удаляет');
         h.$item.fetch = async (method, params) => {
             calls.push({ method, params });
             if (method === 'read_object')
@@ -121,6 +126,10 @@ describe('форма объектов', () => {
         assert.ok(calls.some(c => c.method === 'unpost' && c.params.id === '1.X'));
     });
 
+    it('список объектов только для чтения: правка ячеек идёт через редактор', () => {
+        assert.match(objects.template, /<oda-table[^>]*\breadonly\b/, 'таблица списка readonly');
+    });
+
     it('раскладка: пакет главной панелью сверху, ряд списка и редактора под ним', () => {
         assert.ok(objects.template.includes('oda-packets'), 'пакет в разметке');
         assert.ok(objects.imports.includes('oda//packets'), 'пакет подключён импортом');
@@ -132,6 +141,56 @@ describe('форма объектов', () => {
         assert.ok(objects.template.indexOf('<oda-packets') < objects.template.indexOf('class="body"'),
             'пакет над рядом');
         assert.ok(/<oda-packets[^>]*\bno-flex\b/.test(objects.template), 'панель натуральной высоты');
+    });
+
+    it('редактор — отдельное модальное окно, боковой панели нет', () => {
+        const editor = defs.find(d => d.is === 'item-object-editor');
+        assert.ok(editor, 'item-object-editor определён');
+        assert.ok(editor.template.includes('oda-editor-form'), 'форма в окне');
+        assert.ok(editor.template.includes('Сохранить'), 'кнопка сохранения');
+        assert.ok(editor.template.includes('Закрыть'), 'кнопка закрытия');
+        assert.ok(!objects.template.includes('class="side"'), 'боковая панель убрана');
+        assert.ok(objects.template.includes('oda-table'), 'таблица осталась');
+    });
+
+    it('save: снимок отправленных данных, ввод во время запроса остаётся dirty', async () => {
+        let done;
+        const pending = new Promise(resolve => { done = resolve; });
+        const h = host(objects, [], { fetch: () => pending });
+        h.schema = { FIELDS: [{ id: 'name' }] };
+        h.editing = { name: 'Отправлено' };
+        h.snapshot();
+        const saving = h.save();
+        h.editing.name = 'Позже';
+        done({});
+        assert.equal(await saving, true);
+        assert.equal(h.isDirty(), true, 'ввод во время запроса не стал чистым');
+    });
+
+    it('dirty: возврат к исходным значениям — чисто', () => {
+        const h = host(objects, []);
+        h.schema = { title: 'Операции', FIELDS: [{ id: 'name' }, { id: 'client' }, { id: 'time' }] };
+        h.editing = { id: '1.X', name: 'Оп', client: null };
+        h.snapshot();
+        assert.equal(h.isDirty(), false);
+        h.editing.name = 'Новая';
+        assert.equal(h.isDirty(), true);
+        h.editing.name = 'Оп';
+        h.editing.client = '';
+        assert.equal(h.isDirty(), false, 'null/undefined/"" эквивалентны');
+        h.editing.id = '2.X';
+        assert.equal(h.isDirty(), false, 'служебный id не влияет');
+    });
+
+    it('заголовок окна: класс и имя объекта', () => {
+        const h = host(objects, []);
+        h.schema = { title: 'Операции', FIELDS: [{ id: 'name' }] };
+        h.editing = { id: '1.X', name: 'Оп' };
+        assert.equal(h.editorTitle, 'Операции · Оп');
+        h.editing = {};
+        assert.equal(h.editorTitle, 'Операции · новый объект');
+        h.schema = { FIELDS: [{ id: 'name' }] };
+        assert.equal(h.editorTitle, 'новый объект');
     });
 
     it('границы полосы — крайние дни журнала точки', async () => {

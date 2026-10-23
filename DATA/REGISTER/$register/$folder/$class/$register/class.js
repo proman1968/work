@@ -65,7 +65,8 @@ export default {
         const limit = Math.max(1, Math.min(2000, Number(params.limit) || 200));
         const account = String(params.account || '').trim();
         const source = String(params.source || '').trim();
-        const q = { order: 'desc', limit: 500 };
+        const qLimit = Math.min(5000, Math.max(500, limit * 4));
+        const q = { order: 'desc', limit: qLimit, maxLimit: 5000 };
         if (params.session)
             q.session = params.session;
         if (params.from != null && params.from !== '')
@@ -138,7 +139,7 @@ export default {
         return day ? day + 'T12:00:00' : undefined;
     },
 
-    /** Нормализовать вход в день YYYY-MM-DD ('' — не задан). */
+    /** Нормализовать вход в день YYYY-MM-DD ('' — не задан) в локальном поясе хранилища. */
     _day(v) {
         const s = String(v ?? '').trim();
         if (!s)
@@ -148,7 +149,8 @@ export default {
         const t = new Date(/^\d+$/.test(s) ? Number(s) : s);
         if (!Number.isFinite(t.getTime()))
             throw new Error('sheet: плохая дата «' + s + '»');
-        return t.toISOString().slice(0, 10);
+        const iso = typeof t.toISOTimezoneString === 'function' ? t.toISOTimezoneString() : t.toISOString();
+        return String(iso).slice(0, 10);
     },
 
     _dayBefore(day) {

@@ -181,7 +181,8 @@ export function registerBridge({ uid, hostname, platform, rootDir, readOnly = fa
         hostname: String(hostname || os.hostname()),
         platform: String(platform || process.platform),
         rootDir: String(rootDir || process.cwd()),
-        readOnly: Boolean(readOnly),
+        readOnly: prev?.serverReadOnly != null ? Boolean(prev.serverReadOnly) : Boolean(readOnly),
+        serverReadOnly: prev?.serverReadOnly ?? null,
         allowedApps: Array.isArray(allowedApps) ? allowedApps.map(String) : [],
         connectedAt: prev?.connectedAt || Date.now(),
         lastSeen: Date.now(),
@@ -225,6 +226,7 @@ export function setBridgeReadOnly(uid, readOnly) {
     if (!s)
         throw new Error('мост компьютера не подключён');
     s.readOnly = Boolean(readOnly);
+    s.serverReadOnly = s.readOnly;
     s.lastSeen = Date.now();
     recordLog(s, { action: 'mode', readOnly: s.readOnly, outcome: 'ok' });
     return { uid: s.uid, readOnly: s.readOnly };

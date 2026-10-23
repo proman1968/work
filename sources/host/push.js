@@ -2,7 +2,10 @@ import * as fs from 'node:fs';
 import webPush from 'web-push';
 
 function getPushSubscriptionsPath(uid) {
-    return `./USERS/${uid}/$user/#system/push_subscriptions.json`;
+    const s = String(uid ?? '').trim();
+    if (!/^[\w.-]{1,64}$/.test(s) || /^\.+$/.test(s) || s.includes('..'))
+        throw new Error('push: invalid uid');
+    return `./USERS/${s}/$user/#system/push_subscriptions.json`;
 }
 
 export async function loadPushSubscriptions(uid) {

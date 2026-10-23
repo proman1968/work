@@ -685,8 +685,10 @@ async function recoverInterrupted(items, host) {
 export function toolContent(t, old = false) {
     switch (t.status) {
         case 'ok': {
+            if (old)
+                t.clipped = true;
             const r = String(t.result ?? 'ok');
-            const text = old ? clip(r, OLD_RESULT_MAX) : r;
+            const text = (old || t.clipped) ? clip(r, OLD_RESULT_MAX) : r;
             return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
         }
         case 'error': {

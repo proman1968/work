@@ -167,7 +167,8 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
         ...env.vars,
     };
     const roots = mcpRoots(opts);
-    const key = (owner?.path || '?') + '\n' + url;
+    const caller = String(opts?.owner || 'shared');
+    const key = (owner?.path || '?') + '\n' + caller + '\n' + url;
     let seq = 0;
 
     /** Ответ серверу на его запрос (roots/list или отказ) — не роняет наш вызов. */
@@ -189,8 +190,9 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
     };
 
     const call = async (m, p, sessionId, timeout = MCP_CALL_TIMEOUT) => {
+        const reqId = ++seq;
         const res = await mcpPost(url, sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers,
-            JSON.stringify({ jsonrpc: '2.0', id: ++seq, method: m, params: p || {} }), timeout);
+            JSON.stringify({ jsonrpc: '2.0', id: reqId, method: m, params: p || {} }), timeout);
         if (res.status === 401 || res.status === 403)
             throw new Error('HTTP ' + res.status + ' — нужен ключ (secret:ФАЙЛ в headers)');
         if (!res.ok) {
@@ -236,6 +238,11 @@ async function mcpHttpRpc(owner, method, params, opts = {}) {
                         await answer(msg, sid);
                         continue;
                     }
+                    // JSON-RPC уведомления (method без id) пропускаем — ждём ответ на наш запрос
+                    if (msg.method && msg.id == null)
+                        continue;
+                    if (msg.id != null && msg.id !== reqId)
+                        continue;
                     if (msg.error)
                         throw new Error(msg.error.message || JSON.stringify(msg.error));
                     return { result: msg.result, sessionId: sid };

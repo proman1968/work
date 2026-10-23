@@ -92,7 +92,7 @@ ODA({
     },
     /** признак «не править» для ячейки: колонка или строка (запись — этап 11) */
     cellReadonly(column) {
-        return !!(column?.readonly || this.row?.data?.readonly);
+        return !!(this.host?.readonly || column?.readonly || this.row?.data?.readonly);
     },
     /** при активном фильтре дерево раскрыто виртуально — экспандер не трогаем */
     get expanderDisabled() {
