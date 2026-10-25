@@ -21,6 +21,7 @@ import { toNumber, round } from './expr.js';
 import { DataError } from './errors.js';
 import { parseTime, localDay, periodRange } from './time.js';
 import { registerOperation } from './posting.js';
+import { objectCond } from './scope.js';
 
 /** Допустимые статусы по семейству. */
 export const STATUSES = Object.freeze({
@@ -454,7 +455,8 @@ function ftsQuery(text) {
  * @param {string} [q.search] Полнотекстовый поиск (префиксы слов)
  * @param {*} [q.from] Начало периода по дате объекта
  * @param {*} [q.to] Конец периода (день — включительно)
- * @param {string[]} [q.units] Только эти подразделения (видимость)
+ * @param {string[]} [q.units] Только эти подразделения
+ * @param {Array<object>|null} [q.visible] Права видимости (scope.js, scopeGrants): null — без ограничений
  * @param {string} [q.author] Только автор
  * @param {string} [q.ext_of] Записи-расширения объекта
  * @param {string} [q.order='-time'] Поле или колонка; «-» — по убыванию
@@ -495,6 +497,11 @@ export function queryObjects(db, q) {
     if (Array.isArray(q.units)) {
         where.push(q.units.length ? `o.unit IN (${q.units.map(() => '?').join(',')})` : '0');
         args.push(...q.units);
+    }
+    const visible = objectCond(q.visible);
+    if (visible) {
+        where.push(visible[0]);
+        args.push(...visible[1]);
     }
     if (!isEmpty(q.author)) {
         where.push('o.author = ?');

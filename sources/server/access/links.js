@@ -28,8 +28,9 @@ export function reset() {
     cache = null;
 }
 
-/** Все ссылки всех подразделений: [{ structure, place, id, access }].
- * place — путь места в дереве ROLES ('heads/ceo'), null — общая ссылка #security.LINKS. */
+/** Все ссылки всех подразделений: [{ structure, place, id, access, scope? }].
+ * place — путь места в дереве ROLES ('heads/ceo'), null — общая ссылка #security.LINKS;
+ * scope — видимость данных по ссылке, без него — умолчание по типу класса (sources/data/scope.js). */
 async function collect() {
     if (cache)
         return cache;
@@ -68,11 +69,11 @@ async function collect() {
                         continue;
                     const { common, places } = WORKPLACES.normalizeSecurity(g.DATA?.['#security']);
                     for (const l of common)
-                        out.push({ structure: clsPath, place: null, id: l.id, access: l.access });
+                        out.push({ structure: clsPath, place: null, id: l.id, access: l.access, ...(l.scope ? { scope: l.scope } : {}) });
                     for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
                         const place = WORKPLACES.trailKey(trail);
                         for (const l of node.LINKS)
-                            out.push({ structure: clsPath, place, id: l.id, access: l.access });
+                            out.push({ structure: clsPath, place, id: l.id, access: l.access, ...(l.scope ? { scope: l.scope } : {}) });
                     }
                 }
                 catch { /* нет доступа */ }
@@ -150,6 +151,11 @@ export async function linkLevel(cls, params = {}) {
  * прямые назначения плюс ссылки рабочих мест (кроме структурных типов).
  */
 export async function dataAccess(cls, params = {}) {
+    return takeRank(await directAccess(cls, params), await linkLevel(cls, params));
+}
+
+/** Доступ по назначениям самого класса (роли #security, системные — и унаследованные сверху), без ссылок мест. */
+export async function directAccess(cls, params = {}) {
     let best = null;
     const uid = cls.constructor.resolveUid(params);
     if (uid) {
@@ -167,7 +173,72 @@ export async function dataAccess(cls, params = {}) {
                 best = takeRank(best, 'read');
         }
     }
-    return takeRank(best, await linkLevel(cls, params));
+    return best;
+}
+
+async function structureItem(path) {
+    let g;
+    try {
+        g = await globalThis.WORK.get_item(path);
+    }
+    catch {
+        return null;
+    }
+    if (Array.isArray(g))
+        g = g.at(-1);
+    return g instanceof FS.$class ? g : null;
+}
+
+/**
+ * Ссылки рабочих мест на класс, его предков и его поддерево — с отношением пользователя
+ * к каждой, для видимости данных по scope (sources/data/scope.js). Ссылка ниже класса
+ * открывает сводный отчёт предка по своей ветке.
+ * relation: 'admin' — ADMIN подразделения (запись по ссылке на запись); 'member' — своё место
+ * или общая ссылка; 'ancestor' — ссылка вложенного места (чтение); 'boss' — BOSS подразделения (чтение).
+ * @returns {Promise<Array<{ structure, place, id, access, scope, relation, places: string[], labels: object }>>}
+ *   places — места пользователя в подразделении, labels — названия мест подразделения (путь → label)
+ */
+export async function scopeLinks(cls, params = {}) {
+    if (NO_LINK_TYPES.has(cls.type))
+        return [];
+    const uid = cls.constructor.resolveUid(params);
+    const p = String(cls.path || '');
+    if (!uid || !p.startsWith('/'))
+        return [];
+    const out = [];
+    const seen = new Map();
+    for (const e of await collect()) {
+        if (p !== e.id && !p.startsWith(e.id + '/') && !e.id.startsWith(p + '/'))
+            continue;
+        if (!seen.has(e.structure)) {
+            seen.set(e.structure, (async () => {
+                const g = await structureItem(e.structure);
+                const roles = g ? await g.roles(params).catch(() => []) : [];
+                if (!roles.length)
+                    return null;
+                const sec = g.DATA?.['#security'];
+                const labels = {};
+                for (const { node, trail } of WORKPLACES.walkPlaces(WORKPLACES.normalizeSecurity(sec).places))
+                    labels[WORKPLACES.trailKey(trail)] = node.label;
+                return { roles, sec, labels, places: WORKPLACES.memberTrailKeys(sec, uid) };
+            })());
+        }
+        const s = await seen.get(e.structure);
+        if (!s)
+            continue;
+        const base = { structure: e.structure, place: e.place, id: e.id, scope: e.scope ?? null, places: s.places, labels: s.labels };
+        if (s.roles.includes('ADMIN')) {
+            out.push({ ...base, access: e.access === 'write' ? 'admin' : 'read', relation: 'admin' });
+            continue;
+        }
+        if (!e.place || s.places.includes(e.place))
+            out.push({ ...base, access: e.access, relation: 'member' });
+        else if (WORKPLACES.isAncestorPlaceMember(s.sec, uid, e.place))
+            out.push({ ...base, access: 'read', relation: 'ancestor' });
+        if (s.roles.includes('BOSS'))
+            out.push({ ...base, access: 'read', relation: 'boss' });
+    }
+    return out;
 }
 
 /**

@@ -17,6 +17,7 @@ import { getClass, descendants, isLeaf } from './classes.js';
 import { classSchema } from './schema.js';
 import { queryObjects } from './objects.js';
 import { virtualMembers } from './reports.js';
+import { entryGrants, withoutBranches } from './scope.js';
 import { DataError } from './errors.js';
 
 const POOL = 500;
@@ -59,6 +60,8 @@ const plain = o => ({ id: o.id, cid: o.cid, title: o.title });
  * @param {string} [q.search] Поиск по началам слов
  * @param {boolean} [q.all] Показать и объекты реестра вне состава (без поиска)
  * @param {number} [q.limit=200]
+ * @param {Array<object>|null} [q.visible] Права видимости справочника (scope.js); у виртуального — проводок состава
+ * @param {Array<object>|null} [q.registryVisible] Права на объекты реестра виртуального (по умолчанию — `visible` без веток)
  * @returns {{ target, virtual: boolean, items: Array<{ id, cid, title, member, balance?, ext? }>,
  *             total: number, others: number, create: Array<{ cid, label }> }}
  *   total — всего подходящих; others — объектов реестра вне показанного состава (кнопка «показать все»)
@@ -72,7 +75,7 @@ export function linkChoices(db, q = {}) {
     const search = String(q.search ?? '').trim() || undefined;
 
     if (schema.type !== '$virtual') {
-        const r = queryObjects(db, { cid: schema.cid, search, limit: POOL });
+        const r = queryObjects(db, { cid: schema.cid, search, limit: POOL, visible: q.visible });
         return {
             target: schema.cid,
             virtual: false,
@@ -84,10 +87,13 @@ export function linkChoices(db, q = {}) {
     }
 
     const registry = getClass(db, schema.source?.registry);
-    const members = virtualMembers(db, { cid: schema.cid, at: q.at, units: q.units, unit: q.unit }).items;
+    const members = virtualMembers(db, {
+        cid: schema.cid, at: q.at, units: q.units, unit: q.unit, visible: entryGrants(q.visible, 'catalog'),
+    }).items;
     const member = m => ({ id: m.id, cid: m.cid, title: m.title, member: true, balance: m.balance, ext: m.ext });
     const create = creatable(db, registry.cid);
-    const regTotal = queryObjects(db, { cid: registry.cid, limit: 1 }).total;
+    const regVisible = q.registryVisible !== undefined ? q.registryVisible : withoutBranches(q.visible);
+    const regTotal = queryObjects(db, { cid: registry.cid, limit: 1, visible: regVisible }).total;
 
     if (!search && !q.all)
         return {
@@ -99,7 +105,7 @@ export function linkChoices(db, q = {}) {
             create,
         };
 
-    const pool = queryObjects(db, { cid: registry.cid, search, limit: POOL });
+    const pool = queryObjects(db, { cid: registry.cid, search, limit: POOL, visible: regVisible });
     const found = new Set(pool.items.map(o => o.id));
     const ids = new Set(members.map(m => m.id));
     const items = [

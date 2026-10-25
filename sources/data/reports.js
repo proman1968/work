@@ -12,7 +12,9 @@
  * Период — [from, to): граница-день в `to` включает весь день. Момент `at`
  * («состояние на») включителен; день 'ГГГГ-ММ-ДД' — на конец дня.
  * Общие фильтры проводок: `units` (список подразделений) или `unit`
- * (подразделение с вложенными), `op_cid` (класс операций с потомками), `op`, `author`, `place`.
+ * (подразделение с вложенными), `op_cid` (класс операций с потомками), `op`, `author`, `place`;
+ * `visible` — права видимости (scope.js, `entryGrants`): у ведомости, карточки и объекта ветка-счета
+ * проверяется по счёту своей стороны, у журнала — по любой стороне.
  * Названия объектов и классов — в `names` ответа (текущие).
  */
 import { getClass, descendants, classesOfType } from './classes.js';
@@ -22,6 +24,7 @@ import { presentEntry } from './posting.js';
 import { round } from './expr.js';
 import { DataError } from './errors.js';
 import { parseTime, periodRange, dayStart, nextDay } from './time.js';
+import { entryCond } from './scope.js';
 
 const isEmpty = v => v === undefined || v === null || v === '';
 const LOW = -8.64e15, HIGH = 8.64e15;
@@ -85,9 +88,10 @@ function entryConds(db, q) {
  * Строки сторон проводок: проводка даёт строку дебета (сумма со знаком +) и кредита (−).
  * Колонки: side, id, time, op_id, op_cid, rule, row, storno, acc, corr, amt, q, q2,
  * slot (слот объекта при `object`), k0..kN (аналитики стороны по слотам `by`).
- * @param {object} p { accounts?: cid[], by?: слоты, analytics?: { слот: id }, object?: id, conds?: [sql, args][] }
+ * @param {object} p { accounts?: cid[], by?: слоты, analytics?: { слот: id }, object?: id, conds?: [sql, args][],
+ *                     visible?: права видимости — ветка-счета по счёту стороны }
  */
-function sideRows({ accounts = null, by = [], analytics = null, object = null, conds = [] }) {
+function sideRows({ accounts = null, by = [], analytics = null, object = null, conds = [], visible = null }) {
     const parts = [], args = [];
     for (const [side, col, other, sign] of SIDES) {
         let sql = `SELECT '${side}' side, e.id, e.time, e.op_id, e.op_cid, e.rule, e.row, e.storno,
@@ -115,6 +119,9 @@ function sideRows({ accounts = null, by = [], analytics = null, object = null, c
                     [String(slot), String(typeof ref === 'object' ? ref.id : ref)]]);
         }
         conds.forEach(add);
+        const vc = entryCond(visible, [`e.${col}`]);
+        if (vc)
+            add(vc);
         if (where.length)
             sql += ' WHERE ' + where.join(' AND ');
         parts.push(sql);
@@ -203,6 +210,9 @@ export function journal(db, q = {}) {
         conds.push(['EXISTS (SELECT 1 FROM entry_analytics f WHERE f.entry_id = e.id AND f.ref_id = ?)', [String(q.object)]]);
     if (q.effective)
         conds.push(['e.storno = 0 AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.op_id = e.op_id AND x.op_version > e.op_version)', []]);
+    const visible = entryCond(q.visible);
+    if (visible)
+        conds.push(visible);
     const where = conds.length ? 'WHERE ' + conds.map(c => c[0]).join(' AND ') : '';
     const args = conds.flatMap(c => c[1]);
     const t = db.prepare(`SELECT count(*) n, coalesce(sum(e.amount), 0) a, coalesce(sum(e.qty), 0) q, coalesce(sum(e.qty2), 0) q2
@@ -291,7 +301,7 @@ export function trialBalance(db, q = {}) {
     const nodes = accountTree(db, q.account);
     const conds = entryConds(db, q);
     conds.push(['e.time < ?', [hi(to)]]);
-    const { sql, args } = sideRows({ accounts: isEmpty(q.account) ? null : [...nodes.keys()], by, conds });
+    const { sql, args } = sideRows({ accounts: isEmpty(q.account) ? null : [...nodes.keys()], by, conds, visible: q.visible });
     const keys = by.map((_, i) => `k${i}`);
     const F = lo(from);
     const sums = (col, cond) => `coalesce(sum(CASE WHEN ${cond} THEN ${col} END), 0)`;
@@ -418,7 +428,7 @@ export function accountCard(db, q = {}) {
     const [from, to] = periodRange(q.from, q.to);
     const conds = entryConds(db, q);
     conds.push(['e.time < ?', [hi(to)]]);
-    const { sql, args } = sideRows({ accounts: descendants(db, cls.cid), analytics: q.analytics, conds });
+    const { sql, args } = sideRows({ accounts: descendants(db, cls.cid), analytics: q.analytics, conds, visible: q.visible });
     const F = lo(from);
     const o = db.prepare(`SELECT coalesce(sum(amt), 0) a, coalesce(sum(q), 0) q, coalesce(sum(q2), 0) q2 FROM (${sql}) WHERE time < ?`)
         .get(...args, F);
@@ -473,7 +483,7 @@ export function objectState(db, q = {}) {
     const cur = mustObject(db, q.id);
     const conds = entryConds(db, q);
     conds.push(['e.time < ?', [atBound(q.at)]]);
-    const { sql, args } = sideRows({ object: cur.id, accounts: isEmpty(q.account) ? null : accountCids(db, q.account), conds });
+    const { sql, args } = sideRows({ object: cur.id, accounts: isEmpty(q.account) ? null : accountCids(db, q.account), conds, visible: q.visible });
     const balances = presentBalances(objectBalances(db, sql, args, '1', []));
     return {
         object: isEmpty(q.at) ? cur : readObject(db, cur.id, { at: atBound(q.at) - 1 }),
@@ -492,7 +502,7 @@ export function objectTrajectory(db, q = {}) {
     const [from, to] = periodRange(q.from, q.to);
     const conds = entryConds(db, q);
     conds.push(['e.time < ?', [hi(to)]]);
-    const { sql, args } = sideRows({ object: cur.id, accounts: isEmpty(q.account) ? null : accountCids(db, q.account), conds });
+    const { sql, args } = sideRows({ object: cur.id, accounts: isEmpty(q.account) ? null : accountCids(db, q.account), conds, visible: q.visible });
     const F = lo(from);
     const opening = objectBalances(db, sql, args, 'time < ?', [F]);
     const start = new Map(opening.map(b => [`${b.acc}\n${b.slot}`, b]));
@@ -555,7 +565,7 @@ export function virtualMembers(db, q = {}) {
     const bound = atBound(q.at);
     const conds = entryConds(db, q);
     conds.push(['e.time < ?', [bound]]);
-    const { sql, args } = sideRows({ accounts, by: [slot], conds });
+    const { sql, args } = sideRows({ accounts, by: [slot], conds, visible: q.visible });
     const rows = db.prepare(`SELECT k0 id, sum(amt) a, sum(q) q, sum(q2) q2 FROM (${sql}) WHERE k0 IS NOT NULL
         GROUP BY k0 HAVING sum(amt) <> 0 OR abs(sum(q)) > 1e-9 OR abs(sum(q2)) > 1e-9`).all(...args);
     const at = bound === HIGH ? undefined : bound - 1;
@@ -580,11 +590,11 @@ export function virtualMembers(db, q = {}) {
     return { cid: schema.cid, label: schema.label, slot, registry: { cid: registry.cid, path: registry.path, label: registry.label }, items };
 }
 
-/** Объект — участник виртуального справочника на момент. */
-export function isVirtualMember(db, cid, id, at) {
+/** Объект — участник виртуального справочника на момент (`visible` — только по видимым проводкам). */
+export function isVirtualMember(db, cid, id, at, visible = null) {
     const { regCids, accounts, slot } = virtualSource(db, cid);
     const conds = [['e.time < ?', [atBound(at)]]];
-    const { sql, args } = sideRows({ accounts, analytics: { [slot]: id }, conds });
+    const { sql, args } = sideRows({ accounts, analytics: { [slot]: id }, conds, visible });
     const r = db.prepare(`SELECT coalesce(sum(amt), 0) a, coalesce(sum(q), 0) q, coalesce(sum(q2), 0) q2 FROM (${sql})`).get(...args);
     const obj = db.prepare('SELECT cid FROM objects WHERE id = ?').get(String(id));
     return !!obj && regCids.includes(obj.cid) && (r.a !== 0 || Math.abs(r.q) > 1e-9 || Math.abs(r.q2) > 1e-9);

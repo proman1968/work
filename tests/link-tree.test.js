@@ -1,7 +1,7 @@
 /**
  * Этап 8.1: цепочки ссылок рабочего места — link_tree, каркас предков, стиль данных.
  * Сервер строит трие LINKS + предки до корня типа; вниз и вбок — ничего.
- * Предки видны как страницы (SYSTEM), но данные учётного ядра их поддерева закрыты.
+ * Предки видны как страницы (SYSTEM), данные учётного ядра их поддерева — только по веткам ссылок.
  */
 import '../sources/reactor.js';
 import { describe, it, before, after } from 'node:test';
@@ -123,18 +123,22 @@ describe('link_tree', () => {
         assert.equal(await zar.data_access(as(USER1)), null);
     });
 
-    it('данные учётного ядра: связанный лист открыт, предок-страница и боковая ветка — закрыты', async () => {
+    it('данные учётного ядра: связанный лист открыт, предок — только по видимым веткам, боковая ветка закрыта', async () => {
         const sup = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
-        await sup.db_create({ post: { name: 'Плата' }, ...as(USER1) });
+        const own = await sup.db_create({ post: { name: 'Плата' }, ...as(USER1) });
+        assert.equal(own.unit, '/BASE/direction/sales', 'подразделение — единственное место записи');
         assert.equal((await invoke(sup, 'db_query', as(USER1))).items.length, 1);
-        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
-        await assert.rejects(invoke(fin, 'db_query', as(USER1)), /Доступ запрещён/, 'агрегат предка — с чужими ветками');
-        await assert.rejects(invoke(fin, 'db_journal', as(USER1)), /Доступ запрещён/);
         const zar = await WORK.get_item('/DATA/OPERATIONS/Финансы/Зарплата');
+        const salary = await zar.db_create({ post: { name: 'Оклад' }, ...as(ADMIN) });
+        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
+        assert.deepEqual((await invoke(fin, 'db_query', as(USER1))).items.map(o => o.id), [own.id], 'агрегат предка — без чужих веток');
+        await assert.rejects(invoke(fin, 'db_read', { id: salary.id, ...as(USER1) }), /не найден/);
+        assert.equal((await invoke(fin, 'db_journal', as(USER1))).total, 0);
         await assert.rejects(invoke(zar, 'db_query', as(USER1)), /Доступ запрещён/);
         const acc = await WORK.get_item('/DATA/REGISTER/62');
         assert.equal((await invoke(acc, 'db_journal', as(USER1))).total, 0, 'счёт по ссылке на чтение');
-        await assert.rejects(invoke(await WORK.get_item('/DATA/REGISTER'), 'db_sheet', as(USER1)), /Доступ запрещён/);
-        assert.equal((await invoke(fin, 'db_query', as(ADMIN))).items.length, 1, 'ADMIN видит всё');
+        assert.deepEqual((await invoke(await WORK.get_item('/DATA/REGISTER'), 'db_sheet', as(USER1))).rows, []);
+        await assert.rejects(invoke(fin, 'db_query', as(NOBODY)), /Доступ запрещён/);
+        assert.equal((await invoke(fin, 'db_query', as(ADMIN))).items.length, 2, 'ADMIN видит всё');
     });
 });
