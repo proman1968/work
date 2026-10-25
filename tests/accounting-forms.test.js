@@ -497,6 +497,38 @@ describe('состав виртуального справочника (form/vir
         ]);
     });
 
+    it('правка расширения: нет записи — db_create с ext_of, есть — db_update с версией; только текущий состав', async () => {
+        const calls = [];
+        const members = structuredClone(MEMBERS);
+        members.items[0].ext.version = 3;
+        const h = host(virtual, calls, { self: { fields: [] }, fetch: m => (m === 'db_schema' ? SCHEMA_V : m === 'db_members' ? members : { id: 'x' }) });
+        await h.attached();
+        assert.deepEqual(h.fields.map(f => [f.id, f.type]), [['until', 'String'], ['vip', 'Boolean']]);
+        assert.equal(h.canEdit, true);
+        assert.equal(h.startEdit({ id: '2.X' }), true);
+        assert.deepEqual(h.editing, { id: '2.X', title: 'Пётр', ext: null, data: {} });
+        h.editing.data.until = '2026-03-01';
+        h.editing.data.extra = 'не поле';
+        assert.equal(await h.saveExt(), true);
+        assert.deepEqual(calls.at(-1), { method: 'db_create', params: { ext_of: '2.X' }, post: { until: '2026-03-01' } });
+        h.startEdit({ id: '1.X' });
+        h.editing.data.until = '';
+        assert.equal(await h.saveExt(), true);
+        assert.deepEqual(calls.at(-1), { method: 'db_update', params: { id: 'e1', replace: true, version: 3 }, post: { vip: true } },
+            'очищенное поле уходит из тела');
+        h.at = '2026-01-01';
+        assert.equal(h.canEdit, false, 'состав на прошлую дату — только просмотр');
+    });
+
+    it('ошибка сохранения расширения видна, окно не закрывается', async () => {
+        const h = host(virtual, [], { self: { fields: [{ id: 'until' }] }, fetch: m => (m === 'db_members' ? MEMBERS : null) });
+        await h.reload();
+        h.startEdit({ id: '2.X' });
+        h.$item.fetch = async () => { throw new Error('until — не дата'); };
+        assert.equal(await h.saveExt(), false);
+        assert.equal(h.error, 'until — не дата');
+    });
+
     it('клик открывает реестр-источник', async () => {
         const opened = [];
         globalThis.WORK.get_item = async p => ({ path: p });

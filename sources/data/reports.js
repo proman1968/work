@@ -548,7 +548,7 @@ function virtualSource(db, ref) {
  * сальдо счёта-источника по слоту аналитики, их состояние на момент и запись-расширение.
  * @param {object} q { cid, at?, ...общие фильтры }
  * @returns {{ cid, label, slot, registry: { cid, path, label },
- *   items: Array<{ id, cid, title, body, balance, ext: { id, body } | null }> }}
+ *   items: Array<{ id, cid, title, body, balance, ext: { id, version, body } | null }> }}
  */
 export function virtualMembers(db, q = {}) {
     const { schema, registry, regCids, accounts, slot } = virtualSource(db, q.cid);
@@ -573,7 +573,7 @@ export function virtualMembers(db, q = {}) {
             title: obj.title,
             body: obj.body,
             balance: balance(r.a, r.q, r.q2),
-            ext: extObj ? { id: extObj.id, body: extObj.body } : null,
+            ext: extObj ? { id: extObj.id, version: extObj.version, body: extObj.body } : null,
         });
     }
     items.sort((a, b) => a.title.localeCompare(b.title, 'ru'));

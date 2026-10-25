@@ -128,10 +128,6 @@ ODA({is: 'oda-link-input',
         const type = this.field?.type;
         return String(this.meta?.catalog || this.field?.catalog || (typeof type === 'string' && type.startsWith('/') ? type : '')).trim();
     },
-    /** Имя объекта. fetch отдаёт запись, но WORK.__bind превращает её в элемент $file — имя в DATA. */
-    _name(item) {
-        return item?.DATA?.name ?? item?.name ?? '';
-    },
     showName(item) {
         const name = item?.name || item?.id || '';
         return item?.member === false ? name + ' · из справочника' : name;
@@ -144,7 +140,7 @@ ODA({is: 'oda-link-input',
         if (item?.create)
             return this.createAndPick(item.create, item.title);
         this.value = item?.id || '';
-        // выбрали из списка — значение уже разрешено, поле запирается сразу, не дожидаясь read_link
+        // выбрали из списка — значение уже разрешено, поле запирается сразу, не дожидаясь db_read
         this.resolved = this.value;
         this.text = item?.name || item?.id || '';
         this.variants = [];
@@ -167,9 +163,9 @@ ODA({is: 'oda-link-input',
         }
         try {
             const cat = await WORK.get_item(this.catalog);
-            // учётное ядро (db_read) — заголовок объекта; класс вне ядра — прежний read_link
-            const v2 = await cat.fetch('db_read', { id }).catch(() => null);
-            const name = v2?.id ? (v2.title || v2.body?.name || '') : this._name(await cat.fetch('read_link', { catalog: this.catalog, id }));
+            // объект учётного ядра на справочнике ссылки: заголовок или имя
+            const obj = await cat.fetch('db_read', { id });
+            const name = obj?.title || obj?.body?.name || '';
             // пока шёл запрос, значение могли сменить (очистка, выбор) — чужой ответ не применяем
             if (String(this.value ?? '').trim() !== id)
                 return;
@@ -197,25 +193,15 @@ ODA({is: 'oda-link-input',
      * Варианты учётного ядра (db_choices): без ввода — состав виртуального справочника на дату,
      * с вводом — участники и подходящие объекты реального справочника; «показать все»,
      * если вне состава ещё есть объекты; «создать», если ничего не нашлось.
-     * @returns {Promise<boolean>} false — класс не из ядра (нужен прежний поиск)
      */
     async choices(cat, q, { all = false } = {}) {
-        let res;
-        try {
-            res = await cat.fetch('db_choices', { search: q, all, limit: 20, ...(this.at ? { at: this.at } : {}) });
-        }
-        catch {
-            return false;
-        }
-        if (!res || !Array.isArray(res.items))
-            return false;
-        const out = res.items.map(i => ({ id: i.id, name: i.title || i.id, member: i.member }));
-        if (!q && !all && res.others > 0)
+        const res = await cat.fetch('db_choices', { search: q, all, limit: 20, ...(this.at ? { at: this.at } : {}) });
+        const out = (Array.isArray(res?.items) ? res.items : []).map(i => ({ id: i.id, name: i.title || i.id, member: i.member }));
+        if (!q && !all && res?.others > 0)
             out.push({ all: true, name: `Показать все (ещё ${res.others})` });
-        if (q && !out.length && res.create?.length)
+        if (q && !out.length && res?.create?.length)
             out.push({ create: res.create[0], title: q, name: `Создать «${q}» в «${res.create[0].label}»` });
         this.variants = out;
-        return true;
     },
     /** Создать объект с введённым названием и сослаться на него. */
     async createAndPick(target, title) {
@@ -234,17 +220,10 @@ ODA({is: 'oda-link-input',
         if (!this.catalog)
             return;
         try {
-            const cat = await WORK.get_item(this.catalog);
-            if (await this.choices(cat, q, opts) || !q)
-                return;
-            const found = await cat.fetch('query', { where: JSON.stringify({ name: { like: q } }), limit: 20 });
-            this.variants = (Array.isArray(found) ? found : []).map(r => ({
-                id: String(r.path || '').split('/').pop().replace(/\.data$/, ''),
-                name: this._name(r),
-            })).filter(v => v.id);
+            await this.choices(await WORK.get_item(this.catalog), q, opts);
         }
-        catch {
-            this.variants = [];
+        catch (e) {
+            this.variants = [{ error: true, name: String(e?.message || e) }];
         }
     },
 });

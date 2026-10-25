@@ -19,16 +19,16 @@
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/DATA/REGISTER/$register/$folder/$class/$account/class.js/~/handlers/pages/form/) — предок: icon, label, `METADATA.STATIC` (`label`, `icon`), `METADATA.FIELDS` проводки (`source`, `entry`, `rule`, `corr_account`, `debit`, `credit`, `qty_in`, `qty_out`, `storno`)
+- [`class.js`](/DATA/REGISTER/$register/$folder/$class/$account/class.js/~/handlers/pages/form/) — предок: icon, label, `METADATA.STATIC` (`label`, `icon`)
 - [`readme.md`](/DATA/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — базовый документ типа (этот файл)
+- `handlers/pages/form/postings` — карточка счёта (`db_card`): проводки со сторно, корр. счётом и сальдо после каждой, фильтр по аналитикам
 
 ## 5. В каком это состоянии
 
 - ✅ тип `$account` в meta журнала
 - ✅ счета плана — дерево `$account`
-- ✅ поля проводки в типе (наследуются счетами)
-- 🔧 аналитики счетов, проводки по счетам
+- ✅ аналитики счёта — собственные `METADATA.FIELDS` (`type: 'Link'`, `catalog`, `analytic: true`); проводки и остатки — учётное ядро ([`sources/data`](/sources/data/readme.md/~/handlers/pages/form/))
 
 ## 6. Дальнейшие планы
 
-- Поля аналитики / валюты в FIELDS при появлении проводок
+- Валюты и CID счетов демо-конфигурации

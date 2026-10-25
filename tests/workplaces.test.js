@@ -11,6 +11,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { closeIndexDb } from '../sources/host/index-db.js';
+import { closeDataDb } from '../sources/data/db.js';
+import { invoke } from '../sources/server/access/gateway.js';
 
 const ADMIN = 'WA000000000001', BOSS = 'WB000000000001', USER1 = 'WU000000000001', USER2 = 'WU000000000002', NOBODY = 'WN000000000001';
 let tmp, prev;
@@ -22,7 +24,7 @@ function write(rel, content) {
     fs.writeFileSync(full, content, 'utf-8');
 }
 
-const FIELDS = `METADATA: { FIELDS: [{ id: 'name', required: true }, { id: 'time', type: 'timestamp' }] }`;
+const FIELDS = `METADATA: { FIELDS: [{ id: 'name', required: true }] }`;
 
 before(async () => {
     prev = process.cwd();
@@ -45,9 +47,9 @@ before(async () => {
                         LINKS: [{ id: '/DATA/OPERATIONS', access: 'write' }] }] },
             ],
         } }`);
-    write('DATA/OPERATIONS/$class/class.js', `export default { label: 'Операции', ${FIELDS} }`);
+    write('DATA/OPERATIONS/$operation/class.js', `export default { label: 'Операции', ${FIELDS} }`);
     write('DATA/REGISTER/$register/class.js', `export default { label: 'Журнал' }`);
-    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
+    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты' }`);
     write('OTHER/$class/class.js', `export default { label: 'Чужой класс', ${FIELDS} }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
@@ -55,6 +57,7 @@ before(async () => {
 
 after(async () => {
     await new Promise(r => setTimeout(r, 300));
+    await closeDataDb();
     closeIndexDb();
     process.chdir(prev);
     try { await fsp.rm(tmp, { recursive: true, force: true }); } catch { /* windows */ }
@@ -117,28 +120,24 @@ describe('подразделения: ссылки #security', () => {
         await assert.rejects(invoke(sales, 'places', as(NOBODY)), /Доступ запрещён/);
     });
 
-    it('write-ссылка: создание объектов, read-ссылка: только чтение', async () => {
+    it('write-ссылка: создание объектов, read-ссылка: только чтение (учётное ядро)', async () => {
         const ops = await WORK.get_item('/DATA/OPERATIONS');
+        const r = await invoke(ops, 'db_create', { post: { name: 'Продажа' }, ...as(USER1) });
+        assert.equal(r.author, USER1);
+        await assert.rejects(invoke(ops, 'db_create', { post: { name: 'Чужая' }, ...as(USER2) }), /Доступ запрещён/, 'read — без записи');
+        assert.equal((await invoke(ops, 'db_query', as(USER2))).items.length, 1, 'чтение по ссылке вложенного места');
         const acc = await WORK.get_item('/DATA/REGISTER/62');
-        const r = await ops.create_object({ filename: 'op.data', post: { name: 'Продажа' }, ...as(USER1) });
-        assert.ok(r.id);
-        await assert.rejects(acc.create_object({ filename: 'p.data', post: { name: 'Проводка' }, ...as(USER1) }), /Доступ запрещён/);
-        const q = await acc.query({ ...as(USER2) });
-        assert.ok(Array.isArray(q), 'чтение своей read-ссылки разрешено');
-        const qo = await (await WORK.get_item('/OTHER')).query(as(USER1));
-        assert.ok(Array.isArray(qo), 'чтение по общей ссылке разрешено');
-        await assert.rejects((await WORK.get_item('/OTHER')).create_object({ filename: 'o.data', post: { name: 'o' }, ...as(USER1) }), /Доступ запрещён/);
+        assert.equal((await invoke(acc, 'db_journal', as(USER2))).total, 0, 'своя read-ссылка');
+        await assert.rejects(invoke(acc, 'db_journal', as(USER1)), /Доступ запрещён/, 'ссылки вышестоящего места вниз не наследуются');
     });
 
     it('смена #security через save сразу меняет права', async () => {
         const sales = await WORK.get_item('/BASE/direction/sales');
         const acc = await WORK.get_item('/DATA/REGISTER/62');
-        await assert.rejects(acc.create_object({ filename: 'x.data', post: { name: 'x' }, ...as(USER1) }), /Доступ запрещён/);
         await sales.save({ post: `{ label: 'Продажи', '#security': { USER: ['${USER1}'],
             LINKS: [{ id: '/DATA/REGISTER/62', access: 'write' }] } }`, ...as(ADMIN) });
         assert.equal(await acc.data_access(as(USER1)), 'write');
-        const r = await acc.create_object({ filename: 'x.data', post: { name: 'x' }, ...as(USER1) });
-        assert.ok(r.id);
+        assert.equal((await invoke(acc, 'db_journal', as(USER1))).total, 0);
         assert.equal((await sales.info({})).hasSecurity, true, 'остались USER и LINKS — панель есть');
     });
 });

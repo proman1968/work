@@ -36,7 +36,7 @@ export const MEMBERS = Object.freeze({
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
     work_zone: L.READ, places: L.READ,
-    data_access: L.READ, index: L.READ, link_tree: L.READ, overlay_read: L.READ,
+    data_access: L.READ, link_tree: L.READ,
     // геттеры (свойства и списки)
     size: L.READ, METADATA: L.READ, type: L.READ, type_chain: L.READ, label: L.READ, icon: L.READ,
     id: L.READ, name: L.READ, path: L.READ, short: L.READ, online: L.READ, lastModified: L.READ,
@@ -56,8 +56,6 @@ export const MEMBERS = Object.freeze({
     append_log_includes: L.WRITE, save: L.WRITE, edit: L.WRITE, edit_file: L.WRITE,
     ensure_folder: L.WRITE, create: L.WRITE, write_to_stream: L.WRITE, close_write_stream: L.WRITE,
     restore_from_history: L.WRITE, store_push_subscription: L.WRITE,
-    create_object: L.WRITE, update_object: L.WRITE, delete_object: L.WRITE, split: L.WRITE, rebuild_index: L.WRITE, overlay_write: L.WRITE,
-    read_object: L.READ, query: L.READ, read_link: L.READ,
     // учётное ядро (sources/data/api.js): точное право — внутри метода
     ...Object.fromEntries(Object.entries(DATA_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,

@@ -158,7 +158,11 @@ describe('методы учётного ядра у классов', () => {
             const h = Object.create(proto);
             const target = await item(path);
             // как по HTTP: параметры строками, права — сессии пользователя
-            h.$item = { fetch: (m, p = {}) => invoke(target, m, { ...Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)])), ...as(USER1) }) };
+            h.$item = { fetch: (m, p = {}, post) => invoke(target, m, {
+                ...Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)])),
+                ...(post !== undefined ? { post: JSON.stringify(post) } : {}),
+                ...as(USER1),
+            }) };
             return h;
         };
         const REG = 'DATA/REGISTER/$register/$folder/$class';
@@ -190,6 +194,8 @@ describe('методы учётного ядра у классов', () => {
         assert.deepEqual(c.displayRows.map(r => r.slots), [['ООО «Альфа»'], ['ООО «Альфа»'], ['ООО «Альфа»']]);
         assert.match(c.closingText, /^600,00 Дт$/);
 
+        // форма состава регистрирует окно правки (ODA) при импорте — в node достаточно заглушки
+        globalThis.ODA ??= def => def;
         const v = await form('DATA/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js', '/DATA/CATALOGS/CLIENTS');
         await v.loadSlots();
         await v.reload();
@@ -197,6 +203,18 @@ describe('методы учётного ядра у классов', () => {
         assert.deepEqual(v.slots, [{ id: 'discount', label: 'discount' }]);
         assert.deepEqual(v.displayRows.map(r => r.name), ['ООО «Альфа»']);
         assert.equal(v.registry.path, '/DATA/CATALOGS/SUBJECTS');
+        // правка расширения: создание записи, затем замена с версией
+        assert.ok(v.startEdit({ id: alpha.id }));
+        v.editing.data.discount = 7;
+        assert.equal(await v.saveExt(), true, v.error);
+        await v.reload();
+        assert.deepEqual(v.displayRows[0].slots, ['7']);
+        v.startEdit({ id: alpha.id });
+        assert.equal(v.editing.ext.version, 1);
+        v.editing.data.discount = 9;
+        assert.equal(await v.saveExt(), true, v.error);
+        await v.reload();
+        assert.deepEqual(v.displayRows[0].slots, ['9']);
     });
 
     it('закрытие периода — только ADMIN', async () => {
@@ -222,5 +240,16 @@ describe('методы учётного ядра у классов', () => {
         const { schema, errors } = await goods.db_schema(as(USER1));
         assert.deepEqual(schema.fields.map(f => f.id), ['name', 'base_unit']);
         assert.deepEqual(errors, []);
+    });
+
+    it('у класса с объектами нельзя создать дочерний класс того же типа (инвариант листа)', async () => {
+        const subjects = await item('/DATA/CATALOGS/SUBJECTS');
+        await assert.rejects(subjects.create({ id: 'LEGAL', type: '$catalog', ...as(ADMIN), post: `export default { label: 'Юр. лица', ${SEC} }` }),
+            /есть объекты/);
+        const catalogs = await item('/DATA/CATALOGS');
+        await catalogs.create({ id: 'EMPTY', type: '$catalog', ...as(ADMIN), post: `export default { label: 'Пустой', ${SEC} }` });
+        const empty = await item('/DATA/CATALOGS/EMPTY');
+        await empty.create({ id: 'SUB', type: '$catalog', ...as(ADMIN), post: `export default { label: 'Подкласс', ${SEC} }` });
+        assert.ok(await item('/DATA/CATALOGS/EMPTY/SUB'), 'у класса без объектов — можно');
     });
 });

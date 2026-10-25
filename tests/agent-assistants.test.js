@@ -16,6 +16,7 @@ import { scheduleTools } from '../sources/modules/agent/tools/schedule.js';
 import * as S from '../sources/modules/agent/scheduler.js';
 import { createEnv } from '../sources/modules/agent/index.js';
 import { closeIndexDb } from '../sources/host/index-db.js';
+import { closeDataDb } from '../sources/data/db.js';
 import { docTools, fillDocx } from '../sources/modules/agent/tools/docs.js';
 import AdmZip from 'adm-zip';
 import { memoryTools, memoryBlock } from '../sources/modules/agent/tools/memory.js';
@@ -54,6 +55,14 @@ before(async () => {
         { id: 'code', label: 'Код', required: true }, { id: 'price', label: 'Цена', type: 'Number' },
         { id: 'active', type: 'Boolean' },
     ] } }`);
+    // справочник учётного ядра — цель import_objects
+    write('DATA/$class/class.js', fs.readFileSync(path.join(ROOT, 'DATA/$class/class.js'), 'utf-8'));
+    write('DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js', fs.readFileSync(path.join(ROOT, 'DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js'), 'utf-8'));
+    write('DATA/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', '#security': { USER: ['${IVAN}', '${PETR}'] } }`);
+    write('DATA/CATALOGS/GOODS/$catalog/class.js', `export default { label: 'Товары', '#security': { USER: ['${IVAN}', '${PETR}'] }, METADATA: { FIELDS: [
+        { id: 'name', required: true }, { id: 'code', label: 'Код', required: true },
+        { id: 'price', label: 'Цена', type: 'Number' }, { id: 'active', type: 'Boolean' },
+    ] } }`);
     write('ORG/$class/USER/work.md', 'рабочее');
     write('ORG/$class/USER/tpl/letter.md', 'Уважаемый {{client.name}}! Счёт №{{number}} на {{sum}} руб.');
     write('ORG/$class/BOSS/plan.md', 'план');
@@ -63,6 +72,7 @@ before(async () => {
 
 after(async () => {
     await new Promise(r => setTimeout(r, 300));
+    await closeDataDb();
     closeIndexDb();
     process.chdir(prev);
     try { await fsp.rm(tmp, { recursive: true, force: true }); } catch { /* windows */ }
@@ -162,7 +172,7 @@ describe('отчёты и права', () => {
 });
 
 describe('документы и таблицы', () => {
-    it('read_table → import_objects: сопоставление, типы, обязательные поля, dry_run, без перезаписи', async () => {
+    it('read_table → import_objects в справочник ядра: сопоставление, типы, обязательные поля, dry_run', async () => {
         await tool('write_table').run({ path: '/ORG/Импорт/товары.csv', rows: [
             { 'Наименование': 'Молоко', 'Код': 'A1', 'Цена': '89,90', 'Активен': 'да' },
             { 'Наименование': 'Хлеб', 'Код': 'A2', 'Цена': '45', 'Активен': 'нет' },
@@ -176,19 +186,22 @@ describe('документы и таблицы', () => {
         assert.deepEqual(table.columns, ['Наименование', 'Код', 'Цена', 'Активен']);
 
         const map = { 'Наименование': 'name', 'Код': 'code', 'Цена': 'price', 'Активен': 'active' };
-        const bad = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map: { 'Наименование': 'name' } }, as(PETR)));
+        const GOODS = '/DATA/CATALOGS/GOODS';
+        const bad = JSON.parse(await tool('import_objects').run({ path: GOODS, source: src, map: { 'Наименование': 'name' } }, as(PETR)));
         assert.equal(bad.written, 0, 'без обязательного code — не пишем');
         assert.equal(bad.errors[0].missing[0], 'code');
-        const dry = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map, dry_run: true }, as(PETR)));
+        const dry = JSON.parse(await tool('import_objects').run({ path: GOODS, source: src, map: { ...map, 'Код': 'code', 'Лишнее': 'extra' }, dry_run: true }, as(PETR)));
         assert.equal(dry.valid, 3);
         assert.deepEqual(dry.sample[0], { name: 'Молоко', code: 'A1', price: 89.9, active: true });
-        const res = JSON.parse(await tool('import_objects').run({ path: '/ORG', type: 'data', source: src, map }, as(PETR)));
+        const res = JSON.parse(await tool('import_objects').run({ path: GOODS, source: src, map }, as(PETR)));
         assert.equal(res.written, 3, JSON.stringify(res.failed));
-        const files = fs.readdirSync(path.join(tmp, 'ORG/$class/DATA'), { recursive: true }).filter(f => String(f).endsWith('.data'));
-        assert.equal(files.length, 3, 'два «Хлеба» в одну мс — разные объекты');
-        const bodies = files.map(f => JSON.parse(fs.readFileSync(path.join(tmp, 'ORG/$class/DATA', f), 'utf-8')));
-        assert.deepEqual(bodies.map(b => b.code).sort(), ['A1', 'A2', 'A3']);
-        await assert.rejects(tool('import_objects').run({ path: '/ORG', type: 'nope', rows: [{}] }, as(PETR)), /нет типа данных \$nope/);
+        const goods = await WORK.get_item(GOODS);
+        const found = await goods.db_query({ order: 'time', ...as(PETR) });
+        assert.deepEqual(found.items.map(o => o.body.code).sort(), ['A1', 'A2', 'A3'], 'два «Хлеба» — разные объекты');
+        assert.equal(found.items[0].author, PETR, 'автор — пользователь задачи');
+        const extra = JSON.parse(await tool('import_objects').run({ path: GOODS, rows: [{ name: 'Соль', code: 'S1', color: 'белый' }] }, as(PETR)));
+        assert.deepEqual([extra.written, extra.unknownFields], [1, ['color']], 'неизвестное поле не пишется');
+        await assert.rejects(tool('import_objects').run({ path: '/ORG', rows: [{}] }, as(PETR)), /учётного ядра/, 'класс вне ядра');
     });
 
     it('render_doc: md с вложенными полями; docx с меткой, разрезанной Word на куски, и экранированием', async () => {

@@ -4,7 +4,8 @@
  * Метод вызывается на классе, к которому относится запрос: создание — на листе
  * справочника или операции, выборка — на классе с потомками, отчёты — на счёте
  * (или журнале), состав — на виртуальном справочнике. Права — правила этого класса:
- * чтение — `assertAccess(read)`, запись — `_assertDataWrite` (автор — субъект сессии),
+ * чтение — `assertAccess(read)` и доступ к данным (`data_access`: предок ссылки рабочего
+ * места виден как страница, но не его поддерево), запись — `_assertDataWrite` (автор — субъект сессии),
  * закрытие периода — ADMIN. Объект по `id` доступен только в поддереве класса вызова;
  * чтение через виртуальный справочник видит объекты его реестра (на них ссылаются его поля).
  *
@@ -15,6 +16,7 @@
  * Параметры HTTP приходят строками: флаги ('true'/'1'), JSON-объекты и списки
  * (`where`, `analytics`, `units`, `status`, `by`) разбираются здесь; тело — `post` или `body`.
  */
+import { DEV_MODE } from '../host/config.js';
 import { dataDb } from './db.js';
 import { refreshClasses, getClass, descendants, DEFAULT_ROOTS } from './classes.js';
 import { classSchema, checkSchema, FAMILY } from './schema.js';
@@ -58,6 +60,13 @@ export async function dataStore() {
         await refreshing;
     }
     return db;
+}
+
+/** Есть ли у класса ядра собственные неудалённые объекты (инвариант листа при создании дочернего класса). */
+export async function classHasObjects(ref) {
+    const db = await dataStore();
+    const cls = getClass(db, String(ref ?? ''));
+    return !!cls && !!db.prepare("SELECT 1 FROM objects WHERE cid = ? AND status <> 'deleted' LIMIT 1").get(cls.cid);
 }
 
 /* ---------- параметры ---------- */
@@ -171,7 +180,21 @@ function reportAccount(db, cls, ref) {
     return isEmpty(ref) ? cls.cid : inside(db, cls, ref, 'счёт');
 }
 
-const read = async (item, p) => item.assertAccess(p, item.constructor.ACCESS_LEVEL.READ);
+/**
+ * Чтение данных: видимость класса и доступ к его данным. Предок ссылки рабочего места виден
+ * как страница (каркас цепочки), но его поддерево — это и чужие ветки: данные — только при
+ * data_access (назначения или ссылки). Системная сессия, вызов без сессии, DEV, админ WORK
+ * и класс, открытый гостям, — без второй проверки.
+ */
+async function read(item, p) {
+    await item.assertAccess(p, item.constructor.ACCESS_LEVEL.READ);
+    if (!p?.session || DEV_MODE || p.session.$user === globalThis.WORK || item.DATA?.['#security']?.USER?.includes('GUEST'))
+        return;
+    if (await item._isWorkAdmin(p).catch(() => false))
+        return;
+    if ((await item.data_access(p).catch(() => null)) == null)
+        throw new Error('Доступ запрещён');
+}
 const admin = async (item, p) => item.assertAccess(p, item.constructor.ACCESS_LEVEL.ADMIN);
 
 /** Обёртка метода: права, БД, класс вызова. */

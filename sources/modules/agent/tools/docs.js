@@ -141,24 +141,6 @@ async function tableRows(file, ctx, sheet) {
     return { sheet: name, sheets: wb.SheetNames, rows };
 }
 
-/** Поля объектов типа ext в классе: схема `.data` — из METADATA.FIELDS класса,
- * точечных типов ($file/$ext) — из типа. */
-async function fieldsOf(cls, ext) {
-    await cls.init;
-    if (ext === 'data') {
-        const own = cls.DATA?.METADATA?.FIELDS;
-        if (Array.isArray(own) && own.length)
-            return own;
-        const types = await cls.data_types;
-        const type = (types || []).find(t => t.id === '$data');
-        return Array.isArray(type?.DATA?.METADATA?.FIELDS) ? type.DATA.METADATA.FIELDS : [];
-    }
-    const td = await FS.$file.typeData(ext).catch(() => null);
-    if (!td)
-        throw new Error('в ' + cls.path + ' нет типа данных $' + ext);
-    return Array.isArray(td.METADATA?.FIELDS) ? td.METADATA.FIELDS : [];
-}
-
 function coerce(value, type) {
     if (value == null || value === '')
         return undefined;
@@ -251,20 +233,18 @@ export const docTools = [
         name: 'import_objects',
         risk: 'write',
         target: args => absPath(args?.path, null),
-        description: 'Создать объекты (.data) в классе из строк таблицы: map — колонка → поле схемы (METADATA.FIELDS); значения приводятся к типам полей; обязательные поля проверяются. dry_run — только проверка без записи. До 1000 объектов за вызов.',
+        description: 'Создать объекты справочника или черновики операций (учётное ядро, db_create) из строк таблицы: map — колонка → поле схемы класса (db_schema, с наследованием); значения приводятся к типам полей; обязательные поля проверяются; колонка, сопоставленная с time, — дата операции. Неизвестные поля не пишутся (список — в unknownFields). dry_run — только проверка без записи. До 1000 объектов за вызов.',
         parameters: {
             type: 'object',
             properties: {
-                path: { type: 'string', description: 'Класс, в котором создать объекты' },
-                type: { type: 'string', description: 'Тип объектов: data' },
+                path: { type: 'string', description: 'Лист справочника или операции, в котором создать объекты' },
                 source: { type: 'string', description: 'WORK-путь таблицы (или передай rows)' },
                 sheet: { type: 'string' },
                 rows: { type: 'array', items: { type: 'object' }, description: 'Строки, если не из файла' },
                 map: { type: 'object', description: '{"Колонка таблицы": "поле"}; без map — колонки совпадают с id полей' },
-                name_field: { type: 'string', description: 'Поле, из которого берётся имя объекта (по умолчанию name)' },
                 dry_run: { type: 'boolean', description: 'Только проверить' },
             },
-            required: ['path', 'type'],
+            required: ['path'],
         },
         async run(args, ctx) {
             let cls = await getItem(args.path, ctx);
@@ -272,12 +252,14 @@ export const docTools = [
                 cls = cls.at(-1);
             if (!(cls instanceof FS.$class))
                 throw new Error('import_objects: ' + absPath(args.path, ctx) + ' — не класс');
-            const ext = String(args.type || '').replace(/^[.$]/, '').toLowerCase();
-            const fields = await fieldsOf(cls, ext);
+            const src = args.source ? await fileAt(args.source, ctx) : null;
+            const { schema } = await callAs(cls, 'db_schema', {}, ctx);
+            if (!schema?.leaf || !['catalog', 'operation'].includes(schema.family) || schema.type === '$virtual')
+                throw new Error('import_objects: ' + cls.path + ' — не лист справочника или операции учётного ядра');
+            const fields = schema.fields || [];
             const byId = new Map(fields.filter(f => f?.id).map(f => [f.id, f]));
-            let rows = args.rows;
-            if (args.source)
-                rows = (await tableRows(await fileAt(args.source, ctx), ctx, args.sheet)).rows;
+            const isOp = schema.family === 'operation';
+            const rows = src ? (await tableRows(src, ctx, args.sheet)).rows : args.rows;
             if (!Array.isArray(rows) || !rows.length)
                 throw new Error('import_objects: нет строк (source или rows)');
             if (rows.length > IMPORT_MAX)
@@ -286,19 +268,25 @@ export const docTools = [
             const unknown = new Set();
             const plan = rows.map((row, i) => {
                 const obj = {};
+                let time;
                 for (const [col, value] of Object.entries(row || {})) {
                     const id = map ? map[col] : col;
                     if (!id)
                         continue;
-                    if (!byId.has(id) && byId.size && id !== 'name')
+                    if (isOp && id === 'time' && !byId.has('time')) {
+                        time = coerce(value, 'date');
+                        continue;
+                    }
+                    if (!byId.has(id)) {
                         unknown.add(id);
-                    const v = coerce(value, byId.get(id)?.type);
+                        continue;
+                    }
+                    const v = coerce(value, byId.get(id).type);
                     if (v !== undefined)
                         obj[id] = v;
                 }
-                const missing = fields.filter(f => f.required && f.id !== 'name' && f.id !== 'time' && obj[f.id] == null).map(f => f.id);
-                const name = String(obj[args.name_field || 'name'] ?? obj.name ?? '').trim() || ext + '-' + (i + 1);
-                return { i, name, obj, missing };
+                const missing = fields.filter(f => f.required && obj[f.id] == null).map(f => f.id);
+                return { i, obj, time, missing };
             });
             const bad = plan.filter(p => p.missing.length);
             const summary = {
@@ -316,10 +304,9 @@ export const docTools = [
                 if (ctx?.signal?.aborted)
                     break;
                 try {
-                    const safe = p.name.replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 120) || ext;
-                    // объект в общей зоне DATA через метод-владелец (одна запись ленты на весь импорт — ниже)
-                    const log = await callAs(cls, 'create_object', { filename: safe + '.' + ext, type: ext, post: JSON.stringify(p.obj), ignore_save_logs: true }, ctx);
-                    written.push(log?.logFullPath || log?.path);
+                    // ядро проверяет тело по схеме целиком: ошибки всех полей строки — в одном сообщении
+                    const obj = await callAs(cls, 'db_create', { post: p.obj, ...(p.time !== undefined ? { time: p.time } : {}) }, ctx);
+                    written.push(obj.id);
                 }
                 catch (e) {
                     failed.push({ row: p.i + 1, error: String(e.message || e) });
@@ -328,7 +315,7 @@ export const docTools = [
                 }
             }
             if (written.length)
-                await callAs(cls, 'save_message', { message: 'Импорт объектов $' + ext + ': ' + written.length + (args.source ? ' из ' + absPath(args.source, ctx) : ''), includes: args.source ? [absPath(args.source, ctx)] : [] }, ctx)
+                await callAs(cls, 'save_message', { message: 'Импорт объектов: ' + written.length + (args.source ? ' из ' + absPath(args.source, ctx) : ''), includes: args.source ? [absPath(args.source, ctx)] : [] }, ctx)
                     .catch(() => { /* лента — вторично */ });
             return JSON.stringify({ ...summary, written: written.length, failed, first: written.slice(0, 5) }, null, 1);
         },

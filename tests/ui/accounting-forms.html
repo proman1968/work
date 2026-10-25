@@ -28,7 +28,7 @@ window.WORK = {
     showDialog: ODA.showDialog,
     showConfirm: ODA.showConfirm,
     get_item: async () => ({
-        fetch: async (method, params) => (method === 'read_link' ? { id: params.id, name: 'Альфа' } : null),
+        fetch: async (method, params) => (method === 'db_read' ? { id: params.id, title: 'Альфа', body: { name: 'Альфа' } } : null),
     }),
 };
 
