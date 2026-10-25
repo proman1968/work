@@ -431,10 +431,11 @@ export function previewEntries(db, p = {}) {
     }
     assertRules(db, schema);
     const { entries, errors } = computeEntries(db, schema, op);
-    return { entries: entries.map(e => present({ ...e, time: op.time, storno: 0 })), errors };
+    return { entries: entries.map(e => presentEntry({ ...e, time: op.time, storno: 0 })), errors };
 }
 
-function present(e) {
+/** Проводка для показа: amount — в рублях, аналитики сторон — { слот: id }. */
+export function presentEntry(e) {
     const side = a => Object.fromEntries(Object.entries(a).map(([slot, v]) => [slot, v.ref_id]));
     return {
         ...(e.id !== undefined ? { id: e.id, op_id: e.op_id, op_version: e.op_version, op_cid: e.op_cid } : {}),
@@ -462,7 +463,7 @@ function present(e) {
 export function operationEntries(db, id, { history = false } = {}) {
     const { op } = mustOperation(db, id);
     if (!history)
-        return op.status === 'registered' ? effectiveRows(db, op.id).map(present) : [];
+        return op.status === 'registered' ? effectiveRows(db, op.id).map(presentEntry) : [];
     return db.prepare('SELECT * FROM entries WHERE op_id = ? ORDER BY id').all(op.id)
-        .map(r => present({ ...r, analytics: analyticsOf(db, r.id) }));
+        .map(r => presentEntry({ ...r, analytics: analyticsOf(db, r.id) }));
 }

@@ -1,7 +1,15 @@
 /**
- * form/postings — проводки счёта: фильтр периода и аналитик, таблица, итоги.
- * Слоты аналитик — METADATA.FIELDS с analytic: true (выбор через oda-link-input).
+ * form/postings — карточка счёта на учётном ядре (`db_card`, sources/data/api.js):
+ * сальдо на начало, проводки периода по счёту и субсчетам со стороной, аналитиками,
+ * корр. счётом и сальдо после каждой, обороты и сальдо на конец.
+ * Слоты аналитик — из `db_schema` (поля-ссылки с analytic: true); фильтр по ним —
+ * `oda-link-input` (выбор через `db_choices` справочника слота). Названия — в `names`.
  */
+
+const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+/** Сальдо со знаком (Дт − Кт) текстом: «1 200,00 Дт», «300,00 Кт». */
+const saldo = v => (Number(v) > 0 ? money(v) + ' Дт' : Number(v) < 0 ? money(-v) + ' Кт' : '0');
+
 export default {
     imports: 'oda//button, ~/lib//editor-form',
     template: /*html*/`
@@ -29,7 +37,7 @@ export default {
             border-radius: 4px;
         }
         .error {
-            color: red;
+            color: var(--error-color, red);
             white-space: break-spaces;
         }
         .grid {
@@ -54,6 +62,9 @@ export default {
         .cell.num {
             text-align: right;
         }
+        .storno {
+            color: var(--error-color, red);
+        }
         .total {
             font-weight: bold;
         }
@@ -67,19 +78,21 @@ export default {
     <div class="bar" ~if="slots?.length">
         <oda-link-input ~for="slots" :meta="$for.item" ::value="filters[$for.item.id]"></oda-link-input>
     </div>
-    <div class="bar" ~if="hasOpening">Остаток на начало: {{opening}}</div>
+    <div class="bar opening">Сальдо на начало: {{openingText}}</div>
     <div class="grid">
         <div class="head">
             <div class="cell">Дата</div>
+            <div class="cell">Операция</div>
             <div class="cell num">Дебет</div>
             <div class="cell num">Кредит</div>
             <div class="cell num">Кол-во</div>
             <div class="cell" ~for="slots">{{$for.item.label}}</div>
             <div class="cell">Корр. счёт</div>
-            <div class="cell num">Остаток</div>
+            <div class="cell num">Сальдо</div>
         </div>
-        <div class="row" ~for="displayRows">
+        <div class="row" ~for="displayRows" ~class="{storno: $for.item.storno}">
             <div class="cell">{{$for.item.date}}</div>
+            <div class="cell">{{$for.item.op}}</div>
             <div class="cell num">{{$for.item.debit}}</div>
             <div class="cell num">{{$for.item.credit}}</div>
             <div class="cell num">{{$for.item.qty}}</div>
@@ -88,142 +101,123 @@ export default {
             <div class="cell num">{{$for.item.bal}}</div>
         </div>
         <div class="row total">
-            <div class="cell">Итого</div>
-            <div class="cell num">{{total.debit}}</div>
-            <div class="cell num">{{total.credit}}</div>
+            <div class="cell">Обороты</div>
+            <div class="cell">{{countText}}</div>
+            <div class="cell num">{{money(turnover.debit)}}</div>
+            <div class="cell num">{{money(turnover.credit)}}</div>
             <div class="cell num"></div>
             <div class="cell" ~for="slots"></div>
-            <div class="cell">Сальдо: {{saldo}}</div>
-            <div class="cell num">{{closing}}</div>
+            <div class="cell">Сальдо на конец</div>
+            <div class="cell num">{{closingText}}</div>
         </div>
     </div>
     `,
     from: '',
     to: '',
+    /** отбор по аналитикам стороны счёта: { слот: id } */
     filters: {},
+    /** слоты аналитик счёта: { id, label, catalog } — для фильтров и колонок */
     slots: [],
-    turnoverId: '',
-    rows: [],
-    names: {},
+    items: [],
+    count: 0,
+    opening: { debit: 0, credit: 0 },
+    turnover: { debit: 0, credit: 0 },
+    closing: { debit: 0, credit: 0 },
+    names: { objects: {}, classes: {}, paths: {} },
     error: '',
-    opening: 0,
-    hasOpening: false,
-    total: { debit: 0, credit: 0 },
-    get saldo() {
-        return (Number(this.total.debit) || 0) - (Number(this.total.credit) || 0);
+    money,
+    get openingText() {
+        return saldo((Number(this.opening?.debit) || 0) - (Number(this.opening?.credit) || 0));
     },
-    /** Остаток на конец периода: начало + обороты. */
-    get closing() {
-        return (Number(this.opening) || 0) + this.saldo;
+    get closingText() {
+        return saldo((Number(this.closing?.debit) || 0) - (Number(this.closing?.credit) || 0));
+    },
+    get countText() {
+        const n = (this.items || []).length;
+        return n < this.count ? `${n} из ${this.count}` : '';
+    },
+    accountText(cid) {
+        const code = String(cid || '').split('/').pop();
+        const label = this.names?.classes?.[cid];
+        return label && label !== code ? `${code} ${label}` : code;
+    },
+    /** Операция: её название, без названия (ядро отдаёт id) — класс операции. */
+    opText(i) {
+        const title = this.names?.objects?.[i.op_id];
+        return (title && title !== i.op_id ? title : '') || this.names?.classes?.[i.op_cid] || i.op_id || '';
     },
     get displayRows() {
-        let bal = Number(this.opening) || 0;
-        return (this.rows || []).map(r => {
-            bal += (Number(r.debit) || 0) - (Number(r.credit) || 0);
-            return {
-                date: r.time ? new Date(r.time).toLocaleDateString() : '',
-                debit: r.debit || '',
-                credit: r.credit || '',
-                qty: (r.qty_in || r.qty_out) || '',
-                slots: (this.slots || []).map(s => this.names[r[s.id]] || r[s.id] || ''),
-                corr: r.corr_account || '',
-                bal,
-            };
-        });
+        return (this.items || []).map(i => ({
+            date: i.time ? new Date(i.time).toLocaleDateString() : '',
+            op: this.opText(i),
+            debit: money(i.debit),
+            credit: money(i.credit),
+            qty: i.qty ? String(i.qty) : '',
+            slots: (this.slots || []).map(s => {
+                const id = i.analytics?.[s.id];
+                return id ? this.names?.objects?.[id] || id : '';
+            }),
+            corr: this.accountText(i.corr),
+            bal: saldo(i.balance),
+            storno: !!i.storno,
+        }));
     },
     async attached() {
         await this.loadSlots();
         await this.reload();
     },
-    /** Слоты аналитик счёта для фильтров и колонок + оборотный индекс для остатка. */
+    /** Слоты аналитик счёта из схемы ядра (с учётом наследования). */
     async loadSlots() {
-        const body = await this.$item?.body;
-        const fields = Array.isArray(body?.METADATA?.FIELDS) ? body.METADATA.FIELDS : [];
-        this.slots = fields.filter(f => f?.analytic);
-        const indexes = Array.isArray(body?.METADATA?.INDEXES) ? body.METADATA.INDEXES : [];
-        this.turnoverId = (indexes.find(d => d?.kind === 'turnover') || {}).id || '';
+        try {
+            const s = (await this.$item?.fetch('db_schema'))?.schema;
+            const fields = Array.isArray(s?.fields) ? s.fields : [];
+            this.slots = fields.filter(f => f?.analytic && f.type === 'link')
+                .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.target, placeholder: f.label || f.id }));
+        }
+        catch (e) {
+            this.slots = [];
+            this.error = String(e?.message || e);
+        }
     },
-    where() {
-        const where = {};
+    /** Заданные фильтры аналитик. */
+    analytics() {
+        const out = {};
         for (const [k, v] of Object.entries(this.filters || {})) {
             if (v)
-                where[k] = v;
+                out[k] = v;
         }
-        return where;
+        return out;
+    },
+    params() {
+        const p = { limit: 500 };
+        for (const key of ['from', 'to']) {
+            const s = String(this[key] ?? '').trim();
+            if (s)
+                p[key] = s;
+        }
+        const a = this.analytics();
+        if (Object.keys(a).length)
+            p.analytics = JSON.stringify(a);
+        return p;
     },
     async reload() {
-        this.rows = [];
-        this.names = {};
-        this.total = { debit: 0, credit: 0 };
-        this.opening = 0;
-        this.hasOpening = false;
+        this.items = [];
+        this.count = 0;
+        this.opening = this.turnover = this.closing = { debit: 0, credit: 0 };
         this.error = '';
         if (!this.$item)
             return;
         try {
-            const params = { order: 'asc', limit: 500 };
-            if (String(this.from || '').trim())
-                params.from = String(this.from).trim();
-            if (String(this.to || '').trim())
-                params.to = String(this.to).trim();
-            const where = this.where();
-            if (Object.keys(where).length)
-                params.where = JSON.stringify(where);
-            const found = await this.$item.fetch('query', params);
-            this.rows = (Array.isArray(found) ? found : []).map(r => r.body || {});
-            let debit = 0, credit = 0;
-            for (const r of this.rows) {
-                debit += Number(r.debit) || 0;
-                credit += Number(r.credit) || 0;
-            }
-            this.total = { debit, credit };
-            await this.loadOpening(params);
-            await this.resolveNames();
+            const res = await this.$item.fetch('db_card', this.params());
+            this.names = { objects: {}, classes: {}, paths: {}, ...(res?.names || {}) };
+            this.items = Array.isArray(res?.items) ? res.items : [];
+            this.count = Number(res?.total) || this.items.length;
+            this.opening = res?.opening || { debit: 0, credit: 0 };
+            this.turnover = res?.turnover || { debit: 0, credit: 0 };
+            this.closing = res?.closing || { debit: 0, credit: 0 };
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
-    },
-    /** Остаток на начало периода — обороты до дня `from` по тем же фильтрам. */
-    async loadOpening(params) {
-        if (!this.turnoverId || !params.from)
-            return;
-        const day = new Date(String(params.from).trim() + 'T00:00:00');
-        if (!Number.isFinite(day.getTime()))
-            return;
-        const to = new Date(day.getTime() - 86400000).toISOString().slice(0, 10);
-        try {
-            const q = { id: this.turnoverId, to };
-            if (params.where)
-                q.where = params.where;
-            const res = await this.$item.fetch('index', q);
-            const t = res?.total || {};
-            this.opening = (Number(t.debit) || 0) - (Number(t.credit) || 0);
-            this.hasOpening = true;
-        }
-        catch { /* без начального остатка */ }
-    },
-    async resolveNames() {
-        if (!this.slots?.length)
-            return;
-        const ids = new Set();
-        for (const r of this.rows || [])
-            for (const s of this.slots) {
-                const v = r[s.id];
-                if (v && !this.names[v])
-                    ids.add(v);
-            }
-        const names = {};
-        await Promise.all([...ids].map(async (id) => {
-            const s = this.slots.find(s => (this.rows || []).some(r => r[s.id] === id));
-            try {
-                const one = await this.$item.fetch('read_link', { catalog: s.catalog, id });
-                names[id] = one?.name || id;
-            }
-            catch {
-                names[id] = id;
-            }
-        }));
-        this.names = { ...this.names, ...names };
     },
 };

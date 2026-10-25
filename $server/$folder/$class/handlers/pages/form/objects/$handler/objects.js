@@ -1,17 +1,65 @@
 /**
- * form/objects — список объектов класса и редактор.
- * Слева таблица (`index table`), справа `oda-editor-form` по METADATA.FIELDS.
- * У операций с POSTINGS — колонка «Проведено», кнопки «Провести» / «Отменить».
+ * form/objects — список объектов класса и редактор на учётном ядре (методы `db_*`, sources/data/api.js).
+ * Схема — `db_schema` (поля с учётом наследования), список — `db_query` (класс с потомками,
+ * названия ссылок приходят в `names`), редактор — модальное окно `item-object-editor`;
+ * закрытие с несохранёнными изменениями спрашивает «Сохранить перед закрытием?».
+ *
+ * Операции: полоса периодов сверху (дата операции), колонки «Дата» и «Статус», в окне — дата,
+ * проводки (действующие или предпросмотр черновика) и действия по статусу:
+ * черновик — сохранить, удалить, провести (несохранённое сначала сохраняется);
+ * проведённая — сохранить (= исправление: сторно и новые проводки), отменить; отменённая — только просмотр.
+ * Справочники — весь список без полосы периодов.
+ *
+ * Период хранится здесь, а не в пакете: пакет stateless, состояние — per-point ($save).
+ * `packetsKey` хранит КЛЮЧ выбора, а не границы: у пункта «Сейчас» ключ 'now'
+ * относителен, поэтому нетронутый дефолт остаётся «сегодня», а не вчерашним днём.
  */
+
+// Дата по местному времени: ядро понимает 'YYYY-MM-DD' как местный день.
+function _day(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const _today = () => _day(new Date());
+
+/** Тип поля ядра → тип редактора (editor-form). */
+const TYPES = {
+    string: 'String', text: 'Text', number: 'Number', money: 'Number', integer: 'Number', boolean: 'Boolean',
+    date: 'Date', datetime: 'DateTime', link: 'Link', table: 'Table', enum: 'Select', file: 'String',
+};
+const STATUS = { draft: 'черновик', registered: 'проведена', cancelled: 'отменена', deleted: 'удалена' };
+const DATE_FIELD = Object.freeze({ id: 'time', label: 'Дата', type: 'Date', required: true });
+
+/** Поле схемы ядра → поле редактора: тип, справочник ссылки, варианты, колонки табличной части. */
+function formField(f) {
+    const out = { id: f.id, label: f.label || f.id, type: TYPES[f.type] || 'String' };
+    if (f.required)
+        out.required = true;
+    if (f.type === 'link')
+        out.catalog = f.target;
+    if (f.type === 'enum')
+        out.options = (f.values || f.options || []).map(v => (v && typeof v === 'object'
+            ? { value: String(v.id ?? v.value), label: String(v.label ?? v.id ?? v.value) }
+            : { value: String(v), label: String(v) }));
+    if (f.type === 'table')
+        out.columns = (f.fields || []).map(formField);
+    return out;
+}
+
 export default {
-    imports: 'oda//button, ~/lib//editor-form',
+    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form',
     template: /*html*/`
     <style>
         :host {
-            @apply --horizontal;
+            @apply --vertical;
             @apply --flex;
             gap: 8px;
             padding: 8px;
+            overflow: hidden;
+        }
+        .body {
+            @apply --horizontal;
+            flex: 1;
+            gap: 8px;
             overflow: hidden;
         }
         .list {
@@ -19,68 +67,30 @@ export default {
             flex: 1;
             overflow: hidden;
         }
-        .side {
-            @apply --vertical;
+        oda-table {
             flex: 1;
-            overflow: hidden;
-            gap: 8px;
-        }
-        .row {
-            @apply --horizontal;
-            gap: 8px;
-            padding: 4px 8px;
-            cursor: pointer;
-            align-items: center;
-        }
-        .row:hover {
-            background-color: var(--active-background, #e8e8e8);
-        }
-        .row.selected {
-            background-color: var(--active-background, #d8d8d8);
-        }
-        .head {
-            font-weight: bold;
-        }
-        .cell {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
         .bar {
             @apply --horizontal;
             gap: 8px;
         }
         .error {
-            color: red;
+            color: var(--error-color);
             white-space: break-spaces;
         }
-        oda-editor-form {
-            flex: 1;
-        }
     </style>
-    <div class="list">
-        <div class="bar">
-            <oda-button icon="icons:plus" @tap="create">Создать</oda-button>
-            <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
-        </div>
-        <div class="row head">
-            <div class="cell" ~for="columns">{{$for.item.label}}</div>
-            <div class="cell" ~if="hasPostings">Проведено</div>
-        </div>
-        <div ~for="displayRows" class="row" ~class="{selected: $for.item.id === editing?.id}" @tap="select($for.item)">
-            <div class="cell" ~for="$for.item.cells">{{$for.$for.item}}</div>
-            <div class="cell" ~if="hasPostings">{{$for.item.posted ? 'да' : ''}}</div>
-        </div>
-    </div>
-    <div class="side" ~if="editing">
-        <oda-editor-form :metadata="schema" :data="editing"></oda-editor-form>
-        <div class="error" ~if="error">{{error}}</div>
-        <div class="bar">
-            <oda-button icon="editor:save" @tap="save">Сохранить</oda-button>
-            <oda-button icon="icons:delete" @tap="removeObject">Удалить</oda-button>
-            <oda-button ~if="hasPostings" @tap="post">Провести</oda-button>
-            <oda-button ~if="hasPostings && editing?.posted" @tap="unpost">Отменить</oda-button>
+    <oda-packets no-flex mode="day" ~if="packetsStart && isOperation"
+        :start="packetsStart" :end="packetsEnd"
+        ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
+    <div class="body">
+        <div class="list">
+            <div class="bar">
+                <oda-button ~if="canCreate" icon="icons:plus" @tap="create">Создать</oda-button>
+                <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
+            </div>
+            <div class="error" ~if="error && !editorOpen">{{error}}</div>
+            <oda-table allow-focus readonly ::focused-row="focusedRow" :metadata="tableMetadata" :data-set="tableRows"
+                :$save-key="$item?.short"></oda-table>
         </div>
     </div>
     `,
@@ -88,32 +98,183 @@ export default {
     columns: [],
     schema: null,
     editing: null,
+    /** проводки редактируемой операции: действующие или предпросмотр черновика */
+    entries: [],
+    focusedRow: null,
+    /** окно редактора открыто: второй клик по таблице не открывает ещё одно */
+    editorOpen: false,
+    /** идёт сохранение/удаление/проведение: повторные действия и закрытие ждут */
+    busy: false,
+    /** снимок значений на момент открытия/успешного действия — база для isDirty */
+    _snapshot: '',
+    $observers: {
+        /** клик по строке таблицы открывает объект; пока окно открыто — второй не нужен */
+        select(focusedRow) {
+            if (focusedRow?.id && !this.editorOpen)
+                this.openEditor(focusedRow);
+        }
+    },
+    /** id объекта → название (ссылки в строках списка) */
     names: {},
     error: '',
+    /** Ключ выбранного пакета: 'now' | '*' | маска единицы | 'period:start:end'. */
+    packetsKey: { $def: 'now', $type: String, $save: true },
+    packetsStart: '',
+    packetsEnd: '',
+    /** Период, который показал пакет, — единственный источник границ для выборки операций. */
+    period: null,
+    get isOperation() {
+        return this.schema?.family === 'operation';
+    },
     get hasPostings() {
-        return Array.isArray(this.schema?.POSTINGS) && this.schema.POSTINGS.length > 0;
+        return this.isOperation && Array.isArray(this.schema?.POSTINGS) && this.schema.POSTINGS.length > 0;
     },
-    get displayRows() {
-        return (this.rows || []).map(r => ({
-            id: r.id,
-            posted: r.posted,
-            cells: (this.columns || []).map(c => this.cellText(r, c)),
-        }));
+    /** Объекты создаются только в листе справочника или операции (не в виртуальном). */
+    get canCreate() {
+        const s = this.schema;
+        return !!s?.leaf && (s.family === 'catalog' || s.family === 'operation') && s.type !== '$virtual';
     },
-    /** Поля схемы (без системного time) — для колонок, редактора и отправки. */
+    get status() {
+        return this.editing?.status || '';
+    },
+    /** Сохранять можно справочник, новый объект, черновик и проведённую операцию (исправление). */
+    get canSave() {
+        return !!this.editing && this.status !== 'cancelled' && this.status !== 'deleted';
+    },
+    get canRemove() {
+        return !!this.editing?.id && (!this.isOperation || this.status === 'draft');
+    },
+    get canRegister() {
+        return this.isOperation && !!this.editing && (!this.editing.id || this.status === 'draft');
+    },
+    get canCancel() {
+        return this.isOperation && this.status === 'registered';
+    },
+    /** Заголовок окна: класс + имя объекта; у нового имени ещё нет. */
+    get editorTitle() {
+        const title = this.schema?.title || '';
+        const field = this.fieldList().find(f => ['name', 'label', 'title'].includes(f.id));
+        const name = field ? String(this.editing?.[field.id] ?? '').trim() : '';
+        const object = name || (this.editing?.id ? '' : 'новый объект');
+        if (!title)
+            return object || 'Объект';
+        if (!object || title === object)
+            return title;
+        return title + ' · ' + object;
+    },
+    /** Колонки таблицы: у операций — дата и статус; ссылки показываются названиями (текстом). */
+    get tableMetadata() {
+        const cols = (this.columns || []).map(c => (c.type === 'Link' || c.type === 'Table' ? { ...c, type: 'String' } : c));
+        return this.isOperation ? [{ id: 'time', label: 'Дата' }, ...cols, { id: 'state', label: 'Статус' }] : cols;
+    },
+    /** Строки таблицы: названия вместо id ссылок, число строк табличной части, статус текстом; id сохраняется. */
+    get tableRows() {
+        const cols = this.columns || [];
+        return (this.rows || []).map(r => {
+            const out = { ...r };
+            for (const c of cols) {
+                const v = r[c.id];
+                if (c.type === 'Link' && v)
+                    out[c.id] = this.names?.[v] || v;
+                else if (Array.isArray(v))
+                    out[c.id] = v.length ? `${v.length} стр.` : '';
+            }
+            if (this.isOperation)
+                out.state = STATUS[r.status] || r.status || '';
+            return out;
+        });
+    },
+    /** Поля редактора: у операции первым — дата. */
     fieldList() {
-        return (this.schema?.FIELDS || []).filter(f => f?.id && f.id !== 'time');
+        return (this.schema?.FIELDS || []).filter(f => f?.id);
     },
-    /** Поля класса: FIELDS для колонок и редактора, POSTINGS для кнопок. */
+    /** Значение для снимка: пустые null/undefined/'' эквивалентны. */
+    _value(v) {
+        if (v === undefined || v === null || v === '')
+            return '';
+        if (Array.isArray(v))
+            return v.map(x => this._value(x));
+        if (typeof v === 'object') {
+            const out = {};
+            for (const k of Object.keys(v).sort())
+                out[k] = this._value(v[k]);
+            return out;
+        }
+        return v;
+    },
+    /** Отпечаток только полей редактора: служебные id/status/version в dirty не входят. */
+    fingerprint(data) {
+        const out = {};
+        for (const f of this.fieldList())
+            out[f.id] = this._value(data?.[f.id]);
+        return JSON.stringify(out);
+    },
+    /** Запомнить текущее состояние как чистое (открытие, сохранение, проведение). */
+    snapshot() {
+        this._snapshot = this.fingerprint(this.editing);
+    },
+    /** Есть ли несохранённые изменения относительно снимка. */
+    isDirty() {
+        return !!this.editing && this.fingerprint(this.editing) !== this._snapshot;
+    },
+    /** Схема класса с учётом наследования: поля для колонок и редактора, правила проводок, семейство. */
     async loadSchema() {
-        const body = await this.$item?.body;
-        const fields = Array.isArray(body?.METADATA?.FIELDS) ? body.METADATA.FIELDS : [];
-        this.columns = fields.filter(f => f?.id && f.id !== 'time');
-        this.schema = { title: body?.label || '', FIELDS: this.columns, POSTINGS: body?.METADATA?.POSTINGS };
+        const s = (await this.$item?.fetch('db_schema'))?.schema;
+        const fields = (Array.isArray(s?.fields) ? s.fields : []).filter(f => f?.id && f.id !== 'time').map(formField);
+        this.columns = fields;
+        this.schema = {
+            title: s?.label || '',
+            family: s?.family || '',
+            type: s?.type || '',
+            leaf: !!s?.leaf,
+            POSTINGS: Array.isArray(s?.postings) ? s.postings : [],
+            FIELDS: s?.family === 'operation' ? [DATE_FIELD, ...fields] : fields,
+        };
     },
     async attached() {
-        await this.loadSchema();
+        try {
+            await this.loadSchema();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+            return;
+        }
+        // у операций строки грузит пакет (событие выбора периода), справочник — весь список сразу
+        if (this.isOperation)
+            await this.loadRange();
+        else
+            await this.reload();
+    },
+    /** Границы полосы: от самой ранней операции до самой поздней, но не раньше сегодня. */
+    async loadRange() {
+        if (!this.$item)
+            return;
+        const edge = order => this.$item.fetch('db_query', { order, limit: 1 })
+            .then(r => r?.items?.[0]?.time).catch(() => undefined);
+        const [first, last] = await Promise.all([edge('time'), edge('-time')]);
+        const today = _today();
+        const lastDay = last ? _day(new Date(last)) : today;
+        this.packetsEnd = lastDay > today ? lastDay : today;
+        this.packetsStart = first ? _day(new Date(first)) : this.packetsEnd;
+    },
+    /**
+     * Смена периода в пакете — единственный повод грузить строки операций заново.
+     * Пакет шлёт selection-changed дважды: авто-событие пропа `selection`
+     * (detail — массив выбранных единиц) и явное при смене выбора (detail — объект).
+     * Учитываем только явное, иначе первая выборка ушла бы без границ.
+     */
+    async onPackets(e) {
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        if (Array.isArray(d)) return;
+        this.period = d.period || null;
         await this.reload();
+    },
+    /** Объект ядра → строка формы: поля тела, id, статус, версия; у операции — день даты. */
+    rowOf(o) {
+        const row = { ...(o?.body || {}), id: o.id, status: o.status, version: o.version };
+        if (this.isOperation)
+            row.time = o.time ? _day(new Date(o.time)) : '';
+        return row;
     },
     async reload() {
         this.rows = [];
@@ -122,123 +283,404 @@ export default {
         if (!this.$item)
             return;
         try {
-            const res = await this.$item.fetch('index', { id: 'table', limit: 200 });
-            this.rows = Array.isArray(res?.rows) ? res.rows : [];
-            await this.resolveNames();
+            const params = { limit: 200, order: '-time' };
+            if (this.isOperation && this.period) {
+                params.from = this.period.start;
+                params.to = this.period.end;
+            }
+            const res = await this.$item.fetch('db_query', params);
+            this.names = res?.names || {};
+            this.rows = (Array.isArray(res?.items) ? res.items : []).map(o => this.rowOf(o));
+            // строки пересозданы: выделение возвращаем на открытый объект по id
+            this.focusedRow = this.tableRows.find(r => r.id === this.editing?.id) ?? null;
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
-    },
-    /** id ссылок → имена (по одному запросу на значение). */
-    async resolveNames() {
-        const linkFields = (this.columns || []).filter(f => f.type === 'Link' && f.catalog);
-        if (!linkFields.length)
-            return;
-        const ids = new Set();
-        for (const r of this.rows || [])
-            for (const f of linkFields) {
-                const v = r[f.id];
-                if (v && !this.names[v])
-                    ids.add(v);
-            }
-        const names = {};
-        await Promise.all([...ids].map(async (id) => {
-            const f = linkFields.find(f => (this.rows || []).some(r => r[f.id] === id));
-            try {
-                const one = await this.$item.fetch('read_link', { catalog: f.catalog, id });
-                names[id] = one?.name || id;
-            }
-            catch {
-                names[id] = id;
-            }
-        }));
-        this.names = { ...this.names, ...names };
-    },
-    cellText(row, col) {
-        const v = row?.[col?.id];
-        if (col?.type === 'Link' && v)
-            return this.names[v] || v;
-        return v ?? '';
     },
     async select(row) {
         if (!row?.id)
             return;
         this.error = '';
         try {
-            const found = await this.$item.fetch('read_object', { id: row.id });
-            this.editing = { ...(found?.body || {}), id: row.id };
+            const found = await this.$item.fetch('db_read', { id: row.id });
+            this.editing = this.rowOf(found || { id: row.id });
+            await this.loadEntries();
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
     },
-    create() {
-        this.editing = {};
+    /** Проводки операции: проведённой — действующие, черновика — предпросмотр (ошибки правил — текстом). */
+    async loadEntries() {
+        this.entries = [];
+        const op = this.editing;
+        if (!this.hasPostings || !op?.id || op.status === 'cancelled')
+            return;
+        try {
+            if (op.status === 'registered')
+                this.entries = await this.$item.fetch('db_entries', { id: op.id }) || [];
+            else {
+                const p = await this.$item.fetch('db_preview', { id: op.id });
+                this.entries = [...(p?.entries || []), ...(p?.errors || []).map(e => ({ error: (e.field ? e.field + ': ' : '') + e.message }))];
+            }
+        }
+        catch (e) {
+            this.entries = [{ error: String(e?.message || e) }];
+        }
+    },
+    /** Строка проводки в окне: «Дт 62 — Кт 90: 500», количество — если есть. */
+    entryText(e) {
+        if (e?.error)
+            return e.error;
+        const acc = cid => String(cid || '').split('/').pop();
+        const qty = e.qty ? ` (${e.doc_qty ?? e.qty}${e.doc_unit ? ' ' + e.doc_unit : ''})` : '';
+        return `Дт ${acc(e.debit)} — Кт ${acc(e.credit)}: ${Number(e.amount || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2 })}${qty}`;
+    },
+    /** Загрузить объект и открыть окно редактора. */
+    async openEditor(row) {
+        if (!row?.id || this.editorOpen)
+            return;
+        this.editorOpen = true;
+        this.editing = null;
+        try {
+            await this.select(row);
+            if (this.editing)
+                await this.showEditor();
+        }
+        finally {
+            this.focusedRow = null;
+            this.editorOpen = false;
+        }
+    },
+    /** Новый объект — то же окно с пустыми значениями (у операции — сегодняшняя дата). */
+    async create() {
+        if (this.editorOpen)
+            return;
+        this.editorOpen = true;
+        this.editing = this.isOperation ? { time: _today() } : {};
+        this.entries = [];
         this.error = '';
+        try {
+            await this.showEditor();
+        }
+        finally {
+            this.focusedRow = null;
+            this.editorOpen = false;
+        }
     },
-    form() {
-        return this.$('oda-editor-form');
-    },
-    /** Только поля схемы: служебные id/posted/deleted на сервер не уходят. */
+    /** Только поля схемы (без даты операции — она уходит параметром): служебные на сервер не уходят. */
     postData() {
-        const data = this.form()?.result || this.editing || {};
-        const ids = new Set(this.fieldList().map(f => f.id));
-        return Object.fromEntries(Object.entries(data).filter(([k]) => ids.has(k)));
+        // editing — та же data, в которую пишет форма: снимок form.result может отставать
+        const ids = new Set(this.fieldList().map(f => f.id).filter(id => id !== DATE_FIELD.id || !this.isOperation));
+        return Object.fromEntries(Object.entries(this.editing || {}).filter(([k]) => ids.has(k)));
+    },
+    /** Параметры записи: id и версия (защита от чужой правки), дата операции. */
+    writeParams(extra = {}) {
+        const p = { ...extra };
+        if (this.editing?.id) {
+            p.id = this.editing.id;
+            if (this.editing.version)
+                p.version = this.editing.version;
+        }
+        if (this.isOperation && this.editing?.time)
+            p.time = this.editing.time;
+        return p;
+    },
+    /** Ответ записи: id, статус и версия — для следующего действия в том же окне. */
+    accept(res) {
+        if (res?.id && this.editing)
+            Object.assign(this.editing, { id: res.id, status: res.status, version: res.version });
     },
     async save() {
+        if (this.busy || !this.canSave)
+            return false;
+        this.busy = true;
         this.error = '';
         try {
             const data = this.postData();
-            if (this.editing?.id)
-                await this.$item.fetch('update_object', { id: this.editing.id }, data);
+            // снимок отправленного, а не текущего: ввод во время запроса остаётся dirty
+            const saved = this.fingerprint({ ...data, time: this.editing.time });
+            let res;
+            if (!this.editing.id)
+                res = await this.$item.fetch('db_create', this.writeParams(), data);
+            else if (this.status === 'registered')
+                res = await this.$item.fetch('db_correct', this.writeParams({ replace: true }), data);
             else
-                await this.$item.fetch('create_object', {}, data);
-            this.editing = null;
-            await this.reload();
+                res = await this.$item.fetch('db_update', this.writeParams({ replace: true }), data);
+            this.accept(res);
+            this._snapshot = saved;
+            // внутри окна список обновит его закрытие; внешняя кнопка — сразу
+            if (!this.editorOpen)
+                await this.reload();
+            return true;
         }
         catch (e) {
             this.error = String(e?.message || e);
+            return false;
+        }
+        finally {
+            this.busy = false;
+        }
+    },
+    /** Подтверждение действия; отмена диалога — false. */
+    async confirm(text, title, ok) {
+        try {
+            await WORK.showConfirm(text, {
+                TITLE: { label: title },
+                OK: ok,
+                CANCEL: { label: 'Отмена', icon: 'icons:close', colorMode: 'info' },
+            });
+            return true;
+        }
+        catch {
+            return false;
         }
     },
     /** Удалить редактируемый объект (имя не remove — не затенять Element.remove). */
     async removeObject() {
-        if (!this.editing?.id)
-            return;
-        this.error = '';
+        if (this.busy || !this.canRemove)
+            return false;
+        // подтверждение — часть операции: пока оно открыто, окно не закрыть
+        this.busy = true;
         try {
-            await this.$item.fetch('delete_object', { id: this.editing.id });
-            this.editing = null;
-            await this.reload();
+            if (!await this.confirm('Удалить объект?', 'Удаление', { label: 'Удалить', icon: 'icons:delete', colorMode: 'error' }))
+                return false;
+            this.error = '';
+            await this.$item.fetch('db_delete', this.writeParams());
+            this.snapshot();
+            if (!this.editorOpen)
+                await this.reload();
+            return true;
         }
         catch (e) {
             this.error = String(e?.message || e);
+            return false;
+        }
+        finally {
+            this.busy = false;
         }
     },
+    /** Провести: несохранённое (и новый объект) сначала сохраняется. */
     async post() {
-        if (!this.editing?.id)
-            return;
+        if (this.busy || !this.canRegister)
+            return false;
+        if ((!this.editing.id || this.isDirty()) && !await this.save())
+            return false;
+        this.busy = true;
         this.error = '';
         try {
-            await this.$item.fetch('post', { id: this.editing.id });
+            const res = await this.$item.fetch('db_register', this.writeParams());
+            this.accept(res);
             await this.select({ id: this.editing.id });
+            this.snapshot();
             await this.reload();
+            return true;
         }
         catch (e) {
             this.error = String(e?.message || e);
+            return false;
+        }
+        finally {
+            this.busy = false;
         }
     },
-    async unpost() {
-        if (!this.editing?.id)
-            return;
+    /** Отменить проведённую операцию: сторно всех проводок. */
+    async cancelOperation() {
+        if (this.busy || !this.canCancel)
+            return false;
+        this.busy = true;
         this.error = '';
         try {
-            await this.$item.fetch('unpost', { id: this.editing.id });
+            if (!await this.confirm('Отменить операцию? Её проводки будут сторнированы.', 'Отмена операции',
+                { label: 'Отменить операцию', icon: 'icons:block', colorMode: 'error' }))
+                return false;
+            const res = await this.$item.fetch('db_cancel', this.writeParams());
+            this.accept(res);
             await this.select({ id: this.editing.id });
+            this.snapshot();
             await this.reload();
+            return true;
         }
         catch (e) {
             this.error = String(e?.message || e);
+            return false;
         }
+        finally {
+            this.busy = false;
+        }
+    },
+    /** Окно редактора и единый guard закрытия: dirty/busy не пропускают close дальше. */
+    async showEditor() {
+        // «Создать» доступна до ответа схемы: иначе окно откроется с пустой формой и без имени класса
+        if (!this.schema)
+            await this.loadSchema().catch(() => {});
+        this.snapshot();
+        let unguard = () => {};
+        try {
+            const el = ODA.createComponent('item-object-editor', { owner: this });
+            unguard = this.guardClose(el);
+            await WORK.showModal(el, {
+                TITLE: { label: this.editorTitle },
+                allowClose: true,
+                width: Math.min(720, window.innerWidth || 720),
+            });
+        }
+        catch (e) {
+            if (!(WORK.CancelError && e instanceof WORK.CancelError))
+                this.error = String(e?.message || e);
+        }
+        finally {
+            unguard();
+            this.editing = null;
+            this.entries = [];
+            await this.reload();
+        }
+    },
+    /**
+     * Capture-слушатель close: событие всплывает и composed, поэтому документ видит его
+     * раньше платформенного слушателя на popover. Dirty/busy останавливаем и решаем судьбу окна.
+     */
+    guardClose(el) {
+        let pop = null;
+        let bypass = false;
+        let checking = false;
+        const onClose = (e) => {
+            const target = e.target;
+            if (!target?.contains?.(el))
+                return;
+            pop = target;
+            if (bypass)
+                return;
+            if (this.busy) {
+                e.stopImmediatePropagation();
+                return;
+            }
+            if (!this.isDirty())
+                return;
+            e.stopImmediatePropagation();
+            if (checking)
+                return;
+            checking = true;
+            // крестик закрывает по pointerdown: промпт открываем после текущего события
+            setTimeout(async () => {
+                try {
+                    if (!await this.confirmClose())
+                        return;
+                    if (!pop?.isConnected)
+                        return;
+                    bypass = true;
+                    pop.close('');
+                }
+                catch { /* не закрываем: окно остаётся открытым */ }
+                finally {
+                    checking = false;
+                }
+            }, 0);
+        };
+        document.addEventListener('close', onClose, true);
+        return () => document.removeEventListener('close', onClose, true);
+    },
+    /** Да — сохранить и закрыть; Нет — не сохранять и закрыть; Отмена/X/Esc/Enter — остаться. */
+    async confirmClose() {
+        const text = ODA.createElement('p', {
+            textContent: 'Сохранить перед закрытием?',
+            style: 'margin: var(--space-l);',
+        });
+        let result;
+        try {
+            result = await WORK.showDialog(text, {
+                TITLE: { label: 'Закрытие' },
+                allowClose: true,
+                OK: null,
+                BUTTONS: [
+                    { label: 'Да', icon: 'icons:check', colorMode: 'success' },
+                    { label: 'Нет', icon: 'icons:close', colorMode: 'error' },
+                ],
+                CANCEL: { label: 'Отмена', icon: 'icons:close', colorMode: 'info' },
+            });
+        }
+        catch {
+            return false;
+        }
+        if (result === 1)
+            return await this.save();
+        return result === 2;
     },
 };
+
+/**
+ * item-object-editor — содержимое модального окна: форма, проводки, ошибка и действия.
+ * Бизнес-методы остаются на handler'е; компонент только связывает их с разметкой.
+ */
+ODA({
+    is: 'item-object-editor',
+    imports: '/oda/components/button/button.js, /oda/components/layouts/editor-form/editor-form.js',
+    template: /*html*/`
+    <style>
+        :host {
+            @apply --vertical;
+            overflow: hidden;
+        }
+        oda-editor-form {
+            flex: 1;
+        }
+        .error {
+            color: var(--error-color);
+            white-space: break-spaces;
+            padding: 0 var(--space-m);
+        }
+        .entries {
+            @apply --vertical;
+            gap: 2px;
+            padding: 0 var(--space-m);
+            font-size: smaller;
+            opacity: .8;
+        }
+        .bar {
+            @apply --horizontal;
+            flex-wrap: wrap;
+            gap: var(--space-s);
+            padding: var(--space-m);
+        }
+    </style>
+    <oda-editor-form :metadata="owner.schema" :data="owner.editing"></oda-editor-form>
+    <div class="entries" ~if="owner.entries?.length">
+        <div class="entry" ~for="owner.entries">{{owner.entryText($for.item)}}</div>
+    </div>
+    <div class="error" ~if="owner.error">{{owner.error}}</div>
+    <div class="bar" no-flex>
+        <oda-button ~if="owner.canSave" icon="editor:save" :disabled="owner.busy" @tap="save">Сохранить</oda-button>
+        <oda-button ~if="owner.canRemove" icon="icons:delete" :disabled="owner.busy"
+            @tap="removeObject">Удалить</oda-button>
+        <oda-button ~if="owner.canRegister" :disabled="owner.busy" @tap="post">Провести</oda-button>
+        <oda-button ~if="owner.canCancel" :disabled="owner.busy" @tap="cancelOperation">Отменить</oda-button>
+        <oda-button icon="icons:close" :disabled="owner.busy" @tap="close">Закрыть</oda-button>
+    </div>
+    `,
+    owner: null,
+    attached() {
+        // после первого рендера формы: контролы могли нормализовать значения
+        this.async(() => {
+            if (this.isConnected)
+                this.owner?.snapshot?.();
+        });
+    },
+    async save() {
+        if (await this.owner.save())
+            this.close();
+    },
+    async removeObject() {
+        if (await this.owner.removeObject())
+            this.close();
+    },
+    async post() {
+        await this.owner.post();
+    },
+    async cancelOperation() {
+        await this.owner.cancelOperation();
+    },
+    close() {
+        this.parentElement?.close?.();
+    },
+});

@@ -7,6 +7,7 @@ import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
 import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-node-name.js';
 import { DEV_MODE } from '../host/config.js';
+import { markClassesDirty } from '../data/api.js';
 
 /**
  * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
@@ -28,6 +29,7 @@ function resetMergeCaches() {
         FS.$file.__type_data__ = Object.create(null);
     }
     catch { /* кэши пересоберутся лениво */ }
+    markClassesDirty();
 }
 
 /**

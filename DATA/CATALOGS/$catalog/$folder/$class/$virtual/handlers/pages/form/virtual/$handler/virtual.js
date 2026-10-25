@@ -1,7 +1,12 @@
 /**
- * form/virtual — обзор виртуального справочника: объекты реестра в состоянии счёта
- * на дату, местные расширения колонками. Клик по строке открывает объект в реестре.
+ * form/virtual — состав виртуального справочника на дату на учётном ядре (`db_members`,
+ * sources/data/api.js): объекты реестра-источника с ненулевым сальдо счёта-источника
+ * по слоту аналитики, сальдо, поля записей-расширений (OVERLAY из `db_schema`) колонками.
+ * Клик по названию открывает форму реестра-источника.
  */
+
+const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+
 export default {
     imports: 'oda//button',
     template: /*html*/`
@@ -29,7 +34,7 @@ export default {
             border-radius: 4px;
         }
         .error {
-            color: red;
+            color: var(--error-color, red);
             white-space: break-spaces;
         }
         .grid {
@@ -51,6 +56,9 @@ export default {
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        .cell.num {
+            text-align: right;
+        }
         .cell.link {
             cursor: pointer;
             text-decoration: underline;
@@ -67,10 +75,14 @@ export default {
     <div class="grid">
         <div class="head">
             <div class="cell">Название</div>
+            <div class="cell num">Сальдо</div>
+            <div class="cell num">Кол-во</div>
             <div class="cell" ~for="slots">{{$for.item.label}}</div>
         </div>
         <div class="row" ~for="displayRows">
             <div class="cell link" @tap="open($for.item)">{{$for.item.name}}</div>
+            <div class="cell num">{{$for.item.balance}}</div>
+            <div class="cell num">{{$for.item.qty}}</div>
             <div class="cell" ~for="$for.item.slots">{{$for.$for.item}}</div>
         </div>
         <div class="row total">
@@ -80,27 +92,47 @@ export default {
     `,
     at: '',
     rows: [],
+    /** поля записей-расширений (OVERLAY) — колонки */
     slots: [],
+    /** реестр-источник: { cid, path, label } */
+    registry: null,
     error: '',
+    /** Значение поля расширения текстом. */
+    slotText(v) {
+        if (v === undefined || v === null)
+            return '';
+        if (typeof v === 'boolean')
+            return v ? 'да' : 'нет';
+        if (Array.isArray(v))
+            return v.length ? `${v.length} стр.` : '';
+        return typeof v === 'object' ? '' : String(v);
+    },
     get displayRows() {
-        return (this.rows || []).map(r => ({
-            name: r.name || r.id || '',
-            slots: (this.slots || []).map(s => (r.overlay || {})[s.id] ?? ''),
-            id: r.id || '',
-        }));
+        return (this.rows || []).map(r => {
+            const b = r.balance || {};
+            const net = (Number(b.debit) || 0) - (Number(b.credit) || 0);
+            return {
+                id: r.id || '',
+                name: r.title || r.id || '',
+                balance: net > 0 ? money(net) + ' Дт' : net < 0 ? money(-net) + ' Кт' : '',
+                qty: b.qty ? String(b.qty) : '',
+                slots: (this.slots || []).map(s => this.slotText(r.ext?.body?.[s.id])),
+            };
+        });
     },
     async attached() {
         await this.loadSlots();
         await this.reload();
     },
-    /** Местные поля виртуального листа для колонок. */
+    /** Поля расширений из схемы ядра (с учётом наследования). */
     async loadSlots() {
         try {
-            const body = await this.$item?.body;
-            const over = Array.isArray(body?.OVERLAY) ? body.OVERLAY : [];
-            this.slots = over.filter(f => f?.id);
+            const s = (await this.$item?.fetch('db_schema'))?.schema;
+            this.slots = (Array.isArray(s?.overlay) ? s.overlay : []).filter(f => f?.id).map(f => ({ id: f.id, label: f.label || f.id }));
         }
-        catch { this.slots = []; }
+        catch {
+            this.slots = [];
+        }
     },
     async reload() {
         this.rows = [];
@@ -111,21 +143,21 @@ export default {
             const params = {};
             if (String(this.at || '').trim())
                 params.at = String(this.at).trim();
-            const found = await this.$item.fetch('browse', params);
-            this.rows = Array.isArray(found) ? found : [];
+            const res = await this.$item.fetch('db_members', params);
+            this.registry = res?.registry || null;
+            this.rows = Array.isArray(res?.items) ? res.items : [];
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
     },
-    /** Открыть реестр-источник на его форме. */
-    async open(row) {
+    /** Открыть форму реестра-источника. */
+    async open() {
+        const path = this.registry?.path || this.registry?.cid;
+        if (!path)
+            return;
         try {
-            const body = await this.$item?.body;
-            const registry = body?.SOURCE?.registry;
-            if (!registry)
-                return;
-            const t = await WORK.get_item(registry);
+            const t = await WORK.get_item(path);
             if (t && window.execute)
                 window.execute(t);
         }

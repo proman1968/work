@@ -13,6 +13,7 @@ import * as POLICY from './access/policy.js';
 import * as REFS from './access/refs.js';
 import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
+import { DATA_METHODS } from '../data/api.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 
@@ -2911,6 +2912,17 @@ export class $class extends $folder{
     }
 }
 $class.type_chain = Object.create(null);
+
+// методы учётного ядра (db_create, db_query, db_journal, …): уровни — в шлюзе, права — внутри
+for (const [name, m] of Object.entries(DATA_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
 
 /** Вставить model в export default, если поля ещё нет. */
 function ensureModelField(post, tag) {

@@ -14,6 +14,7 @@
  */
 import { FS } from '../index.js';
 import { audit } from './audit.js';
+import { DATA_METHODS } from '../../data/api.js';
 
 export const LEVEL = Object.freeze({ PUBLIC: 'public', USER: 'user', READ: 'read', CALL: 'call', WRITE: 'write', ADMIN: 'admin' });
 
@@ -57,6 +58,8 @@ export const MEMBERS = Object.freeze({
     restore_from_history: L.WRITE, store_push_subscription: L.WRITE,
     create_object: L.WRITE, update_object: L.WRITE, delete_object: L.WRITE, split: L.WRITE, rebuild_index: L.WRITE, overlay_write: L.WRITE,
     read_object: L.READ, query: L.READ, read_link: L.READ,
+    // учётное ядро (sources/data/api.js): точное право — внутри метода
+    ...Object.fromEntries(Object.entries(DATA_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
