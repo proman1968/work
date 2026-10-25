@@ -12,6 +12,7 @@ globalThis.ODA = (def) => { defs.push(def); return def; };
 globalThis.WORK = {};
 
 const objects = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js')).default;
+const objectsMeta = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/class.js')).default;
 const postings = (await import('../DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
 const journal = (await import('../DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js')).default;
 const sheet = (await import('../DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js')).default;
@@ -213,7 +214,7 @@ describe('форма объектов', () => {
         h.snapshot();
         assert.equal(await h.post(), true);
         const acts = calls.filter(c => !['db_query', 'db_read'].includes(c.method));
-        assert.deepEqual(acts.map(c => c.method), ['db_create', 'db_register', 'db_entries'], 'новую — создать, провести, показать проводки');
+        assert.deepEqual(acts.map(c => c.method), ['db_create', 'db_register', 'db_entries', 'db_print_list'], 'новую — создать, провести, показать проводки и формы печати');
         assert.deepEqual(acts[1].params, { id: 'n1', version: 1, time: '2026-10-14' });
         assert.equal(h.editing.status, 'registered');
 
@@ -223,6 +224,52 @@ describe('форма объектов', () => {
         assert.equal(calls.find(c => c.method === 'db_cancel')?.params.id, 'n1');
     });
 
+    it('печать: формы сохранённой операции — кнопки, форма открывается в новом окне', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            fetch: (m, p) => {
+                if (m === 'db_read')
+                    return { id: p.id, status: 'registered', version: 1, time: 0, body: {} };
+                if (m === 'db_print_list')
+                    return [{ name: 'Накладная', label: 'Товарная накладная', source: '/DATA/OPERATIONS/S' }];
+                if (m === 'db_print')
+                    return { name: p.name, html: '<p>Накладная</p>' };
+                return null;
+            },
+        });
+        h.schema = { family: 'operation', POSTINGS: [], FIELDS: [] };
+        await h.select({ id: 'o1' });
+        assert.deepEqual(h.printForms.map(f => f.name), ['Накладная']);
+        assert.deepEqual(calls.find(c => c.method === 'db_print_list').params, { id: 'o1' });
+
+        const written = [];
+        const win = { document: { open() {}, write: x => written.push(x), close() {} }, focus() {}, close() { written.push('closed'); } };
+        globalThis.window = { open: () => win };
+        try {
+            await h.printForm('Накладная');
+            assert.deepEqual(written, ['<p>Накладная</p>']);
+            assert.deepEqual(calls.find(c => c.method === 'db_print').params, { id: 'o1', name: 'Накладная' });
+            h.$item.fetch = async () => { throw new Error('нет шаблона'); };
+            await h.printForm('Накладная');
+            assert.equal(written.at(-1), 'closed', 'ошибка — окно закрыто');
+            assert.match(h.error, /нет шаблона/);
+        }
+        finally {
+            delete globalThis.window;
+        }
+        h.editing = { time: '2026-10-14' };
+        await h.loadPrints();
+        assert.deepEqual(h.printForms, [], 'у нового объекта форм нет');
+    });
+    it('форма объектов доступна листу с унаследованными полями, но не виртуальному справочнику и счёту без аналитик', async () => {
+        const ctx = (own, schema) => ({ METADATA: { FIELDS: own }, db_schema: async () => ({ schema }) });
+        assert.equal(await objectsMeta.allowUse(ctx([{ id: 'a' }], null)), true, 'собственные поля');
+        assert.equal(await objectsMeta.allowUse(ctx([], { family: 'operation', type: '$operation', fields: [{ id: 'sum' }] })), true, 'поля группы операций');
+        assert.equal(await objectsMeta.allowUse(ctx([], { family: 'catalog', type: '$registry', fields: [{ id: 'name' }] })), true);
+        assert.equal(await objectsMeta.allowUse(ctx([], { family: 'catalog', type: '$virtual', fields: [{ id: 'name' }] })), false, 'виртуальный — своя форма');
+        assert.equal(await objectsMeta.allowUse(ctx([], { family: 'account', type: '$account', fields: [] })), false);
+        assert.equal(await objectsMeta.allowUse({ METADATA: { FIELDS: [] }, db_schema: async () => { throw new Error('нет доступа'); } }), false, 'нет доступа — формы нет');
+    });
     it('список объектов только для чтения: правка ячеек идёт через редактор', () => {
         assert.match(objects.template, /<oda-table[^>]*\breadonly\b/, 'таблица списка readonly');
     });

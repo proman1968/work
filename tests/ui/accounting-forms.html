@@ -404,6 +404,7 @@ await test('objects: операция — окно с датой, проводк
         db_read: () => obj('1.X', { name: 'Продажа' }, { status, time: new Date(2026, 9, 14, 12).getTime() }),
         db_preview: () => ({ entries: [{ debit: '/R/62', credit: '/R/90', amount: 10 }], errors: [] }),
         db_entries: () => [{ debit: '/R/62', credit: '/R/90', amount: 10 }],
+        db_print_list: () => [{ name: 'invoice', label: 'Товарная накладная' }],
     }, 'operation');
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
@@ -424,6 +425,7 @@ await test('objects: операция — окно с датой, проводк
     assert(await until(() => modalButtons(modal).includes('Отменить')), 'проведённая: ' + modalButtons(modal).join('|'));
     assert(!modalButtons(modal).includes('Удалить') && !modalButtons(modal).includes('Провести'), 'проведённая: без удаления и проведения');
     assert(calls.some(c => c.method === 'db_entries'), 'действующие проводки');
+    assert(await until(() => modalButtons(modal).includes('Товарная накладная')), 'кнопка печатной формы: ' + modalButtons(modal).join('|'));
     pop.close();
     await opening;
     el.remove();

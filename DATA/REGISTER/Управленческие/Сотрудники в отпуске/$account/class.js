@@ -1,2 +1,0 @@
-export default { label: 'Сотрудники в отпуске', icon: 'carbon:wallet', '#security': { USER: ['CA4E097FF6C1D387'] },
-    METADATA: { FIELDS: [{ id: 'person', type: 'Link', catalog: '/DATA/CATALOGS/Физлица', analytic: true, label: 'Сотрудник' }] } }

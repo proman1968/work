@@ -192,7 +192,7 @@ export default {
             const s = (await this.$item?.fetch('db_schema'))?.schema;
             const fields = Array.isArray(s?.fields) ? s.fields : [];
             this.slots = fields.filter(f => f?.analytic && f.type === 'link')
-                .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.target, placeholder: f.label || f.id }));
+                .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.targetPath || f.target, placeholder: f.label || f.id }));
         }
         catch (e) {
             this.slots = [];

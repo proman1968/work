@@ -1,1 +1,1 @@
-export default { label: 'Продажи', icon: 'carbon:wallet' }
+export default { CID: 'acc.90', label: '90.00 Продажи', icon: 'carbon:chart-bar' }

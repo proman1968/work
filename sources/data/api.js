@@ -34,10 +34,12 @@ import {
     journal, trialBalance, accountCard, objectState, objectTrajectory, virtualMembers, isVirtualMember, namesOf,
 } from './reports.js';
 import { linkChoices } from './choices.js';
+import { printTemplates, renderPrint } from './print.js';
 import {
     scopeGrants, entryGrants, withoutBranches, objectCond, visibleUnits, writeContexts, resolvePlace,
 } from './scope.js';
 import { DataError } from './errors.js';
+import { buildWorkspace } from './workspace.js';
 import { normalizeSecurity, walkPlaces, trailKey } from '../server/access/workplaces.js';
 
 /** Ссылки рабочих мест — модулем по требованию: links.js тянет сервер, который сам импортирует этот модуль. */
@@ -290,6 +292,21 @@ function method(level, fn) {
     };
 }
 
+/**
+ * Схема для форм: у полей-ссылок (и в строках табличных частей, и в расширениях) к `target` (cid)
+ * добавлен `targetPath` — форма и поле-ссылка открывают класс по пути дерева (`WORK.get_item`), а не по cid.
+ */
+function withTargetPaths(db, schema) {
+    if (!schema)
+        return schema;
+    const walk = list => (list || []).map(f => ({
+        ...f,
+        ...(f.type === 'link' && f.target ? { targetPath: getClass(db, f.target)?.path ?? f.target } : {}),
+        ...(f.type === 'table' ? { fields: walk(f.fields) } : {}),
+    }));
+    return { ...schema, fields: walk(schema.fields), overlay: walk(schema.overlay) };
+}
+
 /** Пути мест подразделения (дерево ROLES его #security). */
 async function structurePlaces(path) {
     if (!path)
@@ -318,7 +335,7 @@ export const DATA_METHODS = Object.freeze({
      * Схема класса по наследованию и ошибки конфигурации: { schema, errors }.
      * Схема вложена: ответ с `type`/`path` на верхнем уровне клиент (WORK.__bind) превратил бы в элемент дерева.
      */
-    db_schema: { level: 'read', fn: method('read', ({ db, cls }) => ({ schema: classSchema(db, cls.cid), errors: checkSchema(db, cls.cid) })) },
+    db_schema: { level: 'read', fn: method('read', ({ db, cls }) => ({ schema: withTargetPaths(db, classSchema(db, cls.cid)), errors: checkSchema(db, cls.cid) })) },
 
     /**
      * Видимость и места записи пользователя в классе: { all, units, contexts }.
@@ -336,6 +353,33 @@ export const DATA_METHODS = Object.freeze({
     })) },
 
     /**
+     * Рабочее пространство пользователя в подразделении вызова и вложенных: подразделения и места
+     * с меню (ссылки мест на классы), контексты работы и описание классов меню — см. workspace.js.
+     * Вызывается на подразделении (`$structure`, `$base`); права — чтение подразделения.
+     */
+    db_workspace: { level: 'read', fn: async (item, p = {}) => {
+        const db = await dataStore();
+        const root = await classOf(db, item);
+        if (!STRUCTURE_TYPES.includes(root.type))
+            throw new DataError(`«${root.label}» — не подразделение`);
+        const units = [];
+        for (const cid of descendants(db, root.cid)) {
+            const c = getClass(db, cid);
+            if (!STRUCTURE_TYPES.includes(c.type))
+                continue;
+            let g = await globalThis.WORK.get_item(c.path);
+            if (Array.isArray(g))
+                g = g.at(-1);
+            await g?.init;
+            const roles = await g?.roles(p).catch(() => []) ?? [];
+            const admin = DEV_MODE || p.session?.$user === globalThis.WORK || roles.includes('ADMIN')
+                || await g?._isWorkAdmin(p).catch(() => false) || false;
+            units.push({ ...c, parent: c.cid === root.cid ? null : c.parent, roles, admin, security: g?.DATA?.['#security'] });
+        }
+        return buildWorkspace(db, { units, uid: item.constructor.resolveUid?.(p) ?? null });
+    } },
+
+    /**
      * Создать объект в листе: { post|body, time?, unit?, place?, ext_of?, valid_from? }.
      * Подразделение и место — из мест записи пользователя: не указаны — единственные доступные.
      */
@@ -347,8 +391,14 @@ export const DATA_METHODS = Object.freeze({
         });
     }) },
 
-    /** Объект: { id, at? } — состояние на момент. На виртуальном справочнике — объект его реестра. */
-    db_read: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => readObject(db, await visibleObject(db, cls, p.id, vis, p), { at: p.at })) },
+    /**
+     * Объект: { id, at? } — состояние на момент. На виртуальном справочнике — объект его реестра.
+     * `names` — названия объектов по его ссылкам (форма показывает ссылки без запроса на каждую).
+     */
+    db_read: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => {
+        const obj = readObject(db, await visibleObject(db, cls, p.id, vis, p), { at: p.at });
+        return obj && { ...obj, names: linkNames(db, [obj.id]) };
+    }) },
 
     /** Версии объекта: { id }. */
     db_versions: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => objectVersions(db, await visibleObject(db, cls, p.id, vis, p))) },
@@ -398,13 +448,40 @@ export const DATA_METHODS = Object.freeze({
     /** Отменить зарегистрированную: { id, version? }. */
     db_cancel: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => cancelOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
 
-    /** Проводки без записи: { id } или { post|body, time? } для листа операции. */
-    db_preview: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => (isEmpty(p.id)
-        ? previewEntries(db, { cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time })
-        : previewEntries(db, { id: ownObject(db, cls, p.id, vis) }))) },
+    /**
+     * Проводки без записи: { id } или { post|body, time? } для листа операции.
+     * `names` — названия счетов (cid) и объектов аналитик для показа.
+     */
+    db_preview: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => {
+        const res = isEmpty(p.id)
+            ? previewEntries(db, { cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time })
+            : previewEntries(db, { id: ownObject(db, cls, p.id, vis) });
+        return {
+            ...res,
+            names: namesOf(db,
+                res.entries.flatMap(e => [...Object.values(e.debit_analytics), ...Object.values(e.credit_analytics)]),
+                res.entries.flatMap(e => [e.debit, e.credit])),
+        };
+    }) },
 
     /** Проводки операции: { id, history? }. */
     db_entries: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => operationEntries(db, ownObject(db, cls, p.id, vis), { history: flag(p.history) })) },
+
+    /**
+     * Печатные формы операции: { id? } — формы класса объекта (с унаследованными), без id — класса вызова.
+     * Не операция — пустой список. Ответ: [{ name, label, source }].
+     */
+    db_print_list: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => {
+        const cid = isEmpty(p.id) ? cls.cid : readObject(db, ownObject(db, cls, p.id, vis))?.cid;
+        if (!cid || familyOf(getClass(db, cid)) !== 'operation')
+            return [];
+        return (await printTemplates(db, process.cwd(), cid)).map(({ name, label, source }) => ({ name, label, source }));
+    }) },
+
+    /** Печатная форма объекта: { id, name? } → { name, label, source, html } (name не нужен, если форма одна). */
+    db_print: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => renderPrint(db, {
+        id: ownObject(db, cls, p.id, vis), name: p.name, root: process.cwd(),
+    })) },
 
     /**
      * Журнал проводок. На счёте (журнале) — проводки его счетов, на классе операций —

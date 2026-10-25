@@ -1,1 +1,0 @@
-export default { label: 'Письма', icon: 'carbon:wallet' }

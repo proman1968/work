@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>App objects UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Список и форма объектов (Lit + Web Awesome) в настоящем браузере (tests/ui/run.mjs): поиск и сортировка
+ * на сервере (параметры db_query), переход в форму, обязательные поля, выбор ссылки, табличная часть,
+ * «Создать → Зарегистрировать», нарушения сервера по полям, проводки предпросмотром, место записи.
+ * Сервер подменён: ответы db_* — из памяти.
+ */
+const H = '/$server/$folder/$class/$structure/handlers/pages/app/$handler/';
+const { loadTheme } = await import(H + 'vendor.js');
+const { startApp } = await import(H + 'store.js');
+const { ApiError } = await import(H + 'api.js');
+await import(H + 'shell.js');
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 4000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            const v = await fn();
+            if (v)
+                return v;
+        }
+        catch { /* ещё нет */ }
+        await tick(25);
+    }
+    return null;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+const assert = (v, msg) => { if (!v) throw new Error(msg || 'assert'); };
+const eq = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+
+const cls = (path, cid, label, type, family, kids = []) => ({ cid, path, label, icon: '', type, family, leaf: !kids.length, children: kids });
+const link = (id, access, scope = null) => ({ id, access, scope });
+const WS = {
+    uid: 'u1',
+    units: [
+        { cid: 'org', path: '/BASE', label: 'Организация', icon: '', parent: null, rights: null, places: [], links: [] },
+        {
+            cid: 'unit.sales', path: '/BASE/sales', label: 'Продажи', icon: '', parent: 'org', rights: 'member', links: [],
+            places: [{ key: 'head', parent: null, label: 'Руководитель', icon: '', view: 'mine', mine: true, links: [link('/DATA/OPS', 'write', 'unit'), link('/DATA/CAT/CLIENTS', 'write')] }],
+        },
+    ],
+    contexts: [{ unit: 'unit.sales', place: 'head', kind: 'place', label: 'Продажи / Руководитель' }],
+    classes: {
+        '/DATA/OPS': cls('/DATA/OPS', 'op', 'Операции', '$operation', 'operation', ['/DATA/OPS/SALE']),
+        '/DATA/OPS/SALE': cls('/DATA/OPS/SALE', 'op.sale', 'Продажа', '$operation', 'operation'),
+        '/DATA/CAT/CLIENTS': cls('/DATA/CAT/CLIENTS', 'cat.clients', 'Клиенты', '$catalog', 'catalog'),
+    },
+};
+const SCHEMAS = {
+    '/DATA/OPS': { family: 'operation', type: '$operation', leaf: false, label: 'Операции', fields: [{ id: 'client', label: 'Клиент', type: 'link', target: 'cat.clients', targetPath: '/DATA/CAT/CLIENTS' }], postings: [] },
+    '/DATA/OPS/SALE': {
+        family: 'operation', type: '$operation', leaf: true, label: 'Продажа', autoRegister: false, postings: [{ id: 'main' }],
+        fields: [
+            { id: 'client', label: 'Клиент', type: 'link', target: 'cat.clients', targetPath: '/DATA/CAT/CLIENTS', required: true },
+            { id: 'note', label: 'Заметка', type: 'string' },
+            { id: 'lines', label: 'Товары', type: 'table', required: true, fields: [
+                { id: 'name', label: 'Товар', type: 'string', required: true },
+                { id: 'qty', label: 'Количество', type: 'number', required: true },
+                { id: 'price', label: 'Цена', type: 'money', required: true },
+            ] },
+        ],
+    },
+    '/DATA/CAT/CLIENTS': { family: 'catalog', type: '$catalog', leaf: true, label: 'Клиенты', fields: [{ id: 'name', label: 'Название', type: 'string', required: true }], postings: [] },
+};
+const day = (d, m = 10) => new Date(2026, m - 1, d).getTime();
+const objects = [
+    { id: 's1', cid: 'op.sale', status: 'registered', time: day(20), version: 2, body: { client: 'c1', lines: [{ name: 'Масло', qty: 10, price: 1234.5 }] } },
+    { id: 's2', cid: 'op.sale', status: 'draft', time: day(25), version: 1, body: { client: 'c2', note: 'для проверки', lines: [{ name: 'Бочка', qty: 2, price: 100 }] } },
+];
+const NAMES = { c1: 'ООО «Альфа»', c2: 'ИП Бета' };
+const calls = [];
+let failCreate = null;
+const api = {
+    workspace: async () => WS,
+    schema: async path => ({ schema: SCHEMAS[path], errors: [] }),
+    query: async (path, p) => { calls.push(['query', path, p]); return { items: p.search ? [] : objects, total: p.search ? 0 : objects.length, names: NAMES }; },
+    read: async (path, id) => ({ ...objects.find(o => o.id === id), title: '', names: NAMES }),
+    scope: async () => ({ all: false, units: [], contexts: [{ unit: 'unit.sales', unit_label: 'Продажи', place: 'head', place_label: 'Руководитель' }, { unit: 'unit.sales', unit_label: 'Продажи', place: 'other', place_label: 'Второе' }] }),
+    choices: async (path, p) => { calls.push(['choices', path, p]); return { target: 'cat.clients', virtual: false, items: [{ id: 'c1', title: 'ООО «Альфа»', member: true }, { id: 'c2', title: 'ИП Бета', member: true }], total: 2, others: 0, create: [] }; },
+    create: async (path, body, params) => {
+        calls.push(['create', path, body, params]);
+        if (failCreate)
+            throw failCreate;
+        const o = { id: 'n1', cid: 'op.sale', status: 'draft', time: params.time, version: 1, body };
+        objects.unshift(o);
+        return o;
+    },
+    register: async (path, id, version) => { calls.push(['register', path, id, version]); const o = objects.find(x => x.id === id); o.status = 'registered'; o.version++; return o; },
+    update: async (path, id, body, params) => { calls.push(['update', path, id, body, params]); return objects.find(x => x.id === id); },
+    preview: async (path, p) => { calls.push(['preview', path, p]); return { entries: [{ rule: 'main', debit: 'acc.62', credit: 'acc.90', amount: 250, debit_analytics: { client: 'c2' }, credit_analytics: {}, storno: false }], errors: [], names: { classes: { 'acc.62': '62 Расчёты', 'acc.90': '90 Выручка' }, objects: NAMES } }; },
+    journal: async () => ({ items: [{ rule: 'main', debit: 'acc.62', credit: 'acc.90', amount: 12345, debit_analytics: {}, credit_analytics: {}, storno: false }], names: { classes: { 'acc.62': '62 Расчёты', 'acc.90': '90 Выручка' }, objects: {} }, total: 1 }),
+    printList: async () => [{ name: 'invoice', label: 'Счёт' }],
+};
+const loc = { hash: '', get() { return this.hash; }, set(h) { this.hash = h; } };
+const mem = new Map();
+const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+
+await loadTheme();
+const app = startApp({ api, root: '/BASE', storage, location: loc });
+const el = document.createElement('work-app');
+document.body.appendChild(el);
+await app.load();
+
+const sr = n => n?.shadowRoot;
+const view = () => sr(sr(el).querySelector('work-class-view'));
+const list = () => sr(view()?.querySelector('work-object-list'));
+const form = () => sr(view()?.querySelector('work-object-form'));
+const text = n => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
+const typeInto = (input, v) => { input.value = v; input.dispatchEvent(new Event('input', { bubbles: true, composed: true })); };
+const last = name => calls.filter(c => c[0] === name).at(-1);
+const cell = (table, row, col) => sr(sr(table).querySelectorAll('tbody tr')[row].querySelectorAll('work-field')[col]);
+
+app.go({ view: 'class', path: '/DATA/OPS' });
+
+await test('список операций: колонки группы, строки с форматированием, статусы и страница на сервере', async () => {
+    assert(await until(() => list()?.querySelectorAll('tbody tr').length === 2), 'две строки');
+    const heads = [...list().querySelectorAll('thead th')].map(text).map(s => s.replace(/[↑↓]/g, '').trim());
+    eq(heads, ['Дата', 'Статус', 'Операция', 'Клиент']);
+    const rows = [...list().querySelectorAll('tbody tr')].map(r => [...r.querySelectorAll('td')].map(text));
+    eq(rows[0], ['20.10.2026 00:00', 'Зарегистрирована', 'Продажа', 'ООО «Альфа»']);
+    eq(rows[1][1], 'Черновик');
+    const q = last('query');
+    eq(q.slice(0, 2), ['query', '/DATA/OPS']);
+    eq([q[2].deep, q[2].limit, q[2].offset, q[2].order, q[2].unit], [true, 25, 0, '-time', 'unit.sales'], 'операции — по подразделению контекста');
+    assert(text(list()).includes('2 объекта'), 'число объектов');
+});
+
+await test('поиск и сортировка уходят в адрес и в db_query (отбор считает сервер)', async () => {
+    typeInto(list().querySelector('wa-input.search'), 'масло');
+    assert(await until(() => last('query')[2].search === 'масло', 3000), 'поиск в запросе');
+    assert(loc.hash.includes('q='), 'и в адресе');
+    assert(await until(() => text(list()).includes('Ничего не найдено')), 'пустой результат с подсказкой');
+    list().querySelector('wa-button[appearance=plain]').click();
+    assert(await until(() => last('query')[2].search === '' && list().querySelectorAll('tbody tr').length === 2), 'сброс');
+    list().querySelector('th[data-col=time]').click();
+    assert(await until(() => last('query')[2].order === 'time'), 'сортировка по дате');
+    assert(loc.hash.includes('order=time'));
+});
+
+await test('строка списка открывает форму: поля, ссылка названием, таблица, проводки предпросмотром', async () => {
+    list().querySelectorAll('tbody tr')[1].click();
+    assert(await until(() => form()?.querySelector('work-table-input')), 'форма открыта');
+    assert(loc.hash.includes('id=s2'));
+    await until(() => form().querySelector('table.entries'));
+    const f = [...form().querySelectorAll('.grid work-field')].find(x => x.field.label === 'Клиент');
+    eq(sr(sr(f).querySelector('work-link-input')).querySelector('wa-input').value, 'ИП Бета', 'ссылка показана названием');
+    eq([0, 1, 2].map(i => cell(form().querySelector('work-table-input'), 0, i).querySelector('wa-input').value), ['Бочка', '2', '100']);
+    assert(text(form().querySelector('header')).includes('Черновик'));
+    eq([...form().querySelectorAll('.bar wa-button')].map(text), ['К списку', 'Зарегистрировать', 'Сохранить черновик', 'Удалить', 'Печать']);
+    assert(form().querySelector('[data-action=save]').disabled, 'без правок сохранять нечего');
+    assert(text(form().querySelector('table.entries')).includes('62 Расчёты') && text(form().querySelector('table.entries')).includes('ИП Бета'), 'проводки с названиями');
+    eq(last('preview').slice(0, 3), ['preview', '/DATA/OPS/SALE', { id: 's2' }], 'сохранённый черновик — предпросмотр по id');
+});
+
+await test('зарегистрированная: «Исправить» после правки, «Отменить», проводки действующие', async () => {
+    form().querySelector('.bar wa-button').click();
+    assert(await until(() => list()), 'назад к списку');
+    list().querySelectorAll('tbody tr')[0].click();
+    assert(await until(() => form()?.querySelector('table.entries')), 'форма открыта');
+    eq([...form().querySelectorAll('.bar wa-button')].map(text), ['К списку', 'Исправить', 'Отменить операцию', 'Печать']);
+    assert(form().querySelector('[data-action=correct]').disabled, 'нет правок — исправлять нечего');
+    assert(text(form()).includes('Действующие проводки') && text(form()).includes('12 345,00'));
+    const note = [...form().querySelectorAll('.grid work-field')].find(x => x.field.label === 'Заметка');
+    assert(await until(() => sr(note)?.querySelector('wa-input')), 'поле заметки');
+    typeInto(sr(note).querySelector('wa-input'), 'правка');
+    assert(await until(() => !form().querySelector('[data-action=correct]').disabled), 'форма изменена');
+});
+
+await test('новая операция: «Создать» открывает форму, пустые обязательные поля подсвечены, запись не уходит', async () => {
+    form().querySelector('.bar wa-button').click();
+    await until(() => list());
+    list().querySelector('[data-action=new]').click();
+    assert(await until(() => form()?.querySelector('[data-action=register]')), 'форма новой операции');
+    assert(loc.hash.includes('id=new') && loc.hash.includes('cls=/DATA/OPS/SALE'), 'лист в адресе');
+    assert(await until(() => form().querySelector('select')), 'место записи выбирается: мест записи два');
+    form().querySelector('[data-action=register]').click();
+    assert(await until(() => text(form()).includes('Заполните обязательные поля')), 'сообщение');
+    const errs = [...form().querySelectorAll('.grid work-field')].map(f => sr(f).querySelector('.err')?.textContent);
+    assert(errs.includes('обязательное поле'), 'у поля «Клиент»');
+    assert(text(sr(form().querySelector('work-table-input'))).includes('добавьте хотя бы одну строку'), 'у табличной части');
+    assert(!last('create'), 'пустая форма не отправляется');
+});
+
+await test('заполнение и «Зарегистрировать»: ссылка из списка, строка таблицы, тело и место записи, переход на созданную', async () => {
+    const f = [...form().querySelectorAll('.grid work-field')].find(x => x.field.label === 'Клиент');
+    const li = sr(f).querySelector('work-link-input');
+    const box = sr(li).querySelector('wa-input');
+    box.dispatchEvent(new Event('focus'));
+    const item = await until(() => [...sr(li).querySelectorAll('.item')].find(b => text(b).includes('Альфа')));
+    assert(item, 'варианты ссылки');
+    assert(last('choices')[1] === '/DATA/CAT/CLIENTS' && last('choices')[2].at, 'справочник и дата операции для состава');
+    item.click();
+    assert(await until(() => sr(li).querySelector('wa-input').value === 'ООО «Альфа»'), 'выбрано');
+    const table = form().querySelector('work-table-input');
+    [...sr(table).querySelectorAll('wa-button')].find(b => text(b).includes('Добавить')).click();
+    assert(await until(() => sr(table).querySelectorAll('tbody tr work-field').length === 3));
+    typeInto(cell(table, 0, 0).querySelector('wa-input'), 'Бочка 200 л');
+    typeInto(cell(table, 0, 1).querySelector('wa-input'), '5');
+    typeInto(cell(table, 0, 2).querySelector('wa-input'), '100,5');
+    await tick(100);
+    assert(text(sr(table)).includes('Итого') && text(sr(table)).includes('100,50'), 'итоги табличной части');
+    assert(await until(() => last('preview')[2].body?.lines?.[0]?.qty === 5, 3000), 'предпросмотр по несохранённому телу');
+    form().querySelector('[data-action=register]').click();
+    assert(await until(() => last('register')), 'зарегистрировано');
+    const [, path, body, params] = last('create');
+    eq(path, '/DATA/OPS/SALE');
+    eq(body, { client: 'c1', lines: [{ name: 'Бочка 200 л', qty: 5, price: 100.5 }] });
+    eq([params.unit, params.place, typeof params.time], ['unit.sales', 'head', 'number'], 'место записи из контекста');
+    eq(last('register').slice(1), ['/DATA/OPS/SALE', 'n1', 1]);
+    assert(await until(() => loc.hash.includes('id=n1') && !loc.hash.includes('cls=')), 'открыта созданная операция');
+    assert(await until(() => text(form()?.querySelector('header') ?? '').includes('Зарегистрирована')), 'статус');
+    assert(await until(() => text(form()).includes('Операция зарегистрирована')), 'сообщение об успехе переживает пересоздание формы');
+});
+
+await test('нарушения сервера по полям показываются у полей и строк таблицы', async () => {
+    form().querySelector('.bar wa-button').click();
+    await until(() => list());
+    list().querySelector('[data-action=new]').click();
+    await until(() => form()?.querySelector('[data-action=save]'));
+    failCreate = new ApiError('DataError: Продажа: данные не прошли проверку: lines[1].qty — «x» — не число; note — слишком длинная', 400);
+    const f = [...form().querySelectorAll('.grid work-field')];
+    const li = sr(f.find(x => x.field.label === 'Клиент')).querySelector('work-link-input');
+    sr(li).querySelector('wa-input').dispatchEvent(new Event('focus'));
+    (await until(() => sr(li).querySelector('.item'))).click();
+    const table = form().querySelector('work-table-input');
+    [...sr(table).querySelectorAll('wa-button')].find(b => text(b).includes('Добавить')).click();
+    await until(() => sr(table).querySelectorAll('tbody tr work-field').length === 3);
+    typeInto(cell(table, 0, 0).querySelector('wa-input'), 'Т');
+    typeInto(cell(table, 0, 1).querySelector('wa-input'), '1');
+    typeInto(cell(table, 0, 2).querySelector('wa-input'), '1');
+    await tick(80);
+    form().querySelector('[data-action=save]').click();
+    assert(await until(() => cell(table, 0, 1).querySelector('.err')?.textContent === '«x» — не число'), 'ошибка у ячейки строки');
+    assert(f.some(x => sr(x).querySelector('.err')?.textContent === 'слишком длинная'), 'ошибка у поля');
+    assert(text(form()).includes('Исправьте отмеченные поля'), 'общее сообщение');
+    failCreate = null;
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

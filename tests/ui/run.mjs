@@ -112,6 +112,7 @@ for (const file of pages) {
 const SMOKE = [
     ['проводник', '/~/handlers//explorer/index.html', 'document.querySelector("body *") && document.body.style.visibility !== "hidden"'],
     ['форма класса BASE', '/BASE/~/handlers//form/index.html', '!!document.querySelector("pages-form")'],
+    ['рабочее место BASE', '/BASE/~/handlers//app/index.html', '(w => w && w.shadowRoot.querySelector("work-menu"))(document.querySelector("work-app"))'],
 ].filter(([name]) => name.includes(filter) || !filter || pages.length === 0);
 if (!filter || SMOKE.length) {
     console.log('▶ smoke');

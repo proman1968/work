@@ -106,8 +106,11 @@ describe('методы учётного ядра у классов', () => {
         const cls = await item('/DATA/OPERATIONS/SALE');
         const preview = await cls.db_preview({ post: { client: alpha.id, sum: 10 }, ...as(USER1) });
         assert.deepEqual(preview.entries.map(e => [e.debit, e.credit, e.amount]), [['/DATA/REGISTER/62', '/DATA/REGISTER/90', 10]]);
+        assert.equal(preview.names.classes['/DATA/REGISTER/62'], 'Расчёты с покупателями', 'предпросмотр называет счета');
+        assert.equal(preview.names.objects[alpha.id], 'ООО «Альфа»', 'и объекты аналитик');
         sale = await invoke(cls, 'db_create', { time: d('02-01'), post: { client: alpha.id, sum: 500 }, ...as(USER1) });
         assert.equal(sale.status, 'draft');
+        assert.deepEqual((await cls.db_read({ id: sale.id, ...as(USER1) })).names, { [alpha.id]: 'ООО «Альфа»' }, 'чтение называет объекты ссылок');
         const reg = await invoke(cls, 'db_register', { id: sale.id, version: String(sale.version), ...as(USER1) });
         assert.equal(reg.status, 'registered');
         await invoke(cls, 'db_correct', { id: sale.id, post: { sum: 600 }, ...as(USER1) });

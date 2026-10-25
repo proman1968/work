@@ -70,7 +70,8 @@ ODA({is: 'oda-link-input',
         <input :value="text" :readonly="locked" :placeholder="meta?.placeholder || field?.placeholder || 'поиск…'" :disabled="inputDisabled" @input="onText($this.value)" @focus="onFocus()">
         <button class="pick" ~if="value && !readonly && !isDisabled" @tap="value = ''" title="Очистить">×</button>
     </div>
-    <div class="variants" ~if="variants?.length">
+    <!-- mousedown.prevent: фокус остаётся в поле, иначе ячейка таблицы теряет его до клика и отбрасывает выбор -->
+    <div class="variants" ~if="variants?.length" @mousedown.prevent="true">
         <div class="variant" ~for="variants" :other="$for.item.member === false" :action="!!($for.item.all || $for.item.create)"
             :error="!!$for.item.error" @tap="pick($for.item)">{{showName($for.item)}}</div>
     </div>

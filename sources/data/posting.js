@@ -16,7 +16,9 @@
  *
  * Функции выражений: norm(вид, объект?, поУмолчанию?) — норматив на дату
  * операции (остаток количества счёта нормативов, см. normValue);
- * coef(номенклатура, единица) — коэффициент единицы к базовой.
+ * coef(номенклатура, единица) — коэффициент единицы к базовой;
+ * unit_cost(счёт, номенклатура, склад?, партия?, поУмолчанию?) — скользящая средняя
+ * стоимость базовой единицы остатка на дату операции (см. unitCost).
  *
  * Автоаналитики проводки — колонки: операция, её класс, автор действия,
  * рабочее место и подразделение операции.
@@ -187,6 +189,58 @@ export function unitCoef(db, item, unit, at) {
     return k;
 }
 
+/* ---------- себестоимость ---------- */
+
+const COST_SLOTS = ['item', 'storage', 'batch'];
+
+/**
+ * Скользящая средняя: стоимость единицы остатка счёта (в базовой единице) на момент операции —
+ * сальдо суммы, делённое на сальдо количества. Остаток отбирается по аналитикам счёта
+ * `item`, `storage`, `batch` (пустые не учитываются); проводки самой операции не берутся,
+ * поэтому исправление считает цену заново. Остатка нет: ошибка, а с `fallback` — он.
+ * @param {object} p { account, item, storage?, batch?, at, exclude?, fallback? }
+ */
+export function unitCost(db, { account, item, storage, batch, at, exclude = '', fallback } = {}) {
+    const cls = getClass(db, account);
+    if (!cls || cls.type !== '$account')
+        throw new DataError(`unit_cost(): счёт ${account} не найден`);
+    const slots = analyticSlots(classSchema(db, cls.cid)).map(f => f.id);
+    const want = { item, storage, batch };
+    const cond = [], args = [];
+    for (const slot of COST_SLOTS) {
+        const v = want[slot];
+        if (isEmpty(v))
+            continue;
+        if (!slots.includes(slot))
+            throw new DataError(`unit_cost(): у счёта ${cls.label} нет аналитики «${slot}»`);
+        cond.push(slot);
+        args.push(slot, String(typeof v === 'object' ? v.id : v));
+    }
+    if (!cond.includes('item'))
+        throw new DataError('unit_cost(): не задана номенклатура');
+    const moment = parseTime(at ?? Date.now(), 'дата себестоимости');
+    const accs = descendants(db, cls.cid);
+    const marks = accs.map(() => '?').join(',');
+    let amount = 0, qty = 0, n = 0;
+    for (const [side, col, sign] of [['D', 'debit_cid', 1], ['C', 'credit_cid', -1]]) {
+        const exists = cond.map(() => 'EXISTS (SELECT 1 FROM entry_analytics a WHERE a.entry_id = e.id AND a.side = ? AND a.slot = ? AND a.ref_id = ?)').join(' AND ');
+        const params = [];
+        for (let i = 0; i < args.length; i += 2)
+            params.push(side, args[i], args[i + 1]);
+        const r = db.prepare(`SELECT count(*) n, coalesce(sum(e.amount), 0) a, coalesce(sum(e.qty), 0) q FROM entries e
+            WHERE e.${col} IN (${marks}) AND e.time <= ? AND e.op_id <> ? AND ${exists}`).get(...accs, moment, String(exclude), ...params);
+        n += r.n;
+        amount += sign * r.a;
+        qty += sign * r.q;
+    }
+    if (n === 0 || Math.abs(qty) < 1e-9) {
+        if (fallback !== undefined)
+            return fallback;
+        throw new DataError(`unit_cost(): остатка нет — себестоимость на ${localDay(moment)} не определить (${cls.label})`);
+    }
+    return round(amount / 100 / qty, 6);
+}
+
 /* ---------- расчёт проводок ---------- */
 
 const rulesCache = new WeakMap();
@@ -245,6 +299,9 @@ function computeEntries(db, schema, op) {
     const fns = {
         norm: (...a) => normValue(db, a[0], a[1], op.time, { exclude: op.id, ...(a.length >= 3 ? { fallback: a[2] } : {}) }),
         coef: (item, unit) => unitCoef(db, item, unit, op.time),
+        unit_cost: (account, item, storage, batch, ...rest) => unitCost(db, {
+            account, item, storage, batch, at: op.time, exclude: op.id, ...(rest.length ? { fallback: rest[0] } : {}),
+        }),
     };
     for (const rule of schema.postings) {
         const rows = rule.each ? (Array.isArray(op.body[rule.each]) ? op.body[rule.each] : []) : [null];

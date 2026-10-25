@@ -28,7 +28,7 @@ export const FIELD_TYPES = Object.freeze(['string', 'text', 'number', 'money', '
 const TYPE_ALIASES = { timestamp: 'datetime', time: 'datetime', bool: 'boolean', int: 'integer', ref: 'link', array: 'table' };
 
 /** Функции, которые ядро проведения передаёт в выражения правил. */
-export const RULE_FUNCTIONS = Object.freeze(['norm', 'coef']);
+export const RULE_FUNCTIONS = Object.freeze(['norm', 'coef', 'unit_cost']);
 
 /** Нормализованный тип поля ('' — неизвестный). */
 export function fieldType(raw) {

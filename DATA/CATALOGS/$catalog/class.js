@@ -1,4 +1,5 @@
 export default {
+    CID: 'catalogs',
     async TestFunc(s, d = {
         d: 44
       }) {
@@ -10,8 +11,9 @@ export default {
     },
     METADATA: {
         FIELDS: [{
-            id: "Наименование",
-            type: "String"
+            id: "name",
+            label: "Название",
+            required: true
         }]
     },
     icon: "carbon:catalog",

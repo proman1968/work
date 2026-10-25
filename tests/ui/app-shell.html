@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>App shell UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Оболочка рабочего места (Lit + Web Awesome) в настоящем браузере (tests/ui/run.mjs): шапка и
+ * навигатор по подразделениям и местам, меню места, экраны «главная» и «класс», смена контекста,
+ * адрес, тема. Сервер подменён: ответы db_workspace/db_schema/db_query — из фикстуры.
+ */
+const H = '/$server/$folder/$class/$structure/handlers/pages/app/$handler/';
+const { loadTheme } = await import(H + 'vendor.js');
+const { startApp } = await import(H + 'store.js');
+await import(H + 'shell.js');
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 4000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            const v = await fn();
+            if (v)
+                return v;
+        }
+        catch { /* ещё нет */ }
+        await tick(25);
+    }
+    return null;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+function eq(a, b, msg) {
+    if (JSON.stringify(a) !== JSON.stringify(b))
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+}
+
+const cls = (path, label, type, family, kids = [], extra = {}) => ({ cid: path, path, label, icon: '', type, family, leaf: !kids.length, children: kids, ...extra });
+const link = (id, access, scope = null) => ({ id, access, scope });
+const WS = {
+    uid: 'u1',
+    units: [
+        { cid: 'org', path: '/BASE', label: 'ООО «Тест»', icon: '', parent: null, rights: null, places: [], links: [] },
+        {
+            cid: 'unit.sales', path: '/BASE/sales', label: 'Продажи', icon: '', parent: 'org', rights: 'member', links: [link('/DATA/CAT/ITEMS', 'read')],
+            places: [
+                { key: 'head', parent: null, label: 'Руководитель', icon: '', view: 'mine', mine: true, links: [link('/DATA/OPS', 'write', 'unit'), link('/DATA/CAT/ITEMS', 'write')] },
+                { key: 'head/manager', parent: 'head', label: 'Менеджер', icon: '', view: 'below', mine: false, links: [link('/DATA/CAT/ITEMS', 'read')] },
+            ],
+        },
+        {
+            cid: 'unit.buy', path: '/BASE/buy', label: 'Закупки', icon: '', parent: 'org', rights: 'member', links: [],
+            places: [{ key: 'buyer', parent: null, label: 'Закупщик', icon: '', view: 'mine', mine: true, links: [link('/DATA/CAT/ITEMS', 'read')] }],
+        },
+    ],
+    contexts: [
+        { unit: 'unit.sales', place: 'head', kind: 'place', label: 'Продажи / Руководитель' },
+        { unit: 'unit.buy', place: 'buyer', kind: 'place', label: 'Закупки / Закупщик' },
+    ],
+    classes: {
+        '/DATA/OPS': cls('/DATA/OPS', 'Операции', '$operation', 'operation', ['/DATA/OPS/SALE']),
+        '/DATA/OPS/SALE': cls('/DATA/OPS/SALE', 'Продажа', '$operation', 'operation'),
+        '/DATA/CAT/ITEMS': cls('/DATA/CAT/ITEMS', 'Номенклатура', '$catalog', 'catalog'),
+    },
+};
+const calls = [];
+const api = {
+    workspace: async root => { calls.push(['workspace', root]); return WS; },
+    schema: async path => {
+        calls.push(['schema', path]);
+        return { schema: { family: 'catalog', type: '$catalog', leaf: true, label: 'Класс', fields: [{ id: 'name', label: 'Наименование', type: 'string', required: true }, { id: 'price', label: 'Цена', type: 'money' }], postings: [] }, errors: [] };
+    },
+    query: async (path, p) => { calls.push(['query', path, p]); return { items: [], total: 7 }; },
+};
+const loc = { hash: '', get() { return this.hash; }, set(h) { this.hash = h; } };
+const mem = new Map();
+const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+
+await loadTheme();
+const app = startApp({ api, root: '/BASE', storage, location: loc });
+const el = document.createElement('work-app');
+document.body.appendChild(el);
+await app.load();
+
+const root = () => el.shadowRoot;
+const deep = (host, sel) => (host?.shadowRoot ?? host)?.querySelector(sel);
+const nav = () => deep(root(), 'work-org-nav');
+const menu = () => deep(root(), 'work-menu');
+const text = node => (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
+const treeItems = host => [...host.shadowRoot.querySelectorAll('wa-tree-item')];
+/** Щелчок мышью по элементу (wa-tree принимает click только после mousedown на том же элементе). */
+const press = node => {
+    for (const type of ['mousedown', 'mouseup', 'click'])
+        node.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, button: 0 }));
+};
+
+await until(() => menu() && treeItems(menu()).length);
+
+await test('оболочка: Web Awesome подключён, шапка, навигатор и крошки', async () => {
+    assert(customElements.get('wa-page') && customElements.get('wa-tree'), 'компоненты Web Awesome определены');
+    assert(document.documentElement.classList.contains('wa-brand-indigo'), 'тема применена');
+    assert(deep(root(), 'wa-page'), 'wa-page');
+    eq(text(deep(nav(), '#trigger')), 'Продажи / Руководитель');
+    eq([...root().querySelectorAll('wa-breadcrumb-item')].map(text), ['ООО «Тест»', 'Продажи', 'Руководитель']);
+    eq(calls[0], ['workspace', '/BASE']);
+});
+
+await test('меню места: разделы и ссылки с поддеревом, право «чтение» помечено', async () => {
+    const heads = [...menu().shadowRoot.querySelectorAll('h3')].map(text);
+    eq(heads, ['Операции', 'Справочники']);
+    const items = treeItems(menu());
+    eq(items.map(i => i.dataset.path), ['/DATA/OPS/SALE', '/DATA/CAT/ITEMS'], 'единственная группа слоя «Операции» показана содержимым');
+    eq(items.map(i => i.querySelector('.label').textContent), ['Продажа', 'Номенклатура']);
+    assert(!items[1].querySelector('.ro'), 'у справочника «запись» нет значка чтения');
+});
+
+await test('главная: карточки слоёв и таблица прав места', async () => {
+    const home = await until(() => deep(root(), 'work-home'));
+    assert(home, 'экран главной');
+    const t = await until(() => text(home.shadowRoot).includes('Права этого места') && text(home.shadowRoot));
+    assert(t, 'таблица прав');
+    assert(t.includes('Руководитель') && t.includes('Операции') && t.includes('Номенклатура'));
+    assert(t.includes('запись') && t.includes('подразделение'), 'доступ и видимость данных по умолчанию слоя');
+});
+
+await test('навигатор: дерево подразделений и мест, выбор места переключает контекст и меню', async () => {
+    const popover = nav().shadowRoot.querySelector('wa-popover');
+    const items = treeItems(nav());
+    eq(items.map(i => text(i.querySelector('.label'))), ['ООО «Тест»', 'Закупки', 'Закупщик', 'Продажи', 'Руководитель', 'Менеджер']);
+    assert(items[0].disabled, 'организация без прав — только каркас');
+    const buyer = items.find(i => i.dataset.place === 'buyer');
+    press(buyer);
+    assert(await until(() => app.ctx.place === 'buyer'), 'контекст переключён');
+    eq(loc.hash, '#unit=unit.buy&place=buyer');
+    assert(await until(() => text(deep(nav(), '#trigger')) === 'Закупки / Закупщик'), 'кнопка показывает новый контекст');
+    assert(await until(() => [...menu().shadowRoot.querySelectorAll('h3')].map(text).join() === 'Справочники'), 'меню закупщика — только справочники');
+    assert(!popover.open || await until(() => !popover.open), 'после выбора окно закрывается');
+});
+
+await test('экран класса: список по схеме, число объектов и страница из db_query', async () => {
+    app.setContext({ unit: 'unit.sales', place: 'head' });
+    await until(() => treeItems(menu()).length === 3);
+    app.go({ view: 'class', path: '/DATA/CAT/ITEMS' });
+    const view = await until(() => deep(root(), 'work-class-view'));
+    assert(view, 'экран класса');
+    const list = await until(() => deep(view, 'work-object-list'));
+    assert(list, 'универсальный список');
+    const t = await until(() => text(list.shadowRoot).includes('Цена') && text(list.shadowRoot));
+    assert(t, 'колонки по схеме');
+    assert(t.includes('Номенклатура') && t.includes('Справочники') && t.includes('запись'));
+    assert(t.includes('Наименование') && t.includes('7 объектов'), 'колонки и число объектов');
+    eq(calls.filter(c => c[0] === 'schema').at(-1), ['schema', '/DATA/CAT/ITEMS']);
+    eq(calls.filter(c => c[0] === 'query').at(-1), ['query', '/DATA/CAT/ITEMS', { deep: true, limit: 25, offset: 0, order: 'name', search: '', status: '', from: '', to: '', unit: '', where: '' }]);
+    assert(loc.hash.includes('view=class') && loc.hash.includes('path=/DATA/CAT/ITEMS'));
+    assert(await until(() => menu().shadowRoot.querySelector('wa-tree-item[data-path="/DATA/CAT/ITEMS"]').selected), 'пункт меню подсвечен');
+    eq([...root().querySelectorAll('wa-breadcrumb-item')].map(text).slice(-2), ['Руководитель', 'Номенклатура']);
+});
+
+await test('меню: клик по пункту открывает класс, «Главная» возвращает на главную', async () => {
+    const sale = treeItems(menu()).find(i => i.dataset.path === '/DATA/OPS/SALE');
+    press(sale);
+    assert(await until(() => app.route.path === '/DATA/OPS/SALE'), 'маршрут обновился');
+    assert(await until(() => text(deep(deep(root(), 'work-class-view'), 'work-object-list')?.shadowRoot).includes('Продажа')), 'открыт класс «Продажа»');
+    menu().shadowRoot.querySelector('.home').click();
+    assert(await until(() => app.route.view === 'home' && deep(root(), 'work-home')), 'главная');
+});
+
+await test('неизвестный класс — сообщение, а не падение; тема переключается', async () => {
+    app.go({ view: 'class', path: '/DATA/НЕТ' });
+    const view = await until(() => { const v = deep(root(), 'work-class-view'); return v?.path === '/DATA/НЕТ' && v; });
+    assert(view, 'экран нового класса');
+    assert(await until(() => text(view.shadowRoot).includes('не входит в меню')), 'сообщение о классе вне меню');
+    const dark = document.documentElement.classList.contains('wa-dark');
+    deep(root(), 'wa-button[title$="тема"]').click();
+    assert(await until(() => document.documentElement.classList.contains('wa-dark') !== dark), 'класс wa-dark переключился');
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

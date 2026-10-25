@@ -37,9 +37,6 @@ ODA({
             :host([collapsed]) .header {
                 border-bottom-color: transparent;
             }
-            :host([no-header]) .header {
-                display: none;
-            }
             .caption {
                 font-weight: 600;
                 white-space: nowrap;
@@ -62,7 +59,7 @@ ODA({
                 @apply --no-flex;
                 align-items: center;
             }
-            :host([collapsed]) .body {
+            :host([collapsed]:not([no-header])) .body {
                 display: none;
             }
             .tool {
@@ -70,12 +67,12 @@ ODA({
                 border-radius: var(--radius-s);
             }
         </style>
-        <div class="header">
-            <oda-button ~if="collapsible" class="tool" :icon="collapsed ? 'icons:chevron-right' : 'icons:expand-more'" :icon-size title="Свернуть / развернуть" @tap.stop="toggle()"></oda-button>
-            <label class="caption" ~if="caption">{{caption}}</label>
+        <div class="header" ~show="!noHeader || visibleTools.length">
+            <oda-button ~if="collapsible && !noHeader" class="tool" :icon="collapsed ? 'icons:chevron-right' : 'icons:expand-more'" :icon-size title="Свернуть / развернуть" @tap.stop="toggle()"></oda-button>
+            <label class="caption" ~if="caption && !noHeader">{{caption}}</label>
             <span class="summary" :title="summary">{{summary}}</span>
             <div class="tools" @tap.stop @dblclick.stop>
-                <oda-button ~for="tools" class="tool" :icon="$for.item.icon" :title="$for.item.title || ''" :disabled="!!$for.item.disabled || (isReadonly && $for.item.edit)" ~show="!$for.item.edit || !isReadonly" :icon-size @tap="runTool($for.item, $event)"></oda-button>
+                <oda-button ~for="visibleTools" class="tool" :icon="$for.item.icon" :title="$for.item.title || ''" :disabled="!!$for.item.disabled" :icon-size @tap="runTool($for.item, $event)"></oda-button>
             </div>
         </div>
     `,
@@ -88,7 +85,7 @@ ODA({
             $def: true,
             $attr: true
         },
-        /** скрыть строку-заголовок (форма показывает подпись сама) */
+        /** без подписи и сворачивания (форма показывает подпись сама); строка остаётся под кнопки, если они есть */
         noHeader: {
             $def: false,
             $attr: true
@@ -112,6 +109,10 @@ ODA({
     /** кнопки строки-заголовка: {icon, title, action(e), disabled, edit (скрыть в режиме чтения)} */
     get tools() {
         return [];
+    },
+    /** кнопки, видимые сейчас: правящие скрыты в режиме чтения */
+    get visibleTools() {
+        return this.tools.filter(t => !t.edit || !this.isReadonly);
     },
     runTool(tool, e) {
         tool.action.call(this, e);

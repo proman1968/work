@@ -35,7 +35,7 @@ function formField(f) {
     if (f.required)
         out.required = true;
     if (f.type === 'link')
-        out.catalog = f.target;
+        out.catalog = f.targetPath || f.target;
     if (f.type === 'enum')
         out.options = (f.values || f.options || []).map(v => (v && typeof v === 'object'
             ? { value: String(v.id ?? v.value), label: String(v.label ?? v.id ?? v.value) }
@@ -109,6 +109,8 @@ export default {
     editing: null,
     /** проводки редактируемой операции: действующие или предпросмотр черновика */
     entries: [],
+    /** печатные формы открытой операции (db_print_list): [{ name, label }] */
+    printForms: [],
     focusedRow: null,
     /** окно редактора открыто: второй клик по таблице не открывает ещё одно */
     editorOpen: false,
@@ -356,8 +358,39 @@ export default {
             const found = await this.$item.fetch('db_read', { id: row.id });
             this.editing = this.rowOf(found || { id: row.id });
             await this.loadEntries();
+            await this.loadPrints();
         }
         catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    /** Печатные формы сохранённой операции; без ответа — кнопок печати нет. */
+    async loadPrints() {
+        this.printForms = [];
+        if (!this.isOperation || !this.editing?.id)
+            return;
+        try {
+            const list = await this.$item.fetch('db_print_list', { id: this.editing.id });
+            this.printForms = Array.isArray(list) ? list : [];
+        }
+        catch {
+            this.printForms = [];
+        }
+    },
+    /** Открыть печатную форму в новом окне: окно создаётся сразу по клику, иначе браузер заблокирует его. */
+    async printForm(name) {
+        const win = window.open('', '_blank');
+        if (!win)
+            return this.error = 'Браузер заблокировал окно печати';
+        try {
+            const res = await this.$item.fetch('db_print', { id: this.editing.id, name });
+            win.document.open();
+            win.document.write(res?.html || '');
+            win.document.close();
+            win.focus();
+        }
+        catch (e) {
+            win.close();
             this.error = String(e?.message || e);
         }
     },
@@ -410,6 +443,7 @@ export default {
         this.editorOpen = true;
         this.editing = this.isOperation ? { time: _today() } : {};
         this.entries = [];
+        this.printForms = [];
         this.error = '';
         try {
             await this.showEditor();
@@ -722,6 +756,7 @@ ODA({
             @tap="removeObject">Удалить</oda-button>
         <oda-button ~if="owner.canRegister" :disabled="owner.busy" @tap="post">Провести</oda-button>
         <oda-button ~if="owner.canCancel" :disabled="owner.busy" @tap="cancelOperation">Отменить</oda-button>
+        <oda-button ~for="owner.printForms" icon="icons:print" :title="$for.item.label" @tap="printForm($for.item.name)">{{$for.item.label}}</oda-button>
         <oda-button icon="icons:close" :disabled="owner.busy" @tap="close">Закрыть</oda-button>
     </div>
     `,
@@ -746,6 +781,9 @@ ODA({
     },
     async cancelOperation() {
         await this.owner.cancelOperation();
+    },
+    async printForm(name) {
+        await this.owner.printForm(name);
     },
     close() {
         this.parentElement?.close?.();

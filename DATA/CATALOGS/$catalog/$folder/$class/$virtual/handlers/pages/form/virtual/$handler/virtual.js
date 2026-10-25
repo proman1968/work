@@ -23,7 +23,7 @@ function formField(f) {
     if (f.required)
         out.required = true;
     if (f.type === 'link')
-        out.catalog = f.target;
+        out.catalog = f.targetPath || f.target;
     if (f.type === 'enum')
         out.options = (f.values || f.options || []).map(v => (v && typeof v === 'object'
             ? { value: String(v.id ?? v.value), label: String(v.label ?? v.id ?? v.value) }
