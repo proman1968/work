@@ -1,24 +1,16 @@
 /**
  * oda-structure — общая модель структурных представлений (форма, таблица, property-grid).
  *
- * fields   — описания полей (соглашение, см. readme): {id, type?, label?, description?, icon?, fields?, items?, required?, readonly?, control?, expression?}
+ * fields   — описания полей WORK (`fields` — вложенные); для отрисовки берутся узлы `nodes` (structure/fields.js:
+ *            канонические `type`, `required`, `children`; служебные поля скрыты)
  * data     — единственный источник данных; значение поля — data[field.id]
  * controls — карта «тип поля → тег контрола» с ключом default (подаётся потребителем; стандартная карта — controls.js)
  *
  * Библиотека не знает типов данных: выбор контрола — только по карте. Приложение переопределяет карту и провайдеры
  * (getFields — дочерние поля, dataOf — данные вложенной структуры) у наследника.
  */
-/** выбор тега по карте (общая функция для наследников с собственными правилами) */
-export function controlOf(map = {}, field) {
-    if (field.control)
-        return field.control;
-    const type = field.type;
-    if (type !== undefined && (type in map || String(type).toLowerCase() in map))
-        return map[type] ?? map[String(type).toLowerCase()];
-    if (field.fields && type === undefined)
-        return undefined;
-    return map.default;
-}
+import { normalizeFields } from '/oda/components/structure/fields.js';
+import { controlOf } from '/oda/components/structure/controls-map.js';
 
 ODA({
     is: 'oda-structure',
@@ -44,7 +36,12 @@ ODA({
     },
     /** дочерние поля (массив или Promise); у приложения — например, поля класса по ссылочному типу */
     getFields(field) {
-        return field.fields;
+        return field.children ?? field.fields;
+    },
+    /** узлы верхнего уровня: `fields` (массив или Promise) → каноническое дерево */
+    get nodes() {
+        const list = this.fields;
+        return typeof list?.then === 'function' ? list.then(l => normalizeFields(l)) : normalizeFields(list);
     },
     /** данные вложенной структуры поля */
     dataOf(field, data) {
@@ -56,5 +53,12 @@ ODA({
     },
     labelOf(field) {
         return field.label ?? field.id;
+    },
+    /**
+     * Значение поля: по умолчанию — data[id]. Потребитель переопределяет, когда источник истины не совпадает
+     * с кэшем реактора (property-grid читает DATA сущности: `update()` пишет туда мимо Reactor.set).
+     */
+    fieldValue(field, data) {
+        return data?.[field?.id];
     }
 });

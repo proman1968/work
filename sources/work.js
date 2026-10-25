@@ -86,7 +86,13 @@ if (process.env.WORK_SWEEP !== '0') {
             if (n)
                 console.log('[sandbox] отключён интернет у', n, 'компьютер(ов) по таймеру');
         }
-        catch { /* Docker спит */ }
+        catch (e) {
+            // R12 (8.37): сбой обхода больше не молчит («изоляция не восстановлена» — видно);
+            // «Docker недоступен» — рабочая тишина сервера без Docker
+            const msg = String(e?.message || e);
+            if (!msg.includes('Docker недоступен'))
+                console.warn('[sandbox] обход TTL интернета не вышел:', msg.slice(0, 200));
+        }
     }, 2 * 60_000).unref?.();
 }
 

@@ -23,7 +23,8 @@ requires: system          # необязательно: system | sandbox — в�
 
 | Навык | Назначение |
 |---|---|
-| [`office-documents`](office-documents.md) | PDF/DOCX/XLSX: чтение, шаблоны, отчёты, настоящий PDF из HTML |
+| [`office-documents`](office-documents.md) | PDF/DOCX/XLSX: чтение, шаблоны, отчёты, настоящий PDF из HTML, презентации PDF из слайдов |
+| [`orchestration`](orchestration.md) | несколько агентов: декомпозиция, параллельные чтения, записи в изолированных ветках (branch), сбор результата |
 | [`doc-from-template`](doc-from-template.md) | документ по шаблону docx/md/html из объекта или данных |
 | [`import-table`](import-table.md) | таблица Excel/CSV → объекты данных с проверкой |
 | [`data-quality`](data-quality.md) | дубли, пустые поля, форматы — отчёт с исправлениями |

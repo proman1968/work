@@ -5,6 +5,7 @@
  * Формат — строки markdown `- [дата] факт`. В system агента попадает как заметки (не инструкции).
  */
 import { FS } from '../../../server/index.js';
+import { markMemoryWrite } from '../../../server/memory-mark.js';
 import { clip } from '../util.js';
 
 const FILE = 'memory.md';
@@ -60,7 +61,8 @@ async function readMemory(folder, params) {
 }
 
 async function writeMemory(folder, params, text, ctx) {
-    await folder.save_file({ ...params, filename: FILE, folder: 'ai', post: text, encoding: 'utf-8', ignore_save_logs: true });
+    // R2 (8.30): метка легитимного писателя файла памяти — ядро пускает только её (memory-mark.js)
+    await folder.save_file(markMemoryWrite({ ...params, filename: FILE, folder: 'ai', post: text, encoding: 'utf-8', ignore_save_logs: true }));
     ctx?.env?.resetMemory?.();
 }
 
@@ -92,6 +94,10 @@ export const memoryTools = [
     {
         name: 'memory',
         risk: 'write',
+        // F30: закрепление И удаление из долговременной памяти (system будущих задач) после
+        // чтения внешнего содержимого — только с подтверждением (taint.js): чужое письмо не
+        // должно ни вписывать себя в память, ни вычищать из неё правила безопасности
+        outbound: args => args?.action === 'remember' || args?.action === 'forget',
         description: 'Долговременная память между задачами. remember — сохранить факт/решение/предпочтение (кратко, одно утверждение); forget — удалить строки с текстом; recall — показать. scope: place — память этого места для твоей роли (видят коллеги по роли), me — личная память пользователя. Не сохраняй пароли, токены и персональные данные без просьбы.',
         parameters: {
             type: 'object',

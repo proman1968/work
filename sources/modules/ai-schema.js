@@ -52,7 +52,7 @@ async function _findFirstChatLeaf(node) {
             const item = node.path ? await WORK.get_item(node.path) : null;
             if (item && !_isChatModel(item.capabilities))
                 return null;
-        } catch {}
+        } catch { /* модель недоступна */ }
         return node;
     }
     for (const child of node.items) {

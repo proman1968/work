@@ -130,7 +130,8 @@ export class $class extends $folder{
             } break;
             case 'String': {
                 if (key === 'template')
-                    value = '`' + value + '`';
+                    // экранируем то, что исполняется в шаблонной строке: \ `
+                    value = '`' + String(value).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`';
                 else
                     value = JSON.stringify(value);
             } break;
@@ -140,7 +141,8 @@ export class $class extends $folder{
         }
         if (key){
            if(!this.validateVarName(key)){
-                key = '"'+key+'"'
+                // ключ с кавычками/кодом остаётся строкой (JSON.stringify экранирует)
+                key = JSON.stringify(key);
            }
            value = key + ': ' + value;
         }
@@ -171,7 +173,11 @@ export class $class extends $folder{
                 }
             }
             else {
-                const val = this._scriptSwitchValue(prop.value, deep, key);
+                // Значения данных читаем через сам объект (то же, что видит прокси Reactor),
+                // а не из дескриптора: дескриптор может хранить устаревшую копию.
+                // Функции берём из дескриптора: прокси отдаёт их как bind-обёртку, её текст не код.
+                const useProxy = 'value' in prop && typeof prop.value !== 'function';
+                const val = this._scriptSwitchValue(useProxy ? json[key] : prop.value, deep, key);
                 script.push(tab + val)
             }
         }
@@ -239,6 +245,61 @@ export class $class extends $folder{
         }
     }
 
+    /**
+     * Оставить в дереве полей только узлы, отличающиеся от предкового (по id, рекурсивно).
+     * Поле без своих отличий и без изменённых детей не пишется. Поле с отличиями
+     * пишется со своими свойствами и только изменёнными детьми (merge слоёв сливает
+     * массивы по id, см. host/babel-merge.js deepMergeArrays).
+     * @param {Array} list Поля, как их передал редактор
+     * @param {Array} [base] Поля того же уровня у предка
+     * @returns {Array} Изменённые поля
+     */
+    static pruneFields(list, base = []) {
+        if (!Array.isArray(list))
+            return list;
+        const byId = new Map((Array.isArray(base) ? base : [])
+            .filter(f => f?.id != null).map(f => [f.id, f]));
+        const out = [];
+        for (const field of list) {
+            // элемент без id не сопоставляется с предком — сохраняем как есть
+            if (!field || typeof field !== 'object' || field.id == null) {
+                out.push(field);
+                continue;
+            }
+            const ancestor = byId.get(field.id);
+            const { fields, ...own } = field;
+            const { fields: ancestorFields, ...ancestorOwn } = ancestor || {};
+            const kids = this.pruneFields(fields, ancestorFields);
+            const hasKids = Array.isArray(kids) && kids.length > 0;
+            const ownChanged = !ancestor || Object.keys(this.getDifference(own, ancestorOwn)).length > 0;
+            if (!ownChanged && !hasKids)
+                continue;
+            out.push(hasKids ? { ...own, fields: kids } : own);
+        }
+        return out;
+    }
+
+    /**
+     * Обрезать METADATA.FIELDS и METADATA.STATIC по предку (см. pruneFields).
+     * Дескрипторы объекта сохраняются (геттеры не вычисляются).
+     * @param {object} data Часть class.js (self или inherit)
+     * @param {object} base Merged baseline предка
+     * @returns {object}
+     */
+    static pruneMeta(data, base) {
+        const meta = data?.METADATA;
+        if (!data || typeof data !== 'object' || Array.isArray(data) || !meta || typeof meta !== 'object')
+            return data;
+        const baseMeta = base?.METADATA || {};
+        const nextMeta = { ...meta };
+        for (const key of ['FIELDS', 'STATIC'])
+            if (key in nextMeta)
+                nextMeta[key] = this.pruneFields(nextMeta[key], baseMeta[key]);
+        const out = Object.defineProperties({}, Object.getOwnPropertyDescriptors(data));
+        out.METADATA = nextMeta;
+        return out;
+    }
+
     static getDifference(value, old = {}) {
         if (!old)
             return value;
@@ -274,21 +335,19 @@ export class $class extends $folder{
     /**
      * Разделить входящий class.js на собственную часть (meta/class.js)
      * и наследуемую однотипными потомками ($distr_folder/class.js).
-     * Явные флаги: to_inherit:true — только в inherit; false — только в self.
-     * Без флагов в inherit уходит только явно помеченное, КРОМЕ содержимого
-     * METADATA.FIELDS/INDEXES/POSTINGS: схема и правила наследуются всегда
-     * (кроме явного отказа) — и остаются в self тоже.
+     * Явные флаги: to_inherit:true — только в inherit; иначе — только в self.
+     * Без флагов наследуется только явно помеченное. Исключение: INDEXES/POSTINGS
+     * наследуются всегда и на любой глубине (кроме явного to_inherit:false) и
+     * остаются в self тоже. FIELDS наследуются только по to_inherit:true.
      * @param {object|Array} data Входящий class.js
      * @param {boolean} [dflt] Наследовать всё без флагов (по умолчанию false).
-     * FIELDS/INDEXES/POSTINGS наследуются всегда и на любой глубине (кроме явного
-     * to_inherit:false) — и остаются в self тоже.
      */
     static separateInheritData(data, dflt = false) {
         const nonEmpty = (v) => Array.isArray(v) ? v.length > 0
             : (v && (typeof v !== 'object' || Object.keys(v).length > 0));
-        // схема и правила (FIELDS/INDEXES/POSTINGS) наследуются однотипными потомками
-        // всегда и на любой глубине — кроме явного to_inherit:false; остаются и в self
-        const schemaChild = (key) => dflt === true || (key === 'FIELDS' || key === 'INDEXES' || key === 'POSTINGS');
+        // правила (INDEXES/POSTINGS) наследуются однотипными потомками всегда;
+        // поля (FIELDS) — только помеченные to_inherit:true
+        const schemaChild = (key) => dflt === true || (key === 'INDEXES' || key === 'POSTINGS');
         if (Array.isArray(data)) {
             const selfData = [];
             const inheritData = [];
@@ -366,8 +425,11 @@ export class $class extends $folder{
      */
     async load(params = {}){
         await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
-        let files = await this.tilde;
-        files = files.filter(f=>f.id === 'class.js');
+        // Собственная схема = предки + свой слой + свой распространяемый слой.
+        // Тот же путь, что у save (get_item('~/class.js')): чтение и запись видят одни слои.
+        // get_item только разрешает путь и не вызывает load, зацикливания нет.
+        let files = await this.get_item('~/class.js');
+        files = (files || []).filter(f=>f.id === 'class.js');
         return $server.mergeFiles(files, params.reset);
     }
     /**
@@ -616,13 +678,16 @@ export class $class extends $folder{
         const distributed_folder = await this.$distr_folder;
 
         const incoming = await this.constructor.importScript('export default ' + post);
-        const [self_data, inherit_data] = this.constructor.separateInheritData(incoming);
+        // сначала делим по to_inherit, затем режем поля по предку своей части
+        const [self_raw, inherit_raw] = this.constructor.separateInheritData(incoming);
 
         const dataJsFiles = await this.get_item('~/class.js');
-        const self_to_save = this.constructor.getDifference(
-            self_data,
-            await this.loadMergedBaseline(2, dataJsFiles)
-        );
+        const baseSelf = await this.loadMergedBaseline(2, dataJsFiles);
+        const baseInherit = await this.loadMergedBaseline(1, dataJsFiles);
+        const self_data = this.constructor.pruneMeta(self_raw, baseSelf);
+        const inherit_data = this.constructor.pruneMeta(inherit_raw, baseInherit);
+
+        const self_to_save = this.constructor.getDifference(self_data, baseSelf);
 
         const fileParams = Object.assign({}, params, { filename: 'class.js' });
         const toDataScript = data => 'export default ' + this.constructor.toScript(data);
@@ -634,10 +699,7 @@ export class $class extends $folder{
             ? inherit_data.length > 0
             : inherit_data && Object.keys(inherit_data).length > 0;
         if (hasInherit) {
-            const dist_to_save = this.constructor.getDifference(
-                inherit_data,
-                await this.loadMergedBaseline(1, dataJsFiles)
-            );
+            const dist_to_save = this.constructor.getDifference(inherit_data, baseInherit);
             const hasDistSave = Array.isArray(dist_to_save)
                 ? dist_to_save.length > 0
                 : dist_to_save && Object.keys(dist_to_save).length > 0;
@@ -696,7 +758,7 @@ export class $class extends $folder{
         const sec = this.DATA?.['#security'];
         const { common, places } = WORKPLACES.normalizeSecurity(sec);
         const roles = await this.roles(params).catch(() => []);
-        const admin = roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
+        const admin = DEV_MODE || roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
         if (!roles.length && !admin)
             return [];
         const uid = $class.resolveUid(params);
@@ -864,6 +926,8 @@ export class $class extends $folder{
         if (params.session?.$user === globalThis.WORK)
             return globalThis.WORK?.id || 'system';
         const uid = this.constructor.resolveUid(params);
+        if (DEV_MODE)
+            return uid || globalThis.WORK?.id || 'dev';
         if (!uid || !(await this.canSee(this, params)))
             throw new Error(ACCESS_DENIED);
         const level = await this.data_access(params);
@@ -1274,7 +1338,14 @@ export class $class extends $folder{
         if (!item || typeof item !== 'object') return false;
         const uid = $class.resolveUid(params);
         if (!uid) return false;
-        if (this.id === uid && params.session?.principal?.kind !== 'node') return true;
+        // цель записи с именем файла: у save_file проверяем фактический файл (folder + filename), не только папку
+        const rel = [params.folder, params.filename].filter(Boolean).join('/');
+        const target = rel && item.path ? item.path.replace(/\/+$/, '') + '/' + rel : item.path;
+        const protectedTarget = POLICY.isExecutablePath(target, this.path) || POLICY.isAgentControlPath(target, this.path);
+        // владелец кабинета пишет свои данные, но не системную часть: class.js/#… исполняются,
+        // ai/ (кроме личной памяти), hooks, triggers загружаются движком агента как код/инструкции
+        if (this.id === uid && params.session?.principal?.kind !== 'node' && !protectedTarget)
+            return true;
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return true;
         if (this._isSystemItem(item))
@@ -1374,6 +1445,8 @@ export class $class extends $folder{
         const filename = params.filename;
         if (!filename)
             throw new Error('Не указано имя файла');
+        if (!/^[\p{L}\p{N}_.-]+$/u.test(filename) || filename.includes('..'))
+            throw new Error('Имя файла секрета: буквы, цифры, точка и дефис, без обхода каталогов');
         for (const path of [this._secretPath(filename), this._legacySecretPath(filename)]) {
             if (!path || !fs.existsSync(path))
                 continue;
@@ -1399,6 +1472,8 @@ export class $class extends $folder{
         await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
         if (!params.filename)
             throw new Error('Не указано имя файла');
+        if (!/^[\p{L}\p{N}_.-]+$/u.test(params.filename) || params.filename.includes('..'))
+            throw new Error('Имя файла секрета: буквы, цифры, точка и дефис, без обхода каталогов');
         if (params.post == null)
             throw new Error('Не указано тело файла');
         if (!this.meta_folder)

@@ -89,6 +89,103 @@ it('страница, скриншот, takeover — свой компьютер
     resetRegistryForTests();
 });
 
+it('F24: takeover с чужим origin — 403; своя страница и клиент без origin — как раньше', async () => {
+    const docker = fakeDocker();
+    setDockerForTests(docker);
+    await ensureComputer(docker, 'user9', 'main', loadSandboxConfig());
+    const s = sess('user9');
+    // чужая страница: origin не совпадает с хостом — отказ до смены управления
+    const evil = res();
+    const evilReq = req('/~computer/main/takeover', s, 'POST', '{"take":"human"}');
+    evilReq.headers.origin = 'https://evil.example';
+    await handleComputerHttp(evilReq, evil, new URL('http://x/~computer/main/takeover'), readBody);
+    assert.equal(evil.status, 403);
+    assert.equal(controlBy((await ensureComputer(docker, 'user9', 'main', loadSandboxConfig())).id), 'agent', 'управление уехало чужой странице');
+    // своя страница (origin совпадает) — работает
+    const own = res();
+    const ownReq = req('/~computer/main/takeover', s, 'POST', '{"take":"human"}');
+    ownReq.headers.origin = 'http://localhost';
+    await handleComputerHttp(ownReq, own, new URL('http://x/~computer/main/takeover'), readBody);
+    assert.equal(own.status, 200);
+    assert.equal(JSON.parse(own.text()).control, 'human');
+    // не-браузерный клиент без origin — работает как раньше
+    const plain = res();
+    await handleComputerHttp(req('/~computer/main/takeover', s, 'POST', '{"take":"agent"}'), plain, new URL('http://x/~computer/main/takeover'), readBody);
+    assert.equal(plain.status, 200);
+    resetRegistryForTests();
+});
+
+it('F24: WS-подключение с чужим origin — отказ до подписок и VNC; потолок сообщения задан', async () => {
+    const { onWebSocketConnect, sameOrigin, WS_MAX_PAYLOAD } = await import('../sources/host/websocket.js');
+    assert.equal(sameOrigin({ headers: { origin: 'https://evil.example', host: 'ours' } }), false);
+    assert.equal(sameOrigin({ headers: { origin: 'http://ours', host: 'ours' } }), true);
+    assert.equal(sameOrigin({ headers: { host: 'ours' } }), true, 'не-браузерный клиент без origin');
+    assert.equal(sameOrigin({ headers: { origin: 'мусор', host: 'ours' } }), false);
+    assert.equal(WS_MAX_PAYLOAD, 1024 * 1024);
+    // подключение с чужим origin закрывается 4403 — до сессии и VNC-обработчика дело не доходит
+    const closes = [];
+    const mkWs = () => ({ close: (code, reason) => closes.push([code, reason]), on() {} });
+    onWebSocketConnect(mkWs(), { url: '/~computer/main/vnc', headers: { origin: 'https://evil.example', host: 'ours', cookie: 'ssid=x' } });
+    onWebSocketConnect(mkWs(), { url: '/some/subscribe', headers: { origin: 'https://evil.example', host: 'ours', cookie: 'ssid=x' } });
+    assert.deepEqual(closes, [[4403, 'чужой origin'], [4403, 'чужой origin']]);
+});
+
+it('F24: присутствие не рассылается анонимным сессиям', async () => {
+    const { broadcastUserPath } = await import('../sources/host/websocket.js');
+    const sent = [];
+    const sock = readyState => ({ ws: { readyState, send: m => sent.push(m) } });
+    const prevSessions = $server.sessions;
+    $server.sessions = {
+        anon: { $user: null, sockets: { s: sock(1) } },
+        closed: { $user: { id: 'U2' }, sockets: { s: sock(0) } }, // не открыт — тоже мимо
+        u1: { $user: { id: 'U1' }, sockets: { s: sock(1) } },
+    };
+    try {
+        broadcastUserPath({ id: 'U9', short: '/ORG/Продажи' });
+        assert.equal(sent.length, 1, 'получила только вошедшая с открытым сокетом: ' + JSON.stringify(sent));
+        assert.deepEqual(JSON.parse(sent[0]), { path: '/ORG/Продажи', initiator: 'U9' });
+    }
+    finally {
+        $server.sessions = prevSessions;
+    }
+});
+
+it('F24: сообщение WS сверх потолка обрывается сервером (1009), обычное — живёт', async () => {
+    const http = await import('node:http');
+    const WebSocket = await import('ws');
+    const { attachWebSocket } = await import('../sources/host/websocket.js');
+    const srv = http.createServer(() => {});
+    attachWebSocket(srv);
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const url = 'ws://127.0.0.1:' + srv.address().port;
+    const opened = [];
+    const track = ws => { opened.push(ws); return ws; };
+    try {
+        // обычное сообщение — соединение живо (сервер отвечает connect)
+        const okCode = await new Promise((resolve, reject) => {
+            const ws = track(new WebSocket.WebSocket(url));
+            const timer = setTimeout(() => reject(new Error('connect не пришёл')), 4000);
+            ws.on('message', m => { clearTimeout(timer); ws.close(); resolve(String(m)); });
+            ws.on('error', reject);
+        });
+        assert.match(okCode, /"type":"connect"/);
+        // сообщение сверх 1 МБ — сервер обрывает (too big), а не копит в памяти
+        const bigCode = await new Promise((resolve, reject) => {
+            const ws = track(new WebSocket.WebSocket(url));
+            const timer = setTimeout(() => reject(new Error('обрыва не было')), 6000);
+            ws.on('open', () => ws.send(Buffer.alloc(2 * 1024 * 1024, 0x61)));
+            ws.on('close', (code) => { clearTimeout(timer); resolve(code || 1006); });
+            ws.on('error', () => { /* close придет следом с кодом */ });
+        });
+        assert.equal(bigCode, 1009, 'гигантский кадр не обрезан сервером');
+    }
+    finally {
+        for (const ws of opened) { try { ws.terminate(); } catch { /* уже */ } }
+        srv.close();
+        srv.closeAllConnections?.();
+    }
+});
+
 it('доступ: без сессии 401, чужой — 403, админ видит чужой', async () => {
     const docker = fakeDocker();
     setDockerForTests(docker);

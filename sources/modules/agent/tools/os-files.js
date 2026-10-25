@@ -6,6 +6,7 @@
  *   os_import (ОС → WORK), os_export (WORK → ОС).
  * Пути — абсолютные, ~ — домашняя папка; на Windows допустимы UNC (\\сервер\шара\…).
  */
+import { log } from '../log.js';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { lineDiff } from '../diff.js';
@@ -59,7 +60,7 @@ async function drives() {
             await fsp.access(l + ':\\');
             out.push(l + ':\\');
         }
-        catch { /* нет диска */ }
+        catch (e) { log.debug('os.disks', e); /* нет диска */ }
     }
     return out;
 }
@@ -99,7 +100,7 @@ export const osFileTools = [
                 try {
                     st = await fsp.stat(full);
                 }
-                catch { /* нет доступа */ }
+                catch (e) { log.debug('os.ls', e); /* нет доступа */ }
                 const kind = d.isDirectory() ? '/' : d.isSymbolicLink() ? ' →' : '';
                 rows.push(d.name + kind + (st && !d.isDirectory() ? '  ' + size(st.size) : '') + (st ? '  ' + st.mtime.toISOString().slice(0, 16).replace('T', ' ') : ''));
             }
@@ -172,7 +173,7 @@ export const osFileTools = [
                     truncated = true;
                     return;
                 }
-                let kids = [];
+                let kids;
                 try {
                     kids = await fsp.readdir(dir, { withFileTypes: true });
                 }
@@ -211,7 +212,7 @@ export const osFileTools = [
                                 out.push(full + ':' + (i + 1) + ': ' + l.trim().slice(0, 300));
                         });
                     }
-                    catch { /* нет доступа */ }
+                    catch (e) { log.debug('os.find', e); /* нет доступа */ }
                 }
             };
             if (!re && !needle)

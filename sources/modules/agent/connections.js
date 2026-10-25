@@ -3,19 +3,27 @@
  *
  * Принцип: регистрация и вход — только руками пользователя. Агент просит подключение (connect_service),
  * человек в карточке сам вводит данные / входит на сайте провайдера (OAuth2 + PKCE); пароли и токены
- * не проходят через модель и не пишутся в ленту задачи. Хранилище — секреты пользователя:
+ * не проходят через модель и не пишутся в ленту задачи. Хранилище — секреты пользователя
+ * (зашифрованы AES-256-GCM, см. host/secret-box.js; ключ — WORK_SECRET_KEY или производный от #system/node-key.json):
  *   USERS/<uid>/$user/#secret/connections/<name>.json
  * OAuth-клиент (client_id/secret) — общий для системы (#system/oauth/<provider>.json, настраивает админ)
  * или свой у пользователя (вводит в карточке подключения).
  * Обратный адрес OAuth: <origin>/oauth/callback (обрабатывает http-server до разбора дерева).
  */
+import { log } from './log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import net from 'node:net';
+import { isPrivateAddress } from '../../host/net-guard.js';
+import * as SB from '../../host/secret-box.js';
+
+export const CATEGORIES = ['mail', 'calendar', 'drive', 'messenger', 'crm', 'code', 'custom'];
 
 export const PROVIDERS = {
     google: {
         label: 'Google',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
         token_url: 'https://oauth2.googleapis.com/token',
         base_url: 'https://www.googleapis.com',
@@ -33,30 +41,109 @@ export const PROVIDERS = {
     },
     yandex: {
         label: 'Яндекс',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://oauth.yandex.ru/authorize',
         token_url: 'https://oauth.yandex.ru/token',
         base_url: 'https://cloud-api.yandex.net',
         console: 'https://oauth.yandex.ru/client/new',
-        scopes: {},
+        scopes: {
+            disk: 'cloud_api:disk.read cloud_api:disk.write',
+            'disk.readonly': 'cloud_api:disk.read',
+            calendar: 'calendar:all',
+            mail: 'mail:imap_full mail:smtp',
+            info: 'login:info login:email',
+        },
     },
     microsoft: {
         label: 'Microsoft',
+        categories: ['mail', 'calendar', 'drive'],
         auth_url: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
         token_url: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
         base_url: 'https://graph.microsoft.com/v1.0',
         console: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps',
-        scopes: { calendar: 'Calendars.ReadWrite offline_access', mail: 'Mail.Send offline_access', files: 'Files.ReadWrite offline_access' },
+        scopes: {
+            calendar: 'Calendars.ReadWrite offline_access',
+            mail: 'Mail.Send offline_access',
+            'mail.readonly': 'Mail.Read offline_access',
+            files: 'Files.ReadWrite offline_access',
+        },
     },
     github: {
         label: 'GitHub',
+        categories: ['code'],
         auth_url: 'https://github.com/login/oauth/authorize',
         token_url: 'https://github.com/login/oauth/access_token',
         base_url: 'https://api.github.com',
         console: 'https://github.com/settings/developers',
         scopes: { repo: 'repo', issues: 'repo', gist: 'gist' },
     },
+    gitlab: {
+        label: 'GitLab',
+        categories: ['code'],
+        auth_url: 'https://gitlab.com/oauth/authorize',
+        token_url: 'https://gitlab.com/oauth/token',
+        base_url: 'https://gitlab.com/api/v4',
+        console: 'https://gitlab.com/-/user_settings/applications',
+        scopes: { api: 'api', read_api: 'read_api', read_repository: 'read_repository' },
+    },
+    slack: {
+        label: 'Slack',
+        categories: ['messenger'],
+        auth_url: 'https://slack.com/oauth/v2/authorize',
+        token_url: 'https://slack.com/api/oauth.v2.access',
+        base_url: 'https://slack.com/api',
+        console: 'https://api.slack.com/apps',
+        scopes: { chat: 'chat:write', channels: 'channels:read channels:history', users: 'users:read' },
+    },
+    telegram: {
+        label: 'Telegram Bot API',
+        categories: ['messenger'],
+        mode: 'token',
+        base_url: 'https://api.telegram.org',
+        docs: 'https://core.telegram.org/bots/api',
+        scopes: {},
+    },
+    hubspot: {
+        label: 'HubSpot CRM',
+        categories: ['crm'],
+        auth_url: 'https://app.hubspot.com/oauth/authorize',
+        token_url: 'https://api.hubapi.com/oauth/v1/token',
+        base_url: 'https://api.hubapi.com',
+        console: 'https://app.hubspot.com/developer',
+        scopes: {
+            contacts: 'crm.objects.contacts.read crm.objects.contacts.write',
+            'contacts.readonly': 'crm.objects.contacts.read',
+            deals: 'crm.objects.deals.read crm.objects.deals.write',
+            companies: 'crm.objects.companies.read',
+        },
+    },
+    bitrix24: {
+        label: 'Битрикс24 CRM',
+        categories: ['crm', 'messenger'],
+        mode: 'token',
+        docs: 'https://apidocs.bitrix24.ru/',
+        scopes: {},
+    },
+    amocrm: {
+        label: 'amoCRM',
+        categories: ['crm'],
+        mode: 'token',
+        docs: 'https://www.amocrm.ru/developers/content/crm_platform/platform-abilities',
+        scopes: {},
+    },
+    notion: {
+        label: 'Notion',
+        categories: ['drive'],
+        auth_url: 'https://api.notion.com/v1/oauth/authorize',
+        token_url: 'https://api.notion.com/v1/oauth/token',
+        base_url: 'https://api.notion.com/v1',
+        console: 'https://www.notion.com/my-integrations',
+        scopes: {},
+    },
     token: {
         label: 'API по токену',
+        categories: ['custom'],
+        mode: 'token',
         scopes: {},
     },
 };
@@ -81,19 +168,41 @@ function file(uid, name) {
     return path.join(userDir(uid), name + '.json');
 }
 
+/** Назначение ключа и владелец записи (AAD): файл нельзя подсунуть другому пользователю/имени. */
+const BOX = (uid, name) => ({ info: 'work-connections', aad: String(uid) + '/' + String(name) });
+
+/**
+ * Прочитать подключение. Записи шифруются (host/secret-box.js); открытый JSON старого формата читается
+ * и сразу перешифровывается. Нет файла → null; нельзя расшифровать → ошибка с понятной причиной.
+ */
 async function read(uid, name) {
+    let parsed;
     try {
-        return JSON.parse(await fs.promises.readFile(file(uid, name), 'utf-8'));
+        parsed = JSON.parse(await fs.promises.readFile(file(uid, name), 'utf-8'));
     }
     catch {
         return null;
+    }
+    if (!SB.isSealed(parsed)) {
+        await write(uid, name, parsed).catch(() => { /* миграция отложится до следующего чтения */ });
+        return parsed;
+    }
+    try {
+        const { value, rekey } = await SB.open(parsed, BOX(uid, name));
+        if (rekey)
+            await write(uid, name, value).catch(() => { /* перешифровка отложится */ });
+        return value;
+    }
+    catch (e) {
+        throw new Error('подключение «' + name + '» не расшифровать: ' + e.message + ' — попросите подключить аккаунт заново (connect_service)', { cause: e });
     }
 }
 
 async function write(uid, name, data) {
     await fs.promises.mkdir(userDir(uid), { recursive: true });
     const tmp = file(uid, name) + '.tmp';
-    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    const sealed = await SB.seal(data, BOX(uid, name));
+    await fs.promises.writeFile(tmp, JSON.stringify(sealed, null, 2), { encoding: 'utf-8', mode: 0o600 });
     await fs.promises.rename(tmp, file(uid, name));
 }
 
@@ -119,10 +228,17 @@ export async function list(uid) {
     try {
         names = (await fs.promises.readdir(userDir(uid))).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5));
     }
-    catch { /* нет подключений */ }
+    catch (e) { log.debug('connections.list', e); /* нет подключений */ }
     const out = [];
     for (const name of names) {
-        const c = await read(uid, name);
+        let c;
+        try {
+            c = await read(uid, name);
+        }
+        catch (e) {
+            console.warn('[connections]', e.message);
+            continue;
+        }
         if (!c)
             continue;
         out.push({
@@ -137,7 +253,33 @@ export async function list(uid) {
 
 /** Нужно ли пользователю вводить свой OAuth-клиент (у системы нет настроенного). */
 export function needsClient(provider) {
-    return provider !== 'token' && !appClient(provider);
+    const p = PROVIDERS[provider];
+    return !!p && p.mode !== 'token' && !appClient(provider);
+}
+
+/**
+ * 9.9: каталог готовых подключений (почта, календарь, диск, мессенджеры, CRM, код, произвольный API).
+ * @param {string} [category] фильтр по категории (mail | calendar | drive | messenger | crm | code | custom)
+ */
+export function catalog(category) {
+    const cat = category ? String(category).trim().toLowerCase() : '';
+    const out = [];
+    for (const [id, p] of Object.entries(PROVIDERS)) {
+        const cats = p.categories || ['custom'];
+        if (cat && !cats.includes(cat))
+            continue;
+        out.push({
+            provider: id,
+            label: p.label,
+            categories: cats,
+            auth: p.mode === 'token' ? 'token' : 'oauth2',
+            base_url: p.base_url || null,
+            scopes: Object.keys(p.scopes || {}),
+            ready: !needsClient(id),
+            docs: p.docs || p.console || null,
+        });
+    }
+    return out;
 }
 
 /**
@@ -150,17 +292,21 @@ export async function start({ uid, name, provider, scopes, base_url, token, head
         throw new Error('неизвестный провайдер ' + provider + '; есть: ' + Object.keys(PROVIDERS).join(', '));
     name ||= provider;
     file(uid, name); // проверка имени и uid
-    if (provider === 'token') {
+    if (p.mode === 'token') {
+        const effBase = base_url || p.base_url;
         if (!token)
             throw new Error('нужен токен');
-        if (!/^https?:\/\//i.test(String(base_url || '')))
+        if (!/^https?:\/\//i.test(String(effBase || '')))
             throw new Error('нужен базовый URL API (https://…)');
-        await write(uid, name, { type: 'token', provider, token: String(token), header: header || 'Authorization', base_url, scopes: [], connected: Date.now() });
+        await write(uid, name, { type: 'token', provider, token: String(token), header: header || 'Authorization', base_url: effBase, scopes: [], connected: Date.now() });
         onDone?.();
         return { ok: true, connected: name };
     }
     const app = appClient(provider) || {};
-    const client = { client_id: client_id || app.client_id, client_secret: client_secret || app.client_secret };
+    // 7.2б (S5): пользовательский client_id никогда не смешивается с системным app.client_secret
+    const client = client_id
+        ? { client_id: String(client_id), client_secret: client_secret ? String(client_secret) : undefined }
+        : { client_id: app.client_id, client_secret: app.client_secret };
     if (!client.client_id)
         return { ok: false, need_client: true, console: p.console, error: 'нет OAuth-клиента: создайте его в ' + p.console + ' и введите client_id/secret' };
     if (!/^https?:\/\//.test(String(origin || '')))
@@ -191,7 +337,7 @@ async function tokenRequest(p, body) {
         signal: AbortSignal.timeout(20000),
     });
     const text = await res.text();
-    let json = null;
+    let json;
     try {
         json = JSON.parse(text);
     }
@@ -204,7 +350,7 @@ async function tokenRequest(p, body) {
 }
 
 /** /oauth/callback?code&state → HTML ответа окну входа. */
-export async function callback(query = {}) {
+export async function callback(query = {}, session = null) {
     const pend = PENDING.get(String(query.state || ''));
     const page = (ok, msg) => `<!doctype html><meta charset="utf-8"><title>WORK</title>
 <body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;text-align:center">
@@ -212,6 +358,9 @@ export async function callback(query = {}) {
 <script>try{window.opener&&window.opener.postMessage({workOAuth:${ok ? 'true' : 'false'}},'*')}catch(e){};${ok ? 'setTimeout(()=>window.close(),1500)' : ''}</script></body>`;
     if (!pend || pend.expires < Date.now())
         return page(false, 'Сессия входа устарела — нажмите «Подключить» ещё раз.');
+    // 7.2б (S5): если в браузере открыта сессия другого пользователя — не привязывать чужой OAuth-аккаунт
+    if (session?.uid && String(session.uid) !== String(pend.uid))
+        return page(false, 'Сессия браузера принадлежит другому пользователю — войдите под своим аккаунтом.');
     PENDING.delete(String(query.state));
     if (query.error)
         return page(false, 'Провайдер ответил: ' + query.error);
@@ -232,7 +381,7 @@ export async function callback(query = {}) {
         try {
             pend.onDone?.();
         }
-        catch { /* задача могла закончиться */ }
+        catch (e) { log.debug('connections.oauth', e); /* задача могла закончиться */ }
         return page(true, (p.label || pend.provider) + ': доступ выдан (' + (pend.scope.join(', ') || 'базовый') + ').');
     }
     catch (e) {
@@ -268,7 +417,10 @@ export async function remove(uid, name) {
     return true;
 }
 
-/** Внешний адрес не должен вести во внутреннюю сеть сервера (агент не ходит в localhost/LAN). */
+/**
+ * Быстрая предпроверка адреса (по тексту). Окончательную проверку — DNS, закрепление IP, каждый редирект —
+ * делает guardedRequest (host/net-guard.js).
+ */
 export function assertPublicUrl(u) {
     let url;
     try {
@@ -283,6 +435,8 @@ export function assertPublicUrl(u) {
     if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h === '0.0.0.0' || h === '::1'
         || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)
         || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h))
+        throw new Error('адрес во внутренней сети запрещён: ' + h);
+    if (net.isIP(h) && isPrivateAddress(h))
         throw new Error('адрес во внутренней сети запрещён: ' + h);
     return url;
 }

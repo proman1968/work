@@ -1,4 +1,4 @@
-import { controlOf } from '/oda/components/structure/structure.js';
+import { controlOf } from '/oda/components/structure/controls-map.js';
 import { isLink } from '/~/lib/item-form/item-form.js';
 
 export default {}

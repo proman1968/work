@@ -1,3 +1,4 @@
+import { log } from '../modules/agent/log.js';
 import * as fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
@@ -15,7 +16,7 @@ export const serverId = await (async () => {
         if (id && RE.test(id))
             return id.toUpperCase();
     }
-    catch { /* нет файла или битый — генерируем новый ниже */ }
+    catch (e) { log.debug('server-id', e); /* нет файла или битый — генерируем новый ниже */ }
     const id = genServerId();
     await fs.promises.mkdir('./#system', { recursive: true });
     const tmp = PATH + '.' + process.pid + '.tmp';

@@ -23,38 +23,7 @@ import '/oda/components/inputs/files/files.js';
 import '/oda/components/inputs/links/links.js';
 import '/oda/components/inputs/list/list.js';
 import '/oda/components/inputs/table-input/table-input.js';
+import '/oda/components/inputs/link/link.js';
 
-export const CONTROLS = {
-    default: 'oda-text-input',
-    string: 'oda-text-input',
-    password: 'oda-text-input',
-    email: 'oda-text-input',
-    url: 'oda-text-input',
-    tel: 'oda-text-input',
-    text: 'oda-textarea-input',
-    markdown: 'oda-markdown-input',
-    code: 'oda-code-input',
-    number: 'oda-numeric-input',
-    boolean: 'oda-checkbox',
-    date: 'oda-date-input',
-    time: 'oda-date-input',
-    datetime: 'oda-date-input',
-    timestamp: 'oda-date-input',
-    select: 'oda-select-input',
-    radio: 'oda-radio-input',
-    tags: 'oda-tags-input',
-    color: 'oda-color-input',
-    range: 'oda-range-input',
-    rating: 'oda-rating-input',
-    icon: 'oda-icon-picker-input',
-    file: 'oda-file-input',
-    files: 'oda-files-input',
-    image: 'oda-image-input',
-    video: 'oda-video-input',
-    audio: 'oda-audio-input',
-    gallery: 'oda-gallery-input',
-    links: 'oda-links-input',
-    list: 'oda-list-input',
-    table: 'oda-table-input'
-};
-export default CONTROLS;
+export { CONTROLS, controlOf } from '/oda/components/structure/controls-map.js';
+export { CONTROLS as default } from '/oda/components/structure/controls-map.js';

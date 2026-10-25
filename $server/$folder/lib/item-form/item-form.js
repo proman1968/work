@@ -1,4 +1,4 @@
-import { controlOf } from '/oda/components/structure/structure.js';
+import { controlOf } from '/oda/components/structure/controls-map.js';
 
 export default {}
 

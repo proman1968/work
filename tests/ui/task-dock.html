@@ -132,7 +132,7 @@ await test('«Монитор»: компьютер удалён — подпис
         dock.select('monitor');
         const mon = await waitFor(() => inDock(shell, 'microchat-monitor'), 'монитор');
         await waitFor(() => mon.$('.off'), 'офлайн-вид');
-        await waitFor(() => /больше нет|выключен/.test(mon.$('.note').textContent), 'подпись о компьютере', 140);
+        await waitFor(() => /больше не запущен|выключен/.test(mon.$('.cap')?.textContent || mon.$('.note')?.textContent || ''), 'подпись о компьютере', 140);
         assert(mon.$('img.shot'), 'последний скриншот');
         assert(mon.$$('.cmd').length >= 1, 'команды агента');
         eq(shell.dockTab, 'monitor');
@@ -153,19 +153,21 @@ await test('без компьютера и файлов — только «Ко�
     finally { sb.remove(); WORK.get_item = realGetItem; }
 });
 
-await test('панель ввода задачи: кнопка со спектром вместо микрофона; шапка без наушников; включение идёт в шелл', async () => {
+await test('панель ввода задачи: микрофон диктовки внизу, кнопка режима беседы со спектром — в верхнем баре', async () => {
     const shell = await mountShell(body());
     try {
         const bar = await waitFor(() => shell.$('microchat-panel')?.$('work-prompt-bar'), 'бар');
-        await waitFor(() => bar.$('.dialog-btn') || !shell.$('microchat-panel').canVoice, 'кнопка диалога');
-        if (shell.$('microchat-panel').canVoice) {
+        const head = await waitFor(() => shell.$('microchat-header'), 'шапка');
+        assert(!bar.$('.dialog-btn'), 'в панели ввода кнопки режима беседы нет');
+        if (bar.speech)
+            await waitFor(() => [...bar.$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('microphone')), 'микрофон диктовки в панели ввода');
+        if (head.canVoice) {
+            await waitFor(() => head.$('.dialog-btn'), 'кнопка режима беседы в шапке');
             const calls = [];
             shell.toggleVoice = on => calls.push(on);
-            bar.toggleDialog();
-            eq(calls[0], true, 'включение дошло до шелла');
-            assert(![...bar.$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('microphone')), 'микрофона-диктовки нет');
+            head.toggleVoice();
+            eq(calls[0], true, 'включение из шапки дошло до шелла');
         }
-        assert(![...shell.$('microchat-header').$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('headset')), 'наушников в шапке нет');
     }
     finally { shell.remove(); WORK.get_item = realGetItem; }
 });

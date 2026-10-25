@@ -15,6 +15,7 @@ export function fakeDocker(o = {}) {
     const volumes = new Set();
     const networks = new Map(); // name -> Set(containerId)
     let n = 0;
+    let mvCount = 0; // 6.3: подмена для теста сбоя mv (failMvOn)
     const matchLabels = (labels, wanted) => (wanted || []).every(f => {
         const [k, v] = f.split('=');
         return v === undefined ? labels[k] !== undefined : labels[k] === v;
@@ -49,7 +50,10 @@ export function fakeDocker(o = {}) {
         const argv = isSh ? Cmd.slice(3) : [];
         // зонд прав на workspace
         if (script && script.includes('.probe_') && script.includes('echo ok'))
-            return { code: 0, out: 'ok', err: '' };
+            return o.probeFails ? { code: 1, out: '', err: 'отказано' } : { code: 0, out: 'ok', err: '' };
+        // размер рабочей папки (мягкая квота тома)
+        if (script && script.includes('du -sm'))
+            return { code: 0, out: String(Number(o.workspaceMb) || 42) + '\n', err: '' };
         if (script === 'scrot -o -') {
             if (o.noGraphics) {
                 code = 127; err = 'sh: scrot: command not found';
@@ -84,6 +88,99 @@ export function fakeDocker(o = {}) {
             const text = Buffer.from(argv[1], 'base64').toString('utf-8');
             c.files.set(argv[2], text);
             out = String(Buffer.byteLength(text, 'utf-8'));
+        }
+        // 6.2 (final): grep/glob в песочнице (tools/dev/search.js) — rg/grep/find по файлам контейнера
+        else if (script.includes('rg --no-heading') || script.includes('grep -rn')) {
+            const pat = String(argv[2] ?? '');
+            const mask = String(argv[3] ?? '');
+            const ci = /\s-i\s/.test(script);
+            const col = script.includes('--column');
+            const word = script.includes('--word-match');
+            const globs = [...script.matchAll(/--glob "([^"]+)"/g)].map(m => m[1]).filter(g => !g.includes('$'));
+            const masks = globs.filter(g => !g.startsWith('!'));
+            const excl = globs.filter(g => g.startsWith('!')).map(g => g.replace(/^\*+/, '').replace(/\*+$/, ''));
+            const needle = ci ? pat.toLowerCase() : pat;
+            const wordRe = word && pat ? new RegExp('\\b' + pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b') : null;
+            const found = [];
+            for (const [p, text] of c.files) {
+                const base = p.split('/').pop();
+                if (masks.length && !masks.some(m => base.endsWith(m.replace(/^\*+/, ''))))
+                    continue;
+                if (excl.some(m => p.includes(m)))
+                    continue;
+                if (mask && !p.endsWith(mask.replace(/^\*+/, '')))
+                    continue;
+                String(text).split('\n').forEach((l, i) => {
+                    const hay = ci ? l.toLowerCase() : l;
+                    let at = -1;
+                    if (wordRe) {
+                        const m = wordRe.exec(l);
+                        at = m ? m.index : -1;
+                    }
+                    else if (needle && hay.includes(needle))
+                        at = hay.indexOf(needle);
+                    if (at >= 0)
+                        found.push('./' + p.replace(/^\/+/, '') + ':' + (i + 1) + (col ? ':' + (at + 1) : '') + ': ' + l);
+                });
+            }
+            out = found.join('\n') + (found.length ? '\n' : '');
+            code = found.length ? 0 : 1;
+        }
+        else if (script.includes('rg --files') || script.includes('find . -type f')) {
+            const mask = String(argv[2] ?? '').replace(/^.*\//, '').replace(/\*/g, '');
+            const keys = [...c.files.keys()].filter(k => !mask || k.split('/').pop().includes(mask));
+            out = keys.map(k => './' + k.replace(/^\/+/, '')).join('\n') + (keys.length ? '\n' : '');
+        }
+        // 6.5 (final): tsc в песочнице — эмуляция диагностики (--noEmit по файлу)
+        else if (script.includes('command -v tsc') && script.includes('--noEmit')) {
+            const file = argv[1];
+            if (!c.files.has(file)) { code = 1; err = 'нет файла: ' + file; }
+            else {
+                const rel = file.replace(/^\/+/, '').replace(/^workspace\//, '');
+                const diags = [];
+                String(c.files.get(file)).split('\n').forEach((l, i) => {
+                    if (l.includes('"not a number"'))
+                        diags.push(rel + '(' + (i + 1) + ',7): error TS-test: Type \'string\' is not assignable to type \'number\'.');
+                });
+                out = diags.join('\n') + (diags.length ? '\n' : '');
+                code = diags.length ? 1 : 0;
+            }
+        }
+        // 6.3 (final): apply_patch в песочнице — cp/mv/rm по файлам контейнера
+        else if (Cmd[0] === 'cp' && Cmd[1] === '--') {
+            if (!c.files.has(Cmd[2])) { code = 1; err = "cp: cannot stat '" + Cmd[2] + "'"; }
+            else c.files.set(Cmd[3], c.files.get(Cmd[2]));
+        }
+        else if (Cmd[0] === 'mv' && Cmd[1] === '--') {
+            mvCount++;
+            if (o.failMvOn === mvCount) { code = 1; err = "mv: cannot move '" + Cmd[2] + "'"; }
+            else if (!c.files.has(Cmd[2])) { code = 1; err = "mv: cannot stat '" + Cmd[2] + "'"; }
+            else { c.files.set(Cmd[3], c.files.get(Cmd[2])); c.files.delete(Cmd[2]); }
+        }
+        else if (Cmd[0] === 'rm' && Cmd[1] === '--') {
+            if (!c.files.has(Cmd[2])) { code = 1; err = "rm: cannot remove '" + Cmd[2] + "'"; }
+            else c.files.delete(Cmd[2]);
+        }
+        // 6.4 (final): git в песочнице — эмуляция по подкоманде (массив аргументов, без sh)
+        else if (Cmd[0] === 'git') {
+            const sub = Cmd[1] || '';
+            if (sub === 'status')
+                out = '## main...origin/main\n';
+            else if (sub === 'log')
+                out = 'abc1234 (HEAD -> main) initial commit\n';
+            else if (sub === 'show')
+                out = 'commit ' + (Cmd[Cmd.length - 1] || 'HEAD') + '\n BOX/doc/a.md | 1 +\n';
+            else if (sub === 'blame') {
+                const at = Cmd.indexOf('--');
+                out = '(HEAD) строка 1 ' + (Cmd[at + 1] || '?') + '\n';
+            }
+            else if (sub === 'commit') {
+                const at = Cmd.indexOf('-m');
+                out = '[main 1234567] ' + (Cmd[at + 1] || '') + '\n';
+            }
+            else if (['diff', 'add', 'branch', 'push'].includes(sub))
+                out = '';
+            else { code = 1; err = "fake git: не умею '" + sub + "'"; }
         }
         else if (Cmd[0] === 'ls') {
             const dir = Cmd[3].replace(/\/+$/, '') || '/';
@@ -158,14 +255,41 @@ export function fakeDocker(o = {}) {
                 Labels: opts.Labels || {}, Created: Math.floor(Date.now() / 1000),
                 files: new Map(), nets: new Set(), hostCfg: opts.HostConfig, createOpts: opts,
             });
-            // авто-остановка для «одноразовых» команд (chown, fix-perms хелпер)
-            const autoExit = opts.Cmd?.[0] === 'chown';
+            // одноразовые команды (chown, iptables-хелпер egress) ВЫПОЛНЯЮТСЯ при start,
+            // не при создании: правило iptables ставит только запущенный контейнер (R1/8.29 —
+            // раньше правило записывалось при createContainer и маскировало пропущенный start).
+            // В work-computer заданы USER agent и ENTRYPOINT /opt/work/entrypoint.sh (sleep infinity),
+            // поэтому хелпер обязан явно передать User: '0:0' и сбросить Entrypoint: [].
+            const resetEntry = Array.isArray(opts.Entrypoint) && opts.Entrypoint.length === 0;
+            const isRoot = opts.User === '0:0' || opts.User === '0' || opts.User === 'root';
+            const isChown = opts.Cmd?.[0] === 'chown' && resetEntry && isRoot;
+            const isIptables = opts.Cmd?.[0] === 'sh' && String(opts.Cmd?.[2] || '').includes('iptables') && resetEntry && isRoot;
+            const autoExit = (isChown && !o.stuckHelper) || isIptables;
+            const runOnce = () => {
+                const c = containers.get(id);
+                if (!c || c.State !== 'running' || c.ranOnce)
+                    return;
+                c.ranOnce = true;
+                if (isIptables) {
+                    c.exitCode = o.iptablesFail ? 1 : 0;
+                    (api.iptables ||= []).push(opts.Cmd[2]);
+                }
+                if (autoExit)
+                    setImmediate(() => { const x = containers.get(id); if (x) x.State = 'exited'; });
+            };
+            containers.get(id).runOnce = runOnce;
             return {
                 id,
                 async start() {
-                    containers.get(id).State = 'running';
-                    if (autoExit)
-                        setImmediate(() => { const c = containers.get(id); if (c) c.State = 'exited'; });
+                    const c = containers.get(id);
+                    c.State = 'running';
+                    // как настоящий Docker: NetworkMode подключает контейнер к сети
+                    const mode = c.hostCfg?.NetworkMode;
+                    if (mode && networks.has(mode)) {
+                        networks.get(mode).add(id);
+                        c.nets.add(mode);
+                    }
+                    runOnce();
                 },
             };
         },
@@ -181,16 +305,21 @@ export function fakeDocker(o = {}) {
                     const bind = (c.hostCfg?.Binds || [])[0] || '';
                     const volName = bind.split(':')[0] || 'vol';
                     return {
-                        Id: c.Id, Name: '/' + c.Name, Config: { Image: c.Image },
-                        State: { Running: c.State === 'running', Status: c.State, StartedAt: new Date().toISOString() },
+                        Id: c.Id, Name: '/' + c.Name, Config: { Image: c.Image, Labels: { ...c.Labels } },
+                        State: { Running: c.State === 'running', Status: c.State, StartedAt: new Date().toISOString(), ExitCode: c.exitCode ?? (c.State === 'running' ? null : 0) },
                         NetworkSettings: { Networks: nets },
                         HostConfig: { Memory: c.hostCfg?.Memory || 0 },
                         Mounts: volName ? [{ Destination: '/workspace', Name: volName }] : [],
                     };
                 },
-                async start() { if (!c) no(); c.State = 'running'; },
+                async start() { if (!c) no(); c.State = 'running'; c.runOnce?.(); },
                 async stop() { if (!c) no(); c.State = 'exited'; },
-                async remove() { if (!c) no(); containers.delete(id); },
+                async remove() { if (!c) no();
+                    // как настоящий Docker: удаление контейнера отключает его от сетей
+                    for (const s of networks.values())
+                        s.delete(id);
+                    containers.delete(id);
+                },
                 async exec(execOpts) {
                     if (!c) no();
                     if (c.State !== 'running') { const e = new Error('container not running'); e.statusCode = 409; throw e; }
@@ -222,6 +351,21 @@ export function fakeDocker(o = {}) {
         },
         getNetwork(name) {
             return {
+                async inspect() {
+                    if (!networks.has(name))
+                        throw new Error('no such network');
+                    const Containers = {};
+                    for (const id of networks.get(name))
+                        Containers[id] = { Name: containers.get(id)?.Name };
+                    return { Name: name, Id: 'e' + name.replace(/\W/g, '').padEnd(12, '0').slice(0, 12), Containers };
+                },
+                async remove() {
+                    if (!networks.has(name))
+                        throw new Error('no such network');
+                    if (networks.get(name).size)
+                        throw new Error('network has active endpoints');
+                    networks.delete(name);
+                },
                 async connect({ Container }) {
                     const s = networks.get(name);
                     if (!s) throw new Error('no such network');

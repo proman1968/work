@@ -90,9 +90,9 @@ export function dnsCandidates(records, permitted) {
 }
 
 export function parseAnnouncement(text, host, via) {
-    let urls = [];
-    if (via === 'ssdp') urls = [text.match(/^location:\s*(.+)$/im)?.[1]?.trim()].filter(Boolean);
-    else urls = (text.match(/<(?:\w+:)?XAddrs\b[^>]*>([^<]+)<\//i)?.[1] || '').trim().split(/\s+/).filter(Boolean);
+    const urls = via === 'ssdp'
+        ? [text.match(/^location:\s*(.+)$/im)?.[1]?.trim()].filter(Boolean)
+        : (text.match(/<(?:\w+:)?XAddrs\b[^>]*>([^<]+)<\//i)?.[1] || '').trim().split(/\s+/).filter(Boolean);
     return urls.flatMap(raw => {
         try {
             const u = new URL(raw);
@@ -103,6 +103,28 @@ export function parseAnnouncement(text, host, via) {
         }
         catch { return []; }
     });
+}
+
+/**
+ * F27: адрес из чужого объявления (SSDP Location, WS-Discovery XAddrs) не водит сервер
+ * за руку: принимаем только само объявившееся устройство или IP-литерал в разрешённых
+ * подсетях — DNS-имена и внешние адреса из заголовков отбрасываются.
+ */
+export function announcementUrlOk(rawUrl, peerHost, permitted) {
+    try {
+        const u = new URL(String(rawUrl));
+        if (!['http:', 'https:'].includes(u.protocol))
+            return false;
+        const h = u.hostname.replace(/^\[|\]$/g, '');
+        if (h === String(peerHost || ''))
+            return true; // само устройство (обычный случай SSDP)
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(h))
+            return permitted(h); // IP-литерал — только в разрешённых подсетях
+        return false; // DNS-имя из чужого заголовка — не доверяем
+    }
+    catch {
+        return false;
+    }
 }
 
 export async function discover(cfg, { signal, duration = 2500 } = {}) {
@@ -149,6 +171,10 @@ export async function discover(cfg, { signal, duration = 2500 } = {}) {
         });
     }))));
     signal?.throwIfAborted();
+    // F27: адреса из объявлений (SSDP Location / XAddrs) — только проверенные
+    const announced = candidates.filter(c => announcementUrlOk(c.url, c.host, permitted));
+    candidates.length = 0;
+    candidates.push(...announced);
     candidates.push(...dnsCandidates(records, permitted));
     // SSDP указывает на XML-описание, не на управляющий endpoint. Читаем его ограниченно.
     await pool(candidates.filter(c => c.via === 'ssdp').slice(0, 30), 4, async c => {

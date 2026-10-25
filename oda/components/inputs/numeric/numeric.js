@@ -1,8 +1,14 @@
 /**
  * oda-numeric-input — число на нативном input (inputmode=decimal).
  * В фокусе — сырое число, без фокуса — формат Intl.NumberFormat (accuracy, currency, locale).
- * value — Number (пусто — undefined). Стрелки ↑/↓ меняют на step. Проверки: не число, min, max.
+ * value — Number (пусто — undefined). Стрелки ↑/↓ меняют на step и останавливаются на границе min/max.
+ * Проверки (validationErrors): не число, min, max. Введённое значение вне диапазона НЕ зажимается молча:
+ * оно сохраняется как есть, а контрол показывает ошибку («Не меньше …» / «Не больше …»).
+ * Ввод фильтруется на beforeinput по вставляемому тексту целиком (одиночный символ и вставка из буфера).
  */
+
+/** допустимые символы ввода: цифры, разделитель (точка/запятая), знак и операторы калькулятора, пробелы (разряды) */
+const ALLOWED_TEXT = /^[0-9+\-*/%^().,\s]*$/;
 
 ODA({
     is: 'oda-numeric-input',
@@ -66,20 +72,17 @@ ODA({
         text = String(text).replace(/[\s\u00a0]/g, '').replace(',', '.');
         return text === '' ? undefined : Number(text);
     },
-    /** допустимые символы: цифры, один разделитель, знак в начале, операторы для калькулятора */
+    /**
+     * Фильтр ввода: проверяется весь вставляемый текст (`e.data`), а не один символ — иначе вставка «12» блокировалась.
+     * Допустимо: цифры, разделитель (точка или запятая), знак и операторы калькулятора, пробелы.
+     * Удаление, отмена/повтор и перенос строки (`data === null`) не фильтруются. Итоговое значение
+     * (в т.ч. «1.2.3») проверяет commit()/validationErrors, а не фильтр.
+     */
     filterInput(e) {
-        if (!e.data)
+        if (e.data == null || !e.inputType?.startsWith('insert'))
             return;
-        if (/^[0-9]$/.test(e.data))
-            return;
-        const v = e.target.value;
-        if ((e.data === '.' || e.data === ',') && !/[.,]/.test(v))
-            return;
-        if ((e.data === '-' || e.data === '+') && (e.target.selectionStart === 0 && !/^[+-]/.test(v)))
-            return;
-        if (/^[+\-*/%^().\s]$/.test(e.data))
-            return;
-        e.preventDefault();
+        if (!ALLOWED_TEXT.test(e.data))
+            e.preventDefault();
     },
     /** простое выражение (= 2*3+1): только числа и операторы, иначе NaN */
     calc(text) {
@@ -104,8 +107,7 @@ ODA({
             this.draft = text;
             return;
         }
-        const { min, max } = this.lim;
-        n = Math.min(max ?? n, Math.max(min ?? n, n));
+        // вне диапазона min/max значение не зажимается: его показывает ошибка в validationErrors
         this.draft = undefined;
         this.value = +n.toFixed(10);
     },
@@ -117,6 +119,7 @@ ODA({
         e.preventDefault();
         const { min, max, step } = this.lim;
         let n = (this.parse(e.target.value) || 0) + (e.key === 'ArrowUp' ? step : -step);
+        // шаг стрелками упирается в границу диапазона (как у нативного number)
         n = Math.min(max ?? n, Math.max(min ?? n, n));
         this.draft = undefined;
         this.value = +n.toFixed(10);

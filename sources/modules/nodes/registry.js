@@ -7,6 +7,7 @@
  */
 import { fingerprint, PROTOCOL, wellKnown } from './identity.js';
 import { serverId } from '../../host/server-id.js';
+import { guardedRequest } from '../../host/net-guard.js';
 
 const CARD_MAX = 1024 * 1024;
 let cache = null;
@@ -58,8 +59,34 @@ export async function findNode(hostId) {
     return (await listNodes()).find(n => n.host_id === id) || null;
 }
 
-/** Получить карточку узла по адресу (только для ADMIN: адрес может быть в локальной сети). */
-export async function fetchCard(origin) {
+/**
+ * Карточка узла извне: оставляем только ожидаемые типы (строки; роли — массив объектов со строковыми полями).
+ * Всё прочее (в т.ч. вложенные объекты в label) отбрасывается до сохранения в class.js узла.
+ */
+export function sanitizeCard(card) {
+    const str = v => typeof v === 'string' || typeof v === 'number' ? String(v) : '';
+    const roles = (Array.isArray(card?.roles) ? card.roles : [])
+        .filter(r => r && typeof r === 'object' && !Array.isArray(r))
+        .map(r => ({ id: str(r.id).slice(0, 64), label: str(r.label).slice(0, 200) }));
+    const peers = (Array.isArray(card?.peers) ? card.peers : [])
+        .filter(p => typeof p === 'string')
+        .map(p => p.slice(0, 300));
+    return { ...card, label: str(card?.label).slice(0, 200), roles, peers };
+}
+
+/**
+ * Получить карточку узла по адресу (только для ADMIN: адрес может быть в локальной сети).
+ *
+ * F19 (final 8.13): запрос идёт через guardedRequest — тело читается потоком с потолком
+ * CARD_MAX (гигантский ответ не оседает в памяти, соединение рвётся), схема — только http/https,
+ * адрес без учётных данных. trusted: адрес из реестра/администратора — узлы могут жить
+ * в локальной сети, частные адреса разрешены; недоверенный (peers чужих карточек в
+ * networkGraph) — частные адреса отрезаны (SSRF: чужая карточка не водит наш сервер
+ * по внутренней сети), DNS каждого шага проверяется.
+ * @param {string} origin
+ * @param {{trusted?: boolean}} [opts]
+ */
+export async function fetchCard(origin, { trusted = false } = {}) {
     let url;
     try {
         url = new URL('/.well-known/work-node', String(origin));
@@ -69,18 +96,30 @@ export async function fetchCard(origin) {
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:')
         throw new Error('Адрес узла: только http/https');
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
-    if (!res.ok)
+    const res = await guardedRequest(url, {
+        method: 'GET',
+        maxBytes: CARD_MAX,
+        timeoutMs: 10_000,
+        maxRedirects: 0,
+        ...(trusted ? { isPrivate: () => false } : {}), // реестровые узлы — LAN легальны
+    });
+    if (res.status !== 200)
         throw new Error('Узел не ответил карточкой: HTTP ' + res.status);
-    const text = await res.text();
+    const text = String(res.body || '');
     if (text.length > CARD_MAX)
         throw new Error('Карточка узла слишком большая');
-    const card = JSON.parse(text);
+    let card;
+    try {
+        card = JSON.parse(text);
+    }
+    catch {
+        throw new Error('Узел прислал не-JSON карточку');
+    }
     if (card?.protocol !== PROTOCOL || !/^[0-9A-F]{15}$/i.test(card.id || '') || !card.publicKey)
         throw new Error('Это не узел WORK (' + PROTOCOL + ')');
     card.fingerprint = fingerprint(card.publicKey);
-    card.origin = url.origin;
-    return card;
+    card.origin = new URL(url).origin;
+    return sanitizeCard(card);
 }
 
 function rolesFrom(card) {
@@ -97,7 +136,7 @@ function rolesFrom(card) {
  * @param {object} params {origin, fingerprint (подтверждение), label?, announce?}
  */
 export async function addNode(root, params = {}) {
-    const card = await fetchCard(params.origin);
+    const card = await fetchCard(params.origin, { trusted: true }); // адрес от администратора (LAN легальна)
     if (card.id.toUpperCase() === serverId)
         throw new Error('Это наш собственный сервер');
     if (!params.fingerprint || String(params.fingerprint).toUpperCase() !== card.fingerprint)
@@ -133,7 +172,7 @@ export async function addNode(root, params = {}) {
 export async function refreshNode(item, params = {}) {
     await item.init;
     const d = item.DATA || {};
-    const card = await fetchCard(d.origin);
+    const card = await fetchCard(d.origin, { trusted: true }); // адрес из реестра (добавлен администратором)
     const patch = { remote: { label: card.label, roles: card.roles || [], peers: card.peers || [], at: Date.now() } };
     if (card.id.toUpperCase() !== String(d.host_id).toUpperCase())
         patch.status = 'id_changed';
@@ -176,14 +215,15 @@ export async function networkGraph({ depth = 2 } = {}) {
     for (const n of await listNodes()) {
         nodes.set(n.host_id, { id: n.host_id, label: n.label, origin: n.origin, status: n.status, known: true, path: n.item.path, level: 1 });
         edge(self.id, n.host_id, 'peer');
-        frontier.push(n);
+        frontier.push({ ...n, trusted: true }); // реестровые узлы добавлены администратором (LAN легальна)
     }
     for (let level = 2; level <= Math.max(1, Math.min(3, Number(depth) || 2)) && frontier.length; level++) {
         const next = [];
         await Promise.all(frontier.slice(0, 50).map(async n => {
             let card;
             try {
-                card = await fetchCard(n.origin);
+                // peers чужих карточек — недоверенные адреса (F19): частная сеть отрезана
+                card = await fetchCard(n.origin, { trusted: !!n.trusted });
             }
             catch (e) {
                 const v = nodes.get(n.host_id || n.id);

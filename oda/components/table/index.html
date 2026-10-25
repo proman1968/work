@@ -2,59 +2,209 @@
 <meta name="color-scheme" content="light dark">
 <style>/*oda-critical*/html{color-scheme:light dark;background:light-dark(#f4f2f9,#191622);color:light-dark(#241f31,#ece8f5);}body{margin:0;visibility:hidden;min-height:100vh;}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>oda-table</title>
+<!-- Значок вкладки инлайном: сетка 2×2 с шапкой. data-URL вместо /favicon.ico, которого в корне нет. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='.5' y='.5' width='15' height='15' rx='3' fill='%23faf8ff' stroke='%237a6aa0'/%3E%3Cpath d='M1 6h14M8 6v9' stroke='%237a6aa0' fill='none'/%3E%3C/svg%3E">
+<title>oda-table (этап 8-c: сортировка, фильтр и меню от шапки)</title>
 <script type="module" src="/oda/oda.js"></script>
 <script type="module" src="./table.js"></script>
 <script type="module" src="/oda/components/inputs/text/text.js"></script>
-<script type="module" src="/oda/components/inputs/checkbox/checkbox.js"></script>
+<script type="module" src="/oda/components/inputs/select/select.js"></script>
 <script type="module" src="/oda/components/button/button.js"></script>
+<style>
+    .stage-note {
+        color: var(--muted-color);
+        font-size: var(--font-size-s);
+    }
+</style>
 <div vertical flex style="padding: var(--space-m); gap: var(--space-s); overflow: hidden;">
-    <div horizontal no-flex style="gap: var(--space-m); align-items: center;">
-        <oda-text-input id="search" flex placeholder="Поиск по таблице" clearable></oda-text-input>
-        <oda-checkbox id="edit" caption="правка ячеек" value></oda-checkbox>
-        <oda-checkbox id="group" caption="группировка"></oda-checkbox>
-        <oda-button id="expand" label="Развернуть всё" border></oda-button>
-        <oda-button id="collapse" label="Свернуть всё" border></oda-button>
-        <span id="log" style="color: var(--muted-color); font-size: var(--font-size-s);"></span>
+    <!-- описание этапа — всегда верхней строкой; перед сдачей страницы его уберём -->
+    <div class="stage-note">
+        oda-table · этап 8-c: шапка управляет таблицей — клик по заголовку сортирует (Ctrl/Cmd — в мультисортировку), кнопка-фильтр открывает меню с полем ввода, правый клик в любом месте шапки — настройки таблицы. Видимость, порядок, сортировка, фильтры и ширины — настройки таблицы: переживают F5, «Сбросить настройки» возвращает всё как в метаданных. «Все фиксированные» — справа пустой хвост.
     </div>
-    <oda-table id="table" flex show-header show-column-filter allow-sort allow-focus allow-row-panel col-lines row-lines even-odd editable auto-fit allow-check="double"></oda-table>
+    <!-- панель демо — только то, чего нет в шапке: поиск, набор колонок (порядку ручек из шапки нет),
+         зебра, фокус, отметка, сброс. Сортировка — кликами, видимость — меню настроек (8-c) -->
+    <div horizontal no-flex style="gap: var(--space-m); align-items: center;">
+        <oda-text-input id="search" flex placeholder="Поиск по строкам" clearable></oda-text-input>
+        <oda-select-input id="set" style="width: 14em" caption="Набор колонок"></oda-select-input>
+        <oda-button id="zebra" label="Зебра" border></oda-button>
+        <oda-button id="allow-focus" label="Фокус" border></oda-button>
+        <oda-button id="mark-row" label="Отметить текущую" border></oda-button>
+        <oda-button id="reset" label="Сбросить настройки" border></oda-button>
+    </div>
+    <oda-table id="grid" flex col-lines row-lines></oda-table>
 </div>
 <script type="module">
-    import { CONTROLS } from '/oda/components/structure/controls.js';
     await customElements.whenDefined('oda-table');
-    table.controls = CONTROLS;
-    table.columns = [
-        { name: 'title', label: 'Задача', treeMode: true, fix: 'left', control: 'oda-text-input' },
-        { name: 'status', label: 'Статус', type: 'select', options: [{ value: 'new', label: 'Новая' }, { value: 'work', label: 'В работе' }, { value: 'done', label: 'Готово' }] },
-        { name: 'plan', label: 'План', items: [
-            { name: 'due', label: 'Срок', type: 'date' },
-            { name: 'hours', label: 'Часы', type: 'number' }
-        ] },
-        { name: 'priority', label: 'Приоритет', type: 'rating', width: 140 },
-        { name: 'urgent', label: 'Срочно', type: 'boolean' },
-        { name: 'note', label: 'Заметка' }
+    // Ключ хранения настроек — до первого чтения состояния: `$save` читает хранилище один раз,
+    // когда кэш пуст. Без ключа все таблицы страницы делили бы одно хранилище.
+    grid.$saveKey = 'table-demo';
+    await customElements.whenDefined('oda-button');
+
+    const STATUSES = ['new', 'work', 'done'];
+    const PEOPLE = ['Иванов', 'Петров', 'Сидорова', 'Кузнецов', 'Морозова', 'Волков'];
+    const TITLES = ['Релиз', 'Дизайн', 'Разработка', 'Тестирование', 'Документация', 'Поддержка', 'Миграция', 'Рефакторинг'];
+    const FIRST = ['Иван', 'Пётр', 'Анна', 'Мария', 'Сергей', 'Ольга'];
+    const MIDDLE = ['Иванович', 'Петрович', 'Сергеевич', 'Алексеевич', 'Николаевич', 'Дмитриевич'];
+
+    /** узел ФИО: своё значение — строка под `'@'`, дети — отдельные ключи (контракт DataAccessNode) */
+    const fioOf = k => {
+        const last = PEOPLE[k % PEOPLE.length];
+        const first = FIRST[k % FIRST.length];
+        const middle = MIDDLE[k % MIDDLE.length];
+        return { '@': `${last} ${first[0]}. ${middle[0]}.`, last, first, middle };
+    };
+
+    /** подзадача со своими подзадачами: третья волна — только у каждой второй ветки */
+    const childrenOf = (n, withGrand) => Array.from({ length: 3 }, (_, j) => ({
+        id: `${n}.${j + 1}`,
+        title: `Этап ${j + 1} задачи ${n}`,
+        status: STATUSES[(n + j) % 3],
+        assignee: PEOPLE[(n + j) % PEOPLE.length],
+        hours: j === 2 ? undefined : (j + 1) * 2, // пустое значение — для проверки правила «пустые в конец»
+        plan: 8,
+        fact: j,
+        due: `2026-11-0${j + 1}`,
+        priority: (j % 5) + 1,
+        urgent: false,
+        note: '',
+        fio: fioOf(n + j),
+        expanded: !!withGrand && j === 0,
+        items: withGrand && j === 0
+            ? [{ id: `${n}.${j + 1}.1`, title: `Подзадача задачи ${n}`, status: 'new', assignee: PEOPLE[n % PEOPLE.length], hours: 1, due: '2026-11-10', priority: 1, fio: fioOf(n + j + 1) }]
+            : undefined,
+    }));
+
+    // 60 строк верхнего уровня и дерево: у каждой седьмой — подзадачи, у части веток они раскрыты.
+    // Пустые значения (часы, срок, исполнитель) — намеренно: проверка правила «пустые в конец».
+    grid.dataSet = Array.from({ length: 60 }, (_, i) => {
+        const n = i + 1;
+        const tree = n % 7 === 3;
+        const withGrand = tree && n % 14 === 3;
+        return {
+            id: n,
+            title: `${TITLES[i % TITLES.length]} ${n}`,
+            status: STATUSES[i % 3],
+            assignee: i % 13 === 3 ? '' : PEOPLE[i % PEOPLE.length],
+            hours: i % 9 === 5 ? undefined : (i % 12) * 4,
+            plan: 40 + (i % 5) * 8,
+            fact: (i % 7) * 6,
+            due: i % 11 === 7 ? '' : `2026-${String((i % 12) + 1).padStart(2, '0')}-${String((i % 27) + 1).padStart(2, '0')}`,
+            priority: (i % 5) + 1,
+            urgent: i % 4 === 0,
+            note: i % 6 === 0 ? 'нужна проверка' : '',
+            fio: fioOf(i),
+            readonly: i === 4, // одна строка «только для чтения» — проверка признака ячейки
+            expanded: tree && n < 21, // первые три ветки раскрыты, остальные свёрнуты
+            items: tree ? childrenOf(n, withGrand) : undefined,
+        };
+    });
+
+    // Метаданные полей WORK (дерево) — строго чтение, присваиваются таблице один раз. `fio` — узел
+    // со своим значением под `'@'` и детьми по `id`; `title` — главная колонка (`treeMode`), её скрыть
+    // нельзя. Размеры (8-b): `width` — фиксированная колонка, `minWidth` — свой минимум гибкой
+    // (у «Задачи» — с запасом на отступ уровней дерева); без них — минимум по умолчанию `--table-min-col`.
+    const METADATA = [
+        { id: 'title', label: 'Задача', treeMode: true, minWidth: 160 },
+        { id: 'fio', label: 'ФИО', type: 'String', fields: [
+            { id: 'last', label: 'Фамилия' },
+            { id: 'first', label: 'Имя' },
+            { id: 'middle', label: 'Отчество' } ] },
+        { id: 'id', label: '№', type: 'number', readonly: true, width: 56 },
+        { id: 'status', label: 'Статус' },
+        { id: 'assignee', label: 'Исполнитель' },
+        { id: 'hours', label: 'Часы', type: 'number', minWidth: 80 },
+        { id: 'plan', label: 'План', type: 'number' },
+        { id: 'fact', label: 'Факт', type: 'number' },
+        { id: 'due', label: 'Срок', type: 'date' },
+        { id: 'priority', label: 'Приоритет', type: 'number' },
+        { id: 'urgent', label: 'Срочно', type: 'boolean', width: 72 },
     ];
-    table.dataSet = [
-        { title: 'Релиз 1.0', status: 'work', priority: 5, expanded: true, items: [
-            { title: 'Дизайн', status: 'done', due: '2026-09-01', hours: 12, priority: 3 },
-            { title: 'Разработка', status: 'work', due: '2026-10-01', hours: 80, priority: 5, urgent: true, expanded: true, items: [
-                { title: 'Поля ввода', status: 'done', hours: 30 },
-                // настройка на уровне строки и ячейки: $fields['*'] и $fields[колонка]
-                { title: 'Таблица (только чтение)', status: 'work', hours: 40, readonly: true },
-                { title: 'Формы', status: 'new', hours: 10, $fields: { note: { control: 'oda-color-input' } }, note: '#4b0082' }
-            ] },
-            { title: 'Тестирование', status: 'new', due: '2026-10-15', hours: 24, priority: 2 }
-        ] },
-        { title: 'Документация', status: 'new', priority: 1, note: 'readme + демо' },
-        { title: 'Поддержка', status: 'work', priority: 2, expanded: true, items: [
-            { title: 'Письма', status: 'done', hours: 6, note: 'очередь разобрана' },
-            { title: 'Звонки', status: 'new', hours: 4, urgent: true }
-        ] }
+    const MAIN = 'title'; // главную колонку скрыть нельзя — в меню настроек её нет
+
+    grid.metadata = METADATA;
+
+    // Всё дальнейшее — настройки таблицы через её API (`setColumnState`/`resetColumnStates`):
+    // таблица хранит их сама (`$save`), метаданные и обёртки колонок не трогаем.
+    // Ключ колонки — путь по `id` (`fio/last`).
+
+    // «Наборы»: порядок корневых колонок и ширины. Каждый набор задаёт оба аспекта целиком,
+    // поэтому переключение между наборами не оставляет следов предыдущего.
+    const ORDER_SEQ = ['title', 'fio', 'status', 'assignee', 'due', 'priority', 'urgent', 'id', 'hours', 'plan', 'fact'];
+    /** ширины «Все фиксированные» — для всех колонок, включая детей `fio` (раскрытая тоже фиксирована);
+        сумма заметно меньше окна — справа виден хвост сетки */
+    const FIXED_WIDTHS = {
+        'title': 200, 'fio': 120, 'fio/last': 96, 'fio/first': 72, 'fio/middle': 96,
+        'id': 56, 'status': 72, 'assignee': 104, 'hours': 64, 'plan': 56,
+        'fact': 56, 'due': 88, 'priority': 72, 'urgent': 72,
+    };
+    const SETS = {
+        base: { order: false, widths: false },
+        order: { order: true, widths: false },
+        fixed: { order: false, widths: true },
+    };
+    /** применить набор: `undefined` снимает значение (ключ удаляется, работает поле метаданных) */
+    const applySet = name => {
+        const preset = SETS[name] ?? SETS.base;
+        for (const column of METADATA) {
+            if (column.id === MAIN)
+                continue;
+            const pos = ORDER_SEQ.indexOf(column.id);
+            grid.setColumnState(column.id, { order: preset.order && pos >= 0 ? (pos + 1) * 10 : undefined });
+        }
+        for (const [key, width] of Object.entries(FIXED_WIDTHS))
+            grid.setColumnState(key, { width: preset.widths ? width : undefined });
+    };
+    /** какой набор сейчас в состоянии таблицы (после F5 селект должен совпасть с таблицей) */
+    const setFromState = () => {
+        if (Object.values(grid.columnSizing ?? {}).some(entry => entry?.width))
+            return 'fixed';
+        if (Object.values(grid.columnView ?? {}).some(entry => entry?.order))
+            return 'order';
+        return 'base';
+    };
+
+    search.addEventListener('value-changed', e => grid.filter = e.detail.value);
+
+    set.items = [
+        { value: 'base', label: 'Базовый' },
+        { value: 'order', label: 'Другой порядок' },
+        { value: 'fixed', label: 'Все фиксированные' },
     ];
-    search.addEventListener('value-changed', e => table.filter = e.detail.value);
-    edit.addEventListener('value-changed', e => table.editable = e.detail.value);
-    group.addEventListener('value-changed', e => table.showGroupPanel = e.detail.value);
-    expand.addEventListener('click', () => table.expandAll());
-    collapse.addEventListener('click', () => table.collapseAll());
-    table.addEventListener('cell-changed', e => log.textContent = `${e.detail.value.column?.name} = ${JSON.stringify(e.detail.value.value)}`);
+    set.value = setFromState();
+    set.addEventListener('value-changed', e => applySet(e.detail.value));
+
+    // Сортировка — кликами по шапке (одиночная / Ctrl/Cmd — в мультисортировку), видимость —
+    // меню настроек таблицы по правому клику (8-c): внешних ручек им в демо больше нет.
+
+    // «Сбросить настройки»: всё снова как в метаданных; селект набора подтягиваем к базе
+    document.querySelector('#reset').addEventListener('click', () => {
+        grid.resetColumnStates();
+        set.value = 'base';
+    });
+
+    // Тогглеры этапа 6: «Зебра» и «Фокус» — состояние синхронизируем с таблицей после
+    // собственного обработчика кнопки (она сама переключает `toggled`).
+    // Внимание: id нельзя брать глобалом — `focus` перекрыт `window.focus`, поэтому только по querySelector
+    const zebraButton = document.querySelector('#zebra');
+    const focusButton = document.querySelector('#allow-focus');
+    // состояние берём из таблицы и пишем и в таблицу, и в кнопку: своё внутреннее переключение
+    // кнопки читать нельзя (порядок обработчиков не определён)
+    const bindToggle = (button, get, set) => button.addEventListener('click', () => {
+        const next = !get();
+        set(next);
+        button.toggled = next;
+    });
+    bindToggle(zebraButton, () => grid.evenOdd, value => grid.evenOdd = value);
+    bindToggle(focusButton, () => grid.allowFocus, value => grid.allowFocus = value);
+
+    // «Отметить текущую»: отметка живёт на обёртке строки (`row.checked`), пишем через прокси;
+    // событие и каскад отметки по дереву — этап 12
+    document.querySelector('#mark-row').addEventListener('click', () => {
+        const data = grid.focusedRow;
+        if (!data)
+            return;
+        const row = (grid.rows ?? []).find(r => r.data?.id === data.id);
+        if (row)
+            row.checked = row.checked === 'checked' ? 'unchecked' : 'checked';
+    });
 </script>

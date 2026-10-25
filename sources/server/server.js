@@ -18,6 +18,7 @@ import {
 import { DEV_MODE } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
 import { guardedGet } from "../host/net-guard.js";
+import { tlsAgentFor } from "../host/tls-ca.js";
 
 /**
  * Ядро агента (sources/modules/agent) для слоёв дерева: class.js грузятся как data:-модули
@@ -63,6 +64,10 @@ export class $server extends $class {
     }
     get https(){
         return https
+    }
+    /** WORK.tls_agent(ai) → https.Agent с корнем из #system/certs (GigaChat) или undefined; геттер — не вызывается через API. */
+    get tls_agent(){
+        return tlsAgentFor
     }
     get system_types(){
         return '$server, $user, $handler, $trigger, $task'
@@ -130,17 +135,12 @@ export class $server extends $class {
 
     async npm(p = {module: ""}){
         await this.assertAccess(p, $class.ACCESS_LEVEL.ADMIN);
-        if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.^~<>=*-]+)?$/i.test(String(p.module || '')))
+        if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[a-z0-9][\w.^~=-]*)?$/i.test(String(p.module || '')))
             throw new Error('npm: недопустимое имя пакета');
-        try{
-            const result = await installPackageSpawn(p.module, './node_modules', {
-                save: true
-            });
-            return `Installation "${p.module}" completed successfully!`;
-        }
-        catch(e){
-            return e;
-        }
+        const _result = await installPackageSpawn(p.module, './node_modules', {
+            save: true
+        });
+        return `Installation "${p.module}" completed successfully!`;
     }
     async get_public_vapid() {
         return getPublicVapid(vapidKeys);
@@ -157,17 +157,18 @@ export class $server extends $class {
         return removePushSubscription(params);
     }
     async send_push_notification(params) {
-        // только вошедший пользователь (или ядро); получатели — корректные uid
+        // только вошедший пользователь (или ядро); получатели — корректные uid (без '.' и '..')
         if (!$class.resolveUid(params) && params.session?.$user !== this)
             throw new Error('Доступ запрещён');
         const list = typeof params.receivers === 'string' ? params.receivers.split(',') : (params.receivers || []);
-        if (list.some(r => !/^[\w.-]{1,64}$/.test(String(r?.id || r).trim())))
+        const validUid = s => /^[\w.-]{1,64}$/.test(s) && !/^\.+$/.test(s) && !s.includes('..');
+        if (list.some(r => !validUid(String(r?.id || r).trim())))
             throw new Error('push: недопустимый получатель');
         return sendPushNotification(params, (o) => this.remove_push_subscription({ ...o, session: { uid: o.session.uid } }));
     }
     _assertPushSubject(params) {
-        const uid = params?.session?.uid;
-        if (!uid || !/^[\w.-]{1,64}$/.test(uid))
+        const uid = String(params?.session?.uid || '');
+        if (!uid || !/^[\w.-]{1,64}$/.test(uid) || /^\.+$/.test(uid) || uid.includes('..'))
             throw new Error('push: требуется вход');
     }
 
@@ -469,6 +470,60 @@ export class $server extends $class {
         await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN);
         const { readAudit } = await import('./access/audit.js');
         return readAudit(params.day || undefined, Math.min(5000, Number(params.limit) || 500));
+    }
+    /**
+     * Панель наблюдаемости агентов (9.3, ADMIN): задачи в работе и ожидающие человека,
+     * стоимость за день и месяц (по пользователям), последние записи журнала безопасности,
+     * песочницы. Данные одним вызовом — рисует UI и докладывает агент (инструмент panel).
+     * @param {object} [params]
+     * @returns {Promise<object>} сводка
+     */
+    async agent_panel(params = {}) {
+        await this.assertAccess(params, $server.ACCESS_LEVEL.ADMIN);
+        const out = { time: new Date().toISOString() };
+        // задачи: незаконченные .task (в работе / ждут человека)
+        try {
+            const { findPendingTasks } = await import('../modules/agent/recovery.js');
+            const found = await findPendingTasks('.', 2000);
+            out.tasks = {
+                running: found.filter(t => t.status === 'running').map(t => t.path),
+                waiting: found.filter(t => t.status === 'waiting').map(t => t.path),
+            };
+        }
+        catch (e) { out.tasks = { error: String(e?.message || e).slice(0, 120) }; }
+        // стоимость: сегодня и месяц (по всем и по пользователям)
+        try {
+            const { usageTotals, usageByUser } = await import('../modules/agent/cost.js');
+            const day = out.time.slice(0, 10);
+            out.cost = {
+                day: await usageTotals({ day }),
+                month: await usageTotals({ month: day }),
+                byUserDay: await usageByUser({ day }),
+                byUserMonth: await usageByUser({ month: day }),
+            };
+        }
+        catch (e) { out.cost = { error: String(e?.message || e).slice(0, 120) }; }
+        // журнал безопасности: последние записи сегодня + счётчики по событиям
+        try {
+            const { readAudit } = await import('./access/audit.js');
+            const rows = await readAudit(out.time.slice(0, 10), 20);
+            const counts = {};
+            for (const r of rows)
+                counts[r.event] = (counts[r.event] || 0) + 1;
+            out.audit = { last: (rows || []).slice(0, 10).map(r => ({ time: r.time, event: r.event, subject: r.subject, tool: r.tool, verdict: r.verdict, outcome: r.outcome })), counts };
+        }
+        catch (e) { out.audit = { error: String(e?.message || e).slice(0, 120) }; }
+        // песочницы: все контейнеры (Docker недоступен — так и скажем)
+        try {
+            const { listComputers } = await import('../modules/sandbox/manager.js');
+            const { dockerAvailable, getDocker } = await import('../modules/sandbox/driver.js');
+            const ok = await dockerAvailable();
+            out.sandbox = ok.ok
+                ? { computers: (await listComputers(await getDocker(), null)).map(c => ({ name: c.name, owner: c.owner, state: c.state, image: c.image })) }
+                : { unavailable: String(ok.error || 'Docker недоступен').slice(0, 120) };
+        }
+        catch (e) { out.sandbox = { error: String(e?.message || e).slice(0, 120) }; }
+        return out;
     }
     /**
      * Перезапустить сервер в обычном режиме (без WORK_DEV).

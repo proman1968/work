@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Agents panel UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Страница «Агенты» (панель наблюдаемости, 9.3-UI) в настоящем браузере (tests/ui/run.mjs):
+ * данные из /?agent_panel рендерятся разделами (задачи/стоимость/журнал/песочницы),
+ * ошибка видна, данные не становятся разметкой (инъекция не исполняется).
+ */
+import '/oda/oda.js';
+import agentsProto from '/$server/$folder/$class/$structure/handlers/pages/agents/$handler/agents.js';
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+const eq = (a, b, msg) => {
+    if (a !== b)
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+};
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(120);
+    return el;
+}
+/** Поиск во всех shadow-корнях страницы (хендлер → form-agents). */
+function deepQuery(el, sel) {
+    const walk = root => {
+        const hit = root?.querySelector?.(sel);
+        if (hit)
+            return hit;
+        for (const child of root?.querySelectorAll?.('*') || []) {
+            const inChild = walk(child.__shadowRoot__ || child.shadowRoot);
+            if (inChild)
+                return inChild;
+        }
+        return null;
+    };
+    return walk(el.__shadowRoot__ || el.shadowRoot);
+}
+function deepText(el) {
+    let text = '';
+    const walk = root => {
+        text += root?.textContent || '';
+        for (const child of root?.querySelectorAll?.('*') || [])
+            walk(child.__shadowRoot__ || child.shadowRoot);
+    };
+    walk(el.__shadowRoot__ || el.shadowRoot);
+    return text;
+}
+
+/** Копия прототипа с сохранением геттеров/сеттеров (spread их убивает). */
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    proto.imports = undefined;
+    return proto;
+}
+await ODA(cloneProto(agentsProto, 'test-agents'));
+
+const DATA = {
+    time: '2026-10-15T12:34:56.000Z',
+    tasks: {
+        running: ['/BOX/task/2026-10-15/1.A000000000000001.task'],
+        waiting: ['/ORG/task/2026-10-15/2.B000000000000002.task', '/BOX/task/2026-10-15/3.<img src=x onerror=window.__xss=1>.task'],
+    },
+    cost: {
+        day: { tokens: 1500000, cost: 2, rows: 3 },
+        month: { tokens: 40000000, cost: 102.5, rows: 60 },
+        byUserDay: [{ uid: 'A000000000000001', turns: 2, tokens: 1400000, cost: 1.5 }, { uid: 'B000000000000002', turns: 1, tokens: 100000, cost: 0.5 }],
+        byUserMonth: [{ uid: 'A000000000000001', turns: 20, tokens: 39000000, cost: 101 }],
+    },
+    audit: {
+        last: [
+            { time: '2026-10-15T12:00:00.000Z', event: 'agent', subject: 'A000000000000001', tool: 'write', verdict: 'ask', outcome: 'ok' },
+            { time: '2026-10-15T11:00:00.000Z', event: 'mcp', subject: 'B000000000000002', tool: 'read', verdict: 'allow', outcome: 'ok' },
+        ],
+        counts: { agent: 12, mcp: 4 },
+    },
+    sandbox: { computers: [{ owner: 'A000000000000001', name: 'main', state: 'running' }, { owner: 'B000000000000002', name: 'dev', state: 'exited' }] },
+};
+let fetchUrls = [];
+const realFetch = window.fetch;
+async function stubFetch(data, fail) {
+    fetchUrls = [];
+    window.fetch = async (url, opts) => {
+        fetchUrls.push(String(url));
+        if (fail)
+            throw new Error('сеть недоступна');
+        return { ok: true, json: async () => data };
+    };
+}
+const restoreFetch = () => { window.fetch = realFetch; };
+
+await test('agents: данные панели рендерятся разделами; инъекция — текст', async () => {
+    await stubFetch(DATA);
+    const el = await mount('test-agents', {});
+    try {
+        assert(await until(() => deepText(el).includes('панель наблюдаемости')), 'заголовок не появился');
+        eq(String(fetchUrls.at(-1)).split('?')[1], 'agent_panel', 'панель запрашивается не у /?agent_panel: ' + fetchUrls.at(-1));
+        // неразрывные пробелы из toLocaleString — к обычным для проверок
+        const text = deepText(el).replace(/\u00A0/g, ' ');
+        assert(text.includes('1 в работе, 2 ждут человека'), 'счётчики задач: ' + text.slice(0, 300));
+        assert(text.includes('[ждёт человека] /ORG/task/2026-10-15/2.B000000000000002.task'), 'список задач');
+        assert(text.includes('Сегодня:'), 'стоимость сегодня');
+        assert(text.includes('$2'), 'деньги дня');
+        assert(text.includes('Месяц:'), 'стоимость месяц');
+        assert(text.includes('A000000000000001') && text.includes('1 400 000'), 'разбивка по пользователям');
+        assert(text.includes('Журнал безопасности'), 'журнал');
+        assert(text.includes('agent/write') && text.includes('ask ok'), 'запись журнала');
+        assert(text.includes('agent 12, mcp 4'), 'счётчики событий');
+        assert(text.includes('Песочницы') && text.includes('A000000000000001/main — running'), 'песочницы');
+        // инъекция из пути задачи — текст, не разметка: img-элемента нет, обработчик не исполнился
+        assert(!deepQuery(el, 'img'), 'из данных построен <img> — innerHTML утечка');
+        eq(window.__xss, undefined, 'onerror из данных исполнился');
+        assert(text.includes('<img src=x'), 'путь-инъекция не показан текстом');
+    }
+    finally {
+        restoreFetch();
+        el.remove();
+    }
+});
+
+await test('agents: ошибка видна; обновление перезапрашивает', async () => {
+    await stubFetch(null, true);
+    const el = await mount('test-agents', {});
+    try {
+        assert(await until(() => deepText(el).includes('Панель не получена')), 'ошибка не показана');
+        assert(deepText(el).includes('сеть недоступна'), 'текст ошибки');
+    }
+    finally {
+        restoreFetch();
+        el.remove();
+    }
+    await stubFetch(DATA);
+    const el2 = await mount('test-agents', {});
+    try {
+        assert(await until(() => deepText(el2).includes('1 в работе')), 'после перезапроса данные не пришли');
+        const calls = fetchUrls.length;
+        await (deepQuery(el2, '#body') ? el2.agentsPage?.reload?.() : null) ?? el2.reload?.();
+        await tick(120);
+        assert(fetchUrls.length > calls, 'обновление не перезапросило панель');
+    }
+    finally {
+        restoreFetch();
+        el2.remove();
+    }
+});
+
+results.push({ name: 'done', ok: results.every(r => r.ok) });
+window.__done = true;
+</script>
+</body>
+</html>

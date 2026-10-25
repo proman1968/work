@@ -3,7 +3,7 @@
  * Режим, модель, уровень рассуждения — свойства бара → configure задачи.
  * Во время вопроса агента текст — ответ, во время подтверждения — отказ с комментарием.
  */
-import { findShell, attachmentName } from './util.js';
+import { findShell, attachmentName, offlineQueuePush, offlineQueue, offlineQueueDrop } from './util.js';
 
 export const MODES = [
     { id: 'auto', label: 'Авто', icon: 'carbon:flash', hint: 'Рабочие данные — без вопросов; изменения системы и опасные действия — с подтверждением' },
@@ -20,8 +20,8 @@ ODA({ is: 'microchat-panel',
             .go { border-radius: 999px; padding: 0 12px; height: 24px; font-size: x-small; border: 1px solid var(--subtle-border); }
         </style>
         <work-prompt-bar ai ::value ::files :pending="busy" :placeholder
-            :model="data?.model" :effort="data?.effort" :modes :mode :dialog="canVoice" :dialog-on="voiceOn"
-            @dialog.stop="onDialog" @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
+            :model="data?.model" :effort="data?.effort" :modes :mode
+            @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
             @send="send" @stop="stop"></work-prompt-bar>
         <div class="foot">
             <span flex>{{hint}}</span>
@@ -33,36 +33,9 @@ ODA({ is: 'microchat-panel',
     value: '',
     modes: MODES,
     $item: null,
-    /** Голосовой диалог: кнопка со спектром вместо диктовки; нужен микрофон (https/localhost) или распознавание браузера. */
-    get canVoice() {
-        return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
-    },
-    get voiceOn() { return !!findShell(this)?.voiceOn; },
-    onDialog(e) { findShell(this)?.toggleVoice(!!(e.detail?.value ?? e.detail)); },
-    /** Полосы кнопки движутся в такт голосу: свой голос, пока слушаем, и речь агента, пока он говорит. Без перерисовок. */
-    bindVoice(v) {
-        for (const [k, fn] of Object.entries(this._vOn || {}))
-            this._v?.removeEventListener(k, fn);
-        this._vOn = this._v = null;
-        const bar = () => this.$('work-prompt-bar');
-        bar()?.setDialogLevel(0);
-        if (!v)
-            return;
-        let user = 0, speech = 0, state = v.state;
-        const push = () => bar()?.setDialogLevel(state === 'speaking' ? speech : user);
-        this._v = v;
-        this._vOn = {
-            level: e => { user = e.detail; push(); },
-            speechlevel: e => { speech = e.detail; push(); },
-            state: e => { state = e.detail; push(); },
-        };
-        for (const [k, fn] of Object.entries(this._vOn))
-            v.addEventListener(k, fn);
-    },
     detached() {
-        this.bindVoice(null);
-    },
-    get status() { return this.$pdp?.status || this.data?.status || 'idle'; },
+        globalThis.removeEventListener?.('online', this._onOnline);
+    },    get status() { return this.$pdp?.status || this.data?.status || 'idle'; },
     get busy() { return this.status === 'running'; },
     get waiting() { return this.status === 'waiting' ? this.data?.waiting : null; },
     get mode() { return this.data?.mode || 'auto'; },
@@ -91,6 +64,11 @@ ODA({ is: 'microchat-panel',
     },
     attached() {
         this.focus();
+        // 9.11: офлайн-очередь — сохранённые реплики уходят при возврате сети
+        this._onOnline ??= () => this.drainOfflineQueue();
+        globalThis.addEventListener?.('online', this._onOnline);
+        if (navigator.onLine)
+            this.drainOfflineQueue();
     },
     focus() {
         this.$('work-prompt-bar')?.focusInput();
@@ -144,13 +122,41 @@ ODA({ is: 'microchat-panel',
     },
     async dispatch(text, attachments = [], { voice = false } = {}) {
         const shell = findShell(this);
+        const body = JSON.stringify({ prompt: text, attachments, ...(voice ? { voice: true } : {}) });
+        // 9.11: офлайн — реплика в очередь (localStorage), уйдёт при возврате сети
+        if (navigator.onLine === false) {
+            if (!this.busy)
+                shell?.optimisticUser?.(text, attachments, voice);
+            offlineQueuePush(this.$item?.path, body);
+            shell?.toast?.('Нет сети — сообщение сохранено и отправится при подключении');
+            this.focus();
+            return { offlineQueued: true };
+        }
         // во время работы реплика уходит в очередь (видна в ленте из body.queue), иначе — сразу в ленту
         if (!this.busy)
-            shell?.optimisticUser(text, attachments, voice);
-        const res = await this.$item.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments, ...(voice ? { voice: true } : {}) }));
+            shell?.optimisticUser?.(text, attachments, voice);
+        const res = await this.$item.fetch('prompt', {}, body);
         if (res?.busy)
-            shell?.toast(res.error);
+            shell?.toast?.(res.error);
         return res;
+    },
+    /** 9.11: отправить сохранённые офлайн-реплики этой задачи (сеть вернулась). */
+    async drainOfflineQueue() {
+        if (navigator.onLine === false || !this.$item?.path)
+            return;
+        for (;;) {
+            const list = offlineQueue();
+            const idx = list.findIndex(x => x.task === this.$item.path);
+            if (idx < 0)
+                break;
+            try {
+                await this.$item.fetch('prompt', {}, list[idx].body);
+                offlineQueueDrop(idx);
+            }
+            catch {
+                break; // сеть снова пропала — остальное дождётся следующего online
+            }
+        }
     },
     /** Черновик из revert: текст и вложения — обратно в поле. */
     prefill(res = {}) {

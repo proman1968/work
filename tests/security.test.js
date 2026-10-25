@@ -82,6 +82,7 @@ before(async () => {
     '#security': { USER: ['${USER}'], CUSTOMER: ['${serverId}'] }
 }`);
     write('ORG/DEPT/$class/USER/work.md', 'рабочий файл');
+    write('ORG/DEPT/$class/USER/range.md', 'abcdefgh');
     write('ORG/DEPT/$class/BOSS/boss.md', 'файл руководителя');
     write('ORG/DEPT/$class/CUSTOMER/price.md', 'прайс для покупателей');
     write('ORG/DEPT/$class/logs/2026-01-01/1.x.logs', JSON.stringify({ time: 1, sender: USER, content: 'моё' }));
@@ -288,6 +289,13 @@ describe('исходящие запросы (SSRF)', () => {
         for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.0.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1'])
             assert.equal(isPrivateAddress(ip), true, ip);
         assert.equal(isPrivateAddress('8.8.8.8'), false);
+        // редкие формы IPv6, которые тоже ведут во внутренние адреса: IPv4-совместимые (::/96), site-local (fec0::/10), Teredo (2001:0::/32)
+        for (const ip of ['::7f00:1', '::127.0.0.1', '::a00:1', 'fec0::1', 'feff::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001::1'])
+            assert.equal(isPrivateAddress(ip), true, ip);
+        // публичные IPv6 рядом не задеты
+        for (const ip of ['2606:4700:4700::1111', '2001:4860:4860::8888', '2a00:1450:4001:81b::200e'])
+            assert.equal(isPrivateAddress(ip), false, ip);
+        await assert.rejects(resolvePublicUrl('http://[::7f00:1]/'), /внутренняя сеть/);
         await assert.rejects(resolvePublicUrl('http://localhost/'), /внутренняя сеть/);
         await assert.rejects(resolvePublicUrl('file:///etc/passwd'), /http и https/);
     });
@@ -296,7 +304,7 @@ describe('исходящие запросы (SSRF)', () => {
 describe('сеть WORK: узлы', () => {
     it('карточка узла публикуется', async () => {
         const card = JSON.parse((await req('/.well-known/work-node')).text);
-        assert.equal(card.protocol, 'work-node/1');
+        assert.equal(card.protocol, 'work-node/2');
         assert.equal(card.id, serverId);
         assert.ok(card.publicKey && card.fingerprint);
         assert.ok(card.roles.some(r => r.id === 'USER'));
@@ -351,6 +359,152 @@ describe('сеть WORK: узлы', () => {
         assert.equal(await nodeItem.canSee(notes, { session }), false);
     });
 
+    it('метка представителя подписана: подмена и удаление ломают подпись (F18)', async () => {
+        const { HEADERS, canonical, digestOf } = await import('../sources/modules/nodes/signing.js');
+        const { sign } = await import('../sources/modules/nodes/identity.js');
+        const url = '/ORG/DEPT/$class/CUSTOMER/price.md?read_text&role=CUSTOMER';
+        const mk = (label) => {
+            const fields = { method: 'GET', url, audience: serverId, date: new Date().toISOString(),
+                nonce: crypto.randomBytes(16).toString('base64url'), node: serverId, actor: USER,
+                actorLabel: label, roles: 'CUSTOMER', digest: digestOf(null) };
+            const headers = {
+                [HEADERS.node]: serverId, [HEADERS.audience]: serverId, [HEADERS.date]: fields.date,
+                [HEADERS.nonce]: fields.nonce, [HEADERS.digest]: fields.digest, [HEADERS.actor]: USER,
+                [HEADERS.roles]: 'CUSTOMER', [HEADERS.signature]: sign(canonical(fields)),
+            };
+            if (label)
+                headers[HEADERS.actorLabel] = label;
+            return headers;
+        };
+        const send = h => fetch(base + encodeURI(url.split('?')[0]) + '?' + url.split('?')[1], { headers: h }).then(r => r.text());
+        // подписана с меткой, отправлена с меткой — проходит
+        assert.equal(JSON.parse(await send(mk(encodeURIComponent('Иванов Иван')))), 'прайс для покупателей');
+        // подмена метки после подписи — отказ
+        const tampered = { ...mk(encodeURIComponent('Иванов Иван')), [HEADERS.actorLabel]: encodeURIComponent('Директор Иванов') };
+        assert.match(await send(tampered), /Доступ запрещён/, 'подменённая метка прошла');
+        // удаление метки (подпись была с ней) — отказ
+        const stripped = mk(encodeURIComponent('Иванов Иван'));
+        delete stripped[HEADERS.actorLabel];
+        assert.match(await send(stripped), /Доступ запрещён/, 'удалённая метка прошла');
+    });
+
+    it('content-length больше лимита отсекается до чтения тела — иначе бы запрос прошёл (F18)', async () => {
+        const { HEADERS, canonical, digestOf } = await import('../sources/modules/nodes/signing.js');
+        const { sign } = await import('../sources/modules/nodes/identity.js');
+        const url = '/ORG/DEPT/$class/CUSTOMER/price.md?read_text&role=CUSTOMER';
+        // честная подпись ПУСТОГО тела: без отсечки по content-length сервер бы прочитал (пустое)
+        // тело и выполнил запрос
+        const fields = { method: 'POST', url, audience: serverId, date: new Date().toISOString(),
+            nonce: crypto.randomBytes(16).toString('base64url'), node: serverId, actor: USER,
+            actorLabel: '', roles: 'CUSTOMER', digest: digestOf(Buffer.alloc(0)) };
+        const headers = { [HEADERS.node]: serverId, [HEADERS.audience]: serverId, [HEADERS.date]: fields.date,
+            [HEADERS.nonce]: fields.nonce, [HEADERS.digest]: fields.digest, [HEADERS.actor]: USER,
+            [HEADERS.roles]: 'CUSTOMER', [HEADERS.signature]: sign(canonical(fields)) };
+        const text = await new Promise((resolve, reject) => {
+            const u = new URL(base + encodeURI(url.split('?')[0]) + '?' + url.split('?')[1]);
+            const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'POST',
+                headers: { ...headers, 'content-length': String(10 * 1024 * 1024 * 1024) } }, res => {
+                let buf = '';
+                res.setEncoding('utf-8');
+                res.on('data', c => { buf += c; });
+                res.on('end', () => resolve(buf));
+            });
+            req.on('error', reject);
+            req.end(); // тела не шлём: отсечка обязана сработать раньше чтения
+        });
+        assert.match(text, /Доступ запрещён/, 'гигантский content-length не отсечён до чтения');
+        assert.ok(!text.includes('прайс'), 'запрос с гигантским content-length выполнился');
+    });
+
+    it('readBody: до порога — в память, дальше — на диск; хез и буфер верны (F18)', async () => {
+        const { readBody, SPOOL_BYTES, BODY_MAX } = await import('../sources/modules/nodes/inbound.js');
+        const { digestOf } = await import('../sources/modules/nodes/signing.js');
+        const streamOf = (buf, chunk = 64 * 1024) => {
+            let i = 0;
+            return (async function* () {
+                while (i < buf.length) {
+                    yield buf.subarray(i, i + chunk);
+                    i += chunk;
+                }
+            })();
+        };
+        // маленькое тело — в памяти
+        const small = Buffer.from('привет узел');
+        const s = await readBody(streamOf(small));
+        assert.equal(s.spooled, false);
+        assert.equal(s.digest, digestOf(small));
+        assert.equal((await s.load()).toString('utf-8'), 'привет узел');
+        // большое (9 МБ) — спул на диск, load возвращает целиком, хез совпадает
+        const big = crypto.randomBytes(SPOOL_BYTES + 1024 * 1024);
+        const b = await readBody(streamOf(big));
+        assert.equal(b.spooled, true, 'большое тело не ушло на диск');
+        assert.equal(b.digest, digestOf(big));
+        const loaded = await b.load();
+        assert.equal(loaded.length, big.length);
+        assert.ok(loaded.equals(big), 'буфер с диска повреждён');
+        // перебор лимита — ошибка и уборка
+        const chunks = [];
+        for (let i = 0; i <= BODY_MAX / (1024 * 1024); i++)
+            chunks.push(Buffer.alloc(1024 * 1024));
+        await assert.rejects(readBody(streamOf(Buffer.concat(chunks))), /больше допустимого/);
+    });
+
+    it('nonce переживает рестарт: хранится в БД индексов, не в памяти (F18)', async () => {
+        const { rememberNonce } = await import('../sources/modules/nodes/signing.js');
+        const { indexDb } = await import('../sources/host/index-db.js');
+        const node = 'A'.repeat(15);
+        const nonce = 'nonce-' + crypto.randomBytes(8).toString('hex');
+        assert.equal(await rememberNonce(node, nonce), true);
+        assert.equal(await rememberNonce(node, nonce), false, 'повтор в той же сессии не пойман');
+        // строка обязана лежать в ПЕРСИСТЕНТНОЙ БД (память чистится рестартом — БД нет)
+        const db = await indexDb();
+        const row = db.prepare('SELECT 1 FROM node_nonces WHERE node = ? AND nonce = ?').get(node, nonce);
+        assert.ok(row, 'nonce не записан в БД — окно повтора после рестарта открыто');
+    });
+
+    it('fetchCard: доверенный адрес (реестр) — LAN разрешена; недоверенный (peers чужих карточек) — частная сеть отрезана (F19)', async () => {
+        const { fetchCard } = await import('../sources/modules/nodes/registry.js');
+        // наш тестовый сервер — loopback: для реестрового адреса (LAN узлы легальны) — карточка читается
+        const card = await fetchCard(base, { trusted: true });
+        assert.equal(card.id, serverId);
+        assert.ok(card.publicKey);
+        // тот же адрес как недоверенный peer чужой карточки — SSRF отрезан
+        await assert.rejects(() => fetchCard(base), /внутренняя сеть|частной|недоступен/i);
+    });
+
+    it('fetchCard: бесконечное тело обрывается по потолку, а не копится в памяти (F19)', async () => {
+        const { fetchCard } = await import('../sources/modules/nodes/registry.js');
+        // сервер, который льёт карточку без конца и не закрывает соединение
+        const flood = http.createServer((_req, res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.write('{"protocol":"work-node/2","id":"' + 'A'.repeat(15) + '","publicKey":"K"');
+            const iv = setInterval(() => res.write('x'.repeat(64 * 1024)), 5);
+            res.on('close', () => clearInterval(iv)); // никогда не end()
+        });
+        await new Promise(r => flood.listen(0, '127.0.0.1', r));
+        try {
+            const t0 = Date.now();
+            // доверенный (реестровый) адрес: потолок CARD_MAX рвёт соединение быстро,
+            // а не ждёт таймаута с гигабайтами в памяти
+            await assert.rejects(
+                () => fetchCard('http://127.0.0.1:' + flood.address().port, { trusted: true }),
+                e => /размер|больш|size|allowed/i.test(String(e?.message || e)) && Date.now() - t0 < 9000,
+                'бесконечная карточка не оборвана по размеру');
+        }
+        finally {
+            flood.close();
+            flood.closeAllConnections?.();
+        }
+    });
+
+    it('networkGraph: реестровые узлы читаются (LAN легальна), peers чужих карточек — через щит (F19)', async () => {
+        const { networkGraph } = await import('../sources/modules/nodes/registry.js');
+        const g = await networkGraph({ depth: 2 });
+        const self = g.nodes.find(n => n.id === serverId && n.known);
+        assert.ok(self, 'узел SELF не попал в граф');
+        assert.equal(self.error, undefined, 'карточка реестрового узла не прочиталась: ' + self.error);
+    });
+
     it('роли только для пользователей узлу не выдаются', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const session = { uid: serverId, principal: { kind: 'node', id: serverId, roles: [] } };
@@ -359,5 +513,140 @@ describe('сеть WORK: узлы', () => {
         write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}', '${serverId}'] } }`);
         org.reset();
         assert.deepEqual(await org.roles({ session }), [], 'BOSS не выдаётся узлу');
+    });
+});
+
+describe('http-сервер: маршруты до дерева и отдача файлов', () => {
+    it('OPTIONS (предзапрос CORS) — пустой ответ без разрешений; /mcp — 401 без токена', async () => {
+        const opt = await req('/', { method: 'OPTIONS' });
+        assert.equal(opt.status, 204);
+        assert.match(opt.headers.get('x-content-type-options') || '', /nosniff/);
+        const mcp = await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        assert.equal(mcp.status, 401);
+        assert.match(mcp.headers.get('www-authenticate') || '', /Bearer/i);
+        await mcp.text();
+    });
+
+    it('маршруты до разбора дерева: oauth/callback, /.well-known/work-node, /~computer/…/status', async () => {
+        const cb = await req('/oauth/callback?state=none');
+        assert.equal(cb.status, 200);
+        assert.match(cb.headers.get('content-type') || '', /text\/html/);
+        assert.match(cb.headers.get('cache-control') || '', /no-store/);
+        assert.match(cb.text, /устарела|подключено/);
+        const wk = await req('/.well-known/work-node');
+        assert.equal(wk.status, 200);
+        assert.equal(wk.headers.get('access-control-allow-origin'), '*');
+        assert.doesNotThrow(() => JSON.parse(wk.text), 'карточка узла — JSON');
+        const comp = await req('/~computer/abc/status');
+        assert.equal(comp.status, 401);
+        assert.deepEqual(JSON.parse(comp.text), { state: 'missing' });
+    });
+
+    it('недопустимый путь с NUL; корень без своей главной — на страницу структуры; отсутствие — ошибка', async () => {
+        const nul = await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error('NUL-запрос не отвечен за 10 с')), 10_000);
+            http.get({ host: '127.0.0.1', port: server.address().port, path: '/x%00y', agent: false }, res => {
+                let text = '';
+                res.on('data', c => text += c);
+                res.on('end', () => { clearTimeout(t); resolve({ status: res.statusCode, text }); });
+            }).on('error', e => { clearTimeout(t); reject(e); });
+        });
+        assert.equal(nul.status, 400);
+        assert.match(nul.text, /Недопустимый путь/);
+        assert.equal((await req('/')).status, 302);
+        assert.match((await req('/')).headers.get('location') || '', /\/index\.html$/);
+        assert.match((await req('/index.html')).headers.get('location') || '', /explorer/);
+        assert.match((await req('/nope')).text, /not found/);
+        // свойство @ по отсутствующему пути — пустой ответ, не ошибка разбора
+        const at = await req('/nope/@label');
+        assert.equal(at.status, 200);
+        assert.equal(at.text, '');
+    });
+
+    it('папка со слэшем — на index.html; массив с методом; класс ?load — скрипт; ?download — вложение', async () => {
+        const admin = await sessionOf(ADMIN);
+        // путь со слэшем/звёздочкой — массив детей; метод по умолчанию — info
+        // путь со слэшем — одиночный элемент класса (как без слэша): JSON объекта
+        const one = await req('/ORG/', { cookie: admin });
+        assert.equal(one.status, 200, one.text);
+        assert.equal(JSON.parse(one.text).id, 'ORG');
+        const star = await req('/ORG/DEPT/$class/*?info', { cookie: admin });
+        assert.equal(star.status, 200, star.text);
+        assert.ok(JSON.parse(star.text).length >= 3, 'массив элементов с методом info');
+        const load = await req('/ORG/DEPT?load', { cookie: admin });
+        assert.equal(load.status, 200, load.text);
+        assert.match(load.headers.get('content-type') || '', /javascript/);
+        const dl = await req('/ORG/DEPT/$class/USER/work.md?download', { cookie: admin });
+        assert.equal(dl.status, 200);
+        assert.match(dl.headers.get('content-type') || '', /octet-stream/);
+        assert.match(dl.headers.get('content-disposition') || '', /work\.md/);
+        assert.match(dl.headers.get('cache-control') || '', /no-cache/);
+    });
+
+    it('Range: частичная отдача — те же права, что у download; без прав — отказ', async () => {
+        const admin = await sessionOf(ADMIN);
+        const full = await req('/ORG/DEPT/$class/USER/range.md', { cookie: admin });
+        assert.equal(full.status, 200, full.text);
+        assert.equal(full.text, 'abcdefgh');
+        const part = await req('/ORG/DEPT/$class/USER/range.md', { cookie: admin, headers: { range: 'bytes=0-3' } });
+        assert.equal(part.status, 206, part.text);
+        assert.match(part.headers.get('content-range') || '', /^bytes 0-3\//);
+        assert.equal(part.text, 'abcd', 'ровно запрошенные байты');
+        // анонимный запрос диапазона — без прав на чтение
+        const denied = await req('/ORG/DEPT/$class/USER/range.md', { headers: { range: 'bytes=0-3' } });
+        assert.equal(denied.status, 400);
+        assert.match(denied.text, /Доступ|доступ/);
+    });
+
+    it('multipart-загрузка через настоящий HTTP: файл сохранён, текст сообщения записан, метаданные учтены', async () => {
+        const user = await sessionOf(USER);
+        const fd = new FormData();
+        fd.append('message', 'multipart-сообщение');
+        fd.append('metadata', JSON.stringify({ path: '/ORG/DEPT/CUSTOMER/price.md' }));
+        fd.append('file', new Blob(['содержимое загруженного multipart'], { type: 'text/plain' }), 'up-multipart.txt');
+        const res = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test' },
+            body: fd,
+        });
+        const text = await res.text();
+        assert.equal(res.status, 200, text);
+        assert.match(text, /multipart-сообщение/);
+        // файл из формы сохранён в зону роли (вложенная text/) с исходным содержимым
+        const saved = path.join(tmp, 'ORG', 'DEPT', '$class', 'USER', 'text', 'up-multipart.txt');
+        assert.ok(fs.existsSync(saved), 'файл загрузки сохранён');
+        assert.equal(fs.readFileSync(saved, 'utf-8'), 'содержимое загруженного multipart');
+    });
+
+    it('multipart: сообщение файлом (legacy) — текст читается из файла формы', async () => {
+        const user = await sessionOf(USER);
+        const fd = new FormData();
+        fd.append('message', new Blob(['файл-сообщение'], { type: 'text/plain' }), 'msg.txt');
+        const res = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test' },
+            body: fd,
+        });
+        const text = await res.text();
+        assert.equal(res.status, 200, text);
+        assert.match(text, /файл-сообщение/);
+        // битая multipart-форма — ошибка разбора, а не падение и не тихий пропуск
+        const broken = await fetch(base + encodeURI('/ORG/DEPT?save_files&role=USER'), {
+            method: 'POST',
+            headers: { cookie: 'ssid=' + user, 'x-work-wsid': 'test', 'content-type': 'multipart/form-data; boundary=zz' },
+            body: 'это не multipart-тело',
+        });
+        assert.equal(broken.status, 400, await broken.text());
+    });
+
+    it('ETag/304 и кэш статики: повторная загрузка — без тела', async () => {
+        const admin = await sessionOf(ADMIN);
+        const one = await req('/ORG/DEPT/$class/USER/work.md', { cookie: admin });
+        assert.equal(one.status, 200);
+        const etag = one.headers.get('etag');
+        assert.ok(etag, 'файл отдаёт ETag');
+        const two = await req('/ORG/DEPT/$class/USER/work.md', { cookie: admin, headers: { 'if-none-match': etag } });
+        assert.equal(two.status, 304, 'повтор — без тела');
+        assert.equal(two.text, '');
     });
 });

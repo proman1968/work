@@ -101,10 +101,13 @@ export class $folder extends $item {
             .catch(() => ['ADMIN', 'BOSS', 'USER', 'GUEST']);
     }
     /**
-     * Роли для переключателя: свои + USER, чтобы смотреть глазами исполнителя.
+     * Роли для переключателя: свои + USER, чтобы смотреть глазами исполнителя
+     * (в режиме отладки сервера — все объявленные роли точки).
      * @returns {Promise<string[]>}
      */
     get selectableRoles() {
+        if (WORK?.DEV_MODE)
+            return this.roleOrder;
         return Promise.all([this.myRoles]).then(([mine]) =>
             mine.includes('USER') ? mine : [...mine, 'USER']);
     }
@@ -113,8 +116,8 @@ export class $folder extends $item {
      * иначе ближайшая по порядку; без предпочтения — сильнейшая.
      */
     async syncRole() {
-        const mine = await this.myRoles;
         const order = await this.roleOrder;
+        const mine = WORK?.DEV_MODE ? order : await this.myRoles;
         const next = effectiveRole(mine, order, WORK.preferredRole);
         if (this.role !== next)
             this.role = next;
@@ -140,8 +143,10 @@ export class $folder extends $item {
     get roles() {
         return Promise.resolve(this.fetch('roles')).then(roles => Array.isArray(roles) ? roles : []);
     }
-    /** Проверка роли администратора. */
+    /** Проверка роли администратора (в режиме отладки сервера — true для всех). */
     get isAdmin() {
+        if (WORK?.DEV_MODE)
+            return Promise.resolve(true);
         return Promise.resolve(this.roles).then(roles => roles.includes('ADMIN'));
     }
     get expanded() {

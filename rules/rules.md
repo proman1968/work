@@ -7,6 +7,7 @@
 |------|------------|
 | [`rules.md`](/rules/rules.md/~/handlers/pages/form/) | Общие правила: **правило правил** (продукт для автономного ИИ), документация, декларативный UI, контракты → минимальный код |
 | [`styles.md`](/rules/styles.md/~/handlers/pages/form/) | Системные стили ODA: когда/как (attrs, `@apply`, тема) |
+| [`threats.md`](/rules/threats.md/~/handlers/pages/form/) | Модель угроз агента: активы, нарушители, что защищено структурно, инварианты безопасности, остаточные риски |
 | [`user.md`](/rules/user.md/~/handlers/pages/form/) | Роль USER |
 | [`boss.md`](/rules/boss.md/~/handlers/pages/form/) | Роль BOSS |
 | [`admin.md`](/rules/admin.md/~/handlers/pages/form/) | Роль ADMIN |

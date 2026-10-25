@@ -13,6 +13,7 @@
  * Дерево WORK файловыми os_* недоступно: там работают WORK-инструменты (права, история, журнал).
  * Вызовы os_*, net_* пишутся в общий журнал безопасности (.index/audit).
  */
+import { log } from './log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -198,6 +199,8 @@ export function guarded(tools) {
     return tools.map(t => ({
         ...t,
         system: true,
+        // любое изменение в ОС/сети сервера — действие наружу: после внешнего содержимого только с подтверждением (taint.js)
+        outbound: t.outbound ?? !t.readonly,
         async run(args, ctx) {
             const t0 = Date.now();
             try {
@@ -244,13 +247,17 @@ export function run(file, args = [], o = {}) {
             windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], shell: !!o.shell,
         });
         const kill = () => {
+            // дерево (внучата при shell: true) — taskkill /T; он может сработать с большой
+            // задержкой или не найти процесс, поэтому прямое убийство делаем сразу и сами
             try {
                 if (IS_WIN && child.pid)
                     spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-                else
-                    child.kill('SIGKILL');
             }
-            catch { /* уже завершён */ }
+            catch (e) { log.debug('shell.kill.tree', e); /* уже завершён */ }
+            try {
+                child.kill('SIGKILL');
+            }
+            catch (e) { log.debug('shell.kill', e); /* уже завершён */ }
         };
         const timer = setTimeout(() => { timedOut = true; kill(); }, o.timeout || 60_000);
         const onAbort = () => kill();

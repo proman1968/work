@@ -87,7 +87,7 @@ API элементов — это «система команд» для ИИ-а
 | Имя | Где | Смысл |
 |---|---|---|
 | `save()` | `$folder` | mkdir этой папки |
-| `save({ post })` | `$class` | сохранить `class.js` (слои); `METADATA.FIELDS`/`INDEXES`/`POSTINGS` наследуются однотипными потомками через `$distr_folder` (кроме `to_inherit: false`) |
+| `save({ post })` | `$class` | сохранить `class.js` (слои). Сохраняются только отличия от предка: поля `METADATA.FIELDS`/`STATIC` сверяются с предком по `id` (рекурсивно по `fields`), совпадающие без изменённых детей не пишутся. Поля с `to_inherit: true` уходят в `$distr_folder`, без пометки — в свою метапапку. `INDEXES`/`POSTINGS` наследуются однотипными потомками всегда (кроме `to_inherit: false`) |
 | `save({ post })` | `$file` | перезаписать содержимое этого файла |
 | `edit({ post })` | `$file` | точечная правка SEARCH/REPLACE; deprecated-алиас: `edit_file` |
 | `save_file({ filename, post })` | `$folder`/`$class` | обычный файл → зона роли, history + лог; файлы данных (`point`/`$data`) → зона роли, точка в папке ext + лог |

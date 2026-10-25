@@ -5,9 +5,49 @@
 import { genId, stringifyFrontmatter, clip, callSnapshots, snapshotName } from '../util.js';
 import { absPath, callAs, getItem, writeBinary } from './work.js';
 import { ENGINE_AI } from '../resources.js';
+import { untrustedNames } from '../taint.js';
 
 const TODO_STATUS = ['pending', 'in_progress', 'completed'];
 export const MAX_DEPTH = 2;
+
+/** F31 (final 8.24): потолок дочерних задач на зону роли (env WORK_AGENT_START_MAX). */
+const MAX_CHILD_TASKS = Number(process.env.WORK_AGENT_START_MAX) || 20;
+
+/** Сколько ДОЧЕРНИХ .task (с полем parentTask и вне статуса stopped, вне history/) уже лежит в зоне роли — прежде чем заводить ещё одного (R13). */
+async function countChildTasks(point, role) {
+    try {
+        const zone = await point.work_zone({ role });
+        const dir = zone?.dir;
+        if (!dir)
+            return 0;
+        const fs = await import('node:fs');
+        let n = 0;
+        const walk = d => {
+            for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+                if (e.name === 'history' || e.name === '.index')
+                    continue;
+                if (e.isDirectory())
+                    walk(d + '/' + e.name);
+                else if (/\.task$/i.test(e.name)) {
+                    try {
+                        const raw = fs.readFileSync(d + '/' + e.name, 'utf-8');
+                        if (!raw.includes('"parentTask"'))
+                            continue;
+                        const parsed = JSON.parse(raw);
+                        if (parsed?.parentTask && parsed?.status !== 'stopped')
+                            n++;
+                    }
+                    catch { /* пропуск битого файла */ }
+                }
+            }
+        };
+        walk(dir);
+        return n;
+    }
+    catch {
+        return 0; /* зона недоступна — путь agent_start сам откажет ниже */
+    }
+}
 
 /** Снимки, созданные записями этой задачи (включая вложенные ленты субагентов). */
 function collectSnapshots(items, out = []) {
@@ -159,14 +199,18 @@ export const metaTools = [
             entry.agent = name;
             entry.items = [{ id: genId(), type: 'user', time: Date.now(), content: String(args.prompt) }];
             await ctx.host.save();
-            const llm = def.meta.model ? await env.llmFor(def.meta.model) : ctx.llm;
+            // 9.2: дешёвая модель для субагентов (ai/config.js subagentModel) — если у агента нет своей
+            const subModel = def.meta.model || env.config?.subagentModel;
+            const llm = subModel ? await env.llmFor(subModel) : ctx.llm;
             const res = await ctx.runLoop({
                 llm,
-                system: () => env.makeSystem(def),
+                system: () => env.makeSystemParts(def),
                 items: entry.items,
                 tools: await env.makeTools(def, depth, ctx.tools),
                 host: ctx.host,
                 depth,
+                taintedFrom: ctx.tainted || [],
+                hooks: ctx.hooks, // правила организации действуют и на субагента: иначе их обходило бы делегирование
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
                 ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
                 maxTurns: Number(def.meta.maxTurns) || 40,
@@ -183,6 +227,7 @@ export const metaTools = [
     {
         name: 'agent_start',
         risk: 'write',
+        outbound: true, // новый автономный агент получает инструкции: после внешнего содержимого — только с подтверждением (taint.js)
         description: 'Запустить продолжимого субагента в отдельной .task: сразу вернуть путь. Он переживает перезапуск и принимает agent_message. Роль и права — те же, что у родителя; для короткого разового поручения используй task.',
         parameters: { type: 'object', properties: {
             agent: { type: 'string', description: 'Имя агента из списка «Субагенты»' },
@@ -198,15 +243,29 @@ export const metaTools = [
             const def = ctx.env.agents.get(String(args.agent));
             if (!def)
                 throw new Error('нет субагента «' + args.agent + '»');
-            if (!(await ctx.env.makeTools(def, depth, ctx.tools)).length)
+            const preview = await ctx.env.makeTools(def, depth, ctx.tools);
+            if (!preview.length)
                 throw new Error('субагенту в этой роли недоступны инструменты');
+            // R3 (8.31): ограничение call родителя переживает перезапуск дочерней задачи —
+            // в теле (body.callRestrict); применяется при каждом запуске (session.js → makeTools)
+            const pcall = preview.find(t => t.name === 'call' && t.restrictedMethods);
             const point = ctx.env.place;
             if (!point || typeof point.save_file !== 'function')
                 throw new Error('нет рабочей точки для дочерней задачи');
+            // F31: дочерняя задача не мягче родителя — наследует его режим (ask/plan);
+            // у auto родителя остаётся auto (человек уже разрешил свободный режим)
+            const parentMode = ['ask', 'plan'].includes(String(ctx.host?.mode || '')) ? ctx.host.mode : 'auto';
+            // F31: потолок дочерних задач в зоне роли (живое чтение — настроить можно без рестарта)
+            const max = Number(process.env.WORK_AGENT_START_MAX) || MAX_CHILD_TASKS;
+            const existing = await countChildTasks(point, ctx.role);
+            if (existing >= max)
+                throw new Error('agent_start: в зоне роли уже ' + existing + ' дочерних задач (потолок ' + max
+                    + ') — останови ненужные (agent_stop) или используй разовых субагентов (task)');
             const name = String(args.description || args.agent).slice(0, 80);
-            const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle',
+            const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle', mode: parentMode,
                 parentTask: ctx.task.path, ownerUid: ctx.session.uid, childAgent: def.name, childDepth: depth,
-                model: def.meta.model || ctx.llm.name, role: ctx.role };
+                model: def.meta.model || ctx.llm.name, role: ctx.role,
+                ...(pcall ? { callRestrict: [...pcall.restrictedMethods] } : {}) };
             // skip_file_handler: не запускать триггер одновременно с явным prompt ниже.
             const log = await callAs(point, 'save_file', {
                 filename: name.replace(/[<>:"/\\|?*\r\n]/g, ' ').trim() + '.task',
@@ -230,13 +289,16 @@ export const metaTools = [
         parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
         async run(args, ctx) {
             const { child, body, core } = await ownedChild(args.path, ctx);
+            // ответ дочернего агента мог быть составлен из внешнего содержимого — тот же режим, что у чужого текста
+            if (ctx.entry && untrustedNames(body.items).size)
+                ctx.entry.untrusted = true;
             const last = [...body.items].reverse().find(i => i.type === 'assistant' && i.content);
             return { path: child.path, status: core.isRunning(child) ? 'running' : body.status,
                 waiting: body.waiting || null, last: last?.content || '', updated: body.updated };
         },
     },
     {
-        name: 'agent_message', risk: 'write',
+        name: 'agent_message', risk: 'write', outbound: true,
         description: 'Отправить сообщение своему продолжимому субагенту. Во время работы оно ставится в очередь; ожидание вопроса не подменяется ответом родителя.',
         parameters: { type: 'object', properties: { path: { type: 'string' }, prompt: { type: 'string' } }, required: ['path', 'prompt'] },
         async run(args, ctx) {
@@ -311,6 +373,7 @@ export const metaTools = [
     {
         name: 'save_skill',
         risk: 'write',
+        outbound: true, // новый навык = закрепление инструкций в системе (taint.js)
         target: args => args?.scope === 'global' ? ENGINE_AI + '/skills/' + args?.name + '.md' : null,
         description: 'Сохранить удачно выполненную работу как навык — рецепт для повторения: когда применять, шаги (какие инструменты, пути, контракты), проверки результата, подводные камни. Сохраняй, когда человек просит «запомни/зафиксируй как навык» или подтверждает предложение.',
         parameters: {
@@ -374,9 +437,120 @@ export const metaTools = [
             return 'изображение сохранено: ' + real + ' (' + (pic.model || model.short) + ')';
         },
     },
+    {
+        name: 'panel',
+        readonly: true,
+        description: 'Панель наблюдаемости (только админ): задачи в работе и ожидающие человека, стоимость агентов за день и месяц (по пользователям), последние записи журнала безопасности, песочницы.',
+        parameters: {
+            type: 'object',
+            properties: {},
+        },
+        async run(args, ctx) {
+            const { isAdmin } = await import('../system.js');
+            if (!(await isAdmin(ctx?.session)))
+                throw new Error('панель наблюдаемости — только администратору WORK (задачи и траты всех)');
+            const p = await globalThis.WORK.agent_panel({}); // права проверены выше (isAdmin); вызов системный
+            const { money } = await import('../cost.js');
+            const out = ['Панель агентов (' + p.time.replace('T', ' ').slice(0, 16) + ')'];
+            if (p.tasks?.running || p.tasks?.waiting) {
+                out.push('Задачи: ' + (p.tasks.running?.length || 0) + ' в работе, ' + (p.tasks.waiting?.length || 0) + ' ждут человека');
+                for (const t of (p.tasks.running || []).slice(0, 10))
+                    out.push('- [работает] ' + t);
+                for (const t of (p.tasks.waiting || []).slice(0, 10))
+                    out.push('- [ждёт человека] ' + t);
+                const more = (p.tasks.running?.length || 0) + (p.tasks.waiting?.length || 0) - 20;
+                if (more > 0)
+                    out.push('… ещё ' + more);
+            }
+            else
+                out.push('Задачи: незаконченных нет');
+            if (p.cost?.day) {
+                const c = p.cost;
+                out.push('Стоимость: сегодня ' + c.day.tokens.toLocaleString('ru-RU') + ' токенов, ' + (c.day.cost ? money(c.day.cost) : 'без тарифов')
+                    + '; месяц ' + c.month.tokens.toLocaleString('ru-RU') + ' токенов, ' + (c.month.cost ? money(c.month.cost) : 'без тарифов'));
+                if (c.byUserDay?.length)
+                    out.push('По пользователям (сегодня): ' + c.byUserDay.slice(0, 10).map(u => u.uid + ' ' + u.tokens.toLocaleString('ru-RU') + ' ток.' + (u.cost ? ' ' + money(u.cost) : '')).join(', '));
+            }
+            if (p.audit?.last) {
+                const counts = Object.entries(p.audit.counts || {}).map(([k, v]) => k + ' ' + v).join(', ');
+                out.push('Журнал безопасности (сегодня, последние): '
+                    + (p.audit.last.map(r => r.event + (r.tool ? '/' + r.tool : '') + ' → ' + (r.verdict || '') + (r.outcome ? ' ' + r.outcome : '')).slice(0, 5).join('; ') || 'записей нет'));
+                if (counts)
+                    out.push('События сегодня: ' + counts);
+            }
+            if (p.sandbox?.computers)
+                out.push('Песочницы: ' + p.sandbox.computers.length + ' (' + p.sandbox.computers.filter(c => c.state === 'running').length + ' запущено)'
+                    + (p.sandbox.computers.length ? ': ' + p.sandbox.computers.slice(0, 10).map(c => (c.owner || '?') + '/' + (c.name || '?') + ' ' + c.state).join(', ') : ''));
+            else if (p.sandbox?.unavailable)
+                out.push('Песочницы: Docker недоступен (' + p.sandbox.unavailable + ')');
+            return out.join('\n');
+        },
+    },
+    {
+        name: 'budget',
+        readonly: true,
+        description: 'Стоимость и бюджет: потрачено в этой задаче (ходы, токены, деньги по тарифам моделей), дневной лимит пользователя и трата сегодня, оценка следующего хода. all:true (админу) — траты всех пользователей за сегодня.',
+        parameters: {
+            type: 'object',
+            properties: { all: { type: 'boolean', description: 'Только админу: траты всех пользователей за сегодня' } },
+        },
+        async run(args, ctx) {
+            const { usageTotals, money } = await import('../cost.js');
+            const { isAdmin } = await import('../system.js');
+            // сумма по ленте задачи (включая вложенные ленты субагентов)
+            const walk = (items, acc) => {
+                for (const it of items || []) {
+                    if (it?.type !== 'assistant')
+                        continue;
+                    if (it.usage) {
+                        acc.turns++;
+                        acc.prompt += Number(it.usage.prompt) || 0;
+                        acc.completion += Number(it.usage.completion) || 0;
+                        acc.cached += Number(it.usage.cached) || 0;
+                        acc.cost += Number(it.usage.cost ?? 0) || 0;
+                        acc.priced = acc.priced || it.usage.cost != null;
+                    }
+                    for (const t of it.tools || [])
+                        walk(t?.items, acc);
+                }
+                return acc;
+            };
+            const out = [];
+            const body = ctx?.task && typeof ctx.task.getBody === 'function' ? await ctx.task.getBody().catch(() => null) : null;
+            const t = body ? walk(body.items, { turns: 0, prompt: 0, completion: 0, cached: 0, cost: 0, priced: false }) : null;
+            if (t?.turns)
+                out.push('Задача: ' + t.turns + ' ход(ов), ' + (t.prompt + t.completion + t.cached).toLocaleString('ru-RU') + ' токенов'
+                    + (t.priced ? ', ' + money(t.cost) + ' (по тарифам моделей)' : ' (тарифы моделей не заданы — pricing в карточке MODELS)'));
+            else
+                out.push('Задача: расходов ещё нет (списание — после каждого хода с ответом модели)');
+            // дневной лимит пользователя
+            const limits = ctx?.env?.config?.limits || {};
+            const uid = ctx?.session?.uid || 'anonymous';
+            const spent = await usageTotals({ uid });
+            if (limits.dayTokens || limits.dayCost)
+                out.push('Дневной лимит: ' + (limits.dayTokens ? limits.dayTokens.toLocaleString('ru-RU') + ' токенов' : '')
+                    + (limits.dayTokens && limits.dayCost ? ' / ' : '') + (limits.dayCost ? '$' + limits.dayCost : '')
+                    + ' — потрачено сегодня: ' + spent.tokens.toLocaleString('ru-RU') + ' токенов, ' + (spent.cost ? money(spent.cost) : 'без тарифов'));
+            else
+                out.push('Дневной лимит: не задан (ai/config.js limits: { dayTokens, dayCost }); потрачено сегодня: '
+                    + spent.tokens.toLocaleString('ru-RU') + ' токенов' + (spent.cost ? ', ' + money(spent.cost) : ''));
+            if (args?.all) {
+                if (!(await isAdmin(ctx?.session)))
+                    throw new Error('траты всех пользователей видит только администратор WORK');
+                const every = await usageTotals({});
+                out.push('Все пользователи сегодня: ' + every.rows + ' ход(ов), ' + every.tokens.toLocaleString('ru-RU') + ' токенов, ' + (every.cost ? money(every.cost) : 'без тарифов'));
+            }
+            // оценка следующего хода: средний расход хода этой задачи
+            if (t?.turns)
+                out.push('Оценка следующего хода: ~' + Math.round((t.prompt + t.completion + t.cached) / t.turns).toLocaleString('ru-RU') + ' токенов'
+                    + (t.priced ? ', ~' + money(t.cost / t.turns) : ''));
+            return out.join('\n');
+        },
+    },
 ];
 
 /** Короткий листинг для system: имя — описание. */
 export function listing(map, max = 60) {
-    return [...map.values()].slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
+    // сначала сортируем по имени, затем берём первые max: детерминированный набор и порядок независимо от обхода ФС
+    return [...map.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
 }

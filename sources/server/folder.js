@@ -6,7 +6,9 @@ import { DOMParser } from 'linkedom';
 import { FS } from './index.js';
 import { buildAiSchema } from '../modules/ai-schema.js';
 import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-node-name.js';
+import { isUpload } from './upload-mark.js';
 import { DEV_MODE } from '../host/config.js';
+import { assertNotMemory } from './memory-mark.js';
 import { markClassesDirty } from '../data/api.js';
 
 /**
@@ -75,8 +77,12 @@ export class $folder extends $item{
         return script.replace(/^\s*import\s+(['"])(\/[^'"]+)\1\s*;?\s*$/gm, '');
     }
 
-    static importScript(script) {
+    static importScript(script, sourceUrl = '') {
         script = this.stripAbsoluteImports(script);
+        if (sourceUrl) {
+            const safeUrl = String(sourceUrl).replace(/[\r\n]/g, '');
+            script += `\n//# sourceURL=work://${safeUrl.replace(/^\/+/, '')}`;
+        }
         const b64 = Buffer.from(script, 'utf-8').toString('base64');
         return import('data:text/javascript;base64,' + b64).then(module => module.default || module).catch(err => {
             console.error(err, script);
@@ -167,7 +173,7 @@ export class $folder extends $item{
             }
             if (files.length) {
                 let script = await $server.mergeFiles(files);
-                script = await this.constructor.importScript(script);
+                script = await this.constructor.importScript(script, this.path || this.id);
                 if (script)
                     this.DATA = script;
             }
@@ -1400,6 +1406,17 @@ export class $folder extends $item{
         }) || []
 
         logs = await Promise.all(logs);
+
+        // скачанные по URL — внешний источник (8.2): агент читает их как чужой текст
+        {
+            const urlCount = post?.urls?.length || 0;
+            if (urlCount) {
+                const { markExternal } = await import('./external-source.js');
+                for (let i = 0; i < urlCount && i < logs.length; i++)
+                    if (logs[i]?.path)
+                        markExternal(logs[i].path, 'web');
+            }
+        }
         if (params.ignore_save_logs)
             return logs;
 
@@ -1485,7 +1502,15 @@ export class $folder extends $item{
         // полный путь к файлу
         const path = dir + '/' + params.filename;
         assertInside(this.dir, path);
+        // R2 (final 8.30): файл памяти — только инструмент memory (метка Symbol, memory-mark.js);
+        // call/агентские записи/writeBinary/restore_from_history метки не имеют — отказ
+        assertNotMemory(path, params);
+        // файл из формы загрузки — внешний источник: агент будет читать его как чужой текст (external-source.js)
+        const fromUpload = !!params?.post?.path;
         if (params?.post?.path) {
+            // путь на диске доверяем только настоящей загрузке из формы (upload-mark.js): объект из JSON-тела не принимается
+            if (!isUpload(params.post))
+                throw new Error('save_file: файл принимается только из формы загрузки (multipart/form-data)');
             if (params?.post?.originalFilename) {
                 let isRenamed = true;
                 try {
@@ -1521,6 +1546,10 @@ export class $folder extends $item{
         const file = await holder._get_next_item(params.filename, FS.$file);
         file.reset();
         this.reset();
+        if (fromUpload) {
+            const { markExternal } = await import('./external-source.js');
+            markExternal(file.path, 'upload');
+        }
         globalThis.WORK_RAG?.invalidate?.(path);
         // Правка слоя обязана менять поведение без рестарта: сносим кэши сборки class.js
         if (params.filename === 'class.js')
@@ -1656,11 +1685,8 @@ export class $folder extends $item{
 
         let obj = this.write_streams[params.filename];
         if (!obj) {
-            if (fs.existsSync(dir)) {
-                fs.rmSync(dir);
-            }
             obj = this.write_streams[params.filename] = {
-                stream: fs.createWriteStream(dir, { flags: 'a' }),
+                stream: fs.createWriteStream(dir, { flags: 'w' }),
                 check: null,
                 writing: null,
                 close: async () => {
@@ -1683,8 +1709,18 @@ export class $folder extends $item{
         return obj;
     }
   async close_write_stream(params) {
-      const obj = await this.get_write_stream(params);
-      return obj?.close();
+      await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+      await this._sanitizeWriteTarget(params);
+      if (params.folder) {
+          let holder = this;
+          for (const seg of params.folder.split('/').filter(Boolean))
+              holder = await holder._get_next_item(seg, FS.$folder);
+          return holder.close_write_stream({ ...params, folder: undefined });
+      }
+      const obj = this.write_streams[params.filename];
+      if (!obj)
+          return false;
+      return obj.close();
     }
   async write_to_stream(params) {
         const obj = await this.get_write_stream(params);
@@ -1852,8 +1888,12 @@ async function readDataPost(post) {
     if (isPlainDataBody(post))
         return { ...post };
     let raw = '';
-    if (post?.path)
+    if (post?.path) {
+        // путь — только из формы загрузки (upload-mark.js); JSON-тело с path не читает файлы сервера
+        if (!isUpload(post))
+            throw new Error('save_file: файл данных принимается только из формы загрузки (multipart/form-data)');
         raw = await fsp.readFile(post.path, { encoding: 'utf-8' });
+    }
     else
         raw = dataPostText(post);
     if (!String(raw).trim())

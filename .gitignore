@@ -8,20 +8,22 @@ node_modules/
 /#system/settings.json
 /#system/os.json
 /#system/lan/
-/services/AI/GigaChat/$service/#system/settings.json
 .env
 **/#secret/
+**/#system/email.json
 
 # Local user profiles (runtime data)
-users/*/
-!users/$users/
+USERS/*/
+!USERS/$users/
 
 # Runtime data (keep structure, ignore volatile content)
 **/logs/
 **/.RAG/
 **/*.webm
 **/history/
-**/work/
+# рабочие зоны классов — только внутри $-метапапок (учёту 4.4: широкое **/work/ съедало
+# код sources/modules/agent/tools/work/); вне метапапок work/ — код, не данные
+**/$*/work/
 # Зоны ролей и данных — только внутри метапапки ($тип/DATA, $тип/USER…); одноимённые классы (/DATA) публикуются
 **/$*/DATA/
 **/$*/ADMIN/
@@ -45,9 +47,10 @@ torus/binnet/models/
 !*.js
 
 .vscode/tasks.json
-package-lock.json
 /#system/oauth/
 
 # ��������� ������� ������� (������ �� ������, RAG)
 /.index/
 
+# Data organization DB (source of truth, backup separately)
+/.data/

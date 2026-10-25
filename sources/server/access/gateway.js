@@ -13,6 +13,7 @@
  *  - admin  — защита от CSRF + ADMIN.
  */
 import { FS } from '../index.js';
+import { DEV_MODE } from '../../host/config.js';
 import { audit } from './audit.js';
 import { DATA_METHODS } from '../../data/api.js';
 
@@ -48,7 +49,7 @@ export const MEMBERS = Object.freeze({
     $parent: L.READ, $owner: L.READ, $class: L.READ, $folder: L.READ, $users: L.READ,
     types: L.READ, system_types: L.READ,
     // вошедший
-    proxy: L.USER, node_grants: L.USER,
+    proxy: L.USER, node_grants: L.USER, mcp_token_create: L.USER, mcp_token_list: L.USER, mcp_token_revoke: L.USER,
     // сеть WORK
     network_graph: L.READ, remote: L.WRITE, node_add: L.ADMIN, node_refresh: L.ADMIN,
     // запись (точное право — внутри метода)
@@ -61,7 +62,7 @@ export const MEMBERS = Object.freeze({
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
-    save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN,
+    save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN, agent_panel: L.ADMIN,
 });
 
 /** Никогда не вызываются снаружи, даже если объявлены в class.js. */
@@ -118,6 +119,12 @@ export function resolveMember(item, name) {
     }
     const own = owner === item;
     let level = MEMBERS[name];
+    // 7.2б (S4 / R11): если class.js переопределил собственным методом имя из MEMBERS с уровнем READ
+    // (например get_schema / members) без явного ACCESS: { [name]: 'read' } — это прикладной вызов CALL, а не чтение ядра
+    if (level === L.READ && (own || !isCoreProto(owner)) && typeof desc.value === 'function') {
+        const declared = item?.DATA?.ACCESS?.[name];
+        level = Object.values(LEVEL).includes(declared) ? declared : L.CALL;
+    }
     if (!level) {
         if (own || !isCoreProto(owner)) {
             // методы из class.js (DATA / $method) и прикладных подклассов
@@ -192,7 +199,7 @@ export async function authorize(item, name, level, params, ctx = {}) {
         case L.PUBLIC:
             return;
         case L.USER:
-            if (!uid && params?.session)
+            if (!DEV_MODE && !uid && params?.session)
                 deny(item, name, params, 'anonymous');
             return;
         case L.READ:
@@ -201,7 +208,7 @@ export async function authorize(item, name, level, params, ctx = {}) {
                 deny(item, name, params, 'read');
             return;
         case L.WRITE:
-            if (!uid && params?.session && params.session.$user !== globalThis.WORK)
+            if (!DEV_MODE && !uid && params?.session && params.session.$user !== globalThis.WORK)
                 deny(item, name, params, 'anonymous');
             return;
         case L.ADMIN:
@@ -226,6 +233,8 @@ export async function authorize(item, name, level, params, ctx = {}) {
  * @param {object} [ctx] {transport: 'http'|'agent'|'node', request, post}
  */
 export async function invoke(item, name, params = {}, ctx = {}) {
+    if ('skipAccess' in params)
+        delete params.skipAccess;   // внутренний флаг ядра (query/read_link), извне не задаётся
     const member = resolveMember(item, name);
     if (!member) {
         if (name && name in (item || {}))
@@ -271,9 +280,9 @@ function coreMemberKind(name) {
     return null;
 }
 
-/** Оставить в списке только видимое субъекту. */
+/** Оставить в списке только видимое субъекту (в режиме отладки DEV_MODE — видно всё). */
 export async function visibleOnly(list, params) {
-    if (!Array.isArray(list) || !params?.session)
+    if (!Array.isArray(list) || DEV_MODE || !params?.session)
         return list;
     const out = [];
     for (const it of list)

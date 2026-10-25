@@ -3,6 +3,10 @@
 # VNC не выходит: у контейнера вообще нет сети, WORK ходит через docker exec).
 # PID 1 — sleep, чтобы контейнер жил; сигналы Docker доходят напрямую.
 set -e
+# Одноразовая команда (не стандартный `sleep infinity` компьютера) — выполнить сразу без подъёма Xvfb
+if [ "$#" -gt 0 ] && [ "$1 $2" != "sleep infinity" ]; then
+  exec "$@"
+fi
 GEOM="${WORK_GEOM:-1280x800x24}"
 
 Xvfb :99 -screen 0 "$GEOM" -ac +extension RANDR >/tmp/xvfb.log 2>&1 &

@@ -43,6 +43,16 @@ openbox, x11vnc, Chromium, xdotool, scrot, socat, python3, кирилличес�
 `computer_network` (с подтверждением) — контейнер всегда ровно в одной сети.
 `NetworkMode:none` не используется: Docker запрещает цеплять такие контейнеры к сетям.
 
+Корень контейнера — «только чтение» (`readOnlyRootfs: true`, по умолчанию с hardening 1.5):
+система образа не меняется вообще. Пишут: том `/workspace`, tmpfs `/tmp` (логи Xvfb, WM,
+Chromium), `/var/tmp`, `/run` и HOME пользователя образа (`homeDir`/`homeUid`/`homeGid`,
+по умолчанию `/home/agent` uid 1000; tmpfs монтируется с uid/gid — CapDrop ALL не даёт
+даже root выполнить chown). Профиль Chromium — в томе (`/workspace/.chromium`).
+Проверено на живом Docker: дисплей, скриншоты, Chromium/CDP, `pip --user` работают.
+Ограничение: `apt` недоступен (пишет в `/var/lib/dpkg`, корень только для чтения) —
+если нужно ставить системные пакеты, задайте `readOnlyRootfs: false` в
+`#system/sandbox.json` (на время работы с интернетом).
+
 ## Docker Desktop (Windows)
 
 1. Поставить Docker Desktop, в настройках — WSL2 backend.

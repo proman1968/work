@@ -42,7 +42,7 @@ async function loadConfig(){
         const config = await fs.readFile('./config.json', 'utf8').then(JSON.parse);
         return Object.freeze(config);
     }
-    catch(e){
+    catch {
         return Object.freeze({});
     }
 }

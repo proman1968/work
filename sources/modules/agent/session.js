@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Сессия задачи (.task, версия 2) — тонкий хост ленты для цикла агента.
  *
@@ -16,9 +17,12 @@
  * События в UI (session.send): chat.start / chat.done (занятость), task.state { status },
  * task.delta { item, field, token } (стрим), { path } — файл изменился (перечитать).
  */
+import { log } from './log.js';
 import { runLoop, maybeCompact } from './loop.js';
-import { createEnv, llmFor } from './index.js';
+import { createEnv } from './index.js';
 import { genId } from './util.js';
+import { collectUndo, applyUndo } from './undo.js';
+import { getItem, callAs, writeFile } from './tools/work.js';
 
 const RUNS = new Map();
 const MODES = ['auto', 'ask', 'plan'];
@@ -32,7 +36,10 @@ function stateOf(file) {
     return s;
 }
 
-/** Нормализация тела; v1 (старый движок) → v2 одноразово. */
+/** Нормализация тела; v1 (старый движок) → v2 одноразово.
+ * @param {string | { [key: string]: any }} raw
+ * @returns {TaskBody}
+ */
 export function normalizeBody(raw) {
     const body = raw && typeof raw === 'object' ? raw : {};
     if (body.version !== 2) {
@@ -78,7 +85,10 @@ function migrateLegacy(blocks) {
     return out;
 }
 
-/** Тело: в работе — из памяти, иначе с диска (его могли поменять снаружи). */
+/** Тело: в работе — из памяти, иначе с диска (его могли поменять снаружи).
+ * @param {any} file  элемент .task
+ * @returns {Promise<TaskBody>}
+ */
 export async function getBody(file) {
     const s = stateOf(file);
     if (s.running && s.body)
@@ -87,8 +97,8 @@ export async function getBody(file) {
     try {
         raw = String(await file.load({ encoding: 'utf-8' }) ?? '');
     }
-    catch { /* нового файла ещё нет */ }
-    let parsed = {};
+    catch (e) { log.debug('task.load', e); /* нового файла ещё нет */ }
+    let parsed;
     try {
         parsed = raw.trim() ? JSON.parse(raw) : {};
     }
@@ -128,7 +138,7 @@ async function save(s, session) {
             try {
                 s.file.reset?.();
             }
-            catch { /* кэш файла */ }
+            catch (e) { log.debug('task.reset', e); /* кэш файла */ }
         } while (s.again);
     })();
     try {
@@ -165,30 +175,53 @@ function findCall(items, callId) {
 /** Работа короче — без push о завершении (человек, скорее всего, ещё смотрит). */
 export const PUSH_DONE_MIN_MS = 20_000;
 
+/** 9.7: кнопки «Разрешить/Отклонить» в уведомлении разрешения (обрабатывает sw.js: POST file?approve). */
+const APPROVAL_ACTIONS = [
+    { action: 'task-approve', title: 'Разрешить' },
+    { action: 'task-reject', title: 'Отклонить' },
+];
+
+/**
+ * Push-сообщение о задаче (чистая — покрыта тестами): заголовок, тело, данные для
+ * service worker (url для клика, состояние, задача). Ожидающее РАЗРЕШЕНИЕ — с кнопками
+ * «Разрешить/Отклонить» (service worker подтверждает через POST file?approve) и
+ * признаком approval с id вызова; вопрос и прочее — без кнопок (клик открывает задачу).
+ * @param {{ body?: any, file?: { path?: string } }} s состояние задачи
+ * @param {'waiting'|'done'|'error'|'review'} kind
+ * @param {string} [text] что ждёт / что вышло
+ * @param {{ waitingKind?: string, call?: string, reason?: string }} [detail] 9.7: вид ожидания
+ */
+export function pushMessageOf(s, kind, text, detail = {}) {
+    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
+    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
+    const path = String(s.file?.path || '');
+    const url = encodeURI(path + '/~/handlers//form/index.html');
+    const isApproval = kind === 'waiting' && detail.waitingKind === 'approval' && !!detail.call;
+    return {
+        type: 'task:' + path, tag: 'task:' + path, title,
+        body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
+        data: {
+            url, kind: 'task', state: kind, task: path,
+            ...(isApproval ? { approval: { call: detail.call, reason: detail.reason || '' } } : {}),
+        },
+        ...(isApproval ? { actions: APPROVAL_ACTIONS } : {}),
+        requireInteraction: kind === 'waiting' || kind === 'review',
+        renotify: kind === 'waiting' || kind === 'review',
+    };
+}
+
 /**
  * Push пользователю: задача ждёт его / закончила долгую работу / упала.
  * Показывать ли — решает service worker: если вкладка WORK видима и в фокусе, уведомление не показывается.
+ * 9.7: ожидающее разрешение — с кнопками «Разрешить/Отклонить» прямо в уведомлении.
  */
-async function pushNotify(s, session, kind, text) {
+async function pushNotify(s, session, kind, text, detail = {}) {
     const uid = session?.uid;
     if (!uid || process.env.WORK_TEST)
         return;
-    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
-    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
-    const path = String(s.file.path || '');
-    const url = encodeURI(path + '/~/handlers//form/index.html');
     try {
         const { sendPushNotification, removePushSubscription } = await import('../../host/push.js');
-        await sendPushNotification({
-            receivers: [uid],
-            message: {
-                type: 'task:' + path, tag: 'task:' + path, title,
-                body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
-                data: { url, kind: 'task', state: kind, task: path },
-                requireInteraction: kind === 'waiting' || kind === 'review',
-                renotify: kind === 'waiting' || kind === 'review',
-            },
-        }, removePushSubscription);
+        await sendPushNotification({ receivers: [uid], message: pushMessageOf(s, kind, text, detail) }, removePushSubscription);
     }
     catch (e) {
         console.warn('[task push]', e.message);
@@ -218,7 +251,11 @@ const SAFE_RECOVERY_TOOLS = new Set([
     'read_table', 'web_search', 'web_fetch', 'connections', 'skill', 'todo_write',
 ]);
 
-/** Вызывается восстановителем после рестарта; ожидающие вопросы не перезапускаются. */
+/** Вызывается восстановителем после рестарта; ожидающие вопросы не перезапускаются.
+ * @param {any} file  элемент .task
+ * @param {any} session
+ * @returns {Promise<any>}
+ */
 export async function recover(file, session) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -227,7 +264,9 @@ export async function recover(file, session) {
     if (body.status === 'waiting' && body.waiting) {
         const call = findCall(body.items, body.waiting.call)?.entry;
         if (call) {
-            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name);
+            // 9.7: подтверждение после рестарта — тоже с кнопками в уведомлении
+            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name,
+                { waitingKind: body.waiting.kind, call: body.waiting.call, reason: call.reason || call.name || '' });
             return { status: 'waiting' };
         }
         body.status = 'needs_review';
@@ -265,6 +304,7 @@ function makeHost(s, session) {
         save: () => save(s, session),
         emit: e => send(s, session, { ...e, type: 'task.delta' }),
         setTodos: todos => { body.todos = todos; },
+        getTodos: () => body.todos, // 9.5: самопроверка открытых пунктов перед завершением
         /** Очередь реплик, пришедших во время работы: цикл забирает их между ходами. */
         takeQueue: () => {
             const q = body.queue || [];
@@ -280,9 +320,11 @@ function makeHost(s, session) {
             const p = new Promise(resolve => s.waiters.set(req.call, resolve));
             save(s, session);
             const hit = findCall(body.items, req.call)?.entry;
+            // 9.7: разрешение — с кнопками «Разрешить/Отклонить» в уведомлении (reason — что именно)
             pushNotify(s, session, 'waiting', req.kind === 'question' ? req.question
                 : req.kind === 'connect' ? 'подключить ' + (hit?.connect?.label || hit?.connect?.provider || 'сервис')
-                    : 'разрешить: ' + (req.reason || req.tool || ''));
+                    : 'разрешить: ' + (req.reason || req.tool || ''),
+                { waitingKind: req.kind, call: req.call, reason: req.reason || req.tool || '' });
             return p.then(res => {
                 delete body.waiting;
                 if (!s.controller?.signal.aborted) {
@@ -295,7 +337,12 @@ function makeHost(s, session) {
     };
 }
 
-/** Набор результатов задачи (publish): добавление, снятие, чтение. Сохраняется сразу. */
+/** Набор результатов задачи (publish): добавление, снятие, чтение. Сохраняется сразу.
+ * @param {any} file  элемент .task
+ * @param {{ snapshot?: string, title?: string, remove?: boolean, [key: string]: any }} res
+ * @param {any} session
+ * @returns {Promise<any[]>}
+ */
 export async function addTaskResult(file, res, session) {
     const s = stateOf(file);
     const body = await getBody(file);
@@ -308,7 +355,11 @@ export async function addTaskResult(file, res, session) {
     return body.results;
 }
 
-/** При успешном завершении: выбранные результаты — в includes записи задачи (все копии). */
+/** При успешном завершении: выбранные результаты — в includes записи задачи (все копии).
+ * @param {any} file  элемент .task
+ * @param {any} session
+ * @returns {Promise<number>}
+ */
 export async function publishTaskResults(file, session) {
     const body = stateOf(file).body;
     const snaps = [...new Set((body?.results || []).map(r => r?.snapshot).filter(Boolean))];
@@ -334,7 +385,10 @@ export async function publishTaskResults(file, session) {
     return n;
 }
 
-/** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null. */
+/** Роль задачи по месту её файла: `<метапапка>/<РОЛЬ>/…/x.task` → РОЛЬ; вне зон — null.
+ * @param {any} file  элемент .task
+ * @returns {string | null}
+ */
 export function taskRole(file) {
     try {
         const point = file.$owner || file.$class;
@@ -346,6 +400,29 @@ export function taskRole(file) {
     }
 }
 
+/** Владелец задачи по имени файла `<время>.<uid>.task` (как создаёт UI); null — имя не этого формата. */
+export function taskOwnerUid(file) {
+    const m = /(\d{10,16})\.([0-9A-F]{16})\.task$/i.exec(String(file?.id || file?.path || ''));
+    return m ? m[2].toUpperCase() : null;
+}
+
+/**
+ * Методы .task, меняющие ход работы (реплика, подтверждение, стоп, откат, настройки, подключение),
+ * — владельцу задачи или админу WORK. Чтение ленты — как обычно, по правам роли.
+ */
+async function assertTaskOwner(file, params) {
+    const owner = taskOwnerUid(file);
+    if (!owner)
+        return;
+    const uid = String(params?.session?.uid || '').toUpperCase();
+    if (uid === owner)
+        return;
+    // админ WORK может вмешиваться в любую задачу (роли корня; assertAccess на самом WORK всегда отказывает)
+    if (await WORK.roles?.({ session: params?.session }).then(r => r?.includes?.('ADMIN')).catch(() => false))
+        return;
+    throw new Error('Доступ запрещён: задача принадлежит ' + owner);
+}
+
 /** Запуск петли (фоном). Возвращает сразу; ход работы — событиями и сохранениями. */
 function start(s, session, file) {
     const body = s.body;
@@ -355,6 +432,8 @@ function start(s, session, file) {
     send(s, session, { type: 'chat.start' });
     const host = makeHost(s, session);
     s.running = (async () => {
+        let restart;
+        let aborted;
         try {
             const place = file.$class || file.$owner || null;
             // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
@@ -366,12 +445,14 @@ function start(s, session, file) {
             const depth = Math.max(0, Number(body.childDepth) || 0);
             const model = body.model || def?.meta.model || await env.defaultModel();
             body.model = model;
-            const llm = await llmFor(model);
+            const llm = await env.llmFor(model); // 9.1: с запасными моделями (fallbackModels)
             const res = await runLoop({
                 llm,
-                system: () => env.makeSystem(def),
+                system: () => env.makeSystemParts(def),
+                hooks: env.hooks,
                 items: body.items,
-                tools: await env.makeTools(def, depth),
+                // R3 (8.31): ограничение call родителя из тела задачи (agent_start записал callRestrict)
+                tools: await env.makeTools(def, depth, undefined, body.callRestrict),
                 host,
                 depth,
                 ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
@@ -389,30 +470,29 @@ function start(s, session, file) {
         finally {
             delete body.waiting;
             s.waiters.clear();
-            const aborted = !!s.controller?.signal.aborted;
+            aborted = !!s.controller?.signal.aborted;
             s.controller = null;
             // реплики, пришедшие под конец (или при стопе), не теряются: в ленту; без стопа — новый прогон
             const rest = body.queue || [];
             delete body.queue;
             for (const u of rest)
                 body.items.push({ ...u, queued: undefined });
-            if (rest.length && !aborted && body.status !== 'error') {
-                await save(s, session);
-                s.running = null;
-                start(s, session, file);
-                return;
-            }
+            restart = rest.length > 0 && !aborted && body.status !== 'error';
             await save(s, session);
             s.running = null;
-            send(s, session, { type: 'task.state', status: body.status });
-            send(s, session, { type: 'chat.done' });
-            if (!aborted && body.status === 'idle')
-                await publishTaskResults(file, session).catch(e => console.warn('[task publish]', e?.message || e));
-            if (!aborted && body.status === 'error')
-                pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
-            else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
-                pushNotify(s, session, 'done', lastAnswer(body));
         }
+        if (restart) {
+            start(s, session, file);
+            return;
+        }
+        send(s, session, { type: 'task.state', status: body.status });
+        send(s, session, { type: 'chat.done' });
+        if (!aborted && body.status === 'idle')
+            await publishTaskResults(file, session).catch(e => console.warn('[task publish]', e?.message || e));
+        if (!aborted && body.status === 'error')
+            pushNotify(s, session, 'error', [...body.items].reverse().find(i => i.type === 'error' || i.error)?.content);
+        else if (!aborted && body.status === 'idle' && Date.now() - s.startedAt >= PUSH_DONE_MIN_MS)
+            pushNotify(s, session, 'done', lastAnswer(body));
     })();
     return s.running;
 }
@@ -454,18 +534,25 @@ function applyOffline(body, reply) {
 
 /**
  * Сообщение человека. Идёт работа: ответ на вопрос/отказ с комментарием на подтверждение,
- * иначе «занят». Нет работы: реплика в ленту и запуск.
+ * иначе «занёт». Нет работы: реплика в ленту и запуск.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
  */
 export async function prompt(file, params = {}) {
     params = argsOf(params);
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const session = params.session;
     const body = await getBody(file);
     const text = String(params.prompt ?? params.post?.prompt ?? params.text ?? '').trim();
     const attachments = normAttachments(params.attachments ?? params.post?.attachments ?? params.includes ?? params.post?.includes);
+    // F32: реплика из расписания (сессия с scheduled: true) не отвечает за человека:
+    // ждущий вопрос/подтверждение продолжает ждать ЕГО ответа, текст встаёт в очередь
+    const scheduled = params.session?.scheduled === true;
     if (s.running) {
         const w = body.waiting;
-        if (w && s.waiters.has(w.call)) {
+        if (w && s.waiters.has(w.call) && !scheduled) {
             const resolve = s.waiters.get(w.call);
             s.waiters.delete(w.call);
             resolve(w.kind === 'question' ? { content: text } : { accept: false, content: text });
@@ -480,6 +567,20 @@ export async function prompt(file, params = {}) {
     }
     if (body.status === 'needs_review' && !text)
         return { ok: false, error: 'Сначала проверьте результат прерванного действия и напишите его в ответе; пустое «продолжить» недоступно.' };
+    if (body.status === 'needs_review' && scheduled) {
+        // R6 (8.34): результат прерванного изменяющего действия проверяет человек — расписание
+        // не возобновляет задачу: текст в очередь, старт — только ответом владельца
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true });
+        await save(s, session);
+        return { ok: true, queued: true };
+    }
+    if (body.waiting && scheduled) {
+        // F32: и на ожидании после рестарта расписание не подменяет ответ человека:
+        // текст — в очередь, вопрос продолжает ждать владельца
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true });
+        await save(s, session);
+        return { ok: true, queued: true };
+    }
     if (body.waiting) {
         // ожидание пережило рестарт: текст — ответ на вопрос или отказ с комментарием
         const w = body.waiting;
@@ -505,8 +606,13 @@ export async function prompt(file, params = {}) {
     return { ok: true };
 }
 
-/** Сообщение продолжимому агенту: вопрос человеку не подменяем ответом другого агента. */
+/** Сообщение продолжимому агенту: вопрос человеку не подменяем ответом другого агента.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function message(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const body = await getBody(file);
     const text = String(params.prompt || '').trim();
@@ -537,7 +643,7 @@ function argsOf(params = {}) {
         try {
             out.values = JSON.parse(out.values);
         }
-        catch { /* строка */ }
+        catch (e) { log.debug('task.parse', e); /* строка */ }
     }
     return out;
 }
@@ -549,14 +655,19 @@ function normAttachments(list) {
         try {
             list = JSON.parse(list);
         }
-        catch { /* одиночный путь */ }
+        catch (e) { log.debug('task.parse', e); /* одиночный путь */ }
     }
     const arr = Array.isArray(list) ? list : [list];
     return arr.map(a => typeof a === 'string' ? { path: a, name: a.split('/').pop() } : a).filter(a => a?.path);
 }
 
-/** Подтверждение вызова / ответ формой. { call, accept, always, content, values } */
+/** Подтверждение вызова / ответ формой. { call, accept, always, content, values }
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function approve(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const p = argsOf(params);
     const body = await getBody(file);
@@ -581,8 +692,13 @@ export async function approve(file, params = {}) {
     return { ok: true, resumed: true };
 }
 
-/** Стоп: оборвать стрим/инструмент, снять ожидания. */
+/** Стоп: оборвать стрим/инструмент, снять ожидания.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function stop(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const body = await getBody(file);
     if (s.controller) {
@@ -605,19 +721,47 @@ export async function stop(file, params = {}) {
     return { ok: true, stopped: true };
 }
 
-/** Откат ленты к реплике id (она и всё после удаляются; текст — назад в поле ввода). */
+/**
+ * Откат ленты к реплике id (она и всё после удаляются; текст — назад в поле ввода).
+ *   dry: true   — ничего не менять, вернуть { files: [{path, op}], manual: [...] } — что агент изменил в этом диапазоне
+ *                 (интерфейс спрашивает про файлы только если есть что откатывать);
+ *   files: true — заодно вернуть файлы, изменённые агентом (undo.js): { reverted, skipped } в ответе.
+ * @param {any} file  элемент .task
+ * @param {{ id?: string, dry?: boolean, files?: boolean, [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function revert(file, params = {}) {
     params = argsOf(params);
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const id = params.id ?? params.post?.id;
     if (!id)
         return { ok: false, error: 'id required' };
+    const flag = v => v === true || v === 1 || /^(1|true|yes)$/i.test(String(v ?? ''));
+    if (flag(params.dry)) {
+        const b = await getBody(file);
+        const at = b.items.findIndex(i => i.id === id);
+        if (at < 0)
+            return { ok: false, error: 'элемент не найден' };
+        const { undo, manual } = collectUndo(b.items.slice(at));
+        return { ok: true, dry: true, files: undo.map(u => ({ path: u.path, op: u.op, tool: u.tool })), manual: manual.map(m => ({ path: m.path, tool: m.tool })) };
+    }
     if (s.running)
         await stop(file, params);
     const body = await getBody(file);
     const idx = body.items.findIndex(i => i.id === id);
     if (idx < 0)
         return { ok: false, error: 'элемент не найден' };
+    let fileReport = null;
+    if (flag(params.files)) {
+        const { undo } = collectUndo(body.items.slice(idx));
+        const ctx = { session: params.session, role: body.role, task: file };
+        fileReport = await applyUndo(undo, {
+            getItem: p => getItem(p, ctx),
+            callAs: (item, method, args) => callAs(item, method, args, ctx),
+            writeFile: (p, text) => writeFile(p, text, ctx),
+        });
+    }
     const removed = body.items.splice(idx);
     // сжатые элементы до точки отката снова живые, если сводка ушла
     if (removed.some(i => i.type === 'summary') && !body.items.some(i => i.type === 'summary'))
@@ -632,6 +776,7 @@ export async function revert(file, params = {}) {
         ok: true,
         prompt: first?.type === 'user' ? String(first.content || '') : '',
         attachments: first?.attachments || [],
+        ...(fileReport ? { files: fileReport } : {}),
     };
 }
 
@@ -648,8 +793,12 @@ function lastTodos(items) {
  * Подключение аккаунта из карточки connect_service (данные вводит человек, в ленту не пишутся):
  * { call, origin, client_id?, client_secret?, token?, base_url? } → { auth_url } (окно входа) | { ok } (токен сохранён).
  * По завершении входа (OAuth callback) ожидание вызова снимается с accept:true — агент продолжает.
+ * @param {any} file  элемент .task
+ * @param {{ call?: string, origin?: string, client_id?: string, client_secret?: string, token?: string, base_url?: string }} params
+ * @returns {Promise<any>}
  */
 export async function connectStart(file, params = {}) {
+    await assertTaskOwner(file, params);
     const p = argsOf(params);
     const body = await getBody(file);
     const hit = findCall(body.items, p.call);
@@ -670,8 +819,13 @@ export async function connectStart(file, params = {}) {
     }
 }
 
-/** Отменить реплику из очереди. { id } */
+/** Отменить реплику из очереди. { id }
+ * @param {any} file  элемент .task
+ * @param {{ id?: string }} params
+ * @returns {Promise<any>}
+ */
 export async function unqueue(file, params = {}) {
+    await assertTaskOwner(file, params);
     const p = argsOf(params);
     const s = stateOf(file);
     const body = await getBody(file);
@@ -683,8 +837,13 @@ export async function unqueue(file, params = {}) {
     return { ok: (body.queue || []).length < before };
 }
 
-/** Настройки задачи: model / effort / mode. */
+/** Настройки задачи: model / effort / mode.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function configure(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     const p = argsOf(params);
     const body = await getBody(file);
@@ -701,8 +860,13 @@ export async function configure(file, params = {}) {
     return { ok: true, model: body.model, effort: body.effort, mode: body.mode };
 }
 
-/** Принудительное сжатие контекста. */
+/** Принудительное сжатие контекста.
+ * @param {any} file  элемент .task
+ * @param {{ [key: string]: any }} params
+ * @returns {Promise<any>}
+ */
 export async function compact(file, params = {}) {
+    await assertTaskOwner(file, params);
     const s = stateOf(file);
     if (s.running)
         return { ok: false, error: 'задача выполняется' };
@@ -710,12 +874,16 @@ export async function compact(file, params = {}) {
     const place = file.$class || file.$owner || null;
     const host = { mode: body.mode, signal: undefined, save: () => save(s, params.session) };
     const env = await createEnv({ place, session: params.session, host });
-    const llm = await llmFor(body.model || await env.defaultModel());
-    const done = await maybeCompact({ llm, items: body.items, host, system: await env.makeSystem(), force: true });
+    // 9.2: compactModel — дешёвая модель для сжатия (ai/config.js), иначе — модель задачи
+    const llm = await env.llmFor(env.config.compactModel || body.model || await env.defaultModel());
+    const done = await maybeCompact({ llm, items: body.items, host, system: await env.makeSystemParts(), hooks: env.hooks, task: file, force: true });
     return { ok: done };
 }
 
-/** Для тестов/диагностики: дождаться окончания текущей петли. */
+/** Для тестов/диагностики: дождаться окончания текущей петли.
+ * @param {any} file  элемент .task
+ * @returns {Promise<void>}
+ */
 export async function idle(file) {
     const s = stateOf(file);
     while (s.running)
@@ -723,6 +891,10 @@ export async function idle(file) {
     return s.body;
 }
 
+/** Идёт ли петля задачи.
+ * @param {any} file  элемент .task
+ * @returns {boolean}
+ */
 export function isRunning(file) {
     return !!stateOf(file).running;
 }

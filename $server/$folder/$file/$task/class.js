@@ -7,7 +7,8 @@
  *   approve({ call, accept, always, content, values }) — подтверждение вызова или ответ формой
  *   unqueue({ id })                                — убрать реплику из очереди (отправлена во время работы)
  *   stop()                                         — стоп
- *   revert({ id })                                 — откат ленты к реплике → { prompt, attachments }
+ *   revert({ id, dry?, files? })                   — откат ленты к реплике → { prompt, attachments }; dry — только список изменённых агентом файлов;
+ *                                                    files — заодно вернуть эти файлы → { files: { reverted, skipped } }
  *   configure({ model, effort, mode })             — настройки
  *   compact()                                      — сжать контекст
  *   state()                                        — тело + running
@@ -67,13 +68,13 @@ export default {
     async voice_speak(params = {}) {
         await this.assertAccess(params, 'read');
         const text = params.text ?? (typeof params.post === 'string' ? params.post : params.post?.text);
-        return (await WORK_AGENT_CORE()).voice.speak(this, { text, language: params.language, instructions: params.instructions });
+        return (await WORK_AGENT_CORE()).voice.speak(this, { text, language: params.language, instructions: params.instructions, uid: params.session?.principal?.id || params.session?.uid });
     },
     /** Распознавание речи: тело запроса — WAV (16 кГц, моно) → { text }. */
     async voice_transcribe(params = {}) {
         await this.assertAccess(params, 'read');
         const audio = Buffer.isBuffer(params.post) ? params.post : null;
-        return (await WORK_AGENT_CORE()).voice.transcribe(this, { audio, language: params.language });
+        return (await WORK_AGENT_CORE()).voice.transcribe(this, { audio, language: params.language, uid: params.session?.principal?.id || params.session?.uid });
     },
     /** { running, body } — тело не на верхнем уровне: клиентский WORK.__bind принял бы {type:'task'} за элемент дерева и склеил ответы разных задач. */
     async state(params = {}) {

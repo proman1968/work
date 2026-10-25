@@ -8,7 +8,7 @@
  *     images: ['python:3.12-slim', 'node:22-slim'],          // белый список образов
  *     workdir: '/workspace',                // рабочая папка внутри (единственная доступная агенту)
  *     user: '',                             // пользователь внутри ('': по умолчанию образа)
- *     limits: { memoryMb: 1024, cpus: 1, pids: 256 },
+ *     limits: { memoryMb: 1024, cpus: 1, pids: 256, volumeMb: 10240 },
  *     maxPerUser: 2,                        // компьютеров на пользователя
  *     maxRunning: 4,                        // запущенных компьютеров всего
  *     idleStopMin: 30,                      // остановка при простое
@@ -22,6 +22,11 @@
  *       // (контейнер на NetworkMode:none Docker вообще запрещает цеплять к сетям)
  *     graphical: ['work-computer:latest'],  // после создания ждём дисплей и VNC
  *     displayWaitSec: 30,
+ *     readOnlyRootfs: true,   // корень контейнера «только чтение» (tmpfs: /tmp, /var/tmp, /run, homeDir).
+ *                             // apt при этом недоступен (ставит в /var); pip --user и npm работают в HOME.
+ *                             // false — если нужно ставить системные пакеты (apt) с включённым интернетом.
+ *     homeDir: '/home/agent', // пользователь образа (tmpfs при readOnlyRootfs)
+ *     homeUid: 1000, homeGid: 1000,  // uid/gid пользователя образа (владелец tmpfs HOME)
  *   }
  */
 import fs from 'node:fs';
@@ -34,7 +39,7 @@ const DEFAULTS = {
     images: ['work-computer:latest', 'python:3.12-slim', 'node:22-slim'],
     workdir: '/workspace',
     user: '',
-    limits: { memoryMb: 1024, cpus: 1, pids: 256 },
+    limits: { memoryMb: 1024, cpus: 1, pids: 256, volumeMb: 10_240 },
     maxPerUser: 2,
     maxRunning: 4,
     idleStopMin: 30,
@@ -46,6 +51,10 @@ const DEFAULTS = {
     // ttlMin: авто-выключение интернета через N минут (0 = выключено)
     graphical: ['work-computer:latest'],  // после создания ждём дисплей (Xvfb+WM) и VNC
     displayWaitSec: 30,
+    readOnlyRootfs: true,
+    homeDir: '/home/agent',
+    homeUid: 1000,
+    homeGid: 1000,
 };
 
 /** Конфиг песочниц (файл + умолчания). */

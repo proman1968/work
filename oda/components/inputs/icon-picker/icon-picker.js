@@ -19,8 +19,8 @@ ODA({
         <oda-button ~if="!isReadonly" class="affix" icon="icons:expand-more" :icon-size title="Выбрать иконку" :disabled @tap.stop="choose()"></oda-button>
     `,
     $public: {
+        // без $def: пустое значение — undefined, а не '' (иначе при первом чтении наружу уходит ложное value-changed, pitfalls §43.3)
         value: {
-            $def: '',
             $type: String
         }
     },
@@ -35,9 +35,6 @@ ODA({
             input.setAttribute('list', id);
             list.id = id;
         });
-    },
-    get icon() {
-        return undefined;
     },
     enter(text) {
         this.value = text.trim();

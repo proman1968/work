@@ -3,6 +3,7 @@
  * Используют подсистема доступа (индекс лент) и RAG. Открывается лениво:
  * пока никто не обратился, файл не создаётся (тесты и утилиты его не видят).
  */
+import { log } from '../modules/agent/log.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -80,14 +81,14 @@ export function transaction(db, fn) {
         return res;
     }
     catch (e) {
-        try { db.exec('ROLLBACK'); } catch { /* уже откатилась */ }
+        try { db.exec('ROLLBACK'); } catch (e) { log.debug('db.rollback', e); /* уже откатилась */ }
         throw e;
     }
 }
 
 /** Закрыть БД (тесты, остановка сервера). */
 export function closeIndexDb() {
-    try { opened?.close(); } catch { /* уже закрыта */ }
+    try { opened?.close(); } catch (e) { log.debug('db.close', e); /* уже закрыта */ }
     opened = null;
     failed = null;
 }

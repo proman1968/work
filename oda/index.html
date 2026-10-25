@@ -104,10 +104,10 @@
     for (const c of COMPONENTS)
         (cats[c.cat] ??= []).push(c);
     nav.items = [{ id: 'Обзор', overview: true }, ...Object.entries(cats).map(([id, items]) => ({ id, expanded: true, items }))];
-    grid.columns = [
-        { name: 'tag', label: 'Тег', width: 200 },
-        { name: 'cat', label: 'Раздел', width: 150 },
-        { name: 'title', label: 'Назначение', width: 380 }
+    grid.metadata = [
+        { id: 'tag', label: 'Тег', width: 200 },
+        { id: 'cat', label: 'Раздел', width: 150 },
+        { id: 'title', label: 'Назначение', width: 380 }
     ];
     grid.dataSet = COMPONENTS;
     function showOverview(on) {

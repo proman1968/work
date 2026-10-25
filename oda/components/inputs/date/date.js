@@ -17,8 +17,8 @@ ODA({
             @input="value = $this.value" @change="value = $this.value">
     `,
     $public: {
+        // без $def: пустое — undefined, иначе вечный цикл с привязкой (см. pitfalls §21)
         value: {
-            $def: '',
             $type: String
         },
         /** date | time | datetime-local | month | week; пусто — по field.type */

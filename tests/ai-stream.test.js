@@ -1,7 +1,8 @@
 import '../sources/reactor.js';
+import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import aiDef, { resolveKey, toGigaChatMessages } from '../MODELS/$ai/$folder/$class/$ai/class.js';
+import aiDef, { resolveKey, gigachatToken, toGigaChatMessages } from '../MODELS/$ai/$folder/$class/$ai/class.js';
 
 function sseLine(obj) {
     return 'data: ' + JSON.stringify(obj) + '\n';
@@ -71,6 +72,39 @@ describe('streamChat SSE: рваные чанки собираются без п
     });
 });
 
+describe('streamChat: usage и токены кэша провайдера', () => {
+    const usageOf = async usage => {
+        installWork([sseLine({ choices: [{ delta: { content: 'ок' } }] }), sseLine({ usage }), 'data: [DONE]\n']);
+        return (await collect(ai, { messages })).events.find(e => e.type === 'usage');
+    };
+
+    it('OpenAI: prompt_tokens — полный размер запроса, cached_tokens из prompt_tokens_details', async () => {
+        const u = await usageOf({ prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, prompt_tokens_details: { cached_tokens: 800 } });
+        assert.deepEqual(u, { type: 'usage', prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, cached_tokens: 800 });
+    });
+
+    it('DeepSeek: prompt_cache_hit_tokens; без кэша — cached_tokens: 0', async () => {
+        assert.equal((await usageOf({ prompt_tokens: 500, completion_tokens: 5, prompt_cache_hit_tokens: 300, prompt_cache_miss_tokens: 200 })).cached_tokens, 300);
+        const none = await usageOf({ prompt_tokens: 500, completion_tokens: 5 });
+        assert.equal(none.cached_tokens, 0);
+        assert.equal(none.total_tokens, 505);
+    });
+
+    it('Anthropic-поля: input_tokens без кэша → полный размер = input + чтение + запись кэша', async () => {
+        const u = await usageOf({ input_tokens: 100, cache_read_input_tokens: 800, cache_creation_input_tokens: 50, output_tokens: 7 });
+        assert.equal(u.prompt_tokens, 950);
+        assert.equal(u.cached_tokens, 800);
+        assert.equal(u.completion_tokens, 7);
+        assert.equal(u.total_tokens, 957);
+    });
+
+    it('prompt_tokens имеет приоритет над input_tokens (шлюз уже суммировал кэш)', async () => {
+        const u = await usageOf({ prompt_tokens: 900, input_tokens: 100, cache_read_input_tokens: 800, completion_tokens: 3 });
+        assert.equal(u.prompt_tokens, 900);
+        assert.equal(u.cached_tokens, 800);
+    });
+});
+
 describe('streamChat: нативные tool_calls', () => {
     it('явный maxOutput задаёт лимит ответа, а не размер контекста', async () => {
         installWork(['data: [DONE]\n']);
@@ -123,6 +157,34 @@ describe('ключи моделей', () => {
         await assert.rejects(() => resolveKey(model, 'secret:none.json'), /нет секрета/);
     });
 
+    it('GigaChat: ключ из secret, запасной env GIGACHAT_KEY, иначе понятная ошибка', async () => {
+        const prev = process.env.GIGACHAT_KEY;
+        try {
+            delete process.env.GIGACHAT_KEY;
+            const provider = { read_secret: async ({ filename }) => filename === 'gigachat.json' ? { token: 'k-sec' } : {} };
+            const model = { token: 'secret:gigachat.json', read_secret: async () => ({}), $parent: provider };
+            assert.equal(await gigachatToken(model), 'k-sec');
+            const bare = { token: 'secret:gigachat.json', read_secret: async () => ({}) };
+            await assert.rejects(() => gigachatToken(bare), /нет секрета/);
+            process.env.GIGACHAT_KEY = 'k-env';
+            assert.equal(await gigachatToken(bare), 'k-env');
+            assert.equal(await gigachatToken(model), 'k-sec');
+            delete process.env.GIGACHAT_KEY;
+            await assert.rejects(() => gigachatToken({ token: '' }), /не задан ключ/);
+        }
+        finally {
+            if (prev === undefined)
+                delete process.env.GIGACHAT_KEY;
+            else
+                process.env.GIGACHAT_KEY = prev;
+        }
+    });
+
+    it('в коде провайдера GigaChat нет зашитого ключа', async () => {
+        const { default: def } = await import('../MODELS/GigaChat/$provider/$folder/$class/$ai/class.js');
+        assert.match(def.token, /^(secret|env):/);
+    });
+
     it('GigaChat: tool_calls → function_call, tool → function', () => {
         const out = toGigaChatMessages([
             { role: 'user', content: 'x' },
@@ -131,5 +193,106 @@ describe('ключи моделей', () => {
         ]);
         assert.deepEqual(out[1].function_call, { name: 'ls', arguments: { path: '/' } });
         assert.deepEqual(out[2], { role: 'function', name: 'ls', content: 'ok' });
+    });
+});
+
+
+// ── F28 (final 8.21): потолки тел и буферов ответа провайдера ──────────────
+
+describe('F28: память не отдана провайдеру — потолки тел и SSE-буфера', () => {
+    function installStatus(statusCode, chunks) {
+        // Readable: и события on('data'/'end') (ветка ошибки), и async-итерация (SSE)
+        const fakeRes = () => {
+            const res = Readable.from(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c)));
+            res.statusCode = statusCode;
+            return res;
+        };
+        globalThis.WORK = {
+            https: {
+                request(_opts, cb) {
+                    queueMicrotask(() => cb(fakeRes()));
+                    return { on() {}, setTimeout() {}, destroy() {}, write(b) { lastBody = JSON.parse(b); }, end() {} };
+                },
+            },
+        };
+    }
+
+    it('тело ошибки 500 сверх 64 КБ — обрезано, а не скопировано целиком', async () => {
+        installStatus(500, ['x'.repeat(200 * 1024)]);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            e => /stream error 500/.test(e.message) && /обрезано на 64 КБ/.test(e.message) && e.message.length < 70_000,
+            'гигантское тело ошибки прошло в сообщение целиком');
+    });
+
+    it('тело ошибки 500 короткое — целиком, без пометки об обрезке', async () => {
+        installStatus(503, ['плата не оплачена']);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            e => /stream error 503: плата не оплачена$/.test(e.message),
+            'короткое тело ошибки искажено');
+    });
+
+    it('SSE-поток без переводов строк сверх 1 МБ — обрыв, а не вечный рост буфера', async () => {
+        installStatus(200, ['data: ' + 'x'.repeat(2 * 1024 * 1024)]);
+        await assert.rejects(
+            () => collect(ai, { messages }),
+            /строка потока превысила 1 МБ/,
+            'поток без переводов строк не оборван');
+    });
+
+    it('JSON-ответ (generateImage) больше 16 МБ — отказ, а не копирование', async () => {
+        // generateImage → httpsPostJson: чужой гигабайтный «ответ» не оседает в памяти
+        installStatus(200, ['{"junk":"' + 'z'.repeat(20 * 1024 * 1024) + '}']);
+        const imageAi = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test', capabilities: 'image' };
+        await assert.rejects(
+            () => aiDef.generateImage.call(imageAi, { prompt: 'кот' }),
+            /тело ответа больше 16 МБ/,
+            'гигабайтный JSON-ответ принят');
+    });
+
+    it('SSE-поток anthropic без переводов строк — тот же потолок', async () => {
+        installStatus(200, ['data: ' + 'y'.repeat(2 * 1024 * 1024)]);
+        const anthropicAi = { protocol: 'anthropic', baseUrl: 'https://x.test/v1/messages', model: 'm', apiKey: 'sk-test' };
+        await assert.rejects(
+            () => collect(anthropicAi, { messages }),
+            /строка потока превысила 1 МБ/,
+            'anthropic-поток без переводов строк не оборван');
+    });
+
+    // ── R7 (8.35): оставшиеся пути чтения тела провайдера — тоже с потолком ──
+
+    it('речь (speak): бинарный ответ больше 32 МБ — обрыв, а не копирование в память', async () => {
+        installStatus(200, [Buffer.alloc(33 * 1024 * 1024, 1)]);
+        const tts = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test', capabilities: 'tts' };
+        await assert.rejects(
+            () => aiDef.speak.call(tts, { text: 'прочти' }),
+            /ответ превысил 32 МБ/,
+            'гигантский «WAV» скопирован в память');
+    });
+
+    it('list_remote: JSON-ответ больше 16 МБ — отказ, а не копирование', async () => {
+        installStatus(200, ['{"junk":"' + 'z'.repeat(20 * 1024 * 1024) + '}']);
+        const listAi = { protocol: 'openai', baseUrl: 'https://x.test', model: 'm', apiKey: 'sk-test' };
+        const res = await aiDef.list_remote.call(listAi, {});
+        assert.match(res.error, /list_remote: не удалось/);
+        assert.ok(res.tried.some(u => /JSON-ответ превысил 16 МБ/.test(String(u))), 'потолок не сработал: ' + JSON.stringify(res.tried));
+    });
+
+    it('gigachat auth: ответ больше 16 МБ — обрыв, а не копирование', async () => {
+        // свой фек-транспорт: gigachat пишет form-urlencoded (scope=…), а не JSON
+        const fakeRes = () => {
+            const res = Readable.from([Buffer.from('{"junk":"' + 'y'.repeat(20 * 1024 * 1024) + '"}')]);
+            res.statusCode = 200;
+            return res;
+        };
+        globalThis.WORK = {
+            https: { request(_o, cb) { queueMicrotask(() => cb(fakeRes())); return { on() {}, setTimeout() {}, destroy() {}, write() {}, end() {} }; } },
+        };
+        const giga = { protocol: 'gigachat', baseUrl: 'https://x.test/v1/chat/completions', authUrl: 'https://a.x.test', model: 'm', token: 'k', scope: 'x' };
+        await assert.rejects(
+            () => collect(giga, { messages }),
+            /GigaChat auth: ответ превысил 16 МБ/,
+            'гигантский auth-ответ скопирован в память');
     });
 });

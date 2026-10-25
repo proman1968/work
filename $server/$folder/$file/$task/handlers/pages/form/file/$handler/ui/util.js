@@ -204,6 +204,42 @@ export function findShell(el) {
     return null;
 }
 
+// ── 9.11 (final): офлайн-очередь реплик (мобильность) ─────────────────────
+
+const OFFLINE_KEY = 'WORK.offline-queue';
+const OFFLINE_MAX = 50; // реплик в очереди (защита localStorage от переполнения)
+
+/** Прочитать очередь офлайн-реплик (чистая — покрыта тестами). */
+export function offlineQueue() {
+    try {
+        const list = JSON.parse(globalThis.localStorage?.getItem?.(OFFLINE_KEY) || '[]');
+        return Array.isArray(list) ? list : [];
+    }
+    catch {
+        return [];
+    }
+}
+
+/** Положить реплику в очередь: [{ task, body, time }] (связано с этой задачей). */
+export function offlineQueuePush(task, body) {
+    const list = offlineQueue();
+    list.push({ task: String(task || ''), body: String(body || ''), time: Date.now() });
+    while (list.length > OFFLINE_MAX)
+        list.shift(); // старые сверх лимита — теряются, новые важнее
+    globalThis.localStorage?.setItem?.(OFFLINE_KEY, JSON.stringify(list));
+    return list.length;
+}
+
+/** Убрать из очереди по индексу (отправлено). */
+export function offlineQueueDrop(idx) {
+    const list = offlineQueue();
+    if (idx >= 0 && idx < list.length) {
+        list.splice(idx, 1);
+        globalThis.localStorage?.setItem?.(OFFLINE_KEY, JSON.stringify(list));
+    }
+    return list;
+}
+
 /** Текст для показа: стрим обгоняет сохранённое — берём стрим. */
 export function liveText(saved, streamed) {
     const a = String(saved || '');

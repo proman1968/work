@@ -10,6 +10,8 @@ const REGISTER_CODE_TTL_MS = 10 * 60 * 1000;
 const REGISTER_MAX_ATTEMPTS = 5;
 const REGISTER_START_INTERVAL_MS = 30 * 1000;
 const REGISTER_STARTS_PER_HOUR = 5;
+const MAX_ICON_BYTES = 512 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const UID_RE = /^[0-9A-F]{16}$/;
 
 /** Незавершённые входы: challengeId → { value, uid, expiresAt }. Одноразовые, со сроком. */
@@ -45,6 +47,14 @@ function sameCode(a, b) {
     return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
+/** uid вошедшего пользователя; сессия MCP (эфемерная) токены выпускать не может. */
+function mcpUser(params = {}) {
+    const s = params.session;
+    if (!s?.uid || s.ephemeral || s.principal?.kind !== 'user')
+        throw new Error('Доступ запрещён');
+    return s.uid;
+}
+
 export const authMethods = {
     async user_register_start(params = {}) {
         let { uid, email } = params.post || {};
@@ -57,8 +67,20 @@ export const authMethods = {
         let session = params.session;
         throttleStart(session, email);
         let code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+        session.registration = { uid, email, code, at: Date.now(), attempts: 0 };
+        delete session.credentials;
+        if (DEV_MODE) {
+            console.log('[DEV] Registration code for', email, ':', code);
+        }
+        if (!mailer) {
+            if (DEV_MODE) {
+                return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
+            }
+            throw new Error('Почтовый сервер не настроен (#system/mail.json)');
+        }
+        const fromUser = mailer?.options?.auth?.user || 'noreply@localhost';
         const mailOptions = {
-            from: `"ODANT-WORK" <${mailer.options.auth.user}>`,
+            from: `"ODANT-WORK" <${fromUser}>`,
             to: email,
             subject: 'Код подтверждения ODANT-WORK',
             text: `Ваш одноразовый код: ${code}\n\nДействует 10 минут.`,
@@ -73,17 +95,6 @@ export const authMethods = {
                 <p>С уважением,<br>WORK</p>
             `,
         };
-        session.registration = { uid, email, code, at: Date.now(), attempts: 0 };
-        delete session.credentials;
-        if (DEV_MODE) {
-            console.log('[DEV] Registration code for', email, ':', code);
-        }
-        if (!mailer) {
-            if (DEV_MODE) {
-                return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
-            }
-            throw new Error('Почтовый сервер не настроен (#system/mail.json)');
-        }
         await mailer.sendMail(mailOptions);
         return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
     },
@@ -133,14 +144,40 @@ export const authMethods = {
         if (!publicKey || !signature || time == null)
             throw new Error("registration failed: нет ключа или подписи");
 
-        let PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
-        const isValid = await crypto.subtle.verify(
-            { name: "RSASSA-PKCS1-v1_5" },
-            PK,
-            Buffer.from(signature, "base64"),
-            new TextEncoder().encode(session.credentials.challenge)
-        );
-        if (!isValid) throw new Error("registration failed");
+        let PK;
+        let isValid;
+        try {
+            PK = await crypto.subtle.importKey("spki", Buffer.from(publicKey, "base64"), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]);
+            isValid = await crypto.subtle.verify(
+                { name: "RSASSA-PKCS1-v1_5" },
+                PK,
+                Buffer.from(signature, "base64"),
+                new TextEncoder().encode(session.credentials.challenge)
+            );
+        }
+        catch {
+            isValid = false;
+        }
+        if (!isValid) {
+            // Одноразовый challenge: после неверной подписи требуется заново подтвердить код
+            delete session.credentials;
+            throw new Error("registration failed");
+        }
+
+        let iconBytes = null;
+        let base64Image = typeof icon === 'string' ? icon.split(';base64,').pop() : null;
+        if (base64Image) {
+            iconBytes = Buffer.from(base64Image, 'base64');
+            if (iconBytes.length > MAX_ICON_BYTES)
+                throw new Error("registration failed: иконка больше 512 КБ");
+            if (iconBytes.length < PNG_MAGIC.length || !iconBytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC))
+                throw new Error("registration failed: иконка должна быть в формате PNG");
+        }
+
+        const cleanStr = v => String(v || '').replace(/[\r\n\0]/g, ' ').trim().slice(0, 100);
+        surname = cleanStr(surname);
+        name = cleanStr(name);
+        patronymic = cleanStr(patronymic);
 
         const credentials = {
             uid, icon: '', surname, name, patronymic, email,
@@ -154,8 +191,7 @@ export const authMethods = {
         credentials.keys = $user_item.keys || {};
         credentials.keys[time] = publicKey;
 
-        let base64Image = icon?.split(';base64,')?.pop();
-        if (base64Image)
+        if (iconBytes)
             credentials.icon = '/USERS//' + uid + '/$user/icon.png';
 
         let post = CORE.$class.toScript(credentials);
@@ -166,9 +202,8 @@ export const authMethods = {
         u.children = undefined;
         u.users = undefined;
 
-        if (base64Image) {
-            base64Image = Buffer.from(base64Image, 'base64');
-            fs.writeFileSync('./USERS/' + uid + '/$user/icon.png', base64Image);
+        if (iconBytes) {
+            fs.writeFileSync('./USERS/' + uid + '/$user/icon.png', iconBytes);
         }
 
         session.credentials = { ...session.credentials, ...credentials };
@@ -188,7 +223,7 @@ export const authMethods = {
     },
 
     async user_login_start(params = {}) {
-        const { uid, session, challengeId } = params;
+        const { uid, challengeId } = params;
         if (!uid || !UID_RE.test(String(uid).toUpperCase()))
             throw new Error("uid required");
         if (!challengeId || String(challengeId).length > 64)
@@ -218,7 +253,10 @@ export const authMethods = {
     },
 
     async user_login_finish(params = {}) {
-        const { uid, session, time, challengeId } = params;
+        const { uid: rawUid, session, time, challengeId } = params;
+        const uid = String(rawUid || '').trim().toUpperCase();
+        if (!UID_RE.test(uid))
+            throw new Error("uid required");
         if (session.uid !== uid) {
             let signature = params.post?.signature;
             if (!signature) throw new Error("login session break. Need signature.");
@@ -255,6 +293,34 @@ export const authMethods = {
             $server.broadcastAuthChangedToSession(session, { uid, reason: 'login' });
         }
         return "Вход выполнен";
+    },
+
+    /**
+     * Токены доступа внешних ИИ-клиентов по MCP (modules/mcp). Только вошедший пользователь — не сессия самого MCP.
+     * mcp_token_create({ role?, label? }) → { token, id, role, label }: токен показывается один раз.
+     */
+    async mcp_token_create(params = {}) {
+        const uid = mcpUser(params);
+        const { role, label, days } = params.post || {};
+        const { issueToken } = await import('../modules/mcp/tokens.js');
+        const rec = await issueToken(uid, { role, label, days });
+        audit('mcp_token', { action: 'create', id: rec.id, role: rec.role, params });
+        return { ...rec, endpoint: '/mcp' };
+    },
+
+    async mcp_token_list(params = {}) {
+        const { listTokens } = await import('../modules/mcp/tokens.js');
+        return listTokens(mcpUser(params));
+    },
+
+    /** mcp_token_revoke({ id }) | ({ all: true }) → сколько токенов отозвано. */
+    async mcp_token_revoke(params = {}) {
+        const uid = mcpUser(params);
+        const { id, all } = params.post || {};
+        const { revokeToken } = await import('../modules/mcp/tokens.js');
+        const count = await revokeToken(uid, all ? 'all' : String(id || ''));
+        audit('mcp_token', { action: 'revoke', id: all ? 'all' : String(id || ''), count, params });
+        return { revoked: count };
     },
 
     async user_exit(params = {}) {

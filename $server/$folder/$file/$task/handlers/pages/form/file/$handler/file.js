@@ -93,11 +93,11 @@ export default {
     dockWidth: { $def: 520, $save: true },
     freshDocs: 0,
     extraFiles: [],
-    /** Голосовой режим включён; полосы кнопки в панели ввода подключаются к голосу при смене. */
+    /** Голосовой режим включён; полосы кнопки в шапке задачи подключаются к голосу при смене. */
     voiceOn: {
         $def: false,
         set(v) {
-            this.async(() => this.$('microchat-panel')?.bindVoice(v ? this._voice : null));
+            this.async(() => (this.$('microchat-header') || this._formHeader)?.bindVoice?.(v ? this._voice : null));
         },
     },
     inForm: false,
@@ -304,6 +304,13 @@ export default {
     /** Статус компьютера уже получен (до первого ответа монитор пишет «проверяю…», а не «удалён»). */
     computerChecked: false,
     get computerName() { return this.computer.name; },
+    get computerOwner() {
+        const m = /(\d{10,16})\.([0-9A-F]{16})\.task$/i.exec(String(this.$item?.id || this.$item?.path || ''));
+        return m ? m[2].toUpperCase() : '';
+    },
+    get computerQuery() {
+        return this.computerOwner ? '?owner=' + encodeURIComponent(this.computerOwner) : '';
+    },
     _pcPoll: null,
     /** Проверка компьютера через пассивный статус: running|stopped|missing. */
     async _checkComputer() {
@@ -311,7 +318,7 @@ export default {
         if (!this.computer.used)
             return;
         try {
-            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status', { credentials: 'same-origin', signal: AbortSignal.timeout(6000) });
+            const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status' + this.computerQuery, { credentials: 'same-origin', signal: AbortSignal.timeout(6000) });
             const data = await r.json().catch(() => ({}));
             const state = data.state || 'missing';
             if (state !== this.computerState)
@@ -376,7 +383,7 @@ export default {
                         this.status = data.status || 'idle';
                         this._lastDelta = Date.now();
                         this._noticeDocs(before);
-                        if (this.computer.used && !this.computerChecked)
+                        if (this.computer.used)
                             this._checkComputer();
                         if (this.starting)
                             this.async(() => this.invalidate?.('starting', 'feedItems', 'activity'), Math.max(50, 20100 - (Date.now() - (+data.created || 0))));
@@ -483,11 +490,26 @@ export default {
     async revert(item) {
         if (!item?.id || item.id === 'optimistic')
             return;
-        const res = await this.$item?.fetch('revert', { id: item.id });
+        // про файлы спрашиваем только если агент в откатываемом диапазоне реально что-то менял
+        const dry = await this.$item?.fetch('revert', { id: item.id, dry: 1 });
+        const changed = dry?.files || [];
+        let withFiles = false;
+        if (changed.length) {
+            const list = changed.slice(0, 6).map(f => '• ' + f.path).join('\n') + (changed.length > 6 ? '\n… и ещё ' + (changed.length - 6) : '');
+            const manual = dry?.manual?.length ? '\n\nЕщё ' + dry.manual.length + ' изменений агента автоматически не откатываются.' : '';
+            withFiles = confirm('После этого сообщения агент менял файлы (' + changed.length + '):\n' + list + manual
+                + '\n\nОК — откатить ленту и вернуть файлы\nОтмена — откатить только ленту (файлы останутся как есть)');
+        }
+        const res = await this.$item?.fetch('revert', { id: item.id, ...(withFiles ? { files: 1 } : {}) });
         if (!res || res.ok === false)
             return this.toast(res?.error || 'Откат не удался');
         this.optimistic = null;
         this.$('microchat-panel')?.prefill(res.prompt ? res : { prompt: item.content, attachments: item.attachments });
+        if (res.files) {
+            const skipped = res.files.skipped || [];
+            this.toast('Файлы возвращены: ' + (res.files.reverted || []).length
+                + (skipped.length ? '. Не тронуты (' + skipped.length + '): ' + skipped.slice(0, 2).map(s => s.path.split('/').pop() + ' — ' + s.reason).join('; ') : ''));
+        }
     },
     toggleGroup(id, open) {
         this.groupOpen = { ...this.groupOpen, [id]: open };

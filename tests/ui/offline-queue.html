@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Offline queue UI tests</title></head>
+<body>
+<script type="module">
+/**
+ * Офлайн-очередь реплик (9.11) в настоящем браузере (tests/ui/run.mjs):
+ * чистые функции util (push/drop/лимит), панель без сети — реплика в очередь и тост,
+ * возврат сети (online) — очередь уходит на $item.fetch, чужие задачи не трогаются.
+ */
+await import('/sources/client.js');
+await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/panel.js');
+await ODA.waitReg('microchat-panel');
+
+const results = [];
+window.__results = results;
+const tick = (ms = 40) => new Promise(r => setTimeout(r, ms));
+const until = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        try {
+            if (await fn()) return true;
+        }
+        catch { /* ещё нет */ }
+        await tick(20);
+    }
+    return false;
+};
+async function test(name, fn) {
+    try {
+        await fn();
+        results.push({ name, ok: true });
+    }
+    catch (e) {
+        results.push({ name, ok: false, error: String(e?.stack || e) });
+    }
+}
+function assert(v, msg) {
+    if (!v)
+        throw new Error(msg || 'assert');
+}
+const eq = (a, b, msg) => {
+    if (JSON.stringify(a) !== JSON.stringify(b))
+        throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b));
+};
+async function mount(tag, props = {}) {
+    await customElements.whenDefined(tag);
+    const el = document.createElement(tag);
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(120);
+    return el;
+}
+const setOnline = v => Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => v });
+
+const { offlineQueue, offlineQueuePush, offlineQueueDrop } = await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js');
+
+await test('очередь: push/drop/лимит (чистые функции)', async () => {
+    localStorage.removeItem('WORK.offline-queue');
+    eq(offlineQueue(), []);
+    offlineQueuePush('/T/one.task', '{"prompt":"привет"}');
+    offlineQueuePush('/T/two.task', '{"prompt":"ещё"}');
+    eq(offlineQueue().length, 2);
+    eq(offlineQueue()[0].task, '/T/one.task');
+    offlineQueueDrop(0);
+    eq(offlineQueue().map(x => x.task), ['/T/two.task']);
+    offlineQueueDrop(99); // вне диапазона — не ломает
+    eq(offlineQueue().length, 1);
+    // лимит: старые сверх 50 теряются
+    for (let i = 0; i < 60; i++)
+        offlineQueuePush('/T/x' + i + '.task', '{}');
+    const list = offlineQueue();
+    assert(list.length === 50, 'лимит очереди: ' + list.length);
+    assert(list.at(-1).task === '/T/x59.task', 'последний — новейший');
+    localStorage.removeItem('WORK.offline-queue');
+});
+
+await test('панель без сети: реплика в очередь, тост; online — уходит этой задаче, чужие остаются', async () => {
+    localStorage.removeItem('WORK.offline-queue');
+    const sent = [];
+    const $item = { path: '/T/mine.task', fetch: async (m, p, body) => { sent.push({ m, body }); return {}; } };
+    const toasts = [];
+    const shellHost = document.createElement('div');
+    shellHost.__microchatShell = { toast: t => toasts.push(String(t)), optimisticUser: () => {} };
+    document.body.appendChild(shellHost);
+    setOnline(false);
+    await customElements.whenDefined('microchat-panel');
+    const el = document.createElement('microchat-panel');
+    Object.assign(el, { $item });
+    shellHost.appendChild(el);
+    await tick(120);
+    try {
+        const res = await el.dispatch('запись без сети', []);
+        assert(res?.offlineQueued === true, 'реплика не помечена офлайн-очередью');
+        assert(sent.length === 0, 'без сети fetch ушёл на сервер');
+        eq(offlineQueue().map(x => JSON.parse(x.body).prompt), ['запись без сети']);
+        // чужая задача в очереди — не отправляется этой панелью
+        offlineQueuePush('/T/other.task', '{"prompt":"чужая"}');
+        // возврат сети: online-событие и drain уходят только своей задаче
+        setOnline(true);
+        await el.drainOfflineQueue();
+        assert(sent.length === 1, 'повтор отправил не только свою очередь: ' + sent.length);
+        eq(JSON.parse(sent[0].body).prompt, 'запись без сети');
+        eq(offlineQueue().map(x => x.task), ['/T/other.task'], 'своя реплика не удалена из очереди или чужая удалена');
+    }
+    finally {
+        setOnline(true);
+        el.remove();
+        shellHost.remove();
+        localStorage.removeItem('WORK.offline-queue');
+    }
+});
+
+results.push({ name: 'done', ok: results.every(r => r.ok) });
+window.__done = true;
+</script>
+</body>
+</html>

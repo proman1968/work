@@ -7,11 +7,16 @@
   "scripts": {
     "start": "node run.mjs",
     "test": "node --test \"tests/**/*.test.js\"",
+    "test:ci": "npm test",
     "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
     "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-sync.ps1",
     "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1",
-    "test:ui": "node tests/ui/run.mjs"
+    "test:ui": "node tests/ui/run.mjs",
+    "eval": "node scripts/agent-eval.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs && node scripts/check-ignored-code.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -21,9 +26,9 @@
     "@babel/parser": "^7.28.5",
     "@babel/traverse": "^7.28.5",
     "@babel/types": "^7.28.5",
+    "@huggingface/transformers": "^4.3.1",
     "@kreuzberg/node": "^4.9.9",
     "@novnc/novnc": "^1.7.0",
-    "@xenova/transformers": "^2.17.2",
     "adm-zip": "^0.5.16",
     "dockerode": "^5.0.1",
     "esprima": "^4.0.1",
@@ -36,7 +41,14 @@
     "stun": "^1.1.0",
     "web-push": "^3.6.7",
     "ws": "^8.21.0",
-    "xlsx": "^0.18.5",
+    "xlsx": "file:vendor/xlsx-0.20.3.tgz",
     "xmldom": "^0.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "typescript": "^7.0.2"
   }
 }

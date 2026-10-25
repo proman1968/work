@@ -11,7 +11,7 @@ import { PORT, TLSPORT, TLSHOST, LOCAL_ORIGIN, HOST, DEV_MODE, MAX_BODY_BYTES, M
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import * as GATEWAY from '../server/access/gateway.js';
-import { audit } from '../server/access/audit.js';
+import { markUpload } from '../server/upload-mark.js';
 
 /** Активное содержимое из пользовательских зон (html/svg/xml/js) — в песочнице: нельзя исполнить на нашем домене. */
 const ACTIVE_TYPE = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)/i;
@@ -213,7 +213,12 @@ export function parseCookies(request) {
         if (!name) return;
         const value = rest.join(`=`).trim();
         if (!value) return;
-        list[name] = decodeURIComponent(value);
+        try {
+            list[name] = decodeURIComponent(value);
+        }
+        catch {
+            list[name] = value;
+        }
     });
     return list;
 }
@@ -258,6 +263,25 @@ export function createRequestHandler() {
             response.end();
             return;
         }
+        // WORK как MCP-сервер (внешние ИИ-клиенты, токен вместо cookie-сессии) — до разбора сессии и дерева
+        const reqPath = String(request.url).split('?')[0];
+        if (reqPath === '/mcp') {
+            const { handleMcp } = await import('../modules/mcp/server.js');
+            await handleMcp(request, response);
+            return;
+        }
+        // 9.9: протокол A2A (/.well-known/agent.json, /a2a) и REST/SDK для встраивания (/api/agent, /sdk/work-agent.js)
+        if (reqPath === '/.well-known/agent.json' || reqPath === '/a2a' || reqPath === '/api/agent' || reqPath === '/sdk/work-agent.js') {
+            const { handleA2aHttp } = await import('../modules/a2a/server.js');
+            if (await handleA2aHttp(request, response))
+                return;
+        }
+        // 9.12: агент-«мост» на компьютере пользователя (/~bridge/register, /~bridge/poll, /~bridge/result)
+        if (reqPath.startsWith('/~bridge/')) {
+            const { handleBridgeHttp } = await import('../modules/bridge/hub.js');
+            if (await handleBridgeHttp(request, response))
+                return;
+        }
         const cookies = parseCookies(request);
         let session;
         // Подписанный запрос узла сети WORK — эфемерная сессия субъекта-узла (без cookie)
@@ -277,7 +301,7 @@ export function createRequestHandler() {
         // Возврат со страницы входа провайдера (OAuth подключения агента) — до разбора дерева
         if (path === '/oauth/callback') {
             const { callback } = await import('../modules/agent/connections.js');
-            const html = await callback(Object.fromEntries(url.searchParams));
+            const html = await callback(Object.fromEntries(url.searchParams), session);
             response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
             response.end(html);
             return;
@@ -396,11 +420,16 @@ export function createRequestHandler() {
                 if(range){
                     // частичная отдача — те же права, что у download
                     await item.assertAccess(params, CORE.$class.ACCESS_LEVEL.READ);
-                    const fileSize = item.size;
-                    const parts = range.replace(/bytes=/, "").split("-");
+                    const fileSize = Number(item.size) || 0;
+                    const parts = String(range).replace(/bytes=/, "").split("-");
                     const start = parseInt(parts[0], 10);
                     let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
                     end = Math.max(0, Math.min(end, fileSize - 1));
+                    if (!Number.isInteger(start) || start < 0 || start >= fileSize || !Number.isInteger(end) || end < start) {
+                        response.writeHead(416, { 'Content-Range': `bytes */${fileSize}`, 'X-Content-Type-Options': 'nosniff' });
+                        response.end();
+                        return;
+                    }
                     const chunksize = (end - start) + 1;
                     const file = fs.createReadStream(item.dir, { start, end });
 
@@ -438,6 +467,12 @@ export function createRequestHandler() {
                                         params.message = String(fields.message[0]);
 
                                     params.post = {};
+
+                                    // помечаем объекты файлов формы: только им save_file доверяет post.path (upload-mark.js)
+                                    for (const list of [files?.file, files?.url, files?.message])
+                                        if (Array.isArray(list))
+                                            for (const f of list)
+                                                markUpload(f);
 
                                     if (files?.file) {
                                         params.post.files = files.file;
@@ -495,7 +530,6 @@ export function createRequestHandler() {
         else if (result instanceof CORE.$folder && result !== item && !(await GATEWAY.canRead(result, params)))
             throw new Error('Нет доступа');
 
-        const isFilePayload = item?.constructor === CORE.$file && (!method || method === 'load' || method === 'script' || method === 'download');
         const header = { "Content-Type": "application/json", "X-Content-Type-Options": "nosniff" };
         subscribe();
         // if (method === 'load_icon') {
@@ -506,8 +540,9 @@ export function createRequestHandler() {
             header["Content-Type"] = 'application/javascript; charset=utf-8';
         else if (item?.constructor === CORE.$file) {
             if (method === 'download') {
+                const safeAscii = String(item.id || 'file').replace(/[\r\n"\\;]/g, '_');
                 header["Content-Type"] = "application/octet-stream";
-                header["Content-Disposition"] = "attachment; filename=" + item.id;
+                header["Content-Disposition"] = `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(String(item.id || 'file'))}`;
                 header["Cache-Control"] = 'no-cache';
             }
             else if (isFileBodyMethod(method)) {

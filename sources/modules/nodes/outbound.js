@@ -18,6 +18,9 @@ export async function nodeFetch(node, req = {}) {
     if (!node?.origin || !node?.host_id)
         throw new Error('nodeFetch: у узла нет адреса или id');
     const url = new URL(String(req.path || '/').replace(/^\/*/, '/'), node.origin);
+    // `\\хост` и `//хост` в пути не уводят подписанный запрос с адреса узла
+    if (url.origin !== new URL(node.origin).origin)
+        throw new Error('nodeFetch: путь уводит с адреса узла');
     if (req.method)
         url.search = '?' + encodeURIComponent(req.method);
     for (const [k, v] of Object.entries(req.params || {}))
@@ -41,9 +44,11 @@ export async function nodeFetch(node, req = {}) {
     const roles = (req.roles || []).join(',');
     const pathQuery = url.pathname + url.search;
     const digest = digestOf(body);
+    // метка представителя входит в подпись (F18): значение заголовка как есть
+    const actorLabel = req.actorLabel ? encodeURIComponent(String(req.actorLabel).slice(0, 200)) : '';
     const fields = {
         method: body ? 'POST' : 'GET', url: pathQuery, audience: String(node.host_id).toUpperCase(),
-        date, nonce, node: serverId, actor: req.actor || '', roles, digest,
+        date, nonce, node: serverId, actor: req.actor || '', actorLabel, roles, digest,
     };
     const headers = {
         [HEADERS.node]: serverId,
@@ -56,8 +61,8 @@ export async function nodeFetch(node, req = {}) {
     };
     if (req.actor)
         headers[HEADERS.actor] = req.actor;
-    if (req.actorLabel)
-        headers[HEADERS.actorLabel] = encodeURIComponent(String(req.actorLabel).slice(0, 200));
+    if (actorLabel)
+        headers[HEADERS.actorLabel] = actorLabel;
     if (roles)
         headers[HEADERS.roles] = roles;
     if (contentType)
@@ -67,9 +72,25 @@ export async function nodeFetch(node, req = {}) {
         redirect: 'error',
         signal: AbortSignal.timeout(req.timeoutMs || 30_000),
     });
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > RESPONSE_MAX)
-        throw new Error('Ответ узла слишком большой');
+    // R8 (8.35): тело читается ПОТОКОМ с потолком — гигабайты от узла не оседают в памяти
+    // целиком до проверки (так было с arrayBuffer())
+    const chunks = [];
+    let size = 0;
+    if (res.body) {
+        const reader = res.body.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            size += value.length;
+            if (size > RESPONSE_MAX) {
+                reader.cancel().catch(() => {});
+                throw new Error('Ответ узла слишком большой');
+            }
+            chunks.push(Buffer.from(value));
+        }
+    }
+    const buf = Buffer.concat(chunks);
     const text = buf.toString('utf-8');
     if (!res.ok)
         throw new Error('Узел ' + node.host_id + ': HTTP ' + res.status + ' ' + text.slice(0, 300));

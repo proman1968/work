@@ -241,9 +241,9 @@ await test('реплика: пометка «сказано голосом» т�
     finally { spoken.remove(); typed.remove(); }
 });
 
-await test('шапка: персонаж показывает статус задачи; кнопки голосового режима в шапке нет (она в панели ввода)', async () => {
+await test('шапка: персонаж показывает статус задачи; кнопка режима беседы со спектром в шапке переключает голос', async () => {
     await import(base + 'dock.js');
-    const shell = mountShell({ title: 'Задача', status: 'idle', stats: { pct: 0 }, closable: false });
+    const shell = mountShell({ title: 'Задача', status: 'idle', stats: { pct: 0 }, closable: false, voiceOn: false });
     const el = document.createElement('microchat-header');
     shell.appendChild(el);
     try {
@@ -255,7 +255,11 @@ await test('шапка: персонаж показывает статус за�
         await waitFor(() => el.$('work-dot').getAttribute('mood') === 'waiting', 'ждёт вас');
         shell.status = 'error';
         await waitFor(() => el.$('work-dot').getAttribute('mood') === 'error', 'ошибка');
-        assert(![...el.$$('oda-button')].some(b => String(b.getAttribute('icon')).includes('headset')), 'наушников в шапке нет');
+        if (el.canVoice) {
+            await waitFor(() => el.$('.dialog-btn'), 'кнопка режима беседы в шапке');
+            el.toggleVoice();
+            assert(JSON.stringify(shell.calls).includes('["toggleVoice",true]'), 'включение из шапки ушло в шелл');
+        }
     }
     finally { shell.remove(); }
 });

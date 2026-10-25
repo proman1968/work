@@ -257,13 +257,18 @@ export function vectorsOf(hash) {
 }
 
 /** BM25 по чанкам: [{id, hash, score}] (score — чем меньше, тем лучше, как в bm25()). */
-export function ftsSearch(match, limit) {
+export function ftsSearch(match, limit, allowedHashes = null) {
     if (!match)
         return [];
     try {
-        return st(`SELECT c.id AS id, c.hash AS hash, bm25(rag_fts) AS score
+        const scanLimit = allowedHashes ? Math.max(Number(limit) || 200, 2000) : (Number(limit) || 200);
+        const rows = st(`SELECT c.id AS id, c.hash AS hash, bm25(rag_fts) AS score
                    FROM rag_fts JOIN rag_chunks c ON c.id = rag_fts.rowid
-                   WHERE rag_fts MATCH ? ORDER BY score LIMIT ?`).all(match, limit);
+                   WHERE rag_fts MATCH ? ORDER BY score LIMIT ?`).all(match, scanLimit);
+        if (!allowedHashes)
+            return rows;
+        const set = allowedHashes instanceof Set ? allowedHashes : new Set(allowedHashes);
+        return rows.filter(r => set.has(r.hash)).slice(0, Number(limit) || 200);
     }
     catch {
         return [];

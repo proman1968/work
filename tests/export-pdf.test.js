@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { workTools } from '../sources/modules/agent/tools/work.js';
-import { docTools, findPdfBrowser, renderPdf } from '../sources/modules/agent/tools/docs.js';
+import { docTools, findPdfBrowser, renderPdf, sandboxHtml } from '../sources/modules/agent/tools/docs.js';
 import { parseFrontmatter } from '../sources/modules/agent/util.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -37,6 +37,7 @@ before(async () => {
     write(`USERS/${IVAN}/$user/class.js`, `export default { label: 'Иванов Иван' }`);
     write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { USER: ['${IVAN}'] } }`);
     write('ORG/doc/note.md', 'заметка');
+    write('ORG/doc/table.html', '<p>не слайды</p>');
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -61,6 +62,60 @@ describe('export_pdf валидация', () => {
         await assert.rejects(tool('export_pdf').run({ source: '/ORG/doc/note.md', path: '/ORG/н.pdf' }, as(IVAN)), /источник — \.html/);
         await assert.rejects(tool('export_pdf').run({ source: '/ORG/doc/note.md', path: '/ORG/н.html' }, as(IVAN)), /источник — \.html/);
         await assert.rejects(tool('export_pdf').run({ source: '/ORG/нет.html', path: '/ORG/н.pdf' }, as(IVAN)), /не найдено|нужен файл/);
+    });
+
+    it('file:// ссылки в документе — отказ до рендера (F11: рендер не должен читать локальные файлы сервера)', async () => {
+        const wc = as(IVAN);
+        const evil = '<!DOCTYPE html><html><head></head><body><h1>Счёт</h1>'
+            + '<img src="file:///C:/Windows/win.ini"><iframe src="FILE:///C:/secret.json"></iframe></body></html>';
+        await tool('write').run({ path: '/ORG/утечка.html', content: evil }, wc);
+        await assert.rejects(tool('export_pdf').run({ source: wc.entry.path, path: '/ORG/у.pdf' }, as(IVAN)), /file:\/\//);
+        assert.equal(fs.existsSync(path.join(tmp, 'ORG/$class/USER/у.pdf')), false, 'PDF с утечкой создан');
+    });
+});
+
+describe('sandboxHtml: CSP рендерной копии (F11)', () => {
+    it('CSP-мета вставляется до контента, doctype не трогается (quirks mode не включается)', () => {
+        const doc = '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"></head><body><p>Привет</p></body></html>';
+        const out = sandboxHtml(doc);
+        assert.ok(out.startsWith('<!DOCTYPE html>'), 'doctype на месте');
+        const doctypeEnd = doc.indexOf('>') + 1;
+        assert.ok(out.slice(doctypeEnd).startsWith('<meta http-equiv="Content-Security-Policy"'), 'CSP не после doctype: ' + out.slice(0, 140));
+        assert.match(out, /default-src 'none'/);
+        assert.match(out, /img-src data:/);
+        assert.ok(out.includes('<p>Привет</p>'), 'контекст не искажён');
+    });
+    it('без doctype и без html — мета в начале; комментарии перед doctype не мешают', () => {
+        assert.ok(sandboxHtml('<h1>x</h1>').startsWith('<meta http-equiv='));
+        const withComment = '<!-- заказ 5 --><!--(черновик)-->\n<!DOCTYPE html><html><body>ок</body></html>';
+        const out2 = sandboxHtml(withComment);
+        const doctypeAt = out2.indexOf('<!DOCTYPE');
+        const metaAt = out2.indexOf('<meta http-equiv=');
+        assert.ok(doctypeAt >= 0 && metaAt > doctypeAt && metaAt < out2.indexOf('<html'), 'CSP должна быть после doctype и до html');
+    });
+    it('явные file: ссылки (src/href/url/@import, любой регистр) — ошибка', () => {
+        for (const bad of [
+            '<img src="file:///C:/a.png">',
+            '<iframe src=\'FILE:///etc/passwd\'></iframe>',
+            '<style>body{background:url( file:///C:/x.png )}</style>',
+            '<style>@import "file:///C:/s.css"</style>',
+            '<object data="file:///C:/e.emf"></object>',
+            '<base href="file:///C:/Windows/">',
+        ])
+            assert.throws(() => sandboxHtml('<!DOCTYPE html><html><body>' + bad + '</body></html>'), /file:\/\//, bad);
+    });
+    it('легальные документы проходят: data: картинки, http в тексте (не в атрибутах), инлайн-скрипты', () => {
+        const ok = '<!DOCTYPE html><html><head><style>b{color:red}</style></head><body>'
+            + '<img src="data:image/png;base64,iVBOR..."><p>файл: отчёт хранится в file: архиве</p>'
+            + '<script>document.title = "x"<\/script></body></html>';
+        const out = sandboxHtml(ok);
+        assert.match(out, /Content-Security-Policy/);
+        assert.match(out, /data:image\/png/);
+    });
+    it('энтити-кодирование обойдёт скан — но CSP всё равно не пустит file: (гарантия — не скан)', () => {
+        const sneaky = '<!DOCTYPE html><html><body><img src="&#x66;ile:///C:/win.ini"></body></html>';
+        const out = sandboxHtml(sneaky); // скан пропускает — и не должен ронять честный документ
+        assert.match(out, /default-src 'none'/, 'CSP обязан быть даже там, где скан слеп');
     });
 });
 
@@ -94,6 +149,30 @@ describe('export_pdf рендер (требует браузер)', () => {
         assert.ok(Math.abs(Number(box[3]) - 595.28) < 1 && Math.abs(Number(box[4]) - 841.89) < 1, 'формат A4');
     });
 
+    itBrowser('энтити-кодированная file: ссылка не доезжает до рендера (CSP копии), документ печатается', async () => {
+        // «секрет сервера» — файл за пределами дерева WORK; ссылка закодирована (&#x66;ile),
+        // чтобы её не видел скан sandboxHtml — обязан остановить CSP рендерной копии
+        const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-pdf-sec-'));
+        try {
+            const marker = 'СЕКРЕТ-8-5-НЕ-В-PDF';
+            const css = path.join(outside, 'secret.css').replace(/\\/g, '/');
+            await fsp.writeFile(path.join(outside, 'secret.css'), 'body::after{content:"' + marker + '"}', 'utf-8');
+            const html = '<!DOCTYPE html><html><head><meta charset="utf-8">'
+                + `<link rel="stylesheet" href="&#x66;ile:///${css}">`
+                + '<style>@page{size:A4;margin:12mm}</style></head>'
+                + '<body><h1>Документ без утечки</h1><p>Нормальный текст 42.</p></body></html>';
+            const wc = as(IVAN);
+            await tool('write').run({ path: '/ORG/без-утечки.html', content: html }, wc);
+            const res = await tool('export_pdf').run({ source: wc.entry.path, path: '/ORG/бу.pdf' }, as(IVAN));
+            const text = await tool('read').run({ path: res.match(/сохранено (\S+)/)[1] }, as(IVAN));
+            assert.match(text, /Нормальный текст 42/, 'документ не напечатался');
+            assert.ok(!text.includes(marker), 'содержимое локального файла утекло в PDF');
+        }
+        finally {
+            await fsp.rm(outside, { recursive: true, force: true });
+        }
+    });
+
     it('renderPdf проверяет магию PDF, убирает мусор и показывает код выхода', async () => {
         const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-pdf-neg-'));
         try {
@@ -101,6 +180,11 @@ describe('export_pdf рендер (требует браузер)', () => {
             await assert.rejects(
                 renderPdf(path.join(dir, 'd.html'), path.join(dir, 'd.pdf'), { browser: process.execPath }),
                 err => /не создал PDF/.test(err.message) && /\(код -?\d+\)/.test(err.message));
+            // защита обязана стоять в цепочке renderPdf: исходник с file:// не рендерится вовсе
+            await fsp.writeFile(path.join(dir, 'evil.html'), '<img src="file:///C:/win.ini">', 'utf-8');
+            await assert.rejects(
+                renderPdf(path.join(dir, 'evil.html'), path.join(dir, 'e.pdf'), { browser: process.execPath }),
+                /file:\/\//);
         }
         finally {
             await fsp.rm(dir, { recursive: true, force: true });
@@ -137,5 +221,55 @@ describe('навык office-documents', () => {
         assert.match(body, /export_pdf/);
         assert.match(body, /@page/);
         assert.match(body, /по запросу/);
+    });
+});
+
+// ── 9.10 (final): презентации — слайды → PDF ───────────────────────────────
+
+describe('export_presentation: слайды (9.10)', () => {
+    const hasBrowser = !!findPdfBrowser();
+
+    it('slidesOfMarkdown/slidesHtml: разделитель ---, заголовки, «- пункт» — список; текст — данные, не разметка', async () => {
+        const { slidesOfMarkdown, slidesHtml } = await import('../sources/modules/agent/tools/docs.js');
+        const slides = slidesOfMarkdown('# Итоги года\n- Доход 100\n- Расход 40\n---\nПланы\nтекст абзаца\n');
+        assert.deepEqual(slides, [
+            { title: 'Итоги года', bullets: ['Доход 100', 'Расход 40'], paras: [] },
+            { title: 'Планы', bullets: [], paras: ['текст абзаца'] },
+        ], 'разбор слайдов');
+        assert.deepEqual(slidesOfMarkdown('---\n\n---'), [], 'пустые блоки не считаются слайдами');
+        // текст слайдов — данные: разметка экранируется, не исполняется
+        const html = slidesHtml([{ title: 'X <img src=x onerror=alert(1)>', bullets: ['<b>пункт</b>'], paras: [] }], { title: '«Титул»' });
+        assert.ok(!html.includes('<img src=x'), 'заголовок слайда стал разметкой');
+        assert.match(html, /&lt;b&gt;пункт/, 'пункт слайда не экранирован');
+        assert.match(html, /«Титул»/, 'титул не попал в HTML');
+        assert.match(html, /size: 1280px 720px/, 'формат слайда не 16:9');
+    });
+    it('валидация: формат источника/результата, лимиты слайдов и текста', async () => {
+        await assert.rejects(tool('export_presentation').run({ slides: [{ title: 'Один' }], path: '/ORG/н.html' }, as(IVAN)), /\.pdf/);
+        await assert.rejects(tool('export_presentation').run({ source: '/ORG/doc/table.html', path: '/ORG/н.pdf' }, as(IVAN)), /\.md\/\.txt/);
+        await assert.rejects(tool('export_presentation').run({ source: '/ORG/doc/нет-такого.md', path: '/ORG/н.pdf' }, as(IVAN)), /не найдено|нужен файл/);
+        await assert.rejects(tool('export_presentation').run({ slides: [], path: '/ORG/н.pdf' }, as(IVAN)), /нет слайдов/);
+        await assert.rejects(tool('export_presentation').run({ path: '/ORG/н.pdf' }, as(IVAN)), /нет слайдов/);
+        const tooMany = Array.from({ length: 31 }, (_, i) => ({ title: 'Слайд ' + i }));
+        await assert.rejects(tool('export_presentation').run({ slides: tooMany, path: '/ORG/н.pdf' }, as(IVAN)), /больше 30 слайдов/);
+        const tooBig = [{ title: 'Т', bullets: ['x'.repeat(4100)] }];
+        await assert.rejects(tool('export_presentation').run({ slides: tooBig, path: '/ORG/н.pdf' }, as(IVAN)), /слайд 1 больше/);
+        await assert.rejects(tool('export_presentation').run({ slides: 'не массив', path: '/ORG/н.pdf' }, as(IVAN)), /slides — массив/);
+    });
+    (hasBrowser ? it : it.skip)('рендер: презентация из слайдов → PDF с извлекаемым текстом', async () => {
+        const res = await tool('export_presentation').run({
+            title: 'Итоги квартала',
+            slides: [
+                { title: 'Доходы', bullets: ['Продажи 100', 'Сервисы 40'] },
+                { title: 'Расходы', bullets: ['Зарплата 60'] },
+            ],
+            path: '/ORG/итоги.pdf',
+        }, as(IVAN));
+        assert.match(res, /сохранено/);
+        assert.match(res, /3 слайдов/);
+        const text = await tool('read').run({ path: res.match(/сохранено (\S+)/)[1] }, as(IVAN));
+        assert.match(text, /Итоги квартала/);
+        assert.match(text, /Продажи 100/);
+        assert.match(text, /Зарплата 60/);
     });
 });

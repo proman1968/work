@@ -23,7 +23,7 @@ ODA({
                 border-bottom: 1px solid var(--subtle-border);
             }
         </style>
-        <oda-form-field ~for="fields" :field="$for.item" :data :dense></oda-form-field>
+        <oda-form-field ~for="nodes" :field="$for.item" :data :dense></oda-form-field>
     `,
     $public: {
         /** компактный вид (property-grid): контролы без рамки, строки с разделителями */
@@ -140,9 +140,12 @@ ODA({
                 <span ~if="field.description" class="hint">{{field.description}}</span>
             </div>
             <div ~is="control" class="control" :field :value :readonly="isReadonly" :borderless="dense" :dense
+                @focusin="focusIn()" @focusout="focusOut()"
                 @value-changed="set($event.detail.value)"></div>
         </div>
         <div ~if="!hasChildren && isBlock" ~is="control" class="block" :field :value :readonly="isReadonly"
+            :borderless="dense" :dense
+            @focusin="focusIn()" @focusout="focusOut()"
             @value-changed="set($event.detail.value)"></div>
         <details ~if="hasChildren" :open="expanded" @toggle="expanded = $this.open">
             <summary>
@@ -152,7 +155,8 @@ ODA({
                     <span>{{label}}</span>
                 </div>
                 <div ~if="control" ~is="control" class="control" :field :value :readonly="isReadonly" :borderless="dense" :dense
-                    @tap.stop @value-changed="set($event.detail.value)"></div>
+                    @tap.stop @focusin="focusIn()" @focusout="focusOut()"
+                    @value-changed="set($event.detail.value)"></div>
             </summary>
             <div ~if="expanded" class="nested">
                 <oda-form-field ~for="children" :field="$for.item" :data="nestedData" :dense :level="level + 1"></oda-form-field>
@@ -162,12 +166,26 @@ ODA({
     field: {
         $type: Object,
         set(n) {
+            // новое поле — новый контрол: кэш подменённых элементов (`~is`) у текущего контрола
+            // сбрасываем, иначе контрол прежнего поля (со своим значением) достаётся новому полю
+            // и присылает это значение в запись (в данные попадало чужое значение)
+            for (const el of this.$$('.control, .block')) {
+                const replacer = el[R]?.cache?.replacer;
+                if (replacer)
+                    for (const key of Object.keys(replacer))
+                        delete replacer[key];
+            }
+            this._armed = false;
             this.reset();
         }
     },
     data: {
         $type: Object,
         set(n) {
+            // новые данные — прежнее отданное значение контролу больше не действительно
+            this._pushed = undefined;
+            this._armed = false;
+            this.editing = false;
             this.reset();
         }
     },
@@ -175,6 +193,13 @@ ODA({
         $def: false,
         $attr: true
     },
+    /**
+     * фокус в контроле: правку принимаем только из него (как в oda-table-cell) — программные проталкивания
+     * (значение по умолчанию, эхо перерисовки) правкой не являются
+     */
+    editing: false,
+    /** синхронизация состоялась: контрол подтвердил, что получил значение из данных */
+    _armed: false,
     level: 0,
     /** раскрытие блока: первый уровень — по form.expanded */
     expanded: {
@@ -190,7 +215,9 @@ ODA({
         return this.$pdp?.controlOf(this.field);
     },
     get value() {
-        return this.data?.[this.field?.id];
+        // значение, отданное контролу: по нему узнаём «эхо» — контрол повторил ровно то, что мы ему дали
+        this._pushed = this.$pdp?.fieldValue ? this.$pdp.fieldValue(this.field, this.data) : this.data?.[this.field?.id];
+        return this._pushed;
     },
     get isReadonly() {
         return !!(this.$pdp?.readonly || this.field?.readonly);
@@ -214,13 +241,19 @@ ODA({
         return this.$pdp?.dataOf(this.field, this.data);
     },
     set(value) {
-        const old = this.data?.[this.field.id];
+        const old = this.$pdp?.fieldValue ? this.$pdp.fieldValue(this.field, this.data) : this.data?.[this.field.id];
         const empty = v => v === undefined || v === '' || v === false || v === null || Array.isArray(v) && !v.length;
-        // привязки ODA асинхронны: первое value-changed контрола несёт его значение по умолчанию —
-        // запись начинается после того, как контрол получил значение из данных
-        if (this._syncedWith !== this.data) {
-            if (value === old || empty(value) && empty(old))
-                this._syncedWith = this.data;
+        // Привязки ODA асинхронны: контрол присылает своё значение по умолчанию и значение прежнего поля
+        // (контрол переиспользуется) — это не правка пользователя. Правку принимаем, когда:
+        // - контрол в фокусе (настоящий ввод) — как в oda-table-cell; сброс фокуса отложен, чтобы не потерять
+        //   коммит по blur (число фиксируется на change/blur);
+        // - либо значение отличается от переданного (эха нет) и синхронизация уже состоялась.
+        // Прежняя привязка сравнивала маркер с САМИМ объектом данных: plain-объект Reactor оборачивает новым
+        // прокси на каждом чтении, сравнение всегда проваливалось — и вся правка глоталась (правка не доходила).
+        if (!this.editing && !this._armed)
+            return; // правка не из фокуса и синхронизации ещё не было — не принимаем
+        if (value === this._pushed) {
+            this._armed = true; // эхо нашего значения: синхронизация состоялась
             return;
         }
         if (!this.data || old === value || old === undefined && empty(value))
@@ -228,6 +261,18 @@ ODA({
         this.data[this.field.id] = value;
         this.invalidate('value');
         this.$pdp.changed(this.field, value, this.data);
+    },
+    /** фокус в контроле: правки принимаем */
+    focusIn() {
+        this.editing = true;
+        clearTimeout(this._focusTimer);
+    },
+    /** уход фокуса: сброс отложен — коммит по blur (число) приходит сразу после и должен дойти */
+    focusOut() {
+        clearTimeout(this._focusTimer);
+        this._focusTimer = setTimeout(() => {
+            this.editing = false;
+        }, 0);
     },
     /** проверка своего контрола и раскрытых дочерних полей */
     validate() {

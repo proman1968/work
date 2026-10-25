@@ -9,14 +9,23 @@
 | Файл | Роль |
 |---|---|
 | `index.js` | фасад `RAG`: `start/stop`, `invalidate`, `search`, `queryObjects`, `clear`, `reconcile`, `status` |
-| `config.js` | модель, нарезка, лимиты, исключения, веса поиска; версия индекса = модель \| чанкер |
+| `config.js` | модель, нарезка, лимиты, исключения, веса поиска; версия индекса = модель \| чанкер \| формат входов |
 | `store.js` | SQLite (`.index/work.db`, node:sqlite): документы, содержимое по hash, чанки + векторы + FTS5, назначения, реестр классов |
 | `extract.js` | документы по физическому пути: `file`, `object` (карточка `$data` по схеме), `log` (запись ленты), `class` (карточка класса) |
 | `chunker.js` | нарезка с учётом заголовков markdown, абзацев, предложений; перекрытие внутри раздела |
-| `embedder.js`, `embed-worker.js` | эмбеддинги в worker_threads (transformers.js), пакетами |
+| `embedder.js`, `embed-worker.js` | эмбеддинги в worker_threads (`@huggingface/transformers`), пакетами; кэш моделей — `.index/hf` (`WORK_RAG_CACHE`) |
 | `indexer.js` | очередь по событиям, сверка с диском, fs.watch корня |
 | `scope.js` | проекции точки (слои `~`), области документов, контексты пользователя (кольца) |
 | `search.js` | гибридное ранжирование, проверка прав на выходе; `queryObjects` |
+
+## Модель эмбеддингов (final 8.8)
+
+По умолчанию — **EmbeddingGemma 2** (`onnx-community/embeddinggemma-2-ONNX`, q8): окно 8K токенов
+(куски не обрезаются — у прежней MiniLM окно было 128), 100+ языков, 768d, работает локально.
+Обязательные служебные префиксы входа — `docInput`/`queryInput` в `config.js` («task: search result | query: …»,
+«title: … | text: …»); формат входит в версию индекса. fp16 запрещён карточкой модели (тихий NaN);
+замер качества/скорости — `node scripts/rag-bench.mjs` (против прежней модели и fp32).
+Прежняя модель возвращается `WORK_RAG_MODEL=Xenova/paraphrase-multilingual-MiniLM-L12-v2`.
 
 ## Индексация
 

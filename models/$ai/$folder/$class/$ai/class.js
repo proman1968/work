@@ -14,6 +14,12 @@
  *   capabilities, functionCalling, accessToken
  */
 
+const ERROR_BODY_MAX = 64 * 1024;        // F28: тело ошибки потока — хватит для диагностики
+const SSE_LINE_MAX = 1024 * 1024;        // F28: незавершённая строка SSE (data-JSON много меньше)
+const JSON_BODY_MAX = 16 * 1024 * 1024;  // F28: JSON-ответ (картинка b64 — мегабайты; чужой мусор — нет)
+
+const REMOTE_BODY_MAX = 32 * 1024 * 1024; // R7 (8.35): бинарный ответ провайдера (WAV речи/распознавания)
+
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'editor',
@@ -94,7 +100,7 @@ export default {
      */
     async list_remote(params = {}) {
         const ai = params.$ai || this;
-        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
         const where = ai.short || ai.path || ai.id || '?';
         if (!base)
             return { error: 'list_remote: нет baseUrl у ' + where };
@@ -146,40 +152,48 @@ export default {
         let tools = Array.isArray(options.tools) && options.tools.length ? options.tools : null;
         if (!tools && Array.isArray(options.functions) && options.functions.length && ai.functionCalling === true)
             tools = toOpenAiTools(options.functions);
-        let messages = options.messages || [];
-        messages = isGigachat ? toGigaChatMessages(messages) : normalizeOpenAiMessages(messages);
+        // protocol 'anthropic' — нативный Messages API (свой формат запроса и потока); остальные — OpenAI-совместимый чат
+        const isAnthropic = ai.protocol === 'anthropic';
+        let body;
+        if (isAnthropic) {
+            body = buildAnthropicRequest(ai, options, tools);
+        }
+        else {
+            let messages = options.messages || [];
+            messages = isGigachat ? toGigaChatMessages(messages) : normalizeOpenAiMessages(messages);
 
-        const body = {
-            model: options.model || ai.model || '',
-            messages,
-            temperature: options.temperature ?? 0.7,
-            stream: true,
-        };
-        const cap = Number(options.maxOutput);
-        if (Number.isFinite(cap) && cap > 0)
-            body.max_tokens = cap;
-        if (options.stop)
-            body.stop = options.stop;
-        applyEffort(body, ai, options);
-        if (!isGigachat)
-            body.stream_options = { include_usage: true };
+            body = {
+                model: options.model || ai.model || '',
+                messages,
+                temperature: options.temperature ?? 0.7,
+                stream: true,
+            };
+            const cap = Number(options.maxOutput);
+            if (Number.isFinite(cap) && cap > 0)
+                body.max_tokens = cap;
+            if (options.stop)
+                body.stop = options.stop;
+            applyEffort(body, ai, options);
+            if (!isGigachat)
+                body.stream_options = { include_usage: true };
 
-        if (tools) {
-            if (isGigachat) {
-                const gigaFns = sanitizeGigaChatFunctions(tools.map(t => t.function || t));
-                body.functions = gigaFns;
-                body.messages = sanitizeGigaChatMessages(messages, gigaFns);
-                body.function_call = options.function_call || 'auto';
-            } else {
-                body.tools = tools;
-                body.tool_choice = resolveOpenAiToolChoice(options);
-                if (options.parallel_tool_calls != null)
-                    body.parallel_tool_calls = !!options.parallel_tool_calls;
+            if (tools) {
+                if (isGigachat) {
+                    const gigaFns = sanitizeGigaChatFunctions(tools.map(t => t.function || t));
+                    body.functions = gigaFns;
+                    body.messages = sanitizeGigaChatMessages(messages, gigaFns);
+                    body.function_call = options.function_call || 'auto';
+                } else {
+                    body.tools = tools;
+                    body.tool_choice = resolveOpenAiToolChoice(options);
+                    if (options.parallel_tool_calls != null)
+                        body.parallel_tool_calls = !!options.parallel_tool_calls;
+                }
             }
         }
 
         const headers = await getAuthHeaders(ai);
-        const url = new URL(ai.baseUrl);
+        const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
 
         const res = await new Promise((resolve, reject) => {
@@ -188,14 +202,37 @@ export default {
                 port: url.port || (url.protocol === 'http:' ? 80 : 443),
                 path: url.pathname + url.search,
                 method: 'POST',
-                agent: isGigachat ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+                agent: WORK.tls_agent?.(ai),
                 headers,
             }, (res) => {
                 if (res.statusCode < 200 || res.statusCode >= 300) {
+                    // F28: тело ошибки — с потолком (чужой сервер не решает, сколько мы держим в памяти)
                     const chunks = [];
-                    res.on('data', c => chunks.push(c));
+                    let errSize = 0;
+                    let overflow = false;
+                    res.on('data', c => {
+                        errSize += c.length;
+                        if (errSize <= ERROR_BODY_MAX)
+                            chunks.push(c);
+                        else {
+                            overflow = true;
+                            res.destroy();
+                        }
+                    });
+                    const text = () => Buffer.concat(chunks).toString('utf-8').slice(0, ERROR_BODY_MAX);
                     res.on('end', () => {
-                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + Buffer.concat(chunks).toString('utf-8')));
+                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                            + (overflow ? ' (тело ошибки обрезано на ' + (ERROR_BODY_MAX / 1024) + ' КБ)' : '')));
+                    });
+                    res.on('error', () => {
+                        reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                            + ' (соединение оборвано' + (overflow ? ' на потолке тела' : '') + ')'));
+                    });
+                    // destroy() без ошибки не всегда даёт 'error'/'end' — 'close' приходит всегда
+                    res.on('close', () => {
+                        if (overflow)
+                            reject(new Error('LLM ' + body.model + ' stream error ' + res.statusCode + ': ' + text()
+                                + ' (тело ошибки обрезано на ' + (ERROR_BODY_MAX / 1024) + ' КБ)'));
                     });
                     return;
                 }
@@ -218,6 +255,11 @@ export default {
             req.write(JSON.stringify(body));
             req.end();
         });
+
+        if (isAnthropic) {
+            yield* anthropicStream(res, body.model);
+            return;
+        }
 
         // Вызовы инструментов копятся по index (параллельные tool_calls), отдаются одним событием в конце.
         const calls = [];
@@ -266,14 +308,22 @@ export default {
                 noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
             if (json.usage) {
                 const u = json.usage;
-                const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
-                const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0) || 0;
+                // токены, прочитанные из кэша провайдера: OpenAI (prompt_tokens_details.cached_tokens), DeepSeek (prompt_cache_hit_tokens), Anthropic-поля
+                const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cache_read_input_tokens ?? 0) || 0;
+                const cacheWrite = Number(u.cache_creation_input_tokens ?? 0) || 0;
+                // prompt_tokens — ПОЛНЫЙ размер запроса, включая кэш (так его читает цикл агента для решения о сжатии);
+                // Anthropic-поля input_tokens не включают кэш — тогда полный размер = input + чтение + запись кэша
+                let promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0) || 0;
+                if (!promptTokens && u.input_tokens != null)
+                    promptTokens = (Number(u.input_tokens) || 0) + cached + cacheWrite;
+                const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? 0) || 0;
                 const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
                 yield {
                     type: 'usage',
                     prompt_tokens: promptTokens,
                     completion_tokens: completionTokens,
                     total_tokens: totalTokens,
+                    cached_tokens: cached,
                 };
             }
         };
@@ -285,6 +335,9 @@ export default {
         const decoder = new TextDecoder('utf-8');
         for await (const chunk of res) {
             buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+            // F28: чужой поток без переводов строк не копится в памяти бесконечно
+            if (buf.length > SSE_LINE_MAX)
+                throw new Error('LLM ' + body.model + ': строка потока превысила ' + Math.round(SSE_LINE_MAX / 1048576) + ' МБ — обрыв');
             const lines = buf.split('\n');
             buf = lines.pop();
             for (const line of lines)
@@ -324,7 +377,7 @@ export default {
         const tag = String(params.model || ai.model || '').trim();
         if (!tag)
             throw new Error('generateImage: нет model');
-        const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+        const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
         if (!base)
             throw new Error('generateImage: нет baseUrl у ' + (ai.short || ai.path || '?'));
         let origin;
@@ -435,11 +488,16 @@ export default {
 };
 
 function speechOrigin(params, ai, who) {
-    const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();
+    const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
     if (!base)
         throw new Error(who + ': нет baseUrl у ' + (ai.short || ai.path || '?'));
     try {
-        return new URL(base).origin;
+        const u = new URL(base);
+        const prefix = u.pathname
+            .replace(/\/+$/, '')
+            .replace(/\/v1\/(?:chat\/completions|audio\/(?:speech|transcriptions)|images\/generations|models)$/i, '')
+            .replace(/\/v1$/i, '');
+        return u.origin + prefix;
     }
     catch {
         throw new Error(who + ': некорректный baseUrl: ' + base);
@@ -464,7 +522,6 @@ export function buildMultipart(parts) {
 function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 60000) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
     return new Promise((resolve, reject) => {
         const req = transport.request({
@@ -472,13 +529,30 @@ function httpsPostBuffer(urlStr, headers, payload, contentType, ai, timeoutMs = 
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'POST',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: '*/*', ...headers, 'Content-Type': contentType, 'Content-Length': data.length },
             timeout: timeoutMs,
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): бинарный ответ (WAV) — потолок: чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > REMOTE_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('ответ превысил ' + Math.round(REMOTE_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const buf = Buffer.concat(chunks);
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + buf.toString('utf-8', 0, 200)));
@@ -812,6 +886,323 @@ export function normalizeOpenAiMessages(messages) {
     return out;
 }
 
+// ── Anthropic Messages API (protocol: 'anthropic') ─────────────────────────────
+// Нативный формат: system-блоки, tool_use/tool_result, input_json_delta, thinking с подписью, cache_control.
+// Чистые функции (без импортов — класс загружается как data: URL): покрыты tests/anthropic.test.js.
+
+export const ANTHROPIC_VERSION = '2023-06-01';
+/** Начало служебного сообщения с изменчивой частью среды (agent/loop.js VOLATILE_HEAD; тест держит их в синхроне). */
+export const ANTHROPIC_VOLATILE_PREFIX = '[Служебный контекст среды';
+const ANTHROPIC_EFFORT_BUDGET = { low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 49152 };
+const EPHEMERAL = { type: 'ephemeral' };
+
+/** baseUrl → адрес Messages API: хост, …/v1 или …/v1/messages (устаревший …/chat/completions заменяется). */
+export function anthropicUrl(baseUrl) {
+    const u = new URL(String(baseUrl || ''));
+    let p = u.pathname.replace(/\/+$/, '');
+    if (/\/chat\/completions$/.test(p))
+        p = p.replace(/\/chat\/completions$/, '/messages');
+    else if (!/\/messages$/.test(p))
+        p += /\/v1$/.test(p) ? '/messages' : '/v1/messages';
+    u.pathname = p;
+    return u.toString();
+}
+
+/** OpenAI tools[] → Anthropic tools[]; cache_control на последнем (кэш всего блока инструментов). */
+export function toAnthropicTools(tools, { cache = true } = {}) {
+    if (!Array.isArray(tools) || !tools.length)
+        return undefined;
+    const out = tools.map(t => {
+        const f = t.function || t;
+        const schema = f.parameters && typeof f.parameters === 'object' ? f.parameters : { type: 'object', properties: {} };
+        return { name: String(f.name), description: String(f.description || f.name), input_schema: schema };
+    });
+    if (cache)
+        out[out.length - 1].cache_control = EPHEMERAL;
+    return out;
+}
+
+function anthropicContentBlocks(content) {
+    const parts = Array.isArray(content) ? content : [content];
+    const out = [];
+    for (const p of parts) {
+        if (p == null)
+            continue;
+        if (typeof p === 'string') {
+            if (p.trim())
+                out.push({ type: 'text', text: p });
+            continue;
+        }
+        if (p.type === 'text' || typeof p.text === 'string') {
+            if (String(p.text || '').trim())
+                out.push({ type: 'text', text: String(p.text) });
+        }
+        else if (p.type === 'image_url' || p.image_url) {
+            const url = String(p.image_url?.url ?? p.image_url ?? '');
+            const m = url.match(/^data:([^;,]+);base64,(.*)$/s);
+            if (m)
+                out.push({ type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } });
+            else if (/^https?:\/\//i.test(url))
+                out.push({ type: 'image', source: { type: 'url', url } });
+        }
+    }
+    return out;
+}
+
+function parseToolInput(args) {
+    if (args && typeof args === 'object' && !Array.isArray(args))
+        return args;
+    try {
+        const v = JSON.parse(String(args || '{}'));
+        return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    }
+    catch {
+        return {};
+    }
+}
+
+/**
+ * OpenAI-сообщения (как их собирает цикл агента) → { system: [блоки], messages }.
+ *  - все system → блоки system; cache_control на последнем;
+ *  - tool-результаты подряд → ОДНО user-сообщение (tool_result первыми), за ним — остальные блоки того же хода;
+ *  - соседние сообщения одной роли склеиваются; первое сообщение — user;
+ *  - блоки размышлений (неперечисляемое msg.thinking_blocks) — только при включённом thinking;
+ *  - точка кэша истории — последний блок ДО изменчивого служебного сообщения (оно меняется каждый ход:
+ *    кэш на нём писался бы впустую). Всего точек кэша не больше трёх (инструменты, system, история).
+ */
+export function toAnthropicMessages(messages, { thinking = false, cache = true } = {}) {
+    const system = [];
+    const out = [];
+    const tail = new Set();
+    const push = (role, blocks, isTail) => {
+        if (!blocks.length)
+            return;
+        if (isTail)
+            for (const b of blocks)
+                tail.add(b);
+        const last = out[out.length - 1];
+        if (last && last.role === role)
+            last.content.push(...blocks);
+        else
+            out.push({ role, content: [...blocks] });
+    };
+    for (const m of Array.isArray(messages) ? messages : []) {
+        if (!m || typeof m !== 'object')
+            continue;
+        if (m.role === 'system') {
+            system.push(...anthropicContentBlocks(m.content));
+        }
+        else if (m.role === 'user') {
+            const isTail = typeof m.content === 'string' && m.content.startsWith(ANTHROPIC_VOLATILE_PREFIX);
+            push('user', anthropicContentBlocks(m.content), isTail);
+        }
+        else if (m.role === 'assistant') {
+            const blocks = [];
+            if (thinking && Array.isArray(m.thinking_blocks))
+                blocks.push(...m.thinking_blocks);
+            blocks.push(...anthropicContentBlocks(m.content));
+            for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : [])
+                blocks.push({ type: 'tool_use', id: String(tc.id), name: String(tc.function?.name || tc.name), input: parseToolInput(tc.function?.arguments ?? tc.arguments) });
+            push('assistant', blocks, false);
+        }
+        else if (m.role === 'tool') {
+            const text = String(m.content ?? '');
+            const block = { type: 'tool_result', tool_use_id: String(m.tool_call_id) };
+            if (text)
+                block.content = text;
+            if (/^(<untrusted[^>]*>\s*)?Ошибка:/.test(text))
+                block.is_error = true;
+            push('user', [block], false);
+        }
+    }
+    // tool_result должны идти первыми в user-сообщении (за ними — текст/картинки того же хода)
+    for (const m of out)
+        if (m.role === 'user')
+            m.content = [...m.content.filter(b => b.type === 'tool_result'), ...m.content.filter(b => b.type !== 'tool_result')];
+    if (!out.length || out[0].role !== 'user')
+        out.unshift({ role: 'user', content: [{ type: 'text', text: 'Продолжай.' }] });
+    const systemOut = system.length ? system : undefined;
+    if (cache) {
+        if (systemOut)
+            systemOut[systemOut.length - 1].cache_control = EPHEMERAL;
+        // последний блок истории, который не относится к изменчивому хвосту
+        done: for (let i = out.length - 1; i >= 0; i--)
+            for (let j = out[i].content.length - 1; j >= 0; j--) {
+                const b = out[i].content[j];
+                if (tail.has(b) || b.type === 'thinking' || b.type === 'redacted_thinking')
+                    continue;
+                b.cache_control = EPHEMERAL;
+                break done;
+            }
+    }
+    return { system: systemOut, messages: out };
+}
+
+/** Тело запроса Messages API из параметров streamChat (OpenAI-стиль: messages, tools, maxOutput, effort, stop…). */
+export function buildAnthropicRequest(ai, options = {}, tools = null) {
+    const cache = ai.promptCache !== false;
+    const cap = Number(options.maxOutput);
+    const maxTokens = Number.isFinite(cap) && cap > 0 ? cap : (Number(ai.maxOutput) > 0 ? Number(ai.maxOutput) : 8192);
+    // effort → thinking.budget_tokens (минимум 1024, строго меньше max_tokens)
+    let thinking = null;
+    const effort = options.effort;
+    if (hasCap(ai, 'effort') && effort != null && effort !== '' && effort !== 'off' && effort !== false) {
+        const want = ANTHROPIC_EFFORT_BUDGET[effort] ?? (effort === true ? ANTHROPIC_EFFORT_BUDGET.medium : (Number(effort) >= 1024 ? Number(effort) : 0));
+        const budget = Math.min(want, maxTokens - 1024);
+        if (budget >= 1024)
+            thinking = { type: 'enabled', budget_tokens: budget };
+    }
+    const conv = toAnthropicMessages(options.messages || [], { thinking: !!thinking, cache });
+    const body = { model: options.model || ai.model || '', max_tokens: maxTokens, stream: true, messages: conv.messages };
+    if (conv.system)
+        body.system = conv.system;
+    if (thinking)
+        body.thinking = thinking;
+    else
+        body.temperature = options.temperature ?? 0.7;
+    if (options.stop)
+        body.stop_sequences = Array.isArray(options.stop) ? options.stop : [options.stop];
+    const anthropicTools = toAnthropicTools(tools, { cache });
+    if (anthropicTools) {
+        body.tools = anthropicTools;
+        const choice = resolveOpenAiToolChoice(options);
+        let tc;
+        if (choice === 'none')
+            tc = { type: 'none' };
+        else if (choice === 'required')
+            tc = { type: 'any' };
+        else if (choice && typeof choice === 'object' && choice.function?.name)
+            tc = { type: 'tool', name: String(choice.function.name) };
+        else
+            tc = { type: 'auto' };
+        // с thinking разрешены только auto/none
+        if (thinking && (tc.type === 'any' || tc.type === 'tool'))
+            tc = { type: 'auto' };
+        if (options.parallel_tool_calls === false && tc.type !== 'none')
+            tc.disable_parallel_tool_use = true;
+        body.tool_choice = tc;
+    }
+    return body;
+}
+
+const ANTHROPIC_STOP = { end_turn: 'stop', stop_sequence: 'stop', tool_use: 'tool_calls', max_tokens: 'length', model_context_window_exceeded: 'length', refusal: 'content_filter' };
+
+/**
+ * Разбор SSE-событий Messages API в события адаптера (строки текста, reasoning, thinking_blocks, tool_calls, usage, finish).
+ * feed(event) вызывается на каждое событие и возвращает готовые куски; end() — итоговые (по концу потока).
+ */
+export function createAnthropicParser(model = '') {
+    const blocks = [];
+    const usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+    let stop = null;
+    let done = false;
+    const takeUsage = u => {
+        if (!u)
+            return;
+        if (u.input_tokens != null) usage.input = Number(u.input_tokens) || 0;
+        if (u.cache_read_input_tokens != null) usage.cacheRead = Number(u.cache_read_input_tokens) || 0;
+        if (u.cache_creation_input_tokens != null) usage.cacheWrite = Number(u.cache_creation_input_tokens) || 0;
+        if (u.output_tokens != null) usage.output = Number(u.output_tokens) || 0;
+    };
+    return {
+        feed(ev) {
+            const out = [];
+            switch (ev?.type) {
+                case 'message_start':
+                    takeUsage(ev.message?.usage);
+                    break;
+                case 'content_block_start': {
+                    const cb = ev.content_block || {};
+                    blocks[ev.index] = { type: cb.type, id: cb.id, name: cb.name, args: '', thinking: cb.thinking || '', signature: cb.signature || '', data: cb.data };
+                    if (cb.type === 'text' && cb.text)
+                        out.push(String(cb.text));
+                    break;
+                }
+                case 'content_block_delta': {
+                    const d = ev.delta || {};
+                    const b = blocks[ev.index] ??= { type: d.type === 'input_json_delta' ? 'tool_use' : 'text', args: '', thinking: '', signature: '' };
+                    if (d.type === 'text_delta' && d.text)
+                        out.push(String(d.text));
+                    else if (d.type === 'input_json_delta')
+                        b.args += d.partial_json || '';
+                    else if (d.type === 'thinking_delta' && d.thinking) {
+                        b.thinking += d.thinking;
+                        out.push({ type: 'reasoning', content: String(d.thinking) });
+                    }
+                    else if (d.type === 'signature_delta')
+                        b.signature += d.signature || '';
+                    break;
+                }
+                case 'message_delta':
+                    stop = ev.delta?.stop_reason ?? stop;
+                    takeUsage(ev.usage);
+                    break;
+                case 'message_stop':
+                    done = true;
+                    break;
+                case 'error':
+                    throw new Error('LLM ' + model + ': ' + (ev.error?.message || JSON.stringify(ev.error || ev)));
+            }
+            return out;
+        },
+        end() {
+            const out = [];
+            const present = blocks.map((b, index) => ({ b, index })).filter(x => x.b);
+            const thinking = present.map(x => x.b).filter(b => (b.type === 'thinking' && b.signature) || b.type === 'redacted_thinking')
+                .map(b => b.type === 'thinking' ? { type: 'thinking', thinking: b.thinking, signature: b.signature } : { type: 'redacted_thinking', data: b.data });
+            if (thinking.length)
+                out.push({ type: 'thinking_blocks', blocks: thinking });
+            const calls = present.filter(x => x.b.type === 'tool_use' && x.b.name)
+                .map(x => ({ id: x.b.id, name: x.b.name, arguments: parseFunctionArgs(x.b.args) }));
+            if (calls.length)
+                out.push({ type: 'tool_calls', calls });
+            const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
+            out.push({
+                type: 'usage', prompt_tokens: prompt, completion_tokens: usage.output, total_tokens: prompt + usage.output,
+                cached_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheWrite,
+            });
+            out.push({ type: 'finish', reason: stop ? (ANTHROPIC_STOP[stop] || stop) : null, done });
+            return out;
+        },
+    };
+}
+
+/** SSE-поток Messages API (res — ответ HTTP) → события адаптера. Строки `event:` не нужны: тип есть в каждом data. */
+async function* anthropicStream(res, model) {
+    const parser = createAnthropicParser(model);
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    const line = function* (raw) {
+        const l = raw.trim();
+        if (!l.startsWith('data:'))
+            return;
+        const s = l.slice(5).trim();
+        if (!s || s === '[DONE]')
+            return;
+        let json;
+        try {
+            json = JSON.parse(s);
+        }
+        catch {
+            return; // keep-alive/мусор
+        }
+        yield* parser.feed(json);
+    };
+    for await (const chunk of res) {
+        buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        // F28: чужой поток без переводов строк не копится в памяти бесконечно
+        if (buf.length > SSE_LINE_MAX)
+            throw new Error('LLM ' + model + ': строка потока превысила ' + Math.round(SSE_LINE_MAX / 1048576) + ' МБ — обрыв');
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const l of lines)
+            yield* line(l);
+    }
+    if (buf.trim())
+        yield* line(buf);
+    yield* parser.end();
+}
+
 async function getAuthHeaders(ai) {
     const headers = { 'Content-Type': 'application/json' };
     switch (ai.protocol) {
@@ -823,7 +1214,9 @@ async function getAuthHeaders(ai) {
         }
         case 'anthropic': {
             headers['x-api-key'] = await resolveKey(ai, ai.apiKey);
-            headers['anthropic-version'] = '2023-06-01';
+            headers['anthropic-version'] = ANTHROPIC_VERSION;
+            if (ai.anthropicBeta)
+                headers['anthropic-beta'] = String(ai.anthropicBeta);
             break;
         }
         case 'openai':
@@ -873,7 +1266,6 @@ export async function resolveKey(ai, raw) {
 function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     const payload = JSON.stringify(body || {});
     return new Promise((resolve, reject) => {
         const req = transport.request({
@@ -881,13 +1273,36 @@ function httpsPostJson(urlStr, headers, body, ai, timeoutMs = 60000) {
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'POST',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: 'application/json', ...headers, 'Content-Length': Buffer.byteLength(payload) },
             timeout: timeoutMs,
         }, (res) => {
+            // F28: тело ответа — с потолком (картинки b64 — мегабайты, влезают; чужие гигабайты — нет)
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            res.on('data', c => {
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    res.destroy();
+                    return;
+                }
+                chunks.push(c);
+            });
+            res.on('error', () => reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                + Math.round(JSON_BODY_MAX / 1048576) + ' МБ (или соединение оборвано)')));
+            // destroy() без ошибки не всегда даёт 'error'/'end' — 'close' приходит всегда
+            res.on('close', () => {
+                if (size > JSON_BODY_MAX)
+                    reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                        + Math.round(JSON_BODY_MAX / 1048576) + ' МБ'));
+            });
             res.on('end', () => {
+                // F28: даже если 'end' пришёл после destroy — переполненное тело не парсим
+                if (size > JSON_BODY_MAX) {
+                    reject(new Error('HTTP ' + res.statusCode + ': тело ответа больше '
+                        + Math.round(JSON_BODY_MAX / 1048576) + ' МБ'));
+                    return;
+                }
                 const text = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + text.slice(0, 160)));
@@ -968,20 +1383,36 @@ function pickGeneratedImage(data) {
 function httpsGetJson(urlStr, headers, ai) {
     const url = new URL(urlStr);
     const transport = transportFor(url);
-    const insecure = ai?.protocol === 'gigachat';
     return new Promise((resolve, reject) => {
         const req = transport.request({
             hostname: url.hostname,
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + url.search,
             method: 'GET',
-            agent: insecure ? new WORK.https.Agent({ rejectUnauthorized: false }) : undefined,
+            agent: WORK.tls_agent?.(ai),
             headers: { Accept: 'application/json', ...headers },
             timeout: 15000,
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): JSON-ответ — потолок (как generateImage): чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('JSON-ответ превысил ' + Math.round(JSON_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const body = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     reject(new Error('HTTP ' + res.statusCode + ': ' + body.slice(0, 120)));
@@ -1017,16 +1448,33 @@ function normalizeRemoteModelIds(data) {
     return [];
 }
 
+/** Authorization key GigaChat: поле token модели (литерал | env: | secret:), запасной — env GIGACHAT_KEY. */
+export async function gigachatToken(ai) {
+    try {
+        const token = await resolveKey(ai, ai.token);
+        if (token)
+            return token;
+    }
+    catch (e) {
+        if (!process.env.GIGACHAT_KEY)
+            throw e;
+    }
+    const fallback = String(process.env.GIGACHAT_KEY || '').trim();
+    if (!fallback)
+        throw new Error('GigaChat: не задан ключ — положите {"token": "..."} в /MODELS/GigaChat/$provider/#secret/gigachat.json или задайте env GIGACHAT_KEY');
+    return fallback;
+}
+
 async function gigachatAuth(ai) {
     const url = new URL(ai.authUrl);
-    const token = await resolveKey(ai, ai.token);
+    const token = await gigachatToken(ai);
     return new Promise((resolve, reject) => {
         const req = WORK.https.request({
             hostname: url.hostname,
             port: url.port || 9443,
             path: url.pathname,
             method: 'POST',
-            agent: new WORK.https.Agent({ rejectUnauthorized: false }),
+            agent: WORK.tls_agent?.(ai),
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Accept': 'application/json',
@@ -1035,8 +1483,25 @@ async function gigachatAuth(ai) {
             },
         }, (res) => {
             const chunks = [];
-            res.on('data', c => chunks.push(c));
+            let size = 0;
+            let overflow = false;
+            // R7 (8.35): ответ auth — JSON-потолок: чужой мусор не копится в памяти
+            res.on('data', c => {
+                if (overflow)
+                    return;
+                size += c.length;
+                if (size > JSON_BODY_MAX) {
+                    overflow = true;
+                    chunks.length = 0;
+                    req.destroy();
+                    reject(new Error('GigaChat auth: ответ превысил ' + Math.round(JSON_BODY_MAX / 1048576) + ' МБ — обрыв'));
+                    return;
+                }
+                chunks.push(c);
+            });
             res.on('end', () => {
+                if (overflow)
+                    return;
                 const body = Buffer.concat(chunks).toString('utf-8');
                 if (res.statusCode >= 400)
                     console.warn('[gigachat-auth] error:', res.statusCode, body.slice(0, 200));

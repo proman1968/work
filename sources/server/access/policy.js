@@ -231,6 +231,26 @@ export function isExecutablePath(path, pointPath = '') {
     return name === 'class.js' || segs.some(s => s[0] === '#');
 }
 
+/**
+ * Пути, которые движок агента исполняет или загружает как инструкции/конфиг: `ai/` внутри метапапки
+ * (кроме личной памяти memory.md), `hooks/`, `triggers/`. Писать их может только системная область.
+ */
+export function isAgentControlPath(path, pointPath = '') {
+    const segs = tildeSegments(path, pointPath);
+    for (let i = 0; i < segs.length; i++) {
+        const s = segs[i];
+        if (s === 'hooks' || s === 'triggers')
+            return true;
+        if (s === 'ai') {
+            const rest = segs.slice(i + 1);
+            if (rest.length === 1 && rest[0] === 'memory.md')
+                continue;   // память — данные пользователя (tools/memory.js)
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Запись ленты принадлежит пользователю: автор или получатель. */
 export function isOwnLogRow(row, uid) {
     if (!row || !uid)

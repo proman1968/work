@@ -108,27 +108,71 @@ describe('$class.getDifference', () => {
     });
 });
 
+describe('$class.pruneFields', () => {
+    it('не пишет поле, совпадающее с предком', () => {
+        const base = [{ id: 'a', type: 'String' }];
+        assert.deepEqual($class.pruneFields([{ id: 'a', type: 'String' }], base), []);
+    });
+
+    it('пишет поле с отличием и только новое поле', () => {
+        const base = [{ id: 'a', type: 'String' }, { id: 'b' }];
+        const out = $class.pruneFields([{ id: 'a', type: 'Number' }, { id: 'b' }, { id: 'c' }], base);
+        assert.deepEqual(out, [{ id: 'a', type: 'Number' }, { id: 'c' }]);
+    });
+
+    it('пишет родителя, если изменён только ребёнок, и тащит только изменённых детей', () => {
+        const base = [{ id: 'p', fields: [{ id: 'x' }, { id: 'y' }] }];
+        const list = [{ id: 'p', fields: [{ id: 'x' }, { id: 'y', type: 'Number' }] }];
+        assert.deepEqual($class.pruneFields(list, base), [
+            { id: 'p', fields: [{ id: 'y', type: 'Number' }] },
+        ]);
+    });
+
+    it('сохраняет элемент без id как есть', () => {
+        assert.deepEqual($class.pruneFields([{ type: 'String' }], []), [{ type: 'String' }]);
+    });
+});
+
+describe('$class.pruneMeta', () => {
+    it('обрезает FIELDS и STATIC по предку, остальные ключи не трогает', () => {
+        const base = { METADATA: { FIELDS: [{ id: 'a' }], STATIC: [{ id: 's' }] } };
+        const data = {
+            label: 'L',
+            METADATA: { FIELDS: [{ id: 'a' }, { id: 'b' }], STATIC: [{ id: 's' }], INDEXES: [{ id: 'i' }] },
+        };
+        const out = $class.pruneMeta(data, base);
+        assert.deepEqual(out.METADATA.FIELDS, [{ id: 'b' }]);
+        assert.deepEqual(out.METADATA.STATIC, []);
+        assert.deepEqual(out.METADATA.INDEXES, [{ id: 'i' }]);
+        assert.equal(out.label, 'L');
+        assert.equal(data.METADATA.FIELDS.length, 2, 'исходный объект не мутируется');
+    });
+});
+
 describe('$class.separateInheritData', () => {
     it('matches example.js golden split', () => {
         const { self_data, inherit_data } = separateInheritGolden();
 
         assert.equal(self_data.label, 'test structure');
         assert.equal(typeof Object.getOwnPropertyDescriptor(self_data, 'foo')?.get, 'function');
+        // поля без to_inherit — только в self; to_inherit:true — только в inherit
         const selfFields = self_data.METADATA.FIELDS;
-        assert.equal(selfFields.length, 4);
-        assert.equal(selfFields[0].id, 'f1');
-        assert.equal(selfFields[2].id, 'f3');
+        assert.deepEqual(selfFields.map(f => f.id), ['f1', 'f2', 'f3', 'f4']);
         assert.equal(selfFields[2].fields, undefined);
         assert.equal(selfFields[3].to_inherit, false);
 
         const inheritFields = inherit_data.METADATA.FIELDS;
-        assert.equal(inheritFields.length, 4);
-        assert.equal(inheritFields[0].id, 'f1');
-        assert.equal(inheritFields[1].id, 'f2');
-        assert.equal(inheritFields[2].id, 'f3');
-        assert.equal(inheritFields[2].fields[0].id, 'f31');
-        assert.equal(inheritFields[3].id, 'f5');
-        assert.equal(inheritFields[3].to_inherit, true);
+        assert.deepEqual(inheritFields.map(f => f.id), ['f3', 'f5']);
+        assert.equal(inheritFields[0].fields[0].id, 'f31');
+        assert.equal(inheritFields[1].to_inherit, true);
+    });
+
+    it('не наследует FIELDS без пометки to_inherit', () => {
+        const [self, inherit] = $class.separateInheritData({
+            METADATA: { FIELDS: [{ id: 'a', type: 'String' }] },
+        });
+        assert.equal(self.METADATA.FIELDS[0].id, 'a');
+        assert.equal(inherit.METADATA, undefined);
     });
 
     it('puts to_inherit fields into inherit part', () => {

@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         x11-xserver-utils xterm \
         chromium chromium-driver \
         xdotool scrot imagemagick \
-        git curl ca-certificates \
+        git curl ca-certificates ripgrep \
         fonts-noto-core \
-        procps net-tools \
+        procps net-tools iptables \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 1000 -s /bin/bash agent \
     && mkdir -p /workspace /opt/work \
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY entrypoint.sh /opt/work/entrypoint.sh
 COPY cdp.py /opt/work/cdp.py
-RUN chmod +x /opt/work/entrypoint.sh
+RUN sed -i 's/\r$//' /opt/work/entrypoint.sh /opt/work/cdp.py && chmod +x /opt/work/entrypoint.sh
 
 USER agent
 WORKDIR /workspace

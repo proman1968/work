@@ -5,10 +5,14 @@ import * as mime from "mime-types";
 import * as kreuzberg from '@kreuzberg/node';
 import { DOMParser } from 'linkedom';
 import * as XLSX from 'xlsx';
+import { assertZipSafe } from './zip-guard.js';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
 import * as LOGS from './logs.js';
+import * as REFS from './access/refs.js';
+import { markUpload } from './upload-mark.js';
+import { assertNotMemory } from './memory-mark.js';
 
 const SHEET_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
 
@@ -73,6 +77,9 @@ function sheetText(buf) {
 
 async function extractText(buf, ext, path) {
     const kind = sniffKind(buf, ext);
+    // zip-архивы (docx/xlsx/pptx/odt) — проверить до любого распаковщика (F16)
+    if (kind === 'zip')
+        assertZipSafe(buf);
     if (kind === 'text' || kind === 'html' || kind === 'xml')
         return markupText(buf, kind);
     let lastErr;
@@ -157,7 +164,8 @@ export class $file extends $folder{
             throw new Error('Восстановить можно только файл из истории');
         let target_folder = this.parent.parent.parent;
         params.filename = target_folder.id.slice(1);
-        params.post = {path: this.dir};
+        // доверенный внутренний путь (снимок истории) — помечаем, как загрузку из формы (upload-mark.js)
+        params.post = markUpload({ path: this.dir });
         return target_folder.parent.save_file(params);
     }
     /**
@@ -271,8 +279,11 @@ export class $file extends $folder{
         return data?.isDataFile ?? false;
     }
     async delete(params = {}){
+        // R2 (final 8.30): файл памяти не удаляется руками (даже админом) — только инструмент memory
+        assertNotMemory(this.dir, params);
         await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
         await fsp.unlink(this.dir);
+        await REFS.removeTarget(this.path).catch(() => {});
         globalThis.WORK_RAG?.invalidate?.(this.dir);
         this.parent.reset();
         this.reset();
@@ -383,7 +394,7 @@ export class $file extends $folder{
     async importScript() {
         return this[R].cache['_import_script'] ??= new AsyncPromise(async () => {
             const script = await this.inherit();
-            return this.constructor.importScript(script);
+            return this.constructor.importScript(script, this.path || this.dir);
         });
     }
     /**

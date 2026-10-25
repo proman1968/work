@@ -12,7 +12,7 @@
 
 1. **Контракт провайдера** (`SERVICES/<Имя>/$service/class.js`): `label/description/icon`, `capabilities[]`, `SCHEMA`, сами `async`-методы — либо поле `mcp` (клиент из типа, методы наследуются):
    - локальный: `mcp: {command, args, env}` (stdio-процесс рядом);
-   - прокси: `mcp: {url, headers}` (чужой HTTP-эндпоинт, Streamable HTTP + сессия).
+   - прокси: `mcp: {url, headers}` (чужой HTTP-эндпоинт, Streamable HTTP; сессия `Mcp-Session-Id` кэшируется на сервис — один initialize на серию вызовов, при 404/400 «session» сбрасывается и повторяется один раз; на запрос `roots/list` клиент отвечает корнями места задачи `work:<путь>`).
    Токены — только `secret:ФАЙЛ` (резолв через `read_secret`), открытым текстом запрещены.
 2. **Реестр** — `services_schema()` на классе `SERVICES` (`sources/server/folder.js`, рядом с `get_schema`): сводит всех провайдеров в `{services: [{service, path, label, description, icon, capabilities, tools}]}`. Провайдеры без `SCHEMA` и без `capabilities` в сводку не попадают.
 3. **Discovery**: `web` берёт провайдеров с `tools.search`, `site` — с `tools.fetch_url` из реестра; захардкоженные пути — только fallback, если реестр пуст.
@@ -22,7 +22,7 @@
 ## Из чего это состоит
 
 - `class.js` в `$service/` — тип `$service`: `icon`, `description`, `METADATA.FIELDS` (`baseUrl`, `apiKey`, `capabilities`) (конфигурация подключения, шаблон провайдера)
-- `mcp_list_tools` / `mcp_call_tool` — stdio-клиент MCP в типе (наследники задают `mcp: {command, args, env}` и получают вызовы; `secret:ФАЙЛ` — через `read_secret`) (протокол без новых зависимостей)
+- `mcp_list_tools` / `mcp_call_tool` — MCP-клиент в типе: stdio (`mcp: {command, args, env}`, пул процессов) и remote HTTP (`mcp: {url, headers}`); `secret:ФАЙЛ` — через `read_secret`; `roots/list` сервера — корни места задачи (передаёт `call` агента), остальное — честный -32601
 - `DuckDuckGo/`, `Yandex/`, `SearXNG/` — поиск (`search`) и чтение страниц (`fetch_url`) (глаза интернета)
 - `Weather/` — погода (`get_weather`) (сенсор внешнего мира)
 - `ArgoCD/`, `1C/` — прикладные провайдеры со своей `SCHEMA` (интеграции бизнеса)
@@ -32,8 +32,8 @@
 
 - ✅ контракт провайдера (`capabilities/SCHEMA/METADATA`), 6 провайдеров
 - ✅ реестр `services_schema()` + discovery в `web`/`site` + `validateCall` до `exec`
-- ✅ MCP-клиент (stdio JSON-RPC в типе) + агент `mcp` (search/inspect/install, установка — через `work` с approval)
-- 🔧 внешние MCP-серверы поверх HTTP/SSE, версионный пин пакетов — не реализовано
+- ✅ MCP-клиент: stdio (JSON-RPC, пул) и remote (Streamable HTTP, сессия на сервис, сброс/повтор при потере, roots места задачи) + агент `mcp` (search/inspect/install, установка — через `work` с approval)
+- 🔧 версионный пин пакетов MCP-серверов — не реализовано
 - 🔧 `result.error` от сервисов агенты местами помечают `error` — долг: различать провал операции и подсказку
 
 ## Дальнейшие планы

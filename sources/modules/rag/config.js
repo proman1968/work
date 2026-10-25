@@ -1,11 +1,23 @@
 /**
- * Настройки RAG. Версии модели/чанкера входят в ключ содержимого:
- * их смена переиндексирует документы без ручной очистки.
+ * Настройки RAG. Версии модели/чанкера/формата входов входят в ключ содержимого:
+ * их смена переиндексирует документы без ручной очистки (store.open сбрасывает индекс).
+ *
+ * Модель по умолчанию — EmbeddingGemma 2 (final 8.8): окно 8K токенов (куски не обрезаются),
+ * 100+ языков, поиск по коду; текстовая часть 270M. Служебные префиксы task:/title: —
+ * часть контракта модели (см. docInput/queryInput). fp16 запрещён карточкой модели (тихий NaN).
  */
+const MODEL = process.env.WORK_RAG_MODEL || 'onnx-community/embeddinggemma-2-ONNX';
+const GEMMA = /embeddinggemma/i.test(MODEL);
+
 export const CONFIG = {
-    /** Модель эмбеддингов (transformers.js). Макс. длина входа — 128 токенов: чанки короткие. */
-    model: process.env.WORK_RAG_MODEL || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2',
-    dims: 384,
+    /** Модель эмбеддингов (transformers.js; прежняя — Xenova/paraphrase-multilingual-MiniLM-L12-v2). */
+    model: MODEL,
+    /** Размерность векторов (у MiniLM — 384, у EmbeddingGemma — 768; WORK_RAG_DIMS — override). */
+    dims: Number(process.env.WORK_RAG_DIMS) || (GEMMA ? 768 : 384),
+    /** Точность ONNX: q8 (быстро, ~314 МБ) | fp32 (~1 ГБ). fp16 не использовать. */
+    dtype: process.env.WORK_RAG_DTYPE || 'q8',
+    /** Версия формата входов (префиксы EmbeddingGemma) — в ключе содержимого. */
+    inputVersion: GEMMA ? 'p2' : 'p1',
     /** Версия чанкера и карточек: увеличить при изменении нарезки/формата карточек. */
     chunker: 'c3',
     chunk: { max: 700, overlap: 120, min: 30 },
@@ -43,5 +55,21 @@ export const CONFIG = {
 
 /** Ключ версии содержимого (в hash документа). */
 export function contentVersion() {
-    return CONFIG.model + '|' + CONFIG.chunker;
+    return CONFIG.model + '|' + CONFIG.chunker + '|' + CONFIG.inputVersion;
+}
+
+/** Модель семейства EmbeddingGemma (префиксы входа обязательны). */
+const isGemma = m => /embeddinggemma/i.test(m);
+
+/** Вход документа для эмбеддинга: EmbeddingGemma требует префикс «title | text». */
+export function docInput(title, text, model = CONFIG.model) {
+    const t = String(title || '').slice(0, 300).replace(/\s+/g, ' ').trim();
+    if (isGemma(model))
+        return 'title: ' + (t || 'none') + ' | text: ' + text;
+    return (t ? t + '\n' : '') + text;
+}
+
+/** Вход запроса поиска: EmbeddingGemma требует префикс «task: search result | query:». */
+export function queryInput(q, model = CONFIG.model) {
+    return isGemma(model) ? 'task: search result | query: ' + String(q) : String(q);
 }

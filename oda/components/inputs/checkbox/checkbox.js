@@ -41,9 +41,13 @@ ODA({
         <label ~if="caption" @click.stop="toggle($event)">{{caption}}</label>
     `,
     $public: {
+        // без $def: пустое — undefined (как в данных); $def: false + каскад в state
+        // давал вечный цикл с привязкой (см. pitfalls §21)
         value: {
-            $def: false,
+            $type: Boolean,
             set(n) {
+                if (n === undefined)
+                    return;
                 // false при неопределённом состоянии его не сбрасывает (порядок синхронизации state → value)
                 if (n || this.state !== 'indeterminate')
                     this.state = n ? 'checked' : 'unchecked';
@@ -63,9 +67,17 @@ ODA({
         return !this.value;
     },
     toggle(e) {
+        // один физический клик добегает дважды: сначала capture-tap хоста, затем click
+        // инпута (либо наоборот) — второе срабатывание того же объекта события пропускаем
+        if (this.__lastToggleEvent === e)
+            return;
+        this.__lastToggleEvent = e;
         e.preventDefault();
         if (this.disabled || this.isReadonly)
             return;
+        // порядок как у всех: сначала фокус, затем смена значения и событие —
+        // потребитель видит фокус раньше value-changed (внешне — как обычно)
+        this.focus();
         if (this.threeStates)
             this.state = { unchecked: 'checked', checked: 'indeterminate' }[this.state] ?? 'unchecked';
         else

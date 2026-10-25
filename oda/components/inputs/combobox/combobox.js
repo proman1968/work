@@ -18,6 +18,14 @@ ODA({
     $public: {
         allowOther: true
     },
+    /**
+     * value не отражается в атрибут: сброс (undefined) возвращался бы из `attributeChangedCallback` как null,
+     * а число варианта — строкой. `$type: String` тут нельзя: значение варианта бывает числом.
+     * Начальный атрибут value="…" при создании по-прежнему применяется.
+     */
+    value: {
+        $public: false
+    },
     /** подпись варианта для значения или само значение */
     get text() {
         return this.isEmpty ? '' : this.optionOf(this.value)?.label ?? String(this.value);

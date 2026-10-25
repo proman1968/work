@@ -1,0 +1,39 @@
+# CI (hardening 4.5): линтер, типы, тесты и сканеры секретов на каждый push и PR.
+#
+# ubuntu-latest: пути с `# CI (hardening 4.5): линтер, типы, тесты и сканеры секретов на каждый push и PR.
+#
+ в именах ($server/$class) и русские имена файлов — норма для git/Linux,
+# тесты платформо-нейтральны (Windows-ветка junction в system-os на Linux — обычная dir-ссылка).
+#
+# test:ci = npm test (final 8.1): красных долгов нет — accounting-forms и ai-package починены,
+# system-os стабилен (таймаут run() теперь убивает процесс сразу, а не ждёт медленный taskkill).
+# package-lock.json в репо (final 8.3): npm ci ставит ровно зафиксированные версии.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:ci
+      - run: npm run check:secrets # секреты + «файлы кода не игнорируются»
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

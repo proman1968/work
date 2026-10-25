@@ -8,15 +8,14 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { CONFIG, contentVersion } from './config.js';
+import { CONFIG, contentVersion, docInput } from './config.js';
 import * as store from './store.js';
 import { chunkText } from './chunker.js';
 import { embedAll } from './embedder.js';
 import {
-    kindOf, isExcluded, readDocument, classDirOf, cabinetUidOf, workPathOf, diskOf,
+    kindOf, isExcluded, readDocument, classDirOf, workPathOf, diskOf,
     addDataExt, resetClassDirCache,
 } from './extract.js';
-import * as REFS from '../../server/access/refs.js';
 import { invalidateLayers } from './scope.js';
 
 const queue = new Map();
@@ -26,7 +25,8 @@ let processed = 0;
 let failures = 0;
 const recent = [];
 const reconcileState = { running: false, done: false, at: 0, files: 0, queued: 0, removed: 0 };
-let watcher = null;
+const WATCH_ROOTS = ['$server', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT', 'USERS', 'rules', 'docs'];
+let watchers = [];
 let watchTimer = null;
 const watchPending = new Set();
 
@@ -94,6 +94,8 @@ function hashOf(kind, text) {
     return createHash('sha256').update(contentVersion()).update('\0').update(kind).update('\0').update(text).digest('hex');
 }
 
+export { hashOf };
+
 /** Проиндексировать один путь (удалить из индекса, если его нет на диске). */
 export async function indexPath(p, { force = false } = {}) {
     const disk = diskOf(p) || '.';
@@ -120,7 +122,7 @@ export async function indexPath(p, { force = false } = {}) {
         return;
     const mtime = Math.floor(stat.mtimeMs);
     const prev = store.getDoc(p);
-    if (prev && prev.mtime === mtime && prev.kind === kind && (prev.hash || prev.error === null))
+    if (prev && prev.mtime === mtime && prev.kind === kind)
         return;
     if (stat.size > CONFIG.maxFileBytes) {
         store.upsertDoc({ path: p, kind, hash: null, mtime, size: stat.size, class_dir: classDirOf(p), error: 'too large' });
@@ -142,7 +144,7 @@ export async function indexPath(p, { force = false } = {}) {
     const hash = hashOf(kind, doc.text);
     if (!store.hasContent(hash)) {
         const chunks = chunkText(doc.text);
-        const inputs = chunks.map(c => doc.title + (c.heading ? ' › ' + c.heading : '') + '\n' + c.text);
+        const inputs = chunks.map(c => docInput(doc.title + (c.heading ? ' › ' + c.heading : ''), c.text));
         const vecs = await embedAll(inputs);
         store.putContent(hash, chunks, vecs);
     }
@@ -151,11 +153,12 @@ export async function indexPath(p, { force = false } = {}) {
         title: doc.title, meta: doc.meta || null, error: null,
     });
     processed++;
-    if (kind === 'log') {
-        const uid = cabinetUidOf(p);
-        if (uid && doc.row)
-            await REFS.addRow(uid, doc.row, p);
-    }
+    // F10 (инвариант 10, rules/threats.md): файлы лент НЕ доверены — их может править владелец.
+    // Раньше здесь вызывался REFS.addRow(uid, doc.row, p): подложная запись в ленте своего
+    // кабинета открывала владельцу чужой путь (path/includes попадали в feed_refs без проверки).
+    // Индекс лент наполняется ТОЛЬКО системным путём записи (logs.appendRow → writeLogTo),
+    // где вложения проверены правами автора (assertIncludesVisible) и путь решает ядро.
+    // Цена: при потере .index старые ссылки лент не восстанавливаются (новые записи создают заново).
     if (kind === 'class') {
         const cp = doc.classInfo?.path || '/';
         store.setAssignments(cp, doc.assignments || []);
@@ -259,28 +262,35 @@ export async function reconcile() {
     return reconcileState;
 }
 
-/** Наблюдение за изменениями на диске (внешние правки, SVN) — дебаунс 1 с. */
+/** Наблюдение за изменениями на диске (внешние правки, SVN) — дебаунс 1 с.
+ *  Наблюдаем только рабочие папки, а не '.' целиком: иначе fs.watch на Windows перехватывает
+ *  node_modules, .index/work.db-wal и .git на уровне ОС до JS-фильтра и крутит цикл событий. */
 function startWatch() {
-    try {
-        watcher = fs.watch('.', { recursive: true }, (_type, name) => {
-            if (!name)
-                return;
-            const p = workPathOf(String(name));
-            if (!p || isExcluded(p, { allowHidden: false }))
-                return;
-            watchPending.add(p);
-            clearTimeout(watchTimer);
-            watchTimer = setTimeout(() => {
-                const list = [...watchPending];
-                watchPending.clear();
-                for (const x of list)
-                    invalidate(x);
-            }, 1000);
-        });
-        watcher.unref?.();
-    }
-    catch (e) {
-        note('watch: ' + e.message);
+    for (const root of WATCH_ROOTS) {
+        if (!fs.existsSync(root))
+            continue;
+        try {
+            const w = fs.watch(root, { recursive: true }, (_type, name) => {
+                if (!name)
+                    return;
+                const p = workPathOf(root + '/' + String(name));
+                if (!p || isExcluded(p, { allowHidden: false }))
+                    return;
+                watchPending.add(p);
+                clearTimeout(watchTimer);
+                watchTimer = setTimeout(() => {
+                    const list = [...watchPending];
+                    watchPending.clear();
+                    for (const x of list)
+                        invalidate(x);
+                }, 1000);
+            });
+            w.unref?.();
+            watchers.push(w);
+        }
+        catch (e) {
+            note('watch ' + root + ': ' + e.message);
+        }
     }
 }
 
@@ -297,8 +307,10 @@ export function start({ watch = true, reconcileDelayMs = CONFIG.reconcileDelayMs
 export function stop() {
     started = false;
     queue.clear();
-    try { watcher?.close(); } catch { /* закрыт */ }
-    watcher = null;
+    for (const w of watchers) {
+        try { w.close(); } catch { /* закрыт */ }
+    }
+    watchers = [];
 }
 
 export function status() {

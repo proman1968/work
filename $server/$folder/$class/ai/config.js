@@ -6,6 +6,8 @@
  *   ttsModel    — синтез речи голосового режима задачи (capability tts); нет или недоступна — речь браузера;
  *   sttModel    — распознавание речи (capability stt); нет или недоступна — распознавание браузера;
  *   voice       — { instructions?, language? } — голос и язык синтеза вместо заданных у модели;
+ *   hooks       — хуки организации { pre_tool, post_tool, on_stop, on_compact }: функции или 'hooks/<имя>.js' из ai/ этого слоя;
+ *                 слои складываются (не перекрывают друг друга), менять может только ADMIN (sources/modules/agent/hooks.js);
  *   dot         — внешний вид персонажа агента (work-dot): { color?: CSS-цвет, eyes: round | sleepy | happy,
  *                 accessory: none | glasses | cap }; у подразделения может быть свой «помощник».
  */

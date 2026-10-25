@@ -810,15 +810,11 @@ class PeerConnector extends EventTarget {
         super();
         this.user = user;
         this.audioMixer = new AudioMixer();
+        const customIce = Array.isArray(globalThis.WORK_ICE_SERVERS) ? globalThis.WORK_ICE_SERVERS : null;
         this.pc = new RTCPeerConnection({
-            iceServers: [
+            iceServers: customIce || [
                 { urls: 'stun:stun.sipnet.ru:3478' },
                 { urls: 'stun:stun.odant.org' },
-                {
-                    urls: 'turn:stun.odant.org:3478',
-                    username: 'odant',
-                    credential: 'lkhjasdf8967'
-                }
             ]
         });
         this.pc.addEventListener('connectionstatechange', (e) => console.log('connectionstatechange to', this.pc.connectionState, e));

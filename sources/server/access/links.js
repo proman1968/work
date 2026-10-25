@@ -6,10 +6,10 @@
  * поддерево класса. Реестр строится лениво обходом структур, сбрасывается
  * при save() любой структуры.
  */
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { FS } from '../index.js';
+import { DEV_MODE } from '../../host/config.js';
 import * as POLICY from './policy.js';
 import * as WORKPLACES from './workplaces.js';
 
@@ -151,6 +151,8 @@ export async function linkLevel(cls, params = {}) {
  * прямые назначения плюс ссылки рабочих мест (кроме структурных типов).
  */
 export async function dataAccess(cls, params = {}) {
+    if (DEV_MODE)
+        return 'admin';
     return takeRank(await directAccess(cls, params), await linkLevel(cls, params));
 }
 

@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Цикл агента на нативном tool calling.
  *
@@ -20,8 +21,22 @@
  *   mode: 'auto'|'ask'|'plan' — режим разрешений
  *   allowed: Set<string>     — «разрешить всегда» в этой сессии (имена инструментов)
  */
+import { log } from './log.js';
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
 import { decide } from './permissions.js';
+import { newNonce, wrapUntrusted, taintSources, untrustedNames } from './taint.js';
+import { runPreTool, runAppend, runNotify } from './hooks.js';
+import { costOf, recordUsage, budgetExceeded } from './cost.js';
+
+/** 9.5: самопроверка перед завершением — открытые пункты плана (todo_write). */
+export const SELF_CHECK_NUDGE = '[Самопроверка] Перед завершением: в плане задачи остались незакрытые пункты';
+
+/** Открытые пункты плана (не завершённые) с непустым содержанием — для самопроверки (9.5). */
+export function openTodosOf(todos) {
+    return (Array.isArray(todos) ? todos : [])
+        .filter(t => t && String(t?.content || '').trim() && String(t?.status || '') !== 'completed')
+        .map(t => ({ content: String(t.content), status: String(t.status || 'pending') }));
+}
 
 export const MAX_TURNS = 60;
 export const RESULT_MAX = 24000;
@@ -30,21 +45,66 @@ export const KEEP_FULL_TURNS = 6;
 export const STREAM_RETRIES = 2;
 export const EMPTY_RETRIES = 2;
 export const COMPACT_AT = 0.72;
+/** usage ответа считается достоверным, если не меньше этой доли от system + схем инструментов (они есть в каждом запросе). */
+export const USAGE_TRUST_MIN = 0.7;
+/** Заголовок служебного сообщения с изменчивой частью среды (время, режим…), см. splitSystem/toMessages. */
+export const VOLATILE_HEAD = '[Служебный контекст среды на этот ход — не реплика пользователя]\n';
+
+/**
+ * system → { stable, volatile }. Строка (разовые вызовы, сжатие) — только стабильная часть.
+ * stable идёт первым сообщением system и почти не меняется (префикс для кэша провайдера),
+ * volatile (время, режим) — отдельным сообщением в КОНЦЕ: изменение в начале сломало бы кэш всей истории.
+ * @param {string | { stable?: string, volatile?: string } | Function} system
+ * @returns {{ stable: string, volatile: string }}
+ */
+export function splitSystem(system) {
+    if (system && typeof system === 'object')
+        return { stable: String(system.stable || ''), volatile: String(system.volatile || '') };
+    return { stable: String(system || ''), volatile: '' };
+}
+
+/** Весь текст system одной строкой (оценка токенов).
+ * @param {string | { stable?: string, volatile?: string } | Function} system
+ * @returns {string}
+ */
+export function systemText(system) {
+    const { stable, volatile } = splitSystem(system);
+    return volatile ? stable + '\n\n' + volatile : stable;
+}
+
 /** Скрытая подсказка после пустого хода (только в messages, в ленту не пишется). */
 export const EMPTY_NUDGE = '[Система] Твой предыдущий ответ был пустым: ни текста, ни вызова инструмента. Продолжай работу — вызови нужный инструмент или напиши итоговый ответ пользователю.';
 
 /**
  * Выполнить агента до ответа без вызовов инструментов (или стопа/лимита).
- * @param {object} opts
- * @param {object} opts.llm  { name, contextTokens, stream(req) → AsyncIterable }
- * @param {string|Function} opts.system  system-промпт или async () => string
- * @param {Array} opts.items  лента (мутируется)
- * @param {Array} opts.tools  инструменты { name, description, parameters, readonly?, risk?, run(args, ctx) }
- * @param {object} opts.host
- * @param {object} [opts.ctx]  доп. поля в ctx инструментов (session, place, …)
- * @returns {Promise<{status:'done'|'limit'|'stopped'|'error', content?:string}>}
+ * @param {LoopOpts} opts
+ * @returns {Promise<RunResult>}
  */
 export async function runLoop(opts) {
+    let res;
+    try {
+        res = await runLoopCore(opts);
+    }
+    catch (e) {
+        await notifyStop(opts, { status: 'error', content: String(e?.message || e) });
+        throw e;
+    }
+    await notifyStop(opts, res);
+    return res;
+}
+
+/** Хук on_stop (hooks.js): только для основного цикла задачи, не для субагентов. */
+async function notifyStop(opts, res) {
+    if (opts.depth || !opts.hooks?.on_stop?.length)
+        return;
+    await runNotify(opts.hooks, 'on_stop', {
+        status: res.status, content: clip(res.content || '', 2000),
+        turns: opts.items.filter(i => i.type === 'assistant').length,
+        task: opts.ctx?.task?.path || null,
+    }, opts.ctx);
+}
+
+async function runLoopCore(opts) {
     const { llm, items, host } = opts;
     const maxTurns = opts.maxTurns ?? MAX_TURNS;
     const tools = visibleTools(opts.tools || [], host.mode);
@@ -58,6 +118,7 @@ export async function runLoop(opts) {
                 await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
         await recoverInterrupted(items, host);
         let empty = 0;
+        let selfChecked = false; // 9.5: самопроверка — не чаще одного раза на задачу (без зацикливания)
         for (let turn = 0; ; turn++) {
             throwIfStopped(host.signal);
             if (turn >= maxTurns) {
@@ -65,22 +126,50 @@ export async function runLoop(opts) {
                 await host.save();
                 return { status: 'limit' };
             }
-            const system = typeof opts.system === 'function' ? await opts.system() : String(opts.system || '');
-            await maybeCompact({ llm, items, host, system });
+            // 9.2: дневной бюджет (ai/config.js limits: dayTokens/dayCost) — исчерпан: стоп с пояснением
+            if (opts.ctx?.session) {
+                const over = await budgetExceeded({ config: opts.ctx?.env?.config, uid: opts.ctx.session.uid });
+                if (over) {
+                    items.push({ id: genId(), type: 'error', time: Date.now(), content: 'Бюджет остановил задачу: ' + over.reason });
+                    await host.save();
+                    return { status: 'limit' };
+                }
+            }
+            const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
+            const toolsTokens = estimateTokens(schemas);
+            await maybeCompact({ llm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
             if (empty)
                 messages.push({ role: 'user', content: EMPTY_NUDGE });
+            const systemTokens = estimateTokens(systemText(system));
+            const measured = estimateContext({ items, system, toolsTokens });
             host.noteContext?.({
                 limit: Number(llm.contextTokens) || 0,
-                system: estimateTokens(system),
-                tools: estimateTokens(schemas),
-                messages: estimateTokens(messages) - estimateTokens(system),
+                system: systemTokens,
+                tools: toolsTokens,
+                messages: estimateTokens(messages) - systemTokens,
+                used: measured.tokens,
+                source: measured.source,
             });
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
             await host.save();
             const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: opts.effort });
+            // 9.2: стоимость хода по тарифам модели (pricing) + учёт (agent_usage в .index/work.db)
+            if (it.usage) {
+                const cost = costOf(it.usage, llm.pricing);
+                if (cost != null)
+                    it.usage.cost = cost;
+                await recordUsage({
+                    uid: opts.ctx?.session?.uid,
+                    place: opts.ctx?.place?.path,
+                    task: opts.ctx?.task?.path,
+                    model: llm.used || llm.name,
+                    usage: it.usage,
+                    cost,
+                });
+            }
             if (!calls.length) {
                 // реплики, пришедшие во время хода, — в ленту и ещё один ход
                 if (takeQueued(items, host, opts.depth)) {
@@ -99,6 +188,21 @@ export async function runLoop(opts) {
                     it.content = emptyReason(it);
                     await host.save();
                     return { status: 'error', content: it.content };
+                }
+                // 9.5: самопроверка — в плане остались незакрытые пункты: реплика-подсказка и ещё ход
+                // (модель либо завершает их инструментами, либо объясняет в ответе, почему нельзя);
+                // даётся один раз — иначе цикл не завершился бы никогда
+                const open = openTodosOf(host.getTodos?.());
+                if (open.length && !selfChecked) {
+                    selfChecked = true;
+                    items.push({
+                        id: genId(), type: 'user', time: Date.now(),
+                        content: SELF_CHECK_NUDGE + ':\n'
+                            + open.slice(0, 20).map(t => '- ' + t.content + (t.status !== 'pending' ? ' (' + t.status + ')' : '')).join('\n')
+                            + '\nЗаверши их инструментами или объясни в итоговом ответе, почему пункт не выполнен.',
+                    });
+                    await host.save();
+                    continue;
                 }
                 await host.save();
                 return { status: 'done', content: it.content };
@@ -252,7 +356,14 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                     host.emit?.({ type: 'delta', item: it.id, field: 'reasoning', token: ch.content });
                 }
                 else if (ch?.type === 'usage')
-                    it.usage = { prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens };
+                    it.usage = {
+                        prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens,
+                        ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}),
+                        ...(ch.cache_creation_tokens ? { cacheWrite: ch.cache_creation_tokens } : {}),
+                    };
+                // подписанные блоки размышлений (Anthropic): без них следующий шаг цикла инструментов при включённом thinking — ошибка API
+                else if (ch?.type === 'thinking_blocks')
+                    it.thinkingBlocks = ch.blocks;
                 else if (ch?.type === 'tool_calls')
                     calls = ch.calls || [];
                 else if (ch?.type === 'finish')
@@ -307,6 +418,11 @@ function stripThink(text) {
     return String(text || '').replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '');
 }
 
+/**
+ * @param {number} ms
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<void>}
+ */
 function sleep(ms, signal) {
     return new Promise(resolve => {
         const t = setTimeout(resolve, ms);
@@ -314,7 +430,10 @@ function sleep(ms, signal) {
     });
 }
 
-/** Вызовы хода: подряд идущие read-only — параллельно, остальные — по одному. */
+/**
+ * Вызовы хода: подряд идущие read-only — параллельно, остальные — по одному.
+ * @param {{ it: any, byName: Map<string, Tool>, host: Host, llm: LLM, opts: LoopOpts }} o
+ */
 async function runCalls({ it, byName, host, llm, opts }) {
     const entries = it.tools;
     let i = 0;
@@ -334,6 +453,37 @@ async function runCalls({ it, byName, host, llm, opts }) {
     }
 }
 
+/**
+ * Аудит вызова инструмента (server/access/audit.js, event 'agent'): рискованные (risk) — любой итог,
+ * отказы политики и решения человека — всегда. Аргументы не пишутся (секреты), только цель (target).
+ * Журнал асинхронный и не должен ронять цикл.
+ */
+async function noteAudit(tool, entry, ctx, verdict, outcome, extra = {}) {
+    try {
+        const { audit } = await import('../../server/access/audit.js');
+        let target;
+        try {
+            target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
+        }
+        catch (e) { log.debug('audit.target', e); /* цель не определилась — не повод ломать вызов */ }
+        audit('agent', {
+            tool: tool.name,
+            verdict, outcome,
+            ...extra,
+            target: Array.isArray(target) ? String(target[0]) : (target != null ? String(target) : undefined),
+            task: ctx?.task?.path,
+            error: entry.error ? clip(entry.error, 300) : undefined,
+            ms: entry.durationMs || 0,
+            params: { session: ctx?.session, role: ctx?.role },
+        });
+    }
+    catch (e) { log.debug('audit', e); /* журнал не должен ронять цикл */ }
+}
+
+/**
+ * Один вызов инструмента: хуки → политика → (подтверждение) → инструмент → аудит.
+ * @param {{ entry: Entry, tool: Tool, it: any, host: Host, llm: LLM, opts: LoopOpts, preapproved?: boolean }} o
+ */
 async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     if (!tool) {
         entry.status = 'error';
@@ -365,21 +515,59 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         signal: host.signal,
         depth: opts.depth || 0,
         tools: opts.tools,
+        hooks: opts.hooks,
         runLoop,
     };
-    const decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
+    // внешнее содержимое после последней реплики человека (и от родителя субагента) → действия наружу только с подтверждением
+    const tainted = taintSources(opts.items, opts.taintedFrom);
+    ctx.tainted = tainted.length ? tainted : null;
+    // хуки организации (hooks.js): могут запретить, потребовать подтверждение или поправить аргументы — но не разрешить сверх политики
+    let hookAsk = null;
+    if (opts.hooks?.pre_tool?.length) {
+        const pre = await runPreTool(opts.hooks, hookPayload(tool, entry, ctx), ctx);
+        if (pre.verdict === 'deny') {
+            entry.status = 'denied';
+            entry.hookDenied = true;
+            entry.error = pre.reason + ' (' + pre.scope + ')';
+            await host.save();
+            await noteAudit(tool, entry, ctx, 'deny', 'hook', { reason: clip(entry.error, 300) });
+            return;
+        }
+        if (pre.argsChanged) {
+            entry.args = pre.args;
+            entry.hookArgs = true;
+            const lacking = (tool.parameters?.required || []).filter(k => entry.args?.[k] == null || entry.args[k] === '');
+            if (lacking.length) {
+                entry.status = 'error';
+                entry.error = 'После правки аргументов правилом организации не хватает: ' + lacking.join(', ');
+                await host.save();
+                return;
+            }
+        }
+        if (pre.verdict === 'ask' && !preapproved)
+            hookAsk = pre;
+    }
+    /** @type {Verdict} */
+    let decision = preapproved ? { verdict: 'allow' } : await decide(tool, entry.args || {}, ctx);
+    if (hookAsk && decision.verdict === 'allow')
+        decision = { verdict: 'ask', noAlways: true, reason: 'правило организации (' + hookAsk.scope + '): ' + hookAsk.reason };
     if (decision.verdict === 'deny') {
         entry.status = 'denied';
         entry.error = decision.reason || 'запрещено политикой';
         await host.save();
+        await noteAudit(tool, entry, ctx, 'deny', 'policy', { reason: clip(entry.error, 300) });
         return;
     }
     if (decision.verdict === 'ask' && typeof host.wait !== 'function') {
         entry.status = 'denied';
         entry.error = 'нужно подтверждение человека (' + (decision.reason || 'политика') + '), а запуск автономный — предложи действие в ответе';
         await host.save();
+        await noteAudit(tool, entry, ctx, 'ask', 'denied', { reason: clip(decision.reason || 'политика', 300), headless: true });
         return;
     }
+    // подтверждение человека (или пред-подтверждение после рестарта) — в аудит попадает пометкой
+    /** @type {{ preapproved?: boolean, reason?: string, always?: boolean } | null} */
+    let approved = preapproved ? { preapproved: true } : null;
     if (decision.verdict === 'ask') {
         entry.status = 'approval';
         entry.reason = decision.reason;
@@ -398,8 +586,10 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
             entry.status = 'denied';
             entry.answer = res.content ? String(res.content) : undefined;
             await host.save();
+            await noteAudit(tool, entry, ctx, 'ask', 'denied', { reason: clip(decision.reason, 300), answer: entry.answer ? clip(entry.answer, 300) : undefined });
             return;
         }
+        approved = { reason: decision.reason, always: !!(res.always && !entry.noAlways) };
     }
     entry.status = 'running';
     const t0 = Date.now();
@@ -407,6 +597,9 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
     try {
         const value = await tool.run(entry.args || {}, ctx);
         throwIfStopped(host.signal);
+        // чужое содержимое (даже в ответе-ошибке сервиса): в контексте оборачивается в <untrusted>, ход считается зараженным
+        if (tool.untrusted)
+            entry.untrusted = true;
         if (value && typeof value === 'object' && !Array.isArray(value) && value.error && Object.keys(value).length <= 3) {
             entry.status = 'error';
             entry.error = String(value.error);
@@ -428,8 +621,43 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         entry.status = 'error';
         entry.error = String(e?.message || e);
     }
+    // инструмент мог пометить вызов сам (ctx.entry.untrusted = true, например read письма .eml)
+    if (entry.untrusted && !entry.nonce)
+        entry.nonce = newNonce();
     entry.durationMs = Date.now() - t0;
+    // post_tool: хук может дописать к результату поясняющий текст организации
+    if (opts.hooks?.post_tool?.length && (entry.status === 'ok' || entry.status === 'error')) {
+        const extra = await runAppend(opts.hooks, 'post_tool', {
+            ...hookPayload(tool, entry, ctx),
+            status: entry.status, result: clip(entry.result || '', 4000), error: entry.error, durationMs: entry.durationMs,
+        }, ctx);
+        if (extra) {
+            if (entry.status === 'ok')
+                entry.result = clip((entry.result ?? '') + '\n\n[Правило организации]\n' + extra, RESULT_MAX);
+            else
+                entry.error = String(entry.error || '') + '\n[Правило организации] ' + extra;
+        }
+    }
     await host.save();
+    // аудит: рискованные (risk) — любой итог; подтверждённые человеком — verdict 'ask'; пред-подтверждённые — 'allow' с пометкой
+    if (tool.risk || approved || entry.status !== 'ok')
+        await noteAudit(tool, entry, ctx, approved ? 'ask' : 'allow', entry.status,
+            approved ? { reason: clip(approved.reason, 300), always: approved.always || undefined, preapproved: approved.preapproved || undefined } : {});
+}
+
+/** Данные вызова для хуков (копии простых значений — не живые объекты ядра). */
+function hookPayload(tool, entry, ctx) {
+    let target;
+    try {
+        target = typeof tool.target === 'function' ? tool.target(entry.args || {}) : undefined;
+    }
+    catch (e) { log.debug('tool.target', e); /* цель не определилась */ }
+    return {
+        tool: tool.name, args: entry.args || {}, risk: tool.risk || null, readonly: !!tool.readonly,
+        target: Array.isArray(target) ? target.map(String) : (target != null ? String(target) : null),
+        tainted: ctx.tainted, mode: ctx.host?.mode || null, role: ctx.role || null,
+        task: ctx.task?.path || null, depth: ctx.depth || 0, uid: ctx.session?.uid || null,
+    };
 }
 
 /** Незакрытые вызовы (обрыв, рестарт) → interrupted: модель увидит честный результат. */
@@ -457,12 +685,19 @@ async function recoverInterrupted(items, host) {
 export function toolContent(t, old = false) {
     switch (t.status) {
         case 'ok': {
+            if (old)
+                t.clipped = true;
             const r = String(t.result ?? 'ok');
-            return old ? clip(r, OLD_RESULT_MAX) : r;
+            const text = (old || t.clipped) ? clip(r, OLD_RESULT_MAX) : r;
+            return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
         }
-        case 'error':
-            return 'Ошибка: ' + (t.error || 'неизвестно');
+        case 'error': {
+            const text = 'Ошибка: ' + (t.error || 'неизвестно');
+            return t.untrusted ? wrapUntrusted(text, t.name, t.nonce) : text;
+        }
         case 'denied':
+            if (t.hookDenied)
+                return 'Вызов запрещён правилом организации: ' + (t.error || '');
             return 'Пользователь отклонил вызов.' + (t.answer ? ' Комментарий: ' + t.answer : '') + (t.error ? ' ' + t.error : '');
         default:
             return 'Вызов прерван (стоп или перезапуск) — результата нет.';
@@ -475,8 +710,9 @@ export function toolContent(t, old = false) {
  */
 export function toMessages(system, items, images = null) {
     const out = [];
-    if (system)
-        out.push({ role: 'system', content: system });
+    const { stable, volatile } = splitSystem(system);
+    if (stable)
+        out.push({ role: 'system', content: stable });
     const live = items.filter(i => !i.compacted);
     const assistants = live.filter(i => i.type === 'assistant');
     const fullFrom = assistants.length - KEEP_FULL_TURNS;
@@ -486,9 +722,11 @@ export function toMessages(system, items, images = null) {
             case 'user':
                 out.push({ role: 'user', content: userContent(it, images) });
                 break;
-            case 'summary':
-                out.push({ role: 'user', content: '[Сводка предыдущей части работы]\n' + it.content });
+            case 'summary': {
+                const body = it.untrusted ? wrapUntrusted(it.content, 'summary', it.nonce || 'summary') : it.content;
+                out.push({ role: 'user', content: '[Сводка предыдущей части работы]\n' + body });
                 break;
+            }
             case 'assistant': {
                 const old = ai++ < fullFrom;
                 const tools = (it.tools || []).filter(t => t && t.name);
@@ -504,6 +742,10 @@ export function toMessages(system, items, images = null) {
                     }));
                 if (!msg.content && !msg.tool_calls)
                     break;
+                // блоки размышлений — неперечисляемое свойство: не попадает в JSON других протоколов и в оценку токенов,
+                // читает его только адаптер Anthropic (MODELS/$ai …/class.js toAnthropicMessages)
+                if (it.thinkingBlocks?.length)
+                    Object.defineProperty(msg, 'thinking_blocks', { value: it.thinkingBlocks, enumerable: false });
                 out.push(msg);
                 for (const t of tools)
                     out.push({ role: 'tool', tool_call_id: t.id, content: toolContent(t, old) });
@@ -513,6 +755,10 @@ export function toMessages(system, items, images = null) {
                 break;
         }
     }
+    // Изменчивая часть среды (время, режим) — в конце: история выше остаётся неизменным префиксом для кэша провайдера.
+    // Роль user, а не второй system: шаблоны многих моделей допускают system только первым сообщением.
+    if (volatile)
+        out.push({ role: 'user', content: VOLATILE_HEAD + volatile });
     // Скриншоты — отдельным сообщением в конце: не все провайдеры понимают картинки в role:'tool'.
     const shots = collectShots(live);
     if (shots.length && images !== null) {
@@ -538,12 +784,52 @@ function userContent(it, imageMap) {
     return [{ type: 'text', text: text + note }, ...images.map(a => ({ type: 'image_url', image_url: { url: a.image_url } }))];
 }
 
-/** Сжатие: контекст близок к пределу — старая часть ленты → сводка. */
-export async function maybeCompact({ llm, items, host, system, force = false }) {
+/**
+ * Опора для оценки контекста — реальный usage последнего ответа модели: prompt_tokens того запроса.
+ * Не годится, если после него было сжатие (summary новее ответа): размер контекста с тех пор изменился.
+ * @returns {{index:number, prompt:number}|null}
+ */
+function usageBaseline(items) {
+    let summaryAt = 0;
+    for (const i of items)
+        if (i.type === 'summary')
+            summaryAt = Math.max(summaryAt, Number(i.time) || 0);
+    for (let k = items.length - 1; k >= 0; k--) {
+        const it = items[k];
+        if (it.type !== 'assistant' || it.compacted || it.error)
+            continue;
+        const prompt = Number(it.usage?.prompt) || 0;
+        if (prompt <= 0)
+            continue;
+        return summaryAt > (Number(it.time) || 0) ? null : { index: k, prompt };
+    }
+    return null;
+}
+
+/**
+ * Размер следующего запроса в токенах. Есть usage последнего ответа — реальный prompt того запроса
+ * (system + схемы инструментов + диалог) плюс оценка добавленного после него (ответ, результаты инструментов, реплики);
+ * иначе — эвристика len/3.2 по сообщениям плюс схемы инструментов (toolsTokens).
+ * Микросжатие старых результатов с тех пор могло уменьшить контекст — оценка с запасом, это безопасная сторона.
+ * @returns {{tokens:number, source:'usage'|'estimate'}}
+ */
+export function estimateContext({ items, system, toolsTokens = 0 }) {
+    const base = usageBaseline(items);
+    // usage меньше того, что заведомо входит в каждый запрос (схемы инструментов + system), — данные шлюза недостоверны
+    // (нулевой/неполный usage): не верим ему, иначе сжатие не сработает и контекст переполнится
+    const floor = toolsTokens + estimateTokens(systemText(system));
+    if (base && base.prompt >= floor * USAGE_TRUST_MIN) {
+        const added = items.slice(base.index).filter(i => !i.compacted);
+        return { tokens: base.prompt + estimateTokens(toMessages('', added)), source: 'usage' };
+    }
+    return { tokens: estimateTokens(toMessages(system, items)) + toolsTokens, source: 'estimate' };
+}
+
+/** Сжатие: контекст близок к пределу — старая часть ленты → сводка. toolsTokens — схемы инструментов для эвристики без usage. */
+export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0, hooks, task }) {
     stripOldShots(items);
     const limit = Number(llm.contextTokens) || 32000;
-    const messages = toMessages(system, items);
-    if (!force && estimateTokens(messages) < limit * COMPACT_AT)
+    if (!force && estimateContext({ items, system, toolsTokens }).tokens < limit * COMPACT_AT)
         return false;
     const live = items.filter(i => !i.compacted);
     // граница — последний user-элемент, чтобы не резать пары вызов/результат
@@ -583,8 +869,17 @@ export async function maybeCompact({ llm, items, host, system, force = false }) 
         return false;
     for (const it of old)
         it.compacted = true;
+    const wasUntrusted = untrustedNames(old).size > 0 || old.some(it => it.type === 'summary' && it.untrusted);
     const idx = items.indexOf(live[cut]);
-    items.splice(idx, 0, { id: genId(), type: 'summary', time: Date.now(), content: summary });
+    const note = {
+        id: genId(), type: 'summary', time: Date.now(), content: summary,
+        ...(wasUntrusted ? { untrusted: true, nonce: newNonce() } : {}),
+    };
+    // on_compact: хук может дописать к сводке то, что обязано пережить сжатие (правила, ссылки)
+    const extra = await runAppend(hooks, 'on_compact', { summary: clip(summary, 4000), compacted: old.length, task: task?.path || null }, { task });
+    if (extra)
+        note.content += '\n\n' + extra;
+    items.splice(idx, 0, note);
     await host.save();
     return true;
 }

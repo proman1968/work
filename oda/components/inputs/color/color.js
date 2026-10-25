@@ -40,8 +40,8 @@ ODA({
             :readonly="isReadonly" :disabled :required="isRequired" @input="enter($this.value)">
     `,
     $public: {
+        // без $def: пустое — undefined, иначе вечный цикл с привязкой (см. pitfalls §21)
         value: {
-            $def: '',
             $type: String
         }
     },

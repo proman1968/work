@@ -49,29 +49,56 @@ export async function pickContacts(options = {}) {
 
 // ============= УТИЛИТЫ ДЛЯ РАБОТЫ С КОНТАКТАМИ =============
 
+// ── F29 (final 8.22): данные контактов уходят в файлы и innerHTML чужими глазами ──
+
+/** CSV-ячейка: формула (=,+,-,@) не исполняется в Excel; кавычки удваиваются. */
+export function escapeCsvValue(v) {
+    const s = String(v ?? '');
+    // R4 (8.32): апостроф ВНУТРИ кавычек — Excel видит текст, строгий парсер — одно поле
+    // (снаружи: значение вне кавычек, запятая внутри резала бы колонки; тест 8.22 закрепил неверный порядок)
+    const body = (/^[=+@-]/.test(s) ? "'" : '') + s.replace(/"/g, '""');
+    // =CMD(...) из имени контакта не должна исполняться при открытии файла
+    return '"' + body + '"';
+}
+
+/** vCard-значение (RFC 2426): \, переводы строк (в т.ч. одиночный \r), запятая, точка с запятой экранируются. */
+export function escapeVCardValue(v) {
+    return String(v ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n')
+        .replace(/,/g, '\\,')
+        .replace(/;/g, '\\;');
+}
+
+/** HTML-текст: имя контакта — данные, не разметка (self-XSS в списке). */
+export function escapeHtml(v) {
+    return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 /**
  * Форматирование одного контакта в строку
  */
 export function formatContact(contact) {
     const parts = [];
-    
+
     if (contact.name?.[0]) {
-        parts.push(`👤 ${contact.name[0]}`);
+        parts.push(`👤 ${escapeHtml(contact.name[0])}`);
     }
     if (contact.tel?.length) {
-        parts.push(`📞 ${contact.tel.join(', ')}`);
+        parts.push(`📞 ${escapeHtml(contact.tel.join(', '))}`);
     }
     if (contact.email?.length) {
-        parts.push(`✉️ ${contact.email.join(', ')}`);
+        parts.push(`✉️ ${escapeHtml(contact.email.join(', '))}`);
     }
     if (contact.address?.length) {
         const addr = contact.address[0];
         const addrStr = [addr.street, addr.city, addr.country]
             .filter(Boolean)
             .join(', ');
-        if (addrStr) parts.push(`🏠 ${addrStr}`);
+        if (addrStr) parts.push(`🏠 ${escapeHtml(addrStr)}`);
     }
-    
+
     return parts.join(' · ') || 'Нет данных';
 }
 
@@ -104,26 +131,26 @@ export function groupContactsByLetter(contacts) {
 export function exportToVCard(contacts) {
     return contacts.map(contact => {
         let vcard = 'BEGIN:VCARD\nVERSION:3.0\n';
-        
+
         // Имя
         if (contact.name?.[0]) {
-            vcard += `FN:${contact.name[0]}\n`;
+            vcard += `FN:${escapeVCardValue(contact.name[0])}\n`;
         }
-        
+
         // Телефоны
         if (contact.tel?.length) {
             contact.tel.forEach(phone => {
-                vcard += `TEL:${phone}\n`;
+                vcard += `TEL:${escapeVCardValue(phone)}\n`;
             });
         }
-        
+
         // Email
         if (contact.email?.length) {
             contact.email.forEach(email => {
-                vcard += `EMAIL:${email}\n`;
+                vcard += `EMAIL:${escapeVCardValue(email)}\n`;
             });
         }
-        
+
         // Адрес
         if (contact.address?.length) {
             const addr = contact.address[0];
@@ -134,9 +161,9 @@ export function exportToVCard(contacts) {
                 addr.postalCode,
                 addr.country
             ].filter(Boolean);
-            vcard += `ADR:;;${addrParts.join(';')}\n`;
+            vcard += `ADR:;;${addrParts.map(escapeVCardValue).join(';')}\n`;
         }
-        
+
         vcard += 'END:VCARD';
         return vcard;
     }).join('\n');
@@ -158,7 +185,7 @@ export function exportToCSV(contacts) {
     
     return [
         headers.join(','),
-        ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+        ...rows.map(row => row.map(cell => escapeCsvValue(cell)).join(','))
     ].join('\n');
 }
 

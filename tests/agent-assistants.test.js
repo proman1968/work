@@ -66,6 +66,16 @@ before(async () => {
     write('ORG/$class/USER/work.md', 'рабочее');
     write('ORG/$class/USER/tpl/letter.md', 'Уважаемый {{client.name}}! Счёт №{{number}} на {{sum}} руб.');
     write('ORG/$class/BOSS/plan.md', 'план');
+    // «бомба»-таблица: 2 МБ нулей, сжатых в ~1 КБ (степень сжатия >200) — до старта WORK
+    {
+        const AdmZip = (await import('adm-zip')).default;
+        const z = new AdmZip();
+        z.addFile('xl/worksheets/sheet1.xml', Buffer.alloc(2 * 1024 * 1024));
+        write('ORG/$class/USER/бомба.xlsx', z.toBuffer());
+        const zd = new AdmZip();
+        zd.addFile('word/document.xml', Buffer.alloc(2 * 1024 * 1024));
+        write('ORG/$class/USER/бомба.docx', zd.toBuffer());
+    }
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
@@ -204,6 +214,24 @@ describe('документы и таблицы', () => {
         await assert.rejects(tool('import_objects').run({ path: '/ORG', rows: [{}] }, as(PETR)), /учётного ядра/, 'класс вне ядра');
     });
 
+    it('read_table: архивная бомба .xlsx — отказ до разбора (F16)', async () => {
+        await assert.rejects(tool('read_table').run({ path: '/ORG/$class/USER/бомба.xlsx' }, as(PETR)), /бомбу|отклонён/);
+    });
+
+    it('render_doc: архивная бомба .docx — отказ до разбора (F16)', async () => {
+        await assert.rejects(tool('render_doc').run({
+            template: '/ORG/$class/USER/бомба.docx',
+            path: '/ORG/из-бомбы.docx',
+            data: { x: 1 },
+        }, as(PETR)), /бомбу|отклонён/);
+    });
+
+    it('read_table: таблица больше 25 МБ — отказ до разбора (F16)', async () => {
+        const big = await tool('write').run({ path: '/ORG/таблица-гигант.csv', content: 'a\n' + 'x'.repeat(26 * 1024 * 1024) }, as(PETR));
+        const src = String(big).match(/(?:создан|сохранено|перезаписан) (\S+)/)[1];
+        await assert.rejects(tool('read_table').run({ path: src }, as(PETR)), /25 МБ/);
+    });
+
     it('render_doc: md с вложенными полями; docx с меткой, разрезанной Word на куски, и экранированием', async () => {
         const res = await tool('render_doc').run({
             template: '/ORG/$class/USER/tpl/letter.md', path: '/ORG/Документы/письмо.md',
@@ -226,7 +254,63 @@ describe('документы и таблицы', () => {
 });
 
 describe('память, эскалация, триггеры', () => {
-    it('memory: память места видна только своей роли; личная — только владельцу; секреты не сохраняются', async () => {
+    it('F30: файл памяти не правится write/append/edit — только инструментом memory; forget — действие наружу', async () => {
+        const org = await WORK.get_item('/ORG');
+        const petrPlace = { ...as(PETR), place: org };
+        // write в память места (зона роли — ядро разрешило бы) — агенту запрещено
+        await assert.rejects(
+            tool('write').run({ path: '/ORG/$class/USER/ai/memory.md', content: '- [2026-10-14] вписано чужим письмом' }, petrPlace),
+            /инструментом memory/,
+            'write прошёл в файл памяти мимо пометок и фильтров memory');
+        await assert.rejects(
+            tool('append').run({ path: '/ORG/$class/USER/ai/memory.md', content: 'ещё' }, petrPlace),
+            /инструментом memory/);
+        await assert.rejects(
+            tool('edit').run({ path: '/ORG/$class/USER/ai/memory.md', old_string: 'x', new_string: 'y' }, petrPlace),
+            /инструментом memory/);
+        // маскированный путь — тоже
+        await assert.rejects(
+            tool('write').run({ path: '/ORG/USER/../$class/USER/ai/memory.md', content: 'x' }, petrPlace),
+            /инструментом memory/);
+        // R2 (8.30): обход через call — ядро отказывает (не только агентские write/append/edit).
+        // Сначала легитимная запись инструментом memory (метка Symbol, memory-mark.js)
+        assert.match(await tool('memory').run({ action: 'remember', text: 'правило: отчёты по пятницам' }, petrPlace),
+            /запомнил/);
+        // call.save_file в файл памяти — отказ на уровне ядра
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER', method: 'save_file',
+                args: { filename: 'memory.md', folder: 'ai', post: '- [2026-10-18] вписано чужим письмом' } }, petrPlace),
+            /инструментом memory/,
+            'call.save_file прошёл в файл памяти — мимо пометок, фильтра секретов и лимитов memory');
+        // регистр (Windows) — тоже отказ
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER', method: 'save_file',
+                args: { filename: 'MEMORY.MD', folder: 'AI', post: 'x' } }, petrPlace),
+            /инструментом memory/);
+        // удаление файла памяти через call — отказ даже админу (шлюз пускает ADMIN — ядро отказывает)
+        await assert.rejects(
+            tool('call').run({ path: '/ORG/$class/USER/ai/memory.md', method: 'delete', args: {} }, { ...as(ADMIN), place: org }),
+            /инструментом memory/,
+            'call.delete удалил файл памяти');
+        assert.ok(fs.existsSync(path.join(tmp, 'ORG', '$class', 'USER', 'ai', 'memory.md')), 'файл памяти удалён');
+        // память не создана обходом: в блоке памяти чужого факта нет
+        const { memoryBlock } = await import('../sources/modules/agent/tools/memory.js');
+        const block = await memoryBlock(org, petrPlace.session);
+        assert.ok(!/вписано чужим/.test(block), 'чужой факт попал в память');
+        // forget — outbound: в заражённом ходе человек подтверждает
+        const { memoryTools } = await import('../sources/modules/agent/tools/memory.js');
+        const { decide } = await import('../sources/modules/agent/permissions.js');
+        const { isOutbound } = await import('../sources/modules/agent/taint.js');
+        const mem = memoryTools.find(x => x.name === 'memory');
+        assert.equal(isOutbound(mem, { action: 'forget' }, {}), true, 'forget не помечен исходящим');
+        assert.equal(isOutbound(mem, { action: 'remember' }, {}), true);
+        assert.equal(isOutbound(mem, { action: 'recall' }, {}), false);
+        const host = { mode: 'auto', allowed: new Set() };
+        assert.equal((await decide(mem, { action: 'forget', text: 'x' }, { host, tainted: ['read'] })).verdict, 'ask',
+            'в заражённом ходе forget прошёл без вопроса — чужое письмо может вычистить правила безопасности');
+    });
+
+it('memory: память места видна только своей роли; личная — только владельцу; секреты не сохраняются', async () => {
         const org = await WORK.get_item('/ORG');
         const petr = { ...as(PETR), place: org }, boss = { ...as(BOSS), place: org };
         assert.match(await tool('memory').run({ action: 'remember', text: 'Отчёты отдела — только xlsx' }, petr), /запомнил.*роль USER/);
@@ -331,6 +415,38 @@ describe('расписание', () => {
         assert.throws(() => S.normalizeRule({ every: 5 }), /от 15/);
         assert.throws(() => S.normalizeRule({ at: '25:00' }));
         assert.throws(() => S.normalizeRule({ at: '09:00', days: [0] }), /1–7/);
+    });
+
+    it('9.8: календарные даты — однократно, ежемесячно, ежегодно; рабочие дни', () => {
+        const from = Date.parse('2026-09-28T10:00:00Z'); // пн 28.09.2026 13:00 МСК
+        // конкретная дата в будущем / прошедшая — null / дата без времени — ошибка
+        const once = S.normalizeRule({ date: '2026-10-20', at: '15:00' });
+        assert.equal(new Date(S.nextRun(once, 'Europe/Moscow', from)).toISOString(), '2026-10-20T12:00:00.000Z', 'однократная дата');
+        assert.equal(S.nextRun(once, 'Europe/Moscow', Date.parse('2026-10-21T00:00:00Z')), null, 'прошедшая дата не повторяется');
+        assert.throws(() => S.normalizeRule({ date: '2026-10-20' }), /нужно at/);
+        assert.throws(() => S.normalizeRule({ date: '20.10.2026', at: '09:00' }), /YYYY-MM-DD/);
+        assert.throws(() => S.normalizeRule({ date: '2026-10-20', at: '09:00', repeat: 'weekly' }), /repeat/);
+        // ежемесячно: от 28.09 следующий 20-й — 20.10; 31-е в коротком месяце — месяц пропускается (31.08 → 31.10)
+        const monthly = S.normalizeRule({ date: '2026-08-31', at: '09:00', repeat: 'monthly' });
+        assert.equal(new Date(S.nextRun(monthly, 'Europe/Moscow', from)).toISOString(), '2026-10-31T06:00:00.000Z', '31-е пропускает сентябрь');
+        const monthlyMid = S.normalizeRule({ date: '2026-01-20', at: '09:00', repeat: 'monthly' });
+        assert.equal(new Date(S.nextRun(monthlyMid, 'Europe/Moscow', from)).toISOString(), '2026-10-20T06:00:00.000Z', 'ежемесячно 20-го');
+        // ежегодно: 29 февраля в невисокосный год — 28 февраля
+        const yearly = S.normalizeRule({ date: '2024-02-29', at: '09:00', repeat: 'yearly' });
+        assert.equal(new Date(S.nextRun(yearly, 'UTC', from)).toISOString(), '2027-02-28T09:00:00.000Z', '29 февраля → 28 в невисокосный');
+        const yearlyOct = S.normalizeRule({ date: '2026-10-05', at: '09:00', repeat: 'yearly' });
+        assert.equal(new Date(S.nextRun(yearlyOct, 'Europe/Moscow', from)).toISOString(), '2026-10-05T06:00:00.000Z', 'ещё в этом году — этот год');
+        assert.equal(new Date(S.nextRun(yearlyOct, 'Europe/Moscow', Date.parse('2026-10-06T00:00:00Z'))).toISOString(), '2027-10-05T06:00:00.000Z', 'прошедшая в этом году — следующий год');
+        // рабочие дни: пн–пт
+        const wd = S.normalizeRule({ at: '09:00', workdays: true });
+        assert.deepEqual(wd.days, [1, 2, 3, 4, 5], 'workdays ≠ пн–пт');
+        assert.equal(wd.workdays, true);
+        assert.equal(new Date(S.nextRun(wd, 'Europe/Moscow', from)).toISOString(), '2026-09-29T06:00:00.000Z', 'пн 13:00 → вт 09:00');
+        // описания по-человечески
+        assert.equal(S.describeRule(once), '20.10.2026 в 15:00 (однократно)');
+        assert.equal(S.describeRule(monthlyMid), 'ежемесячно 20-го в 09:00');
+        assert.equal(S.describeRule(yearlyOct), 'ежегодно 10-05 в 09:00');
+        assert.equal(S.describeRule(wd), 'по рабочим дням в 09:00');
     });
 
     it('schedule: создание из задачи, подтверждение, список, отмена; запуск от имени владельца', async () => {

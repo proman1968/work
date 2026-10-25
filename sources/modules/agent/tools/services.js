@@ -5,7 +5,9 @@
  *  - mcp_* — инструменты MCP-серверов (сервисы с полем mcp), список кэшируется.
  * Реестр строится из дерева: новый сервис/MCP в /SERVICES — новые инструменты без кода.
  */
+import { log } from '../log.js';
 import { clip } from '../util.js';
+import { urlCarriesData } from '../taint.js';
 import { callAs } from './work.js';
 import { askEach } from '../system.js';
 
@@ -27,9 +29,9 @@ export async function listServices(force = false) {
     try {
         root = await WORK.get_item('/SERVICES');
     }
-    catch { /* нет каталога */ }
+    catch (e) { log.debug('services.list', e); /* нет каталога */ }
     const walk = async (folder, level, prefix) => {
-        let kids = [];
+        let kids;
         try {
             kids = (await folder.items) || [];
         }
@@ -38,7 +40,7 @@ export async function listServices(force = false) {
             const id = kid.id || '';
             if (!id || /^[$.#]/.test(id) || typeof kid.import !== 'function')
                 continue;
-            let data = null;
+            let data;
             try {
                 data = await kid.import();
             }
@@ -119,6 +121,7 @@ export const webTools = [
     {
         name: 'web_search',
         readonly: true,
+        untrusted: true,
         description: 'Поиск в интернете. Возвращает ссылки с описаниями; содержимое страницы — web_fetch.',
         parameters: {
             type: 'object',
@@ -154,8 +157,10 @@ export const webTools = [
     },
     {
         name: 'web_fetch',
-        readonly: true,
-        description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url).',
+        planSafe: true,             // чтение: в «Плане» и «auto» — сразу; readonly нельзя: данные в адресе — см. outbound
+        outbound: urlCarriesData,   // адрес уносит данные контекста (длинные/текстовые параметры) — с подтверждения (8.2)
+        untrusted: true,
+        description: 'Прочитать веб-страницу по URL: текст со ссылками [текст](url). Если в адресе есть данные (длинные или текстовые параметры) — попрошу подтверждение.',
         parameters: {
             type: 'object',
             properties: { url: { type: 'string', description: 'Полный http(s) URL' } },
@@ -185,6 +190,8 @@ export async function serviceTools(session) {
             out.push({
                 name: toolId('svc', s.id, method),
                 readonly: spec?.readonly ?? READ_NAME.test(method),
+                untrusted: !s.data.lanKind, // ответ внешнего сервиса — чужой текст (taint.js); LAN-сервисы (1С, принтеры) — свои данные
+                outbound: !(spec?.readonly ?? READ_NAME.test(method)),
                 risk: (spec?.readonly ?? READ_NAME.test(method)) ? undefined : 'danger',
                 permission: s.data.lanKind && !(spec?.readonly ?? READ_NAME.test(method))
                     ? askEach(() => (s.data.label || s.id) + ': ' + method) : undefined,
@@ -230,24 +237,39 @@ export async function mcpTools({ onError } = {}) {
         for (const t of cached.tools) {
             if (!t?.name)
                 continue;
-            const ro = t.annotations?.readOnlyHint === true;
-            out.push({
-                name: toolId('mcp', s.id, t.name),
-                readonly: ro,
-                risk: ro ? undefined : (t.annotations?.destructiveHint ? 'danger' : 'write'),
-                description: '[MCP ' + (s.data.label || s.id) + '] ' + String(t.description || t.name).slice(0, 1000),
-                parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
-                source: { service: s.path, mcp: t.name },
-                async run(args, ctx) {
-                    const res = await callAs(s.item, 'mcp_call_tool', { name: t.name, arguments: args || {} }, ctx);
-                    if (res?.error)
-                        return { error: String(res.error) };
-                    const parts = (res?.content || []).map(c => c.type === 'text' ? c.text : (c.type === 'image' ? '[изображение ' + (c.mimeType || '') + ']' : JSON.stringify(c)));
-                    const text = parts.join('\n') || JSON.stringify(res?.structuredContent ?? res ?? '');
-                    return res?.isError ? { error: text } : text;
-                },
-            });
+            out.push(mcpToolDef(s, t));
         }
     }));
     return out;
+}
+
+/**
+ * Инструмент из декларации MCP-сервера (F17, final 8.10): чужой сервер не решает,
+ * что «только чтение» — readOnlyHint это заявка автора кода, который мы не контролируем,
+ * а readonly обходит даже подтверждения заражённого хода. Вызов чужого кода — всегда
+ * «наружу» (outbound): в заражённом ходе человек подтверждает, destructiveHint — danger.
+ * @param {{id:string, path:string, data:object, item:object}} s сервис
+ * @param {{name:string, description?:string, inputSchema?:object, annotations?:object}} t декларация
+ */
+export function mcpToolDef(s, t) {
+    const ro = t.annotations?.readOnlyHint === true; // подсказка — только в описании, не в правах
+    return {
+        name: toolId('mcp', s.id, t.name),
+        untrusted: true, // ответ MCP-сервера — чужой текст (taint.js)
+        outbound: true,  // вызов чужого кода — действие наружу
+        risk: t.annotations?.destructiveHint ? 'danger' : 'write',
+        description: '[MCP ' + (s.data.label || s.id) + ']'
+            + (ro ? ' (читающий, по заявлению сервера)' : '') + ' '
+            + String(t.description || t.name).slice(0, 1000),
+        parameters: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
+        source: { service: s.path, mcp: t.name },
+        async run(args, ctx) {
+            const res = await callAs(s.item, 'mcp_call_tool', { name: t.name, arguments: args || {} }, ctx);
+            if (res?.error)
+                return { error: String(res.error) };
+            const parts = (res?.content || []).map(c => c.type === 'text' ? c.text : (c.type === 'image' ? '[изображение ' + (c.mimeType || '') + ']' : JSON.stringify(c)));
+            const text = parts.join('\n') || JSON.stringify(res?.structuredContent ?? res ?? '');
+            return res?.isError ? { error: text } : text;
+        },
+    };
 }

@@ -170,7 +170,7 @@ export async function onSave(file, params = {}) {
         if (!file)
             return 0;
     }
-    let triggers = [];
+    let triggers;
     try {
         triggers = await matchTriggers(file);
     }

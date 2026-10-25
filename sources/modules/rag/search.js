@@ -5,8 +5,10 @@
  * Одинаковое содержимое (снимки, копии записей лент) сворачивается: чанк один на hash,
  * он приписывается ближайшему видимому документу.
  */
-import { CONFIG } from './config.js';
+import * as fs from 'node:fs';
+import { CONFIG, queryInput } from './config.js';
 import * as store from './store.js';
+import * as REFS from '../../server/access/refs.js';
 import { embed } from './embedder.js';
 import { buildContexts, scopeDocs, feedDocs, layerWeight } from './scope.js';
 import { invalidate, pending } from './indexer.js';
@@ -95,7 +97,7 @@ export async function search(point, params = {}) {
     if (!byHash.size)
         return { query, results: [], contexts: summary, pending: pending() };
 
-    const [qvec] = await embed([query]);
+    const [qvec] = await embed([queryInput(query)]);
     const vec = [];
     for (const hash of byHash.keys()) {
         for (const { id, vec: v } of store.vectorsOf(hash)) {
@@ -106,7 +108,7 @@ export async function search(point, params = {}) {
     }
     vec.sort((a, b) => b.s - a.s);
     vec.length = Math.min(vec.length, 400);
-    const fts = store.ftsSearch(ftsQuery(query), S.ftsLimit).filter(r => byHash.has(r.hash));
+    const fts = store.ftsSearch(ftsQuery(query), S.ftsLimit, new Set(byHash.keys()));
 
     const scored = new Map();
     const bump = (id, hash, add, field, value) => {
@@ -146,12 +148,18 @@ export async function search(point, params = {}) {
         if (results.length >= k)
             break;
         const { doc, context } = r.cand;
-        if (!system && context.kind !== 'cabinet' && !doc.feed) {
+        if (!system && context.kind !== 'cabinet') {
             let meta = null;
             try { meta = doc.meta ? JSON.parse(doc.meta) : null; } catch { /* без meta */ }
             const descriptor = { path: doc.virtual, $class: context.cls, descriptor: true, logRow: doc.kind === 'log' ? meta : null };
-            const ok = await context.cls.canSee(descriptor, { session: params.session, role: context.role.id })
-                .catch(() => false);
+            const ok = doc.feed
+                ? (await REFS.visible(uid, doc.path).catch(() => false)) && fs.existsSync('.' + doc.path)
+                : await context.cls.canSee(descriptor, { session: params.session, role: context.role.id }).catch(() => false);
+            if (!ok)
+                continue;
+        }
+        else if (!system && doc.feed) {
+            const ok = (await REFS.visible(uid, doc.path).catch(() => false)) && fs.existsSync('.' + doc.path);
             if (!ok)
                 continue;
         }
@@ -216,7 +224,7 @@ export async function queryObjects(point, params = {}) {
     const { cands } = await collectCandidates(point, params, { kinds: new Set(['object']), prefix });
     const out = [];
     for (const { doc, context, weight } of cands.values()) {
-        let meta = null;
+        let meta;
         try { meta = doc.meta ? JSON.parse(doc.meta) : null; } catch { continue; }
         if (!meta || (type && meta.type !== type))
             continue;
@@ -236,5 +244,5 @@ export async function queryObjects(point, params = {}) {
     }
     out.sort((a, b) => (b.weight - a.weight) || ((b.time || 0) - (a.time || 0)));
     const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
-    return out.slice(offset, offset + limit).map(({ weight, ...o }) => o);
+    return out.slice(offset, offset + limit).map(({ weight: _weight, ...o }) => o);
 }

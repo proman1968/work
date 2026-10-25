@@ -63,8 +63,8 @@ ODA({
         <label ~if="stateLabel" @click.stop="toggle($event)">{{stateLabel}}</label>
     `,
     $public: {
+        // без $def: пустое — undefined, иначе вечный цикл с привязкой (см. pitfalls §21)
         value: {
-            $def: false,
             $type: Boolean
         },
         checkedLabel: '',
