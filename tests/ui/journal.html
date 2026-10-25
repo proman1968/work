@@ -81,12 +81,14 @@ const RES = {
         paths: { '/DATA/REGISTER/62': '/DATA/REGISTER/62', '/DATA/REGISTER/90': '/DATA/REGISTER/90', '/DATA/OPERATIONS/SALE': '/DATA/OPERATIONS/SALE' },
     },
 };
-function stubItem(calls, res) {
+function stubItem(calls, res, scope = null) {
     return {
         fetch: async (method, params) => {
             calls.push({ method, params });
             if (method === 'db_journal')
                 return res;
+            if (method === 'db_scope')
+                return scope;
             return null;
         },
     };
@@ -116,7 +118,8 @@ await test('journal: фильтры уходят в db_journal, ошибка в�
     const calls = [];
     const el = await mount('test-journal', { $item: stubItem(calls, RES) });
     assert(await until(() => dataRows(el).length === 2), 'строки');
-    eq(calls[0].params.desc, true, 'новые сверху');
+    eq(calls.find(c => c.method === 'db_journal').params.desc, true, 'новые сверху');
+    assert(!el.$('select'), 'одно подразделение — без фильтра');
     el.from = '2026-01-01';
     el.account = '/DATA/REGISTER/62';
     el.opClass = '/DATA/OPERATIONS/SALE';
@@ -130,6 +133,15 @@ await test('journal: фильтры уходят в db_journal, ошибка в�
     eq(sent.params.op_cid, '/DATA/OPERATIONS/SALE');
     eq(sent.params.effective, true);
     el.remove();
+    const units = [{ cid: '/BASE/N', label: 'Север' }, { cid: '/BASE/S', label: 'Юг' }];
+    const multi = await mount('test-journal', { $item: stubItem(calls, RES, { all: false, units, contexts: [] }) });
+    assert(await until(() => multi.$('select')?.options.length === 3), 'фильтр: все + два подразделения');
+    const sel = multi.$('select');
+    sel.value = '/BASE/S';
+    sel.dispatchEvent(new Event('change'));
+    await multi.reload();
+    eq(calls.at(-1).params.unit, '/BASE/S', 'подразделение уходит в db_journal');
+    multi.remove();
     const bad = await mount('test-journal', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
     assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
     bad.remove();

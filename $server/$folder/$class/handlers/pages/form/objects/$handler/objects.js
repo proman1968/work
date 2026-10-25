@@ -45,6 +45,11 @@ function formField(f) {
     return out;
 }
 
+/** Ключ места записи для выбора и сохранения: «подразделение|место». */
+function contextKeyOf(c) {
+    return c ? `${c.unit}|${c.place ?? ''}` : '';
+}
+
 export default {
     imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form',
     template: /*html*/`
@@ -87,6 +92,10 @@ export default {
             <div class="bar">
                 <oda-button ~if="canCreate" icon="icons:plus" @tap="create">Создать</oda-button>
                 <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
+                <select ~if="units.length > 1" title="Подразделение" @change="filterUnit($this.value)">
+                    <option value="" :selected="!unitFilter">Все подразделения</option>
+                    <option ~for="units" :value="$for.item.cid" :selected="$for.item.cid === unitFilter">{{$for.item.label}}</option>
+                </select>
             </div>
             <div class="error" ~if="error && !editorOpen">{{error}}</div>
             <oda-table allow-focus readonly ::focused-row="focusedRow" :metadata="tableMetadata" :data-set="tableRows"
@@ -123,6 +132,32 @@ export default {
     packetsEnd: '',
     /** Период, который показал пакет, — единственный источник границ для выборки операций. */
     period: null,
+    /** Подразделения, данные которых видны (db_scope): больше одного — фильтр списка. */
+    units: [],
+    /** Выбранное подразделение фильтра (cid), пусто — все. */
+    unitFilter: '',
+    /** Подразделения и места, от которых пользователь создаёт объекты (db_scope). */
+    contexts: [],
+    /** Последнее выбранное место записи: «подразделение|место». */
+    contextKey: { $def: '', $type: String, $save: true },
+    /** Место записи нового объекта: выбранное или первое из доступных. */
+    get context() {
+        const list = this.contexts || [];
+        return list.find(c => contextKeyOf(c) === this.contextKey) ?? list[0] ?? null;
+    },
+    /** Выбор места записи нужен, если их несколько (иначе сервер возьмёт единственное). */
+    get showContext() {
+        return (this.contexts || []).length > 1;
+    },
+    contextKeyOf,
+    /** Сменить фильтр подразделения списка и перечитать. */
+    filterUnit(cid) {
+        this.unitFilter = cid || '';
+        return this.reload();
+    },
+    contextTitle(c) {
+        return c?.place ? `${c.unit_label} / ${c.place_label}` : c?.unit_label || '';
+    },
     get isOperation() {
         return this.schema?.family === 'operation';
     },
@@ -239,11 +274,24 @@ export default {
             this.error = String(e?.message || e);
             return;
         }
+        await this.loadScope();
         // у операций строки грузит пакет (событие выбора периода), справочник — весь список сразу
         if (this.isOperation)
             await this.loadRange();
         else
             await this.reload();
+    },
+    /** Видимые подразделения и места записи; без ответа — форма работает без выбора (сервер решит сам). */
+    async loadScope() {
+        try {
+            const s = await this.$item?.fetch('db_scope');
+            this.units = Array.isArray(s?.units) && !s.all ? s.units : [];
+            this.contexts = Array.isArray(s?.contexts) ? s.contexts : [];
+        }
+        catch {
+            this.units = [];
+            this.contexts = [];
+        }
     },
     /** Границы полосы: от самой ранней операции до самой поздней, но не раньше сегодня. */
     async loadRange() {
@@ -288,6 +336,8 @@ export default {
                 params.from = this.period.start;
                 params.to = this.period.end;
             }
+            if (this.unitFilter)
+                params.unit = this.unitFilter;
             const res = await this.$item.fetch('db_query', params);
             this.names = res?.names || {};
             this.rows = (Array.isArray(res?.items) ? res.items : []).map(o => this.rowOf(o));
@@ -375,13 +425,18 @@ export default {
         const ids = new Set(this.fieldList().map(f => f.id).filter(id => id !== DATE_FIELD.id || !this.isOperation));
         return Object.fromEntries(Object.entries(this.editing || {}).filter(([k]) => ids.has(k)));
     },
-    /** Параметры записи: id и версия (защита от чужой правки), дата операции. */
+    /** Параметры записи: id и версия (защита от чужой правки), дата операции; у нового — место записи. */
     writeParams(extra = {}) {
         const p = { ...extra };
         if (this.editing?.id) {
             p.id = this.editing.id;
             if (this.editing.version)
                 p.version = this.editing.version;
+        }
+        else if (this.showContext && this.context) {
+            p.unit = this.context.unit;
+            if (this.context.place)
+                p.place = this.context.place;
         }
         if (this.isOperation && this.editing?.time)
             p.time = this.editing.time;
@@ -643,7 +698,19 @@ ODA({
             gap: var(--space-s);
             padding: var(--space-m);
         }
+        .context {
+            @apply --horizontal;
+            align-items: center;
+            gap: var(--space-s);
+            padding: var(--space-m) var(--space-m) 0;
+        }
     </style>
+    <label class="context" ~if="owner.showContext && !owner.editing?.id">От места
+        <select @change="owner.contextKey = $this.value">
+            <option ~for="owner.contexts" :value="owner.contextKeyOf($for.item)"
+                :selected="owner.contextKeyOf($for.item) === owner.contextKeyOf(owner.context)">{{owner.contextTitle($for.item)}}</option>
+        </select>
+    </label>
     <oda-editor-form :metadata="owner.schema" :data="owner.editing"></oda-editor-form>
     <div class="entries" ~if="owner.entries?.length">
         <div class="entry" ~for="owner.entries">{{owner.entryText($for.item)}}</div>

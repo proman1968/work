@@ -4,6 +4,7 @@
  * корр. счётом и сальдо после каждой, обороты и сальдо на конец.
  * Слоты аналитик — из `db_schema` (поля-ссылки с analytic: true); фильтр по ним —
  * `oda-link-input` (выбор через `db_choices` справочника слота). Названия — в `names`.
+ * Если видно несколько подразделений (`db_scope`) — фильтр по подразделению с вложенными.
  */
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
@@ -72,6 +73,10 @@ export default {
     <div class="bar">
         <input :value="from" placeholder="с 2026-01-01" @change="from = $this.value">
         <input :value="to" placeholder="по 2026-12-31" @change="to = $this.value">
+        <select ~if="units.length > 1" title="Подразделение" @change="unit = $this.value">
+            <option value="" :selected="!unit">Все подразделения</option>
+            <option ~for="units" :value="$for.item.cid" :selected="$for.item.cid === unit">{{$for.item.label}}</option>
+        </select>
         <oda-button icon="icons:refresh" @tap="reload">Показать</oda-button>
     </div>
     <div class="error" ~if="error">{{error}}</div>
@@ -118,6 +123,10 @@ export default {
     filters: {},
     /** слоты аналитик счёта: { id, label, catalog } — для фильтров и колонок */
     slots: [],
+    /** видимые подразделения (db_scope): больше одного — фильтр */
+    units: [],
+    /** выбранное подразделение (с вложенными), пусто — все видимые */
+    unit: '',
     items: [],
     count: 0,
     opening: { debit: 0, credit: 0 },
@@ -164,7 +173,18 @@ export default {
     },
     async attached() {
         await this.loadSlots();
+        await this.loadScope();
         await this.reload();
+    },
+    /** Видимые подразделения для фильтра; без ответа — без фильтра. */
+    async loadScope() {
+        try {
+            const s = await this.$item?.fetch('db_scope');
+            this.units = Array.isArray(s?.units) && !s.all ? s.units : [];
+        }
+        catch {
+            this.units = [];
+        }
     },
     /** Слоты аналитик счёта из схемы ядра (с учётом наследования). */
     async loadSlots() {
@@ -190,7 +210,7 @@ export default {
     },
     params() {
         const p = { limit: 500 };
-        for (const key of ['from', 'to']) {
+        for (const key of ['from', 'to', 'unit']) {
             const s = String(this[key] ?? '').trim();
             if (s)
                 p[key] = s;

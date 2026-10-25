@@ -217,4 +217,66 @@ describe('видимость данных по scope ссылок рабочих
         assert.deepEqual(choices.items.map(i => [i.id, i.member]), [[beta.id, true], [alpha.id, false]], 'чужой клиент находится как субъект');
         assert.equal((await invoke(clients, 'db_read', { id: alpha.id, ...as(S1) })).title, 'ООО «Альфа»');
     });
+
+    /** Обработчик формы с $item.fetch как по HTTP (параметры строками) от имени uid. */
+    const form = async (rel, target, uid) => {
+        globalThis.ODA ??= def => def;
+        const h = Object.create((await import(`../${rel}`)).default);
+        const it = await item(target);
+        h.$item = { fetch: (m, p = {}, post) => invoke(it, m, {
+            ...Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)])),
+            ...(post !== undefined ? { post: JSON.stringify(post) } : {}),
+            ...as(uid),
+        }) };
+        return h;
+    };
+    const REG = 'DATA/REGISTER/$register/$folder/$class';
+
+    it('форма объектов: место записи из нескольких, фильтр подразделения', async () => {
+        const f = await form('$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js', SALE, M1);
+        await f.loadSchema();
+        await f.loadScope();
+        assert.equal(f.showContext, true);
+        assert.deepEqual(f.units.map(u => u.cid).sort(), [NORTH, SOUTH]);
+        assert.equal(f.contextTitle(f.context), 'Север / Продажи', 'по умолчанию — первое место');
+        f.contextKey = f.contextKeyOf(f.contexts.find(c => c.unit === SOUTH));
+        f.editing = { time: d('04-01'), client: beta.id, sum: 5 };
+        assert.deepEqual(f.writeParams(), { unit: SOUTH, place: 'sales', time: d('04-01') });
+        assert.equal(await f.save(), true, f.error);
+        f.unitFilter = SOUTH;
+        await f.reload();
+        assert.equal(f.error, '');
+        assert.ok(f.rows.length >= 2 && f.rows.every(r => r.id !== saleN.id), 'только Юг');
+        await invoke(await item(SALE), 'db_delete', { id: f.editing.id, ...as(M1) });
+
+        const single = await form('$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js', SALE, N1);
+        await single.loadScope();
+        assert.equal(single.showContext, false, 'одно место — без выбора');
+        assert.equal(single.units.length, 1, 'одно подразделение — фильтр не показывается');
+    });
+
+    it('формы отчётов: фильтр подразделения из видимых', async () => {
+        const j = await form(`${REG}/$register/handlers/pages/form/journal/$handler/journal.js`, '/DATA/REGISTER', M1);
+        await j.loadScope();
+        assert.deepEqual(j.units.map(u => u.label).sort(), ['Север', 'Юг']);
+        await j.reload();
+        assert.equal(j.items.length, 3);
+        j.unit = SOUTH;
+        await j.reload();
+        assert.deepEqual(j.items.map(e => e.amount), [1000]);
+
+        const s = await form(`${REG}/$register/handlers/pages/form/sheet/$handler/sheet.js`, '/DATA/REGISTER', M1);
+        await s.loadScope();
+        s.unit = NORTH;
+        await s.reload();
+        assert.equal(s.error, '');
+        assert.equal(s.total.closing.debit, 110);
+
+        const c = await form(`${REG}/$account/handlers/pages/form/postings/$handler/postings.js`, '/DATA/REGISTER/62', M1);
+        await c.loadScope();
+        c.unit = SOUTH;
+        await c.reload();
+        assert.equal(c.error, '');
+        assert.match(c.closingText, /^1\s?000,00 Дт$/);
+    });
 });

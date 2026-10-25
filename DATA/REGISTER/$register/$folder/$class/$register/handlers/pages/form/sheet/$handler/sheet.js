@@ -3,6 +3,7 @@
  * сальдо на начало, обороты Дт/Кт, сальдо на конец по дереву счетов журнала.
  * «Разворот» — слоты аналитик (через запятую, например `counterparty`): строки счёта
  * делятся по объектам аналитик, сальдо счёта тогда развёрнутое. Клик по строке открывает форму счёта.
+ * Если видно несколько подразделений (`db_scope`) — фильтр по подразделению с вложенными.
  */
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
@@ -80,6 +81,10 @@ export default {
         <input :value="to" placeholder="по 2026-12-31" @change="to = $this.value">
         <input :value="account" placeholder="счёт /DATA/REGISTER/…" @change="account = $this.value">
         <input :value="by" placeholder="разворот: слот аналитики" @change="by = $this.value">
+        <select ~if="units.length > 1" title="Подразделение" @change="unit = $this.value">
+            <option value="" :selected="!unit">Все подразделения</option>
+            <option ~for="units" :value="$for.item.cid" :selected="$for.item.cid === unit">{{$for.item.label}}</option>
+        </select>
         <oda-button icon="icons:refresh" @tap="reload">Показать</oda-button>
     </div>
     <div class="error" ~if="error">{{error}}</div>
@@ -118,6 +123,10 @@ export default {
     account: '',
     /** слоты аналитик для разворота строк счёта, через запятую */
     by: '',
+    /** видимые подразделения (db_scope): больше одного — фильтр */
+    units: [],
+    /** выбранное подразделение (с вложенными), пусто — все видимые */
+    unit: '',
     rows: [],
     total: null,
     names: { objects: {}, classes: {}, paths: {} },
@@ -152,11 +161,22 @@ export default {
         }));
     },
     async attached() {
+        await this.loadScope();
         await this.reload();
+    },
+    /** Видимые подразделения для фильтра; без ответа — без фильтра. */
+    async loadScope() {
+        try {
+            const s = await this.$item?.fetch('db_scope');
+            this.units = Array.isArray(s?.units) && !s.all ? s.units : [];
+        }
+        catch {
+            this.units = [];
+        }
     },
     params() {
         const p = {};
-        for (const key of ['from', 'to', 'account']) {
+        for (const key of ['from', 'to', 'account', 'unit']) {
             const s = String(this[key] ?? '').trim();
             if (s)
                 p[key] = s;

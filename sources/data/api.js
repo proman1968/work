@@ -369,7 +369,7 @@ export const DATA_METHODS = Object.freeze({
     db_query: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => {
         const res = queryObjects(db, {
             cid: cls.cid, deep: optFlag(p.deep), status: list(p.status, 'status'), where: json(p.where, 'where'),
-            search: p.search, from: p.from, to: p.to, units: list(p.units, 'units'), author: p.author,
+            search: p.search, from: p.from, to: p.to, units: list(p.units, 'units'), unit: p.unit, author: p.author,
             ext_of: p.ext_of, order: p.order, limit: p.limit, offset: p.offset, visible: vis,
         });
         return { ...res, names: linkNames(db, res.items.map(o => o.id)) };

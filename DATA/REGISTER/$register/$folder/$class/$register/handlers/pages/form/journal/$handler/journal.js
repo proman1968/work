@@ -1,7 +1,8 @@
 /**
  * form/journal — журнал проводок на учётном ядре (`db_journal`, sources/data/api.js):
  * проводки периода по счетам журнала, новые сверху. Фильтры — период, счёт (с субсчетами),
- * класс операций, «только действующие» (без сторно и прежних версий проведения).
+ * класс операций, подразделение (если видно несколько — `db_scope`), «только действующие»
+ * (без сторно и прежних версий проведения).
  * Названия операций, аналитик и счетов приходят в `names`; клик по счёту или операции
  * открывает форму счёта или класса операций.
  */
@@ -76,6 +77,10 @@ export default {
         <input :value="to" placeholder="по 2026-12-31" @change="to = $this.value">
         <input :value="account" placeholder="счёт /DATA/REGISTER/…" @change="account = $this.value">
         <input :value="opClass" placeholder="операции /DATA/OPERATIONS/…" @change="opClass = $this.value">
+        <select ~if="units.length > 1" title="Подразделение" @change="unit = $this.value">
+            <option value="" :selected="!unit">Все подразделения</option>
+            <option ~for="units" :value="$for.item.cid" :selected="$for.item.cid === unit">{{$for.item.label}}</option>
+        </select>
         <label><input type="checkbox" :checked="effective" @change="effective = $this.checked"> только действующие</label>
         <oda-button icon="icons:refresh" @tap="reload">Показать</oda-button>
     </div>
@@ -123,6 +128,10 @@ export default {
     opClass: '',
     /** только действующие проводки: без сторно и прежних версий проведения */
     effective: false,
+    /** видимые подразделения (db_scope): больше одного — фильтр */
+    units: [],
+    /** выбранное подразделение (с вложенными), пусто — все видимые */
+    unit: '',
     items: [],
     /** всего проводок по фильтру (строк может быть меньше — первая страница) */
     count: 0,
@@ -167,7 +176,18 @@ export default {
         }));
     },
     async attached() {
+        await this.loadScope();
         await this.reload();
+    },
+    /** Видимые подразделения для фильтра; без ответа — без фильтра. */
+    async loadScope() {
+        try {
+            const s = await this.$item?.fetch('db_scope');
+            this.units = Array.isArray(s?.units) && !s.all ? s.units : [];
+        }
+        catch {
+            this.units = [];
+        }
     },
     params() {
         const p = { limit: 500, desc: true };
@@ -180,6 +200,7 @@ export default {
         put('to', this.to);
         put('account', this.account);
         put('op_cid', this.opClass);
+        put('unit', this.unit);
         if (this.effective)
             p.effective = true;
         return p;

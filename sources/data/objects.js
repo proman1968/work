@@ -456,6 +456,7 @@ function ftsQuery(text) {
  * @param {*} [q.from] Начало периода по дате объекта
  * @param {*} [q.to] Конец периода (день — включительно)
  * @param {string[]} [q.units] Только эти подразделения
+ * @param {string} [q.unit] Подразделение с вложенными
  * @param {Array<object>|null} [q.visible] Права видимости (scope.js, scopeGrants): null — без ограничений
  * @param {string} [q.author] Только автор
  * @param {string} [q.ext_of] Записи-расширения объекта
@@ -497,6 +498,13 @@ export function queryObjects(db, q) {
     if (Array.isArray(q.units)) {
         where.push(q.units.length ? `o.unit IN (${q.units.map(() => '?').join(',')})` : '0');
         args.push(...q.units);
+    }
+    if (!isEmpty(q.unit)) {
+        const u = getClass(db, q.unit);
+        if (!u || FAMILY[u.type] !== 'structure')
+            throw new DataError(`подразделение ${q.unit} не найдено`);
+        where.push('o.unit IN (SELECT descendant FROM class_tree WHERE ancestor = ?)');
+        args.push(u.cid);
     }
     const visible = objectCond(q.visible);
     if (visible) {
