@@ -29,7 +29,12 @@ function write(rel, content) {
     fs.writeFileSync(full, content, 'utf-8');
 }
 
-const copy = rel => write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+const copy = rel => {
+    const src = rel === 'DATA/$domain/class.js'
+        ? 'MODULES/$domain/class.js'
+        : rel.startsWith('DATA/') ? 'MODULES/Register/' + rel.slice(5) : rel;
+    write(rel, fs.readFileSync(path.join(ROOT, src), 'utf-8'));
+};
 const cls = (rel, type, body) => write(`${rel}/${type}/class.js`, `export default ${body}`);
 const item = p => WORK.get_item(p);
 
@@ -168,7 +173,7 @@ describe('методы учётного ядра у классов', () => {
             }) };
             return h;
         };
-        const REG = 'DATA/REGISTER/$register/$folder/$class';
+        const REG = 'MODULES/Register/REGISTER/$register/$folder/$class';
         const j = await form(`${REG}/$register/handlers/pages/form/journal/$handler/journal.js`, '/DATA/REGISTER');
         await j.reload();
         assert.equal(j.error, '');
@@ -199,7 +204,7 @@ describe('методы учётного ядра у классов', () => {
 
         // форма состава регистрирует окно правки (ODA) при импорте — в node достаточно заглушки
         globalThis.ODA ??= def => def;
-        const v = await form('DATA/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js', '/DATA/CATALOGS/CLIENTS');
+        const v = await form('MODULES/Register/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js', '/DATA/CATALOGS/CLIENTS');
         await v.loadSlots();
         await v.reload();
         assert.equal(v.error, '');

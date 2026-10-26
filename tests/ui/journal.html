@@ -9,7 +9,7 @@
  * клик открывает форму счёта/класса операции.
  */
 import '/oda/oda.js';
-import journalProto from '/DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js';
+import journalProto from '/MODULES/Register/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js';
 
 const results = [];
 window.__results = results;
@@ -157,15 +157,15 @@ await test('journal: клик открывает форму счёта/клас�
     window.execute = (t) => opened.push(t.path || t);
     try {
         const cells = dataRows(el)[0].querySelectorAll('div.cell.link');
-        eq(cells.length, 3);
-        cells[0].click();
+        eq(cells.length, 4);
+        cells[1].click();
         await tick(80);
         eq(got.join(','), '/DATA/OPERATIONS/SALE');
         eq(opened.join(','), '/DATA/OPERATIONS/SALE');
-        cells[1].click();
+        cells[2].click();
         await tick(80);
         eq(got.at(-1), '/DATA/REGISTER/62');
-        cells[2].click();
+        cells[3].click();
         await tick(80);
         eq(got.at(-1), '/DATA/REGISTER/90');
     }

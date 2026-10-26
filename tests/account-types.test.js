@@ -24,7 +24,8 @@ function write(rel, content) {
 }
 
 function copy(rel) {
-    write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+    const src = rel.startsWith('DATA/') ? 'MODULES/Register/' + rel.slice(5) : rel;
+    write(rel, fs.readFileSync(path.join(ROOT, src), 'utf-8'));
 }
 
 before(async () => {

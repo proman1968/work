@@ -12,7 +12,7 @@ import * as POLICY from './access/policy.js';
 import * as REFS from './access/refs.js';
 import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
-import { DATA_METHODS, classHasObjects } from '../data/api.js';
+import { DATA_METHODS, classHasObjects, classObjectCount } from '../data/api.js';
 import { DATA_TYPES } from '../data/classes.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
@@ -138,6 +138,9 @@ export class $class extends $folder{
                 if (!sec || typeof sec !== 'object')
                     return false;
                 return Object.values(sec).some(v => Array.isArray(v) && v.length > 0);
+            },
+            get objectCount(){
+                return this.DATA?.objectCount;
             },
         }
     }
@@ -487,6 +490,9 @@ export class $class extends $folder{
         if (p.reset)
             this.reset();
         await this.init; // после get_item уже собран (кэш) — чтение чистое
+        const cnt = await classObjectCount(this.path, this.type);
+        if (this.DATA)
+            this.DATA.objectCount = cnt > 0 ? cnt : undefined;
         const arg = Object.assign({}, p)
         return super.info(arg);
     }
@@ -840,13 +846,14 @@ export class $class extends $folder{
         const byPath = new Map();
         const roots = [];
         for (const [id, e] of eff) {
-            const segs = id.split('/').filter(Boolean);
-            let prefix = '', parent = null;
+            const modMatch = /^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
+            const segs = modMatch ? modMatch[2].split('/').filter(Boolean) : id.split('/').filter(Boolean);
+            let prefix = modMatch ? modMatch[1] : '', parent = null;
             segs.forEach((seg, i) => {
                 prefix += '/' + seg;
                 let n = byPath.get(prefix);
                 if (!n) {
-                    n = { path: prefix, label: seg, icon: '', type: '', access: 'read', via: [], children: [] };
+                    n = { path: prefix, label: seg, icon: '', type: '', access: 'read', via: [], objectCount: 0, children: [] };
                     byPath.set(prefix, n);
                     if (parent)
                         parent.children.push(n);
@@ -860,8 +867,7 @@ export class $class extends $folder{
                 parent = n;
             });
         }
-        // Подписи метками классов (внутренний обход — без проверок доступа,
-        // читать цепочку разрешено самим фактом членства в подразделении).
+        // Подписи метками классов и количество объектов
         for (const n of byPath.values()) {
             try {
                 let t = await globalThis.WORK.get_item(n.path);
@@ -873,6 +879,9 @@ export class $class extends $folder{
                 n.label = t.DATA?.label || t.name || n.label;
                 n.icon = t.DATA?.icon || '';
                 n.type = t.type || '';
+                const cnt = t.DATA?.objectCount ?? await classObjectCount(n.path, n.type);
+                if (cnt > 0)
+                    n.objectCount = cnt;
             }
             catch { /* сегмент как есть */ }
         }

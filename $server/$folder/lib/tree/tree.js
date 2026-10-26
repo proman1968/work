@@ -132,29 +132,37 @@ ODA({is: 'oda-tree-node',
         <style>
             :host {
                 @apply --vertical;
-                overflow: hidden;
-                padding: 2px;
+                overflow: visible;
+                padding: 1px 2px;
+                min-width: 0;
             }
             .node {
                 @apply --horizontal;
                 @apply --flex;
                 align-items: center;
                 overflow: hidden;
-                top: 0px;
+                min-height: 28px;
+                box-sizing: border-box;
+            }
+            .node.sticky-parent {
                 position: sticky;
+                background: #d8c6ec;
+                border-bottom: 1px solid #6a1b9a;
+                box-shadow: 0 1px 2px rgba(74, 20, 140, 0.12);
             }
             .node:hover {
-                background: var(--accent-soft);
+                background: var(--accent-soft, #dcc8ef);
             }
             .node.focused {
-                background: var(--accent-soft);
+                background: var(--accent-soft, #dcc8ef);
                 outline: 2px solid var(--accent-color);
                 outline-offset: -2px;
             }
             .sub-nodes {
                 @apply --vertical;
                 @apply --flex;
-                overflow: hidden;
+                overflow: visible;
+                min-width: 0;
             }
             oda-icon {
                 cursor: pointer;
@@ -199,12 +207,12 @@ ODA({is: 'oda-tree-node',
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused}" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused, 'sticky-parent': expanded && hideRoots < 1}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
-            <div vertical flex>
-                <div horizontal flex>
+            <div vertical flex style="min-width: 0; overflow: hidden;">
+                <div horizontal flex style="min-width: 0; overflow: hidden;">
                     <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-                    <item-node :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
+                    <item-node style="min-width: 0;" :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
                         <item-users ~if="isPlace" :$item="$item.owner" :place="$item.trail" :select-mode="false" :icon-size="20"></item-users>
                         <span class="access" ~if="isLinkWrite">A</span>
                         <span class="access" ~if="isLinkRead">R</span>
@@ -212,13 +220,20 @@ ODA({is: 'oda-tree-node',
                 </div>
             </div>
         </div>
-        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
+        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px; overflow: visible;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
-                <oda-tree-node :show-status :show-users ~is="nodeTemplate" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
+                <oda-tree-node :show-status :show-users ~is="nodeTemplate" :sticky-level="hideTops > 0 || hideRoots > 0 ? stickyLevel : stickyLevel + 1" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
             </div>
         </div>
     `,
+    stickyLevel: 0,
+    get nodeStickyStyle() {
+        if (!this.expanded || this.hideRoots > 0)
+            return '';
+        const lvl = Number(this.stickyLevel) || 0;
+        return `position: sticky; top: ${lvl * 32}px; z-index: ${30 - lvl};`;
+    },
     get hasSecurity(){
         // Ветка настройки — только у подразделений ($structure и наследники)
         // с заполненной #security (ROLES, LINKS или назначения — флаг из $public).
@@ -230,7 +245,7 @@ ODA({is: 'oda-tree-node',
     },
     /** Строка рабочего места (#security.ROLES): пользователи — через item-users в слоте. */
     get isPlace() {
-        return !!this.$item?.isPlace;
+        return !!this.$item && ('isPlace' in Object(this.$item)) && this.$item.isPlace === true;
     },
     /**
      * Значок доступа узла-ссылки. Чтение linkAccess только у ссылок:
@@ -373,11 +388,8 @@ ODA({is: 'oda-tree-node',
     get items() {
         return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
             let items = applyTreeFilters(raw, this.$pdp);
-            if (this.$item?.type === '$server') {
-                //const allAdmins = await this.$item?.allAdmins;
-                if (!WORK?.DEV_MODE && !(await this.$item.isAdmin)) {
-                    items = items.filter(f => f instanceof CORE.$class);
-                }
+            if (this.$item?.type === '$server' && this.$pdp?.itemsSelector === 'items') {
+                items = items.filter(f => f instanceof CORE.$class);
             }
             // Места и ссылки подразделения — обычные дочерние узлы дерева
             // (ветка настройки): места с пользователями, ссылки — цепочкой

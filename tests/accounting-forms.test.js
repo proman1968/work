@@ -13,10 +13,10 @@ globalThis.WORK = {};
 
 const objects = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js')).default;
 const objectsMeta = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/class.js')).default;
-const postings = (await import('../DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
-const journal = (await import('../DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js')).default;
-const sheet = (await import('../DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js')).default;
-const virtual = (await import('../DATA/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js')).default;
+const postings = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
+const journal = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$register/handlers/pages/form/journal/$handler/journal.js')).default;
+const sheet = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js')).default;
+const virtual = (await import('../MODULES/Register/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js')).default;
 await import('../oda/components/inputs/link/link.js');
 
 function host(proto, calls, extra = {}) {

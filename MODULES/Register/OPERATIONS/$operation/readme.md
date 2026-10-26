@@ -10,7 +10,7 @@
 
 ## 3. Как это работает
 
-1. Корень `/MODULES/Register/OPERATIONS` — контейнер операций (класс `$operation`); операции образуют одно дерево наследования.
+1. Корень `/DATA/OPERATIONS` — контейнер операций (класс `$operation`); операции образуют одно дерево наследования.
 2. **Операция** — дочерний класс с **type `$operation`**: `create` с `type: '$operation'`, в `class.js` — `label`, поля и правила.
 3. Поля — `METADATA.FIELDS`: ссылки на справочники — `type: 'Link'`, `catalog`; табличные части — `type: 'Table'` с вложенными `FIELDS`.
 4. Правила — `METADATA.POSTINGS`, сливаются по `id` от корня к листу; лист обязан определить оба счёта каждого правила. Ключи: `each`, `when`, `amount`, `qty`/`unit`/`item`, `qty2`, `debit`/`credit: { account, analytics }`; значения — выражения мини-языка (см. [`sources/data/readme.md`](/sources/data/readme.md/~/handlers/pages/form/)).
@@ -19,10 +19,10 @@
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/MODULES/Register/OPERATIONS/$operation/class.js/~/handlers/pages/form/) — корень: `label`, `icon`
-- [`$folder/$class/$operation/class.js`](/MODULES/Register/OPERATIONS/$operation/$folder/$class/$operation/class.js/~/handlers/pages/form/) — тип: `label`, `icon`, описание правил
-- [`readme.md`](/MODULES/Register/OPERATIONS/$operation/readme.md/~/handlers/pages/form/) — это руководство
-- Дети `/MODULES/Register/OPERATIONS` — операции `$operation`; у каждой — свой `class.js` с `FIELDS` и `POSTINGS`
+- [`class.js`](/DATA/OPERATIONS/$operation/class.js/~/handlers/pages/form/) — корень: `label`, `icon`
+- [`$folder/$class/$operation/class.js`](/DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js/~/handlers/pages/form/) — тип: `label`, `icon`, описание правил
+- [`readme.md`](/DATA/OPERATIONS/$operation/readme.md/~/handlers/pages/form/) — это руководство
+- Дети `/DATA/OPERATIONS` — операции `$operation`; у каждой — свой `class.js` с `FIELDS` и `POSTINGS`
 
 ## 5. В каком это состоянии
 

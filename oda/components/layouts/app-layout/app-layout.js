@@ -245,7 +245,7 @@ ODA({is: 'app-layout-drawer',
             $list: ['left', 'right'],
         },
         width: {
-            $def: 240,
+            $def: 340,
             $save: true
         },
         hidden: {

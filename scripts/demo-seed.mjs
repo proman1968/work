@@ -31,7 +31,7 @@ export const NORMS = Object.freeze({
  * @param {object} [opts] { since — с какого дня действуют нормативы (по умолчанию 1 января текущего года), author }
  * @returns {Record<string, string>} id созданных объектов по коротким именам
  */
-export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, author, prefix = '/DATA' } = {}) {
+export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, author, prefix = '/ORGANIZATIONS/Маслоторг/MODULES/Register' } = {}) {
     const ids = {};
     const make = (key, cid, body, extra = {}) => {
         ids[key] = createObject(db, { cid, body, author, ...extra }).id;
@@ -66,7 +66,7 @@ export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, auth
 /**
  * Провести стартовый пакет демо-операций (поступление, фасовка, реализация, платежи, кадры, зарплата, письмо).
  */
-export function seedDemoOperations(db, ids, { year = new Date().getFullYear(), author = 'demo', prefix = '/DATA', orgBase = '/BASE' } = {}) {
+export function seedDemoOperations(db, ids, { year = new Date().getFullYear(), author = 'demo', prefix = '/ORGANIZATIONS/Маслоторг/MODULES/Register', orgBase = '/ORGANIZATIONS/Маслоторг' } = {}) {
     const d = md => `${year}-${md}`;
     const post = (subpath, md, body, unitSub, place = 'head') => {
         const o = createObject(db, {
@@ -144,7 +144,6 @@ export function seedDemoOperations(db, ids, { year = new Date().getFullYear(), a
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const targets = [
-        [path.join(root, '.data', 'work.db'), '/DATA', '/BASE'],
         [path.join(root, 'ORGANIZATIONS', 'Маслоторг', '$base', '#system', 'work.db'), '/ORGANIZATIONS/Маслоторг/MODULES/Register', '/ORGANIZATIONS/Маслоторг'],
     ];
     for (const [dbFile, prefix, orgBase] of targets) {

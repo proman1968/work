@@ -1,5 +1,5 @@
 export default {
-    icon: 'icons:local-shipping',
+    icon: 'carbon:shopping-bag',
     label: 'Закупки',
     "#security": {
         LINKS: [

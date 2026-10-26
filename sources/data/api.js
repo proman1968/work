@@ -20,8 +20,9 @@
  * Параметры HTTP приходят строками: флаги ('true'/'1'), JSON-объекты и списки
  * (`where`, `analytics`, `units`, `status`, `by`) разбираются здесь; тело — `post` или `body`.
  */
+import fs from 'node:fs';
 import { DEV_MODE } from '../host/config.js';
-import { dataDb } from './db.js';
+import { dataDb, baseDbFile } from './db.js';
 import { refreshClasses, getClass, descendants, isLeaf, classesOfType, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
 import { classSchema, checkSchema, analyticSlots, FAMILY } from './schema.js';
 import {
@@ -101,6 +102,52 @@ export async function classHasObjects(ref) {
     const db = await dataStore(resolveBasePath(pathStr));
     const cls = getClass(db, pathStr);
     return !!cls && !!db.prepare("SELECT 1 FROM objects WHERE cid = ? AND status <> 'deleted' LIMIT 1").get(cls.cid);
+}
+
+/**
+ * Количество объектов (или записей счёта/участников виртуального справочника) у класса и его поддерева.
+ * Если файла БД организации ещё нет на диске — возвращает 0 без создания файла БД.
+ */
+export async function classObjectCount(clsPath, clsType = '') {
+    const p = String(clsPath ?? '').trim();
+    if (!p || p === '/')
+        return 0;
+    const basePath = resolveBasePath(p);
+    if (!fs.existsSync(baseDbFile(process.cwd(), basePath)))
+        return 0;
+    try {
+        const db = await dataStore(basePath);
+        const cls = getClass(db, p);
+        const type = cls?.type || clsType;
+        if (!type)
+            return 0;
+        if (type === '$base')
+            return db.prepare("SELECT count(*) n FROM objects WHERE status <> 'deleted' AND ext_of IS NULL").get()?.n || 0;
+        if (type === '$structure') {
+            const units = cls ? descendants(db, cls.cid) : [p];
+            if (!units.length)
+                return 0;
+            return db.prepare(`SELECT count(*) n FROM objects WHERE status <> 'deleted' AND ext_of IS NULL AND unit IN (${units.map(() => '?').join(',')})`).get(...units)?.n || 0;
+        }
+        if (type === '$virtual')
+            return virtualMembers(db, { cid: cls?.cid || p }).items.length;
+        if (type === '$account' || type === '$register') {
+            const accs = cls ? descendants(db, cls.cid) : [p];
+            if (!accs.length)
+                return 0;
+            return db.prepare(`SELECT count(*) n FROM account_entries WHERE account_cid IN (${accs.map(() => '?').join(',')}) AND NOT storno`).get(...accs)?.n || 0;
+        }
+        if (type === '$catalog' || type === '$operation') {
+            const cids = (cls ? descendants(db, cls.cid) : [p]).filter(cid => getClass(db, cid)?.type !== '$virtual');
+            if (!cids.length)
+                return 0;
+            return db.prepare(`SELECT count(*) n FROM objects WHERE cid IN (${cids.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL`).get(...cids)?.n || 0;
+        }
+        return 0;
+    }
+    catch {
+        return 0;
+    }
 }
 
 /* ---------- параметры ---------- */

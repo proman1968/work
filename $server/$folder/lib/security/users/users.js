@@ -20,6 +20,7 @@ export default {
             }
         </style>
         <div class="part">
+            <oda-icon ~if="place && !selectMode && !availableUsers?.length" icon="fontawesome:s-users" :icon-size="16" style="opacity:.65; padding:2px 4px; background:rgba(0,0,0,.07); border-radius:4px;" title="Сотрудники рабочего места"></oda-icon>
             <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap="_tap" @contextmenu.capture="_userMenu"></item-user>
         </div>
         <div flex ~if="selectMode && selectedUsers.length"></div>

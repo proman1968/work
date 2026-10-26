@@ -1,5 +1,5 @@
 export default {
-    icon: 'carbon:operations',
+    icon: 'carbon:task-complete',
     label: 'Операции',
     $public: {
         form: 'objects',

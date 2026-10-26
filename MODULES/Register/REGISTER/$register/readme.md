@@ -10,23 +10,23 @@
 
 ## 3. Как это работает
 
-1. Корень `/MODULES/Register/REGISTER` — журнал (класс `$register`, label «Журнал проводок»).
-2. Тип счёта объявлен в meta журнала: [`$folder/$class/$account`](/MODULES/Register/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — наследный предок всех счетов (поля, базовый readme).
+1. Корень `/DATA/REGISTER` — журнал (класс `$register`, label «Журнал проводок»).
+2. Тип счёта объявлен в meta журнала: [`$folder/$class/$account`](/DATA/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — наследный предок всех счетов (поля, базовый readme).
 3. **Счёт** — дочерний класс журнала с **type `$account`**. Имя папки — номер (например `50`), в `$account/class.js` — `label` и **обязательно `icon`** из реального набора ODA (`carbon:`, `icons:`, …; набора `register:` нет). Одна meta на узел: только `$account`.
 4. **Субсчёт** — дочерний `$account` у счёта (и глубже). Иерархия папок = план счетов.
 5. Добавить счёт/субсчёт — `create` с `type: '$account'`, id = номер, `label` + `icon` в class.js; **не** `$register` и не `$class`. Не правка `FIELDS` у корня журнала.
-6. Перед изменением плана — readme журнала и readme типа `$account`, затем **`ls` / `info` ветки `/MODULES/Register/REGISTER` (deep=2)**. Состав счетов **сейчас** — только из ls, не из примеров ниже.
+6. Перед изменением плана — readme журнала и readme типа `$account`, затем **`ls` / `info` ветки `/DATA/REGISTER` (deep=2)**. Состав счетов **сейчас** — только из ls, не из примеров ниже.
 7. `METADATA.FIELDS` у корня журнала — метаданные журнала (не план счетов).
 8. Документ журнала — `readme.md` в `$register/`; документ счёта — в его `$account/`.
-9. ИИ-агент: рецепт «завести типовой план счетов» — навык [`register-accounts`](/MODULES/Register/REGISTER/$register/ai/skills/register-accounts.md) (виден агенту, работающему в `/MODULES/Register/REGISTER` и ниже).
+9. ИИ-агент: рецепт «завести типовой план счетов» — навык [`register-accounts`](/DATA/REGISTER/$register/ai/skills/register-accounts.md) (виден агенту, работающему в `/DATA/REGISTER` и ниже).
 
 ## 4. Из чего это состоит
 
-- [`class.js`](/MODULES/Register/REGISTER/$register/class.js/~/handlers/pages/form/) — журнал: `label`, `icon`, `METADATA.FIELDS`
-- [`readme.md`](/MODULES/Register/REGISTER/$register/readme.md/~/handlers/pages/form/) — устройство журнала (этот документ)
-- [`$folder/$class/$account/`](/MODULES/Register/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — тип счёта (предок + базовый readme)
-- [`ai/skills/`](/MODULES/Register/REGISTER/$register/ai/skills/register-accounts.md) — навыки ИИ-агента места
-- Дети `/MODULES/Register/REGISTER` — счета `$account` (номера-папки); актуальный список — только через ls ветки, не фиксируется в этом разделе
+- [`class.js`](/DATA/REGISTER/$register/class.js/~/handlers/pages/form/) — журнал: `label`, `icon`, `METADATA.FIELDS`
+- [`readme.md`](/DATA/REGISTER/$register/readme.md/~/handlers/pages/form/) — устройство журнала (этот документ)
+- [`$folder/$class/$account/`](/DATA/REGISTER/$register/$folder/$class/$account/readme.md/~/handlers/pages/form/) — тип счёта (предок + базовый readme)
+- [`ai/skills/`](/DATA/REGISTER/$register/ai/skills/register-accounts.md) — навыки ИИ-агента места
+- Дети `/DATA/REGISTER` — счета `$account` (номера-папки); актуальный список — только через ls ветки, не фиксируется в этом разделе
 
 ## 5. В каком это состоянии
 

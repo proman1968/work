@@ -9,7 +9,7 @@ import { safeNodeName, safeRelPath, isPlainName, assertInside } from './safe-nod
 import { isUpload } from './upload-mark.js';
 import { DEV_MODE } from '../host/config.js';
 import { assertNotMemory } from './memory-mark.js';
-import { markClassesDirty } from '../data/api.js';
+import { markClassesDirty, classObjectCount } from '../data/api.js';
 
 /**
  * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
@@ -177,8 +177,12 @@ export class $folder extends $item{
                 if (script)
                     this.DATA = script;
             }
-            if (this instanceof FS.$class)
+            if (this instanceof FS.$class) {
                 await this._liftMethods();
+                const cnt = await classObjectCount(this.path, this.type);
+                if (cnt > 0 && this.DATA)
+                    this.DATA.objectCount = cnt;
+            }
             return this;
         })
     }
@@ -1865,6 +1869,16 @@ export class $folder extends $item{
     }
 
     sortItems(files, reverse = false, isType = this.isType) {
+        const rootOrder = { ORGANIZATIONS: 0, MODULES: 1, MODELS: 2, nodes: 3, SERVICES: 4, USERS: 5 };
+        const typeGroup = (t) => {
+            if (t === '$structure' || t === '$base')
+                return 0;
+            if (t === '$catalog' || t === '$virtual' || t === '$struct' || t === '$operation' || t === '$register' || t === '$account')
+                return 1;
+            if (t === '$module' || t === '$domain')
+                return 3;
+            return 2;
+        };
         files = files.sort((a, b) => {
             if (a?.parent === a?.$owner) {
                 if (b?.$owner !== b?.parent)
@@ -1873,18 +1887,27 @@ export class $folder extends $item{
             else if (b?.$owner === b?.parent) {
                 return isType ? -1 : 1;
             }
-            if (a.type === b.type) {
-                if (a.id[0] !== '$') {
-                    if (b.id[0] === '$')
-                        return -1;
-                }
-                else if (b.id[0] !== '$')
-                    return 1;
-                return a.id < b.id ? -1 : 1;
+            const aCls = a instanceof FS.$class;
+            const bCls = b instanceof FS.$class;
+            if (aCls !== bCls)
+                return aCls ? -1 : 1;
+            if (aCls && bCls && this.type === '$server') {
+                const ra = rootOrder[a.id] ?? 10;
+                const rb = rootOrder[b.id] ?? 10;
+                if (ra !== rb)
+                    return ra - rb;
             }
-            if (a instanceof FS.$class && !(b instanceof FS.$class))
+            if (aCls && bCls && a.type !== b.type) {
+                const ga = typeGroup(a.type);
+                const gb = typeGroup(b.type);
+                if (ga !== gb)
+                    return ga - gb;
+            }
+            if (a.id[0] !== '$' && b.id[0] === '$')
                 return -1;
-            return 1;
+            if (a.id[0] === '$' && b.id[0] !== '$')
+                return 1;
+            return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
         });
         if (reverse)
             files.reverse();

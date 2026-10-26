@@ -7,7 +7,7 @@ export default{
         
     `,
     list:[
-        '/USERS', '/NODES', '/DATA'
+        '/ORGANIZATIONS', '/MODULES', '/USERS', '/nodes'
     ],
     get available(){
         return this.list.reduce(async (acc, item) => {
