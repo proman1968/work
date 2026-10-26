@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Счёт на оплату</title>
+<style>
+    body { font: 13px/1.4 Arial, sans-serif; margin: 20mm; color: #000; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sub { color: #555; margin-bottom: 16px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+    th, td { border: 1px solid #000; padding: 5px 7px; }
+    th { background: #f3f3f3; }
+    td.r { text-align: right; white-space: nowrap; }
+    .total { text-align: right; font-size: 15px; font-weight: bold; margin-bottom: 8px; }
+    @media print { body { margin: 10mm; } }
+</style>
+</head>
+<body>
+<h1>Счёт на оплату № {{doc.number}}</h1>
+<div class="sub">от {{doc.date}}</div>
+<p><b>Поставщик:</b> {{org.name}}, ИНН {{org.inn}}, КПП {{org.kpp}}, {{org.address}}<br>
+<b>Банк:</b> {{org.bank}}, БИК {{org.bik}}, р/с {{org.account}}, к/с {{org.corr}}<br>
+<b>Покупатель:</b> {{client}}</p>
+<table>
+    <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Ед.</th><th>Цена</th><th>Сумма</th></tr></thead>
+    <tbody>
+    {{#lines}}
+        <tr><td class="r">{{i}}</td><td>{{row.item}}</td><td class="r">{{n(row.qty, 3)}}</td><td>{{row.unit}}</td>
+            <td class="r">{{money(row.price)}}</td><td class="r">{{money(row.qty * row.price)}}</td></tr>
+        {{+net = row.qty * row.price}}
+        {{+vat = round(row.qty * row.price * norm('Ставка НДС', row.item_id), 2)}}
+    {{/lines}}
+    </tbody>
+</table>
+<div class="total">Итого без НДС: {{money(net)}} ₽</div>
+<div class="total">НДС {{n(norm('Ставка НДС') * 100, 0)}}%: {{money(vat)}} ₽</div>
+<div class="total">Всего к оплате: {{money(net + vat)}} ₽</div>
+<p>{{words(net + vat)}}</p>
+</body>
+</html>

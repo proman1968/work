@@ -98,8 +98,9 @@ export class $class extends $folder{
             return fields.fields;
         return [];
     }
+    /** Свойства класса — только METADATA.STATIC. Без фолбэка на FIELDS: иначе дерево CLASS делит массив с OBJECT. */
     static staticList(meta) {
-        return this.fieldsList(meta?.STATIC?.length ? meta.STATIC : meta?.FIELDS);
+        return this.fieldsList(meta?.STATIC);
     }
     get $fields(){
         return Promise.resolve(this.metadata).then(meta => {
@@ -198,7 +199,11 @@ export class $class extends $folder{
                 }
             }
             else {
-                const val = this._scriptSwitchValue(prop.value, deep, key);
+                // Значения данных читаем через сам объект (то же, что видит прокси Reactor),
+                // а не из дескриптора: дескриптор может хранить устаревшую копию.
+                // Функции берём из дескриптора: прокси отдаёт их как bind-обёртку, её текст не код.
+                const useProxy = 'value' in prop && typeof prop.value !== 'function';
+                const val = this._scriptSwitchValue(useProxy ? json[key] : prop.value, deep, key);
                 script.push(tab + val)
             }
         }

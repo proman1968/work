@@ -1,7 +1,7 @@
 /**
  * Этап 8.1: цепочки ссылок рабочего места — link_tree, каркас предков, стиль данных.
  * Сервер строит трие LINKS + предки до корня типа; вниз и вбок — ничего.
- * Предки видны как страницы (SYSTEM), но DATA/INDEX им закрыты.
+ * Предки видны как страницы (SYSTEM), данные учётного ядра их поддерева — только по веткам ссылок.
  */
 import '../sources/reactor.js';
 import { describe, it, before, after } from 'node:test';
@@ -13,6 +13,7 @@ import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { invoke } from '../sources/server/access/gateway.js';
 import { closeIndexDb } from '../sources/host/index-db.js';
+import { closeDataDb } from '../sources/data/db.js';
 
 const ADMIN = 'WA000000000001', USER1 = 'WU000000000001', NOBODY = 'WN000000000001';
 let tmp, prev;
@@ -53,13 +54,15 @@ before(async () => {
     write('DATA/OPERATIONS/Финансы/Зарплата/$operation/class.js', `export default { label: 'Зарплата', ${FIELDS} }`);
     write('DATA/CATALOGS/Контрагенты/$catalog/class.js', `export default { label: 'Контрагенты' }`);
     write('DATA/CATALOGS/Контрагенты/Поставщики/$catalog/class.js', `export default { label: 'Поставщики', ${FIELDS} }`);
-    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты', ${FIELDS} }`);
+    write('DATA/REGISTER/$register/class.js', 'export default {}');
+    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты' }`);
     process.chdir(tmp);
     globalThis.WORK = new $server();
 });
 
 after(async () => {
     await new Promise(r => setTimeout(r, 300));
+    await closeDataDb();
     closeIndexDb();
     process.chdir(prev);
     try { await fsp.rm(tmp, { recursive: true, force: true }); } catch { /* windows */ }
@@ -120,21 +123,22 @@ describe('link_tree', () => {
         assert.equal(await zar.data_access(as(USER1)), null);
     });
 
-    it('query предка показывает только связанные ветки, боковая запрещена', async () => {
+    it('данные учётного ядра: связанный лист открыт, предок — только по видимым веткам, боковая ветка закрыта', async () => {
         const sup = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
-        await sup.create_object({ filename: 'op.data', post: { name: 'Плата' }, ...as(USER1) });
-        const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
-        const rows = await fin.query(as(USER1));
-        assert.equal(rows.length, 1);
-        assert.ok(rows[0].point.includes('Поставщик'));
+        const own = await sup.db_create({ post: { name: 'Плата' }, ...as(USER1) });
+        assert.equal(own.unit, '/BASE/direction/sales', 'подразделение — единственное место записи');
+        assert.equal((await invoke(sup, 'db_query', as(USER1))).items.length, 1);
         const zar = await WORK.get_item('/DATA/OPERATIONS/Финансы/Зарплата');
-        await assert.rejects(zar.query(as(USER1)), /Доступ запрещён/);
-    });
-
-    it('index предка запрещён (агрегат с чужими ветками), у листа — штатная ошибка', async () => {
+        const salary = await zar.db_create({ post: { name: 'Оклад' }, ...as(ADMIN) });
         const fin = await WORK.get_item('/DATA/OPERATIONS/Финансы');
-        await assert.rejects(fin.index({ id: 'x', ...as(USER1) }), /Доступ запрещён/);
-        const sup = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
-        await assert.rejects(sup.index({ id: 'x', ...as(USER1) }), /нет индекса/);
+        assert.deepEqual((await invoke(fin, 'db_query', as(USER1))).items.map(o => o.id), [own.id], 'агрегат предка — без чужих веток');
+        await assert.rejects(invoke(fin, 'db_read', { id: salary.id, ...as(USER1) }), /не найден/);
+        assert.equal((await invoke(fin, 'db_journal', as(USER1))).total, 0);
+        await assert.rejects(invoke(zar, 'db_query', as(USER1)), /Доступ запрещён/);
+        const acc = await WORK.get_item('/DATA/REGISTER/62');
+        assert.equal((await invoke(acc, 'db_journal', as(USER1))).total, 0, 'счёт по ссылке на чтение');
+        assert.deepEqual((await invoke(await WORK.get_item('/DATA/REGISTER'), 'db_sheet', as(USER1))).rows, []);
+        await assert.rejects(invoke(fin, 'db_query', as(NOBODY)), /Доступ запрещён/);
+        assert.equal((await invoke(fin, 'db_query', as(ADMIN))).items.length, 2, 'ADMIN видит всё');
     });
 });

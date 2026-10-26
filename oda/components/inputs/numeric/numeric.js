@@ -109,7 +109,8 @@ ODA({
         }
         // вне диапазона min/max значение не зажимается: его показывает ошибка в validationErrors
         this.draft = undefined;
-        this.value = +n.toFixed(10);
+        // пустое поле — undefined (раньше падало на toFixed при уходе из пустой ячейки)
+        this.value = n === undefined ? undefined : +n.toFixed(10);
     },
     onKey(e) {
         if (e.key === 'Enter')

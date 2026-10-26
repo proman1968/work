@@ -10,7 +10,7 @@
  */
 import '/oda/oda.js';
 import objectsProto from '/$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js';
-import postingsProto from '/DATA/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
+import postingsProto from '/MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
 // cloneProto обнуляет imports, поэтому компоненты из них стенд грузит сам.
 // oda-packets нужен как полоса периодов: без неё элемент остаётся обычным HTMLElement.
 await import('/oda//packets.js');
@@ -28,7 +28,7 @@ window.WORK = {
     showDialog: ODA.showDialog,
     showConfirm: ODA.showConfirm,
     get_item: async () => ({
-        fetch: async (method, params) => (method === 'read_link' ? { id: params.id, name: 'Альфа' } : null),
+        fetch: async (method, params) => (method === 'db_read' ? { id: params.id, title: 'Альфа', body: { name: 'Альфа' } } : null),
     }),
 };
 
@@ -270,23 +270,23 @@ await test('фреймворк: @tap с методом', async () => {
     el.remove();
 });
 
-const FIELDS = [
-    { id: 'name', label: 'Название' },
-    { id: 'client', label: 'Клиент', type: 'Link', catalog: '/DATA/CATALOGS/C' },
-];
+// Ответ db_schema учётного ядра: поля с нормализованными типами, семейство, лист
+const SCHEMA = (family = 'catalog') => ({ schema: {
+    label: 'Операции', family, type: family === 'operation' ? '$operation' : '$catalog', leaf: true,
+    fields: [{ id: 'name', label: 'Название', type: 'string' }, { id: 'client', label: 'Клиент', type: 'link', target: '/DATA/CATALOGS/C' }],
+    postings: family === 'operation' ? [{ id: 'main' }] : [],
+}, errors: [] });
 const _day = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-// Журнал точки: сегодня и ещё два дня назад (по убыванию)
 const today = () => _day(new Date());
-const LOG_DAYS = [today(), _day(new Date(Date.now() - 13 * 864e5)), _day(new Date(Date.now() - 44 * 864e5))];
-function mockItem(calls, handlers, fields) {
+/** Объект ядра для db_query/db_read. */
+const obj = (id, body, extra = {}) => ({ id, status: 'active', version: 1, time: Date.now(), body, ...extra });
+function mockItem(calls, handlers, family = 'catalog') {
     return {
-        body: Promise.resolve({ label: 'Операции', METADATA: { FIELDS: fields || FIELDS } }),
-        // logs({mode:'dates'}) — дни журнала по убыванию, сегодня первым (как logs.datesList):
-        // из них form/objects берёт границы полосы периодов
-        logs: async () => LOG_DAYS,
         fetch: async (method, params, post) => {
             calls.push({ method, params, post });
-            return handlers[method] ? handlers[method](params, post) : null;
+            if (handlers[method])
+                return handlers[method](params, post);
+            return method === 'db_schema' ? SCHEMA(family) : null;
         },
     };
 }
@@ -294,11 +294,7 @@ function mockItem(calls, handlers, fields) {
 await test('objects: шапка и ячейки — текст, без [object Object]', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [
-            { id: '1.X', name: 'Продажа', client: '9.Y' },
-            { id: '2.X', name: 'Оплата', client: '' },
-        ] }),
-        read_link: () => ({ id: '9.Y', name: 'Альфа' }),
+        db_query: () => ({ items: [obj('1.X', { name: 'Продажа', client: '9.Y' }), obj('2.X', { name: 'Оплата' })], names: { '9.Y': 'Альфа' } }),
     });
     const el = await mount('test-objects', { $item });
     const headers = () => deepAll(el, '.hcell .title').map(text);
@@ -315,41 +311,43 @@ await test('objects: шапка и ячейки — текст, без [object O
     const cells = rows().flatMap(row => deepAll(row, 'oda-table-cell').map(cellText));
     eq(cells.join('|'), 'Продажа|Альфа|Оплата|');
     assert(!deepText(el).includes('[object Object]'), 'нет [object Object]');
+    assert(!el.$('oda-packets'), 'у справочника нет полосы периодов');
     el.remove();
 });
 
-await test('objects: полоса периодов сверху, выборка идёт по пакету', async () => {
+await test('objects: операции — полоса периодов сверху, выборка идёт по пакету', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [{ id: '1.X', name: 'Продажа' }] }),
-    });
+        db_query: () => ({ items: [obj('1.X', { name: 'Продажа' }, { status: 'registered' })], names: {} }),
+    }, 'operation');
     const el = await mount('test-objects', { $item });
     assert(await until(() => el.$('oda-packets')?.items?.length), 'пакет отрисован');
-    eq(el.packetsEnd, LOG_DAYS[0], 'верхняя граница — первый день журнала');
-    eq(el.packetsStart, LOG_DAYS[2], 'нижняя граница — самый старый день');
-    assert(await until(() => calls.some(c => c.method === 'index')), 'строки загрузились по событию пакета');
-    eq(calls.filter(c => c.method === 'index').length, 1,
-        'одна выборка: авто-событие пропа selection не должно дублировать её');
+    eq(el.packetsEnd, today(), 'верхняя граница — не раньше сегодня');
+    eq(el.packetsStart, today(), 'нижняя граница — самая ранняя операция');
+    const loads = () => calls.filter(c => c.method === 'db_query' && c.params.limit === 200);
+    assert(await until(() => loads().length), 'строки загрузились по событию пакета');
+    eq(loads().length, 1, 'одна выборка: авто-событие пропа selection не должно дублировать её');
     eq(el.packetsKey, 'now', 'дефолт «Сегодня» не затирается пустым ключом пакета');
     eq(el.$('oda-packets').mask, today() + '*', 'в пакете выбран сегодняшний день');
-    eq(calls.find(c => c.method === 'index').params.from, today() + 'T00:00:00', 'левая граница выборки');
-    eq(calls.find(c => c.method === 'index').params.to, today() + 'T00:00:00', 'правая граница выборки');
+    eq(loads()[0].params.from, today(), 'левая граница выборки — местный день');
+    eq(loads()[0].params.to, today(), 'правая граница выборки — день включительно');
     assert(el.rows.length, 'строки пришли: ' + JSON.stringify(el.rows));
+    eq(el.tableRows[0].state, 'проведена', 'статус текстом');
     el.remove();
 });
 
 await test('objects: сохранить шлёт тело третьим аргументом', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [] }),
-        create_object: (params, post) => ({ id: '3.X', path: '/p/3.X' }),
+        db_query: () => ({ items: [], names: {} }),
+        db_create: () => ({ id: '3.X', status: 'active', version: 1 }),
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, '.hcell').length), 'шапка');
     el.editing = { name: 'Новая' };
     assert(await el.save(), 'save вернул true');
-    const sent = calls.find(c => c.method === 'create_object');
-    assert(sent, 'create_object вызван');
+    const sent = calls.find(c => c.method === 'db_create');
+    assert(sent, 'db_create вызван');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая' }));
     assert(el.editing?.name === 'Новая', 'редактор не обнуляется самим save');
     el.remove();
@@ -358,29 +356,30 @@ await test('objects: сохранить шлёт тело третьим арг�
 await test('objects: правка шлёт только поля схемы', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
-        read_object: () => ({ body: { name: 'Старая', client: '', posted: { entry: 'e' }, deleted: false } }),
-        update_object: () => ({}),
+        db_query: () => ({ items: [obj('1.X', { name: 'Старая' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'Старая' }, { version: 4 }),
+        db_update: () => ({ id: '1.X', status: 'active', version: 5 }),
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
     await el.select({ id: '1.X' });
     assert(await until(() => el.editing?.id === '1.X'), 'редактирование');
-    el.editing = { ...el.editing, name: 'Новая' };
+    el.editing = { ...el.editing, name: 'Новая', client: '' };
     assert(await el.save(), 'save вернул true');
-    const sent = calls.find(c => c.method === 'update_object');
-    assert(sent, 'update_object вызван');
+    const sent = calls.find(c => c.method === 'db_update');
+    assert(sent, 'db_update вызван');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая', client: '' }));
+    eq(JSON.stringify(sent.params), JSON.stringify({ replace: true, id: '1.X', version: 4 }), 'версия — защита от чужой правки');
     el.remove();
 });
 
 await test('objects: кнопка Создать открывает окно с заголовком и кнопками', async () => {
     const calls = [];
-    const $item = mockItem(calls, { index: () => ({ rows: [] }) });
+    const $item = mockItem(calls, { db_query: () => ({ items: [], names: {} }) });
     const el = await mount('test-objects', { $item });
     assert(await until(() => el.schema), 'схема');
-    const btn = [...el.__shadowRoot__.querySelectorAll('oda-button')].find(b => b.textContent.trim() === 'Создать');
-    assert(btn, 'кнопка Создать');
+    let btn = null;
+    assert(await until(() => !!(btn = [...el.__shadowRoot__.querySelectorAll('oda-button')].find(b => b.textContent.trim() === 'Создать'))), 'кнопка Создать');
     btn.click();
     const pop = await waitPopover();
     assert(await until(() => popTitle(pop) === 'Операции · новый объект'), 'заголовок: ' + popTitle(pop));
@@ -389,6 +388,7 @@ await test('objects: кнопка Создать открывает окно с 
     assert(await until(() => modalButtons(modal).includes('Сохранить')), 'кнопки: ' + modalButtons(modal).join('|'));
     assert(modalButtons(modal).includes('Закрыть'), 'Закрыть');
     assert(!modalButtons(modal).includes('Удалить'), 'у нового нет Удалить');
+    assert(!modalButtons(modal).includes('Провести'), 'у справочника нет Провести');
     pop.close();
     assert(await until(() => !pop.isConnected), 'окно закрыто');
     assert(await until(() => el.editorOpen === false), 'editorOpen сброшен');
@@ -396,14 +396,46 @@ await test('objects: кнопка Создать открывает окно с 
     el.remove();
 });
 
+await test('objects: операция — окно с датой, проводками и действиями по статусу', async () => {
+    const calls = [];
+    let status = 'draft';
+    const $item = mockItem(calls, {
+        db_query: () => ({ items: [obj('1.X', { name: 'Продажа' }, { status })], names: {} }),
+        db_read: () => obj('1.X', { name: 'Продажа' }, { status, time: new Date(2026, 9, 14, 12).getTime() }),
+        db_preview: () => ({ entries: [{ debit: '/R/62', credit: '/R/90', amount: 10 }], errors: [] }),
+        db_entries: () => [{ debit: '/R/62', credit: '/R/90', amount: 10 }],
+        db_print_list: () => [{ name: 'invoice', label: 'Товарная накладная' }],
+    }, 'operation');
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+    let opening = el.openEditor({ id: '1.X' });
+    let pop = await waitPopover();
+    let modal = modalOf(pop);
+    assert(await until(() => modalButtons(modal).includes('Провести')), 'черновик: ' + modalButtons(modal).join('|'));
+    assert(modalButtons(modal).includes('Удалить') && !modalButtons(modal).includes('Отменить'), 'черновик: удалить, без отмены');
+    eq(el.editing.time, '2026-10-14', 'дата операции в форме');
+    assert(await until(() => deepText(modal).includes('Дт 62 — Кт 90')), 'предпросмотр проводок: ' + deepText(modal));
+    pop.close();
+    await opening;
+
+    status = 'registered';
+    opening = el.openEditor({ id: '1.X' });
+    pop = await waitPopover();
+    modal = modalOf(pop);
+    assert(await until(() => modalButtons(modal).includes('Отменить')), 'проведённая: ' + modalButtons(modal).join('|'));
+    assert(!modalButtons(modal).includes('Удалить') && !modalButtons(modal).includes('Провести'), 'проведённая: без удаления и проведения');
+    assert(calls.some(c => c.method === 'db_entries'), 'действующие проводки');
+    assert(await until(() => modalButtons(modal).includes('Товарная накладная')), 'кнопка печатной формы: ' + modalButtons(modal).join('|'));
+    pop.close();
+    await opening;
+    el.remove();
+});
+
 await test('objects: клик по строке открывает окно; второго окна нет', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [
-            { id: '1.X', name: 'Первая', client: '' },
-            { id: '2.X', name: 'Вторая', client: '' },
-        ] }),
-        read_object: params => ({ body: { name: params.id === '1.X' ? 'Первая' : 'Вторая', client: '' } }),
+        db_query: () => ({ items: [obj('1.X', { name: 'Первая' }), obj('2.X', { name: 'Вторая' })], names: {} }),
+        db_read: params => obj(params.id, { name: params.id === '1.X' ? 'Первая' : 'Вторая' }),
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 2), 'две строки');
@@ -424,9 +456,9 @@ await test('objects: клик по строке открывает окно; в�
 await test('objects: кнопка Сохранить сохраняет и закрывает', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
-        read_object: () => ({ body: { name: 'Старая', client: '' } }),
-        update_object: () => ({}),
+        db_query: () => ({ items: [obj('1.X', { name: 'Старая' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'Старая' }),
+        db_update: () => ({ id: '1.X', status: 'active', version: 2 }),
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
@@ -434,14 +466,14 @@ await test('objects: кнопка Сохранить сохраняет и за�
     const pop = await waitPopover();
     assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок: ' + popTitle(pop));
     await tick(60);
-    el.editing = { ...el.editing, name: 'Кнопка' };
+    el.editing = { ...el.editing, name: 'Кнопка', client: '' };
     const btn = deepAll(modalOf(pop), 'oda-button').find(b => b.textContent.trim() === 'Сохранить');
     assert(btn, 'кнопка Сохранить');
     btn.click();
     assert(await until(() => !pop.isConnected), 'окно закрыто кнопкой');
     await opening;
-    const sent = calls.find(c => c.method === 'update_object');
-    assert(sent, 'update_object вызван');
+    const sent = calls.find(c => c.method === 'db_update');
+    assert(sent, 'db_update вызван');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Кнопка', client: '' }));
     el.remove();
 });
@@ -449,9 +481,9 @@ await test('objects: кнопка Сохранить сохраняет и за�
 await test('objects: Удалить спрашивает подтверждение', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
-        read_object: () => ({ body: { name: 'Старая', client: '' } }),
-        delete_object: () => null,
+        db_query: () => ({ items: [obj('1.X', { name: 'Старая' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'Старая' }),
+        db_delete: () => null,
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
@@ -469,7 +501,7 @@ await test('objects: Удалить спрашивает подтвержден�
     confirm.close();
     assert(await until(() => !confirm.isConnected), 'подтверждение закрыто');
     assert(pop.isConnected, 'Отмена оставила окно');
-    assert(!calls.some(c => c.method === 'delete_object'), 'Отмена не удаляет');
+    assert(!calls.some(c => c.method === 'db_delete'), 'Отмена не удаляет');
 
     btn.click();
     confirm = null;
@@ -477,16 +509,16 @@ await test('objects: Удалить спрашивает подтвержден�
     confirm.ok();
     assert(await until(() => !pop.isConnected), 'окно закрыто после удаления');
     await opening;
-    assert(calls.some(c => c.method === 'delete_object'), 'delete_object вызван');
+    assert(calls.some(c => c.method === 'db_delete'), 'db_delete вызван');
     el.remove();
 });
 
 await test('objects: закрытие с изменениями — Да/Нет/Отмена', async () => {
     const calls = [];
     const $item = mockItem(calls, {
-        index: () => ({ rows: [{ id: '1.X', name: 'Старая', client: '' }] }),
-        read_object: () => ({ body: { name: 'Старая', client: '', posted: { entry: 'e' }, deleted: false } }),
-        update_object: () => ({}),
+        db_query: () => ({ items: [obj('1.X', { name: 'Старая' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'Старая' }),
+        db_update: () => ({ id: '1.X', status: 'active', version: 2 }),
     });
     const el = await mount('test-objects', { $item });
     assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
@@ -515,20 +547,20 @@ await test('objects: закрытие с изменениями — Да/Нет/
     await opening;
     assert(!pop.isConnected, 'Нет закрыла окно');
     eq(el.editing, null, 'editing очищен');
-    assert(!calls.some(c => c.method === 'update_object'), 'Нет не сохраняет');
+    assert(!calls.some(c => c.method === 'db_update'), 'Нет не сохраняет');
 
     // Да — сохранить и закрыть
     opening = el.openEditor({ id: '1.X' });
     pop = await waitPopover();
     assert(await until(() => popTitle(pop) === 'Операции · Старая'), 'заголовок 2');
     await tick(60);
-    el.editing = { ...el.editing, name: 'Новая' };
+    el.editing = { ...el.editing, name: 'Новая', client: '' };
     pop.close();
     prompt = null;
     assert(await until(() => !!(prompt = promptOf(pop))), 'промпт 3');
     prompt.ok(1);
     await opening;
-    const sent = calls.find(c => c.method === 'update_object');
+    const sent = calls.find(c => c.method === 'db_update');
     assert(sent, 'Да сохранила');
     eq(JSON.stringify(sent.post), JSON.stringify({ name: 'Новая', client: '' }));
     assert(!pop.isConnected, 'Да закрыла окно');
@@ -541,7 +573,7 @@ await test('objects: закрытие с изменениями — Да/Нет/
     el.editing = { ...el.editing, name: 'Плохая' };
     const fetch = $item.fetch;
     $item.fetch = async (method, params, post) => {
-        if (method === 'update_object')
+        if (method === 'db_update')
             throw new Error('сервер отказал: нет обязательного поля');
         return fetch(method, params, post);
     };
@@ -561,76 +593,163 @@ await test('objects: закрытие с изменениями — Да/Нет/
     el.remove();
 });
 
-await test('postings: ячейки аналитик — текст, итоги и сальдо', async () => {
-    const calls = [];
-    const $item = {
-        body: Promise.resolve({ METADATA: { FIELDS: [
-            { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/DATA/CATALOGS/C', analytic: true },
-        ] } }),
+const rub = v => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Ответы учётного ядра для карточки счёта: схема счёта (аналитика-ссылка) и db_card
+const CARD_SCHEMA = { schema: { family: 'account', fields: [
+    { id: 'counterparty', label: 'Контрагент', type: 'link', target: '/DATA/CATALOGS/C', analytic: true },
+] }, errors: [] };
+const CARD = {
+    account: '/DATA/REGISTER/62', label: 'Расчёты',
+    opening: { debit: 200, credit: 0 },
+    turnover: { debit: 1000, credit: 700 },
+    closing: { debit: 500, credit: 0 },
+    total: 2,
+    items: [
+        { time: 100, op_id: 'o1', op_cid: '/DATA/OPERATIONS/SALE', debit: 1000, credit: 0, qty: 0,
+            analytics: { counterparty: '9.Y' }, corr: '/DATA/REGISTER/90', balance: 1200 },
+        { time: 200, op_id: 'o2', op_cid: '/DATA/OPERATIONS/PAY', debit: 0, credit: 700, qty: 0,
+            analytics: { counterparty: '9.Y' }, corr: '/DATA/REGISTER/51', balance: 500 },
+    ],
+    names: { objects: { '9.Y': 'Альфа', o1: 'Продажа 1', o2: 'o2' },
+        classes: { '/DATA/REGISTER/90': 'Продажи', '/DATA/OPERATIONS/PAY': 'Оплата' }, paths: {} },
+};
+function cardItem(calls) {
+    return {
         fetch: async (method, params, post) => {
             calls.push({ method, params, post });
-            if (method === 'query')
-                return [
-                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/DATA/REGISTER/90' } },
-                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/DATA/REGISTER/51' } },
-                ];
-            if (method === 'read_link')
-                return { id: '9.Y', name: 'Альфа' };
+            if (method === 'db_schema')
+                return CARD_SCHEMA;
+            if (method === 'db_card')
+                return CARD;
             return null;
         },
     };
-    const el = await mount('test-postings', { $item });
+}
+
+await test('postings: ячейки аналитик и операций — текст, обороты и сальдо', async () => {
+    const calls = [];
+    const el = await mount('test-postings', { $item: cardItem(calls) });
     const rows = () => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
-    const html = () => 'rows=' + rows().length;
-    assert(await until(() => rows().length === 2), 'две проводки: ' + html());
+    assert(await until(() => rows().length === 2), 'две проводки: rows=' + rows().length);
     assert(!allText(el).includes('[object Object]'), 'нет [object Object]');
-    const first = rows()[0].textContent;
-    assert(first.includes('Альфа'), 'имя аналитики: ' + first);
-    assert(el.$('.row.total').textContent.includes('300'), 'сальдо 300: ' + el.$('.row.total').textContent);
-    const q = calls.find(c => c.method === 'query');
-    assert(q && typeof q.params.where === 'string' || !q.params.where, 'where — строка или пуст');
+    const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
+    eq(head, 'Дата|Операция|Дебет|Кредит|Кол-во|Контрагент|Корр. счёт|Сальдо');
+    const [first, second] = rows().map(r => r.textContent);
+    assert(first.includes('Альфа') && first.includes('Продажа 1') && first.includes('90 Продажи'), 'первая: ' + first);
+    assert(second.includes('Оплата'), 'операция без названия — класс: ' + second);
+    assert(first.includes(rub(1200) + ' Дт'), 'сальдо после проводки 1200: ' + first);
+    assert(second.includes(rub(500) + ' Дт'), 'сальдо после проводки 500: ' + second);
+    const total = el.$('.row.total').textContent;
+    assert(total.includes(rub(1000)) && total.includes(rub(700)) && total.includes(rub(500) + ' Дт'), 'обороты и конец: ' + total);
+    const opening = text(el.$('.bar.opening'));
+    assert(opening.includes(rub(200) + ' Дт'), 'сальдо на начало: ' + opening);
     el.remove();
 });
 
-await test('postings: остаток на начало и нарастающий', async () => {
+await test('postings: период и фильтр аналитики уходят в db_card', async () => {
     const calls = [];
-    const $item = {
-        body: Promise.resolve({ METADATA: {
-            FIELDS: [
-                { id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/DATA/CATALOGS/C', analytic: true },
-            ],
-            INDEXES: [{ id: 'turnover', kind: 'turnover', by: ['counterparty'] }],
-        } }),
-        fetch: async (method, params, post) => {
-            calls.push({ method, params, post });
-            if (method === 'query')
-                return [
-                    { body: { time: 100, debit: 1000, credit: 0, counterparty: '9.Y', corr_account: '/DATA/REGISTER/90' } },
-                    { body: { time: 200, debit: 0, credit: 700, counterparty: '9.Y', corr_account: '/DATA/REGISTER/51' } },
-                ];
-            if (method === 'index')
-                return { def: 'turnover', kind: 'turnover', total: { debit: 200, credit: 0 } };
-            if (method === 'read_link')
-                return { id: '9.Y', name: 'Альфа' };
+    const el = await mount('test-postings', { $item: cardItem(calls) });
+    assert(await until(() => el.$('oda-link-input')), 'фильтр аналитики');
+    el.from = '2026-02-01';
+    el.filters = { counterparty: '9.Y' };
+    await el.reload();
+    const sent = calls.filter(c => c.method === 'db_card').at(-1);
+    eq(sent.params.from, '2026-02-01');
+    eq(sent.params.analytics, JSON.stringify({ counterparty: '9.Y' }));
+    el.remove();
+    const bad = await mount('test-postings', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
+    assert(await until(() => text(bad.$('.error')).includes('сервер отказал')), 'ошибка показана');
+    bad.remove();
+});
+
+await test('postings: 4-шаговый интерфейс ODANT (Анализ счёта, двухпанельные Обороты и сборная Карточка проводки)', async () => {
+    const calls = [];
+    const item = {
+        fetch: async (method, params) => {
+            calls.push({ method, params });
+            if (method === 'db_schema')
+                return CARD_SCHEMA;
+            if (method === 'db_card')
+                return CARD;
+            if (method === 'db_sheet') {
+                return {
+                    rows: [{ account: '/DATA/REGISTER/62', label: 'Расчёты', level: 1, leaf: true, key: { counterparty: '9.Y' },
+                        opening: { debit: 200, credit: 0 }, turnover: { debit: 1000, credit: 700 }, closing: { debit: 500, credit: 0 },
+                        qty: { opening: 1, debit: 5, credit: 3, closing: 3 } }],
+                    total: { opening: { debit: 200, credit: 0 }, turnover: { debit: 1000, credit: 700 }, closing: { debit: 500, credit: 0 },
+                        qty: { opening: 1, debit: 5, credit: 3, closing: 3 } },
+                    names: CARD.names,
+                };
+            }
+            if (method === 'db_turnovers') {
+                return {
+                    account: '/DATA/REGISTER/62', label: 'Расчёты', groupBy: 'quarter',
+                    opening: { debit: 200, credit: 0, net: 200 },
+                    groups: [{ key: '2026-Q1', label: '1 кв. 2026 г.', debit: 1000, credit: 700, turnover: 300, balance: 500, count: 2 }],
+                    closing: { debit: 1000, credit: 700, turnover: 300, net: 500 },
+                    total: 2,
+                    items: [
+                        { entry: 77, time: 100, groupKey: '2026-Q1', op_id: 'o1', op_cid: '/DATA/OPERATIONS/SALE', debit: 1000, credit: 0, corr: '/DATA/REGISTER/90', balance: 1200 },
+                    ],
+                    names: CARD.names,
+                };
+            }
+            if (method === 'db_entry') {
+                return {
+                    entry: 77, time: 100, amount: 1000, qty: 0, storno: false,
+                    operation: { id: 'o1', cid: '/DATA/OPERATIONS/SALE', title: 'Продажа 1' },
+                    debit: { account: '/DATA/REGISTER/62', label: '62 Расчёты', amount: 1000, analytics: [{ id: 'counterparty', label: 'Контрагент', title: 'Альфа' }] },
+                    credit: { account: '/DATA/REGISTER/90', label: '90 Продажи', amount: 1000, analytics: [] },
+                };
+            }
             return null;
         },
     };
-    const el = await mount('test-postings', { $item });
-    const rows = () => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
-    assert(await until(() => rows().length === 2), 'две проводки');
-    eq(el.hasOpening, false, 'без периода остатка нет');
-    el.from = '2026-02-01';
-    await el.reload();
-    assert(await until(() => el.hasOpening === true), 'остаток загружен');
-    const ix = calls.find(c => c.method === 'index');
-    assert(ix && ix.params.id === 'turnover', 'индекс оборотов');
-    assert(/^\d{4}-\d{2}-\d{2}$/.test(ix.params.to) && ix.params.to < '2026-02-01', 'день до from: ' + ix.params.to);
-    const bar = () => [...el.__shadowRoot__.querySelectorAll('div.bar')].map(text).join('|');
-    assert(await until(() => bar().includes('200')), 'начало 200: ' + bar());
-    const cells = rows().map(r => r.textContent);
-    assert(cells[0].includes('1200'), 'нарастающий 1200: ' + cells[0]);
-    assert(cells[1].includes('500'), 'нарастающий 500: ' + cells[1]);
-    assert(el.__shadowRoot__.querySelector('div.row.total').textContent.includes('500'), 'конец 500');
+    const el = await mount('test-postings', { $item: item });
+    assert(await until(() => el.$('oda-packets')), 'полоса периодов oda-packets отрисована');
+
+    // Экран 2: Анализ счёта
+    await el.setMode('analysis');
+    assert(await until(() => el.$('.analysis-layout') && deepText(el).includes('АНАЛИТИКИ СЧЁТА')),
+        'Экран 2: Анализ счёта отрисован: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 600));
+    assert(deepText(el).includes('Альфа') && deepText(el).includes(rub(500)), 'строка аналитики в Анализе счёта: ' + deepText(el));
+
+    // Экран 3: Двухпанельные Обороты счёта
+    await el.setMode('turnovers');
+    assert(await until(() => el.$('.turnovers-layout') && deepText(el).includes('ГРУППИРОВАТЬ')), 'Экран 3: Обороты счёта отрисованы');
+    assert(deepText(el).includes('1 кв. 2026 г.') && deepText(el).includes('со сч. 90 Продажи'), 'левая таблица периодов и правая таблица документов: ' + deepText(el));
+
+    // Экран 4: Сборная карточка проводки
+    await el.openEntry(77);
+    assert(await until(() => el.$('.entry-card') && deepText(el).includes('Проводка #77')), 'Экран 4: Карточка проводки отрисована: ' + deepText(el));
+    assert(deepText(el).includes('ДЕБЕТ:') && deepText(el).includes('КРЕДИТ:'), 'симметричные стороны Дебета и Кредита');
+    el.remove();
+});
+
+await test('objects: в окне объекта справочника видны остатки по счетам и траектория движений', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        db_query: () => ({ items: [obj('1.X', { name: 'ООО «Альфа»' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'ООО «Альфа»' }),
+        db_trajectory: () => ({
+            closing: [{ account: 'acc.62', slot: 'counterparty', debit: 1500, credit: 0, qty: 0 }],
+            items: [{ time: new Date(2026, 9, 20, 12).getTime(), op_id: 'op1', op_cid: 'op.sale', account: 'acc.62', corr: 'acc.90', debit: 1500, credit: 0, balance: 1500 }],
+            names: {
+                objects: { op1: 'Реализация Р-001' },
+                classes: { 'acc.62': '62 Расчёты с покупателями', 'op.sale': 'Покупателю' },
+                paths: { 'acc.62': '/DATA/REGISTER/62', 'op.sale': '/DATA/OPERATIONS/Реализация/Покупателю' },
+            },
+        }),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+    const opening = el.openEditor({ id: '1.X' });
+    const pop = await waitPopover();
+    const modal = modalOf(pop);
+    assert(await until(() => deepText(modal).includes('Остатки по счетам')), 'остатки показаны: ' + deepText(modal));
+    assert(deepText(modal).includes('62 Расчёты с покупателями') && deepText(modal).includes('Реализация Р-001'), 'траектория показана: ' + deepText(modal));
+    pop.close();
+    await opening;
     el.remove();
 });
 

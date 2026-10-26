@@ -114,4 +114,50 @@ describe('builder сохраняет схему в класс', () => {
         assert.deepEqual(saved[0].b.METADATA.FIELDS, [{ id: 'b' }]);
         assert.deepEqual(saved[0].p, { role: 'USER' });
     });
+
+    it('builder сохраняет миксины types, SOURCE (mode: turnover/balance), OVERLAY и POSTINGS', async () => {
+        const builder = (await import('../$server/$folder/$class/handlers/pages/form/builder/$handler/builder.js')).default;
+        const { $field } = await import('../sources/client/field.js');
+        const fld = new $field({ id: 'units', type: 'Struct', target: '/DATA/STRUCTS/Единица измерения', table: true });
+        assert.equal(fld.table, true);
+        assert.equal(fld.target, '/DATA/STRUCTS/Единица измерения');
+
+        const saved = [];
+        const vBody = { label: 'Клиенты', SOURCE: { registry: '/DATA/CATALOGS/Субъекты', account: '/DATA/REGISTER/62', mode: 'balance' }, OVERLAY: [{ id: 'discount', type: 'Number' }], METADATA: { STATIC: [], FIELDS: [] } };
+        const vItem = {
+            type: '$virtual',
+            body: Promise.resolve(vBody),
+            $fields: Promise.resolve({ DATA: { fields: [] } }),
+            metadata: Promise.resolve(vBody.METADATA),
+            save: async (b) => { saved.push(b); },
+        };
+        const vh = Object.assign(Object.create(builder), { $item: vItem });
+        await vh._ensureExtrasLoaded();
+        await vh.overlayFields;
+        vh.setTypesText('/MODULES/Geo');
+        vh.setSourceField('mode', 'turnover');
+        await vh.save();
+        assert.deepEqual(saved[0].METADATA.types, ['/MODULES/Geo']);
+        assert.equal(saved[0].SOURCE.mode, 'turnover');
+        assert.deepEqual(saved[0].OVERLAY, [{ id: 'discount', type: 'Number' }]);
+
+        const opBody = { label: 'Продажа', METADATA: { STATIC: [], FIELDS: [], POSTINGS: [] } };
+        const opItem = {
+            type: '$operation',
+            body: Promise.resolve(opBody),
+            $fields: Promise.resolve({ DATA: { fields: [] } }),
+            metadata: Promise.resolve(opBody.METADATA),
+            save: async (b) => { saved.push(b); },
+        };
+        const oh = Object.assign(Object.create(builder), { $item: opItem });
+        await oh._ensureExtrasLoaded();
+        oh.addPostingRule();
+        oh.updateRule(0, 'amount', 'sum');
+        oh.updateRuleSide(0, 'debit', '/DATA/REGISTER/62');
+        oh.updateRuleSide(0, 'credit', '/DATA/REGISTER/90');
+        await oh.save();
+        assert.equal(saved[1].METADATA.POSTINGS.length, 1);
+        assert.equal(saved[1].METADATA.POSTINGS[0].debit.account, '/DATA/REGISTER/62');
+        assert.equal(saved[1].METADATA.POSTINGS[0].credit.account, '/DATA/REGISTER/90');
+    });
 });

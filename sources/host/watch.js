@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { FS } from '../server/index.js';
+import { markClassesDirty } from '../data/api.js';
 
 const ROOTS = ['$server', 'sources', 'oda', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT'];
 // DATA/INDEX — данные и производные агрегаты: их каждая запись объекта/проводки пишет в *.json,
@@ -42,6 +43,7 @@ function flush($server) {
     if (files.some(f => /class\.js$/i.test(f))) {
         FS.$file.__ext_scripts__ = Object.create(null);
         FS.$file.__type_data__ = Object.create(null);
+        markClassesDirty();
     }
     for (const f of files) {
         const p = '/' + f.replace(/\\/g, '/');

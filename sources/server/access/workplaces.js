@@ -3,7 +3,7 @@
  * Хранятся в `#security` класса:
  *   '#security': {
  *       ADMIN: [...], BOSS: [...], USER: [...], GUEST: [...],
- *       LINKS: [{ id: '/ПУТЬ', access: 'read'|'write' }],   // общие ссылки — всем назначенным
+ *       LINKS: [{ id: '/ПУТЬ', access: 'read'|'write', scope?: 'own'|'place'|'unit'|'all' }],   // общие ссылки — всем назначенным
  *       ROLES: [{ id, label?, icon?, USERS: [...], LINKS: [...], ROLES: [...] }],  // дерево должностей
  *   }
  * Правила:
@@ -24,13 +24,17 @@ function maxAccess(a, b) {
     return (RANK[b] || 0) > (RANK[a] || 0) ? b : a;
 }
 
-/** Нормализовать одну ссылку {id, access}; мусор — null. */
+/** Видимость данных по ссылке (docs/architecture-v2.md, Р8): свои объекты, своего места, подразделения с вложенными, все. */
+export const LINK_SCOPES = Object.freeze(['own', 'place', 'unit', 'all']);
+
+/** Нормализовать одну ссылку {id, access, scope?}; мусор — null, неизвестный scope отбрасывается (действует умолчание). */
 export function normalizeLink(raw) {
     const id = String(raw?.id || '').trim();
     const access = String(raw?.access || '').trim();
     if (!id.startsWith('/') || (access !== 'read' && access !== 'write'))
         return null;
-    return { id, access };
+    const scope = String(raw?.scope || '').trim();
+    return LINK_SCOPES.includes(scope) ? { id, access, scope } : { id, access };
 }
 
 /** Нормализовать дерево прикладных ролей; мусор отбрасывается. */

@@ -4,12 +4,15 @@
 <body>
 <script type="module">
 /**
- * Обзор виртуального справочника (tests/ui/run.mjs): строки текстом,
- * местные расширения колонками, дата уходит в fetch, ошибка видна,
- * клик открывает форму реестра.
+ * Состав виртуального справочника (db_members) в браузере (tests/ui/run.mjs): строки текстом,
+ * сальдо, поля записей-расширений колонками, дата уходит в fetch, ошибка видна,
+ * клик открывает форму реестра, «Изменить» — окно правки расширения.
  */
 import '/oda/oda.js';
-import virtualProto from '/DATA/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js';
+import virtualProto from '/MODULES/Register/CATALOGS/$catalog/$folder/$class/$virtual/handlers/pages/form/virtual/$handler/virtual.js';
+// окно правки расширения: форма полей и showModal (cloneProto обнуляет imports — грузим сами)
+await import('/oda/components/layouts/editor-form/editor-form.js');
+await import('/oda/components/containers/containers.js');
 
 const results = [];
 window.__results = results;
@@ -64,34 +67,43 @@ function cloneProto(src, is) {
 
 await ODA(cloneProto(virtualProto, 'test-virtual'));
 
-const ROWS = [
-    { id: '1.X', name: 'Иван', body: { name: 'Иван' }, overlay: { until: 'завтра' } },
-    { id: '2.X', name: 'Пётр', body: { name: 'Пётр' }, overlay: {} },
-];
-function stubItem(calls, rows, over) {
+// Ответ db_members учётного ядра: участники на дату, сальдо, записи-расширения, реестр-источник
+const RES = {
+    cid: '/DATA/CATALOGS/CLIENTS', label: 'Клиенты', slot: 'counterparty',
+    registry: { cid: '/DATA/CATALOGS/K', path: '/DATA/CATALOGS/K', label: 'Контрагенты' },
+    items: [
+        { id: '1.X', title: 'Иван', body: { name: 'Иван' }, balance: { debit: 300, credit: 0, qty: 0 }, ext: { id: 'e1', body: { until: 'завтра' } } },
+        { id: '2.X', title: 'Пётр', body: { name: 'Пётр' }, balance: { debit: 0, credit: 0, qty: 2 }, ext: null },
+    ],
+};
+// Ответ db_schema: поля записей-расширений
+const SCHEMA = { schema: { overlay: [{ id: 'until', label: 'До', type: 'string' }] }, errors: [] };
+function stubItem(calls, res) {
     return {
-        body: Promise.resolve({
-            SOURCE: { registry: '/DATA/CATALOGS/K' },
-            OVERLAY: over || [{ id: 'until', label: 'До' }],
-        }),
-        fetch: async (method, params) => {
-            calls.push({ method, params });
-            if (method === 'browse')
-                return rows;
+        fetch: async (method, params, post) => {
+            calls.push({ method, params, post });
+            if (method === 'db_schema')
+                return SCHEMA;
+            if (method === 'db_members')
+                return res;
+            if (method === 'db_create' || method === 'db_update')
+                return { id: 'e2', version: 1 };
             return null;
         },
     };
 }
 const dataRows = (el) => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
 
-await test('virtual: шапка, строки и расширения текстом', async () => {
+await test('virtual: шапка, строки, сальдо и расширения текстом', async () => {
     const calls = [];
-    const el = await mount('test-virtual', { $item: stubItem(calls, ROWS) });
+    const el = await mount('test-virtual', { $item: stubItem(calls, RES) });
     assert(await until(() => dataRows(el).length === 2), 'две строки');
+    assert(await until(() => el.slots.length === 1), 'колонки расширений');
     const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
-    eq(head, 'Название|До');
+    eq(head, 'Название|Сальдо|Кол-во|До|', 'последняя колонка — «Изменить»');
     const first = dataRows(el)[0].textContent;
-    assert(first.includes('Иван') && first.includes('завтра'), 'строка: ' + first);
+    assert(first.includes('Иван') && first.includes('завтра') && first.includes('Дт'), 'строка: ' + first);
+    assert(dataRows(el)[1].textContent.includes('2'), 'количество: ' + dataRows(el)[1].textContent);
     assert(!el.__shadowRoot__.textContent.includes('[object Object]'), 'без [object Object]');
     assert(el.__shadowRoot__.querySelector('div.row.total').textContent.includes('2'), 'итог');
     el.remove();
@@ -99,21 +111,21 @@ await test('virtual: шапка, строки и расширения текст
 
 await test('virtual: дата уходит в fetch, ошибка видна', async () => {
     const calls = [];
-    const el = await mount('test-virtual', { $item: stubItem(calls, ROWS) });
+    const el = await mount('test-virtual', { $item: stubItem(calls, RES) });
     assert(await until(() => dataRows(el).length === 2), 'строки');
     el.at = '2026-02-01';
     await el.reload();
     const sent = calls.at(-1);
-    eq(sent.method, 'browse');
+    eq(sent.method, 'db_members');
     eq(sent.params.at, '2026-02-01');
     el.remove();
-    const bad = await mount('test-virtual', { $item: { body: Promise.resolve({}), fetch: async () => { throw new Error('сервер отказал'); } } });
+    const bad = await mount('test-virtual', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
     assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
     bad.remove();
 });
 
 await test('virtual: клик открывает форму реестра', async () => {
-    const el = await mount('test-virtual', { $item: stubItem([], ROWS) });
+    const el = await mount('test-virtual', { $item: stubItem([], RES) });
     assert(await until(() => dataRows(el).length === 2), 'строки');
     const got = [], opened = [];
     const prevWork = window.WORK, prevExec = window.execute;
@@ -130,6 +142,41 @@ await test('virtual: клик открывает форму реестра', asy
         window.execute = prevExec;
     }
     el.remove();
+});
+
+await test('virtual: «Изменить» — окно с полями расширения, «Сохранить» создаёт запись с ext_of', async () => {
+    const calls = [];
+    const prevWork = window.WORK;
+    window.WORK = { CancelError: ODA.CancelError, showModal: ODA.showModal, get_item: async () => null };
+    const el = await mount('test-virtual', { $item: stubItem(calls, RES) });
+    try {
+        assert(await until(() => dataRows(el).length === 2 && el.canEdit), 'строки и право правки');
+        const edit = dataRows(el)[1].querySelector('div.cell.edit');
+        eq(text(edit), 'Изменить');
+        edit.click();
+        let pop = null;
+        assert(await until(() => !!(pop = document.querySelector('oda-popover'))), 'окно открылось');
+        const modal = pop.querySelector('virtual-ext-editor');
+        assert(modal, 'содержимое окна');
+        assert(await until(() => modal.__shadowRoot__?.querySelector('oda-editor-form')), 'форма полей');
+        eq(el.editing.id, '2.X');
+        el.editing.data.until = '2026-03-01';
+        let save = null;
+        assert(await until(() => !!(save = [...modal.__shadowRoot__.querySelectorAll('oda-button')].find(b => text(b) === 'Сохранить'))),
+            'кнопка Сохранить: ' + (modal.__shadowRoot__?.innerHTML || '').slice(-400));
+        save.click();
+        assert(await until(() => !pop.isConnected), 'окно закрылось после сохранения');
+        const sent = calls.find(c => c.method === 'db_create');
+        assert(sent, 'db_create вызван');
+        eq(JSON.stringify(sent.params), JSON.stringify({ ext_of: '2.X' }));
+        eq(JSON.stringify(sent.post), JSON.stringify({ until: '2026-03-01' }));
+        assert(await until(() => el.editing === null), 'правка завершена');
+        assert(calls.filter(c => c.method === 'db_members').length >= 2, 'состав перечитан');
+    }
+    finally {
+        window.WORK = prevWork;
+        el.remove();
+    }
 });
 
 window.__done = true;

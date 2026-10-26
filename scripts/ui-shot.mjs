@@ -81,6 +81,11 @@ if (js) {
     console.log('[eval]', JSON.stringify(r.result?.result?.value ?? r.result?.exceptionDetails?.text ?? r.result).slice(0, 2000));
     await sleep(1500);
 }
+if (process.env.WHEEL) {
+    const [wx, wy, wdy] = String(process.env.WHEEL).split(',').map(Number);
+    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: wx || 180, y: wy || 400, deltaX: 0, deltaY: wdy || 500 });
+    await sleep(800);
+}
 const shot = await send('Page.captureScreenshot', { format: 'png' });
 fs.writeFileSync(out, Buffer.from(shot.result.data, 'base64'));
 console.log('saved', out);

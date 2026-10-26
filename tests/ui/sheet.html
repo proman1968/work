@@ -4,11 +4,11 @@
 <body>
 <script type="module">
 /**
- * Ведомость в настоящем браузере (tests/ui/run.mjs): строки текстом, отступ субсчетов,
+ * Ведомость (db_sheet) в настоящем браузере (tests/ui/run.mjs): строки текстом, отступ субсчетов и разворота,
  * параметры уходят в fetch, ошибка видна, клик по счёту открывает его форму.
  */
 import '/oda/oda.js';
-import sheetProto from '/DATA/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js';
+import sheetProto from '/MODULES/Register/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/sheet.js';
 
 const results = [];
 window.__results = results;
@@ -63,20 +63,24 @@ function cloneProto(src, is) {
 
 await ODA(cloneProto(sheetProto, 'test-sheet'));
 
+const rub = v => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const sums = (od, oc, td, tc, cd, cc) => ({ opening: { debit: od, credit: oc }, turnover: { debit: td, credit: tc }, closing: { debit: cd, credit: cc } });
+// Ответ db_sheet учётного ядра: строки по дереву счетов, строка разворота с key, итог, названия
 const RES = {
-    from: '2026-02-01', to: '2026-02-28',
     rows: [
-        { path: '/DATA/REGISTER/62', label: 'Расчёты', level: 0, leaf: false, open_debit: 1000, open_credit: 0, debit: 400, credit: 600, close_debit: 800, close_credit: 0 },
-        { path: '/DATA/REGISTER/62/01', label: 'Покупатели', level: 1, leaf: true, open_debit: 1000, open_credit: 0, debit: 0, credit: 600, close_debit: 400, close_credit: 0 },
-        { path: '/DATA/REGISTER/90', label: 'Продажи', level: 0, leaf: true, open_debit: 0, open_credit: 1000, debit: 0, credit: 400, close_debit: 0, close_credit: 1400 },
+        { account: '/DATA/REGISTER/62', label: 'Расчёты', level: 0, leaf: false, ...sums(1000, 0, 400, 600, 800, 0) },
+        { account: '/DATA/REGISTER/62/01', label: 'Покупатели', level: 1, leaf: true, ...sums(1000, 0, 0, 600, 400, 0) },
+        { account: '/DATA/REGISTER/62/01', label: 'Покупатели', level: 2, leaf: true, key: { counterparty: 'c1' }, ...sums(1000, 0, 0, 600, 400, 0) },
+        { account: '/DATA/REGISTER/90', label: 'Продажи', level: 0, leaf: true, ...sums(0, 1000, 0, 400, 0, 1400) },
     ],
-    total: { open_debit: 1000, open_credit: 1000, debit: 400, credit: 1000, close_debit: 800, close_credit: 1400 },
+    total: sums(1000, 1000, 400, 1000, 800, 1400),
+    names: { objects: { c1: 'Альфа' }, classes: {}, paths: { '/DATA/REGISTER/62/01': '/DATA/REGISTER/62/01' } },
 };
 function stubItem(calls, res) {
     return {
         fetch: async (method, params) => {
             calls.push({ method, params });
-            if (method === 'sheet')
+            if (method === 'db_sheet')
                 return res;
             return null;
         },
@@ -84,37 +88,42 @@ function stubItem(calls, res) {
 }
 const dataRows = (el) => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
 
-await test('sheet: шапка, строки текстом, отступ субсчёта, итог', async () => {
+await test('sheet: шапка, строки текстом, отступ субсчёта, разворот, итог', async () => {
     const calls = [];
     const el = await mount('test-sheet', { $item: stubItem(calls, RES) });
-    assert(await until(() => dataRows(el).length === 3), 'три строки');
+    assert(await until(() => dataRows(el).length === 4), 'четыре строки');
     const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
     eq(head, 'Счёт|Нач. Дт|Нач. Кт|Оборот Дт|Оборот Кт|Кон. Дт|Кон. Кт');
     const r = dataRows(el);
-    assert(r[0].textContent.includes('Расчёты') && r[0].textContent.includes('800'), 'родитель: ' + r[0].textContent);
-    assert(r[1].textContent.includes('Покупатели') && r[1].textContent.includes('400'), 'субсчёт: ' + r[1].textContent);
+    assert(r[0].textContent.includes('62 Расчёты') && r[0].textContent.includes(rub(800)), 'родитель: ' + r[0].textContent);
+    assert(r[1].textContent.includes('01 Покупатели') && r[1].textContent.includes(rub(400)), 'субсчёт: ' + r[1].textContent);
+    assert(r[2].textContent.includes('Альфа') && r[2].classList.contains('detail'), 'строка разворота: ' + r[2].textContent);
     const pad = el => parseInt(el.querySelector('div.cell.acc').style.paddingLeft || '0');
     eq(pad(r[0]), 0, 'отступ родителя');
     eq(pad(r[1]), 16, 'отступ субсчёта');
+    eq(pad(r[2]), 32, 'отступ разворота');
+    assert(r[0].classList.contains('group') && !r[1].classList.contains('group'), 'группа — у родителя');
     assert(!el.__shadowRoot__.textContent.includes('[object Object]'), 'без [object Object]');
     const total = el.__shadowRoot__.querySelector('div.row.total').textContent;
-    assert(total.includes('1400') && total.includes('Итого'), 'итог: ' + total);
+    assert(total.includes(rub(1400)) && total.includes('Итого'), 'итог: ' + total);
     el.remove();
 });
 
-await test('sheet: параметры уходят в fetch, ошибка видна', async () => {
+await test('sheet: параметры уходят в db_sheet, ошибка видна', async () => {
     const calls = [];
     const el = await mount('test-sheet', { $item: stubItem(calls, RES) });
-    assert(await until(() => dataRows(el).length === 3), 'строки');
+    assert(await until(() => dataRows(el).length === 4), 'строки');
     el.from = '2026-02-01';
     el.to = '2026-02-28';
     el.account = '/DATA/REGISTER/62';
+    el.by = 'counterparty';
     await el.reload();
     const sent = calls.at(-1);
-    eq(sent.method, 'sheet');
+    eq(sent.method, 'db_sheet');
     eq(sent.params.from, '2026-02-01');
     eq(sent.params.to, '2026-02-28');
     eq(sent.params.account, '/DATA/REGISTER/62');
+    eq(sent.params.by, '["counterparty"]');
     el.remove();
     const bad = await mount('test-sheet', { $item: { fetch: async () => { throw new Error('сервер отказал'); } } });
     assert(await until(() => text(bad.__shadowRoot__.querySelector('.error')).includes('сервер отказал')), 'ошибка показана');
@@ -123,7 +132,7 @@ await test('sheet: параметры уходят в fetch, ошибка вид
 
 await test('sheet: клик по счёту открывает его форму', async () => {
     const el = await mount('test-sheet', { $item: stubItem([], RES) });
-    assert(await until(() => dataRows(el).length === 3), 'строки');
+    assert(await until(() => dataRows(el).length === 4), 'строки');
     const got = [], opened = [];
     const prevWork = window.WORK, prevExec = window.execute;
     window.WORK = { get_item: async (p) => { got.push(p); return { path: p }; } };

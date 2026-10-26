@@ -1,5 +1,6 @@
 /**
- * Этап 6: каркас типов учёта — поля проводки наследуются счётом из типа $account.
+ * Тип счёта $account: счёт создаётся в журнале, его поля — только собственные аналитики
+ * (полей записей проводок у типа нет — проводки хранит учётное ядро).
  */
 import '../sources/reactor.js';
 import { describe, it, before, after } from 'node:test';
@@ -23,7 +24,8 @@ function write(rel, content) {
 }
 
 function copy(rel) {
-    write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+    const src = rel.startsWith('DATA/') ? 'MODULES/Register/' + rel.slice(5) : rel;
+    write(rel, fs.readFileSync(path.join(ROOT, src), 'utf-8'));
 }
 
 before(async () => {
@@ -46,13 +48,12 @@ after(async () => {
 });
 
 describe('типы учёта', () => {
-    it('счёт наследует поля проводки из типа $account', async () => {
+    it('счёт — класс $account журнала, его поля — только собственные аналитики', async () => {
         const reg = await WORK.get_item('/DATA/REGISTER');
-        await reg.create({ id: '62', type: '$account', post: `export default { label: 'Расчёты с покупателями', icon: 'carbon:wallet' }`, ...as(ADMIN) });
+        await reg.create({ id: '62', type: '$account', ...as(ADMIN), post: `export default { label: 'Расчёты с покупателями', icon: 'carbon:wallet',
+            METADATA: { FIELDS: [{ id: 'counterparty', type: 'Link', catalog: '/DATA/CATALOGS/SUBJECTS', analytic: true }] } }` });
         const acc = await WORK.get_item('/DATA/REGISTER/62');
         assert.equal(acc.type, '$account');
-        const ids = (acc.METADATA?.FIELDS || []).map(f => f.id);
-        for (const f of ['source', 'entry', 'rule', 'corr_account', 'debit', 'credit', 'qty_in', 'qty_out', 'storno'])
-            assert.ok(ids.includes(f), 'нет поля ' + f);
+        assert.deepEqual((acc.METADATA?.FIELDS || []).map(f => f.id), ['counterparty']);
     });
 });

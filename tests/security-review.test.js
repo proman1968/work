@@ -588,11 +588,8 @@ describe('Ф.1 независимое ревью (R10, R13, R18, R19, R20)', () 
         assert.match(safe, /form-action 'none'; base-uri 'none'/);
     });
 
-    it('P0/P1 аудит: защита _readById от обхода пути, валидация push uid, авторитетный readOnly моста и липкое микросжатие toolContent', async () => {
-        // 1. _readById отвергает обратные слэши и ..
-        const box = await WORK.get_item('/BOX');
-        assert.equal(await box._readById('..\\..\\secret.data'), null, '_readById пропустил обратные слэши');
-        assert.equal(await box._readById('0.evil'), null, '_readById пропустил нулевой timestamp');
+    it('P0/P1 аудит: валидация push uid, авторитетный readOnly моста и липкое микросжатие toolContent', async () => {
+        // 1. (файловое хранение объектов с _readById удалено — объекты в учётном ядре SQLite)
 
         // 2. push uid без '..'
         await assert.rejects(

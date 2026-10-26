@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Платёжное поручение</title>
+<style>
+    body { font: 13px/1.4 Arial, sans-serif; margin: 20mm; color: #000; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sub { color: #555; margin-bottom: 16px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+    td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; }
+    td.k { width: 28%; background: #f3f3f3; }
+    .sum { font-size: 16px; font-weight: bold; }
+    .sign { margin-top: 36px; display: flex; gap: 48px; }
+    .sign div { border-top: 1px solid #000; min-width: 180px; padding-top: 4px; font-size: 11px; }
+    @media print { body { margin: 10mm; } }
+</style>
+</head>
+<body>
+<h1>Платёжное поручение № {{doc.number}}</h1>
+<div class="sub">от {{doc.date}} · {{doc.label}}</div>
+<table>
+    <tr><td class="k">Плательщик</td><td>{{org.name}}<br>ИНН {{org.inn}}, КПП {{org.kpp}}, р/с {{org.account}}<br>{{org.bank}}, БИК {{org.bik}}, к/с {{org.corr}}</td></tr>
+    <tr><td class="k">Получатель</td><td>{{coalesce(counterparty, employee, doc.label)}}</td></tr>
+    <tr><td class="k">Сумма</td><td class="sum">{{money(sum)}} ₽</td></tr>
+    <tr><td class="k">Сумма прописью</td><td>{{words(sum)}}</td></tr>
+    <tr><td class="k">Назначение платежа</td><td>{{coalesce(purpose, doc.label)}}{{#if contract}}. Договор: {{contract}}{{/if}}</td></tr>
+</table>
+<div class="sign"><div>Руководитель</div><div>Главный бухгалтер</div><div>Банк</div></div>
+</body>
+</html>

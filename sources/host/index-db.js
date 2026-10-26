@@ -51,7 +51,7 @@ export async function indexDb() {
 }
 
 /** node:sqlite без разового ExperimentalWarning в логе сервера (остальные предупреждения не трогаем). */
-async function importSqlite() {
+export async function importSqlite() {
     const emit = process.emitWarning;
     process.emitWarning = function (warning, ...rest) {
         const text = typeof warning === 'string' ? warning : warning?.message;

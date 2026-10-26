@@ -30,7 +30,7 @@ import { devLspTools } from '../sources/modules/agent/tools/dev/lsp.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const AI = path.join(ROOT, '$server/$folder/$class/ai');
-const PLACE_SKILLS = [path.join(ROOT, 'DATA/REGISTER/$register/ai/skills')];
+const PLACE_SKILLS = [path.join(ROOT, 'MODULES/Register/REGISTER/$register/ai/skills')];
 const MAX_DESCRIPTION = 400; // список в system обрезается: смысл должен уместиться
 const SUBAGENT_DENY = ['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push'];
 const REQUIRES = ['system', 'sandbox'];

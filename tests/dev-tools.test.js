@@ -825,7 +825,8 @@ describe('R15: чужой текст помечают все читатели', 
         assert.match(JSON.stringify(rows), /Анна/);
         assert.equal(e1.untrusted, true, 'read_table читает загруженную таблицу как свою');
         const e2 = {};
-        await importObjects.run({ path: '/BOX', type: 'data', source: '/BOX/doc/table.csv', dry_run: true }, mkCtx(ADMIN, { entry: e2 }));
+        // /BOX — не класс учётного ядра: импорт откажет, но таблица уже помечена
+        await importObjects.run({ path: '/BOX', source: '/BOX/doc/table.csv', dry_run: true }, mkCtx(ADMIN, { entry: e2 })).catch(() => {});
         assert.equal(e2.untrusted, true, 'import_objects читает загруженную таблицу как свою');
         unmarkExternal('/BOX/doc/table.csv');
         const own = {};

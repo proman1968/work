@@ -216,6 +216,7 @@ ODA({
             this._dayIndex = {};
             this._units = {};
             this._leaves = [];
+            this._dateNodes = {};
             this._lo = this._hi = '';
             this.error = 'Задайте корректные start и end в формате YYYY-MM-DD';
             return;
@@ -240,6 +241,7 @@ ODA({
         const years = this._makeDateStructure(days, mode);
         this._years = years;
         this._leaves = this._collectLeaves(years, mode);
+        this._dateNodes = this._indexNodes(years);
         const bar = this._makeBar(years, mode, this._lo, this._hi);
         this.items = bar.items;
         this._allItem = bar.allItem;
@@ -325,11 +327,18 @@ ODA({
                     yearNode.items.push(this._makeItem({ name: q, parent: yearNode, root: yearNode }, mode));
                 continue;
             }
+            // month/day: год → квартал → месяц (→ день); кварталы выбираемы и в меню сгруппированы
+            const qName = `${y}-q${_getQuarterOfMonth(day.slice(5, 7))}`;
+            let qNode = yearNode.items.find(i => i.name === qName);
+            if (!qNode) {
+                qNode = this._makeItem({ name: qName, parent: yearNode, root: yearNode, items: [] }, mode);
+                yearNode.items.push(qNode);
+            }
             const m = day.slice(0, 7);
-            let mNode = yearNode.items.find(i => i.name === m);
+            let mNode = qNode.items.find(i => i.name === m);
             if (!mNode) {
-                mNode = this._makeItem({ name: m, parent: yearNode, root: yearNode, items: [] }, mode);
-                yearNode.items.push(mNode);
+                mNode = this._makeItem({ name: m, parent: qNode, root: yearNode, items: [] }, mode);
+                qNode.items.push(mNode);
             }
             if (mode === 'month') continue;
             mNode.items.push(this._makeItem({ name: day, parent: mNode, root: yearNode }, mode));
@@ -351,12 +360,34 @@ ODA({
             if (mode === 'year') { out.push(y); continue; }
             const kids = [...(y.items || [])].filter(i => !i.whole)
                 .sort((a, b) => a.name.localeCompare(b.name));
+            // квартал — не лист в month/day: листья — месяцы (month) или дни (day)
             for (const k of kids) {
-                if (mode !== 'day') { out.push(k); continue; }
-                for (const d of [...(k.items || [])].sort((a, b) => a.name.localeCompare(b.name))) out.push(d);
+                if (mode === 'quarter') { out.push(k); continue; }
+                for (const m of [...(k.items || [])].sort((a, b) => a.name.localeCompare(b.name))) {
+                    if (mode !== 'day') { out.push(m); continue; }
+                    for (const d of [...(m.items || [])].sort((a, b) => a.name.localeCompare(b.name))) out.push(d);
+                }
             }
         }
         return out;
+    },
+    // Плоский индекс всех выбираемых узлов дерева по name (год, квартал, месяц, день); «весь год» не индексируем
+    _indexNodes(years) {
+        const index = {};
+        const add = node => {
+            if (node && !node.whole) index[node.name] = node;
+        };
+        for (const y of years) {
+            add(y);
+            for (const q of y.items || []) {
+                add(q);
+                for (const m of q.items || []) {
+                    add(m);
+                    for (const d of m.items || []) add(d);
+                }
+            }
+        }
+        return index;
     },
     // Полоса: [Now, ...годы, <, period, >, All] (порт дата-ветки _rebuildPackets)
     _makeBar(years, mode, rangeStart, rangeEnd) {
@@ -439,8 +470,9 @@ ODA({
             return bar.find(i => i.is === 'oda-packets-now-selector') || null;
         if (key === '*') return this._allItem || null;
         if (key.startsWith('period:')) return this._restorePeriod(key.slice(7));
-        return [...this._leaves, ...bar]
-            .find(i => !i.disabled && i.name !== '<' && i.name !== '>' && i.mask === key) || null;
+        // любой выбираемый узел (год, квартал, месяц, день) — не только листья: месяц выбирается и в day-режиме
+        const node = this._dateNodes?.[key.replace(/\*+$/, '')];
+        return node && node.mask === key && !node.disabled ? node : null;
     },
     // Ключ (возможно мульти-выбор) → узлы; null — ключ пуст или ни один не найден.
     _itemsByKey(key) {
@@ -523,37 +555,52 @@ ODA({
     async _onOpenMenu(e) {
         const { item, anchor } = this._detail(e);
         if (!item?.items?.length) return;
-        const menuItems = item.items.map(child => ({
-            label: child.label,
-            hint: child.fullLabel !== child.label ? child.fullLabel : '',
-            disabled: !!child.disabled,
-            value: child.name,
-            // day-режим: дни месяца едут в меню месяцев, окно дней открывает сам oda-packets-months
-            days: child.items?.map(d => ({ label: d.label, hint: d.fullLabel, value: d.name }))
-        }));
-        const { month, day } = this._menuFocus(item);
+        // day/month: кварталы — заголовки-пункты, месяцы идут под ними; quarter/year — плоский список
+        const grouped = this.mode === 'day' || this.mode === 'month';
+        const menuItems = [];
+        for (const child of item.items) {
+            if (!grouped || child.whole) {
+                menuItems.push(this._toMenuItem(child));
+                continue;
+            }
+            menuItems.push({ label: child.label, value: child.name, header: true, disabled: !!child.disabled });
+            for (const m of child.items || []) menuItems.push(this._toMenuItem(m));
+        }
+        const { value, day } = this._menuFocus();
         // Список всегда передаём явно, через params.menu: по умолчанию showMenu берёт
         // ODA.menuTag, а приложение подменяет его на item-menu — контекстное меню WORK
         // (tools + дерево handlers), которое items не рисует и открыло бы пустое окно
-        const params = this.mode === 'day'
-            ? { menu: ODA.createComponent('oda-packets-months', { items: menuItems, value: month, day }) }
-            : { menu: ODA.createComponent('oda-menu-list', { items: menuItems, value: month }) };
+        const params = {
+            menu: ODA.createComponent(grouped ? 'oda-packets-months' : 'oda-menu-list', { items: menuItems, value, day })
+        };
         let pickedName = null;
         try {
             pickedName = await ODA.showMenu(params, anchor || this);
         } catch { return; } // отмена
-        // Значение — месяц либо день (day-режим закрывает окно месяцев именем выбранного дня)
-        const pickedValue = pickedName?.value ?? pickedName;
-        const monthItem = item.items.find(c => c.name === pickedValue);
-        const dayItem = item.items.flatMap(c => c.items).find(d => d.name === pickedValue);
-        if (dayItem && !dayItem.disabled) this._applySelection([dayItem]);
-        else if (monthItem && !monthItem.disabled) this._applySelection([monthItem]);
+        // Значение — квартал, месяц, день или год: все они индексированы по имени
+        const node = this._dateNodes?.[pickedName?.value ?? pickedName];
+        if (node && !node.disabled) this._applySelection([node]);
     },
-    // Отметка в меню: месяц и день текущего выбора (в day-режиме выбран день — месяц это его префикс)
-    _menuFocus(item) {
+    // Пункт меню для узла дерева; дни месяца — в пункте, шеврон показываем только при наличии дней (day-режим)
+    _toMenuItem(node) {
+        const days = this.mode === 'day'
+            ? (node.items || []).map(d => ({ label: d.label, hint: d.fullLabel, value: d.name }))
+            : [];
+        return {
+            label: node.label,
+            hint: node.fullLabel !== node.label ? node.fullLabel : '',
+            disabled: !!node.disabled,
+            value: node.name,
+            days,
+            submenu: days.length > 0
+        };
+    },
+    // Отметка в меню: выбранный узел (день → его месяц плюс день в окне дней; квартал/месяц/год — сам узел)
+    _menuFocus() {
         const sel = this.selected;
-        if (sel?.type === 'day') return { month: sel.name.slice(0, 7), day: sel.name };
-        return { month: item.items.find(i => i.selected)?.name ?? '', day: '' };
+        if (!sel || sel.type === 'service') return { value: '', day: '' };
+        if (sel.type === 'day') return { value: sel.name.slice(0, 7), day: sel.name };
+        return { value: sel.name, day: '' };
     },
     // --- стрелки </> : шаг по _leaves с зацикливанием ---
     _step(dir) {
@@ -562,16 +609,16 @@ ODA({
         let idx = -1;
         // _isRight — только про раскладку в полосе; шаг определяется границами выбора
         if (cur && cur.name !== '<' && cur.name !== '>' && cur.name !== '*') {
-            // period-item с кастомным диапазоном: шаг от его края
-            if (cur.name === 'period' && cur.start) {
-                const edge = dir < 0 ? cur.start : cur.end;
-                idx = this._leaves.findIndex(l => {
-                    const [s, e] = _leafSpan(l.name, l.type);
-                    return edge >= s && edge <= e;
-                });
-            } else {
-                idx = this._leaves.findIndex(l => l.name === cur.name);
-            }
+            // шаг от края выбора: period — от его границ, квартал/месяц — от краёв своего отрезка (обрезка по покрытию)
+            const span = cur.name === 'period' && cur.start
+                ? [cur.start, cur.end]
+                : _leafSpan(cur.name, cur.type);
+            let edge = dir < 0 ? span[0] : span[1];
+            edge = edge < this._lo ? this._lo : edge > this._hi ? this._hi : edge;
+            idx = this._leaves.findIndex(l => {
+                const [s, e] = _leafSpan(l.name, l.type);
+                return edge >= s && edge <= e;
+            });
         }
         let next;
         if (idx === -1) next = dir < 0 ? this._leaves[this._leaves.length - 1] : this._leaves[0];
@@ -740,24 +787,130 @@ ODA({ is: 'oda-packets-period-selector', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-left-arrow', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-right-arrow', extends: 'oda-packets-item' });
 
-// Список месяцев окна выбора дня: месяц не закрывает окно, а открывает окно дней справа.
-// Якорь окна дней — {target, x, y}: target внутри окна месяцев сохраняет верхний уровень в стеке
-// (ODA.showPopover), x/y — экранные координаты левого верхнего угла (oda-popover.layout).
+// Меню года в day/month: заголовки кварталов (кликабельны, выбирают квартал), месяцы под ними.
+// Клик по строке выбирает месяц и закрывает окно. Шеврон у месяца открывает окно дней справа от строки,
+// окно месяцев остаётся открытым.
+// Не через extends: ODA склеивает шаблоны родителя и потомка (oda/core/component.js), и список
+// oda-menu-list рисовался бы вторым разом. Поэтому контракт oda-menu-list (items, value, iconSize,
+// isSelected, pick) продублирован здесь; при правках oda-menu-list синхронизировать вручную.
 ODA({
     is: 'oda-packets-months',
-    extends: 'oda-menu-list',
-    imports: '/oda/components/menus/menu-list/menu-list.js',
+    imports: '/oda/components/icon/icon.js',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                padding: var(--space-s);
+                min-width: 12em;
+                max-width: 24em;
+                overflow: auto;
+            }
+            .item {
+                @apply --horizontal;
+                align-items: center;
+                gap: var(--space-m);
+                padding: var(--space-s) var(--space-m);
+                border-radius: var(--radius-s);
+                cursor: pointer;
+            }
+            .item:hover {
+                background: var(--accent-soft);
+            }
+            .item.current {
+                background: var(--accent-soft);
+                font-weight: 600;
+            }
+            .item.disabled {
+                opacity: .5;
+                pointer-events: none;
+            }
+            .header {
+                @apply --horizontal;
+                align-items: center;
+                gap: var(--space-m);
+                padding: var(--space-s) var(--space-m);
+                margin-top: var(--space-xs);
+                border-top: 1px solid var(--subtle-border);
+                border-radius: var(--radius-s);
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .header:hover,
+            .header.current {
+                background: var(--accent-soft);
+            }
+            .header.disabled {
+                opacity: .5;
+                pointer-events: none;
+            }
+            .submenu {
+                margin-left: auto;
+                opacity: .65;
+                flex: none;
+                cursor: pointer;
+            }
+            .submenu:hover {
+                opacity: 1;
+            }
+            .group {
+                @apply --muted;
+                font-size: var(--font-size-xs);
+                padding: var(--space-s) var(--space-m) 0;
+                border-top: 1px solid var(--subtle-border);
+                margin-top: var(--space-xs);
+            }
+            .hint {
+                @apply --muted;
+                font-size: var(--font-size-xs);
+            }
+        </style>
+        <div ~for="items" style="display: contents;">
+            <div class="group" ~if="$for.item.group && $for.item.group !== items[$for.index - 1]?.group">{{$for.item.group}}</div>
+            <div class="header" ~if="$for.item.header" role="menuitem" tabindex="0" ~class="{current: isSelected($for.item), disabled: !!$for.item.disabled}"
+                @tap="pick($for.item)" @keydown="$event.key === 'Enter' && pick($for.item)">
+                <oda-icon no-flex :icon="isSelected($for.item) ? 'icons:check' : ''" :icon-size="iconSize"></oda-icon>
+                <span>{{$for.item.label}}</span>
+            </div>
+            <div class="item" ~if="!$for.item.header" role="menuitem" tabindex="0" ~class="{current: isSelected($for.item), disabled: !!$for.item.disabled}"
+                @tap="pick($for.item)" @keydown="$event.key === 'Enter' && pick($for.item)">
+                <oda-icon no-flex :icon="$for.item.icon || (isSelected($for.item) ? 'icons:check' : '')" :icon-size="iconSize"></oda-icon>
+                <div vertical flex>
+                    <span>{{$for.item.label}}</span>
+                    <span class="hint" ~if="$for.item.hint">{{$for.item.hint}}</span>
+                </div>
+                <oda-icon class="submenu" ~if="$for.item.submenu" icon="icons:chevron-right" :icon-size="iconSize" title="Дни"
+                    role="button" tabindex="0"
+                    @tap.stop="openSubmenu($for.item, $event)" @keydown.stop="$event.key === 'Enter' && openSubmenu($for.item, $event)"></oda-icon>
+            </div>
+        </div>
+    `,
+    items: [],
+    /** значение выбранного пункта (отмечается галочкой) */
+    value: {
+        $def: undefined
+    },
+    iconSize: 20,
     /** выбранный день — отметка в окне дней */
     day: '',
-    async pick(item) {
-        // месяц без дней («весь год») выбирается сразу
-        if (!item.days?.length) return this.parentElement.close(item.value);
+    isSelected(item) {
+        // сравнение по строке: значение могло прийти атрибутом
+        return this.value !== undefined && String(item.value ?? item) === String(this.value);
+    },
+    pick(item) {
+        item.execute?.(item);
+        this.parentElement.close(item.value ?? item);
+    },
+    // Окно дней справа от строки. Якорь {target, x, y}: target внутри окна месяцев сохраняет верхний уровень в стеке
+    // (ODA.showPopover), x/y — экранные координаты (oda-popover.layout берёт их, если target не элемент).
+    async openSubmenu(item, e) {
+        if (!item?.days?.length) return;
         this.value = item.value;
-        const { right, top } = this.getBoundingClientRect();
+        const el = e?.currentTarget || this;
+        const { right, top } = el.getBoundingClientRect();
         // menu передаём явно — см. комментарий в _onOpenMenu: без него окно дней
         // создавалось бы на подменённом приложением ODA.menuTag и вышло бы пустым
         const picked = await ODA.showMenu({ menu: ODA.createComponent('oda-menu-list', { items: item.days, value: this.day }) },
-            { target: this, x: right, y: top }).catch(() => null); // отмена окна дней — выбор не меняется
+            { target: el, x: right, y: top }).catch(() => null); // отмена окна дней — выбор не меняется
         if (picked) this.parentElement.close(picked?.value ?? picked);
     }
 });

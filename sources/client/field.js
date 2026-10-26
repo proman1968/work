@@ -19,13 +19,15 @@ export class $field extends $item{
                 $def: 'String',
                 $list: [
                     {id: 'String', icon: 'iconoir:input-field'},
+                    {id: 'Text', icon: 'bootstrap:card-text'},
                     {id: 'Number', icon: 'carbon:array-numbers'},
+                    {id: 'Money', icon: 'carbon:currency-ruble'},
+                    {id: 'Date', icon: 'box:i-calendar'},
                     {id: 'DateTime', icon: 'box:i-calendar'},
                     {id: 'Boolean', icon: 'carbon:checkbox-checked'},
-                    {id: 'Table', icon: 'bootstrap:table'},
-                    {id: 'Text', icon: 'bootstrap:card-text'},
-                    {id: 'Object', icon: 'carbon:database'},
-                    {id: 'Form', icon: 'icons:view-list'}
+                    {id: 'Select', icon: 'icons:view-list'},
+                    {id: 'Link', icon: 'icons:link'},
+                    {id: 'Struct', icon: 'carbon:data-structured'},
                 ],
                 set (n){
                     this.update('type', n)
@@ -44,6 +46,49 @@ export class $field extends $item{
                 $def: false,
                 set(n){
                     this.update('required', n)
+                }
+            },
+            /** Признак табличной части (массив структур/значений в одном поле). */
+            table: {
+                $def: false,
+                get(){
+                    return !!this.DATA?.table;
+                },
+                set(n){
+                    this.update('table', !!n);
+                }
+            },
+            /** Путь целевого класса для Link ($catalog/$virtual) или Struct ($struct). */
+            target: {
+                $def: '',
+                $editor: 'tree-link-editor',
+                get(){
+                    return this.DATA?.target || this.DATA?.catalog || this.DATA?.struct || this.DATA?.link || '';
+                },
+                set(n){
+                    this.update('target', n);
+                }
+            },
+            /** Признак слота аналитики на счёте ($account). */
+            analytic: {
+                $def: false,
+                get(){
+                    return !!this.DATA?.analytic;
+                },
+                set(n){
+                    this.update('analytic', !!n);
+                }
+            },
+            /** Список вариантов для типа Select/enum (через запятую). */
+            values: {
+                $def: '',
+                get(){
+                    const v = this.DATA?.values || this.DATA?.options;
+                    return Array.isArray(v) ? v.map(x => (typeof x === 'object' ? x.id ?? x.value : x)).join(', ') : (v || '');
+                },
+                set(n){
+                    const arr = String(n || '').split(',').map(s => s.trim()).filter(Boolean);
+                    this.update('values', arr);
                 }
             },
             link:{
@@ -66,8 +111,11 @@ export class $field extends $item{
         return this.DATA?.id || 'FIELDS'
     }
     get icon(){
-        if(this.parent instanceof $field)
-            return this[R].props.type.$list.find(f=>f.id === this.type)?.icon || 'iconoir:input-field'
+        if(this.parent instanceof $field) {
+            if (this.DATA?.table)
+                return 'odant:grid';
+            return this[R].props.type.$list.find(f=>f.id === this.type)?.icon || 'iconoir:input-field';
+        }
         return 'icons:tree-structure'
     }
     get fields(){

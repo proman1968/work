@@ -52,3 +52,6 @@ torus/binnet/models/
 # ��������� ������� ������� (������ �� ������, RAG)
 /.index/
 
+# Data organization DB (source of truth, backup separately)
+/.data/
+**/#system/work.db*

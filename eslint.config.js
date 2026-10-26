@@ -24,6 +24,7 @@ export default [
             'sources/modules/rag/**/*.js',
             'sources/modules/sandbox/**/*.js',
             'sources/modules/ai-schema.js',
+            'sources/data/**/*.js',
             'sources/host/**/*.js',
             'sources/server/access/**/*.js',
             'sources/server/assert-class-id.js',

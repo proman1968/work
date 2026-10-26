@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { $server } from '../sources/server/server.js';
 import { closeIndexDb } from '../sources/host/index-db.js';
+import { closeDataDb } from '../sources/data/db.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ADMIN = 'HA000000000001', USER1 = 'HU000000000001';
@@ -75,6 +76,7 @@ before(async () => {
 
 after(async () => {
     await new Promise(r => setTimeout(r, 300));
+    await closeDataDb();
     closeIndexDb();
     process.chdir(prev);
     try { await fsp.rm(tmp, { recursive: true, force: true }); } catch { /* windows */ }
@@ -89,17 +91,16 @@ describe('дерево операций', () => {
 
     it('проводка листа пользуется унаследованными полями', async () => {
         const tax = await WORK.get_item('/DATA/OPERATIONS/PAY/CASH/TAX');
-        const o = await tax.create_object({ filename: 't.data', post: { name: 'Налог', sum: 200, kassa: '1' }, ...as(USER1) });
-        await tax.post({ id: o.id, ...as(USER1) });
-        const d = await (await WORK.get_item('/DATA/REGISTER/68')).query({ ...as(USER1) });
-        assert.equal(d.length, 1);
-        assert.equal(d[0].body.debit, 200);
-        assert.equal(d[0].body.source, '/DATA/OPERATIONS/PAY/CASH/TAX/' + o.id);
+        const o = await tax.db_create({ post: { name: 'Налог', sum: 200, kassa: '1' }, ...as(USER1) });
+        await tax.db_register({ id: o.id, ...as(USER1) });
+        const j = await (await WORK.get_item('/DATA/REGISTER/68')).db_journal(as(USER1));
+        assert.deepEqual(j.items.map(e => [e.op_id, e.debit, e.credit, e.amount]),
+            [[o.id, '/DATA/REGISTER/68', '/DATA/REGISTER/51', 200]]);
     });
 
     it('без обязательного поля предков объект не создаётся', async () => {
         const tax = await WORK.get_item('/DATA/OPERATIONS/PAY/CASH/TAX');
-        await assert.rejects(tax.create_object({ filename: 'bad.data', post: { name: 'Без суммы', kassa: '1' }, ...as(USER1) }), /sum/);
+        await assert.rejects(tax.db_create({ post: { name: 'Без суммы', kassa: '1' }, ...as(USER1) }), /sum/);
     });
 
     it('save публикует схему уровня в его distributive', async () => {

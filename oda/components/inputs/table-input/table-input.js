@@ -72,12 +72,17 @@ ODA({
         // children — после нормализации (structure/fields.js); columns — как в readme и демо
         return this.field?.children ?? this.field?.columns ?? [];
     },
-    /** метаданные колонок oda-table: ключ колонки — `id` (бывший `:columns` с `name` писал в чужое свойство хоста) */
+    /** метаданные колонок oda-table: ключ колонки — `id` (бывший `:columns` с `name` писал в чужое свойство хоста);
+        `catalog` — справочник ссылки, его читает `oda-link-input` ячейки; путь в `type` (structure/fields.js) — тоже ссылка */
     get tableColumns() {
-        return this.columns.map(c => ({
-            id: c.id, label: c.label || c.id, type: c.type && String(c.type).toLowerCase(),
-            options: c.options ?? c.items, readonly: !!c.calc, width: c.width
-        }));
+        return this.columns.map(c => {
+            const path = typeof c.type === 'string' && c.type.startsWith('/') ? c.type : '';
+            return {
+                id: c.id, label: c.label || c.id, type: path ? 'link' : c.type && String(c.type).toLowerCase(),
+                options: c.options ?? c.items, readonly: !!c.calc || !!c.readonly, width: c.width,
+                catalog: c.catalog || path || undefined, placeholder: c.placeholder
+            };
+        });
     },
     /** строки для таблицы со значениями вычисляемых колонок; value при этом не меняется */
     get rows() {

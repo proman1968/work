@@ -1,1 +1,0 @@
-export default { label: 'Продажи', icon: 'carbon:wallet' }

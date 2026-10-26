@@ -61,19 +61,36 @@ export default {
                 white-space: nowrap;
                 align-self: center;
             }
+            .obj-count{
+                @apply --no-flex;
+                font-size: 12px;
+                font-weight: 700;
+                padding: 0 6px;
+                white-space: nowrap;
+                align-self: center;
+                opacity: .85;
+            }
         </style>
-        <div horizontal flex style="align-items: center;">
-            <div vertical flex>
-                <div horizontal flex>
-                    <label flex :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : ''" ~show="!hideLabel">{{label}}</label>
+        <div horizontal flex style="align-items: center; min-width: 0; width: 100%;">
+            <div vertical flex style="min-width: 0;">
+                <div horizontal flex style="min-width: 0;">
+                    <label flex style="min-width: 0;" :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : label" ~show="!hideLabel">{{label}}</label>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                 </div>
             </div>
+            <span class="obj-count" ~if="objectCount">{{objectCount}}</span>
             <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
         </div>
     `,
     showSize: false,
+    get objectCount() {
+        const it = this.$item;
+        if (!it || ('isPlace' in Object(it) && it.isPlace))
+            return '';
+        const c = isLinkNode(it) ? it.objectCount : it.DATA?.objectCount;
+        return (typeof c === 'number' && c > 0) ? String(c) : '';
+    },
     // пользователи в строке дерева не показываются (шум и запросы на каждую строку); свойство оставлено для совместимости биндов
     showUsers: false,
     hideLabel: false,
@@ -146,9 +163,9 @@ export default {
             return 24;
         if(this.$item){
             if(this.$item instanceof CORE.$handler)
-                return 32;
+                return 28;
             if(this.$item instanceof CORE.$class)
-                return 48;
+                return 28;
             return 24;
         }
     },

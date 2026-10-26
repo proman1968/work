@@ -30,11 +30,12 @@ function linkData(real) {
     return data;
 }
 
-function makeLinkNode(real, kids, access) {
+function makeLinkNode(real, kids, access, objectCount = 0) {
     const link = new real.constructor(linkData(real));
     Object.defineProperty(link, 'isLink', { value: true, enumerable: true });
     Object.defineProperty(link, 'isLinkLeaf', { value: !kids.length, enumerable: true });
     Object.defineProperty(link, 'linkAccess', { value: access || 'read', enumerable: true });
+    Object.defineProperty(link, 'objectCount', { value: objectCount || real?.DATA?.objectCount || 0, enumerable: true });
     Object.defineProperty(link, 'items', { value: kids, writable: true, configurable: true, enumerable: true });
     return Reactor.activate(link);
 }
@@ -51,7 +52,7 @@ async function bindLinkNode(n, getItem) {
     if (Array.isArray(real))
         real = real.at(-1);
     if (real)
-        return makeLinkNode(real, kids, n.access);
+        return makeLinkNode(real, kids, n.access, n.objectCount);
     return {
         id: String(n.path || '').split('/').pop() || n.path,
         path: n.path,
@@ -61,6 +62,7 @@ async function bindLinkNode(n, getItem) {
         isLink: true,
         isLinkLeaf: !kids.length,
         linkAccess: n.access || 'read',
+        objectCount: n.objectCount || 0,
         noLinkTarget: true,
         items: kids,
         expanded: false,

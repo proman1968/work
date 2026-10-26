@@ -276,3 +276,213 @@ export const query = {
                 + (rows.length >= limit ? '\n(получено ' + rows.length + ' — возможно, есть ещё: повтори с offset ' + (offset + rows.length) + ')' : '');
         },
     };
+
+export const describeClass = {
+    name: 'describe_class',
+    readonly: true,
+    description: 'Схема учётного класса WORK ($catalog, $virtual, $struct, $operation, $account, $register) с учётом 3-осевого наследования (Types → Ancestor → Parent): поля (включая вложенные структуры $struct и табличные поля table:true), слоты аналитик счёта, правила проводок (POSTINGS), источник виртуального справочника и листья поддерева.',
+    parameters: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'WORK-путь учётного класса (например /DATA/OPERATIONS/Реализация/Покупателю или /DATA/REGISTER/62)' },
+        },
+        required: ['path'],
+    },
+    async run(args, ctx) {
+        const item = await mustItem(args.path, ctx);
+        if (Array.isArray(item))
+            throw new Error('describe_class: укажи один класс без ~');
+        await item.init;
+        return callAs(item, 'db_schema', {}, ctx, undefined, { gateway: true });
+    },
+};
+
+export const findObjects = {
+    name: 'find_objects',
+    readonly: true,
+    description: 'Поиск и выборка объектов справочника ($catalog), виртуального справочника ($virtual) или операций ($operation) по классу (включая потомков), тексту search, условиям where (поддерживаются вложенные поля структур, например passport.address.city), периоду [from, to] и статусу.',
+    parameters: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'WORK-путь класса справочника или операции' },
+            search: { type: 'string', description: 'Поисковая строка по названию и текстовым полям' },
+            where: { type: 'object', description: 'Фильтр по полям объекта (включая вложенные поля структур)' },
+            from: { type: 'string', description: 'Начало периода YYYY-MM-DD (для операций)' },
+            to: { type: 'string', description: 'Конец периода YYYY-MM-DD включительно (для операций)' },
+            status: { type: 'string', description: 'Статус: active | draft | registered | cancelled | deleted' },
+            at: { type: 'string', description: 'Дата состояния YYYY-MM-DD (для виртуального справочника)' },
+            mode: { type: 'string', description: 'Режим виртуального справочника: balance | turnover' },
+            limit: { type: 'integer', description: 'Максимум записей (по умолчанию 50)' },
+        },
+        required: ['path'],
+    },
+    async run(args, ctx) {
+        const item = await mustItem(args.path, ctx);
+        if (Array.isArray(item))
+            throw new Error('find_objects: укажи один класс без ~');
+        await item.init;
+        if (item.type === '$virtual') {
+            return callAs(item, 'db_members', {
+                at: args.at,
+                mode: args.mode,
+            }, ctx, undefined, { gateway: true });
+        }
+        const p = { limit: Math.min(500, Number(args.limit) || 50), order: '-time' };
+        if (args.search)
+            p.search = args.search;
+        if (args.where && typeof args.where === 'object')
+            p.where = JSON.stringify(args.where);
+        if (args.from)
+            p.from = args.from;
+        if (args.to)
+            p.to = args.to;
+        if (args.status)
+            p.status = args.status;
+        return callAs(item, 'db_query', p, ctx, undefined, { gateway: true });
+    },
+};
+
+export const registerOperation = {
+    name: 'register_operation',
+    risk: 'write',
+    target: target('path'),
+    description: 'Создать, предпросмотреть (preview:true), провести, исправить (через сторно) или отменить учётную операцию ($operation). Проведение создаёт явную двойную запись в классах счетов Дебета и Кредита и пишет факт в ленту событий (data.logs).',
+    parameters: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'WORK-путь класса операции (лист $operation)' },
+            action: { type: 'string', description: 'Действие: preview | register | draft | correct | cancel (по умолчанию register)' },
+            id: { type: 'string', description: 'ID существующей операции (для register черновика, correct или cancel)' },
+            time: { type: 'string', description: 'Дата операции YYYY-MM-DD' },
+            body: { type: 'object', description: 'Поля шапки и табличных частей операции' },
+            unit: { type: 'string', description: 'Подразделение (если доступно несколько)' },
+            place: { type: 'string', description: 'Рабочее место (если доступно несколько)' },
+        },
+        required: ['path'],
+    },
+    async permission(args) {
+        const act = String(args?.action || 'register');
+        if (act === 'preview')
+            return { verdict: 'allow' };
+        return {
+            verdict: 'ask',
+            reason: `выполнить учётную операцию (${act}) в ${args?.path || ''}${args?.id ? ' #' + args.id : ''}`,
+        };
+    },
+    async run(args, ctx) {
+        const item = await mustItem(args.path, ctx);
+        if (Array.isArray(item))
+            throw new Error('register_operation: укажи один класс операции без ~');
+        await item.init;
+        const action = String(args.action || 'register').toLowerCase();
+        const body = args.body && typeof args.body === 'object' ? args.body : {};
+        if (action === 'preview') {
+            return callAs(item, 'db_preview', {
+                id: args.id,
+                time: args.time,
+                unit: args.unit,
+                place: args.place,
+                post: body,
+            }, ctx, undefined, { gateway: true });
+        }
+        if (action === 'cancel') {
+            if (!args.id)
+                throw new Error('register_operation cancel: укажи id операции');
+            return callAs(item, 'db_cancel', { id: args.id }, ctx, undefined, { gateway: true });
+        }
+        if (action === 'correct') {
+            if (!args.id)
+                throw new Error('register_operation correct: укажи id операции');
+            return callAs(item, 'db_correct', {
+                id: args.id,
+                time: args.time,
+                replace: true,
+                post: body,
+            }, ctx, undefined, { gateway: true });
+        }
+        if (action === 'draft') {
+            return callAs(item, 'db_create', {
+                time: args.time,
+                unit: args.unit,
+                place: args.place,
+                post: body,
+            }, ctx, undefined, { gateway: true });
+        }
+        // action === 'register': если передан id — проводим черновик, иначе создаём и проводим
+        let op;
+        if (args.id) {
+            op = await callAs(item, 'db_register', { id: args.id, time: args.time }, ctx, undefined, { gateway: true });
+        }
+        else {
+            op = await callAs(item, 'db_create', {
+                time: args.time,
+                unit: args.unit,
+                place: args.place,
+                post: body,
+            }, ctx, undefined, { gateway: true });
+            if (op?.status === 'draft')
+                op = await callAs(item, 'db_register', { id: op.id, version: op.version, time: args.time }, ctx, undefined, { gateway: true });
+        }
+        return op;
+    },
+};
+
+export const report = {
+    name: 'report',
+    readonly: true,
+    description: 'Построить учётный отчёт по классу журнала ($register) или счёта ($account): sheet (Экран 1/2: ОСВ и Анализ счёта с разворотом by по аналитикам и субаналитикам), turnovers (Экран 3: двухпанельные Обороты счёта с группировкой groupBy), card (карточка проводок счёта), journal (журнал проводок), entry (Экран 4: сборная карточка проводки по номеру entry).',
+    parameters: {
+        type: 'object',
+        properties: {
+            path: { type: 'string', description: 'WORK-путь журнала ($register) или счёта ($account)' },
+            kind: { type: 'string', description: 'Вид отчёта: sheet | turnovers | card | journal | entry (по умолчанию sheet)' },
+            from: { type: 'string', description: 'Начало периода YYYY-MM-DD' },
+            to: { type: 'string', description: 'Конец периода YYYY-MM-DD включительно' },
+            account: { type: 'string', description: 'Уточнение счёта (при вызове на журнале)' },
+            by: { type: 'array', items: { type: 'string' }, description: 'Слоты аналитик или поля субаналитик (например ["item", "item.base_unit"]) для разворота ОСВ' },
+            groupBy: { type: 'string', description: 'Группировка оборотов: none | day | week | month | quarter | year | operation | account | all' },
+            analytics: { type: 'object', description: 'Фильтр по аналитикам или субаналитикам ({ counterparty: id } или { "counterparty.name": { contains: "Альфа" } })' },
+            subanalytics: { type: 'object', description: 'Двухэтапный фильтр по полям справочника-аналитики и его OVERLAY' },
+            entry: { type: 'integer', description: 'Номер проводки (для kind: "entry")' },
+            effective: { type: 'boolean', description: 'Только действующие проводки без сторно (для kind: "journal")' },
+        },
+        required: ['path'],
+    },
+    async run(args, ctx) {
+        const item = await mustItem(args.path, ctx);
+        if (Array.isArray(item))
+            throw new Error('report: укажи один класс журнала или счёта без ~');
+        await item.init;
+        const kind = String(args.kind || 'sheet').toLowerCase();
+        if (kind === 'entry')
+            return callAs(item, 'db_entry', { entry: args.entry }, ctx, undefined, { gateway: true });
+        const p = {};
+        if (args.from)
+            p.from = args.from;
+        if (args.to)
+            p.to = args.to;
+        if (args.account)
+            p.account = args.account;
+        if (args.analytics)
+            p.analytics = JSON.stringify(args.analytics);
+        if (args.subanalytics)
+            p.subanalytics = JSON.stringify(args.subanalytics);
+        if (kind === 'turnovers') {
+            if (args.groupBy)
+                p.groupBy = args.groupBy;
+            return callAs(item, 'db_turnovers', p, ctx, undefined, { gateway: true });
+        }
+        if (kind === 'card')
+            return callAs(item, 'db_card', p, ctx, undefined, { gateway: true });
+        if (kind === 'journal') {
+            if (args.effective)
+                p.effective = true;
+            return callAs(item, 'db_journal', p, ctx, undefined, { gateway: true });
+        }
+        if (Array.isArray(args.by) && args.by.length)
+            p.by = JSON.stringify(args.by);
+        return callAs(item, 'db_sheet', p, ctx, undefined, { gateway: true });
+    },
+};
+
+export const accountingTools = [describeClass, findObjects, registerOperation, report];
