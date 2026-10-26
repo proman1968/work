@@ -1891,6 +1891,12 @@ export class $folder extends $item{
             const bCls = b instanceof FS.$class;
             if (aCls !== bCls)
                 return aCls ? -1 : 1;
+            if (!aCls && !bCls) {
+                const aDir = !(a instanceof FS.$file);
+                const bDir = !(b instanceof FS.$file);
+                if (aDir !== bDir)
+                    return aDir ? -1 : 1;
+            }
             if (aCls && bCls && this.type === '$server') {
                 const ra = rootOrder[a.id] ?? 10;
                 const rb = rootOrder[b.id] ?? 10;

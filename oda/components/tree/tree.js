@@ -18,7 +18,7 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
             <input flex type="search" placeholder="Поиск" ::value="filter" style="border: none; outline: none; background: transparent; color: inherit; font: inherit; min-width: 0;">
             <oda-icon no-flex icon="icons:search" :icon-size="18"></oda-icon>
         </div>
-        <div vertical flex style="overflow: auto;">
+        <div vertical flex style="overflow: auto;" @scroll="_onScroll">
             <oda-tree-header dark :columns ~if=showHeader></oda-tree-header>
             <div vertical style="overflow: visible;">
                 <oda-tree-item :filter ~is="itemTemplate" flex :node-template :hide-tops :hide-roots :show-tools :menu-mode :show-users :show-size :show-status ~for='items' :row="$for?.item"></oda-tree-item>
@@ -71,6 +71,9 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
             this._cellsWidths = undefined;
             this.invalidate('cells_style');
         }
+    },
+    _onScroll() {
+        this._onTreeScroll?.();
     },
     $public: {
         allowCategories: false,

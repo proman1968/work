@@ -125,6 +125,15 @@ export default {
     async nodeChildren(node) {
         return applyTreeFilters(Array.isArray(node?.[this.itemsSelector]) ? node[this.itemsSelector] : [], this);
     },
+    _onTreeScroll() {
+        if (this._scrollRaf)
+            return;
+        this._scrollRaf = requestAnimationFrame(() => {
+            this._scrollRaf = 0;
+            for (const n of this._mountedNodes || [])
+                n._syncStuck?.();
+        });
+    },
 }
 ODA({is: 'oda-tree-node',
     imports: 'oda//icon, ~/lib//node, ~/lib//users',
@@ -146,6 +155,8 @@ ODA({is: 'oda-tree-node',
             }
             .node.sticky-parent {
                 position: sticky;
+            }
+            .node.is-stuck {
                 background: #d8c6ec;
                 border-bottom: 1px solid #6a1b9a;
                 box-shadow: 0 1px 2px rgba(74, 20, 140, 0.12);
@@ -207,7 +218,7 @@ ODA({is: 'oda-tree-node',
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused, 'sticky-parent': expanded && hideRoots < 1}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused, 'sticky-parent': expanded && hideRoots < 1 && !!expanderIcon, 'is-stuck': isStuck}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <div vertical flex style="min-width: 0; overflow: hidden;">
                 <div horizontal flex style="min-width: 0; overflow: hidden;">
@@ -228,8 +239,38 @@ ODA({is: 'oda-tree-node',
         </div>
     `,
     stickyLevel: 0,
+    isStuck: false,
+    attached() {
+        const tree = this.$pdp?.tree;
+        if (tree) {
+            tree._mountedNodes ??= new Set();
+            tree._mountedNodes.add(this);
+        }
+    },
+    detached() {
+        this.$pdp?.tree?._mountedNodes?.delete(this);
+    },
+    _syncStuck() {
+        if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon) {
+            if (this.isStuck)
+                this.isStuck = false;
+            return;
+        }
+        const nodeEl = this.$('.node');
+        const subEl = this.$('.sub-nodes');
+        if (!nodeEl || !subEl) {
+            if (this.isStuck)
+                this.isStuck = false;
+            return;
+        }
+        const nRect = nodeEl.getBoundingClientRect();
+        const sRect = subEl.getBoundingClientRect();
+        const stuck = sRect.height > 2 && sRect.top < nRect.bottom - 1 && sRect.bottom > nRect.top + 4;
+        if (this.isStuck !== stuck)
+            this.isStuck = stuck;
+    },
     get nodeStickyStyle() {
-        if (!this.expanded || this.hideRoots > 0)
+        if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon)
             return '';
         const lvl = Number(this.stickyLevel) || 0;
         return `position: sticky; top: ${lvl * 32}px; z-index: ${30 - lvl};`;
@@ -362,6 +403,9 @@ ODA({is: 'oda-tree-node',
                     this.$item.expanded = true;
                 }
                 this.$item.expanded = n;
+                if (!n)
+                    this.isStuck = false;
+                this.$pdp?.tree?._onTreeScroll?.();
             }
         }
     },
@@ -388,8 +432,11 @@ ODA({is: 'oda-tree-node',
     get items() {
         return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
             let items = applyTreeFilters(raw, this.$pdp);
-            if (this.$item?.type === '$server' && this.$pdp?.itemsSelector === 'items') {
-                items = items.filter(f => f instanceof CORE.$class);
+            if (this.$item?.type === '$server') {
+                //const allAdmins = await this.$item?.allAdmins;
+                if (!WORK?.DEV_MODE && !(await this.$item.isAdmin)) {
+                    items = items.filter(f => f instanceof CORE.$class);
+                }
             }
             // Места и ссылки подразделения — обычные дочерние узлы дерева
             // (ветка настройки): места с пользователями, ссылки — цепочкой
