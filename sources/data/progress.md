@@ -1,6 +1,14 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [00:45, 27.10] Чистка дерева проводника, счётчики объектов, прилипание слоёв и слияние в `main` (Git + SVN):
+  - Удалены старые корневые `/BASE`, `/DATA` и дублирующее представление `$server/$folder/$class/handlers/pages/form/table/`.
+  - В `sources/server/folder.js` (`inherit_ancestor`, `_tilde_layers`), `sources/data/print.js`, `sources/data/schema.js` (`norms`) и `sources/data/posting.js` (`unit_cost` с `resolveInBase`) обеспечено полное наследование форм (`sheet`, `journal`, `postings`, `virtual`, `objects`), печатных шаблонов и правил проводок для модулей внутри организаций (`/ORGANIZATIONS/Маслоторг/MODULES/Register`).
+  - В `scripts/demo-seed.mjs` добавлена `seedDemoOperations` — заполняет `ORGANIZATIONS/Маслоторг/$base/#system/work.db` справочниками (20), нормативами (8) и проведёнными операциями (12 документов, 68 записей счетов).
+  - В `sources/data/api.js` добавлена `classObjectCount()`, подключённая в `sources/server/class.js` (`init`, `info`, `_linkTrie`), `link-nodes.js` и `node.js`: у всех классов и ссылок справа отображается количество объектов/записей, а у рабочих мест — значок сотрудников `👥` (`users.js`).
+  - В `sources/server/class.js` (`_linkTrie`) срезан избыточный префикс `/ORGANIZATIONS/<Орг>/MODULES/<Модуль>` у ссылок рабочих мест (ссылки начинаются сразу со `Справочники`, `Операции`, `Журнал проводок`).
+  - В `$server/$folder/lib/tree/tree.js` исправлено многоуровневое прилипание (`position: sticky !important`), плашка `.is-stuck` включается только у реально прилипших к верху узлов, а класс фокуса переименован в `.node-focused` (чтобы глобальный `.focused { position: relative !important }` из `oda/tools/styles/styles.js` не сдвигал выбранный узел вниз).
+  - Изменения влиты в `main` (`origin/main` и `origin/work-v2`) и закоммичены в SVN; выровнен регистр `NODES` и `readme.md`, дополнен `svn:global-ignores`.
 - [14:55] Развёртывание `/MODULES/Register`, `/ORGANIZATIONS/Маслоторг` и обновление конструктора классов `form/builder`:
   - В `/MODULES/Register` развёрнута полная типовая учётная конфигурация (`CATALOGS`, `STRUCTS`, `OPERATIONS`, `REGISTER`).
   - В `/ORGANIZATIONS/Маслоторг` (`$base`) развёрнута полноценная организация со своими подразделениями (`sales`, `purchasing`, `warehouse`, `finances`, `personal`, `logistics`), рабочими местами и подключённым модулем `MODULES/Register`, наследующим метаданные от `/MODULES/Register` по оси `Ancestor`.
