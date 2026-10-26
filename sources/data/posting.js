@@ -104,7 +104,8 @@ function normsAccount(db) {
     let acc = null;
     if (list.length) {
         const c = list[0];
-        const spec = typeof c.own?.NORMS === 'object' ? c.own.NORMS : {};
+        const rawNorms = c.own?.NORMS ?? classSchema(db, c.cid)?.norms;
+        const spec = (rawNorms && typeof rawNorms === 'object') ? rawNorms : {};
         const kind = String(spec.kind || 'kind');
         const allCids = new Set();
         const allKindCids = new Set();

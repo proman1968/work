@@ -338,7 +338,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
     sequence.push({ layer: cls, inherited: false });
 
     let fields = [], postings = [], overlay = [], staticFields = [];
-    let autoRegister = false, source = null;
+    let autoRegister = false, source = null, norms = null;
     for (const { layer, inherited } of sequence) {
         const own = layer.own || {};
         const meta = own.METADATA || {};
@@ -351,6 +351,8 @@ export function classSchema(db, ref, seenStructs = new Set()) {
             autoRegister = own.AUTO_REGISTER;
         if (own.SOURCE && typeof own.SOURCE === 'object')
             source = { ...(source || {}), ...clone(own.SOURCE) };
+        if (own.NORMS !== undefined)
+            norms = clone(own.NORMS);
     }
 
     // Привязываем ссылки на счета и источники виртуального справочника к контексту $base
@@ -386,6 +388,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
         overlay: overlay.map(f => normalizeField(db, f, basePath, seenStructs)),
         autoRegister,
         source,
+        norms,
         static: staticFields,
     };
     byDb.map.set(cls.cid, schema);

@@ -80,6 +80,9 @@ describe('классы демо-конфигурации', () => {
         const pay = classSchema(db, '/DATA/OPERATIONS/Платежи с расчётного счёта/Поставщику');
         const main = pay.postings.find(r => r.id === 'main');
         assert.deepEqual([main.debit.account, main.credit.account, main.amount], ['/DATA/REGISTER/60', '/DATA/REGISTER/51', 'sum']);
+
+        const orgNorms = classSchema(db, '/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/Нормативы');
+        assert.equal(orgNorms.norms, true);
     });
 
     it('места: ссылки указывают на существующие классы, места уникальны в подразделении', () => {
