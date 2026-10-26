@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.hr',
-    label: 'Кадры',
+export default {    label: 'Кадры',
     icon: 'carbon:user-role',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'person',
                 label: 'Сотрудник',
                 type: 'Link',
-                target: 'cat.person',
+                target: '/DATA/CATALOGS/Субъекты/Физ. лица',
                 analytic: true,
                 required: true,
             },

@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.70',
-    label: '70.00 Расчёты с персоналом',
+export default {    label: '70.00 Расчёты с персоналом',
     icon: 'carbon:wallet',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'employee',
                 label: 'Сотрудник',
                 type: 'Link',
-                target: 'cat.employees',
+                target: '/DATA/CATALOGS/Сотрудники',
                 analytic: true,
                 required: true,
             },

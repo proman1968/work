@@ -1,1 +1,1 @@
-export default { CID: 'acc.hr.work', label: 'Работают', icon: 'carbon:user' }
+export default { label: 'Работают', icon: 'carbon:user' }

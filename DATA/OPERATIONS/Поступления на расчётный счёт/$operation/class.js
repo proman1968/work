@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.receipts',
-    label: 'Поступления на расчётный счёт',
+export default {    label: 'Поступления на расчётный счёт',
     icon: 'carbon:money',
     METADATA: {
         FIELDS: [
@@ -8,6 +6,6 @@ export default {
             { id: 'purpose', label: 'Назначение' },
             { id: 'doc_number', label: 'Номер документа' },
         ],
-        POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: 'acc.51' } }],
+        POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '/DATA/REGISTER/51' } }],
     },
 }

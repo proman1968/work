@@ -31,6 +31,47 @@ export function looksLikeFileId(id) {
     return /\.[A-Za-z][A-Za-z0-9]{0,15}$/.test(s);
 }
 
+/**
+ * Матрица допустимых дочерних типов внутри контейнера (кроме $file и $folder, которые разрешены везде).
+ * Абстрактный $class нигде не создаётся; в корне $server допустимы только домены ($domain).
+ */
+export const ALLOWED_CHILD_TYPES = Object.freeze({
+    $server:    Object.freeze(['$domain']),
+    $domain:    Object.freeze(['$domain']),
+    $base:      Object.freeze(['$structure', '$base', '$domain', '$module']),
+    $structure: Object.freeze(['$structure']),
+    $module:    Object.freeze(['$domain', '$module', '$catalog', '$struct', '$operation', '$register']),
+    $catalog:   Object.freeze(['$catalog', '$virtual']),
+    $virtual:   Object.freeze([]),
+    $struct:    Object.freeze(['$struct']),
+    $operation: Object.freeze(['$operation']),
+    $register:  Object.freeze(['$register', '$account']),
+    $account:   Object.freeze(['$account']),
+    $users:     Object.freeze(['$user']),
+    $user:      Object.freeze([]),
+    $provider:  Object.freeze(['$ai']),
+    $ai:        Object.freeze(['$provider', '$ai']),
+    $service:   Object.freeze(['$service']),
+    $node:      Object.freeze(['$node']),
+});
+
+/** Прочитать собственные объявления дочерних $-типов из папки <dir>/<type>/$folder/$class. */
+function readDeclaredChildTypesSync(realDir, type) {
+    if (!realDir || !type)
+        return [];
+    const declDir = path.join(realDir, type, '$folder', '$class');
+    if (!fs.existsSync(declDir))
+        return [];
+    try {
+        return fs.readdirSync(declDir, { withFileTypes: true })
+            .filter(d => d.isDirectory() && d.name[0] === '$' && d.name !== '$class' && d.name !== '$file' && d.name !== '$folder')
+            .map(d => d.name);
+    }
+    catch {
+        return [];
+    }
+}
+
 export class $class extends $folder{
     static sourceUrl = import.meta.url;
     static safeNodeName = safeNodeName;
@@ -1304,6 +1345,9 @@ export class $class extends $folder{
         // Ссылки рабочих мест — доступ к прикладным классам (до pass-through и ленты)
         if (await LINKS.grants(this, item, params))
             return true;
+        // Модули ($module) в дереве напрямую видны только администраторам (остальным — через ссылки рабочих мест)
+        if (this.type === '$module' && !roles.includes($class.ROLES.ADMIN) && !(await this.allAdmins).some(u => u?.id === uid))
+            return false;
         // Класс без назначений — pass-through к родителю
         if (!this.hasAssignments() && !roles.length) {
             const parent = this.$parent;
@@ -1560,10 +1604,50 @@ export class $class extends $folder{
         })
     }
     /**
-     * Создать дочерний класс (только класс). Файлы — save_file; папки появляются при save_file.
+     * Допустимые типы дочерних классов внутри этого узла (кроме $file и $folder).
+     * Собираются из физических объявлений `<meta>/$folder/$class/*` и матрицы `ALLOWED_CHILD_TYPES`.
+     * Абстрактный `$class` не входит в допустимые типы реальных узлов.
+     */
+    get allowed_child_types() {
+        return Promise.resolve().then(() => {
+            if (this === globalThis.WORK || this.constructor?.name === '$server' || this.type === '$server')
+                return [...ALLOWED_CHILD_TYPES.$server];
+            const myType = this.type;
+            const declared = [];
+            const add = list => {
+                for (const t of list) {
+                    if (t && !declared.includes(t))
+                        declared.push(t);
+                }
+            };
+            for (let p = this; p && p instanceof $class; p = p.$parent) {
+                if (p !== this && p.type !== myType)
+                    break;
+                add(readDeclaredChildTypesSync(p.real_dir, p.type));
+            }
+            if (myType === '$domain' && !declared.length && this.id) {
+                add(readDeclaredChildTypesSync('./' + this.id, '$domain'));
+            }
+            if (myType === '$domain') {
+                return declared.length
+                    ? [...new Set([...declared, '$domain'])]
+                    : ['$domain', '$base', '$module', '$catalog', '$struct', '$operation', '$register'];
+            }
+            if (myType in ALLOWED_CHILD_TYPES) {
+                return [...new Set([...declared, ...ALLOWED_CHILD_TYPES[myType]])];
+            }
+            // Временные тестовые песочницы с прямым типом $class на диске
+            if (myType === '$class')
+                return declared.length ? declared : ['$class'];
+            return declared.length ? declared : [myType];
+        });
+    }
+
+    /**
+     * Создать дочерний класс (только допустимого внутри родителя типа). Файлы — save_file; папки — ensure_folder / save_file.
      * @param {object} [p]
-     * @param {string} [p.type] $class или другой типизатор ($paas, …); по умолчанию $class
-     * @param {string} p.id Имя класса (для $class — целиком ЗАГЛАВНЫМИ)
+     * @param {string} [p.type] Типизатор дочернего узла ($domain, $base, $structure, $module, $catalog, …)
+     * @param {string} p.id Имя класса
      * @param {string} [p.post] Содержимое class.js
      * @returns {Promise<object>} Снимок class.js (history path)
      */
@@ -1575,13 +1659,30 @@ export class $class extends $folder{
             throw new Error('create: пустое имя узла после нормализации');
         if (looksLikeFileId(id))
             throw new Error('create создаёт только класс. Файл — save_file({ filename, post })');
-        let type = p.type || '$class';
+        const allowed = await this.allowed_child_types;
+        const parentType = (this === globalThis.WORK || this.constructor?.name === '$server') ? '$server' : this.type;
+        let type = p.type;
+        if (!type) {
+            if (parentType === '$class')
+                type = '$class';
+            else if (allowed.length === 1)
+                type = allowed[0];
+            else {
+                const primary = allowed.filter(t => t !== '$domain');
+                if (primary.length === 1)
+                    type = primary[0];
+            }
+        }
+        if (!type)
+            throw new Error(`create: укажите type для создания внутри ${this.path || '/'} (${parentType}); допустимы: ${allowed.join(', ') || 'нет'}`);
         if (type === '$file' || type === '$folder')
             throw new Error('create создаёт только класс. Файл — save_file; папки появляются при save_file');
-        if (typeof type !== 'string' || type[0] !== '$')
-            throw new Error('create: type должен быть $class или типизатором ($…)');
-        if (type.length < 2)
-            throw new Error('create: type должен быть $class или типизатором с именем ($…), не «$»');
+        if (typeof type !== 'string' || type[0] !== '$' || type.length < 2)
+            throw new Error('create: type должен быть типизатором с именем ($…)');
+        if (type === '$class' && parentType !== '$class')
+            throw new Error('create: $class — абстрактный базовый тип и не может находиться в дереве');
+        if (!allowed.includes(type))
+            throw new Error(`create: внутри ${this.path || '/'} (${parentType}) нельзя создать тип ${type}; допустимы: ${allowed.join(', ') || 'нет'}`);
         if (type === '$class')
             assertClassId(id);
 

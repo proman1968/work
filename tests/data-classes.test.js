@@ -22,34 +22,32 @@ function write(rel, content) {
 
 before(async () => {
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-data-classes-'));
-    write('DATA/$class/class.js', `export default { label: 'Данные' }`);
+    write('DATA/$domain/class.js', `export default { label: 'Данные' }`);
     // журнал и счета
-    write('DATA/REGISTER/$register/class.js', `export default { label: 'Журнал', CID: 'register' }`);
+    write('DATA/REGISTER/$register/class.js', `export default { label: 'Журнал' }`);
     write('DATA/REGISTER/$register/$folder/$class/$account/class.js', `export default { label: 'Счёт (тип)' }`);
-    write('DATA/REGISTER/62/$account/class.js', `export default { CID: '62', label: 'Расчёты с покупателями',
-        METADATA: { FIELDS: [{ id: 'counterparty', type: 'Link', catalog: 'subjects', analytic: true }] } }`);
-    write('DATA/REGISTER/62/62.01/$account/class.js', `export default { CID: '62.01', label: 'Расчёты в рублях' }`);
-    write('DATA/REGISTER/62/62.02/$account/class.js', `export default { CID: '62.02', label: 'Авансы' }`);
-    write('DATA/REGISTER/62/62.02/history/x/$account/class.js', `export default { CID: 'мусор' }`);
+    write('DATA/REGISTER/62/$account/class.js', `export default { label: 'Расчёты с покупателями',
+        METADATA: { FIELDS: [{ id: 'counterparty', type: 'Link', catalog: '/DATA/CATALOGS/SUBJECTS', analytic: true }] } }`);
+    write('DATA/REGISTER/62/62.01/$account/class.js', `export default { label: 'Расчёты в рублях' }`);
+    write('DATA/REGISTER/62/62.02/$account/class.js', `export default { label: 'Авансы' }`);
+    write('DATA/REGISTER/62/62.02/history/x/$account/class.js', `export default { label: 'мусор' }`);
     // операции: функции и геттеры не попадают в данные
-    write('DATA/OPERATIONS/$operation/class.js', `export default { label: 'Операции', CID: 'ops',
+    write('DATA/OPERATIONS/$operation/class.js', `export default { label: 'Операции',
         async post() { return WORK.never(); },
         get broken() { throw new Error('геттер не должен вызываться'); },
         METADATA: { FIELDS: [{ id: 'sum', type: 'Number' }] } }`);
-    write('DATA/OPERATIONS/ПРОДАЖА/$operation/class.js', `export default { CID: 'sale', label: 'Продажа', AUTO_REGISTER: false,
-        METADATA: { POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '62.01' }, credit: { account: '90' } }] } }`);
+    write('DATA/OPERATIONS/ПРОДАЖА/$operation/class.js', `export default { label: 'Продажа', AUTO_REGISTER: false,
+        METADATA: { POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '/DATA/REGISTER/62/62.01' }, credit: { account: '/DATA/REGISTER/90' } }] } }`);
     // папка с двумя метапапками
-    write('DATA/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', CID: 'catalogs' }`);
-    write('DATA/CATALOGS/SUBJECTS/$catalog/class.js', `export default { CID: 'subjects', label: 'Субъекты' }`);
-    write('DATA/CATALOGS/SUBJECTS/$registry/class.js', `export default { CID: 'subjects-registry' }`);
-    // повтор CID
-    write('DATA/CATALOGS/DUP/$catalog/class.js', `export default { CID: 'subjects' }`);
+    write('DATA/CATALOGS/$catalog/class.js', `export default { label: 'Справочники' }`);
+    write('DATA/CATALOGS/SUBJECTS/$catalog/class.js', `export default { label: 'Субъекты' }`);
+    write('DATA/CATALOGS/SUBJECTS/$virtual/class.js', `export default { label: 'Субъекты-виртуал' }`);
     // класс без class.js — cid = путь
     fs.mkdirSync(path.join(tmp, 'DATA/CATALOGS/EMPTY/$catalog'), { recursive: true });
     // структура
-    write('BASE/$base/class.js', `export default { label: 'Организация', CID: 'org' }`);
-    write('BASE/SALES/$structure/class.js', `export default { label: 'Отдел продаж', CID: 'sales' }`);
-    write('BASE/SALES/#secret/x/$structure/class.js', `export default { CID: 'секрет' }`);
+    write('BASE/$base/class.js', `export default { label: 'Организация' }`);
+    write('BASE/SALES/$structure/class.js', `export default { label: 'Отдел продаж' }`);
+    write('BASE/SALES/#secret/x/$structure/class.js', `export default { label: 'секрет' }`);
 });
 
 after(async () => {
@@ -96,8 +94,7 @@ describe('кэш дерева классов', () => {
 
     before(async () => {
         db = await openDataDb(':memory:');
-        // «subjects» уже принадлежит SUBJECTS — копия DUP не должна его отобрать
-        scan = await scanClasses(tmp, undefined, new Map([['subjects', '/DATA/CATALOGS/SUBJECTS']]));
+        scan = await scanClasses(tmp);
         syncClasses(db, scan.classes);
     });
 
@@ -112,72 +109,65 @@ describe('кэш дерева классов', () => {
         ]);
     });
 
-    it('сообщает о нескольких метапапках и повторе CID', () => {
+    it('сообщает о нескольких метапапках в одной папке', () => {
         assert.ok(scan.problems.some(p => p.includes('/DATA/CATALOGS/SUBJECTS') && p.includes('выбран $catalog')));
-        assert.ok(scan.problems.some(p => p.includes('/DATA/CATALOGS/DUP') && p.includes('уже занят')));
     });
 
-    it('без владельца в БД повторный CID достаётся первому по пути', async () => {
-        const fresh = await scanClasses(tmp);
-        assert.equal(fresh.classes.find(c => c.cid === 'subjects').path, '/DATA/CATALOGS/DUP');
-        assert.ok(fresh.problems.some(p => p.startsWith('/DATA/CATALOGS/SUBJECTS:') && p.includes('уже занят')));
-    });
-
-    it('cid из CID, иначе путь; тип — метапапка; собственный слой без функций и геттеров', () => {
-        assert.equal(getClass(db, '/DATA/REGISTER/62').cid, '62');
-        assert.equal(getClass(db, '62').type, '$account');
+    it('cid всегда равен пути; тип — метапапка; собственный слой без функций и геттеров', () => {
+        assert.equal(getClass(db, '/DATA/REGISTER/62').cid, '/DATA/REGISTER/62');
+        assert.equal(getClass(db, '/DATA/REGISTER/62').type, '$account');
         assert.equal(getClass(db, '/DATA/CATALOGS/EMPTY').cid, '/DATA/CATALOGS/EMPTY');
         assert.equal(getClass(db, '/DATA/CATALOGS/EMPTY').label, 'EMPTY');
-        const ops = getClass(db, 'ops');
-        assert.deepEqual(Object.keys(ops.own).sort(), ['CID', 'METADATA', 'label']);
-        assert.equal(getClass(db, 'sale').own.METADATA.POSTINGS[0].debit.account, '62.01');
-        assert.equal(getClass(db, 'нет'), null);
+        const ops = getClass(db, '/DATA/OPERATIONS');
+        assert.deepEqual(Object.keys(ops.own).sort(), ['METADATA', 'label']);
+        assert.equal(getClass(db, '/DATA/OPERATIONS/ПРОДАЖА').own.METADATA.POSTINGS[0].debit.account, '/DATA/REGISTER/62/62.01');
+        assert.equal(getClass(db, '/нет'), null);
     });
 
     it('иерархия: родитель — ближайший класс-предок по пути', () => {
-        assert.equal(getClass(db, '62.01').parent, '62');
-        assert.equal(getClass(db, '62').parent, 'register');
-        assert.equal(getClass(db, 'register').parent, '/DATA');
+        assert.equal(getClass(db, '/DATA/REGISTER/62/62.01').parent, '/DATA/REGISTER/62');
+        assert.equal(getClass(db, '/DATA/REGISTER/62').parent, '/DATA/REGISTER');
+        assert.equal(getClass(db, '/DATA/REGISTER').parent, '/DATA');
         assert.equal(getClass(db, '/DATA').parent, null);
-        assert.equal(getClass(db, 'sales').parent, 'org');
+        assert.equal(getClass(db, '/BASE/SALES').parent, '/BASE');
     });
 
     it('потомки и предки по замыканию', () => {
-        assert.deepEqual(descendants(db, '62'), ['62', '62.01', '62.02']);
-        assert.deepEqual(descendants(db, '62', { self: false }), ['62.01', '62.02']);
-        assert.deepEqual(ancestors(db, '62.02').map(c => c.cid), ['/DATA', 'register', '62', '62.02']);
-        assert.deepEqual(ancestors(db, '62.02', { self: false }).map(c => c.cid), ['/DATA', 'register', '62']);
+        assert.deepEqual(descendants(db, '/DATA/REGISTER/62'), ['/DATA/REGISTER/62', '/DATA/REGISTER/62/62.01', '/DATA/REGISTER/62/62.02']);
+        assert.deepEqual(descendants(db, '/DATA/REGISTER/62', { self: false }), ['/DATA/REGISTER/62/62.01', '/DATA/REGISTER/62/62.02']);
+        assert.deepEqual(ancestors(db, '/DATA/REGISTER/62/62.02').map(c => c.cid), ['/DATA', '/DATA/REGISTER', '/DATA/REGISTER/62', '/DATA/REGISTER/62/62.02']);
+        assert.deepEqual(ancestors(db, '/DATA/REGISTER/62/62.02', { self: false }).map(c => c.cid), ['/DATA', '/DATA/REGISTER', '/DATA/REGISTER/62']);
         // по названию: «Авансы» раньше «Расчёты в рублях»
-        assert.deepEqual(children(db, '62').map(c => c.cid), ['62.02', '62.01']);
-        assert.equal(isLeaf(db, '62.01'), true);
-        assert.equal(isLeaf(db, '62'), false);
-        assert.deepEqual(classesOfType(db, '$account').map(c => c.cid), ['62', '62.01', '62.02']);
-        assert.deepEqual(classesOfType(db, ['$base', '$structure']).map(c => c.cid), ['org', 'sales']);
+        assert.deepEqual(children(db, '/DATA/REGISTER/62').map(c => c.cid), ['/DATA/REGISTER/62/62.02', '/DATA/REGISTER/62/62.01']);
+        assert.equal(isLeaf(db, '/DATA/REGISTER/62/62.01'), true);
+        assert.equal(isLeaf(db, '/DATA/REGISTER/62'), false);
+        assert.deepEqual(classesOfType(db, '$account').map(c => c.cid), ['/DATA/REGISTER/62', '/DATA/REGISTER/62/62.01', '/DATA/REGISTER/62/62.02']);
+        assert.deepEqual(classesOfType(db, ['$base', '$structure']).map(c => c.cid), ['/BASE', '/BASE/SALES']);
     });
 
     it('повторная синхронизация без изменений ничего не пишет', () => {
         assert.deepEqual(syncClasses(db, scan.classes), { total: scan.classes.length, changed: 0, removed: 0 });
     });
 
-    it('перенос класса: cid сохраняется, путь и замыкание обновляются; удалённые классы уходят', async () => {
+    it('перенос класса: путь и замыкание обновляются; удалённые классы уходят', async () => {
         fs.renameSync(path.join(tmp, 'DATA/REGISTER/62/62.02'), path.join(tmp, 'DATA/REGISTER/62/62.01/62.02'));
         fs.rmSync(path.join(tmp, 'DATA/CATALOGS/EMPTY'), { recursive: true });
         const res = await refreshClasses(db, tmp);
-        assert.equal(res.removed, 1);
-        assert.equal(getClass(db, '62.02').path, '/DATA/REGISTER/62/62.01/62.02');
-        assert.equal(getClass(db, '62.02').parent, '62.01');
-        assert.deepEqual(descendants(db, '62.01'), ['62.01', '62.02']);
+        assert.equal(res.removed, 2); // старый путь 62.02 и EMPTY ушли, новый 62.01/62.02 добавлен
+        assert.equal(getClass(db, '/DATA/REGISTER/62/62.01/62.02').path, '/DATA/REGISTER/62/62.01/62.02');
+        assert.equal(getClass(db, '/DATA/REGISTER/62/62.01/62.02').parent, '/DATA/REGISTER/62/62.01');
+        assert.deepEqual(descendants(db, '/DATA/REGISTER/62/62.01'), ['/DATA/REGISTER/62/62.01', '/DATA/REGISTER/62/62.01/62.02']);
         assert.equal(getClass(db, '/DATA/CATALOGS/EMPTY'), null);
     });
 
     it('правка class.js подхватывается при следующем сканировании', async () => {
         const file = path.join(tmp, 'DATA/REGISTER/62/$account/class.js');
-        fs.writeFileSync(file, `export default { CID: '62', label: 'Покупатели и заказчики' }`, 'utf-8');
+        fs.writeFileSync(file, `export default { label: 'Покупатели и заказчики' }`, 'utf-8');
         const later = new Date(Date.now() + 5000);
         fs.utimesSync(file, later, later);
         const res = await refreshClasses(db, tmp);
         assert.equal(res.changed, 1);
-        assert.equal(getClass(db, '62').label, 'Покупатели и заказчики');
+        assert.equal(getClass(db, '/DATA/REGISTER/62').label, 'Покупатели и заказчики');
     });
 
     it('plainData: массивы и вложенные объекты, без функций', () => {

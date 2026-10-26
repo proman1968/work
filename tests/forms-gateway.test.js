@@ -35,7 +35,7 @@ before(async () => {
         write(p + '/class.js', 'export default {}');
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
-    for (const rel of ['DATA/$class/class.js', 'DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js'])
+    for (const rel of ['DATA/$domain/class.js', 'DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
     write('DATA/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', '#security': { USER: ['${USER1}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true },

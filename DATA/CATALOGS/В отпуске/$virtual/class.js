@@ -1,7 +1,5 @@
-export default {
-    CID: 'cat.vacation',
-    label: 'В отпуске',
+export default {    label: 'В отпуске',
     icon: 'carbon:filter',
-    SOURCE: { registry: 'cat.person', account: 'acc.hr.vacation', slot: 'person' },
+    SOURCE: { registry: '/DATA/CATALOGS/Субъекты/Физ. лица', account: '/DATA/REGISTER/Кадры/В отпуске', slot: 'person' },
     OVERLAY: [{ id: 'until', label: 'Отпуск до', type: 'Date' }],
 }

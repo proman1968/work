@@ -1,0 +1,4 @@
+export default {    label: '90.02 Себестоимость продаж',
+    icon: 'carbon:chart-bar',
+    METADATA: { FIELDS: [{ id: 'item', label: 'Номенклатура', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true }] },
+}

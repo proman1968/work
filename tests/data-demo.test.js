@@ -30,11 +30,16 @@ before(async () => {
 after(() => db?.close());
 
 describe('классы демо-конфигурации', () => {
-    it('дерево читается без проблем, у каждого класса данных и подразделения есть CID', () => {
+    it('дерево читается без проблем, у каждого класса идентификатор равен его пути (без искусственных CID и $registry)', () => {
         assert.deepEqual(problems, []);
         const bad = classesOfType(db, [...DATA_TYPES, ...STRUCTURE_TYPES])
-            .filter(c => c.cid === c.path && c.path !== '/BASE/production');
+            .filter(c => c.cid !== c.path || c.own.CID !== undefined);
         assert.deepEqual(bad.map(c => c.path), []);
+        assert.deepEqual(classesOfType(db, '$registry'), []);
+        assert.deepEqual(classesOfType(db, '$class'), [], 'абстрактный $class не должен встречаться как экземпляр в дереве');
+        assert.equal(getClass(db, '/ORGANIZATIONS')?.type, '$domain');
+        assert.equal(getClass(db, '/MODULES')?.type, '$domain');
+        assert.equal(getClass(db, '/DATA')?.type, '$domain');
     });
 
     it('схемы всех классов корректны, листья операций проводятся полностью', () => {
@@ -42,28 +47,45 @@ describe('классы демо-конфигурации', () => {
             assert.deepEqual(checkSchema(db, c.cid), [], c.path);
     });
 
-    it('состав: справочники, операции и счета из раздела 4', () => {
+    it('состав: справочники, структуры, операции и счета из раздела 4', () => {
         const labels = type => classesOfType(db, type).map(c => c.label);
         for (const l of ['Юр. лица', 'Физ. лица', 'Номенклатура', 'Склады и резервуары', 'Партии', 'Договоры', 'Транспорт', 'Виды нормативов', 'Клиенты', 'Поставщики', 'Сотрудники', 'В отпуске'])
-            assert.ok(labels(['$catalog', '$registry', '$virtual']).includes(l), l);
+            assert.ok(labels(['$catalog', '$virtual']).includes(l), l);
+        for (const l of ['Адрес', 'Паспорт', 'Единица измерения'])
+            assert.ok(labels('$struct').includes(l), l);
         for (const l of ['Поступление товара', 'Перемещение', 'Фасовка', 'Покупателю', 'Возврат от покупателя', 'Доставка', 'Естественная убыль',
             'Инвентаризация', 'Начисление зарплаты', 'Приём на работу', 'Письмо', 'Звонок', 'Установка норматива', 'От покупателя', 'Поставщику'])
             assert.ok(labels('$operation').includes(l), l);
         assert.deepEqual(classesOfType(db, '$operation').filter(c => classSchema(db, c.cid).fields.some(f => f.id === 'time')), [], 'дата операции — колонка, не поле');
     });
 
-    it('номенклатура: единицы — табличная часть; платежи наследуют Кт 51, лист дописывает Дт 60', () => {
-        const items = classSchema(db, 'cat.items');
-        assert.equal(items.fields.find(f => f.id === 'units').type, 'table');
-        const pay = classSchema(db, 'op.pay.supplier');
+    it('структуры ($struct) и table: true: Паспорт → Адрес у физлиц, табличные Единицы у номенклатуры; наследование правил платежей', () => {
+        const items = classSchema(db, '/DATA/CATALOGS/Номенклатура');
+        const units = items.fields.find(f => f.id === 'units');
+        assert.equal(units.type, 'table');
+        assert.equal(units.table, true);
+        assert.equal(units.struct, '/DATA/STRUCTS/Единица измерения');
+        assert.deepEqual(units.fields.map(f => f.id), ['unit', 'coef', 'price']);
+
+        const person = classSchema(db, '/DATA/CATALOGS/Субъекты/Физ. лица');
+        const passport = person.fields.find(f => f.id === 'passport');
+        assert.equal(passport.type, 'struct');
+        assert.equal(passport.table, false);
+        assert.equal(passport.struct, '/DATA/STRUCTS/Паспорт');
+        const addr = passport.fields.find(f => f.id === 'address');
+        assert.equal(addr.type, 'struct');
+        assert.equal(addr.struct, '/DATA/STRUCTS/Адрес');
+        assert.deepEqual(addr.fields.map(f => f.id), ['city', 'street', 'house']);
+
+        const pay = classSchema(db, '/DATA/OPERATIONS/Платежи с расчётного счёта/Поставщику');
         const main = pay.postings.find(r => r.id === 'main');
-        assert.deepEqual([main.debit.account, main.credit.account, main.amount], ['acc.60', 'acc.51', 'sum']);
+        assert.deepEqual([main.debit.account, main.credit.account, main.amount], ['/DATA/REGISTER/60', '/DATA/REGISTER/51', 'sum']);
     });
 
     it('места: ссылки указывают на существующие классы, места уникальны в подразделении', () => {
         const units = classesOfType(db, '$structure').filter(c => c.own['#security']);
         assert.ok(units.length >= 6);
-        for (const u of [...units, getClass(db, 'org')]) {
+        for (const u of [...units, getClass(db, '/BASE')]) {
             const sec = u.own['#security'];
             const ids = [];
             const walk = (places, trail) => {
@@ -106,108 +128,108 @@ describe('сквозной сценарий', () => {
     });
 
     it('поступление: НДС отдельной проводкой, масса партии по плотности', () => {
-        const o = post('op.receipt', '02-01', {
+        const o = post('/DATA/OPERATIONS/Поступление товара', '02-01', {
             supplier: ids.supplier, storage: ids.tank, vat_sum: 30000,
             lines: [{ item: ids.oil, unit: 'бочка', qty: 5, price: 30000, density: 0.88 }],
-        }, { unit: 'unit.warehouse', place: 'head' });
+        }, { unit: '/BASE/warehouse', place: 'head' });
         const e = entries(o);
         assert.deepEqual(e.map(x => [x.rule, x.debit, x.credit, x.amount, x.qty]), [
-            ['lines', 'acc.41', 'acc.60', 150000, 1000], ['vat', 'acc.19', 'acc.60', 30000, 0],
+            ['lines', '/DATA/REGISTER/41', '/DATA/REGISTER/60', 150000, 1000], ['vat', '/DATA/REGISTER/19', '/DATA/REGISTER/60', 30000, 0],
         ]);
         assert.equal(e[0].qty2, 880);
-        post('op.receipt', '02-02', {
+        post('/DATA/OPERATIONS/Поступление товара', '02-02', {
             supplier: ids.supplier, storage: ids.stock,
             lines: [{ item: ids.canister, unit: 'шт', qty: 100, price: 100 }],
         });
-        assert.equal(virtualMembers(db, { cid: 'cat.suppliers' }).items.length, 1, 'поставщик стал участником сам');
+        assert.equal(virtualMembers(db, { cid: '/DATA/CATALOGS/Поставщики' }).items.length, 1, 'поставщик стал участником сам');
     });
 
     it('фасовка: масло из резервуара на склад, тара через счёт 20', () => {
-        const o = post('op.packing', '02-10', {
+        const o = post('/DATA/OPERATIONS/Фасовка', '02-10', {
             item: ids.oil, from_storage: ids.tank, to_storage: ids.stock,
             lines: [{ unit: 'канистра', qty: 20, container: ids.canister }],
         });
         const e = entries(o);
         assert.deepEqual(e.map(x => [x.rule, x.debit, x.credit, x.amount, x.qty]), [
-            ['product', 'acc.41', 'acc.41', 60000, 400], ['tare_in', 'acc.20', 'acc.41', 2000, 20], ['tare_out', 'acc.41', 'acc.20', 2000, 0],
+            ['product', '/DATA/REGISTER/41', '/DATA/REGISTER/41', 60000, 400], ['tare_in', '/DATA/REGISTER/20', '/DATA/REGISTER/41', 2000, 20], ['tare_out', '/DATA/REGISTER/41', '/DATA/REGISTER/20', 2000, 0],
         ]);
         assert.equal(e[0].doc_unit, 'канистра');
     });
 
     it('реализация: выручка, НДС по нормативу и себестоимость; клиент появляется в составе; себестоимость — скользящая средняя (150 за литр + тара)', () => {
-        const o = sale = post('op.sales.sale', '03-01', {
+        const o = sale = post('/DATA/OPERATIONS/Реализация/Покупателю', '03-01', {
             client: ids.client, storage: ids.stock,
             lines: [{ item: ids.oil, unit: 'канистра', qty: 10, price: 3200 }],
-        }, { unit: 'unit.sales', place: 'head/manager' });
+        }, { unit: '/BASE/sales', place: 'head/manager' });
         const e = entries(o);
         assert.deepEqual(e.map(x => [x.rule, x.debit, x.credit, x.amount]), [
-            ['revenue', 'acc.62', 'acc.90.01', 32000], ['vat', 'acc.62', 'acc.68.02', 6400], ['cogs', 'acc.90.02', 'acc.41', 31000],
+            ['revenue', '/DATA/REGISTER/62', '/DATA/REGISTER/90/01', 32000], ['vat', '/DATA/REGISTER/62', '/DATA/REGISTER/68/02', 6400], ['cogs', '/DATA/REGISTER/90/02', '/DATA/REGISTER/41', 31000],
         ]);
         assert.equal(e[2].qty, 200);
-        assert.equal(e[0].unit, 'unit.sales');
-        assert.deepEqual(virtualMembers(db, { cid: 'cat.clients' }).items.map(i => i.id), [ids.client]);
+        assert.equal(e[0].unit, '/BASE/sales');
+        assert.deepEqual(virtualMembers(db, { cid: '/DATA/CATALOGS/Клиенты' }).items.map(i => i.id), [ids.client]);
     });
 
     it('оплата гасит долг — клиент выпадает из состава; возврат и платежи', () => {
-        post('op.receipts.customer', '03-05', { counterparty: ids.client, sum: 38400 });
-        assert.deepEqual(virtualMembers(db, { cid: 'cat.clients' }).items, []);
-        const ret = post('op.sales.return', '03-10', {
+        post('/DATA/OPERATIONS/Поступления на расчётный счёт/От покупателя', '03-05', { counterparty: ids.client, sum: 38400 });
+        assert.deepEqual(virtualMembers(db, { cid: '/DATA/CATALOGS/Клиенты' }).items, []);
+        const ret = post('/DATA/OPERATIONS/Реализация/Возврат от покупателя', '03-10', {
             client: ids.client, storage: ids.stock,
             lines: [{ item: ids.oil, unit: 'канистра', qty: 1, price: 3200 }],
         });
         assert.equal(sum(entries(ret)), 3200 + 640 + 3100);
-        post('op.pay.supplier', '03-12', { counterparty: ids.supplier, sum: 120000 });
-        post('op.pay.vat', '03-15', { sum: 5000 });
-        payment = post('op.pay.supplier', '03-16', { counterparty: ids.supplier, sum: 1234.5, purpose: 'Оплата по счёту' });
+        post('/DATA/OPERATIONS/Платежи с расчётного счёта/Поставщику', '03-12', { counterparty: ids.supplier, sum: 120000 });
+        post('/DATA/OPERATIONS/Платежи с расчётного счёта/НДС', '03-15', { sum: 5000 });
+        payment = post('/DATA/OPERATIONS/Платежи с расчётного счёта/Поставщику', '03-16', { counterparty: ids.supplier, sum: 1234.5, purpose: 'Оплата по счёту' });
     });
 
     it('доставка, убыль и инвентаризация считаются по нормативам и расхождениям', () => {
-        const dl = post('op.delivery', '03-20', {
+        const dl = post('/DATA/OPERATIONS/Доставка', '03-20', {
             client: ids.client, vehicle: ids.truck, distance: 100, fuel: ids.diesel, fuel_storage: ids.fuel_stock,
-        }, { unit: 'unit.logistics' });
+        }, { unit: '/BASE/logistics' });
         assert.deepEqual([entries(dl)[0].amount, entries(dl)[0].qty], [1740, 30]);
-        const sh = post('op.shrinkage', '03-31', { storage: ids.tank, item: ids.oil, base: 1000 });
+        const sh = post('/DATA/OPERATIONS/Естественная убыль', '03-31', { storage: ids.tank, item: ids.oil, base: 1000 });
         assert.deepEqual([entries(sh)[0].amount, entries(sh)[0].qty], [75, 0.5]);
-        const inv = post('op.inventory', '03-31', {
+        const inv = post('/DATA/OPERATIONS/Инвентаризация', '03-31', {
             storage: ids.stock,
             lines: [{ item: ids.oil, unit: 'л', delta: -2 }, { item: ids.oil, unit: 'л', delta: 1 }],
         });
         assert.deepEqual(entries(inv).map(x => [x.rule, x.debit, x.credit, x.amount, x.qty]), [
-            ['surplus', 'acc.41', 'acc.91', 155, 1], ['shortage', 'acc.94', 'acc.41', 310, 2],
+            ['surplus', '/DATA/REGISTER/41', '/DATA/REGISTER/91', 155, 1], ['shortage', '/DATA/REGISTER/94', '/DATA/REGISTER/41', 310, 2],
         ]);
     });
 
     it('кадры: приём, отпуск, зарплата сотрудникам из состава', () => {
-        post('op.hr.hire', '04-01', { person: ids.ivanov, position: 'Менеджер', salary: 100000 });
-        post('op.hr.hire', '04-01', { person: ids.petrov });
-        assert.equal(virtualMembers(db, { cid: 'cat.employees', at: d('04-02') }).items.length, 2);
-        post('op.hr.vacation', '07-01', { person: ids.petrov, until: d('07-14') });
-        assert.deepEqual(virtualMembers(db, { cid: 'cat.vacation', at: d('07-02') }).items.map(i => i.id), [ids.petrov]);
-        assert.equal(virtualMembers(db, { cid: 'cat.employees', at: d('07-02') }).items.length, 2, 'в отпуске — всё ещё сотрудник');
-        post('op.hr.back', '07-15', { person: ids.petrov });
-        assert.deepEqual(virtualMembers(db, { cid: 'cat.vacation', at: d('07-16') }).items, []);
+        post('/DATA/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.ivanov, position: 'Менеджер', salary: 100000 });
+        post('/DATA/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.petrov });
+        assert.equal(virtualMembers(db, { cid: '/DATA/CATALOGS/Сотрудники', at: d('04-02') }).items.length, 2);
+        post('/DATA/OPERATIONS/Кадры/Отправить в отпуск', '07-01', { person: ids.petrov, until: d('07-14') });
+        assert.deepEqual(virtualMembers(db, { cid: '/DATA/CATALOGS/В отпуске', at: d('07-02') }).items.map(i => i.id), [ids.petrov]);
+        assert.equal(virtualMembers(db, { cid: '/DATA/CATALOGS/Сотрудники', at: d('07-02') }).items.length, 2, 'в отпуске — всё ещё сотрудник');
+        post('/DATA/OPERATIONS/Кадры/Вернуть из отпуска', '07-15', { person: ids.petrov });
+        assert.deepEqual(virtualMembers(db, { cid: '/DATA/CATALOGS/В отпуске', at: d('07-16') }).items, []);
 
-        const pr = post('op.payroll', '04-30', { period: d('04-01'), staff: [{ employee: ids.ivanov, sum: 100000 }] });
+        const pr = post('/DATA/OPERATIONS/Зарплата', '04-30', { period: d('04-01'), staff: [{ employee: ids.ivanov, sum: 100000 }] });
         assert.deepEqual(entries(pr).map(x => [x.rule, x.debit, x.credit, x.amount]), [
-            ['accrual', 'acc.26', 'acc.70', 100000], ['contributions', 'acc.26', 'acc.69', 30200], ['ndfl', 'acc.70', 'acc.68.01', 13000],
+            ['accrual', '/DATA/REGISTER/26', '/DATA/REGISTER/70', 100000], ['contributions', '/DATA/REGISTER/26', '/DATA/REGISTER/69', 30200], ['ndfl', '/DATA/REGISTER/70', '/DATA/REGISTER/68/01', 13000],
         ]);
-        post('op.pay.salary', '05-05', { employee: ids.ivanov, sum: 87000 });
+        post('/DATA/OPERATIONS/Платежи с расчётного счёта/Зарплата', '05-05', { employee: ids.ivanov, sum: 87000 });
     });
 
     it('коммуникации регистрируются сразу и имеют нормативную стоимость', () => {
-        const mail = createObject(db, { cid: 'op.comm.letter', time: d('04-05'), body: { counterparty: ids.client, direction: 'Исходящее' } });
+        const mail = createObject(db, { cid: '/DATA/OPERATIONS/Коммуникации/Письмо', time: d('04-05'), body: { counterparty: ids.client, direction: 'Исходящее' } });
         assert.equal(mail.status, 'registered');
         assert.deepEqual([entries(mail)[0].amount, entries(mail)[0].qty], [50, 1]);
-        const call = createObject(db, { cid: 'op.comm.call', time: d('04-06'), body: { counterparty: ids.client, direction: 'Входящий', minutes: 3 } });
+        const call = createObject(db, { cid: '/DATA/OPERATIONS/Коммуникации/Звонок', time: d('04-06'), body: { counterparty: ids.client, direction: 'Входящий', minutes: 3 } });
         assert.deepEqual([entries(call)[0].amount, entries(call)[0].qty], [15, 3]);
     });
 
     it('печатные формы: наследование шаблонов, накладная и платёжное поручение', async () => {
         const names = async cid => (await printTemplates(db, ROOT, cid)).map(t => t.name);
-        assert.deepEqual(await names('op.sales.sale'), ['Счёт на оплату', 'Товарная накладная']);
-        assert.deepEqual(await names('op.pay.supplier'), ['Платёжное поручение'], 'шаблон группы действует на лист');
-        assert.deepEqual(await names('op.pay.vat'), ['Платёжное поручение']);
-        assert.deepEqual(await names('op.receipt'), []);
+        assert.deepEqual(await names('/DATA/OPERATIONS/Реализация/Покупателю'), ['Счёт на оплату', 'Товарная накладная']);
+        assert.deepEqual(await names('/DATA/OPERATIONS/Платежи с расчётного счёта/Поставщику'), ['Платёжное поручение'], 'шаблон группы действует на лист');
+        assert.deepEqual(await names('/DATA/OPERATIONS/Платежи с расчётного счёта/НДС'), ['Платёжное поручение']);
+        assert.deepEqual(await names('/DATA/OPERATIONS/Поступление товара'), []);
 
         const bill = await renderPrint(db, { id: sale.id, name: 'Товарная накладная', root: ROOT });
         assert.equal(bill.label, 'Товарная накладная');
@@ -241,7 +263,7 @@ describe('сквозной сценарий', () => {
         assert.deepEqual(r.total.turnover.debit, r.total.turnover.credit);
         const bal = objectState(db, { id: ids.oil }).balances;
         const at = account => bal.find(b => b.account === account);
-        assert.deepEqual([at('acc.41').qty, at('acc.41').qty2], [818.5, 880], '1000 − 200 + 20 (возврат) − 0,5 (убыль) − 2 + 1 (инвентаризация)');
-        assert.equal(at('acc.94').qty, 2.5, 'убыль и недостача');
+        assert.deepEqual([at('/DATA/REGISTER/41').qty, at('/DATA/REGISTER/41').qty2], [818.5, 880], '1000 − 200 + 20 (возврат) − 0,5 (убыль) − 2 + 1 (инвентаризация)');
+        assert.equal(at('/DATA/REGISTER/94').qty, 2.5, 'убыль и недостача');
     });
 });

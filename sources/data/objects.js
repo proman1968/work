@@ -117,6 +117,11 @@ function coerce(db, field, value, errors, path) {
                 return fail(`объект ${id} удалён`);
             return id;
         }
+        case 'struct': {
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                return fail('ожидается вложенный объект (структура)');
+            return checkBody(db, field.fields, value, errors, `${path}.`);
+        }
         case 'table': {
             if (!Array.isArray(value))
                 return fail('ожидается список строк');
@@ -143,13 +148,14 @@ function checkBody(db, fields, body, errors, prefix = '') {
     const out = {};
     for (const f of fields) {
         const v = body[f.id];
-        if (isEmpty(v) || (Array.isArray(v) && !v.length && f.type === 'table')) {
+        const emptyStruct = f.type === 'struct' && v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length;
+        if (isEmpty(v) || emptyStruct || (Array.isArray(v) && !v.length && f.type === 'table')) {
             if (f.required)
                 errors.push({ field: prefix + f.id, message: 'обязательное поле' });
             continue;
         }
         const c = coerce(db, f, v, errors, prefix + f.id);
-        if (c !== undefined)
+        if (c !== undefined && !(f.type === 'struct' && typeof c === 'object' && !Object.keys(c).length))
             out[f.id] = c;
     }
     return out;
@@ -178,8 +184,10 @@ function collectRefs(db, fields, body, prefix = '', row = -1, out = []) {
             continue;
         if (f.type === 'link')
             out.push({ field: prefix + f.id, row, ref_id: v, ref_cid: db.prepare('SELECT cid FROM objects WHERE id = ?').get(v)?.cid ?? null });
-        if (f.type === 'table')
-            v.forEach((r, i) => collectRefs(db, f.fields, r, f.id + '.', i, out));
+        if (f.type === 'struct' && v && typeof v === 'object')
+            collectRefs(db, f.fields, v, prefix + f.id + '.', row, out);
+        if (f.type === 'table' && Array.isArray(v))
+            v.forEach((r, i) => collectRefs(db, f.fields, r, prefix + f.id + '.', row >= 0 ? row : i, out));
     }
     return out;
 }
@@ -193,7 +201,9 @@ function searchText(schema, body) {
                 continue;
             if (['string', 'text', 'enum'].includes(f.type))
                 parts.push(String(v));
-            if (f.type === 'table')
+            if (f.type === 'struct' && v && typeof v === 'object')
+                walk(f.fields, v);
+            if (f.type === 'table' && Array.isArray(v))
                 v.forEach(r => walk(f.fields, r));
         }
     };
@@ -420,13 +430,19 @@ export function restoreObject(db, { id, author } = {}) {
 
 const OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
-/** Поля класса и его потомков (запрос к родителю фильтрует и по полям наследников). */
+/** Поля класса и его потомков (запрос к родителю фильтрует и по полям наследников, включая поля вложенных структур). */
 function knownFields(db, schema) {
     const ids = new Set();
+    const add = (list, prefix = '') => {
+        for (const f of list) {
+            ids.add(prefix + f.id);
+            if (f.type === 'struct' && Array.isArray(f.fields))
+                add(f.fields, prefix + f.id + '.');
+        }
+    };
     for (const cid of descendants(db, schema.cid)) {
         const s = classSchema(db, cid);
-        for (const f of [...s.fields, ...s.overlay])
-            ids.add(f.id);
+        add([...s.fields, ...s.overlay]);
     }
     return ids;
 }
@@ -436,7 +452,8 @@ function columnExpr(db, schema, key, args) {
         return `o.${key}`;
     if (!knownFields(db, schema).has(key))
         throw new DataError(`${schema.label}: нет поля «${key}»`);
-    args.push('$."' + key.replace(/"/g, '\\"') + '"');
+    const jsonPath = '$.' + key.split('.').map(p => '"' + p.replace(/"/g, '\\"') + '"').join('.');
+    args.push(jsonPath);
     return 'json_extract(o.body, ?)';
 }
 

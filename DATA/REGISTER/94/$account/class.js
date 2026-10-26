@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.94',
-    label: '94.00 Недостачи и потери',
+export default {    label: '94.00 Недостачи и потери',
     icon: 'carbon:warning',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'item',
                 label: 'Номенклатура',
                 type: 'Link',
-                target: 'cat.items',
+                target: '/DATA/CATALOGS/Номенклатура',
                 analytic: true,
                 required: true,
             },
@@ -16,7 +14,7 @@ export default {
                 id: 'storage',
                 label: 'Склад',
                 type: 'Link',
-                target: 'cat.storages',
+                target: '/DATA/CATALOGS/Склады и резервуары',
                 analytic: true,
                 required: true,
             },

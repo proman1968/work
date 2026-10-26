@@ -662,6 +662,97 @@ await test('postings: период и фильтр аналитики уходя
     bad.remove();
 });
 
+await test('postings: 4-шаговый интерфейс ODANT (Анализ счёта, двухпанельные Обороты и сборная Карточка проводки)', async () => {
+    const calls = [];
+    const item = {
+        fetch: async (method, params) => {
+            calls.push({ method, params });
+            if (method === 'db_schema')
+                return CARD_SCHEMA;
+            if (method === 'db_card')
+                return CARD;
+            if (method === 'db_sheet') {
+                return {
+                    rows: [{ account: '/DATA/REGISTER/62', label: 'Расчёты', level: 1, leaf: true, key: { counterparty: '9.Y' },
+                        opening: { debit: 200, credit: 0 }, turnover: { debit: 1000, credit: 700 }, closing: { debit: 500, credit: 0 },
+                        qty: { opening: 1, debit: 5, credit: 3, closing: 3 } }],
+                    total: { opening: { debit: 200, credit: 0 }, turnover: { debit: 1000, credit: 700 }, closing: { debit: 500, credit: 0 },
+                        qty: { opening: 1, debit: 5, credit: 3, closing: 3 } },
+                    names: CARD.names,
+                };
+            }
+            if (method === 'db_turnovers') {
+                return {
+                    account: '/DATA/REGISTER/62', label: 'Расчёты', groupBy: 'quarter',
+                    opening: { debit: 200, credit: 0, net: 200 },
+                    groups: [{ key: '2026-Q1', label: '1 кв. 2026 г.', debit: 1000, credit: 700, turnover: 300, balance: 500, count: 2 }],
+                    closing: { debit: 1000, credit: 700, turnover: 300, net: 500 },
+                    total: 2,
+                    items: [
+                        { entry: 77, time: 100, groupKey: '2026-Q1', op_id: 'o1', op_cid: '/DATA/OPERATIONS/SALE', debit: 1000, credit: 0, corr: '/DATA/REGISTER/90', balance: 1200 },
+                    ],
+                    names: CARD.names,
+                };
+            }
+            if (method === 'db_entry') {
+                return {
+                    entry: 77, time: 100, amount: 1000, qty: 0, storno: false,
+                    operation: { id: 'o1', cid: '/DATA/OPERATIONS/SALE', title: 'Продажа 1' },
+                    debit: { account: '/DATA/REGISTER/62', label: '62 Расчёты', amount: 1000, analytics: [{ id: 'counterparty', label: 'Контрагент', title: 'Альфа' }] },
+                    credit: { account: '/DATA/REGISTER/90', label: '90 Продажи', amount: 1000, analytics: [] },
+                };
+            }
+            return null;
+        },
+    };
+    const el = await mount('test-postings', { $item: item });
+    assert(await until(() => el.$('oda-packets')), 'полоса периодов oda-packets отрисована');
+
+    // Экран 2: Анализ счёта
+    await el.setMode('analysis');
+    assert(await until(() => el.$('.analysis-layout') && deepText(el).includes('АНАЛИТИКИ СЧЁТА')),
+        'Экран 2: Анализ счёта отрисован: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 600));
+    assert(deepText(el).includes('Альфа') && deepText(el).includes(rub(500)), 'строка аналитики в Анализе счёта: ' + deepText(el));
+
+    // Экран 3: Двухпанельные Обороты счёта
+    await el.setMode('turnovers');
+    assert(await until(() => el.$('.turnovers-layout') && deepText(el).includes('ГРУППИРОВАТЬ')), 'Экран 3: Обороты счёта отрисованы');
+    assert(deepText(el).includes('1 кв. 2026 г.') && deepText(el).includes('со сч. 90 Продажи'), 'левая таблица периодов и правая таблица документов: ' + deepText(el));
+
+    // Экран 4: Сборная карточка проводки
+    await el.openEntry(77);
+    assert(await until(() => el.$('.entry-card') && deepText(el).includes('Проводка #77')), 'Экран 4: Карточка проводки отрисована: ' + deepText(el));
+    assert(deepText(el).includes('ДЕБЕТ:') && deepText(el).includes('КРЕДИТ:'), 'симметричные стороны Дебета и Кредита');
+    el.remove();
+});
+
+await test('objects: в окне объекта справочника видны остатки по счетам и траектория движений', async () => {
+    const calls = [];
+    const $item = mockItem(calls, {
+        db_query: () => ({ items: [obj('1.X', { name: 'ООО «Альфа»' })], names: {} }),
+        db_read: () => obj('1.X', { name: 'ООО «Альфа»' }),
+        db_trajectory: () => ({
+            closing: [{ account: 'acc.62', slot: 'counterparty', debit: 1500, credit: 0, qty: 0 }],
+            items: [{ time: new Date(2026, 9, 20, 12).getTime(), op_id: 'op1', op_cid: 'op.sale', account: 'acc.62', corr: 'acc.90', debit: 1500, credit: 0, balance: 1500 }],
+            names: {
+                objects: { op1: 'Реализация Р-001' },
+                classes: { 'acc.62': '62 Расчёты с покупателями', 'op.sale': 'Покупателю' },
+                paths: { 'acc.62': '/DATA/REGISTER/62', 'op.sale': '/DATA/OPERATIONS/Реализация/Покупателю' },
+            },
+        }),
+    });
+    const el = await mount('test-objects', { $item });
+    assert(await until(() => deepAll(el, 'oda-table-row').length === 1), 'строка');
+    const opening = el.openEditor({ id: '1.X' });
+    const pop = await waitPopover();
+    const modal = modalOf(pop);
+    assert(await until(() => deepText(modal).includes('Остатки по счетам')), 'остатки показаны: ' + deepText(modal));
+    assert(deepText(modal).includes('62 Расчёты с покупателями') && deepText(modal).includes('Реализация Р-001'), 'траектория показана: ' + deepText(modal));
+    pop.close();
+    await opening;
+    el.remove();
+});
+
 window.__done = true;
 </script>
 </body>

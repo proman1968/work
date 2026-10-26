@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.41',
-    label: '41.00 Товары',
+export default {    label: '41.00 Товары',
     icon: 'carbon:product',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'item',
                 label: 'Номенклатура',
                 type: 'Link',
-                target: 'cat.items',
+                target: '/DATA/CATALOGS/Номенклатура',
                 analytic: true,
                 required: true,
             },
@@ -16,11 +14,11 @@ export default {
                 id: 'storage',
                 label: 'Склад',
                 type: 'Link',
-                target: 'cat.storages',
+                target: '/DATA/CATALOGS/Склады и резервуары',
                 analytic: true,
                 required: true,
             },
-            { id: 'batch', label: 'Партия', type: 'Link', target: 'cat.batches', analytic: true },
+            { id: 'batch', label: 'Партия', type: 'Link', target: '/DATA/CATALOGS/Партии', analytic: true },
         ],
     },
 }

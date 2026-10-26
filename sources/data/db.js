@@ -124,6 +124,39 @@ export const MIGRATIONS = [
         value TEXT
     );
     `,
+    // 2 — явная двойная запись по классам счетов ($account): отдельная запись в счёте Дебета
+    //     со своими аналитиками и отдельная запись в счёте Кредита со своими аналитиками
+    `
+    CREATE TABLE account_entries (
+        id          INTEGER PRIMARY KEY,
+        entry_id    INTEGER NOT NULL,          -- общий ключ проводки (связка Дт и Кт)
+        side        TEXT NOT NULL CHECK (side IN ('D', 'C')),
+        account_cid TEXT NOT NULL,             -- класс счёта ($account), владеющий записью
+        corr_cid    TEXT NOT NULL,             -- корреспондирующий счёт
+        op_id       TEXT NOT NULL,
+        op_version  INTEGER NOT NULL,
+        op_cid      TEXT NOT NULL,
+        rule        TEXT NOT NULL,
+        row         INTEGER NOT NULL DEFAULT -1,
+        time        INTEGER NOT NULL,
+        debit       INTEGER NOT NULL DEFAULT 0, -- копейки
+        credit      INTEGER NOT NULL DEFAULT 0, -- копейки
+        qty_in      REAL NOT NULL DEFAULT 0,
+        qty_out     REAL NOT NULL DEFAULT 0,
+        qty2        REAL NOT NULL DEFAULT 0,
+        doc_qty     REAL,
+        doc_unit    TEXT,
+        analytics   TEXT NOT NULL DEFAULT '{}', -- JSON аналитик ИМЕННО этого счёта { слот: ref_id }
+        author      TEXT,
+        place       TEXT,
+        unit        TEXT,
+        storno      INTEGER NOT NULL DEFAULT 0,
+        created     INTEGER NOT NULL
+    );
+    CREATE INDEX account_entries_acc_time ON account_entries(account_cid, time);
+    CREATE INDEX account_entries_entry    ON account_entries(entry_id);
+    CREATE INDEX account_entries_op       ON account_entries(op_id);
+    `,
 ];
 
 /** Применить недостающие миграции. @returns {number} версия схемы после миграции */
@@ -154,19 +187,50 @@ export async function openDataDb(file = path.resolve(DATA_DIR, DATA_FILE)) {
 }
 
 let opened = null;
+const openedByBase = new Map();
 
-/** Общая БД данных сервера (открывается при первом обращении, относительно cwd). */
-export async function dataDb() {
-    opened ??= openDataDb();
-    return opened;
+/**
+ * Путь к файлу БД конкретной организации ($base): `<Организация>/$base/#system/work.db`.
+ * Для пустого basePath (режим по умолчанию) — `./.data/work.db`.
+ */
+export function baseDbFile(rootDir = process.cwd(), basePath = '') {
+    const norm = String(basePath ?? '').trim().replace(/\/+$/, '');
+    if (norm && norm !== '/') {
+        const rel = norm.replace(/^\/+/, '');
+        return path.resolve(rootDir, rel, '$base', '#system', DATA_FILE);
+    }
+    return path.resolve(rootDir, DATA_DIR, DATA_FILE);
 }
 
-/** Закрыть общую БД (тесты, остановка сервера). */
+/**
+ * БД данных организации ($base) или сервера по умолчанию.
+ * @param {string} [basePath] Путь организации (например, '/ORGANIZATIONS/Маслоторг'); пусто — дефолтная БД
+ */
+export async function dataDb(basePath = '') {
+    const key = String(basePath ?? '').trim().replace(/\/+$/, '');
+    if (!key) {
+        opened ??= openDataDb();
+        return opened;
+    }
+    let p = openedByBase.get(key);
+    if (!p) {
+        p = openDataDb(baseDbFile(process.cwd(), key));
+        openedByBase.set(key, p);
+    }
+    return p;
+}
+
+/** Закрыть открытые БД данных (тесты, остановка сервера). */
 export async function closeDataDb() {
     const p = opened;
     opened = null;
+    const list = [...openedByBase.values()];
+    openedByBase.clear();
     if (p)
         (await p).close();
+    for (const dbPromise of list) {
+        try { (await dbPromise).close(); } catch { /* ignore */ }
+    }
 }
 
 /** Значение настройки (JSON) или undefined. */

@@ -7,8 +7,7 @@
  * класса операций, подразделение со всеми вложенными) отвечал один SQL-запрос
  * по замыканию `class_tree`.
  *
- * Идентификатор класса `cid` — поле `CID` собственного слоя class.js (стабилен
- * при переносе и переименовании папки); без него — путь класса.
+ * Идентификатор класса `cid` всегда равен его пути в дереве WORK (`path`).
  */
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -17,19 +16,21 @@ import { pathToFileURL } from 'node:url';
 import { tx } from './db.js';
 
 /** Типы прикладных классов данных. */
-export const DATA_TYPES = Object.freeze(['$catalog', '$registry', '$virtual', '$operation', '$account', '$register']);
+export const DATA_TYPES = Object.freeze(['$catalog', '$virtual', '$struct', '$operation', '$account', '$register']);
 
-/** Типы классов орг-структуры (подразделения). */
+/** Типы классов орг-структуры (подразделения), доменов и модулей. */
 export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base']);
+export const MODULE_TYPES = Object.freeze(['$module']);
+export const DOMAIN_TYPES = Object.freeze(['$domain']);
 
 /** Корни дерева, которые сканируются по умолчанию. */
-export const DEFAULT_ROOTS = Object.freeze(['DATA', 'BASE']);
+export const DEFAULT_ROOTS = Object.freeze(['MODULES', 'ORGANIZATIONS', 'DATA', 'BASE']);
 
 /** Папки, которые не бывают классами. */
 const SKIP = new Set(['node_modules', 'history', 'logs']);
 
 /** Приоритет при нескольких метапапках в одной папке: известные типы раньше прочих. */
-const KNOWN = [...DATA_TYPES, ...STRUCTURE_TYPES];
+const KNOWN = [...DATA_TYPES, '$registry', ...STRUCTURE_TYPES, ...MODULE_TYPES, ...DOMAIN_TYPES];
 
 /**
  * Копия значения без функций, геттеров и символов (только данные class.js).
@@ -70,16 +71,13 @@ async function readOwn(file) {
 
 /**
  * Найти классы в дереве.
- * Повтор CID (например, папку класса скопировали) — ошибка конфигурации: CID
- * остаётся за классом, который уже владеет им в БД (`known`), иначе — за первым
- * по пути; остальные пропускаются с сообщением в problems.
+ * Идентификатор класса `cid` равен его пути `path`.
  * @param {string} rootDir Корень WORK на диске
  * @param {readonly string[]} [roots] Корневые папки сканирования (отсутствующие пропускаются)
- * @param {Map<string, string>} [known] Текущие владельцы: cid → путь
  * @returns {Promise<{ classes: Array<{cid, path, type, label, own}>, problems: string[] }>}
  */
-export async function scanClasses(rootDir, roots = DEFAULT_ROOTS, known = new Map()) {
-    const found = [];
+export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
+    const classes = [];
     const problems = [];
 
     async function visit(rel) {
@@ -107,9 +105,8 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS, known = new Ma
             catch (e) {
                 problems.push(`${clsPath}: class.js не загружен — ${e.message}`);
             }
-            const cid = typeof own.CID === 'string' && own.CID.trim() ? own.CID.trim() : clsPath;
             const label = typeof own.label === 'string' && own.label ? own.label : path.basename(rel);
-            found.push({ cid, path: clsPath, type, label, own });
+            classes.push({ cid: clsPath, path: clsPath, type, label, own });
         }
         for (const name of dirs) {
             if (name.startsWith('$') || name.startsWith('.') || name.startsWith('#') || SKIP.has(name))
@@ -121,17 +118,6 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS, known = new Ma
     for (const root of roots)
         await visit(root);
 
-    const byCid = Map.groupBy(found, c => c.cid);
-    const classes = [];
-    for (const [cid, group] of byCid) {
-        const owner = group.find(c => c.path === known.get(cid))
-            ?? [...group].sort((a, b) => a.path.localeCompare(b.path))[0];
-        classes.push(owner);
-        for (const c of group) {
-            if (c !== owner)
-                problems.push(`${c.path}: CID «${cid}» уже занят классом ${owner.path} — класс пропущен`);
-        }
-    }
     return { classes, problems };
 }
 
@@ -173,7 +159,6 @@ export function syncClasses(db, classes) {
             ON CONFLICT(cid) DO UPDATE SET path = excluded.path, parent = excluded.parent, type = excluded.type,
                 label = excluded.label, own = excluded.own, hash = excluded.hash`);
         let changed = 0;
-        // путь уникален: сначала освободить пути, которые переходят к другим cid
         const del = db.prepare('DELETE FROM classes WHERE cid = ?');
         const keep = new Set(classes.map(c => c.cid));
         let removed = 0;
@@ -223,8 +208,7 @@ export function rebuildTree(db) {
  * @returns {Promise<{ total: number, changed: number, removed: number, problems: string[] }>}
  */
 export async function refreshClasses(db, rootDir, roots = DEFAULT_ROOTS) {
-    const known = new Map(db.prepare('SELECT cid, path FROM classes').all().map(r => [r.cid, r.path]));
-    const { classes, problems } = await scanClasses(rootDir, roots, known);
+    const { classes, problems } = await scanClasses(rootDir, roots);
     return { ...syncClasses(db, classes), problems };
 }
 
@@ -232,14 +216,14 @@ function row(r) {
     return r ? { ...r, own: JSON.parse(r.own) } : null;
 }
 
-/** Класс по cid или пути (null — нет). */
+/** Класс по пути (null — нет). */
 export function getClass(db, ref) {
     const key = String(ref ?? '');
     return row(db.prepare('SELECT cid, path, parent, type, label, own FROM classes WHERE cid = ? OR path = ? LIMIT 1').get(key, key));
 }
 
 /**
- * cid потомков класса.
+ * Пути потомков класса.
  * @param {object} [opts] { self = true — включая сам класс }
  * @returns {string[]}
  */

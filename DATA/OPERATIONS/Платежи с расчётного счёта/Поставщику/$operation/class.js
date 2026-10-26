@@ -1,12 +1,10 @@
-export default {
-    CID: 'op.pay.supplier',
-    label: 'Поставщику',
+export default {    label: 'Поставщику',
     icon: 'carbon:money',
     METADATA: {
         FIELDS: [
-            { id: 'counterparty', label: 'Поставщик', type: 'Link', target: 'cat.suppliers', required: true },
-            { id: 'contract', label: 'Договор', type: 'Link', target: 'cat.contracts' },
+            { id: 'counterparty', label: 'Поставщик', type: 'Link', target: '/DATA/CATALOGS/Поставщики', required: true },
+            { id: 'contract', label: 'Договор', type: 'Link', target: '/DATA/CATALOGS/Договоры' },
         ],
-        POSTINGS: [{ id: 'main', debit: { account: 'acc.60', analytics: { counterparty: 'counterparty' } } }],
+        POSTINGS: [{ id: 'main', debit: { account: '/DATA/REGISTER/60', analytics: { counterparty: 'counterparty' } } }],
     },
 }

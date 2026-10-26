@@ -54,3 +54,4 @@ torus/binnet/models/
 
 # Data organization DB (source of truth, backup separately)
 /.data/
+**/#system/work.db*

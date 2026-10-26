@@ -1,16 +1,22 @@
 /**
  * form/journal — журнал проводок на учётном ядре (`db_journal`, sources/data/api.js):
- * проводки периода по счетам журнала, новые сверху. Фильтры — период, счёт (с субсчетами),
- * класс операций, подразделение (если видно несколько — `db_scope`), «только действующие»
- * (без сторно и прежних версий проведения).
- * Названия операций, аналитик и счетов приходят в `names`; клик по счёту или операции
- * открывает форму счёта или класса операций.
+ * сверху полоса периодов `oda-packets`, проводки периода по счетам журнала, новые сверху.
+ * Фильтры — период, счёт (с субсчетами), класс операций, подразделение (`db_scope`),
+ * «только действующие» (без сторно и прежних версий проведения).
+ * Клик по дате/сумме открывает сборную карточку проводки (`db_entry`, Экран 4 ODANT);
+ * клик по счёту или операции открывает форму счёта или документ операции.
  */
+
+function _day(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const _today = () => _day(new Date());
+const _yearStart = () => `${new Date().getFullYear()}-01-01`;
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
 export default {
-    imports: 'oda//button',
+    imports: 'oda//button, oda//packets',
     template: /*html*/`
     <style>
         :host {
@@ -30,9 +36,9 @@ export default {
             min-width: 0;
             width: 140px;
             box-sizing: border-box;
-            padding: 4px;
-            font-size: 110%;
-            border: none;
+            padding: 4px 6px;
+            font-size: 100%;
+            border: 1px solid var(--border-color, #ccc);
             border-radius: 4px;
         }
         .error {
@@ -48,9 +54,11 @@ export default {
             @apply --horizontal;
             gap: 8px;
             padding: 4px 8px;
+            border-bottom: 1px solid var(--border-color, #eee);
         }
         .head {
             font-weight: bold;
+            background: var(--section-background, #f5f5f5);
         }
         .cell {
             flex: 1;
@@ -60,6 +68,7 @@ export default {
         }
         .cell.num {
             text-align: right;
+            font-variant-numeric: tabular-nums;
         }
         .cell.link {
             cursor: pointer;
@@ -70,8 +79,37 @@ export default {
         }
         .total {
             font-weight: bold;
+            background: var(--section-background, #f5f5f5);
+        }
+        .entry-card {
+            @apply --vertical;
+            gap: 8px;
+            padding: 10px;
+            border: 2px solid var(--focused-color, #1a73e8);
+            border-radius: 6px;
+            background: var(--content-background, #fff);
+        }
+        .entry-sides {
+            @apply --horizontal;
+            gap: 12px;
+        }
+        .entry-side {
+            @apply --vertical;
+            flex: 1;
+            gap: 4px;
+            padding: 8px;
+            border: 1px solid var(--border-color, #ddd);
+            border-radius: 4px;
+        }
+        .entry-side-title {
+            font-weight: bold;
+            border-bottom: 1px solid var(--border-color, #eee);
+            padding-bottom: 4px;
         }
     </style>
+    <oda-packets no-flex mode="month" ~if="packetsStart"
+        :start="packetsStart" :end="packetsEnd"
+        ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
     <div class="bar">
         <input :value="from" placeholder="с 2026-01-01" @change="from = $this.value">
         <input :value="to" placeholder="по 2026-12-31" @change="to = $this.value">
@@ -97,8 +135,8 @@ export default {
             <div class="cell num">Кол-во</div>
             <div class="cell">Статус</div>
         </div>
-        <div class="row" ~for="displayRows" ~class="{storno: $for.item.storno}">
-            <div class="cell">{{$for.item.date}}</div>
+        <div class="row" ~for="displayRows" ~class="{storno: $for.item.storno}" @dblclick="openEntry($for.item.entry)">
+            <div class="cell link" title="Открыть карточку проводки" @tap="openEntry($for.item.entry)">{{$for.item.date}}</div>
             <div class="cell link" @tap="openOperation($for.item)">{{$for.item.op}}</div>
             <div class="cell link" @tap="openAccount($for.item, 'debit')">{{$for.item.debit}}</div>
             <div class="cell">{{$for.item.debitAnalytics}}</div>
@@ -120,7 +158,38 @@ export default {
             <div class="cell"></div>
         </div>
     </div>
+    <!-- Экран 4 ODANT: Сборная карточка проводки -->
+    <div class="entry-card" ~if="entryCard">
+        <div class="bar">
+            <strong>Проводка #{{entryCard.entry}}</strong>
+            <span>Сумма: <strong>{{money(entryCard.amount)}}</strong></span>
+            <span ~if="entryCard.qty">Кол-во: {{entryCard.qty}}</span>
+            <span class="storno" ~if="entryCard.storno">[СТОРНО]</span>
+            <span style="margin-left:auto;">Операция: <strong>{{entryCard.operation?.title}}</strong></span>
+            <button type="button" @tap="closeEntry()">Закрыть</button>
+        </div>
+        <div class="entry-sides">
+            <div class="entry-side">
+                <div class="entry-side-title">ДЕБЕТ: {{entryCard.debit?.label}}</div>
+                <div>Сумма Дт: <strong>{{money(entryCard.debit?.amount)}}</strong></div>
+                <div ~for="entryCard.debit?.analytics">
+                    <span>{{$for.item.label}}:</span> <strong>{{$for.item.title || '—'}}</strong>
+                </div>
+            </div>
+            <div class="entry-side">
+                <div class="entry-side-title">КРЕДИТ: {{entryCard.credit?.label}}</div>
+                <div>Сумма Кт: <strong>{{money(entryCard.credit?.amount)}}</strong></div>
+                <div ~for="entryCard.credit?.analytics">
+                    <span>{{$for.item.label}}:</span> <strong>{{$for.item.title || '—'}}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
     `,
+    packetsKey: { $def: '*', $type: String, $save: true },
+    packetsStart: _yearStart(),
+    packetsEnd: _today(),
+    _packetFiltered: false,
     from: '',
     to: '',
     account: '',
@@ -137,6 +206,7 @@ export default {
     count: 0,
     sum: { amount: 0, qty: 0 },
     names: { objects: {}, classes: {}, paths: {} },
+    entryCard: null,
     error: '',
     money,
     get countText() {
@@ -160,6 +230,8 @@ export default {
     },
     get displayRows() {
         return (this.items || []).map(e => ({
+            entry: e.id || e.entry || null,
+            op_id: e.op_id || '',
             date: e.time ? new Date(e.time).toLocaleDateString() : '',
             op: this.opText(e),
             debit: this.accountText(e.debit),
@@ -174,6 +246,42 @@ export default {
             debit_cid: e.debit || '',
             credit_cid: e.credit || '',
         }));
+    },
+    async onPackets(e) {
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        if (Array.isArray(d))
+            return;
+        if (d.selected?.name === '*') {
+            if (this._packetFiltered) {
+                this._packetFiltered = false;
+                this.from = '';
+                this.to = '';
+                await this.reload();
+            }
+            return;
+        }
+        if (d.period?.start && d.period?.end) {
+            this._packetFiltered = true;
+            this.from = d.period.start;
+            this.to = d.period.end;
+            await this.reload();
+        }
+    },
+    async openEntry(entryId) {
+        if (!entryId || !this.$item)
+            return null;
+        this.error = '';
+        try {
+            this.entryCard = await this.$item.fetch('db_entry', { entry: entryId });
+            return this.entryCard;
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+            return null;
+        }
+    },
+    closeEntry() {
+        this.entryCard = null;
     },
     async attached() {
         await this.loadScope();
@@ -224,13 +332,13 @@ export default {
         }
     },
     /** Открыть форму класса в новом окне. */
-    async openPath(path) {
+    async openPath(path, nav) {
         if (!path)
             return;
         try {
             const t = await WORK.get_item(path);
             if (t && window.execute)
-                window.execute(t);
+                window.execute(t, nav);
         }
         catch (e) {
             this.error = String(e?.message || e);
@@ -238,7 +346,8 @@ export default {
     },
     /** Класс операции (её форма — список операций с окном редактора). */
     openOperation(row) {
-        return this.openPath(this.names?.paths?.[row.op_cid] || row.op_cid);
+        const nav = row?.op_id ? { view: 'objects', id: row.op_id } : undefined;
+        return this.openPath(this.names?.paths?.[row.op_cid] || row.op_cid, nav);
     },
     openAccount(row, side) {
         const cid = side === 'debit' ? row.debit_cid : row.credit_cid;

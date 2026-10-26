@@ -1,14 +1,12 @@
-export default {
-    CID: 'op.hr.back',
-    label: 'Вернуть из отпуска',
+export default {    label: 'Вернуть из отпуска',
     icon: 'carbon:user',
     METADATA: {
         POSTINGS: [
             {
                 id: 'main',
                 qty: '1',
-                debit: { account: 'acc.hr.work', analytics: { person: 'person' } },
-                credit: { account: 'acc.hr.vacation', analytics: { person: 'person' } },
+                debit: { account: '/DATA/REGISTER/Кадры/Работают', analytics: { person: 'person' } },
+                credit: { account: '/DATA/REGISTER/Кадры/В отпуске', analytics: { person: 'person' } },
             },
         ],
     },

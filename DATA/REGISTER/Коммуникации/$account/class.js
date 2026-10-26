@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.comm',
-    label: 'Коммуникации',
+export default {    label: 'Коммуникации',
     icon: 'carbon:email',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'counterparty',
                 label: 'Контрагент',
                 type: 'Link',
-                target: 'cat.subjects',
+                target: '/DATA/CATALOGS/Субъекты',
                 analytic: true,
                 required: true,
             },

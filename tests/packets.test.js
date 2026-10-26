@@ -74,13 +74,14 @@ describe('oda-packets: период и маска', () => {
 });
 
 describe('oda-packets: гранулярность mode', () => {
-    it('в month-режиме кварталов нет в детях года', () => {
+    it('в month-режиме кварталы — узлы года, месяцы лежат в них, листья — месяцы', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-12-31', 'month');
         const quarters = yearNode(inst, '2024').items.filter(i => i.type === 'quarter');
-        assert.deepEqual(quarters, [], 'кварталов быть не должно');
-        assert.equal(leaf(inst, '2024-02').parent.name, '2024');
+        assert.deepEqual(quarters.map(q => q.name), ['2024-q1', '2024-q2', '2024-q3', '2024-q4']);
+        assert.equal(leaf(inst, '2024-02').parent.name, '2024-q1');
         assert.equal(leaf(inst, '2024-02').root.name, '2024');
+        assert.equal(inst._leaves.some(l => l.type === 'quarter'), false, 'квартал не лист');
     });
 
     it('в day-режиме кварталов нет, дни — детьми месяца', () => {
@@ -156,7 +157,7 @@ describe('oda-packets: состояние и обратная связь', () =>
     it('отметка сбрасывается во всём дереве, а не только в полосе', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-12-31', 'day');
-        const may = yearNode(inst, '2024').items.find(i => i.name === '2024-05');
+        const may = inst._dateNodes['2024-05'];
         inst._applySelection([leaf(inst, '2024-05-17')]);
         assert.equal(may.items.find(d => d.name === '2024-05-17').selected, true);
         inst._applySelection([inst.items.find(i => i.name === '*')]);
@@ -241,7 +242,7 @@ describe('oda-packets: подписи без сдвига по таймзоне'
     it('подпись месяца соответствует названию месяца, а не соседнему', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2025-12-31', 'month');
-        const dec = yearNode(inst, '2024').items.find(i => i.name === '2024-12');
+        const dec = inst._dateNodes['2024-12'];
         assert.match(dec.label, /^декабрь/, dec.label);
         assert.match(dec.fullLabel, /^декабрь/, dec.fullLabel);
     });
@@ -392,11 +393,14 @@ describe('oda-packets: меню выбора', () => {
             delete fakeODA.createComponent;
             delete fakeODA.showMenu;
         }
-        assert.equal(created.id, 'oda-menu-list', 'список отдан явно, а не по ODA.menuTag');
+        assert.equal(created.id, 'oda-packets-months', 'список отдан явно, а не по ODA.menuTag');
         assert.equal(params.menu, created, 'содержимое окна передаётся в ODA.showMenu');
         assert.equal(params.items, undefined, 'список живёт в компоненте, а не в params');
-        assert.equal(created.items.length, 13, '12 месяцев и «весь год»');
-        assert.deepEqual(created.items[1].days, [], 'в month-режиме у месяца нет дней');
+        assert.equal(created.items.length, 17, '«весь год», 4 заголовка кварталов и 12 месяцев');
+        assert.equal(created.items[1].header, true, 'первый квартал — заголовок');
+        assert.equal(created.items[1].value, '2024-q1');
+        assert.deepEqual(created.items.find(i => i.value === '2024-03').days, [], 'в month-режиме у месяца нет дней');
+        assert.equal(created.items.find(i => i.value === '2024-03').submenu, false, 'шеврона нет');
         assert.equal(inst.selected.name, '2024-03');
         assert.equal(inst.mask, '2024-03*');
     });
@@ -417,39 +421,50 @@ describe('oda-packets: список окна не зависит от ODA.menuTa
         return el;
     }
 
-    it('oda-packets-months: окно дней — свой oda-menu-list, выбор доходит до окна месяцев', async () => {
+    // Регрессия: при extends шаблон родителя склеивается с своим — список рисовался бы дважды
+    it('oda-packets-months: без extends, список один (шаблон не склеивается с oda-menu-list)', () => {
+        const def = defs.find(d => d.is === 'oda-packets-months');
+        assert.equal(def.extends, undefined, 'extends недопустим: ODA склеивает шаблоны');
+        assert.equal(def.template.match(/~for="items"/g).length, 1, 'один цикл по items');
+    });
+
+    // Шеврон открывает окно дней справа от строки; окно месяцев остаётся открытым, пока не выбран день
+    it('oda-packets-months: шеврон открывает окно дней, выбор дня закрывает окно месяцев', async () => {
         const el = mountMonths('2024-05-17');
         const created = [];
         fakeODA.menuTag = 'item-menu';
         fakeODA.createComponent = (id, props) => (created.push({ id, ...props }), { id, ...props });
-        fakeODA.showMenu = async p => { el.shown = p; return '2024-05-20'; };
+        let shown = null;
+        fakeODA.showMenu = async (p, anchor) => { shown = { p, anchor }; return '2024-05-20'; };
+        const currentTarget = { getBoundingClientRect: () => ({ right: 90, top: 40 }) };
         try {
-            await el.pick({ value: '2024-05', days: [{ label: '17', value: '2024-05-17' }, { label: '20', value: '2024-05-20' }] });
+            await el.openSubmenu({ value: '2024-05', days: [{ label: '17', value: '2024-05-17' }, { label: '20', value: '2024-05-20' }] }, { currentTarget });
         } finally {
             delete fakeODA.createComponent;
             delete fakeODA.showMenu;
             delete fakeODA.menuTag;
         }
         assert.equal(created[0].id, 'oda-menu-list', 'список дней создаётся явно, а не берётся из ODA.menuTag');
-        assert.deepEqual(el.shown.menu.items.map(d => d.value), ['2024-05-17', '2024-05-20']);
-        assert.equal(el.shown.menu.value, '2024-05-17', 'отмечается выбранный день');
+        assert.deepEqual(shown.p.menu.items.map(d => d.value), ['2024-05-17', '2024-05-20']);
+        assert.equal(shown.p.menu.value, '2024-05-17', 'отмечается выбранный день');
+        assert.deepEqual({ x: shown.anchor.x, y: shown.anchor.y, target: shown.anchor.target }, { x: 90, y: 40, target: currentTarget });
         assert.equal(el.value, '2024-05', 'месяц отмечается в окне месяцев');
         assert.equal(el.closed, '2024-05-20', 'имя дня возвращается окну месяцев');
     });
 
-    it('oda-packets-months: месяц без дней закрывает окно, список не создаётся', async () => {
+    it('oda-packets-months: шеврон у месяца без дней ничего не открывает', async () => {
         const el = mountMonths();
         let created = 0;
         fakeODA.createComponent = () => { created++; return {}; };
         fakeODA.showMenu = async () => { throw new Error('окно дней не должно открываться'); };
         try {
-            await el.pick({ value: '2024', days: [] });
+            await el.openSubmenu({ value: '2024', days: [] }, null);
         } finally {
             delete fakeODA.createComponent;
             delete fakeODA.showMenu;
         }
         assert.equal(created, 0, 'список дней не создаётся');
-        assert.equal(el.closed, '2024', '«весь год» выбирается сразу');
+        assert.equal(el.closed, undefined, 'окно месяцев не закрывается');
     });
 
     it('oda-packets-months: отмена окна дней не закрывает окно месяцев', async () => {
@@ -457,7 +472,7 @@ describe('oda-packets: список окна не зависит от ODA.menuTa
         fakeODA.createComponent = (id, props) => ({ id, ...props });
         fakeODA.showMenu = async () => { throw new Error('отмена'); };
         try {
-            await el.pick({ value: '2024-05', days: [{ value: '2024-05-17' }] });
+            await el.openSubmenu({ value: '2024-05', days: [{ value: '2024-05-17' }] }, null);
         } finally {
             delete fakeODA.createComponent;
             delete fakeODA.showMenu;
@@ -589,5 +604,80 @@ describe('oda-packets: value (ключ выбора)', () => {
         build(inst, '2024-01-01', '2024-12-31', 'month');
         assert.equal(inst.selected.name, '*');
         assert.equal(inst.value, '*');
+    });
+});
+describe('oda-packets: кварталы и месяцы выбираются в day/month', () => {
+    it('квартал: период и маска резолвятся, ключ восстанавливается в month и day', () => {
+        const { inst } = mount();
+        build(inst, '2024-01-01', '2024-12-31', 'month');
+        inst._applySelection([inst._dateNodes['2024-q2']]);
+        assert.deepEqual(inst.period, { start: '2024-04-01', end: '2024-06-30' });
+        assert.equal(inst.value, '2024-q2*');
+        for (const mode of ['month', 'day']) {
+            const restored = mount({ value: '2024-q2*' }).inst;
+            build(restored, '2024-01-01', '2024-12-31', mode);
+            assert.equal(restored.selected.name, '2024-q2', mode);
+        }
+    });
+
+    it('месяц в day-режиме выбирается и восстанавливается по ключу', () => {
+        const { inst } = mount({ value: '2024-05*' });
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        assert.equal(inst.selected.name, '2024-05', 'ключ месяца находит узел, а не откатывается на «Все»');
+        assert.deepEqual(inst.period, { start: '2024-05-01', end: '2024-05-31' });
+    });
+
+    it('квартал на краю покрытия обрезается по диапазону', () => {
+        const { inst } = mount();
+        build(inst, '2024-11-15', '2025-02-10', 'month');
+        inst._applySelection([inst._dateNodes['2024-q4']]);
+        assert.deepEqual(inst.period, { start: '2024-11-15', end: '2024-12-31' });
+    });
+
+    it('стрелки от выбранного квартала в day-режиме идут от его краёв по дням', () => {
+        const { inst } = mount();
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        inst._applySelection([inst._dateNodes['2024-q2']]);
+        inst._step(1);
+        assert.equal(inst.selected.name, '2024-07-01', 'вперёд — первый день после квартала');
+        inst._applySelection([inst._dateNodes['2024-q2']]);
+        inst._step(-1);
+        assert.equal(inst.selected.name, '2024-03-31', 'назад — последний день перед кварталом');
+    });
+
+    it('меню day: заголовки кварталов с месяцами, отметка квартала', async () => {
+        const { inst } = mount({ mode: 'day' });
+        build(inst, '2024-01-01', '2024-12-31', 'day');
+        const created = [];
+        fakeODA.createComponent = (id, props) => (created.push({ id, ...props }), { id, ...props });
+        fakeODA.showMenu = async () => { throw new Error('отмена'); };
+        try {
+            inst._applySelection([inst._dateNodes['2024-q3']]);
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        const list = created[0].items;
+        assert.deepEqual(list.filter(i => i.header).map(i => i.value), ['2024-q1', '2024-q2', '2024-q3', '2024-q4']);
+        const idx = list.findIndex(i => i.value === '2024-q1');
+        assert.deepEqual(list.slice(idx + 1, idx + 4).map(i => i.value), ['2024-01', '2024-02', '2024-03'], 'месяцы под заголовком');
+        assert.equal(list.find(i => i.value === '2024-07').submenu, true, 'у месяца дня — шеврон');
+        assert.equal(created[0].value, '2024-q3', 'выбранный квартал отмечен');
+    });
+
+    it('меню: клик по заголовку квартала выбирает квартал', async () => {
+        const { inst } = mount({ mode: 'month' });
+        build(inst, '2024-01-01', '2024-12-31', 'month');
+        fakeODA.createComponent = (id, props) => ({ id, ...props });
+        fakeODA.showMenu = async () => '2024-q4';
+        try {
+            await inst._onOpenMenu({ detail: { value: { item: yearNode(inst, '2024') } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        assert.equal(inst.selected.name, '2024-q4');
+        assert.equal(inst.period.start, '2024-10-01');
     });
 });

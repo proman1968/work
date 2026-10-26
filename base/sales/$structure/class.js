@@ -1,5 +1,4 @@
 export default {
-    CID: 'unit.sales',
     icon: 'icons:shopping-cart',
     label: "Продажи",
     "#security": {

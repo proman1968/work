@@ -1,15 +1,20 @@
 /**
- * form/sheet — оборотно-сальдовая ведомость на учётном ядре (`db_sheet`, sources/data/api.js):
- * сальдо на начало, обороты Дт/Кт, сальдо на конец по дереву счетов журнала.
- * «Разворот» — слоты аналитик (через запятую, например `counterparty`): строки счёта
- * делятся по объектам аналитик, сальдо счёта тогда развёрнутое. Клик по строке открывает форму счёта.
- * Если видно несколько подразделений (`db_scope`) — фильтр по подразделению с вложенными.
+ * form/sheet — Экран 1 ODANT: Общая оборотно-сальдовая ведомость Журнала (`db_sheet`, sources/data/api.js).
+ * Сверху — единая полоса периодов `oda-packets` и панель быстрого отбора.
+ * В центре — дерево всех счетов и субсчетов: На начало (Дт / Кт) | За период (Дт / Кт) | На конец (Дт / Кт) и строка Итого.
+ * Внизу — панель переходов от выбранного счёта: Обороты | Анализ | Проводки.
  */
+
+function _day(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const _today = () => _day(new Date());
+const _yearStart = () => `${new Date().getFullYear()}-01-01`;
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
 export default {
-    imports: 'oda//button',
+    imports: 'oda//button, oda//packets',
     template: /*html*/`
     <style>
         :host {
@@ -29,9 +34,9 @@ export default {
             min-width: 0;
             width: 140px;
             box-sizing: border-box;
-            padding: 4px;
-            font-size: 110%;
-            border: none;
+            padding: 4px 6px;
+            font-size: 100%;
+            border: 1px solid var(--border-color, #ccc);
             border-radius: 4px;
         }
         .error {
@@ -42,14 +47,23 @@ export default {
             @apply --vertical;
             flex: 1;
             overflow: auto;
+            border: 1px solid var(--border-color, #ddd);
+            border-radius: 4px;
         }
         .head, .row {
             @apply --horizontal;
             gap: 8px;
             padding: 4px 8px;
+            border-bottom: 1px solid var(--border-color, #eee);
         }
         .head {
             font-weight: bold;
+            background: var(--section-background, #f5f5f5);
+            position: sticky;
+            top: 0;
+        }
+        .row.selected {
+            background: var(--selected-background, #e8f0fe);
         }
         .cell {
             flex: 1;
@@ -59,6 +73,7 @@ export default {
         }
         .cell.num {
             text-align: right;
+            font-variant-numeric: tabular-nums;
         }
         .cell.acc {
             flex: 3;
@@ -74,8 +89,24 @@ export default {
         }
         .total {
             font-weight: bold;
+            background: var(--section-background, #f5f5f5);
+        }
+        .footer-nav {
+            @apply --horizontal;
+            gap: 8px;
+            align-items: center;
+            padding-top: 4px;
+            border-top: 1px solid var(--border-color, #ddd);
+        }
+        .footer-target {
+            margin-left: auto;
+            font-size: small;
+            opacity: 0.8;
         }
     </style>
+    <oda-packets no-flex mode="month" ~if="packetsStart"
+        :start="packetsStart" :end="packetsEnd"
+        ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
     <div class="bar">
         <input :value="from" placeholder="с 2026-01-01" @change="from = $this.value">
         <input :value="to" placeholder="по 2026-12-31" @change="to = $this.value">
@@ -98,8 +129,9 @@ export default {
             <div class="cell num">Кон. Дт</div>
             <div class="cell num">Кон. Кт</div>
         </div>
-        <div class="row" ~class="{group: !$for.item.leaf, detail: $for.item.detail}" ~for="displayRows">
-            <div class="cell acc" ~style="{paddingLeft: $for.item.indent + 'px'}" @tap="open($for.item)">{{$for.item.label}}</div>
+        <div class="row" ~class="{group: !$for.item.leaf, detail: $for.item.detail, selected: selectedRow?.account === $for.item.account && selectedRow?.label === $for.item.label}"
+            ~for="displayRows" @tap="selectRow($for.item)" @dblclick="open($for.item)">
+            <div class="cell acc" ~style="{paddingLeft: $for.item.indent + 'px'}" @tap.stop="open($for.item)">{{$for.item.label}}</div>
             <div class="cell num">{{$for.item.open_debit}}</div>
             <div class="cell num">{{$for.item.open_credit}}</div>
             <div class="cell num">{{$for.item.debit}}</div>
@@ -117,17 +149,29 @@ export default {
             <div class="cell num">{{totals.close_credit}}</div>
         </div>
     </div>
+    <div class="footer-nav">
+        <oda-button icon="odant:calendar" @tap="openTurnovers()">Обороты</oda-button>
+        <oda-button icon="odant:grid" @tap="openAnalysis()">Анализ</oda-button>
+        <oda-button icon="icons:list" @tap="openPostings()">Проводки</oda-button>
+        <span class="footer-target">{{selectedRow ? 'Счёт: ' + selectedRow.label : 'Выберите счёт в таблице'}}</span>
+    </div>
     `,
+    packetsKey: { $def: '*', $type: String, $save: true },
+    packetsStart: _yearStart(),
+    packetsEnd: _today(),
+    _packetFiltered: false,
     from: '',
     to: '',
     account: '',
     /** слоты аналитик для разворота строк счёта, через запятую */
     by: '',
+    slots: [],
     /** видимые подразделения (db_scope): больше одного — фильтр */
     units: [],
     /** выбранное подразделение (с вложенными), пусто — все видимые */
     unit: '',
     rows: [],
+    selectedRow: null,
     total: null,
     names: { objects: {}, classes: {}, paths: {} },
     error: '',
@@ -146,13 +190,14 @@ export default {
     rowLabel(r) {
         if (r.key)
             return Object.values(r.key).map(id => (id === null ? '—' : this.names?.objects?.[id] || id)).join(' / ');
-        const code = String(r.account || '').split('/').pop();
+        const code = String(r.account || '').split('/').pop().replace(/^acc\./, '');
         const label = r.label || this.names?.classes?.[r.account];
         return label && label !== code ? `${code} ${label}` : code;
     },
     get displayRows() {
         return (this.rows || []).map(r => ({
             account: r.account,
+            key: r.key || null,
             label: this.rowLabel(r),
             leaf: !!r.leaf,
             detail: !!r.key,
@@ -160,8 +205,45 @@ export default {
             ...this.cells(r),
         }));
     },
+    selectRow(row) {
+        this.selectedRow = row || null;
+    },
+    async onPackets(e) {
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        if (Array.isArray(d))
+            return;
+        if (d.selected?.name === '*') {
+            if (this._packetFiltered) {
+                this._packetFiltered = false;
+                this.from = '';
+                this.to = '';
+                await this.reload();
+            }
+            return;
+        }
+        if (d.period?.start && d.period?.end) {
+            this._packetFiltered = true;
+            this.from = d.period.start;
+            this.to = d.period.end;
+            await this.reload();
+        }
+    },
     async attached() {
+        await this.loadSlots();
         await this.loadScope();
+        await this.reload();
+    },
+    async loadSlots() {
+        try {
+            const s = await this.$item?.fetch('db_schema');
+            this.slots = Array.isArray(s?.slots) ? s.slots : [];
+        }
+        catch {
+            this.slots = [];
+        }
+    },
+    async setBy(val) {
+        this.by = String(val || '');
         await this.reload();
     },
     /** Видимые подразделения для фильтра; без ответа — без фильтра. */
@@ -197,23 +279,44 @@ export default {
             this.names = { objects: {}, classes: {}, paths: {}, ...(res?.names || {}) };
             this.rows = Array.isArray(res?.rows) ? res.rows : [];
             this.total = res?.total || null;
+            if (!this.selectedRow && this.displayRows.length)
+                this.selectedRow = this.displayRows[0];
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
     },
-    /** Открыть форму счёта (у строки разворота — её счёта). */
-    async open(row) {
-        const path = this.names?.paths?.[row?.account] || row?.account;
+    /** Открыть форму счёта (у строки разворота — её счёта) в заданном режиме (по умолчанию — карточка/проводки). */
+    async open(row, mode = '') {
+        const target = row || this.selectedRow || this.displayRows?.[0];
+        const path = this.names?.paths?.[target?.account] || target?.account;
         if (!path)
             return;
         try {
             const t = await WORK.get_item(path);
-            if (t && window.execute)
-                window.execute(t);
+            if (!t || !window.execute)
+                return;
+            const nav = { view: 'postings', from: this.from, to: this.to, unit: this.unit };
+            if (mode)
+                nav.mode = mode;
+            if (target?.key && typeof target.key === 'object') {
+                const filters = Object.fromEntries(Object.entries(target.key).filter(([, v]) => v));
+                if (Object.keys(filters).length)
+                    nav.filters = filters;
+            }
+            window.execute(t, nav);
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
+    },
+    openTurnovers(row) {
+        return this.open(row || this.selectedRow, 'turnovers');
+    },
+    openAnalysis(row) {
+        return this.open(row || this.selectedRow, 'analysis');
+    },
+    openPostings(row) {
+        return this.open(row || this.selectedRow, 'card');
     },
 };

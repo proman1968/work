@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.pay.ndfl',
-    label: 'НДФЛ',
+export default {    label: 'НДФЛ',
     icon: 'carbon:money',
-    METADATA: { POSTINGS: [{ id: 'main', debit: { account: 'acc.68.01' } }] },
+    METADATA: { POSTINGS: [{ id: 'main', debit: { account: '/DATA/REGISTER/68/01' } }] },
 }

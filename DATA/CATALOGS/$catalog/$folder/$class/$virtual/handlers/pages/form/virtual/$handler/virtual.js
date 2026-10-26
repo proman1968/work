@@ -197,14 +197,14 @@ export default {
         }
     },
     /** Открыть форму реестра-источника. */
-    async open() {
+    async open(row) {
         const path = this.registry?.path || this.registry?.cid;
         if (!path)
             return;
         try {
             const t = await WORK.get_item(path);
             if (t && window.execute)
-                window.execute(t);
+                window.execute(t, row?.id ? { view: 'objects', id: row.id } : undefined);
         }
         catch (e) {
             this.error = String(e?.message || e);

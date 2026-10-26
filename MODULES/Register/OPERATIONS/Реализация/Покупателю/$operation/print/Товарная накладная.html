@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Товарная накладная</title>
+<style>
+    body { font: 12px/1.4 Arial, sans-serif; margin: 15mm; color: #000; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sub { color: #555; margin-bottom: 12px; }
+    .parties { margin-bottom: 12px; }
+    .parties div { margin: 2px 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #000; padding: 4px 6px; }
+    th { background: #f3f3f3; }
+    td.r { text-align: right; white-space: nowrap; }
+    tfoot td { font-weight: bold; }
+    .words { margin: 12px 0; }
+    .sign { margin-top: 32px; display: flex; gap: 48px; }
+    .sign div { border-top: 1px solid #000; min-width: 180px; padding-top: 4px; font-size: 11px; }
+    @media print { body { margin: 8mm; } }
+</style>
+</head>
+<body>
+<h1>Товарная накладная № {{doc.number}}</h1>
+<div class="sub">от {{doc.date}}</div>
+<div class="parties">
+    <div><b>Грузоотправитель:</b> {{org.name}}, ИНН {{org.inn}}, КПП {{org.kpp}}, {{org.address}}</div>
+    <div><b>Грузополучатель:</b> {{client}}</div>
+    <div><b>Склад отгрузки:</b> {{storage}}</div>
+    {{#if contract}}<div><b>Договор:</b> {{contract}}</div>{{/if}}
+</div>
+<table>
+    <thead>
+        <tr><th>№</th><th>Наименование</th><th>Ед.</th><th>Кол-во</th><th>Цена без НДС</th><th>Сумма без НДС</th><th>НДС</th><th>Всего</th></tr>
+    </thead>
+    <tbody>
+    {{#lines}}
+        <tr>
+            <td class="r">{{i}}</td><td>{{row.item}}</td><td>{{row.unit}}</td>
+            <td class="r">{{n(row.qty, 3)}}</td><td class="r">{{money(row.price)}}</td>
+            <td class="r">{{money(row.qty * row.price)}}</td>
+            <td class="r">{{money(round(row.qty * row.price * norm('Ставка НДС', row.item_id), 2))}}</td>
+            <td class="r">{{money(row.qty * row.price + round(row.qty * row.price * norm('Ставка НДС', row.item_id), 2))}}</td>
+        </tr>
+        {{+net = row.qty * row.price}}
+        {{+vat = round(row.qty * row.price * norm('Ставка НДС', row.item_id), 2)}}
+    {{/lines}}
+    </tbody>
+    <tfoot>
+        <tr><td colspan="5">Итого</td><td class="r">{{money(net)}}</td><td class="r">{{money(vat)}}</td><td class="r">{{money(net + vat)}}</td></tr>
+    </tfoot>
+</table>
+<div class="words">Всего к оплате: {{words(net + vat)}}</div>
+<div class="sign"><div>Отпустил</div><div>Груз получил</div></div>
+</body>
+</html>

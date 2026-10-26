@@ -47,7 +47,7 @@ export const MEMBERS = Object.freeze({
     allBosses: L.READ, assignedUsers: L.READ, declared_roles: L.READ, data_types: L.READ,
     inherit_ancestor: L.READ, ancestor: L.READ, tilde: L.READ, contentType: L.READ,
     $parent: L.READ, $owner: L.READ, $class: L.READ, $folder: L.READ, $users: L.READ,
-    types: L.READ, system_types: L.READ,
+    types: L.READ, system_types: L.READ, allowed_child_types: L.READ,
     // вошедший
     proxy: L.USER, node_grants: L.USER, mcp_token_create: L.USER, mcp_token_list: L.USER, mcp_token_revoke: L.USER,
     // сеть WORK

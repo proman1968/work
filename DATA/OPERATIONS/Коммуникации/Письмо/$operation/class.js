@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.comm.letter',
-    label: 'Письмо',
+export default {    label: 'Письмо',
     icon: 'carbon:email',
     AUTO_REGISTER: true,
     METADATA: {
@@ -18,8 +16,8 @@ export default {
                 id: 'main',
                 qty: '1',
                 amount: "norm('Стоимость письма')",
-                debit: { account: 'acc.comm', analytics: { counterparty: 'counterparty' } },
-                credit: { account: 'acc.tech' },
+                debit: { account: '/DATA/REGISTER/Коммуникации', analytics: { counterparty: 'counterparty' } },
+                credit: { account: '/DATA/REGISTER/Технический' },
             },
         ],
     },

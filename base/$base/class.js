@@ -1,5 +1,4 @@
 export default {
-    CID: "org",
     label: "ООО «Маслоторг»",
     inn: "7700000001",
     kpp: "770001001",

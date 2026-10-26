@@ -373,6 +373,29 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             $folder[itemsSelector] = [$file];
             return [$folder];
         }
+        try {
+            const allowed = await this.$item?.fetch?.('allowed_child_types');
+            if (Array.isArray(allowed)) {
+                const $file = await fetchTypes('/$server/$folder/$file');
+                prepareFiles($file);
+                const declared = await collectDeclaredTypes(this.$item);
+                const byId = new Map(declared.map(t => [t.id, t]));
+                const nodes = [];
+                for (const id of allowed) {
+                    if (!id || id === '$class')
+                        continue;
+                    let node = byId.get(id);
+                    if (!node) {
+                        node = { id, path: '/$server/$folder/$class/' + id, isCustom: true, icon: '' };
+                        node.icon = await getIcon(node);
+                    }
+                    nodes.push(node);
+                }
+                $folder[itemsSelector] = [$file, ...nodes];
+                return [$folder];
+            }
+        }
+        catch { /* fallback ниже */ }
         if (this.$item.isCustom) {
             // в custom'ых item'ах — папка и типы, объявленные в $folder/$class
             // узла и его кастомных предков (ближний уровень перекрывает дальний)

@@ -1,5 +1,4 @@
 export default {
-    CID: 'unit.purchasing',
     icon: 'icons:local-shipping',
     label: 'Закупки',
     "#security": {

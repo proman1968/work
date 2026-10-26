@@ -1,10 +1,8 @@
-export default {
-    CID: 'op.comm',
-    label: 'Коммуникации',
+export default {    label: 'Коммуникации',
     icon: 'carbon:chat',
     METADATA: {
         FIELDS: [
-            { id: 'counterparty', label: 'Контрагент', type: 'Link', target: 'cat.subjects', required: true },
+            { id: 'counterparty', label: 'Контрагент', type: 'Link', target: '/DATA/CATALOGS/Субъекты', required: true },
             { id: 'subject', label: 'Тема' },
         ],
     },

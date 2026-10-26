@@ -22,8 +22,8 @@
  */
 import { DEV_MODE } from '../host/config.js';
 import { dataDb } from './db.js';
-import { refreshClasses, getClass, descendants, classesOfType, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
-import { classSchema, checkSchema, FAMILY } from './schema.js';
+import { refreshClasses, getClass, descendants, isLeaf, classesOfType, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
+import { classSchema, checkSchema, analyticSlots, FAMILY } from './schema.js';
 import {
     createObject, readObject, objectVersions, updateObject, deleteObject, restoreObject, queryObjects, linkCids,
 } from './objects.js';
@@ -31,7 +31,7 @@ import {
     registerOperation, correctOperation, cancelOperation, previewEntries, operationEntries, closePeriod, closedUntil,
 } from './posting.js';
 import {
-    journal, trialBalance, accountCard, objectState, objectTrajectory, virtualMembers, isVirtualMember, namesOf,
+    journal, trialBalance, accountCard, accountTurnovers, readEntry, objectState, objectTrajectory, virtualMembers, isVirtualMember, namesOf,
 } from './reports.js';
 import { linkChoices } from './choices.js';
 import { printTemplates, renderPrint } from './print.js';
@@ -45,42 +45,61 @@ import { normalizeSecurity, walkPlaces, trailKey } from '../server/access/workpl
 /** Ссылки рабочих мест — модулем по требованию: links.js тянет сервер, который сам импортирует этот модуль. */
 const linksModule = () => import('../server/access/links.js');
 
-let dirty = true;
-let refreshing = null;
+const storeStates = new Map();
+let dirtyGeneration = 1;
+
+/** Путь организации ($base) для вызова: из параметра `base` или из пути элемента `/ORGANIZATIONS/<Имя>`. */
+export function resolveBasePath(item, p = {}) {
+    if (typeof p?.base === 'string' && p.base.trim())
+        return '/' + p.base.trim().replace(/^\/+|\/+$/g, '');
+    const raw = typeof item === 'string' ? item : String(item?.path ?? '');
+    const m = raw.match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+    return m ? `/${m[1]}/${m[2]}` : '';
+}
+
+function rootsForBase(basePath) {
+    if (!basePath)
+        return DEFAULT_ROOTS;
+    return ['MODULES', 'DATA', basePath.replace(/^\/+/, '')];
+}
 
 /** Кэш классов устарел (правка class.js): обновится перед следующим обращением. */
 export function markClassesDirty() {
-    dirty = true;
+    dirtyGeneration++;
 }
 
-/** БД данных с актуальным кэшем классов. */
-export async function dataStore() {
-    const db = await dataDb();
-    while (dirty || refreshing) {
-        if (!refreshing) {
-            dirty = false;
-            refreshing = refreshClasses(db, process.cwd())
+/** БД данных организации ($base) с актуальным кэшем классов. */
+export async function dataStore(basePath = '') {
+    const key = String(basePath ?? '').trim().replace(/\/+$/, '');
+    const db = await dataDb(key);
+    let st = storeStates.get(db);
+    if (!st) {
+        st = { gen: 0, refreshing: null };
+        storeStates.set(db, st);
+    }
+    while (st.gen < dirtyGeneration || st.refreshing) {
+        if (!st.refreshing) {
+            const targetGen = dirtyGeneration;
+            st.refreshing = refreshClasses(db, process.cwd(), rootsForBase(key))
                 .then(r => {
+                    st.gen = targetGen;
                     if (r.problems.length)
                         console.warn('[data] классы:', r.problems.join('; '));
                 })
-                .catch(e => {
-                    dirty = true;
-                    throw e;
-                })
                 .finally(() => {
-                    refreshing = null;
+                    st.refreshing = null;
                 });
         }
-        await refreshing;
+        await st.refreshing;
     }
     return db;
 }
 
 /** Есть ли у класса ядра собственные неудалённые объекты (инвариант листа при создании дочернего класса). */
 export async function classHasObjects(ref) {
-    const db = await dataStore();
-    const cls = getClass(db, String(ref ?? ''));
+    const pathStr = String(ref ?? '');
+    const db = await dataStore(resolveBasePath(pathStr));
+    const cls = getClass(db, pathStr);
     return !!cls && !!db.prepare("SELECT 1 FROM objects WHERE cid = ? AND status <> 'deleted' LIMIT 1").get(cls.cid);
 }
 
@@ -136,12 +155,12 @@ function entryFilters(p) {
 
 const underData = path => DEFAULT_ROOTS.some(r => path === '/' + r || path.startsWith('/' + r + '/'));
 
-async function classOf(db, item) {
+async function classOf(db, item, basePath = '') {
     const ref = String(item?.path ?? '');
     let cls = getClass(db, ref);
     if (!cls && underData(ref)) {
         markClassesDirty();
-        await dataStore();
+        await dataStore(basePath);
         cls = getClass(db, ref);
     }
     if (!cls)
@@ -281,15 +300,50 @@ function method(level, fn) {
             uid = await item._assertDataWrite(p);
         else
             await admin(item, p);
-        const db = await dataStore();
-        const cls = await classOf(db, item);
+        const basePath = resolveBasePath(item, p);
+        const db = await dataStore(basePath);
+        const cls = await classOf(db, item, basePath);
         const scope = level === 'admin'
             ? { full: true, links: [], grants: null }
             : await scopeOf(item, p, db, cls, level === 'write');
         if (scope.grants?.length === 0)
             throw new Error('Доступ запрещён');
-        return fn({ db, cls, p, uid, scope, vis: scope.grants });
+        return fn({ db, cls, item, p, uid, scope, vis: scope.grants });
     };
+}
+
+/**
+ * Записать факт операции в ленту событий (data.logs) подразделения (или класса операции) и автора.
+ */
+async function logOperationFact(db, item, op, action, uid, p) {
+    if (!op || !globalThis.WORK)
+        return;
+    try {
+        const LOGS = await import('../server/logs.js');
+        let storage = item;
+        if (op.unit) {
+            let u = await globalThis.WORK.get_item(op.unit).catch(() => null);
+            if (Array.isArray(u))
+                u = u.at(-1);
+            if (u?.save_file)
+                storage = u;
+        }
+        if (!storage?.save_file)
+            return;
+        const cls = getClass(db, op.cid);
+        const title = op.title || cls?.label || op.id;
+        const row = {
+            time: Date.now(),
+            sender: uid || op.author || 'system',
+            ext: 'operation',
+            path: `${op.cid}/${op.id}`,
+            content: `${action}: ${title}`,
+        };
+        await LOGS.appendRow(storage, row, p);
+    }
+    catch {
+        /* логи не должны блокировать транзакцию БД */
+    }
 }
 
 /**
@@ -302,9 +356,41 @@ function withTargetPaths(db, schema) {
     const walk = list => (list || []).map(f => ({
         ...f,
         ...(f.type === 'link' && f.target ? { targetPath: getClass(db, f.target)?.path ?? f.target } : {}),
-        ...(f.type === 'table' ? { fields: walk(f.fields) } : {}),
+        ...(f.type === 'table' || f.type === 'struct' ? { fields: walk(f.fields) } : {}),
     }));
     return { ...schema, fields: walk(schema.fields), overlay: walk(schema.overlay) };
+}
+
+/**
+ * Поддерево класса для форм: `classes` (cid → описание потомков), `leaves` (листья для создания
+ * объектов в группе) и `slots` (слоты аналитик счёта или журнала по всему поддереву счетов).
+ */
+function schemaSubtree(db, cls) {
+    const classes = {};
+    const leaves = [];
+    const slots = [];
+    const seenSlots = new Set();
+    const fam = familyOf(cls);
+    for (const cid of descendants(db, cls.cid)) {
+        const c = getClass(db, cid);
+        if (!c)
+            continue;
+        const leaf = isLeaf(db, cid);
+        classes[cid] = { cid, path: c.path, label: c.label, type: c.type, leaf };
+        if (leaf && ['$catalog', '$registry', '$operation'].includes(c.type))
+            leaves.push({ cid, path: c.path, label: c.label });
+        if (fam === 'account') {
+            const s = withTargetPaths(db, classSchema(db, cid));
+            for (const f of analyticSlots(s || { fields: [] })) {
+                if (!seenSlots.has(f.id)) {
+                    seenSlots.add(f.id);
+                    slots.push({ id: f.id, label: f.label || f.id, target: f.target, targetPath: f.targetPath || f.target });
+                }
+            }
+        }
+    }
+    leaves.sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+    return { classes, leaves, ...(fam === 'account' ? { slots } : {}) };
 }
 
 /** Пути мест подразделения (дерево ROLES его #security). */
@@ -335,7 +421,11 @@ export const DATA_METHODS = Object.freeze({
      * Схема класса по наследованию и ошибки конфигурации: { schema, errors }.
      * Схема вложена: ответ с `type`/`path` на верхнем уровне клиент (WORK.__bind) превратил бы в элемент дерева.
      */
-    db_schema: { level: 'read', fn: method('read', ({ db, cls }) => ({ schema: withTargetPaths(db, classSchema(db, cls.cid)), errors: checkSchema(db, cls.cid) })) },
+    db_schema: { level: 'read', fn: method('read', ({ db, cls }) => ({
+        schema: withTargetPaths(db, classSchema(db, cls.cid)),
+        errors: checkSchema(db, cls.cid),
+        ...schemaSubtree(db, cls),
+    })) },
 
     /**
      * Видимость и места записи пользователя в классе: { all, units, contexts }.
@@ -358,8 +448,9 @@ export const DATA_METHODS = Object.freeze({
      * Вызывается на подразделении (`$structure`, `$base`); права — чтение подразделения.
      */
     db_workspace: { level: 'read', fn: async (item, p = {}) => {
-        const db = await dataStore();
-        const root = await classOf(db, item);
+        const basePath = resolveBasePath(item, p);
+        const db = await dataStore(basePath);
+        const root = await classOf(db, item, basePath);
         if (!STRUCTURE_TYPES.includes(root.type))
             throw new DataError(`«${root.label}» — не подразделение`);
         const units = [];
@@ -383,12 +474,15 @@ export const DATA_METHODS = Object.freeze({
      * Создать объект в листе: { post|body, time?, unit?, place?, ext_of?, valid_from? }.
      * Подразделение и место — из мест записи пользователя: не указаны — единственные доступные.
      */
-    db_create: { level: 'write', fn: method('write', async ({ db, cls, p, uid, scope }) => {
+    db_create: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, scope }) => {
         const at = await writePlace(db, cls, p, scope);
-        return createObject(db, {
+        const obj = createObject(db, {
             cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time, unit: at.unit, place: at.place,
             ext_of: p.ext_of, valid_from: p.valid_from, author: uid,
         });
+        if (obj?.status === 'registered')
+            await logOperationFact(db, item, obj, 'Проведено', uid, p);
+        return obj;
     }) },
 
     /**
@@ -432,21 +526,33 @@ export const DATA_METHODS = Object.freeze({
         registryVisible: cls.type === '$virtual' ? await registryGrants(db, cls, vis, p) : undefined,
     })) },
 
-    /** Состав виртуального справочника на момент: { at? }. */
+    /** Состав виртуального справочника на момент: { at?, mode? }. */
     db_members: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => virtualMembers(db, {
-        cid: cls.cid, at: p.at, units: list(p.units, 'units'), unit: p.unit, visible: entryGrants(withoutBranches(vis), 'catalog'),
+        cid: cls.cid, at: p.at, mode: p.mode, units: list(p.units, 'units'), unit: p.unit, visible: entryGrants(withoutBranches(vis), 'catalog'),
     })) },
 
     /** Зарегистрировать черновик: { id, version? }. */
-    db_register: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => registerOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
+    db_register: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, vis }) => {
+        const op = registerOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid });
+        await logOperationFact(db, item, op, 'Проведено', uid, p);
+        return op;
+    }) },
 
     /** Исправить зарегистрированную: { id, post|body, replace?, time?, version? }. */
-    db_correct: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => correctOperation(db, {
-        id: ownObject(db, cls, p.id, vis), body: bodyOf(p), replace: flag(p.replace), time: p.time, version: p.version, author: uid,
-    })) },
+    db_correct: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, vis }) => {
+        const op = correctOperation(db, {
+            id: ownObject(db, cls, p.id, vis), body: bodyOf(p), replace: flag(p.replace), time: p.time, version: p.version, author: uid,
+        });
+        await logOperationFact(db, item, op, 'Исправлено', uid, p);
+        return op;
+    }) },
 
     /** Отменить зарегистрированную: { id, version? }. */
-    db_cancel: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => cancelOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
+    db_cancel: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, vis }) => {
+        const op = cancelOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid });
+        await logOperationFact(db, item, op, 'Отменено', uid, p);
+        return op;
+    }) },
 
     /**
      * Проводки без записи: { id } или { post|body, time? } для листа операции.
@@ -509,17 +615,30 @@ export const DATA_METHODS = Object.freeze({
         return journal(db, q);
     }) },
 
-    /** ОСВ по счёту (журналу) вызова: { from?, to?, account?, by? }. */
+    /** ОСВ по счёту (журналу) вызова: { from?, to?, account?, by?, analytics?, subanalytics? }. */
     db_sheet: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => trialBalance(db, {
         ...entryFilters(p), from: p.from, to: p.to, account: reportAccount(db, cls, p.account), by: list(p.by, 'by'),
+        analytics: json(p.analytics, 'analytics'), subanalytics: json(p.subanalytics, 'subanalytics'),
         visible: entryGrants(vis, 'account'),
     })) },
 
-    /** Карточка счёта: { from?, to?, account?, analytics?, limit?, offset? }. */
+    /** Карточка счёта: { from?, to?, account?, analytics?, subanalytics?, limit?, offset? }. */
     db_card: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => accountCard(db, {
         ...entryFilters(p), from: p.from, to: p.to, account: reportAccount(db, cls, p.account),
-        analytics: json(p.analytics, 'analytics'), limit: p.limit, offset: p.offset, visible: entryGrants(vis, 'account'),
+        analytics: json(p.analytics, 'analytics'), subanalytics: json(p.subanalytics, 'subanalytics'),
+        limit: p.limit, offset: p.offset, visible: entryGrants(vis, 'account'),
     })) },
+
+    /** Двухпанельные Обороты счёта (Экран 3 ODANT): { from?, to?, account?, groupBy?, group?, analytics?, subanalytics?, limit? }. */
+    db_turnovers: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => accountTurnovers(db, {
+        ...entryFilters(p), from: p.from, to: p.to, account: reportAccount(db, cls, p.account),
+        groupBy: p.groupBy, group: p.group,
+        analytics: json(p.analytics, 'analytics'), subanalytics: json(p.subanalytics, 'subanalytics'),
+        limit: p.limit, visible: entryGrants(vis, 'account'),
+    })) },
+
+    /** Сборная карточка проводки (Экран 4 ODANT) из записей счетов Дт и Кт: { entry|id }. */
+    db_entry: { level: 'read', fn: method('read', ({ db, p }) => readEntry(db, p.entry ?? p.id)) },
 
     /** Состояние объекта класса на момент: { id, at?, account? }. */
     db_state: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => {

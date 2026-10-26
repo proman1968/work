@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.pay.vat',
-    label: 'НДС',
+export default {    label: 'НДС',
     icon: 'carbon:money',
-    METADATA: { POSTINGS: [{ id: 'main', debit: { account: 'acc.68.02' } }] },
+    METADATA: { POSTINGS: [{ id: 'main', debit: { account: '/DATA/REGISTER/68/02' } }] },
 }

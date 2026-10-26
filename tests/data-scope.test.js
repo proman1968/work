@@ -54,8 +54,8 @@ before(async () => {
         write(p + '/class.js', 'export default {}');
     for (const uid of [ADMIN, N1, J1, S1, M1, BOSS, NOBODY])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${uid}' }`);
-    copy('DATA/$class/class.js');
-    for (const t of ['$catalog', '$virtual', '$registry'])
+    copy('DATA/$domain/class.js');
+    for (const t of ['$catalog', '$virtual'])
         copy(`DATA/CATALOGS/$catalog/$folder/$class/${t}/class.js`);
     for (const t of ['$register', '$account'])
         copy(`DATA/REGISTER/$register/$folder/$class/${t}/class.js`);

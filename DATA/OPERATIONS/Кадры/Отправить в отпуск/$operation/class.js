@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.hr.vacation',
-    label: 'Отправить в отпуск',
+export default {    label: 'Отправить в отпуск',
     icon: 'carbon:user',
     METADATA: {
         FIELDS: [{ id: 'until', label: 'Отпуск до', type: 'Date' }],
@@ -8,8 +6,8 @@ export default {
             {
                 id: 'main',
                 qty: '1',
-                debit: { account: 'acc.hr.vacation', analytics: { person: 'person' } },
-                credit: { account: 'acc.hr.work', analytics: { person: 'person' } },
+                debit: { account: '/DATA/REGISTER/Кадры/В отпуске', analytics: { person: 'person' } },
+                credit: { account: '/DATA/REGISTER/Кадры/Работают', analytics: { person: 'person' } },
             },
         ],
     },

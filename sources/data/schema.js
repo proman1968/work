@@ -1,31 +1,43 @@
 /**
- * Схема класса данных, собранная по наследованию, и её проверка.
+ * Схема класса данных, собранная по трёхосевому наследованию, и её проверка.
  *
- * Схема собирается из собственных слоёв class.js цепочки предков одного
- * семейства (справочники, операции, счета, структура) — от корня к классу:
- *   - FIELDS   — слияние по id: потомок уточняет свойства поля, новые поля — в конец;
+ * Трёхосевое наследование метаданных (приоритет от базового к приоритетному):
+ *   1. Types (миксины: `types` в class.js) — расширяющие классы;
+ *   2. Ancestor (одноимённый класс в корневом модуле /MODULES или /DATA, либо явный `ancestor`/`extends`);
+ *   3. Parent (цепочка предков одного семейства в текущем дереве);
+ *   4. Сам класс (собственный слой class.js).
+ *
+ * Правила слияния слоёв:
+ *   - FIELDS   — слияние по id: более приоритетный слой уточняет свойства поля, новые поля — в конец;
  *                `removed: true` убирает унаследованное поле; поле с `to_inherit: false`
- *                действует только в своём классе;
+ *                действует только в своём классе (и его прямом наследнике по Ancestor);
  *   - POSTINGS — слияние по id: debit/credit и их analytics уточняются по ключам;
- *                `removed: true` убирает унаследованное правило (ключи правила — posting.js);
+ *                `removed: true` убирает унаследованное правило;
  *   - OVERLAY  — поля записей-расширений виртуального справочника (как FIELDS);
  *   - AUTO_REGISTER, SOURCE — ближайшее определённое значение;
- *   - STATIC   — не наследуется (свойства самого класса).
+ *   - STATIC   — свойства самого класса (с учётом Ancestor).
+ *
+ * Если поле ссылается на класс-структуру ($struct):
+ *   - при `table: false` (по умолчанию) тип поля — `'struct'` (вложенный объект со всеми полями структуры, рекурсивно);
+ *   - при `table: true` тип поля — `'table'` (массив объектов этой структуры).
+ * Если поле ссылается на справочник ($catalog, $virtual) — тип поля `'link'`.
  */
 import { getClass, ancestors, isLeaf, classesGeneration } from './classes.js';
 import { compile, BUILTIN_FUNCTIONS } from './expr.js';
 
-/** Семейство типа класса: схема наследуется только внутри семейства. */
+/** Семейство типа класса: схема наследуется внутри семейства. */
 export const FAMILY = Object.freeze({
     $catalog: 'catalog', $registry: 'catalog', $virtual: 'catalog',
+    $struct: 'struct',
     $operation: 'operation',
     $account: 'account', $register: 'account',
     $structure: 'structure', $base: 'structure',
+    $module: 'module',
 });
 
-/** Канонические типы полей и их синонимы в существующих class.js. */
-export const FIELD_TYPES = Object.freeze(['string', 'text', 'number', 'money', 'integer', 'boolean', 'date', 'datetime', 'link', 'table', 'enum', 'file']);
-const TYPE_ALIASES = { timestamp: 'datetime', time: 'datetime', bool: 'boolean', int: 'integer', ref: 'link', array: 'table' };
+/** Канонические типы полей и их синонимы в class.js. */
+export const FIELD_TYPES = Object.freeze(['string', 'text', 'number', 'money', 'integer', 'boolean', 'date', 'datetime', 'link', 'struct', 'table', 'enum', 'file']);
+const TYPE_ALIASES = { timestamp: 'datetime', time: 'datetime', bool: 'boolean', int: 'integer', ref: 'link', array: 'table', structure: 'struct' };
 
 /** Функции, которые ядро проведения передаёт в выражения правил. */
 export const RULE_FUNCTIONS = Object.freeze(['norm', 'coef', 'unit_cost']);
@@ -41,7 +53,7 @@ function clone(v) {
     return v === undefined ? undefined : structuredClone(v);
 }
 
-/** Слияние списков по id. inherited — признак слоя предка (учёт to_inherit:false). */
+/** Слияние списков по id. inherited — признак слоя предка по Parent (учёт to_inherit:false). */
 function mergeById(base, layer, inherited, mergeItem) {
     const out = base;
     for (const raw of Array.isArray(layer) ? layer : []) {
@@ -66,6 +78,12 @@ function mergeById(base, layer, inherited, mergeItem) {
 
 function mergeField(prev, raw) {
     const f = { ...prev, ...clone(raw), id: String(raw.id) };
+    const prevSub = prev.FIELDS ?? prev.fields;
+    const rawSub = raw.FIELDS ?? raw.fields;
+    if (Array.isArray(prevSub) && Array.isArray(rawSub)) {
+        f.FIELDS = mergeById(clone(prevSub), rawSub, false, mergeField);
+        delete f.fields;
+    }
     delete f.to_inherit;
     delete f.removed;
     return f;
@@ -85,7 +103,6 @@ function mergeRule(prev, raw) {
     const r = { ...prev, ...clone(raw), id: String(raw.id) };
     r.debit = mergeSide(prev.debit, raw.debit);
     r.credit = mergeSide(prev.credit, raw.credit);
-    // устаревшее имя количества в class.js
     if (r.quantity !== undefined && r.qty === undefined)
         r.qty = r.quantity;
     delete r.quantity;
@@ -94,19 +111,154 @@ function mergeRule(prev, raw) {
     return r;
 }
 
-/** Нормализовать поле (рекурсивно для табличных частей). */
-function normalizeField(f) {
-    const type = fieldType(f.type);
-    const out = { ...f, type: type || 'string' };
-    if (!type)
-        out.unknownType = String(f.type);
-    if (type === 'link') {
-        out.target = String(f.target ?? f.catalog ?? '');
-        delete out.catalog;
+/** Путь организации ($base), внутри которой находится класс (или '' для корня). */
+export function classBasePath(db, cid) {
+    const chain = ancestors(db, cid, { self: true });
+    for (let i = chain.length - 1; i >= 0; i--) {
+        if (chain[i].type === '$base')
+            return chain[i].path;
     }
-    if (type === 'table')
-        out.fields = (Array.isArray(f.FIELDS) ? f.FIELDS : Array.isArray(f.fields) ? f.fields : [])
-            .filter(x => x && x.id).map(x => normalizeField({ ...x, id: String(x.id) }));
+    if (String(cid || '').startsWith('/MODULES/Register/'))
+        return '/MODULES/Register';
+    return '';
+}
+
+/**
+ * Разрешить ссылку на класс в контексте организации ($base):
+ * если внутри $base материализован одноимённый класс (`basePath + refPath`),
+ * используется он, иначе — указанный путь `refPath`.
+ */
+export function resolveInBase(db, basePath, refPath) {
+    const ref = String(refPath ?? '').trim();
+    if (!ref || !basePath || !ref.startsWith('/') || ref === basePath || ref.startsWith(basePath + '/'))
+        return ref;
+    const candidates = [basePath + ref];
+    if (ref.startsWith('/DATA/'))
+        candidates.push(basePath + '/MODULES/Register' + ref.slice('/DATA'.length), basePath + ref.slice('/DATA'.length));
+    else if (ref.startsWith('/MODULES/Register/'))
+        candidates.push(basePath + '/DATA' + ref.slice('/MODULES/Register'.length), basePath + ref.slice('/MODULES/Register'.length));
+    for (const cand of candidates) {
+        if (getClass(db, cand))
+            return cand;
+    }
+    return ref;
+}
+
+/**
+ * Найти класс-предок по оси Ancestor (одноимённый класс в корневом модуле /MODULES или /DATA,
+ * либо явно указанный в `ancestor`/`extends`).
+ */
+export function findAncestor(db, cls) {
+    if (!cls)
+        return null;
+    const explicit = cls.own?.ancestor ?? cls.own?.extends ?? cls.own?.METADATA?.ancestor ?? cls.own?.METADATA?.extends;
+    if (typeof explicit === 'string' && explicit.trim()) {
+        const hit = getClass(db, explicit.trim());
+        if (hit && hit.cid !== cls.cid)
+            return hit;
+    }
+    const basePath = classBasePath(db, cls.cid);
+    if (!basePath || cls.path === basePath)
+        return null;
+    const rel = cls.path.slice(basePath.length);
+    if (!rel || rel === '/')
+        return null;
+    const candidates = [rel];
+    if (rel.startsWith('/DATA/'))
+        candidates.push('/MODULES/Register' + rel.slice('/DATA'.length));
+    else if (rel.startsWith('/MODULES/Register/'))
+        candidates.push('/DATA' + rel.slice('/MODULES/Register'.length));
+    else if (!rel.startsWith('/MODULES/'))
+        candidates.push('/DATA' + rel, '/MODULES/Register' + rel);
+
+    for (const cand of candidates) {
+        if (cand === cls.cid)
+            continue;
+        const hit = getClass(db, cand);
+        if (hit && FAMILY[hit.type] === FAMILY[cls.type])
+            return hit;
+    }
+    return null;
+}
+
+/** Цепочка предков одного семейства от корня семейства до cls включительно. */
+function sameFamilyChain(db, cls) {
+    const family = FAMILY[cls.type] || 'other';
+    const chain = ancestors(db, cls.cid);
+    let from = chain.length - 1;
+    while (from > 0 && FAMILY[chain[from - 1].type] === family)
+        from--;
+    return chain.slice(from);
+}
+
+/** Список ссылок `types` (миксинов) из собственного слоя класса. */
+function ownTypes(own) {
+    const raw = own?.types ?? own?.TYPES ?? own?.METADATA?.types ?? own?.METADATA?.TYPES;
+    return Array.isArray(raw) ? raw.map(x => String(x || '').trim()).filter(Boolean) : [];
+}
+
+/**
+ * Нормализовать поле (рекурсивно для структур $struct и табличных полей table: true).
+ */
+function normalizeField(db, f, basePath = '', seenStructs = new Set()) {
+    const rawType = String(f.type ?? '').trim();
+    const normType = fieldType(f.type);
+    const isTable = f.table === true || normType === 'table';
+    const pathFromType = rawType.startsWith('/') ? rawType : '';
+    const rawRef = String(f.struct ?? f.target ?? f.catalog ?? pathFromType).trim();
+    const refPath = rawRef ? resolveInBase(db, basePath, rawRef) : '';
+    const refCls = (db && refPath) ? getClass(db, refPath) : null;
+    const isStruct = refCls?.type === '$struct' || normType === 'struct' || Boolean(f.struct);
+
+    if (isStruct) {
+        let baseFields = [];
+        if (refCls?.type === '$struct' && !seenStructs.has(refCls.cid)) {
+            const nextSeen = new Set(seenStructs);
+            nextSeen.add(refCls.cid);
+            const structSchema = classSchema(db, refCls.cid, nextSeen);
+            baseFields = (structSchema?.fields || []).map(clone);
+        }
+        const localRaw = (Array.isArray(f.FIELDS) ? f.FIELDS : Array.isArray(f.fields) ? f.fields : []).filter(x => x && x.id);
+        const merged = localRaw.length
+            ? mergeById(baseFields, localRaw, false, mergeField).map(x => normalizeField(db, { ...x, id: String(x.id) }, basePath, seenStructs))
+            : baseFields;
+        const out = {
+            ...f,
+            type: isTable ? 'table' : 'struct',
+            table: isTable,
+            fields: merged,
+        };
+        if (refCls)
+            out.struct = refCls.cid;
+        else if (refPath)
+            out.struct = refPath;
+        delete out.FIELDS;
+        delete out.catalog;
+        delete out.target;
+        out.label ??= f.id;
+        return out;
+    }
+
+    if (isTable) {
+        const sub = (Array.isArray(f.FIELDS) ? f.FIELDS : Array.isArray(f.fields) ? f.fields : [])
+            .filter(x => x && x.id).map(x => normalizeField(db, { ...x, id: String(x.id) }, basePath, seenStructs));
+        const out = { ...f, type: 'table', table: true, fields: sub };
+        delete out.FIELDS;
+        out.label ??= f.id;
+        return out;
+    }
+
+    if (normType === 'link' || pathFromType) {
+        const out = { ...f, type: 'link', target: refCls ? refCls.cid : refPath };
+        delete out.catalog;
+        delete out.FIELDS;
+        out.label ??= f.id;
+        return out;
+    }
+
+    const out = { ...f, type: normType || 'string' };
+    if (!normType)
+        out.unknownType = String(f.type);
     delete out.FIELDS;
     out.label ??= f.id;
     return out;
@@ -115,13 +267,15 @@ function normalizeField(f) {
 const cache = new WeakMap();
 
 /**
- * Схема класса (с кэшем до изменения дерева классов).
+ * Схема класса по трёхосевому наследованию: Types → Ancestor → Parent → Сам класс.
  * @param {import('node:sqlite').DatabaseSync} db
- * @param {string} ref cid или путь класса
- * @returns {{cid, path, type, family, label, leaf, fields: object[], postings: object[],
- *            overlay: object[], autoRegister: boolean, source: object|null, static: object[]} | null}
+ * @param {string} ref путь класса
+ * @param {Set<string>} [seenStructs] защита от циклов вложенных структур
+ * @returns {{cid, path, type, family, label, leaf, ancestor: string|null, types: string[],
+ *            fields: object[], postings: object[], overlay: object[], autoRegister: boolean,
+ *            source: object|null, static: object[]} | null}
  */
-export function classSchema(db, ref) {
+export function classSchema(db, ref, seenStructs = new Set()) {
     const cls = getClass(db, ref);
     if (!cls)
         return null;
@@ -135,26 +289,88 @@ export function classSchema(db, ref) {
         return hit;
 
     const family = FAMILY[cls.type] || 'other';
-    const chain = ancestors(db, cls.cid);
-    let from = chain.length - 1;
-    while (from > 0 && FAMILY[chain[from - 1].type] === family)
-        from--;
-    const layers = chain.slice(from);
+    const basePath = classBasePath(db, cls.cid);
+    const parentChain = sameFamilyChain(db, cls); // [P_0, ..., cls]
 
-    let fields = [], postings = [], overlay = [];
+    // Находим глубочайший класс в цепочке Parent, у которого есть Ancestor в корне/модуле
+    let matchedAnc = null;
+    let matchedAtSelf = false;
+    for (let i = parentChain.length - 1; i >= 0; i--) {
+        const a = findAncestor(db, parentChain[i]);
+        if (a) {
+            matchedAnc = a;
+            matchedAtSelf = (i === parentChain.length - 1);
+            break;
+        }
+    }
+    const ancChain = matchedAnc ? sameFamilyChain(db, matchedAnc) : [];
+
+    // Собираем все ссылки Types (миксины) из Ancestor-цепочки и Parent-цепочки
+    const typeRefs = [];
+    for (const l of [...ancChain, ...parentChain]) {
+        for (const t of ownTypes(l.own)) {
+            const resolved = resolveInBase(db, basePath, t);
+            if (!typeRefs.includes(resolved) && resolved !== cls.cid)
+                typeRefs.push(resolved);
+        }
+    }
+
+    // 1. Types (миксины) → 2. Ancestor → 3. Parent → 4. Сам класс
+    const sequence = [];
+    const visitedTypeCids = new Set([cls.cid]);
+    for (const tRef of typeRefs) {
+        const tCls = getClass(db, tRef);
+        if (!tCls || visitedTypeCids.has(tCls.cid))
+            continue;
+        visitedTypeCids.add(tCls.cid);
+        const tChain = sameFamilyChain(db, tCls);
+        tChain.forEach((tl, idx) => {
+            sequence.push({ layer: tl, inherited: idx < tChain.length - 1 });
+        });
+    }
+    ancChain.forEach((al, idx) => {
+        const isDirectAncestorOfSelf = matchedAtSelf && idx === ancChain.length - 1;
+        sequence.push({ layer: al, inherited: !isDirectAncestorOfSelf });
+    });
+    parentChain.slice(0, -1).forEach(pl => {
+        sequence.push({ layer: pl, inherited: true });
+    });
+    sequence.push({ layer: cls, inherited: false });
+
+    let fields = [], postings = [], overlay = [], staticFields = [];
     let autoRegister = false, source = null;
-    layers.forEach((layer, i) => {
+    for (const { layer, inherited } of sequence) {
         const own = layer.own || {};
         const meta = own.METADATA || {};
-        const inherited = i < layers.length - 1;
         fields = mergeById(fields, meta.FIELDS, inherited, mergeField);
         postings = mergeById(postings, meta.POSTINGS, inherited, mergeRule);
         overlay = mergeById(overlay, own.OVERLAY ?? meta.OVERLAY, inherited, mergeField);
+        if (!inherited && Array.isArray(meta.STATIC))
+            staticFields = mergeById(staticFields, meta.STATIC, false, mergeField);
         if (typeof own.AUTO_REGISTER === 'boolean')
             autoRegister = own.AUTO_REGISTER;
         if (own.SOURCE && typeof own.SOURCE === 'object')
-            source = clone(own.SOURCE);
-    });
+            source = { ...(source || {}), ...clone(own.SOURCE) };
+    }
+
+    // Привязываем ссылки на счета и источники виртуального справочника к контексту $base
+    if (basePath) {
+        postings = postings.map(r => ({
+            ...r,
+            debit: r.debit?.account ? { ...r.debit, account: resolveInBase(db, basePath, r.debit.account) } : r.debit,
+            credit: r.credit?.account ? { ...r.credit, account: resolveInBase(db, basePath, r.credit.account) } : r.credit,
+        }));
+        if (source) {
+            if (source.registry)
+                source.registry = resolveInBase(db, basePath, source.registry);
+            if (source.account)
+                source.account = resolveInBase(db, basePath, source.account);
+        }
+    }
+
+    const directAnc = findAncestor(db, cls);
+    // Класс является листом, если у него нет дочерних классов в текущем дереве И у его прямого Ancestor нет дочерних классов
+    const leaf = isLeaf(db, cls.cid) && (!directAnc || isLeaf(db, directAnc.cid));
 
     const schema = {
         cid: cls.cid,
@@ -162,13 +378,15 @@ export function classSchema(db, ref) {
         type: cls.type,
         family,
         label: cls.label,
-        leaf: isLeaf(db, cls.cid),
-        fields: fields.map(normalizeField),
+        leaf,
+        ancestor: directAnc ? directAnc.cid : null,
+        types: typeRefs,
+        fields: fields.map(f => normalizeField(db, f, basePath, seenStructs)),
         postings,
-        overlay: overlay.map(normalizeField),
+        overlay: overlay.map(f => normalizeField(db, f, basePath, seenStructs)),
         autoRegister,
         source,
-        static: clone(cls.own?.METADATA?.STATIC) || [],
+        static: staticFields,
     };
     byDb.map.set(cls.cid, schema);
     return schema;
@@ -199,6 +417,10 @@ export function checkSchema(db, ref) {
         return [`класс ${ref} не найден`];
     const errors = [];
     const at = `${s.path}`;
+    for (const tRef of s.types || []) {
+        if (!getClass(db, tRef))
+            errors.push(`${at}: тип-миксин (types) ${tRef} не найден`);
+    }
     const checkFields = (list, where) => {
         const ids = new Set();
         for (const f of list) {
@@ -213,9 +435,16 @@ export function checkSchema(db, ref) {
                 else if (!getClass(db, f.target))
                     errors.push(`${at}: поле-ссылка «${where}${f.id}» — класс ${f.target} не найден`);
             }
-            if (f.type === 'table') {
+            if (f.type === 'struct' || f.type === 'table') {
+                if (f.struct) {
+                    const sc = getClass(db, f.struct);
+                    if (!sc)
+                        errors.push(`${at}: поле «${where}${f.id}» — структура ${f.struct} не найдена`);
+                    else if (sc.type !== '$struct')
+                        errors.push(`${at}: поле «${where}${f.id}» — класс ${f.struct} не является структурой ($struct)`);
+                }
                 if (!f.fields.length)
-                    errors.push(`${at}: табличная часть «${where}${f.id}» без полей`);
+                    errors.push(`${at}: ${f.type === 'table' ? 'табличная часть' : 'структура'} «${where}${f.id}» без полей`);
                 checkFields(f.fields, `${where}${f.id}.`);
             }
         }

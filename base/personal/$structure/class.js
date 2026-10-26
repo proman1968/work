@@ -1,5 +1,4 @@
 export default{
-    CID: 'unit.hr',
     label: 'Кадры',
     icon: 'icons:assignment-ind',
     "#security": {

@@ -1,6 +1,4 @@
-export default {
-    CID: 'catalogs',
-    async TestFunc(s, d = {
+export default {    async TestFunc(s, d = {
         d: 44
       }) {
         let a = 100;

@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.norms',
-    label: 'Нормативы',
+export default {    label: 'Нормативы',
     icon: 'carbon:calculator',
     NORMS: true,
     METADATA: {
@@ -9,11 +7,11 @@ export default {
                 id: 'kind',
                 label: 'Вид норматива',
                 type: 'Link',
-                target: 'cat.norm_kinds',
+                target: '/DATA/CATALOGS/Виды нормативов',
                 analytic: true,
                 required: true,
             },
-            { id: 'object', label: 'Объект', type: 'Link', target: 'catalogs', analytic: true },
+            { id: 'object', label: 'Объект', type: 'Link', target: '/DATA/CATALOGS', analytic: true },
         ],
     },
 }

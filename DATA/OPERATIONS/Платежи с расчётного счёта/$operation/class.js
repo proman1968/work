@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.pay',
-    label: 'Платежи с расчётного счёта',
+export default {    label: 'Платежи с расчётного счёта',
     icon: 'carbon:money',
     METADATA: {
         FIELDS: [
@@ -8,6 +6,6 @@ export default {
             { id: 'purpose', label: 'Назначение' },
             { id: 'doc_number', label: 'Номер документа' },
         ],
-        POSTINGS: [{ id: 'main', amount: 'sum', credit: { account: 'acc.51' } }],
+        POSTINGS: [{ id: 'main', amount: 'sum', credit: { account: '/DATA/REGISTER/51' } }],
     },
 }

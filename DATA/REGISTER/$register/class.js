@@ -1,6 +1,4 @@
-export default {
-    CID: 'register',
-    icon: 'lineawesome:journal-whills-solid',
+export default {    icon: 'lineawesome:journal-whills-solid',
     METADATA: {
         FIELDS: []
     },

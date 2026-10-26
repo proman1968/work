@@ -1,12 +1,10 @@
-export default {
-    CID: 'op.receipts.customer',
-    label: 'От покупателя',
+export default {    label: 'От покупателя',
     icon: 'carbon:money',
     METADATA: {
         FIELDS: [
-            { id: 'counterparty', label: 'Покупатель', type: 'Link', target: 'cat.clients', required: true },
-            { id: 'contract', label: 'Договор', type: 'Link', target: 'cat.contracts' },
+            { id: 'counterparty', label: 'Покупатель', type: 'Link', target: '/DATA/CATALOGS/Клиенты', required: true },
+            { id: 'contract', label: 'Договор', type: 'Link', target: '/DATA/CATALOGS/Договоры' },
         ],
-        POSTINGS: [{ id: 'main', credit: { account: 'acc.62', analytics: { counterparty: 'counterparty' } } }],
+        POSTINGS: [{ id: 'main', credit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'counterparty' } } }],
     },
 }

@@ -144,7 +144,7 @@ describe('db_workspace: метод класса', () => {
             write(p + '/class.js', 'export default {}');
         for (const uid of [ADMIN, SELLER, STRANGER])
             write(`USERS/${uid}/$user/class.js`, `export default { label: '${uid}' }`);
-        copy('DATA/$class/class.js');
+        copy('DATA/$domain/class.js');
         copy('DATA/OPERATIONS/$operation/$folder/$class/$operation/class.js');
         copy('DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js');
         cls('DATA/OPERATIONS', '$operation', `{ label: 'Операции', icon: 'icons:ops' }`);

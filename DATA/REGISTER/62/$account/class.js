@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.62',
-    label: '62.00 Расчёты с покупателями',
+export default {    label: '62.00 Расчёты с покупателями',
     icon: 'carbon:wallet',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'counterparty',
                 label: 'Контрагент',
                 type: 'Link',
-                target: 'cat.subjects',
+                target: '/DATA/CATALOGS/Субъекты',
                 analytic: true,
                 required: true,
             },

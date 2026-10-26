@@ -1,6 +1,4 @@
-export default {
-    CID: 'cat.subjects',
-    label: 'Субъекты',
+export default {    label: 'Субъекты',
     icon: 'carbon:user-multiple',
     METADATA: {
         FIELDS: [

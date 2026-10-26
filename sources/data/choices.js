@@ -30,10 +30,12 @@ function resolveTarget(db, q) {
     const schema = classSchema(db, q.cid);
     if (!schema)
         throw new DataError(`класс ${q.cid ?? ''} не найден`);
-    const [head, tail] = String(q.field ?? '').split('.');
-    let f = schema.fields.find(x => x.id === head);
-    if (f && tail)
-        f = f.type === 'table' ? f.fields.find(x => x.id === tail) : null;
+    const parts = String(q.field ?? '').split('.').filter(Boolean);
+    let f = null, list = schema.fields;
+    for (const part of parts) {
+        f = list?.find(x => x.id === part);
+        list = (f?.type === 'table' || f?.type === 'struct') ? f.fields : null;
+    }
     if (!f || f.type !== 'link')
         throw new DataError(`${schema.label}: поле «${q.field ?? ''}» — не ссылка`);
     return f.target;

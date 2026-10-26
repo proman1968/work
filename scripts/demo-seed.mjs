@@ -30,7 +30,7 @@ export const NORMS = Object.freeze({
  * @param {object} [opts] { since — с какого дня действуют нормативы (по умолчанию 1 января текущего года), author }
  * @returns {Record<string, string>} id созданных объектов по коротким именам
  */
-export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, author } = {}) {
+export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, author, prefix = '/DATA' } = {}) {
     const ids = {};
     const make = (key, cid, body, extra = {}) => {
         ids[key] = createObject(db, { cid, body, author, ...extra }).id;
@@ -38,43 +38,45 @@ export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, auth
     };
 
     for (const [name, [unit]] of Object.entries(NORMS))
-        make(`kind:${name}`, 'cat.norm_kinds', { name, unit });
+        make(`kind:${name}`, `${prefix}/CATALOGS/Виды нормативов`, { name, unit });
     for (const [name, [, value]] of Object.entries(NORMS))
-        createObject(db, { cid: 'op.set_norm', time: since, author, body: { kind: ids[`kind:${name}`], value } });
+        createObject(db, { cid: `${prefix}/OPERATIONS/Установка норматива`, time: since, author, body: { kind: ids[`kind:${name}`], value } });
 
-    make('oil', 'cat.items', {
+    make('oil', `${prefix}/CATALOGS/Номенклатура`, {
         name: 'Масло моторное 10W-40', kind: 'Масло', base_unit: 'л', density: 0.88,
         units: [{ unit: 'канистра', coef: 20, price: 3200 }, { unit: 'бочка', coef: 200, price: 30000 }, { unit: 'IBC', coef: 1000, price: 150000 }],
     });
-    make('diesel', 'cat.items', { name: 'Дизельное топливо', kind: 'Топливо', base_unit: 'л', density: 0.84 });
-    make('canister', 'cat.items', { name: 'Канистра 20 л', kind: 'Тара', base_unit: 'шт' });
-    make('barrel', 'cat.items', { name: 'Бочка 200 л', kind: 'Тара', base_unit: 'шт' });
+    make('diesel', `${prefix}/CATALOGS/Номенклатура`, { name: 'Дизельное топливо', kind: 'Топливо', base_unit: 'л', density: 0.84 });
+    make('canister', `${prefix}/CATALOGS/Номенклатура`, { name: 'Канистра 20 л', kind: 'Тара', base_unit: 'шт' });
+    make('barrel', `${prefix}/CATALOGS/Номенклатура`, { name: 'Бочка 200 л', kind: 'Тара', base_unit: 'шт' });
 
-    make('tank', 'cat.storages', { name: 'Резервуар Р-1', kind: 'Резервуар', capacity: 50000, item: ids.oil });
-    make('stock', 'cat.storages', { name: 'Склад готовой продукции', kind: 'Склад' });
-    make('fuel_stock', 'cat.storages', { name: 'Склад ГСМ', kind: 'Склад' });
+    make('tank', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Резервуар Р-1', kind: 'Резервуар', capacity: 50000, item: ids.oil });
+    make('stock', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Склад готовой продукции', kind: 'Склад' });
+    make('fuel_stock', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Склад ГСМ', kind: 'Склад' });
 
-    make('supplier', 'cat.org', { name: 'ООО «Нефтехим-Поставка»', inn: '7701000001' });
-    make('client', 'cat.org', { name: 'ООО «Автосервис Плюс»', inn: '7701000002' });
-    make('ivanov', 'cat.person', { name: 'Иванов Иван Иванович' });
-    make('petrov', 'cat.person', { name: 'Петров Пётр Петрович' });
-    make('truck', 'cat.vehicles', { name: 'Бензовоз КамАЗ', plate: 'А123ВС77', kind: 'Бензовоз', capacity: 10000, fuel: ids.diesel });
+    make('supplier', `${prefix}/CATALOGS/Субъекты/Юр. лица`, { name: 'ООО «Нефтехим-Поставка»', inn: '7701000001' });
+    make('client', `${prefix}/CATALOGS/Субъекты/Юр. лица`, { name: 'ООО «Автосервис Плюс»', inn: '7701000002' });
+    make('ivanov', `${prefix}/CATALOGS/Субъекты/Физ. лица`, { name: 'Иванов Иван Иванович' });
+    make('petrov', `${prefix}/CATALOGS/Субъекты/Физ. лица`, { name: 'Петров Пётр Петрович' });
+    make('truck', `${prefix}/CATALOGS/Транспорт`, { name: 'Бензовоз КамАЗ', plate: 'А123ВС77', kind: 'Бензовоз', capacity: 10000, fuel: ids.diesel });
     return ids;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    const db = await openDataDb(path.join(root, '.data', 'work.db'));
-    const problems = (await refreshClasses(db, root)).problems;
-    if (problems.length)
-        console.warn(problems.join('\n'));
-    if (queryObjects(db, { cid: 'cat.norm_kinds', limit: 1 }).total) {
-        console.error('В базе уже есть виды нормативов — начальные данные не добавлены.');
-        process.exitCode = 1;
+    const targets = [
+        [path.join(root, '.data', 'work.db'), '/DATA'],
+        [path.join(root, 'ORGANIZATIONS', 'Маслоторг', '$base', '#system', 'work.db'), '/ORGANIZATIONS/Маслоторг/MODULES/Register'],
+    ];
+    for (const [dbFile, prefix] of targets) {
+        const db = await openDataDb(dbFile);
+        const problems = (await refreshClasses(db, root)).problems;
+        if (problems.length)
+            console.warn(problems.join('\n'));
+        if (!queryObjects(db, { cid: `${prefix}/CATALOGS/Виды нормативов`, limit: 1 }).total) {
+            const ids = seedDemo(db, { prefix });
+            console.log(`[${prefix}] Создано объектов: ${Object.keys(ids).length} (+ ${Object.keys(NORMS).length} нормативов).`);
+        }
+        db.close();
     }
-    else {
-        const ids = seedDemo(db);
-        console.log(`Создано объектов: ${Object.keys(ids).length} (+ ${Object.keys(NORMS).length} нормативов).`);
-    }
-    db.close();
 }

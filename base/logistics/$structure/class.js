@@ -1,5 +1,4 @@
 export default{
-    CID: 'unit.logistics',
     label: 'Логистика',
     icon: 'lineawesome:shuttle-van-solid',
     "#security": {

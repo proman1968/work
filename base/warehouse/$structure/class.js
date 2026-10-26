@@ -1,5 +1,4 @@
 export default {
-    CID: 'unit.warehouse',
     icon: 'icons:store',
     label: 'Склад',
     "#security": {

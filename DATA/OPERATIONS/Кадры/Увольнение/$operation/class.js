@@ -1,14 +1,12 @@
-export default {
-    CID: 'op.hr.fire',
-    label: 'Увольнение',
+export default {    label: 'Увольнение',
     icon: 'carbon:user-admin',
     METADATA: {
         POSTINGS: [
             {
                 id: 'main',
                 qty: '1',
-                debit: { account: 'acc.pool' },
-                credit: { account: 'acc.hr.work', analytics: { person: 'person' } },
+                debit: { account: '/DATA/REGISTER/Кадровый резерв' },
+                credit: { account: '/DATA/REGISTER/Кадры/Работают', analytics: { person: 'person' } },
             },
         ],
     },

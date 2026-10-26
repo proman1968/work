@@ -1,6 +1,4 @@
-export default {
-    CID: 'acc.44',
-    label: '44.00 Расходы на продажу',
+export default {    label: '44.00 Расходы на продажу',
     icon: 'carbon:delivery',
     METADATA: {
         FIELDS: [
@@ -8,7 +6,7 @@ export default {
                 id: 'vehicle',
                 label: 'Транспорт',
                 type: 'Link',
-                target: 'cat.vehicles',
+                target: '/DATA/CATALOGS/Транспорт',
                 analytic: true,
                 required: true,
             },

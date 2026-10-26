@@ -363,6 +363,151 @@ describe('форма объектов', () => {
         assert.deepEqual(objects.packetsKey, { $def: 'now', $type: String, $save: true },
             'ключ относителен — дефолт не залипает на вчерашней дате');
     });
+
+    it('отбор списка: поиск, статус, поля (Select/Boolean), страницы и восстановление удалённого', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            fetch: (m, p) => {
+                if (m === 'db_schema')
+                    return SCHEMA('catalog', { fields: [
+                        { id: 'name', label: 'Название', type: 'string' },
+                        { id: 'kind', label: 'Вид', type: 'enum', values: ['oil', 'fuel'] },
+                        { id: 'active_flag', label: 'Активен', type: 'boolean' },
+                    ] });
+                if (m === 'db_query')
+                    return { total: 450, items: [{ id: 'c1', status: p.status || 'active', version: 2, body: { name: 'А' } }], names: {} };
+                if (m === 'db_restore')
+                    return { id: p.id, status: 'active', version: 3 };
+                return null;
+            },
+        });
+        await h.loadSchema();
+        assert.deepEqual(h.filterableFields.map(f => f.id), ['kind', 'active_flag']);
+        await h.onSearch('  масло ');
+        await h.filterStatus('deleted');
+        await h.setFieldFilter('kind', 'oil');
+        await h.setFieldFilter('active_flag', '1');
+        await h.setPage(2);
+        const q = calls.filter(c => c.method === 'db_query').at(-1).params;
+        assert.deepEqual(q, {
+            limit: 200, offset: 200, order: '-time',
+            search: 'масло', status: 'deleted',
+            where: JSON.stringify({ kind: 'oil', active_flag: 1 }),
+        });
+        assert.equal(h.pageText, '201–400 из 450');
+
+        h.editing = { id: 'c1', status: 'deleted', version: 2, name: 'А' };
+        assert.equal(h.canRestore, true);
+        assert.equal(h.canSave, false);
+        assert.equal(await h.restoreObject(), true);
+        assert.equal(calls.find(c => c.method === 'db_restore')?.params.id, 'c1');
+        assert.equal(h.editing.status, 'active');
+    });
+
+    it('группа классов: колонка вида, выбор листа при создании и запись в класс-лист', async () => {
+        const calls = [];
+        const leafCalls = [];
+        globalThis.WORK.get_item = async (p) => ({
+            path: p,
+            fetch: async (m, params, post) => {
+                leafCalls.push({ path: p, method: m, params, post });
+                if (m === 'db_schema')
+                    return SCHEMA('operation', { cid: 'op.sale', path: p, label: 'Покупателю', leaf: true,
+                        fields: [{ id: 'name', type: 'string' }, { id: 'lines', type: 'table', fields: [{ id: 'qty', type: 'number' }] }] });
+                if (m === 'db_create')
+                    return { id: 'o9', status: 'draft', version: 1 };
+                if (m === 'db_preview')
+                    return { entries: [{ debit: 'acc.62', credit: 'acc.90', amount: 200, debit_analytics: { counterparty: 'c1' } }],
+                        errors: [], names: { classes: { 'acc.62': '62 Расчёты', 'acc.90': '90 Выручка' }, objects: { c1: 'ООО «Альфа»' } } };
+                return null;
+            },
+        });
+        try {
+            const h = host(objects, calls, {
+                fetch: (m) => {
+                    if (m === 'db_schema')
+                        return {
+                            ...SCHEMA('operation', { leaf: false, label: 'Реализация' }),
+                            leaves: [
+                                { cid: 'op.sale', path: '/DATA/OPERATIONS/Реализация/Покупателю', label: 'Покупателю' },
+                                { cid: 'op.ret', path: '/DATA/OPERATIONS/Реализация/Возврат', label: 'Возврат' },
+                            ],
+                            classes: {
+                                'op.sales': { cid: 'op.sales', path: '/DATA/OPERATIONS/Реализация', label: 'Реализация', leaf: false },
+                                'op.sale': { cid: 'op.sale', path: '/DATA/OPERATIONS/Реализация/Покупателю', label: 'Покупателю', leaf: true },
+                                'op.ret': { cid: 'op.ret', path: '/DATA/OPERATIONS/Реализация/Возврат', label: 'Возврат', leaf: true },
+                            },
+                        };
+                    if (m === 'db_query')
+                        return { total: 1, items: [{ id: 'o1', cid: 'op.sale', status: 'registered', version: 1, time: 0, body: { name: 'Р-1' } }], names: {} };
+                    return null;
+                },
+            });
+            await h.loadSchema();
+            await h.reload();
+            assert.equal(h.canCreate, true, 'в группе с листьями создание доступно');
+            assert.equal(h.showLeafSelect, true);
+            assert.equal(h.showClassCol, true);
+            assert.deepEqual(h.tableMetadata.map(c => c.id), ['time', 'cls', 'name', 'client', 'state']);
+            assert.equal(h.tableRows[0].cls, 'Покупателю');
+
+            await h.selectLeaf('op.sale');
+            assert.equal(h.activeSchema.title, 'Покупателю');
+            h.editing = { time: '2026-10-20', name: 'Р-2', lines: [{ qty: '' }, { qty: 5 }, {}] };
+            assert.deepEqual(h.postData(), { name: 'Р-2', lines: [{ qty: 5 }] }, 'пустые строки таблицы отброшены');
+            await h.previewDraft();
+            assert.equal(h.entryText(h.entries[0]), `Дт 62 Расчёты (ООО «Альфа») — Кт 90 Выручка: ${rub(200)}`);
+            assert.equal(await h.save(), true);
+            assert.equal(leafCalls.find(c => c.method === 'db_create')?.path, '/DATA/OPERATIONS/Реализация/Покупателю');
+        }
+        finally {
+            delete globalThis.WORK.get_item;
+        }
+    });
+
+    it('состояние и траектория объекта справочника в окне и переходы к счёту и операции', async () => {
+        const opened = [];
+        globalThis.WORK.get_item = async p => ({ path: p });
+        globalThis.window = { execute: (t, nav) => opened.push({ path: t.path, nav }) };
+        try {
+            const h = host(objects, [], {
+                fetch: (m, p) => {
+                    if (m === 'db_schema')
+                        return SCHEMA('catalog');
+                    if (m === 'db_read')
+                        return { id: p.id, status: 'active', version: 1, body: { name: 'Альфа' } };
+                    if (m === 'db_trajectory')
+                        return {
+                            closing: [{ account: 'acc.62', slot: 'counterparty', debit: 1200, credit: 0, qty: 0 }],
+                            items: [{ time: 1000, op_id: 'op1', op_cid: 'op.sale', account: 'acc.62', corr: 'acc.90', debit: 1200, credit: 0, balance: 1200 }],
+                            names: {
+                                objects: { op1: 'Реализация Р-001' },
+                                classes: { 'acc.62': '62 Расчёты', 'op.sale': 'Покупателю' },
+                                paths: { 'acc.62': '/DATA/REGISTER/62', 'op.sale': '/DATA/OPERATIONS/Реализация/Покупателю' },
+                            },
+                        };
+                    return null;
+                },
+            });
+            await h.loadSchema();
+            await h.select({ id: 'c1' });
+            assert.equal(h.objectBalances.length, 1);
+            assert.equal(h.objectBalances[0].label, '62 Расчёты');
+            assert.equal(h.objectBalances[0].balance, `${rub(1200)} Дт`);
+            assert.equal(h.trajectory.length, 1);
+            assert.equal(h.trajectory[0].op, 'Реализация Р-001');
+            await h.openBalanceAccount(h.objectBalances[0]);
+            await h.openTrajectoryOp(h.trajectory[0]);
+            assert.deepEqual(opened, [
+                { path: '/DATA/REGISTER/62', nav: { view: 'postings', filters: { counterparty: 'c1' } } },
+                { path: '/DATA/OPERATIONS/Реализация/Покупателю', nav: { view: 'objects', id: 'op1' } },
+            ]);
+        }
+        finally {
+            delete globalThis.window;
+            delete globalThis.WORK.get_item;
+        }
+    });
 });
 
 const rub = v => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -420,6 +565,148 @@ describe('карточка счёта (form/postings)', () => {
         await h.reload();
         assert.equal(h.error, 'счёт не найден');
         assert.deepEqual(h.items, []);
+    });
+
+    it('переход в карточку счёта (applyNav) и клик по операции / корр. счёту', async () => {
+        const opened = [];
+        globalThis.WORK.get_item = async p => ({ path: p });
+        globalThis.window = { execute: (t, nav) => opened.push({ path: t.path, nav }) };
+        try {
+            const calls = [];
+            const cardWithPaths = {
+                ...CARD,
+                names: { ...CARD.names, paths: { '/DATA/OPERATIONS/SALE': '/DATA/OPERATIONS/SALE', '/DATA/REGISTER/90': '/DATA/REGISTER/90' } },
+            };
+            const h = host(postings, calls, { fetch: m => (m === 'db_schema' ? ASCHEMA : m === 'db_card' ? cardWithPaths : null) });
+            await h.applyNav({ from: '2026-03-01', to: '2026-03-31', unit: 'u1', filters: { counterparty: '9.Y' } });
+            assert.deepEqual(calls.at(-1).params, {
+                limit: 500, from: '2026-03-01', to: '2026-03-31', unit: 'u1', analytics: JSON.stringify({ counterparty: '9.Y' }),
+            });
+            await h.openOperation(h.displayRows[0]);
+            await h.openCorr(h.displayRows[0]);
+            assert.deepEqual(opened, [
+                { path: '/DATA/OPERATIONS/SALE', nav: { view: 'objects', id: 'o1' } },
+                { path: '/DATA/REGISTER/90', nav: { view: 'postings', from: '2026-03-01', to: '2026-03-31', unit: 'u1' } },
+            ]);
+        }
+        finally {
+            delete globalThis.window;
+            delete globalThis.WORK.get_item;
+        }
+    });
+
+    it('Экран 2 ODANT (Анализ счёта): перестановка слотов аналитик ↑↓, субаналитики, переключатель Сумма/Количество и переход в Обороты', async () => {
+        const calls = [];
+        const MULTI_SCHEMA = { schema: { family: 'account', fields: [
+            { id: 'warehouse', label: 'Склад', type: 'link', target: '/DATA/CATALOGS/W', analytic: true },
+            { id: 'item', label: 'Номенклатура', type: 'link', target: '/DATA/CATALOGS/I', analytic: true },
+        ] }, errors: [] };
+        const ANALYSIS_SHEET = {
+            rows: [
+                { account: '/DATA/REGISTER/41', label: 'Товары', level: 1, leaf: true, key: { item: 'i1', warehouse: 'w1' },
+                    opening: { debit: 100, credit: 0 }, turnover: { debit: 500, credit: 200 }, closing: { debit: 400, credit: 0 },
+                    qty: { opening: 2, debit: 10, credit: 4, closing: 8 } },
+                { account: '/DATA/REGISTER/41', label: 'Товары', level: 1, leaf: true, key: { item: 'i2', warehouse: 'w1' },
+                    opening: { debit: 0, credit: 0 }, turnover: { debit: 300, credit: 0 }, closing: { debit: 300, credit: 0 },
+                    qty: { opening: 0, debit: 6, credit: 0, closing: 6 } },
+            ],
+            total: {
+                opening: { debit: 100, credit: 0 }, turnover: { debit: 800, credit: 200 }, closing: { debit: 700, credit: 0 },
+                qty: { opening: 2, debit: 16, credit: 4, closing: 14 },
+            },
+            names: { objects: { i1: 'Масло 5W-40', i2: 'Фильтр', w1: 'Основной склад' }, classes: {}, paths: {} },
+        };
+        const TURNOVERS_RES = {
+            account: '/DATA/REGISTER/41', label: 'Товары', groupBy: 'quarter',
+            opening: { debit: 100, credit: 0, net: 100 },
+            groups: [{ key: '2026-Q1', label: '1 кв. 2026 г.', debit: 500, credit: 200, turnover: 300, balance: 400, count: 2 }],
+            closing: { debit: 500, credit: 200, turnover: 300, net: 400 },
+            total: 2,
+            items: [],
+            names: ANALYSIS_SHEET.names,
+        };
+        const h = host(postings, calls, {
+            fetch: m => (m === 'db_schema' ? MULTI_SCHEMA : m === 'db_sheet' ? ANALYSIS_SHEET : m === 'db_turnovers' ? TURNOVERS_RES : CARD),
+        });
+        await h.attached();
+        assert.deepEqual(h.activeSlots, ['warehouse', 'item']);
+
+        // Переключаемся в Экран 2 (Анализ счёта) и меняем порядок слотов аналитики
+        await h.setMode('analysis');
+        await h.moveSlot(1, -1); // поднимаем 'item' выше 'warehouse'
+        assert.deepEqual(h.slots.map(s => s.id), ['item', 'warehouse']);
+        assert.deepEqual(h.activeSlots, ['item', 'warehouse']);
+
+        // Задаём фильтр по субаналитике: kind:oil
+        await h.setSubFilter('item', 'kind:oil');
+        const lastSheetCall = calls.filter(c => c.method === 'db_sheet').at(-1);
+        assert.equal(lastSheetCall.params.by, JSON.stringify(['item', 'warehouse']));
+        assert.equal(lastSheetCall.params.subanalytics, JSON.stringify({ item: { kind: { contains: 'oil' } } }));
+
+        // Проверка режима значений: Сумма vs Количество
+        assert.equal(h.analysisRows[0].close_debit, rub(400));
+        h.setValueMode('qty');
+        assert.equal(h.analysisRows[0].close_debit, '8');
+        assert.equal(h.analysisTotals.close_debit, '14');
+
+        // Быстрый фильтр по строке аналитики
+        h.analysisQuery = 'масло';
+        assert.equal(h.analysisRows.length, 1);
+        assert.ok(h.analysisRows[0].label.includes('Масло 5W-40'));
+
+        // Переход по кнопке «Обороты» на выбранной аналитике в Экран 3 (turnovers)
+        await h.openTurnoversFromAnalysis(h.analysisRows[0]);
+        assert.equal(h.mode, 'turnovers');
+        assert.equal(h.filters.item, 'i1');
+    });
+
+    it('Экран 3 ODANT (Двухпанельные Обороты счёта) и Экран 4 (Сборная карточка проводки)', async () => {
+        const calls = [];
+        const TURNS = {
+            account: '/DATA/REGISTER/62', label: 'Расчёты', groupBy: 'quarter',
+            opening: { debit: 200, credit: 0, net: 200 },
+            groups: [
+                { key: '2026-Q1', label: '1 кв. 2026 г.', debit: 1000, credit: 700, turnover: 300, balance: 500, count: 2 },
+                { key: '2026-Q2', label: '2 кв. 2026 г.', debit: 400, credit: 0, turnover: 400, balance: 900, count: 1 },
+            ],
+            closing: { debit: 1400, credit: 700, turnover: 700, net: 900 },
+            total: 3,
+            items: [
+                { entry: 101, time: 100, groupKey: '2026-Q1', op_id: 'o1', op_cid: '/DATA/OPERATIONS/SALE', debit: 1000, credit: 0, corr: '/DATA/REGISTER/90', balance: 1200 },
+                { entry: 102, time: 200, groupKey: '2026-Q1', op_id: 'o2', op_cid: '/DATA/OPERATIONS/PAY', debit: 0, credit: 700, corr: '/DATA/REGISTER/51', balance: 500 },
+                { entry: 103, time: 300, groupKey: '2026-Q2', op_id: 'o3', op_cid: '/DATA/OPERATIONS/SALE', debit: 400, credit: 0, corr: '/DATA/REGISTER/90', balance: 900 },
+            ],
+            names: CARD.names,
+        };
+        const ENTRY_101 = {
+            entry: 101, time: 100, amount: 1000, qty: 0, storno: false,
+            operation: { id: 'o1', cid: '/DATA/OPERATIONS/SALE', path: '/DATA/OPERATIONS/SALE', title: 'Продажа 1' },
+            debit: { account: '/DATA/REGISTER/62', label: '62 Расчёты', amount: 1000, analytics: [{ id: 'counterparty', label: 'Контрагент', title: 'Альфа' }] },
+            credit: { account: '/DATA/REGISTER/90', label: '90 Продажи', amount: 1000, analytics: [] },
+        };
+        const h = host(postings, calls, {
+            fetch: m => (m === 'db_schema' ? ASCHEMA : m === 'db_turnovers' ? TURNS : m === 'db_entry' ? ENTRY_101 : CARD),
+        });
+        await h.applyNav({ mode: 'turnovers', groupBy: 'quarter' });
+        assert.equal(h.mode, 'turnovers');
+        assert.equal(h.turnoverGroups.length, 2);
+        assert.equal(h.selectedGroupKey, '2026-Q1', 'по умолчанию выбран первый период');
+        assert.equal(h.turnoverDocs.length, 2, 'правая таблица показывает документы выбранного квартала');
+        assert.equal(h.turnoverDocs[0].corrDir, 'со сч. 90 Продажи');
+        assert.equal(h.turnoverDocs[1].corrDir, 'на сч. 51');
+
+        // Клик по 2 кварталу переключает список документов справа
+        h.selectGroup('2026-Q2');
+        assert.equal(h.turnoverDocs.length, 1);
+        assert.equal(h.turnoverDocs[0].entry, 103);
+
+        // Открытие сборной карточки проводки (Экран 4)
+        const card = await h.openEntry(101);
+        assert.equal(card.entry, 101);
+        assert.equal(h.entryCard.debit.analytics[0].title, 'Альфа');
+        assert.equal(h.entryCard.credit.label, '90 Продажи');
+        h.closeEntry();
+        assert.equal(h.entryCard, null);
     });
 });
 
@@ -518,6 +805,42 @@ describe('ОСВ (form/sheet)', () => {
         assert.deepEqual([rows[0].open_debit, rows[0].open_credit, rows[0].close_debit], [rub(1000), '', rub(800)]);
         assert.equal(h.totals.close_credit, rub(1400));
     });
+
+    it('слоты разворота из db_schema и переход из строки ОСВ в карточку счёта с аналитикой', async () => {
+        const opened = [];
+        globalThis.WORK.get_item = async p => ({ path: p });
+        globalThis.window = { execute: (t, nav) => opened.push({ path: t.path, nav }) };
+        try {
+            const h = host(sheet, [], {
+                fetch: m => (m === 'db_schema'
+                    ? { slots: [{ id: 'counterparty', label: 'Контрагент' }] }
+                    : SHEET),
+            });
+            h.from = '2026-02-01';
+            h.to = '2026-02-28';
+            h.unit = 'u1';
+            await h.attached();
+            assert.deepEqual(h.slots, [{ id: 'counterparty', label: 'Контрагент' }]);
+            await h.open(h.displayRows[2]); // строка разворота с key: { counterparty: 'c1' }
+            assert.deepEqual(opened, [{
+                path: '/DATA/REGISTER/62/01',
+                nav: { view: 'postings', from: '2026-02-01', to: '2026-02-28', unit: 'u1', filters: { counterparty: 'c1' } },
+            }]);
+            opened.length = 0;
+            h.selectRow(h.displayRows[1]);
+            await h.openTurnovers();
+            await h.openAnalysis();
+            await h.openPostings();
+            assert.deepEqual(opened.map(o => o.nav.mode), ['turnovers', 'analysis', 'card'], 'кнопки нижней панели Обороты | Анализ | Проводки');
+            assert.ok(sheet.template.includes('<oda-packets'), 'шкала периодов oda-packets сверху ОСВ');
+            assert.ok(journal.template.includes('<oda-packets'), 'шкала периодов oda-packets сверху журнала');
+            assert.ok(postings.template.includes('<oda-packets'), 'шкала периодов oda-packets сверху формы счёта');
+        }
+        finally {
+            delete globalThis.window;
+            delete globalThis.WORK.get_item;
+        }
+    });
 });
 
 describe('состав виртуального справочника (form/virtual)', () => {
@@ -579,12 +902,12 @@ describe('состав виртуального справочника (form/vir
     it('клик открывает реестр-источник', async () => {
         const opened = [];
         globalThis.WORK.get_item = async p => ({ path: p });
-        globalThis.window = { execute: t => opened.push(t.path) };
+        globalThis.window = { execute: (t, nav) => opened.push({ path: t.path, nav }) };
         try {
             const h = host(virtual, [], { fetch: m => (m === 'db_members' ? MEMBERS : null) });
             await h.reload();
             await h.open(h.displayRows[0]);
-            assert.deepEqual(opened, ['/DATA/CATALOGS/K']);
+            assert.deepEqual(opened, [{ path: '/DATA/CATALOGS/K', nav: { view: 'objects', id: '1.X' } }]);
         }
         finally {
             delete globalThis.window;

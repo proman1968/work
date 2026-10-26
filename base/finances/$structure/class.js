@@ -1,5 +1,4 @@
 export default{
-    CID: 'unit.accounting',
     icon: 'icons:account-balance',
     label: 'Бухгалтерия',
     "#security": {

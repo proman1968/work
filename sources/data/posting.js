@@ -87,22 +87,41 @@ function normsAccount(db) {
     const hit = normsCache.get(db);
     if (hit && hit.gen === gen)
         return hit.acc;
-    const list = classesOfType(db, '$account').filter(c => c.own?.NORMS);
+    let list = classesOfType(db, '$account').filter(c => c.own?.NORMS || classSchema(db, c.cid)?.norms);
+    const nonModule = list.filter(c => !c.path.startsWith('/MODULES/'));
+    if (nonModule.length)
+        list = nonModule;
+    // Внутри одного журнала ($register) счёт нормативов должен быть единственным
+    const byRegister = new Map();
+    for (const c of list) {
+        const reg = c.parent || '';
+        const prev = byRegister.get(reg) || [];
+        prev.push(c);
+        if (prev.length > 1)
+            throw new DataError(`счетов нормативов несколько: ${prev.map(x => x.path).join(', ')} — NORMS должен быть у одного`);
+        byRegister.set(reg, prev);
+    }
     let acc = null;
-    if (list.length > 1)
-        throw new DataError(`счетов нормативов несколько: ${list.map(c => c.path).join(', ')} — NORMS должен быть у одного`);
     if (list.length) {
         const c = list[0];
-        const spec = typeof c.own.NORMS === 'object' ? c.own.NORMS : {};
+        const spec = typeof c.own?.NORMS === 'object' ? c.own.NORMS : {};
         const kind = String(spec.kind || 'kind');
-        const slot = analyticSlots(classSchema(db, c.cid)).find(f => f.id === kind);
+        const allCids = new Set();
+        const allKindCids = new Set();
+        for (const item of list) {
+            for (const cid of descendants(db, item.cid))
+                allCids.add(cid);
+            const slot = analyticSlots(classSchema(db, item.cid)).find(f => f.id === kind);
+            for (const kcid of (slot ? linkCids(db, slot.target) ?? [] : []))
+                allKindCids.add(kcid);
+        }
         acc = {
             cid: c.cid,
             label: c.label,
-            cids: descendants(db, c.cid),
+            cids: [...allCids],
             kind,
             object: String(spec.object || 'object'),
-            kindCids: slot ? linkCids(db, slot.target) ?? [] : null,
+            kindCids: allKindCids.size ? [...allKindCids] : null,
         };
     }
     normsCache.set(db, { gen, acc });
@@ -349,12 +368,27 @@ function insertEntries(db, op, entries, { time, version, author, storno = false,
         amount, qty, qty2, doc_qty, doc_unit, author, place, unit, storno, created)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const insA = db.prepare('INSERT INTO entry_analytics (entry_id, side, slot, ref_id, ref_cid) VALUES (?, ?, ?, ?, ?)');
+    const insAcc = db.prepare(`INSERT INTO account_entries (entry_id, side, account_cid, corr_cid, op_id, op_version, op_cid,
+        rule, row, time, debit, credit, qty_in, qty_out, qty2, doc_qty, doc_unit, analytics, author, place, unit, storno, created)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const e of entries) {
         const sign = storno ? -1 : 1;
-        const res = ins.run(op.id, version, op.cid, e.rule, e.row, e.time ?? time, e.debit_cid, e.credit_cid,
-            sign * e.amount, sign * e.qty, sign * e.qty2, e.doc_qty === null ? null : sign * e.doc_qty, e.doc_unit,
-            author ?? op.author ?? null, op.place ?? null, op.unit ?? null, storno ? 1 : 0, now);
+        const entryTime = e.time ?? time;
+        const entryAuthor = author ?? op.author ?? null;
+        const amt = sign * e.amount;
+        const q = sign * e.qty;
+        const q2 = sign * e.qty2;
+        const docQty = e.doc_qty === null ? null : sign * e.doc_qty;
+        const stornoFlag = storno ? 1 : 0;
+        const res = ins.run(op.id, version, op.cid, e.rule, e.row, entryTime, e.debit_cid, e.credit_cid,
+            amt, q, q2, docQty, e.doc_unit, entryAuthor, op.place ?? null, op.unit ?? null, stornoFlag, now);
         const id = Number(res.lastInsertRowid);
+        const sideJson = side => JSON.stringify(Object.fromEntries(Object.entries(e.analytics[side] || {}).map(([slot, a]) => [slot, a.ref_id])));
+        // Явная двойная запись: отдельная запись в счёте Дебета и отдельная запись в счёте Кредита
+        insAcc.run(id, 'D', e.debit_cid, e.credit_cid, op.id, version, op.cid, e.rule, e.row, entryTime,
+            amt, 0, q, 0, q2, docQty, e.doc_unit, sideJson('D'), entryAuthor, op.place ?? null, op.unit ?? null, stornoFlag, now);
+        insAcc.run(id, 'C', e.credit_cid, e.debit_cid, op.id, version, op.cid, e.rule, e.row, entryTime,
+            0, amt, 0, q, q2, docQty, e.doc_unit, sideJson('C'), entryAuthor, op.place ?? null, op.unit ?? null, stornoFlag, now);
         for (const side of ['D', 'C']) {
             for (const [slot, a] of Object.entries(e.analytics[side]))
                 insA.run(id, side, slot, a.ref_id, a.ref_cid);

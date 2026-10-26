@@ -32,64 +32,64 @@ const sumOf = (list, key = 'amount') => list.reduce((s, e) => s + e[key], 0);
 
 before(async () => {
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-data-posting-'));
-    cls('BASE', '$base', `{ CID: 'org', label: 'Организация' }`);
-    cls('BASE/SALES', '$structure', `{ CID: 'unit.sales', label: 'Отдел продаж' }`);
+    cls('BASE', '$base', `{ label: 'Организация' }`);
+    cls('BASE/SALES', '$structure', `{ label: 'Отдел продаж' }`);
 
-    cls('DATA/CATALOGS', '$catalog', `{ CID: 'catalogs', label: 'Справочники' }`);
-    cls('DATA/CATALOGS/SUBJECTS', '$catalog', `{ CID: 'subjects', label: 'Субъекты', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
-    cls('DATA/CATALOGS/STAFF', '$catalog', `{ CID: 'staff', label: 'Сотрудники', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
-    cls('DATA/CATALOGS/GOODS', '$catalog', `{ CID: 'goods', label: 'Номенклатура', METADATA: { FIELDS: [
+    cls('DATA/CATALOGS', '$catalog', `{ label: 'Справочники' }`);
+    cls('DATA/CATALOGS/SUBJECTS', '$catalog', `{ label: 'Субъекты', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
+    cls('DATA/CATALOGS/STAFF', '$catalog', `{ label: 'Сотрудники', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
+    cls('DATA/CATALOGS/GOODS', '$catalog', `{ label: 'Номенклатура', METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'base_unit' },
         { id: 'units', type: 'Table', FIELDS: [{ id: 'unit', required: true }, { id: 'coef', type: 'Number', required: true }] } ] } }`);
-    cls('DATA/CATALOGS/NORM_KINDS', '$catalog', `{ CID: 'norm_kinds', label: 'Виды нормативов', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
+    cls('DATA/CATALOGS/NORM_KINDS', '$catalog', `{ label: 'Виды нормативов', METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
 
-    cls('DATA/REGISTER', '$register', `{ CID: 'register', label: 'Журнал' }`);
-    cls('DATA/REGISTER/19', '$account', `{ CID: '19', label: 'НДС по приобретённым' }`);
-    cls('DATA/REGISTER/41', '$account', `{ CID: '41', label: 'Товары', METADATA: { FIELDS: [
-        { id: 'item', type: 'Link', target: 'goods', analytic: true, required: true } ] } }`);
-    cls('DATA/REGISTER/60', '$account', `{ CID: '60', label: 'Расчёты с поставщиками', METADATA: { FIELDS: [
-        { id: 'counterparty', type: 'Link', target: 'subjects', analytic: true, required: true } ] } }`);
-    cls('DATA/REGISTER/62', '$account', `{ CID: '62', label: 'Расчёты с покупателями', METADATA: { FIELDS: [
-        { id: 'counterparty', type: 'Link', target: 'subjects', analytic: true, required: true } ] } }`);
-    cls('DATA/REGISTER/90', '$account', `{ CID: '90', label: 'Продажи' }`);
-    cls('DATA/REGISTER/26', '$account', `{ CID: '26', label: 'Общехозяйственные расходы' }`);
-    cls('DATA/REGISTER/69', '$account', `{ CID: '69', label: 'Страховые взносы' }`);
-    cls('DATA/REGISTER/70', '$account', `{ CID: '70', label: 'Расчёты с персоналом', METADATA: { FIELDS: [
-        { id: 'employee', type: 'Link', target: 'staff', analytic: true, required: true } ] } }`);
-    cls('DATA/REGISTER/NORMS', '$account', `{ CID: 'norms', label: 'Нормы', NORMS: true, METADATA: { FIELDS: [
-        { id: 'kind', type: 'Link', target: 'norm_kinds', analytic: true, required: true },
-        { id: 'object', type: 'Link', target: 'catalogs', analytic: true } ] } }`);
-    cls('DATA/REGISTER/000', '$account', `{ CID: '000', label: 'Технический' }`);
+    cls('DATA/REGISTER', '$register', `{ label: 'Журнал' }`);
+    cls('DATA/REGISTER/19', '$account', `{ label: 'НДС по приобретённым' }`);
+    cls('DATA/REGISTER/41', '$account', `{ label: 'Товары', METADATA: { FIELDS: [
+        { id: 'item', type: 'Link', target: '/DATA/CATALOGS/GOODS', analytic: true, required: true } ] } }`);
+    cls('DATA/REGISTER/60', '$account', `{ label: 'Расчёты с поставщиками', METADATA: { FIELDS: [
+        { id: 'counterparty', type: 'Link', target: '/DATA/CATALOGS/SUBJECTS', analytic: true, required: true } ] } }`);
+    cls('DATA/REGISTER/62', '$account', `{ label: 'Расчёты с покупателями', METADATA: { FIELDS: [
+        { id: 'counterparty', type: 'Link', target: '/DATA/CATALOGS/SUBJECTS', analytic: true, required: true } ] } }`);
+    cls('DATA/REGISTER/90', '$account', `{ label: 'Продажи' }`);
+    cls('DATA/REGISTER/26', '$account', `{ label: 'Общехозяйственные расходы' }`);
+    cls('DATA/REGISTER/69', '$account', `{ label: 'Страховые взносы' }`);
+    cls('DATA/REGISTER/70', '$account', `{ label: 'Расчёты с персоналом', METADATA: { FIELDS: [
+        { id: 'employee', type: 'Link', target: '/DATA/CATALOGS/STAFF', analytic: true, required: true } ] } }`);
+    cls('DATA/REGISTER/NORMS', '$account', `{ label: 'Нормы', NORMS: true, METADATA: { FIELDS: [
+        { id: 'kind', type: 'Link', target: '/DATA/CATALOGS/NORM_KINDS', analytic: true, required: true },
+        { id: 'object', type: 'Link', target: '/DATA/CATALOGS', analytic: true } ] } }`);
+    cls('DATA/REGISTER/000', '$account', `{ label: 'Технический' }`);
 
-    cls('DATA/OPERATIONS', '$operation', `{ CID: 'ops', label: 'Операции', METADATA: { FIELDS: [
+    cls('DATA/OPERATIONS', '$operation', `{ label: 'Операции', METADATA: { FIELDS: [
         { id: 'name' }, { id: 'sum', type: 'Money' } ] } }`);
-    cls('DATA/OPERATIONS/SALE', '$operation', `{ CID: 'sale', label: 'Реализация', METADATA: {
-        FIELDS: [{ id: 'client', type: 'Link', target: 'subjects', required: true }],
-        POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '62', analytics: { counterparty: 'client' } }, credit: { account: '90' } }] } }`);
-    cls('DATA/OPERATIONS/RECEIPT', '$operation', `{ CID: 'receipt', label: 'Поступление товара', METADATA: {
-        FIELDS: [{ id: 'supplier', type: 'Link', target: 'subjects', required: true }, { id: 'vat_sum', type: 'Money' },
+    cls('DATA/OPERATIONS/SALE', '$operation', `{ label: 'Реализация', METADATA: {
+        FIELDS: [{ id: 'client', type: 'Link', target: '/DATA/CATALOGS/SUBJECTS', required: true }],
+        POSTINGS: [{ id: 'main', amount: 'sum', debit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'client' } }, credit: { account: '/DATA/REGISTER/90' } }] } }`);
+    cls('DATA/OPERATIONS/RECEIPT', '$operation', `{ label: 'Поступление товара', METADATA: {
+        FIELDS: [{ id: 'supplier', type: 'Link', target: '/DATA/CATALOGS/SUBJECTS', required: true }, { id: 'vat_sum', type: 'Money' },
             { id: 'lines', type: 'Table', required: true, FIELDS: [
-                { id: 'goods', type: 'Link', target: 'goods', required: true }, { id: 'unit' },
+                { id: 'goods', type: 'Link', target: '/DATA/CATALOGS/GOODS', required: true }, { id: 'unit' },
                 { id: 'qty', type: 'Number', required: true }, { id: 'price', type: 'Money' } ] }],
         POSTINGS: [
             { id: 'lines', each: 'lines', amount: 'row.qty * row.price', qty: 'row.qty', unit: 'row.unit', item: 'row.goods',
               qty2: 'row.qty * coef(row.goods, row.unit) * 0.9',
-              debit: { account: '41', analytics: { item: 'row.goods' } }, credit: { account: '60', analytics: { counterparty: 'supplier' } } },
+              debit: { account: '/DATA/REGISTER/41', analytics: { item: 'row.goods' } }, credit: { account: '/DATA/REGISTER/60', analytics: { counterparty: 'supplier' } } },
             { id: 'vat', when: 'vat_sum > 0', amount: 'vat_sum',
-              debit: { account: '19' }, credit: { account: '60', analytics: { counterparty: 'supplier' } } } ] } }`);
-    cls('DATA/OPERATIONS/PAYROLL', '$operation', `{ CID: 'payroll', label: 'Начисление зарплаты', METADATA: {
+              debit: { account: '/DATA/REGISTER/19' }, credit: { account: '/DATA/REGISTER/60', analytics: { counterparty: 'supplier' } } } ] } }`);
+    cls('DATA/OPERATIONS/PAYROLL', '$operation', `{ label: 'Начисление зарплаты', METADATA: {
         FIELDS: [{ id: 'staff', type: 'Table', required: true, FIELDS: [
-            { id: 'employee', type: 'Link', target: 'staff', required: true }, { id: 'sum', type: 'Money', required: true } ] }],
+            { id: 'employee', type: 'Link', target: '/DATA/CATALOGS/STAFF', required: true }, { id: 'sum', type: 'Money', required: true } ] }],
         POSTINGS: [
-            { id: 'accrual', each: 'staff', amount: 'row.sum', debit: { account: '26' }, credit: { account: '70', analytics: { employee: 'row.employee' } } },
-            { id: 'taxes', each: 'staff', amount: "round(row.sum * norm('Ставка взносов', row.employee), 2)", debit: { account: '26' }, credit: { account: '69' } } ] } }`);
-    cls('DATA/OPERATIONS/SET_NORM', '$operation', `{ CID: 'set_norm', label: 'Установка норматива', AUTO_REGISTER: true, METADATA: {
-        FIELDS: [{ id: 'kind', type: 'Link', target: 'norm_kinds', required: true }, { id: 'object', type: 'Link', target: 'catalogs' },
+            { id: 'accrual', each: 'staff', amount: 'row.sum', debit: { account: '/DATA/REGISTER/26' }, credit: { account: '/DATA/REGISTER/70', analytics: { employee: 'row.employee' } } },
+            { id: 'taxes', each: 'staff', amount: "round(row.sum * norm('Ставка взносов', row.employee), 2)", debit: { account: '/DATA/REGISTER/26' }, credit: { account: '/DATA/REGISTER/69' } } ] } }`);
+    cls('DATA/OPERATIONS/SET_NORM', '$operation', `{ label: 'Установка норматива', AUTO_REGISTER: true, METADATA: {
+        FIELDS: [{ id: 'kind', type: 'Link', target: '/DATA/CATALOGS/NORM_KINDS', required: true }, { id: 'object', type: 'Link', target: '/DATA/CATALOGS' },
             { id: 'value', type: 'Number', required: true }],
         POSTINGS: [{ id: 'norm', qty: 'value - norm(kind, object, 0)',
-            debit: { account: 'norms', analytics: { kind: 'kind', object: 'object' } }, credit: { account: '000' } }] } }`);
-    cls('DATA/OPERATIONS/AUTO_BAD', '$operation', `{ CID: 'auto_bad', label: 'Письмо без норматива', AUTO_REGISTER: true, METADATA: {
-        POSTINGS: [{ id: 'cost', amount: "norm('Нет такого')", debit: { account: '26' }, credit: { account: '000' } }] } }`);
+            debit: { account: '/DATA/REGISTER/NORMS', analytics: { kind: 'kind', object: 'object' } }, credit: { account: '/DATA/REGISTER/000' } }] } }`);
+    cls('DATA/OPERATIONS/AUTO_BAD', '$operation', `{ label: 'Письмо без норматива', AUTO_REGISTER: true, METADATA: {
+        POSTINGS: [{ id: 'cost', amount: "norm('Нет такого')", debit: { account: '/DATA/REGISTER/26' }, credit: { account: '/DATA/REGISTER/000' } }] } }`);
 
     db = await openDataDb(':memory:');
     const res = await refreshClasses(db, tmp);
@@ -105,21 +105,21 @@ describe('проведение', () => {
     let buyer, supplier, staffA, staffB, oil, rate, sale, payroll, receipt, julyNorm;
 
     it('справочники для проведения', () => {
-        buyer = createObject(db, { cid: 'subjects', body: { name: 'ООО «Покупатель»' } });
-        supplier = createObject(db, { cid: 'subjects', body: { name: 'АО «НПЗ»' } });
-        staffA = createObject(db, { cid: 'staff', body: { name: 'Смирнова' } });
-        staffB = createObject(db, { cid: 'staff', body: { name: 'Козлов' } });
-        oil = createObject(db, { cid: 'goods', body: { name: 'Масло И-40А', base_unit: 'л', units: [{ unit: 'бочка', coef: 216.5 }, { unit: 'кг', coef: 1.1 }] } });
-        rate = createObject(db, { cid: 'norm_kinds', body: { name: 'Ставка взносов' } });
+        buyer = createObject(db, { cid: '/DATA/CATALOGS/SUBJECTS', body: { name: 'ООО «Покупатель»' } });
+        supplier = createObject(db, { cid: '/DATA/CATALOGS/SUBJECTS', body: { name: 'АО «НПЗ»' } });
+        staffA = createObject(db, { cid: '/DATA/CATALOGS/STAFF', body: { name: 'Смирнова' } });
+        staffB = createObject(db, { cid: '/DATA/CATALOGS/STAFF', body: { name: 'Козлов' } });
+        oil = createObject(db, { cid: '/DATA/CATALOGS/GOODS', body: { name: 'Масло И-40А', base_unit: 'л', units: [{ unit: 'бочка', coef: 216.5 }, { unit: 'кг', coef: 1.1 }] } });
+        rate = createObject(db, { cid: '/DATA/CATALOGS/NORM_KINDS', body: { name: 'Ставка взносов' } });
     });
 
     it('AUTO_REGISTER: установка норматива регистрируется при создании и проводит разницу', () => {
-        const jan = createObject(db, { cid: 'set_norm', time: d('01-01'), body: { kind: rate.id, value: 0.3 }, author: 'U1' });
+        const jan = createObject(db, { cid: '/DATA/OPERATIONS/SET_NORM', time: d('01-01'), body: { kind: rate.id, value: 0.3 }, author: 'U1' });
         assert.equal(jan.status, 'registered');
         assert.equal(operationEntries(db, jan.id)[0].qty, 0.3);
-        julyNorm = createObject(db, { cid: 'set_norm', time: d('07-01'), body: { kind: rate.id, value: 0.302 } });
+        julyNorm = createObject(db, { cid: '/DATA/OPERATIONS/SET_NORM', time: d('07-01'), body: { kind: rate.id, value: 0.302 } });
         assert.equal(operationEntries(db, julyNorm.id)[0].qty, 0.002);
-        createObject(db, { cid: 'set_norm', time: d('01-01'), body: { kind: rate.id, object: staffA.id, value: 0.1 } });
+        createObject(db, { cid: '/DATA/OPERATIONS/SET_NORM', time: d('01-01'), body: { kind: rate.id, object: staffA.id, value: 0.1 } });
     });
 
     it('norm(): остаток на дату, норматив объекта с откатом к общему, вид по имени и id', () => {
@@ -133,7 +133,7 @@ describe('проведение', () => {
     });
 
     it('черновик не имеет проводок; регистрация: each, норматив, автоаналитики', () => {
-        payroll = createObject(db, { cid: 'payroll', time: d('08-10'), author: 'U2', unit: 'unit.sales', place: 'buh',
+        payroll = createObject(db, { cid: '/DATA/OPERATIONS/PAYROLL', time: d('08-10'), author: 'U2', unit: '/BASE/SALES', place: 'buh',
             body: { staff: [{ employee: staffA.id, sum: 50000 }, { employee: staffB.id, sum: 40000 }] } });
         assert.equal(payroll.status, 'draft');
         assert.deepEqual(operationEntries(db, payroll.id), []);
@@ -141,19 +141,19 @@ describe('проведение', () => {
         assert.equal(reg.status, 'registered');
         const entries = operationEntries(db, payroll.id);
         assert.deepEqual(entries.map(e => [e.rule, e.row, e.debit, e.credit, e.amount]), [
-            ['accrual', 0, '26', '70', 50000], ['accrual', 1, '26', '70', 40000],
-            ['taxes', 0, '26', '69', 5000], ['taxes', 1, '26', '69', 12080],
+            ['accrual', 0, '/DATA/REGISTER/26', '/DATA/REGISTER/70', 50000], ['accrual', 1, '/DATA/REGISTER/26', '/DATA/REGISTER/70', 40000],
+            ['taxes', 0, '/DATA/REGISTER/26', '/DATA/REGISTER/69', 5000], ['taxes', 1, '/DATA/REGISTER/26', '/DATA/REGISTER/69', 12080],
         ]);
         assert.deepEqual(entries[1].credit_analytics, { employee: staffB.id });
         assert.equal(entries[0].time, dayStart(d('08-10')));
-        assert.deepEqual([entries[0].author, entries[0].place, entries[0].unit, entries[0].op_cid], ['U3', 'buh', 'unit.sales', 'payroll']);
+        assert.deepEqual([entries[0].author, entries[0].place, entries[0].unit, entries[0].op_cid], ['U3', 'buh', '/BASE/SALES', '/DATA/OPERATIONS/PAYROLL']);
         assert.equal(registerOperation(db, { id: payroll.id }).version, reg.version, 'повторная регистрация ничего не меняет');
         assert.ok(referencedBy(db, staffA.id).entries > 0);
         assert.throws(() => deleteObject(db, { id: rate.id }), /используется/);
     });
 
     it('единицы: количество в базовой единице, doc_qty/doc_unit, qty2; нулевая строка и when', () => {
-        receipt = createObject(db, { cid: 'receipt', time: d('09-10'), body: { supplier: supplier.id, lines: [
+        receipt = createObject(db, { cid: '/DATA/OPERATIONS/RECEIPT', time: d('09-10'), body: { supplier: supplier.id, lines: [
             { goods: oil.id, unit: 'бочка', qty: 2, price: 30000 },
             { goods: oil.id, unit: 'Л', qty: 10, price: 150 },
             { goods: oil.id, qty: 0, price: 1 } ] } });
@@ -168,7 +168,7 @@ describe('проведение', () => {
     });
 
     it('ошибки проведения — все строки сразу, черновик не меняется', () => {
-        const bad = createObject(db, { cid: 'receipt', time: d('09-11'), body: { supplier: supplier.id, lines: [
+        const bad = createObject(db, { cid: '/DATA/OPERATIONS/RECEIPT', time: d('09-11'), body: { supplier: supplier.id, lines: [
             { goods: oil.id, unit: 'IBC', qty: 1, price: 1 }, { goods: oil.id, unit: 'канистра', qty: 1, price: 1 } ] } });
         try {
             registerOperation(db, { id: bad.id });
@@ -184,13 +184,13 @@ describe('проведение', () => {
     });
 
     it('AUTO_REGISTER с ошибкой правил отменяет и создание', () => {
-        const before = queryObjects(db, { cid: 'auto_bad', status: ['draft', 'registered'] }).total;
-        assert.throws(() => createObject(db, { cid: 'auto_bad', body: {} }), /«Нет такого» не найден/);
-        assert.equal(queryObjects(db, { cid: 'auto_bad', status: ['draft', 'registered'] }).total, before);
+        const before = queryObjects(db, { cid: '/DATA/OPERATIONS/AUTO_BAD', status: ['draft', 'registered'] }).total;
+        assert.throws(() => createObject(db, { cid: '/DATA/OPERATIONS/AUTO_BAD', body: {} }), /«Нет такого» не найден/);
+        assert.equal(queryObjects(db, { cid: '/DATA/OPERATIONS/AUTO_BAD', status: ['draft', 'registered'] }).total, before);
     });
 
     it('исправление: сторно прежних и новые проводки одной версией; when включает правило', () => {
-        sale = createObject(db, { cid: 'sale', body: { client: buyer.id, sum: 1000 } });
+        sale = createObject(db, { cid: '/DATA/OPERATIONS/SALE', body: { client: buyer.id, sum: 1000 } });
         registerOperation(db, { id: sale.id });
         assert.throws(() => updateObject(db, { id: sale.id, body: { sum: 1 } }), /только исправлением/);
         const v = readObject(db, sale.id).version;
@@ -221,7 +221,7 @@ describe('проведение', () => {
         assert.equal(sumOf(operationEntries(db, sale.id, { history: true })), 0);
         assert.equal(cancelOperation(db, { id: sale.id }).version, c.version);
         assert.throws(() => correctOperation(db, { id: sale.id, body: { sum: 5 } }), /исправляется только зарегистрированная/);
-        const draft = createObject(db, { cid: 'sale', body: { client: buyer.id, sum: 1 } });
+        const draft = createObject(db, { cid: '/DATA/OPERATIONS/SALE', body: { client: buyer.id, sum: 1 } });
         assert.throws(() => cancelOperation(db, { id: draft.id }), /черновик удаляют/);
         assert.throws(() => correctOperation(db, { id: draft.id, body: { sum: 2 } }), /черновик/);
         assert.throws(() => registerOperation(db, { id: buyer.id }), /не операция/);
@@ -234,7 +234,7 @@ describe('проведение', () => {
         assert.ok(isClosed(db, dayStart(d('08-31')) + 1000));
         assert.ok(!isClosed(db, dayStart(d('09-01'))));
 
-        const late = createObject(db, { cid: 'sale', time: d('08-15'), body: { client: buyer.id, sum: 10 } });
+        const late = createObject(db, { cid: '/DATA/OPERATIONS/SALE', time: d('08-15'), body: { client: buyer.id, sum: 10 } });
         assert.throws(() => registerOperation(db, { id: late.id }), /закрыт — регистрировать/);
         assert.throws(() => correctOperation(db, { id: receipt.id, time: d('08-20'), body: {} }), /закрыт — перенести/);
 
@@ -254,11 +254,11 @@ describe('проведение', () => {
     });
 
     it('предпросмотр проводок без записи', () => {
-        const p = previewEntries(db, { cid: 'sale', body: { client: buyer.id, sum: 77.5 } });
+        const p = previewEntries(db, { cid: '/DATA/OPERATIONS/SALE', body: { client: buyer.id, sum: 77.5 } });
         assert.deepEqual(p.errors, []);
-        assert.deepEqual(p.entries.map(e => [e.debit, e.credit, e.amount, e.debit_analytics.counterparty]), [['62', '90', 77.5, buyer.id]]);
-        const bad = previewEntries(db, { cid: 'receipt', body: { supplier: supplier.id, lines: [{ goods: oil.id, unit: 'ведро', qty: 1 }] } });
+        assert.deepEqual(p.entries.map(e => [e.debit, e.credit, e.amount, e.debit_analytics.counterparty]), [['/DATA/REGISTER/62', '/DATA/REGISTER/90', 77.5, buyer.id]]);
+        const bad = previewEntries(db, { cid: '/DATA/OPERATIONS/RECEIPT', body: { supplier: supplier.id, lines: [{ goods: oil.id, unit: 'ведро', qty: 1 }] } });
         assert.match(bad.errors[0].message, /нет единицы «ведро»/);
-        assert.throws(() => previewEntries(db, { cid: 'sale', body: { sum: 1 } }), /обязательное поле/);
+        assert.throws(() => previewEntries(db, { cid: '/DATA/OPERATIONS/SALE', body: { sum: 1 } }), /обязательное поле/);
     });
 });

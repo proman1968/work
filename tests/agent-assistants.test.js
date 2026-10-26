@@ -56,7 +56,7 @@ before(async () => {
         { id: 'active', type: 'Boolean' },
     ] } }`);
     // справочник учётного ядра — цель import_objects
-    write('DATA/$class/class.js', fs.readFileSync(path.join(ROOT, 'DATA/$class/class.js'), 'utf-8'));
+    write('DATA/$domain/class.js', fs.readFileSync(path.join(ROOT, 'DATA/$domain/class.js'), 'utf-8'));
     write('DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js', fs.readFileSync(path.join(ROOT, 'DATA/CATALOGS/$catalog/$folder/$class/$catalog/class.js'), 'utf-8'));
     write('DATA/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', '#security': { USER: ['${IVAN}', '${PETR}'] } }`);
     write('DATA/CATALOGS/GOODS/$catalog/class.js', `export default { label: 'Товары', '#security': { USER: ['${IVAN}', '${PETR}'] }, METADATA: { FIELDS: [

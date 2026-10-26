@@ -205,10 +205,17 @@ ODA({is: 'work-form',
         }
     },
     async ready() {
-        window.execute ??= ($item) => {
-            let url = $item.short + '/';
+        window.execute ??= ($item, nav) => {
+            const short = $item?.short || $item?.path || '';
+            if (nav && short)
+                this._saveNav(short, nav);
+            if (window.parent !== window && typeof window.parent?.execute === 'function') {
+                window.parent.execute($item);
+                return;
+            }
+            let url = short + '/';
             if ($item.type !== '$handler')
-                url += '~/handlers/pages/' + $item.page + '/'
+                url += '~/handlers/pages/' + ($item.page || 'form') + '/'
             url = encodeURI(url);
             window.open(url, url)
         }
@@ -217,6 +224,59 @@ ODA({is: 'work-form',
             window.close = () => {
                 return this.close();
             }
+        if (typeof BroadcastChannel === 'function') {
+            this._navChannel = new BroadcastChannel('work-form-nav');
+            this._navChannel.onmessage = (ev) => {
+                const d = ev?.data;
+                const myShort = this.$item?.short || this.$item?.path || '';
+                if (d?.short && d.short === myShort) {
+                    const nav = this._takeNav(myShort) || d.nav;
+                    if (nav)
+                        this.applyNav(nav);
+                }
+            };
+        }
+    },
+    detached() {
+        this._navChannel?.close?.();
+        this._navChannel = null;
+    },
+    _saveNav(short, nav) {
+        try {
+            sessionStorage.setItem('work.form.nav:' + short, JSON.stringify(nav));
+        } catch {}
+        try {
+            this._navChannel?.postMessage({ short, nav });
+        } catch {}
+    },
+    _takeNav(short) {
+        if (!short)
+            return null;
+        try {
+            const raw = sessionStorage.getItem('work.form.nav:' + short);
+            if (!raw)
+                return null;
+            sessionStorage.removeItem('work.form.nav:' + short);
+            return JSON.parse(raw);
+        } catch {
+            return null;
+        }
+    },
+    async applyNav(nav) {
+        if (!nav || typeof nav !== 'object')
+            return;
+        this._pendingNav = nav;
+        if (nav.view && this.view?.id !== nav.view) {
+            const v = await this.resolveView(nav.view);
+            if (v && this.view?.id !== v.id) {
+                this.view = v;
+                return;
+            }
+        }
+        if (this.view_control && typeof this.view_control.applyNav === 'function') {
+            this._pendingNav = null;
+            await this.view_control.applyNav(nav);
+        }
     },
     view_name: '',
     /**
@@ -282,7 +342,10 @@ ODA({is: 'work-form',
                 this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
 
                 await n.ensureRole?.();
-                const view_name = this.host.default_view || this.host.view_name || n?.form;
+                const nav = this._takeNav(n.short || n.path);
+                if (nav)
+                    this._pendingNav = nav;
+                const view_name = nav?.view || this.host.default_view || n?.form || this.host.view_name;
                 this.view ||= await this.resolveView(view_name);
             }
         }
@@ -431,6 +494,11 @@ ODA({is: 'work-form',
                 this.appendChild(el);
             this.view_control = el;
             this.host.view_name = n.id;
+            const nav = this._pendingNav || this._takeNav(this.$item?.short || this.$item?.path);
+            if (nav && typeof el?.applyNav === 'function') {
+                this._pendingNav = null;
+                Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
+            }
         }
     },
     $listeners: {

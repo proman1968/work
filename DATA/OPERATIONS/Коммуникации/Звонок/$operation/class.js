@@ -1,6 +1,4 @@
-export default {
-    CID: 'op.comm.call',
-    label: 'Звонок',
+export default {    label: 'Звонок',
     icon: 'carbon:phone',
     AUTO_REGISTER: true,
     METADATA: {
@@ -19,8 +17,8 @@ export default {
                 id: 'main',
                 qty: 'minutes',
                 amount: "round(minutes * norm('Стоимость минуты звонка'), 2)",
-                debit: { account: 'acc.comm', analytics: { counterparty: 'counterparty' } },
-                credit: { account: 'acc.tech' },
+                debit: { account: '/DATA/REGISTER/Коммуникации', analytics: { counterparty: 'counterparty' } },
+                credit: { account: '/DATA/REGISTER/Технический' },
             },
         ],
     },

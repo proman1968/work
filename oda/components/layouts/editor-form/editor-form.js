@@ -3,7 +3,7 @@ import '/oda/components/icon/icon.js';
 import { CONTROLS, controlOf } from '/oda/components/structure/controls-map.js';
 
 /** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
-export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link'];
+export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link', 'Struct'];
 
 function cleanField(f, seen) {
     if (!f || typeof f !== 'object')
@@ -47,9 +47,10 @@ function cleanField(f, seen) {
             field.other = { value: '', label: 'Свой ответ' };
         }
     }
-    if (Array.isArray(f.children)) {
+    const rawChildren = Array.isArray(f.children) ? f.children : (type === 'Struct' && Array.isArray(f.fields) ? f.fields : null);
+    if (rawChildren) {
         const childSeen = new Set();
-        field.children = f.children.map(c => cleanField(c, childSeen)).filter(Boolean);
+        field.children = rawChildren.map(c => cleanField(c, childSeen)).filter(Boolean);
     }
     if (type === 'Table' && Array.isArray(f.columns)) {
         const colSeen = new Set();
@@ -209,9 +210,9 @@ ODA({is: 'oda-editor-form-field',
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
         <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
         <div class="editor-box">
-            <div ~is="editor" ::value="data[field.id]" :field :meta="field" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
+            <div ~if="field?.type !== 'Struct'" ~is="editor" ::value="data[field.id]" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
-                <oda-editor-form-field ~for="children" :field="$for.item" :data></oda-editor-form-field>
+                <oda-editor-form-field ~for="children" :field="$for.item" :data="subData"></oda-editor-form-field>
             </div>
         </div>
     </fieldset>
@@ -219,6 +220,16 @@ ODA({is: 'oda-editor-form-field',
     field: null,
     data: null,
     expanded: true,
+    get subData() {
+        if (!this.data || typeof this.data !== 'object')
+            return {};
+        if (this.field?.type === 'Struct' && this.field.id) {
+            if (!this.data[this.field.id] || typeof this.data[this.field.id] !== 'object' || Array.isArray(this.data[this.field.id]))
+                this.data[this.field.id] = {};
+            return this.data[this.field.id];
+        }
+        return this.data;
+    },
     get editor() {
         return controlOf(CONTROLS, this.field);
     },

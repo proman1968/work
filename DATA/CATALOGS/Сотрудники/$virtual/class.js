@@ -1,8 +1,6 @@
-export default {
-    CID: 'cat.employees',
-    label: 'Сотрудники',
+export default {    label: 'Сотрудники',
     icon: 'carbon:user-role',
-    SOURCE: { registry: 'cat.person', account: 'acc.hr', slot: 'person' },
+    SOURCE: { registry: '/DATA/CATALOGS/Субъекты/Физ. лица', account: '/DATA/REGISTER/Кадры', slot: 'person' },
     OVERLAY: [
         { id: 'position', label: 'Должность' },
         { id: 'salary', label: 'Оклад', type: 'Money' },
