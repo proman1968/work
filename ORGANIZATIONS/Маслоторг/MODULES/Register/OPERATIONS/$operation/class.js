@@ -1,4 +1,7 @@
 export default {
-    label: 'Операции',
     icon: 'carbon:operations',
+    label: 'Операции',
+    $public: {
+        form: 'objects',
+    },
 }

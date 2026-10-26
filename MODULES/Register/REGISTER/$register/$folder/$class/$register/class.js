@@ -4,4 +4,8 @@
  * db_journal (журнал проводок), db_sheet (ОСВ), db_card (карточка счёта);
  * формы — form/journal и form/sheet журнала, form/postings счёта.
  */
-export default {}
+export default {
+    $public: {
+        form: 'sheet',
+    },
+}

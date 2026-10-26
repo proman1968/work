@@ -30,7 +30,7 @@
  */
 import { tx, getSetting, setSetting } from './db.js';
 import { getClass, descendants, classesOfType, classesGeneration } from './classes.js';
-import { classSchema, checkSchema, analyticSlots } from './schema.js';
+import { classSchema, checkSchema, analyticSlots, classBasePath, resolveInBase } from './schema.js';
 import { compile, toNumber, round, ExprError } from './expr.js';
 import { readObject, writeVersion, validateBody, linkCids, mergeBody } from './objects.js';
 import { DataError } from './errors.js';
@@ -316,11 +316,13 @@ function sideOf(db, rule, side, scope, fns) {
  */
 function computeEntries(db, schema, op) {
     const entries = [], errors = [];
+    const basePath = classBasePath(db, schema.cid);
     const fns = {
         norm: (...a) => normValue(db, a[0], a[1], op.time, { exclude: op.id, ...(a.length >= 3 ? { fallback: a[2] } : {}) }),
         coef: (item, unit) => unitCoef(db, item, unit, op.time),
         unit_cost: (account, item, storage, batch, ...rest) => unitCost(db, {
-            account, item, storage, batch, at: op.time, exclude: op.id, ...(rest.length ? { fallback: rest[0] } : {}),
+            account: basePath ? resolveInBase(db, basePath, account) : account,
+            item, storage, batch, at: op.time, exclude: op.id, ...(rest.length ? { fallback: rest[0] } : {}),
         }),
     };
     for (const rule of schema.postings) {

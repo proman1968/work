@@ -1,4 +1,7 @@
 export default {
-    label: "Название",
-    icon: "carbon:catalog",
+    icon: 'carbon:catalog',
+    label: 'Справочники',
+    $public: {
+        form: 'objects',
+    },
 }

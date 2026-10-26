@@ -371,6 +371,16 @@ export class $folder extends $item{
 
 
             if(this.id === '$folder'){
+                const owner = this.$parent;
+                const m = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.*)?$/.exec(owner?.path || '');
+                if (m) {
+                    const modPath = `/MODULES/${m[1]}${m[2] || ''}`;
+                    if (modPath !== owner.path && fs.existsSync('.' + modPath)) {
+                        const modItem = await WORK.get_item(modPath);
+                        if (modItem && !Reactor.equal(modItem.$folder, this))
+                            return modItem.$folder;
+                    }
+                }
                 ancestor =  this.$parent?.$parent?.$folder || this.$parent?.$folder || null;
                 if(Reactor.equal(ancestor, this))
                     ancestor = null;
@@ -858,11 +868,37 @@ export class $folder extends $item{
                             folders.add(domain);
                     }
                 }
+                const tm = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.+)$/.exec(typeRoot.parent?.path || '');
+                if (tm) {
+                    const tModPath = `/MODULES/${tm[1]}${tm[2]}`;
+                    if (fs.existsSync('.' + tModPath)) {
+                        try {
+                            const tModPeer = await WORK.get_item(tModPath);
+                            if (tModPeer?.meta_folder)
+                                folders.add(tModPeer.meta_folder);
+                        }
+                        catch { /* нет предка в модуле */ }
+                    }
+                    folders.add(typeRoot);
+                }
             }
             for (const domain of crossDomains)
                 folders.add(domain);
 
             folders.push(...horizontal_folders);
+
+            const m = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.+)$/.exec(this.path || '');
+            if (m) {
+                const modPath = `/MODULES/${m[1]}${m[2]}`;
+                if (fs.existsSync('.' + modPath)) {
+                    try {
+                        const modPeer = await WORK.get_item(modPath);
+                        if (modPeer?.meta_folder && modPeer.meta_folder !== this.meta_folder)
+                            folders.push(modPeer.meta_folder);
+                    }
+                    catch { /* нет предка в модуле */ }
+                }
+            }
 
             // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
             folders.push(this.meta_folder);

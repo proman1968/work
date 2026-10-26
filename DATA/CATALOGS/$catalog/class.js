@@ -5,7 +5,7 @@ export default {    async TestFunc(s, d = {
         let b = a + 100;
       },
     $public: {
-        form: "chat"
+        form: "objects"
     },
     METADATA: {
         FIELDS: [{

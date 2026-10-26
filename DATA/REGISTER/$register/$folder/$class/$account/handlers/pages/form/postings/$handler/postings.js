@@ -430,22 +430,22 @@ export default {
             <span>Сумма: <strong>{{money(entryCard.amount)}}</strong></span>
             <span ~if="entryCard.qty">Кол-во: {{entryCard.qty}}</span>
             <span class="storno" ~if="entryCard.storno">[СТОРНО]</span>
-            <span style="margin-left:auto;">Операция: <a href="#" @click.prevent="openEntryOperation()">{{entryCard.operation?.title}}</a></span>
+            <span style="margin-left:auto;">Операция: <span class="link" @tap="openEntryOperation()">{{entryCard.opTitle}}</span></span>
             <button type="button" @tap="openEntryOperation()">Открыть документ</button>
             <button type="button" @tap="closeEntry()">Закрыть</button>
         </div>
         <div class="entry-sides">
             <div class="entry-side">
-                <div class="entry-side-title">ДЕБЕТ: <a href="#" @click.prevent="openEntrySideAccount('debit')">{{entryCard.debit?.label}}</a></div>
-                <div>Сумма Дт: <strong>{{money(entryCard.debit?.amount)}}</strong> <span ~if="entryCard.debit?.qty">({{entryCard.debit?.qty}})</span></div>
-                <div ~for="entryCard.debit?.analytics">
+                <div class="entry-side-title">ДЕБЕТ: <span class="link" @tap="openEntrySideAccount('debit')">{{entryCard.debitLabel}}</span></div>
+                <div>Сумма Дт: <strong>{{money(entryCard.debitAmount)}}</strong> <span ~if="entryCard.debitQty">({{entryCard.debitQty}})</span></div>
+                <div ~for="entryCard.debitAnalytics">
                     <span>{{$for.item.label}}:</span> <strong>{{$for.item.title || '—'}}</strong>
                 </div>
             </div>
             <div class="entry-side">
-                <div class="entry-side-title">КРЕДИТ: <a href="#" @click.prevent="openEntrySideAccount('credit')">{{entryCard.credit?.label}}</a></div>
-                <div>Сумма Кт: <strong>{{money(entryCard.credit?.amount)}}</strong> <span ~if="entryCard.credit?.qty">({{entryCard.credit?.qty}})</span></div>
-                <div ~for="entryCard.credit?.analytics">
+                <div class="entry-side-title">КРЕДИТ: <span class="link" @tap="openEntrySideAccount('credit')">{{entryCard.creditLabel}}</span></div>
+                <div>Сумма Кт: <strong>{{money(entryCard.creditAmount)}}</strong> <span ~if="entryCard.creditQty">({{entryCard.creditQty}})</span></div>
+                <div ~for="entryCard.creditAnalytics">
                     <span>{{$for.item.label}}:</span> <strong>{{$for.item.title || '—'}}</strong>
                 </div>
             </div>
@@ -508,6 +508,15 @@ export default {
     },
     get entryCardDate() {
         return this.entryCard?.time ? new Date(this.entryCard.time).toLocaleDateString('ru-RU') : '';
+    },
+    get entryCardOpTitle() {
+        return this.entryCard?.operation?.title || this.entryCard?.operation?.classLabel || '';
+    },
+    get entryCardDebitLabel() {
+        return this.entryCard?.debit?.label || this.entryCard?.debit?.account || '';
+    },
+    get entryCardCreditLabel() {
+        return this.entryCard?.credit?.label || this.entryCard?.credit?.account || '';
     },
     accountText(cid) {
         const code = String(cid || '').split('/').pop();
@@ -682,7 +691,20 @@ export default {
             return null;
         this.error = '';
         try {
-            this.entryCard = await this.$item.fetch('db_entry', { entry: entryId });
+            const card = await this.$item.fetch('db_entry', { entry: entryId });
+            if (card && typeof card === 'object') {
+                const t = card.operation?.title;
+                card.opTitle = (t && t !== card.operation?.id ? t : '') || card.operation?.label || card.operation?.classLabel || t || '';
+                card.debitLabel = card.debit?.label || card.debit?.account || '';
+                card.debitAmount = card.debit?.amount ?? card.amount ?? 0;
+                card.debitQty = card.debit?.qty ?? card.qty ?? 0;
+                card.debitAnalytics = card.debit?.analytics || [];
+                card.creditLabel = card.credit?.label || card.credit?.account || '';
+                card.creditAmount = card.credit?.amount ?? card.amount ?? 0;
+                card.creditQty = card.credit?.qty ?? card.qty ?? 0;
+                card.creditAnalytics = card.credit?.analytics || [];
+            }
+            this.entryCard = card;
             return this.entryCard;
         }
         catch (e) {

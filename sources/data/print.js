@@ -17,7 +17,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { getClass, ancestors, classesOfType } from './classes.js';
-import { classSchema } from './schema.js';
+import { classSchema, findAncestor } from './schema.js';
 import { readObject } from './objects.js';
 import { normValue } from './posting.js';
 import { compile, round, toNumber } from './expr.js';
@@ -37,8 +37,23 @@ export async function printTemplates(db, root, ref) {
     const cls = getClass(db, ref);
     if (!cls)
         throw new DataError(`класс ${ref} не найден`);
+    const chain = ancestors(db, cls.cid);
+    const layers = [];
+    for (const c of chain) {
+        const anc = findAncestor(db, c);
+        if (anc) {
+            for (const ac of ancestors(db, anc.cid)) {
+                if (!layers.some(x => x.cid === ac.cid))
+                    layers.push(ac);
+            }
+        }
+    }
+    for (const c of chain) {
+        if (!layers.some(x => x.cid === c.cid))
+            layers.push(c);
+    }
     const found = new Map();
-    for (const c of ancestors(db, cls.cid)) {
+    for (const c of layers) {
         const dir = path.join(root, ...c.path.split('/').filter(Boolean), c.type, 'print');
         let names = [];
         try {

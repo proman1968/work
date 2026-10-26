@@ -6,6 +6,9 @@
 export default {
     icon: 'carbon:data-base',
     label: 'Счёт',
+    $public: {
+        form: 'postings',
+    },
     METADATA: {
         STATIC: [
             { id: 'label', label: 'Название', type: 'string' },
