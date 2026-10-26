@@ -130,8 +130,10 @@ export default {
             return;
         this._scrollRaf = requestAnimationFrame(() => {
             this._scrollRaf = 0;
+            const scroller = this.$('div[style*="overflow: auto"]');
+            const scrollTop = scroller ? scroller.getBoundingClientRect().top : 0;
             for (const n of this._mountedNodes || [])
-                n._syncStuck?.();
+                n._syncStuck?.(scrollTop);
         });
     },
 }
@@ -142,21 +144,21 @@ ODA({is: 'oda-tree-node',
             :host {
                 @apply --vertical;
                 overflow: visible;
-                padding: 1px 2px;
+                padding: 0;
                 min-width: 0;
             }
             .node {
                 @apply --horizontal;
-                @apply --flex;
+                @apply --no-flex;
                 align-items: center;
                 overflow: hidden;
-                min-height: 28px;
+                height: 30px;
+                min-height: 30px;
+                padding: 0 2px;
                 box-sizing: border-box;
             }
-            .node.sticky-parent {
-                position: sticky;
-            }
             .node.is-stuck {
+                position: sticky !important;
                 background: #d8c6ec;
                 border-bottom: 1px solid #6a1b9a;
                 box-shadow: 0 1px 2px rgba(74, 20, 140, 0.12);
@@ -164,7 +166,7 @@ ODA({is: 'oda-tree-node',
             .node:hover {
                 background: var(--accent-soft, #dcc8ef);
             }
-            .node.focused {
+            .node.node-focused {
                 background: var(--accent-soft, #dcc8ef);
                 outline: 2px solid var(--accent-color);
                 outline-offset: -2px;
@@ -218,7 +220,7 @@ ODA({is: 'oda-tree-node',
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' ~class="{focused: isFocused, 'sticky-parent': expanded && hideRoots < 1 && !!expanderIcon, 'is-stuck': isStuck}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{'node-focused': isFocused, 'is-stuck': isStuck}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <div vertical flex style="min-width: 0; overflow: hidden;">
                 <div horizontal flex style="min-width: 0; overflow: hidden;">
@@ -250,22 +252,22 @@ ODA({is: 'oda-tree-node',
     detached() {
         this.$pdp?.tree?._mountedNodes?.delete(this);
     },
-    _syncStuck() {
+    _syncStuck(scrollTop = 0) {
         if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon) {
             if (this.isStuck)
                 this.isStuck = false;
             return;
         }
-        const nodeEl = this.$('.node');
         const subEl = this.$('.sub-nodes');
-        if (!nodeEl || !subEl) {
+        if (!subEl) {
             if (this.isStuck)
                 this.isStuck = false;
             return;
         }
-        const nRect = nodeEl.getBoundingClientRect();
-        const sRect = subEl.getBoundingClientRect();
-        const stuck = sRect.height > 2 && sRect.top < nRect.bottom - 1 && sRect.bottom > nRect.top + 4;
+        const lvl = Number(this.stickyLevel) || 0;
+        const targetTop = scrollTop + lvl * 30;
+        const hRect = this.getBoundingClientRect();
+        const stuck = hRect.height > 34 && hRect.top <= targetTop + 1 && hRect.bottom > targetTop + 32;
         if (this.isStuck !== stuck)
             this.isStuck = stuck;
     },
@@ -273,7 +275,7 @@ ODA({is: 'oda-tree-node',
         if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon)
             return '';
         const lvl = Number(this.stickyLevel) || 0;
-        return `position: sticky; top: ${lvl * 32}px; z-index: ${30 - lvl};`;
+        return `position: sticky !important; top: ${lvl * 30}px; z-index: ${30 - lvl};`;
     },
     get hasSecurity(){
         // Ветка настройки — только у подразделений ($structure и наследники)
