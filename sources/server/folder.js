@@ -1869,7 +1869,7 @@ export class $folder extends $item{
     }
 
     sortItems(files, reverse = false, isType = this.isType) {
-        const rootOrder = { ORGANIZATIONS: 0, MODULES: 1, MODELS: 2, nodes: 3, SERVICES: 4, USERS: 5 };
+        const rootOrder = { ORGANIZATIONS: 0, MODULES: 1, MODELS: 2, NODES: 3, nodes: 3, SERVICES: 4, USERS: 5 };
         const typeGroup = (t) => {
             if (t === '$structure' || t === '$base')
                 return 0;
