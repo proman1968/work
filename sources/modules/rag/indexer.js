@@ -25,7 +25,7 @@ let processed = 0;
 let failures = 0;
 const recent = [];
 const reconcileState = { running: false, done: false, at: 0, files: 0, queued: 0, removed: 0 };
-const WATCH_ROOTS = ['$server', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT', 'USERS', 'rules', 'docs'];
+const WATCH_ROOTS = ['$server', 'MODELS', 'SERVICES', 'ORGANIZATIONS', 'MODULES', 'NODES', 'USERS', 'rules', 'docs'];
 let watchers = [];
 let watchTimer = null;
 const watchPending = new Set();
@@ -79,8 +79,8 @@ async function drain() {
                 failures++;
                 note(p + ': ' + e.message);
             }
-            // уступить циклу событий между документами
-            await new Promise(r => setImmediate(r));
+            // уступить циклу событий между документами, чтобы HTTP-запросы UI обслуживались без задержек
+            await new Promise(r => setTimeout(r, 10));
         }
     }
     finally {
@@ -239,11 +239,14 @@ export async function reconcile() {
             store.removeDocs(p);
             reconcileState.removed++;
         }
+        let checked = 0;
         for (const p of onDisk.keys()) {
+            if (++checked % 100 === 0)
+                await new Promise(r => setImmediate(r));
             const doc = known.get(p);
             let mtime = 0;
             try {
-                mtime = Math.floor(fs.statSync(diskOf(p)).mtimeMs);
+                mtime = Math.floor((await fsp.stat(diskOf(p))).mtimeMs);
             }
             catch { continue; }
             if (doc && doc.mtime === mtime)

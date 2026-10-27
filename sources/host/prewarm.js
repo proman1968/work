@@ -23,6 +23,7 @@ export async function prewarm(root, depth = 2) {
             // только классы: обычные папки (node_modules, docs) и файлы дерево строит по требованию
             if (!(kid instanceof FS.$class))
                 continue;
+            await new Promise(r => setImmediate(r));
             try {
                 await kid.init;
             }
@@ -33,5 +34,9 @@ export async function prewarm(root, depth = 2) {
         }
     };
     await walk(root, depth);
+    try {
+        await root.handlers?.({ path: '', role: 'ADMIN' });
+    }
+    catch { /* ignore */ }
     return { classes, ms: Date.now() - t0 };
 }

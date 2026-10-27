@@ -54,6 +54,8 @@ export function plainData(value, depth = 0) {
     return out;
 }
 
+const ownFileCache = new Map();
+
 /** Собственный слой class.js как данные (импорт модуля с учётом времени изменения файла). */
 async function readOwn(file) {
     let stat;
@@ -65,8 +67,14 @@ async function readOwn(file) {
             return {};
         throw e;
     }
-    const mod = await import(pathToFileURL(file).href + '?mtime=' + Math.trunc(stat.mtimeMs));
-    return plainData(mod.default ?? {}) || {};
+    const mtime = Math.trunc(stat.mtimeMs);
+    const cached = ownFileCache.get(file);
+    if (cached && cached.mtime === mtime)
+        return cached.data;
+    const mod = await import(pathToFileURL(file).href + '?mtime=' + mtime);
+    const data = plainData(mod.default ?? {}) || {};
+    ownFileCache.set(file, { mtime, data });
+    return data;
 }
 
 /**

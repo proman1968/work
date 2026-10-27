@@ -26,7 +26,8 @@ function write(rel, content) {
 }
 
 function copy(rel) {
-    write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+    const srcRel = rel.replace(/^DATA\//, 'MODULES/Register/');
+    write(rel, fs.readFileSync(path.join(ROOT, srcRel), 'utf-8'));
 }
 
 const SEC = (uid) => `'#security': { USER: ['${uid}'] }`;
@@ -106,9 +107,9 @@ describe('дерево операций', () => {
     it('save публикует схему уровня в его distributive', async () => {
         const ops = await WORK.get_item('/DATA/OPERATIONS');
         await ops.create({ id: 'MID', type: '$operation',
-            post: cls('Середина', `{ id: 'mid' }`), ...as(ADMIN) });
+            post: cls('Середина', `{ id: 'mid', to_inherit: true }`), ...as(ADMIN) });
         const mid = await WORK.get_item('/DATA/OPERATIONS/MID');
-        await mid.save({ post: cls('Середина', `{ id: 'mid' }`).replace(/^export default /, ''), ...as(ADMIN) });
+        await mid.save({ post: cls('Середина', `{ id: 'mid', to_inherit: true }`).replace(/^export default /, ''), ...as(ADMIN) });
         const distPath = path.join(tmp, 'DATA/OPERATIONS/MID/$operation/$folder/$class/$operation/class.js');
         assert.ok(fs.existsSync(distPath), 'distributive записан');
         const text = fs.readFileSync(distPath, 'utf-8');

@@ -7,11 +7,11 @@ import { FS } from './index.js';
 import { $class } from './class.js';
 import { DEV_MODE } from '../host/config.js';
 export class $user extends $class{
-    get online(){
-        return !!Object.values($server?.sessions)?.find(u => u.uid === this.id);
-    }
     get $public(){
         return {
+            get online(){
+                return !!Object.values($server?.sessions)?.find(u => u.uid === this.id);
+            },
             icon:{
                 get(){
                     let icon = this.DATA?.icon;

@@ -96,6 +96,8 @@ export class $folder extends $item {
     }
     /** Порядок ролей точки для выбора ближайшей (ключи declared_roles). */
     get roleOrder() {
+        if (this.DATA?.declaredRoles && typeof this.DATA.declaredRoles === 'object')
+            return Promise.resolve(Object.keys(this.DATA.declaredRoles));
         return this._roleOrder ??= Promise.resolve(this.fetch('declared_roles'))
             .then(d => (d && typeof d === 'object' ? Object.keys(d) : ['ADMIN', 'BOSS', 'USER', 'GUEST']))
             .catch(() => ['ADMIN', 'BOSS', 'USER', 'GUEST']);
@@ -115,19 +117,35 @@ export class $folder extends $item {
      * Эффективная роль точки: предпочитаемая (если доступна здесь),
      * иначе ближайшая по порядку; без предпочтения — сильнейшая.
      */
-    async syncRole() {
-        const order = await this.roleOrder;
-        const mine = WORK?.DEV_MODE ? order : await this.myRoles;
-        const next = effectiveRole(mine, order, WORK.preferredRole);
-        if (this.role !== next)
-            this.role = next;
-        return this.role;
+    syncRole() {
+        const syncOrder = (this.DATA?.declaredRoles && typeof this.DATA.declaredRoles === 'object')
+            ? Object.keys(this.DATA.declaredRoles)
+            : null;
+        if (syncOrder && WORK?.DEV_MODE) {
+            const next = effectiveRole(syncOrder, syncOrder, WORK.preferredRole);
+            if (this.role !== next)
+                this.role = next;
+            return Promise.resolve(this.role);
+        }
+        return this._syncRolePromise ??= (async () => {
+            try {
+                const order = syncOrder || await this.roleOrder;
+                const mine = WORK?.DEV_MODE ? order : await this.myRoles;
+                const next = effectiveRole(mine, order, WORK.preferredRole);
+                if (this.role !== next)
+                    this.role = next;
+                return this.role;
+            }
+            finally {
+                this._syncRolePromise = null;
+            }
+        })();
     }
     /** Заполнить роль, если пустая (перед запросами, зависящими от роли). */
-    async ensureRole() {
+    ensureRole() {
         if (!this.role)
-            await this.syncRole();
-        return this.role;
+            return this.syncRole();
+        return Promise.resolve(this.role);
     }
     get open_url() {
         return new URL(this.url + '/~/handlers//' + this.page + '/index.html').href;
@@ -230,6 +248,8 @@ export class $folder extends $item {
         link.click();
     }
     fetch(method, params, post_data) {
+        if (method === 'declared_roles' && this.DATA?.declaredRoles && typeof this.DATA.declaredRoles === 'object')
+            return Promise.resolve(this.DATA.declaredRoles);
         params ??= {};
         if (this.role && !params.role)
             params.role = this.role;

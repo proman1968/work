@@ -2,6 +2,9 @@ import { $folder } from './folder.js';
 import { $class } from './class.js';
 
 export class $user extends $class{
+    get online(){
+        return Boolean(this.DATA?.online);
+    }
     get iconColor(){
         if(this.icon[0] === '@'){
             let id = this.id;

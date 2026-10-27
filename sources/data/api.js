@@ -104,13 +104,17 @@ export async function classHasObjects(ref) {
     return !!cls && !!db.prepare("SELECT 1 FROM objects WHERE cid = ? AND status <> 'deleted' LIMIT 1").get(cls.cid);
 }
 
+const COUNTABLE_DATA_TYPES = new Set(['$catalog', '$virtual', '$operation', '$account', '$register']);
+
 /**
  * Количество объектов (или записей счёта/участников виртуального справочника) у класса и его поддерева.
  * Если файла БД организации ещё нет на диске — возвращает 0 без создания файла БД.
  */
 export async function classObjectCount(clsPath, clsType = '') {
+    if (clsType && !COUNTABLE_DATA_TYPES.has(clsType))
+        return 0;
     const p = String(clsPath ?? '').trim();
-    if (!p || p === '/')
+    if (!p || p === '/' || p.startsWith('/MODULES/'))
         return 0;
     const basePath = resolveBasePath(p);
     if (!fs.existsSync(baseDbFile(process.cwd(), basePath)))

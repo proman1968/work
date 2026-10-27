@@ -438,25 +438,60 @@ export class $server extends $class {
         const principal = params.session?.principal;
         if (principal?.kind !== 'node')
             throw new Error('Доступ запрещён');
-        const store = await import('../modules/rag/store.js');
-        if (!await store.open())
-            return [];
         const out = [];
-        for (const row of store.assignmentsOf(principal.id)) {
-            try {
-                let cls = row.class_path === '/' ? this : await this.get_item(row.class_path);
-                if (Array.isArray(cls))
-                    cls = cls[0];
-                if (!cls?.declared_roles)
-                    continue;
-                const declared = await cls.declared_roles;
-                const role = declared[row.role];
-                if (!role?.principals?.includes('node') || !cls._roleIds(row.role, declared).includes(principal.id))
-                    continue;
-                out.push({ point: cls.path || '/', label: cls.label, role: row.role, roleLabel: role.label });
+        const seen = new Set();
+        const addGrant = (point, label, role, roleLabel) => {
+            const key = `${point || '/'}::${role}`;
+            if (seen.has(key))
+                return;
+            seen.add(key);
+            out.push({ point: point || '/', label, role, roleLabel });
+        };
+        try {
+            const store = await import('../modules/rag/store.js');
+            if (await store.open()) {
+                for (const row of store.assignmentsOf(principal.id)) {
+                    try {
+                        let cls = row.class_path === '/' ? this : await this.get_item(row.class_path);
+                        if (Array.isArray(cls))
+                            cls = cls[0];
+                        if (!cls?.declared_roles)
+                            continue;
+                        const declared = await cls.declared_roles;
+                        const role = declared[row.role];
+                        if (!role?.principals?.includes('node') || !cls._roleIds(row.role, declared).includes(principal.id))
+                            continue;
+                        addGrant(cls.path || '/', cls.label, row.role, role.label);
+                    }
+                    catch { /* точка удалена */ }
+                }
             }
-            catch { /* точка удалена */ }
         }
+        catch { /* без RAG — обход дерева ниже */ }
+
+        const walkClasses = async (cls, depth = 0) => {
+            if (!cls || depth > 5 || !(cls instanceof $class))
+                return;
+            try {
+                await cls.init;
+                const declared = cls._declaredRolesSync();
+                for (const [roleId, roleDef] of Object.entries(declared)) {
+                    if (!roleDef?.principals?.includes('node'))
+                        continue;
+                    if (cls._roleIds(roleId, declared).includes(principal.id))
+                        addGrant(cls.path || '/', cls.label, roleId, roleDef.label || roleId);
+                }
+                if (declared.USER?.principals?.includes('node') && await cls._isPlaceMember?.(principal.id))
+                    addGrant(cls.path || '/', cls.label, 'USER', declared.USER.label || 'USER');
+                const kids = (await cls.items) || [];
+                for (const k of kids) {
+                    if (k instanceof $class && k.type !== '$node' && k.type !== '$user')
+                        await walkClasses(k, depth + 1);
+                }
+            }
+            catch { /* ignore */ }
+        };
+        await walkClasses(this, 0);
         return out;
     }
     /**

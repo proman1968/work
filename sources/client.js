@@ -803,8 +803,13 @@ WORK.usersByIds = async function (ids) {
 Object.defineProperty(WORK, 'users', {
     get(){ //todo надо сбрасывать при появлении новых пользователей на сервере
         return WORK._users ??= new AsyncPromise(async _=>{
-            let res = await WORK.get_item('/USERS');
-            return res.children;
+            const cached = CORE.$item.ITEMS['/USERS'];
+            if (cached && Array.isArray(cached[R]?.cache?.items))
+                return cached[R].cache.items;
+            let res = await WORK.get_item('/USERS', 'info', { deep: 1 });
+            if (Array.isArray(res?.[R]?.cache?.items))
+                return res[R].cache.items;
+            return res?.items || res?.children || [];
         });
     }
 })

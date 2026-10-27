@@ -10,13 +10,7 @@ export default{
         '/ORGANIZATIONS', '/MODULES', '/USERS', '/NODES'
     ],
     get available(){
-        return this.list.reduce(async (acc, item) => {
-            acc = await acc;
-            let $item = await WORK.get_item(item);
-            if($item){
-                acc.push($item);
-            }
-            return acc;
-        }, []);
+        return Promise.all(this.list.map(path => CORE.$item.ITEMS[path] || WORK.get_item(path)))
+            .then(res => res.filter(Boolean));
     },
 }

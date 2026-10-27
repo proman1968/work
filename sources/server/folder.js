@@ -27,6 +27,7 @@ function resetMergeCaches() {
     }
     catch { /* кэши пересоберутся лениво */ }
     try {
+        FS.$folder?.__script_cache__?.clear?.();
         FS.$file.__ext_scripts__ = Object.create(null);
         FS.$file.__type_data__ = Object.create(null);
     }
@@ -77,16 +78,31 @@ export class $folder extends $item{
         return script.replace(/^\s*import\s+(['"])(\/[^'"]+)\1\s*;?\s*$/gm, '');
     }
 
-    static importScript(script, sourceUrl = '') {
-        script = this.stripAbsoluteImports(script);
-        if (sourceUrl) {
-            const safeUrl = String(sourceUrl).replace(/[\r\n]/g, '');
-            script += `\n//# sourceURL=work://${safeUrl.replace(/^\/+/, '')}`;
+    static __script_cache__ = new Map();
+
+    static async importScript(script, sourceUrl = '') {
+        globalThis.ODA ??= () => {};
+        const clean = this.stripAbsoluteImports(script);
+        let protoPromise = this.__script_cache__.get(clean);
+        if (!protoPromise) {
+            let code = clean;
+            if (sourceUrl) {
+                const safeUrl = String(sourceUrl).replace(/[\r\n]/g, '');
+                code += `\n//# sourceURL=work://${safeUrl.replace(/^\/+/, '')}`;
+            }
+            const b64 = Buffer.from(code, 'utf-8').toString('base64');
+            protoPromise = import('data:text/javascript;base64,' + b64)
+                .then(module => module.default || module)
+                .catch(err => {
+                    console.error(err, code);
+                    return null;
+                });
+            this.__script_cache__.set(clean, protoPromise);
         }
-        const b64 = Buffer.from(script, 'utf-8').toString('base64');
-        return import('data:text/javascript;base64,' + b64).then(module => module.default || module).catch(err => {
-            console.error(err, script);
-        });
+        const proto = await protoPromise;
+        if (!proto || typeof proto !== 'object')
+            return proto;
+        return Object.defineProperties({}, Object.getOwnPropertyDescriptors(proto));
     }
 
     GET = 'info';
@@ -148,6 +164,16 @@ export class $folder extends $item{
         if(this.constructor === FS.$folder && !this.isType)
             return Promise.resolve(this);
         return this[R].cache.init ??= new AsyncPromise(async ()=>{
+            if (this instanceof FS.$handler && this.inherit_source && !fs.existsSync(this.dir)
+                && (!this.$parent || !(this.$parent instanceof FS.$handler) || !fs.existsSync(this.$parent.dir))) {
+                const src = this.real_source;
+                if (src && src !== this) {
+                    await src.init;
+                    if (src.DATA)
+                        this.DATA = Object.defineProperties({}, Object.getOwnPropertyDescriptors(src.DATA));
+                    return this;
+                }
+            }
             let files = [];
             if (this.constructor === FS.$folder && this.isType) {
                 const classJsOf = (folder) =>
@@ -168,8 +194,7 @@ export class $folder extends $item{
                 files = layers;
             }
             if (!files.length) {
-                files = await this.tilde;
-                files = files.filter(f => f.id === 'class.js');
+                files = await this._collect_class_js();
             }
             if (files.length) {
                 let script = await $server.mergeFiles(files);
@@ -192,6 +217,26 @@ export class $folder extends $item{
             }
             return this;
         })
+    }
+    /** Быстрый сбор слоёв class.js по _tilde_layers без полного обхода tilde (всех файлов и папок). */
+    async _collect_class_js() {
+        const layers = await this._tilde_layers();
+        const files = [];
+        const seenDirs = new Set();
+        for (const layer of layers) {
+            for (let cur = layer; cur; cur = await cur.inherit_ancestor) {
+                const real = cur.real_source || cur;
+                const own = (real._collect_own?.() || []).find(f => f.id === 'class.js');
+                if (own) {
+                    if (!seenDirs.has(own.real_dir)) {
+                        seenDirs.add(own.real_dir);
+                        files.push(own);
+                    }
+                    break;
+                }
+            }
+        }
+        return files;
     }
     /** Подпапка для сохранения файла по MIME-типу или расширению.
      *  Файл данных ($class.data_types) — всегда папка расширения, не MIME. */
@@ -321,6 +366,29 @@ export class $folder extends $item{
         let tree  = await this.get_item('~/handlers' + p.path);
         if(!Array.isArray(tree))
             tree = [tree]
+        // Дедупликация слоёв: убираем слои с одинаковым real_dir, а также слои,
+        // которые уже входят в цепочку inherit_ancestor более позднего слоя (он уже включает их children).
+        if (tree.length > 1) {
+            const seenDirs = new Set();
+            tree = tree.filter(el => {
+                const key = el?.real_dir || el?.path;
+                if (!key || seenDirs.has(key))
+                    return false;
+                seenDirs.add(key);
+                return true;
+            });
+            if (tree.length > 1) {
+                const coveredByLater = new Set();
+                for (let i = tree.length - 1; i >= 0; i--) {
+                    const selfDir = tree[i]?.real_dir;
+                    for (let cur = await tree[i]?.inherit_ancestor; cur; cur = await cur.inherit_ancestor) {
+                        if (cur.real_dir && cur.real_dir !== selfDir)
+                            coveredByLater.add(cur.real_dir);
+                    }
+                }
+                tree = tree.filter(el => !coveredByLater.has(el?.real_dir));
+            }
+        }
         // Представления с `roles` в class.js — только своим ролям.
         // Применимость (`allowUse`) вложенных уровней отсекает
         // visibleOnly→allowAccess внутри info(p), корень при точном пути
@@ -375,6 +443,8 @@ export class $folder extends $item{
      * Это ось наследования (типизаторы/классы), а не родитель по файловому пути.
      */
     get inherit_ancestor(){
+        if (this.inherit_source && !this.isMetaFolder && this.id !== '$folder')
+            return Promise.resolve(this.inherit_source);
         return new AsyncPromise(async ()=>{
              //наследование всех папкок и фалов
             let ancestor
@@ -419,14 +489,13 @@ export class $folder extends $item{
                     return this.parent;
             }
 
-            if(this instanceof FS.$class && this.$parent && this.$parent.type !== this.type){
-                //наследование типизированных элементов
+            if(this instanceof FS.$class && !(this instanceof FS.$handler) && this.$owner && this.$parent && this.$parent.type !== this.type){
+                //наследование типизированных элементов внутри метапапки ($owner)
                 let parent = this.$parent.$parent;
                 while(parent && !ancestor){
                     let parentChildren = await parent.children;
                     ancestor = parentChildren?.find(f=>f.id === this.id && f.type === this.type);
                     if(!ancestor && this.$owner){
-                        //наследование вложенных типизированных элементов ($handler, $object, $index ...)
                         let folder = await parent.$folder.find_item(this.$owner.type, (item)=>item.id[0] === '$');
                         while(!ancestor && folder && !folder?.isMetaFolder){
                             let folderChildren = await folder.children;
@@ -833,6 +902,9 @@ export class $folder extends $item{
      */
     async _tilde_layers(p = {}){
         let {inherit} = p;
+        if (!inherit && this[R]?.cache?._tilde_layers)
+            return this[R].cache._tilde_layers;
+        const promise = (async () => {
         let folder = this.$folder;
         let folders = [folder];
         let steps = await this.type_chain;
@@ -916,6 +988,10 @@ export class $folder extends $item{
         }
         else {
             folders = horizontal_folders;
+            if (!inherit && !this.meta_folder && typeof this._remotePeerMetaFolders === 'function') {
+                const peerMetas = await this._remotePeerMetaFolders();
+                folders.push(...peerMetas);
+            }
         }
         // folders = horizontal_folders;
         if (!this.meta_folder) {
@@ -932,6 +1008,10 @@ export class $folder extends $item{
             }
         }
         return folders;
+        })();
+        if (!inherit && this[R]?.cache)
+            this[R].cache._tilde_layers = promise;
+        return promise;
     }
     /**
      * Получить информацию о структуре элемента с возможностью раскрывать дочерние.
@@ -984,6 +1064,13 @@ export class $folder extends $item{
         try {
             if (this instanceof FS.$class && this.type === '$module' && await this.isModuleBlocked())
                 return false;
+            const cached = this[R]?.cache?.[list];
+            if (Array.isArray(cached))
+                return cached.length > 0;
+            if (this.constructor === FS.$folder && !this.isType && (list === 'items' || list === 'entries') && fs.existsSync(this.dir)) {
+                const entries = fs.readdirSync(this.dir);
+                return entries.some(name => name[0] !== '$' && name[0] !== '.' && name[0] !== '#');
+            }
             const items = await this[list];
             return Array.isArray(items) && items.length > 0;
         }
@@ -1037,37 +1124,63 @@ export class $folder extends $item{
             return res;
         });
     }
-    /** Каталог `$method`: `~/methods/*`. Прикладная `~/ai` — только дети-`$method`, не `~/ai/*`. */
-    get _methods(){
-        return new AsyncPromise(async ()=>{
-            const res = {};
-            const take = (item) => {
-                if (!item?.id)
-                    return;
-                res[item.id] = item;
-                item.$context = this;
-            };
+    static _ownLayerMethods(real) {
+        if (!real)
+            return Promise.resolve([]);
+        return real._ownLayerMethodsPromise ??= (async () => {
+            const list = [];
+            const own = real._collect_own?.() || [];
             const isMethod = (item) =>
                 item instanceof FS.$method
                 || item?.constructor?.name === '$method'
                 || item?.type === '$method'
                 || item?.meta_folder?.id === '$method';
-            for (const item of (await this.get_item('~/methods/*')) || [])
-                take(item);
-            try {
-                const ai = await this.get_item('~/ai');
-                const folders = (Array.isArray(ai) ? ai : ai ? [ai] : []).filter(Boolean);
-                for (const folder of folders) {
-                    const kids = await folder.children;
-                    for (const kid of kids) {
-                        if (!isMethod(kid))
-                            continue;
-                        await kid.init;
-                        take(kid);
-                    }
+            const mDir = own.find(f => f.id === 'methods');
+            if (mDir) {
+                for (const item of (await mDir.children) || []) {
+                    await item.init;
+                    if (item?.id)
+                        list.push(item);
                 }
             }
-            catch { /* нет прикладной ai — только ~/methods */ }
+            const aiDir = own.find(f => f.id === 'ai');
+            if (aiDir) {
+                for (const kid of (await aiDir.children) || []) {
+                    if (!isMethod(kid))
+                        continue;
+                    await kid.init;
+                    if (kid?.id)
+                        list.push(kid);
+                }
+            }
+            return list;
+        })();
+    }
+    /** Каталог `$method`: `~/methods/*`. Прикладная `~/ai` — только дети-`$method`, не `~/ai/*`. */
+    get _methods(){
+        return new AsyncPromise(async ()=>{
+            const res = {};
+            const layers = await this._tilde_layers();
+            const seenReal = new Set();
+            const orderedReals = [];
+            for (const layer of layers) {
+                const chain = [];
+                for (let cur = layer; cur; cur = await cur.inherit_ancestor) {
+                    const real = cur.real_source || cur;
+                    if (real?.real_dir && !seenReal.has(real.real_dir)) {
+                        seenReal.add(real.real_dir);
+                        chain.unshift(real);
+                    }
+                }
+                orderedReals.push(...chain);
+            }
+            for (const real of orderedReals) {
+                const methods = await $folder._ownLayerMethods(real);
+                for (const item of methods) {
+                    if (item?.id)
+                        res[item.id] = item;
+                }
+            }
             return res;
         })
     }
@@ -1077,7 +1190,7 @@ export class $folder extends $item{
      * Имя уже есть на прототипе или DATA — не трогать.
      */
     async _liftMethods() {
-        if (this instanceof FS.$method || this instanceof FS.$trigger || this instanceof FS.$timer)
+        if (this instanceof FS.$handler || this instanceof FS.$method || this instanceof FS.$trigger || this instanceof FS.$timer)
             return;
         let methods;
         try {

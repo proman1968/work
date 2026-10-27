@@ -113,8 +113,8 @@ export default {
         this.visibleMode = 'main';
         const drawer = this.left_drawer;
         const activeCtrl = drawer?.controls?.[drawer.focusedIndex];
-        if (activeCtrl?.localName === 'item-consultant')
-            activeCtrl.onShow?.();
+        if (activeCtrl && typeof activeCtrl.onShow === 'function')
+            activeCtrl.onShow();
     },
     /**
      * Открыть панель ИИ «Консультант» вместо дерева в левой панели

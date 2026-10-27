@@ -1,4 +1,5 @@
 import './reactor.js';
+globalThis.ODA ??= function (prototype) {};
 import webPush from 'web-push';
 import './host/stun.js';
 import { DEV_MODE, LOCAL_ORIGIN } from './host/config.js';

@@ -73,14 +73,29 @@ export default {
                     this.isChanged = true;
                     this.render();
                 })
+                if (this.hidden) {
+                    this._deferredItem = n;
+                    return;
+                }
+                this._deferredItem = null;
                 await this.prefetch(n);
                 await this.getItems(n, 1)
                 this.items = [n];
             }
             else {
+                this._deferredItem = null;
                 this.items = [];
             }
         }
+    },
+    async onShow() {
+        const n = this._deferredItem;
+        if (!n)
+            return;
+        this._deferredItem = null;
+        await this.prefetch(n);
+        await this.getItems(n, 1);
+        this.items = [n];
     },
     /** Глубина первого слоя дерева одним запросом info (вглубь — по классам); 0 — выключить. */
     prefetchDeep: 3,

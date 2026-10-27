@@ -9,6 +9,9 @@ export default {
      * их собирает ядро данных (`db_schema`), поэтому смотрим на схему, а без неё — на METADATA.
      */
     async allowUse($context, params) {
+        const t = $context?.type;
+        if (t && t !== '$catalog' && t !== '$operation' && t !== '$class' && !($context?.DATA?.METADATA?.FIELDS?.length))
+            return false;
         try {
             const s = (await $context?.db_schema?.({ session: params?.session }))?.schema;
             if (s)
