@@ -1,6 +1,9 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [04:10, 27.10] Актуализация контрактов `readme.md` и пакета ИИ-навыков/субагентов под архитектуру ODANT → WORK:
+  - Обновлены `sources/data/readme.md` и контракты `MODULES/Register/CATALOGS/$catalog/readme.md`, `MODULES/Register/OPERATIONS/$operation/readme.md`, `MODULES/Register/REGISTER/$register/readme.md`, `MODULES/Register/REGISTER/$register/$folder/$class/$account/readme.md`, навык места `MODULES/Register/REGISTER/$register/ai/skills/register-accounts.md`, а также добавлены контракты доменов и модулей (`ORGANIZATIONS/$domain/readme.md`, `MODULES/$domain/readme.md`, `MODULES/Register/$module/readme.md`, `MODULES/Geo/$module/readme.md`).
+  - В субагенты (`analyst.md`, `builder.md`, `auditor.md`, `explore.md`, `integrator-1c.md`), навыки (`import-table.md`, `data-quality.md`), `ENV_GUIDE` (`sources/modules/agent/index.js`) и `tests/ai-package.test.js` подключены учётные инструменты (`describe_class`, `find_objects`, `register_operation`, `report`) и убраны старые пути `/DATA` и `/BASE`.
 - [03:50, 27.10] ИИ-чат «Консультант» в панели переключателей проводника и кнопка «Консультант» на форме:
   - **Кнопка «ИИ» в панели переключателей и панель `item-consultant` (`$server/$folder/lib/consultant/consultant.js`, `$server/$folder/lib/explorer/explorer.js`, `oda/components/layouts/app-layout/app-layout.js`):**
     1. В левую панель переключателей проводника (`slot="left-panel"` в `item-explorer`) добавлена вкладка `ИИ` (`icon="bootstrap:robot"`), открывающая вместо дерева упрощённый ИИ-чат «Консультант» (`item-consultant`).

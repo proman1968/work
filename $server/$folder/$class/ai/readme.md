@@ -30,9 +30,9 @@
 
 ## 5. В каком это состоянии
 
-Работает на ядре с нативным tool calling. 12 субагентов (`explore`, `web`, `general`, `analyst`, `secretary`, `auditor`, `builder`, `it-admin`, `integrator-1c`, `negotiator`, `reviewer`, `operator`), 25 навыков пакета и навык места `register-accounts` (`/DATA/REGISTER`). Состав и согласованность с ядром проверяет `tests/ai-package.test.js`; поведение на живой модели — `tests/eval/cases.js` (автоматически) и матрица промптов `tests/eval/prompts.md` (вручную).
+Работает на ядре с нативным tool calling. 13 субагентов (`explore`, `web`, `general`, `analyst`, `secretary`, `auditor`, `builder`, `developer`, `it-admin`, `integrator-1c`, `negotiator`, `reviewer`, `operator`), 26 навыков пакета и навык места `register-accounts` (`/MODULES/Register/REGISTER`). Состав и согласованность с ядром проверяет `tests/ai-package.test.js`; поведение на живой модели — `tests/eval/cases.js` (автоматически) и матрица промптов `tests/eval/prompts.md` (вручную).
 
 ## 6. Дальнейшие планы
 
-- Навыки места по умолчанию для прикладных классов (BASE, CATALOGS) — по мере сценариев.
+- Навыки места по умолчанию для прикладных классов (`ORGANIZATIONS`, `MODULES`, `CATALOGS`) — по мере сценариев.
 - Кейсы eval для каждого субагента (`tests/eval/cases.js`).

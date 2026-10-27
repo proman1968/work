@@ -284,7 +284,7 @@ export const describeClass = {
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь учётного класса (например /DATA/OPERATIONS/Реализация/Покупателю или /DATA/REGISTER/62)' },
+            path: { type: 'string', description: 'WORK-путь учётного класса (например /ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Реализация/Покупателю или /ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/62)' },
         },
         required: ['path'],
     },

@@ -15,7 +15,7 @@ requires: system          # необязательно: system | sandbox — в�
 2. … проверки результата, подводные камни
 ```
 
-Слои: навыки пакета движка — для всей системы; `ai/skills/` в метапапке класса — для этого класса и ниже (ближний перекрывает по имени). Навык, привязанный к конкретному месту (его пути и контракты), лежит в метапапке этого места, а не здесь: например `/DATA/REGISTER/$register/ai/skills/register-accounts.md`.
+Слои: навыки пакета движка — для всей системы; `ai/skills/` в метапапке класса — для этого класса и ниже (ближний перекрывает по имени). Навык, привязанный к конкретному месту (его пути и контракты), лежит в метапапке этого места, а не здесь: например `/MODULES/Register/REGISTER/$register/ai/skills/register-accounts.md`.
 
 Запись: инструмент `save_skill` (`name`, `description`, `content`, `scope`: `place` — метапапка места задачи, `global` — пакет движка, с подтверждением). Агент предлагает сохранить удачную повторяемую работу (как писать — навык `skill-authoring`); человек может попросить «зафиксируй как навык».
 
@@ -50,4 +50,4 @@ requires: system          # необязательно: system | sandbox — в�
 | [`node-connect`](node-connect.md) | подключение сервера-партнёра сети WORK (ADMIN) |
 | [`backup-check`](backup-check.md) | проверка резервных копий и места на дисках (ADMIN) |
 
-Навыки мест: [`register-accounts`](/DATA/REGISTER/$register/ai/skills/register-accounts.md) — типовые счета в журнале `/DATA/REGISTER`.
+Навыки мест: [`register-accounts`](/MODULES/Register/REGISTER/$register/ai/skills/register-accounts.md) — типовые счета в журнале проводок (`$register`).

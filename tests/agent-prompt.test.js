@@ -134,7 +134,7 @@ describe('детерминированный порядок инструмент
         const out = listing(mk(['zeta', 'alpha', 'mid']));
         assert.deepEqual(out.split('\n').map(l => l.split(':')[0]), ['- alpha', '- mid', '- zeta']);
         assert.equal(out, listing(mk(['mid', 'zeta', 'alpha'])));
-        assert.deepEqual(listing(mk(['c', 'b', 'a']), 2).split('\n').map(l => l.split(':')[0]), ['- b', '- c'], 'берутся первые max (c, b), затем сортируются');
+        assert.deepEqual(listing(mk(['c', 'b', 'a']), 2).split('\n').map(l => l.split(':')[0]), ['- a', '- b'], 'сначала сортируются по имени, затем берутся первые max (a, b)');
     });
 
     it('stableToolOrder: по имени, не зависит от входного порядка, вход не мутируется', () => {

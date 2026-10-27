@@ -60,7 +60,7 @@
 
 ## Блок P2 — Продуктовая и архитектурная дорожная карта (следующие этапы)
 
-- [ ] **P2.1. Перевод индексов `$class` (`turnover`, `state`, `table`, `lookup`) на `node:sqlite`**
+- [x] **P2.1. Перевод индексов `$class` (`turnover`, `state`, `table`, `lookup`) на `node:sqlite`**
 - [ ] **P2.2. Декомпозиция монолита `sources/server/class.js` на модули (`data`, `index`, `feed`, `security`)**
 - [ ] **P2.3. Полное монтирование удалённых точек федерации узлов (`sources/modules/nodes`)**
 - [ ] **P2.4. Коммерческий контур: платёжный шлюз (ЮKassa), рублёвый баланс компании, Helm-чарт PaaS в `SERVICES/ArgoCD/PaaS` и витрина маркетплейса плагинов**
