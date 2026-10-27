@@ -1,4 +1,4 @@
 export default {
-    label: '69.00 Страховые взносы',
+    label: '69 Страховые взносы',
     icon: 'carbon:receipt',
 }

@@ -1,4 +1,4 @@
 export default {
-    label: '41.00 Товары',
+    label: '41 Товары',
     icon: 'carbon:product',
 }

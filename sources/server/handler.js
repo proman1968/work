@@ -91,6 +91,10 @@ export class $handler extends $class {
             data.usable = await this._usable(p.$context, p);
         }
         catch { data.usable = true; }
+        if (this.DATA?.service)
+            data.service = true;
+        if (this.DATA?.order != null)
+            data.order = this.DATA.order;
         return data;
     }
     async canSee(item, params = {}) {

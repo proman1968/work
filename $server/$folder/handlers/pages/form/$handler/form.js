@@ -58,7 +58,7 @@ export default {
     }
 }
 ODA({is: 'work-form',
-    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree',
+    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools',
     extends: 'oda-app-layout',
     template: /* html */`
         <style>
@@ -75,7 +75,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item show-role></item-node-explorer>
                 <div flex></div>
-                <oda-button id="consultantBtn" shadow icon="bootstrap:robot" label="Консультант" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 16px; padding: 2px 10px; margin-right: 8px; flex-shrink: 0;"></oda-button>
+                <oda-button id="consultantBtn" shadow icon="icons:help" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
@@ -129,9 +129,9 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div slot="footer" footer horizontal flex style="justify-items: space-between">
-            <item-tools :$item filter="service"></item-tools>
-            <item-tools :$item="focusedItem" filter="service"></item-tools>
+        <div slot="footer" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
+            <item-tools id="mainTools" :$item filter="service" show-labels></item-tools>
+            <item-tools id="focusedTools" :target-item="focusedItem" :$item="focusedItem" filter="service" show-labels></item-tools>
             <div flex></div>
             <div no-flex horizontal ~show="dialog">
                 <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="Apply"></oda-button>
@@ -372,6 +372,7 @@ ODA({is: 'work-form',
             let views = (root?.items || []).filter(item =>
                 item.type === '$handler' && item.usable !== false && item.allowUse !== false
             );
+            views.sort((a, b) => (a.order ?? a.DATA?.order ?? 99) - (b.order ?? b.DATA?.order ?? 99));
             // Для handler'а 'file' подставляем icon/label из конкретного открытого файла,
             // чтобы отображать расширение (например 'JSON') и соответствующую иконку
             const ext = $item?.ext;
@@ -399,12 +400,17 @@ ODA({is: 'work-form',
     async resolveView(name) {
         const $item = this.$item;
         const role = this.activeRole;
-        if ($item && name) {
-            const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
-            if (view)
-                return view;
-        }
         const views = await this.formViews;
+        if (name) {
+            const inList = views.find(v => v.id === name);
+            if (inList)
+                return inList;
+            if ($item) {
+                const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
+                if (view)
+                    return view;
+            }
+        }
         return views.find(v => v.id === $item?.form) || views[0];
     },
     $item: {
@@ -423,7 +429,14 @@ ODA({is: 'work-form',
             }
         }
     },
-    focusedItem: null,
+    focusedItem: {
+        $def: null,
+        set(n) {
+            const ft = this.$?.('#focusedTools');
+            if (ft)
+                ft.targetItem = n;
+        }
+    },
     /** Роль формы — эффективная роль элемента (общая предпочитаемая + доступность). */
     get activeRole() {
         return this.$item?.role || '';
@@ -573,6 +586,7 @@ ODA({is: 'work-form',
             else if (!el.isConnected)
                 this.appendChild(el);
             this.view_control = el;
+            this.focusedItem = el?.focusedItem || null;
             this.host.view_name = n.id;
             const nav = this._pendingNav || this._takeNav(this.$item?.short || this.$item?.path);
             if (nav && typeof el?.applyNav === 'function') {

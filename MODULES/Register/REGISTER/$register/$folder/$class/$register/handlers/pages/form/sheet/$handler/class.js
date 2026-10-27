@@ -2,4 +2,5 @@
 export default {
     icon: 'odant:grid',
     label: 'Ведомость',
+    roles: ['BOSS', 'USER'],
 }

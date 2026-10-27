@@ -956,3 +956,87 @@ describe('состав виртуального справочника (form/vir
         }
     });
 });
+
+describe('архитектура представлений формы (VIEW по ролям), $handler счетов и Ведомость', () => {
+    it('компактная кнопка Консультант (icons:help) и сервисная панель item-tools в подвале work-form', () => {
+        const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
+        assert.match(formSrc, /id="consultantBtn"[^>]*icon="icons:help"/, 'кнопка Консультант с иконкой ?');
+        assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
+        assert.match(formSrc, /<item-tools[^>]*:\$item="focusedItem"[^>]*filter="service"[^>]*show-labels>/, 'сервисная панель focusedItem с подписями в футере');
+    });
+
+    it('представления Ведомости: двухслойный заголовок, прижатый футер, без лишней панели инпутов и закостыленных кнопок', () => {
+        assert.ok(sheet.template.includes('class="head-wrap"'), 'двухслойный заголовок head-wrap');
+        assert.ok(sheet.template.includes('class="head-top"'), 'верхний ярус заголовка (На начало / За период / На конец)');
+        assert.ok(sheet.template.includes('class="grid-body"'), 'прокручиваемое тело таблицы отдельно от прижатого футера');
+        assert.ok(!sheet.template.includes('class="bar"'), 'между пакетировщиком и таблицей нет лишней панели инпутов');
+        assert.ok(!sheet.template.includes('class="footer-nav"'), 'закостыленные кнопки внизу Ведомости убраны');
+        assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/19', label: '19 НДС по приобретённым ценностям' }), '19 НДС по приобретённым ценностям');
+        assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/68/01', label: '68.01 НДФЛ' }), '68.01 НДФЛ');
+        assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/Технический', label: 'Технический (корреспондент)' }), 'Технический (корреспондент)');
+    });
+
+    it('$handler Счетов (turnovers, analysis, postings) объявлены как сервисные представления с порядком 1..3', async () => {
+        const turnoversMeta = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/turnovers/$handler/class.js')).default;
+        const analysisMeta = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/analysis/$handler/class.js')).default;
+        const postingsMeta = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/class.js')).default;
+        const turnoversView = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/turnovers/$handler/turnovers.js')).default;
+        const analysisView = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/analysis/$handler/analysis.js')).default;
+
+        assert.equal(turnoversMeta.label, 'Обороты');
+        assert.equal(turnoversMeta.service, true);
+        assert.equal(turnoversMeta.order, 1);
+        assert.equal(turnoversView.mode, 'turnovers');
+
+        assert.equal(analysisMeta.label, 'Анализ');
+        assert.equal(analysisMeta.service, true);
+        assert.equal(analysisMeta.order, 2);
+        assert.equal(analysisView.mode, 'analysis');
+
+        assert.equal(postingsMeta.label, 'Проводки');
+        assert.equal(postingsMeta.service, true);
+        assert.equal(postingsMeta.order, 3);
+    });
+
+    it('фильтрация списка VIEW (handlers //form) строго соответствует активной роли (ADMIN / BOSS / USER)', async () => {
+        await import('../sources/reactor.js');
+        const { $server } = await import('../sources/server/server.js');
+        const prevWork = globalThis.WORK;
+        globalThis.WORK = new $server();
+        try {
+            const reg = await WORK.get_item('/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER');
+            const acc = await WORK.get_item('/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/19');
+            const sales = await WORK.get_item('/ORGANIZATIONS/Маслоторг/sales');
+
+            const viewsOf = async (item, role) => {
+                const root = await item.handlers({ path: '//form', role });
+                return (root?.items || [])
+                    .filter(i => i.type === '$handler' && i.usable !== false)
+                    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+                    .map(i => i.id);
+            };
+
+            assert.deepEqual(await viewsOf(reg, 'ADMIN'), ['builder'], 'Журнал проводок: у ADMIN только конфигуратор');
+            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS файлы и отчёты (без builder)');
+            assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без folder и builder');
+
+            assert.deepEqual(await viewsOf(acc, 'ADMIN'), ['builder', 'editor'], 'Счёт: у ADMIN только конфигуратор и свойства');
+            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки и Файлы');
+            assert.deepEqual(await viewsOf(acc, 'USER'), ['turnovers', 'analysis', 'postings'], 'Счёт: у USER Обороты, Анализ, Проводки');
+
+            const accBossRoot = await acc.handlers({ path: '//form', role: 'BOSS' });
+            const serviceIds = (accBossRoot?.items || [])
+                .filter(i => i.service)
+                .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+                .map(i => i.id);
+            assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
+
+            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'staff'], 'Подразделение: у ADMIN конструктор и настройка ролей/мест');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'folder', 'search'], 'Подразделение: у BOSS лента, файлы и поиск');
+            assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'email'], 'Подразделение: у USER рабочие инструменты');
+        }
+        finally {
+            globalThis.WORK = prevWork;
+        }
+    });
+});

@@ -281,10 +281,25 @@ function coreMemberKind(name) {
     return null;
 }
 
-/** Оставить в списке только видимое субъекту (в режиме отладки DEV_MODE — видно всё). */
+/** Оставить в списке только видимое субъекту (в режиме отладки DEV_MODE — видно всё, кроме фильтра ролей/allowUse у $handler). */
 export async function visibleOnly(list, params) {
-    if (!Array.isArray(list) || DEV_MODE || !params?.session)
+    if (!Array.isArray(list))
         return list;
+    if (DEV_MODE || !params?.session) {
+        if (!list.some(it => it instanceof FS.$handler))
+            return list;
+        const out = [];
+        for (const it of list) {
+            if (it instanceof FS.$handler) {
+                if (!(await it._roleAllowed(params)))
+                    continue;
+                if (!(await it._usable(params?.$context, params)))
+                    continue;
+            }
+            out.push(it);
+        }
+        return out;
+    }
     const out = [];
     for (const it of list)
         if (await canRead(it, params))

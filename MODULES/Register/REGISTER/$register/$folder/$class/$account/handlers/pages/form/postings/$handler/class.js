@@ -1,5 +1,8 @@
-/** Мета хендлера form/postings. Визуалка — postings.js. */
+/** Мета хендлера form/postings (Карточка проводок счёта). Визуалка — postings.js. */
 export default {
-    icon: 'odant:grid',
-    label: 'Счёт',
+    icon: 'icons:list',
+    label: 'Проводки',
+    roles: ['BOSS', 'USER'],
+    service: true,
+    order: 3,
 }

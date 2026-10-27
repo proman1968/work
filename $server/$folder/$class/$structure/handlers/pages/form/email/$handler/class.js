@@ -1,6 +1,8 @@
 /** Мета хендлера form/email. Визуалка — email.js. */
 export default {
     icon: 'enterprise:email',
+    label: 'Почта',
+    roles: ['USER'],
     async showSettings(...params) {
         return runEmailSettingsDialog(this);
     },

@@ -1,4 +1,4 @@
-export default {    label: '60.00 Расчёты с поставщиками',
+export default {    label: '60 Расчёты с поставщиками',
     icon: 'carbon:wallet',
     METADATA: {
         FIELDS: [

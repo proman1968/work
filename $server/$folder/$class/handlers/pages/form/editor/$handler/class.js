@@ -1,9 +1,10 @@
 /** Мета хендлера form/editor. Визуалка — editor.js. */
 export default {
     icon: 'editor:mode-edit',
+    label: 'Свойства',
     allowSave: true,
-    /** Редактор класса — только роли ADMIN и BOSS. */
-    roles: ['ADMIN', 'BOSS'],
+    /** Редактор свойств класса — только роль ADMIN. */
+    roles: ['ADMIN'],
     /**
      * Редактор — только элементам с полями (STATIC, иначе FIELDS —
      * как $fields клиента: STATIC при наличии, иначе FIELDS).

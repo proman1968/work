@@ -2,4 +2,5 @@
 export default {
     icon: 'carbon:filter',
     label: 'Обзор',
+    roles: ['BOSS', 'USER'],
 }

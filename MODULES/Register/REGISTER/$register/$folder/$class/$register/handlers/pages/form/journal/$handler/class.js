@@ -2,4 +2,5 @@
 export default {
     icon: 'odant:calendar',
     label: 'Журнал',
+    roles: ['BOSS', 'USER'],
 }

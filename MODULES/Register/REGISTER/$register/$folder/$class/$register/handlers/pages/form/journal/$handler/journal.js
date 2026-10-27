@@ -7,11 +7,50 @@
  * клик по счёту или операции открывает форму счёта или документ операции.
  */
 
+const PERIOD_STORAGE_KEY = 'work.accounting.period';
+
 function _day(d) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 const _today = () => _day(new Date());
-const _yearStart = () => `${new Date().getFullYear()}-01-01`;
+const _yearStart = () => `${new Date().getFullYear() - 5}-01-01`;
+const _yearEnd = () => `${new Date().getFullYear()}-12-31`;
+
+function _readSavedPeriod() {
+    try {
+        const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PERIOD_STORAGE_KEY) : null;
+        if (!raw)
+            return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+function _writeSavedPeriod(packetsKey, from, to) {
+    try {
+        if (typeof sessionStorage !== 'undefined')
+            sessionStorage.setItem(PERIOD_STORAGE_KEY, JSON.stringify({ packetsKey: packetsKey || '*', from: from || '', to: to || '' }));
+    }
+    catch { /* ignore */ }
+}
+
+function _derivePacketsKey(from, to, fallback = '*') {
+    if (!from && !to)
+        return '*';
+    if (fallback && fallback !== '*')
+        return fallback;
+    if (from && to) {
+        const ym1 = /^(\d{4})-01-01$/.exec(from);
+        const ym2 = /^(\d{4})-12-31$/.exec(to);
+        if (ym1 && ym2 && ym1[1] === ym2[1])
+            return `${ym1[1]}*`;
+        return `period:${from}:${to}`;
+    }
+    return fallback || '*';
+}
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
@@ -188,8 +227,9 @@ export default {
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
     packetsStart: _yearStart(),
-    packetsEnd: _today(),
+    packetsEnd: _yearEnd(),
     _packetFiltered: false,
+    _initializingPackets: false,
     from: '',
     to: '',
     account: '',
@@ -213,11 +253,15 @@ export default {
         const n = (this.items || []).length;
         return n < this.count ? `Записей: ${n} из ${this.count}` : `Записей: ${n}`;
     },
-    /** Счёт для показа: код (последний сегмент пути) и название. */
+    /** Счёт для показа: код (последний сегмент пути) и название (без дублирования кода). */
     accountText(cid) {
-        const code = String(cid || '').split('/').pop();
-        const label = this.names?.classes?.[cid];
-        return label && label !== code ? `${code} ${label}` : code;
+        const code = String(cid || '').split('/').pop().replace(/^acc\./, '');
+        const label = String(this.names?.classes?.[cid] || '').trim();
+        if (!label || label === code)
+            return code;
+        if (label.startsWith(code + ' ') || label.startsWith(code + '.') || /^\d+(?:\.\d+)?\s/.test(label))
+            return label;
+        return `${code} ${label}`;
     },
     /** Аналитики стороны: названия объектов через « / ». */
     analyticsText(side) {
@@ -251,8 +295,11 @@ export default {
         const d = e?.detail?.value ?? e?.detail ?? {};
         if (Array.isArray(d))
             return;
+        if (this._initializingPackets)
+            return;
         if (d.selected?.name === '*') {
-            if (this._packetFiltered) {
+            _writeSavedPeriod('*', '', '');
+            if (this._packetFiltered || this.from || this.to) {
                 this._packetFiltered = false;
                 this.from = '';
                 this.to = '';
@@ -261,10 +308,35 @@ export default {
             return;
         }
         if (d.period?.start && d.period?.end) {
+            const changed = this.from !== d.period.start || this.to !== d.period.end || !this._packetFiltered;
             this._packetFiltered = true;
             this.from = d.period.start;
             this.to = d.period.end;
-            await this.reload();
+            _writeSavedPeriod(this.packetsKey, this.from, this.to);
+            if (changed)
+                await this.reload();
+        }
+    },
+    _restorePeriodState(nav = null) {
+        const hasNavPeriod = nav && (nav.from !== undefined || nav.to !== undefined || nav.packetsKey);
+        if (!hasNavPeriod && (this.from || this.to))
+            return;
+        const saved = _readSavedPeriod();
+        const src = hasNavPeriod ? nav : saved;
+        if (!src)
+            return;
+        this._initializingPackets = true;
+        try {
+            const from = String(src.from || '');
+            const to = String(src.to || '');
+            const key = _derivePacketsKey(from, to, typeof src.packetsKey === 'string' ? src.packetsKey : '*');
+            this.from = from;
+            this.to = to;
+            this._packetFiltered = !!(from || to);
+            this.packetsKey = key;
+        }
+        finally {
+            this._initializingPackets = false;
         }
     },
     async openEntry(entryId) {
@@ -284,6 +356,7 @@ export default {
         this.entryCard = null;
     },
     async attached() {
+        this._restorePeriodState();
         await this.loadScope();
         await this.reload();
     },

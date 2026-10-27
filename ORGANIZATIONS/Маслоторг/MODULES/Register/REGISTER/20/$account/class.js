@@ -1,4 +1,4 @@
 export default {
-    label: '20.00 Фасовка',
+    label: '20 Фасовка',
     icon: 'carbon:tool-box',
 }

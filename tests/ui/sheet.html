@@ -88,16 +88,22 @@ function stubItem(calls, res) {
 }
 const dataRows = (el) => [...el.__shadowRoot__.querySelectorAll('div.grid div.row:not(.head):not(.total)')];
 
-await test('sheet: шапка, строки текстом, отступ субсчёта, разворот, итог', async () => {
+await test('sheet: двухслойная шапка, строки без заиканий, отступ субсчёта, разворот, прижатый итог', async () => {
     const calls = [];
     const el = await mount('test-sheet', { $item: stubItem(calls, RES) });
     assert(await until(() => dataRows(el).length === 4), 'четыре строки');
+    const headTop = [...el.__shadowRoot__.querySelectorAll('div.grid div.head-top div.cell')].map(text).join('|');
+    eq(headTop, 'Счёт|На начало|За период|На конец');
     const head = [...el.__shadowRoot__.querySelectorAll('div.grid div.head div.cell')].map(text).join('|');
-    eq(head, 'Счёт|Нач. Дт|Нач. Кт|Оборот Дт|Оборот Кт|Кон. Дт|Кон. Кт');
+    eq(head, 'Субсчёт|Дебет|Кредит|Дебет|Кредит|Дебет|Кредит');
+    eq(el.__shadowRoot__.querySelectorAll('div.bar').length, 0, 'лишней панели инпутов над таблицей нет');
     const r = dataRows(el);
     assert(r[0].textContent.includes('62 Расчёты') && r[0].textContent.includes(rub(800)), 'родитель: ' + r[0].textContent);
     assert(r[1].textContent.includes('01 Покупатели') && r[1].textContent.includes(rub(400)), 'субсчёт: ' + r[1].textContent);
     assert(r[2].textContent.includes('Альфа') && r[2].classList.contains('detail'), 'строка разворота: ' + r[2].textContent);
+    eq(el.rowLabel({ account: '/MODULES/Register/REGISTER/19', label: '19 НДС по приобретённым ценностям' }), '19 НДС по приобретённым ценностям');
+    eq(el.rowLabel({ account: '/MODULES/Register/REGISTER/68/01', label: '68.01 НДФЛ' }), '68.01 НДФЛ');
+    eq(el.rowLabel({ account: '/MODULES/Register/REGISTER/Технический', label: 'Технический (корреспондент)' }), 'Технический (корреспондент)');
     const pad = el => parseInt(el.querySelector('div.cell.acc').style.paddingLeft || '0');
     eq(pad(r[0]), 0, 'отступ родителя');
     eq(pad(r[1]), 16, 'отступ субсчёта');
@@ -106,6 +112,16 @@ await test('sheet: шапка, строки текстом, отступ суб�
     assert(!el.__shadowRoot__.textContent.includes('[object Object]'), 'без [object Object]');
     const total = el.__shadowRoot__.querySelector('div.row.total').textContent;
     assert(total.includes(rub(1400)) && total.includes('Итого'), 'итог: ' + total);
+    const rights = rowEl => [...rowEl.querySelectorAll('div.cell')].map(c => Math.round(c.getBoundingClientRect().right));
+    const headSubRights = rights(el.__shadowRoot__.querySelector('div.head'));
+    const mainRowRights = rights(r[0]);
+    const subRowRights = rights(r[1]);
+    const detailRowRights = rights(r[2]);
+    const totalRowRights = rights(el.__shadowRoot__.querySelector('div.row.total'));
+    eq(mainRowRights.join(','), headSubRights.join(','), 'колонки основной строки строго под шапкой');
+    eq(subRowRights.join(','), headSubRights.join(','), 'колонки субсчёта строго под шапкой (без сдвига от paddingLeft)');
+    eq(detailRowRights.join(','), headSubRights.join(','), 'колонки разворота строго под шапкой');
+    eq(totalRowRights.join(','), headSubRights.join(','), 'колонки футера Итого строго под шапкой');
     el.remove();
 });
 
@@ -130,18 +146,25 @@ await test('sheet: параметры уходят в db_sheet, ошибка в�
     bad.remove();
 });
 
-await test('sheet: клик по счёту открывает его форму', async () => {
+await test('sheet: выбор строки выставляет focusedItem счёта, dblclick/open открывает его форму с сохранением периода', async () => {
     const el = await mount('test-sheet', { $item: stubItem([], RES) });
     assert(await until(() => dataRows(el).length === 4), 'строки');
     const got = [], opened = [];
     const prevWork = window.WORK, prevExec = window.execute;
     window.WORK = { get_item: async (p) => { got.push(p); return { path: p }; } };
-    window.execute = (t) => opened.push(t.path);
+    window.execute = (t, nav) => opened.push({ path: t.path, nav });
     try {
-        dataRows(el)[1].querySelector('div.cell.acc').click();
+        el.from = '2026-03-01';
+        el.to = '2026-03-31';
+        el.packetsKey = '2026-03*';
+        dataRows(el)[1].click();
         await tick(80);
-        eq(got.join(','), '/DATA/REGISTER/62/01');
-        eq(opened.join(','), '/DATA/REGISTER/62/01');
+        eq(el.focusedItem?.path, '/DATA/REGISTER/62/01', 'focusedItem установлен на выбранный счёт');
+        await el.openTurnovers();
+        eq(opened.at(-1)?.path, '/DATA/REGISTER/62/01');
+        eq(opened.at(-1)?.nav?.view, 'turnovers');
+        eq(opened.at(-1)?.nav?.from, '2026-03-01');
+        eq(opened.at(-1)?.nav?.packetsKey, '2026-03*');
     }
     finally {
         window.WORK = prevWork;

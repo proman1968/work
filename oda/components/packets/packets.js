@@ -514,8 +514,13 @@ ODA({
         this.items = [...this.items]; // триггер перерисовки
         this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
     },
-    // Год подсвечивается, если выбранный период пересекает его (даже частично: ноябрь–январь)
+    // Год подсвечивается, если выбран конкретный период, пересекающий его (не при выборе «Все» '*')
     _markYears(period) {
+        if (this.selection?.length === 1 && this.selection[0]?.name === '*') {
+            for (const y of this._years || [])
+                y.active = false;
+            return;
+        }
         const from = period?.start?.slice(0, 4);
         const to = period?.end?.slice(0, 4);
         for (const y of this._years || [])
@@ -672,16 +677,26 @@ ODA({
             :host {
                 @apply --horizontal;
                 justify-content: space-between;
+                align-items: center;
                 white-space: nowrap;
+                background: light-dark(#f6f6f2, #222328);
+                border-bottom: 1px solid light-dark(#c8c8c0, #3a3b42);
+                padding: 2px 6px;
+                min-height: 28px;
+                gap: 8px;
             }
             :host > div {
                 @apply --horizontal;
                 align-items: center;
-                padding: 4px;
+                gap: 2px;
+                padding: 1px 0;
             }
             .left {
                 overflow-y: hidden;
                 overflow-x: auto;
+            }
+            .right {
+                flex-shrink: 0;
             }
         </style>
         <div class="left">
@@ -691,7 +706,7 @@ ODA({
                 @tap="_onTap($for.item, $event)"></div>
         </div>
         <div class="right">
-            <div style="font-weight: bold;" ~is="$for.item.is || 'oda-packets-selector'" ~for="rightItems"
+            <div ~is="$for.item.is || 'oda-packets-selector'" ~for="rightItems"
                 :item="$for.item" :label="$for.item?.label" :title="$for.item?.fullLabel"
                 :disabled="$for.item?.disabled" :error="$for.item?.selected || $for.item?.active"
                 @tap="_onTap($for.item, $event)"></div>
@@ -729,22 +744,31 @@ ODA({
     template: /*html*/`
         <style>
             :host {
-                padding: 4px 6px;
+                padding: 2px 7px;
                 cursor: pointer;
                 white-space: nowrap;
-                max-height: 30px;
-                max-width: 200px;
+                max-height: 26px;
+                max-width: 220px;
                 text-overflow: ellipsis;
-                font-size: small;
-                border-radius: 4px;
-                @apply --header;
+                font-size: 12.5px;
+                line-height: 1.35;
+                border-radius: 3px;
+                border: 1px solid transparent;
+                background: transparent !important;
+                color: light-dark(#222, #e2e8f0) !important;
                 @apply --no-flex;
                 @apply --horizontal;
                 align-items: center;
+                transition: background-color 0.12s ease, border-color 0.12s ease;
+            }
+            :host(:hover) {
+                background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08)) !important;
             }
             :host([error]) {
-                @apply --active;
-                font-weight: bold;
+                border: 1.5px solid light-dark(#1e3a5f, #60a5fa) !important;
+                background: light-dark(#e6effc, rgba(59, 130, 246, 0.22)) !important;
+                color: light-dark(#102a43, #bfdbfe) !important;
+                font-weight: 700;
             }
             :host([disabled]) {
                 opacity: .45;
@@ -754,7 +778,8 @@ ODA({
                 cursor: pointer;
                 text-overflow: ellipsis;
                 overflow: hidden;
-                font-size: small;
+                font-size: 12.5px;
+                color: inherit;
             }
         </style>
         <label class="flex">{{label}}</label>
@@ -931,11 +956,11 @@ ODA({
             }
         </style>
         <div>
-            <label>Start date:</label>
+            <label>С:</label>
             <input type="date" :min="min" :max="max" ::value="start">
         </div>
         <div>
-            <label>End date:</label>
+            <label>По:</label>
             <input type="date" :min="min" :max="max" ::value="end">
         </div>
     `,

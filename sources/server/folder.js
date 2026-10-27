@@ -1036,8 +1036,8 @@ export class $folder extends $item{
         if (!['items', 'entries', 'files', 'folders', 'children'].includes(p.items))
             throw new Error('info: недопустимый список «' + p.items + '»');
         let items =  await this[p.items];
-        // снаружи — только видимое субъекту (вложенные уровни — тем же фильтром)
-        if (p.session)
+        // снаружи — только видимое субъекту (вложенные уровни — тем же фильтром; для $handler фильтр роли/allowUse работает всегда)
+        if (p.session || items.some(i => i instanceof FS.$handler))
             items = await (await import('./access/gateway.js')).visibleOnly(items, p);
 
         if(p.mask){

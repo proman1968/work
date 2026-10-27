@@ -1,5 +1,7 @@
 export default {
     icon: 'icons:settings',
+    label: 'Настройки',
+    roles: ['ADMIN'],
     allowSave: true,
     allowUse: true,
     template: /*html*/`

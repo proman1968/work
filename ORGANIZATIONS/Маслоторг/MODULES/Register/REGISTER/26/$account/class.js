@@ -1,4 +1,4 @@
 export default {
-    label: '26.00 Общехозяйственные расходы',
+    label: '26 Общехозяйственные расходы',
     icon: 'carbon:wallet',
 }
