@@ -154,6 +154,11 @@ ODA({
             $def: 'month',
             $list: ['day', 'month', 'quarter', 'year']
         },
+        // Опциональный список дат YYYY-MM-DD, в которых реально существуют данные
+        days: {
+            $def: null,
+            $type: Array
+        },
         // Верхняя полоса: [Now?, ...годы, <, period, >, All]
         items: {
             $def: [],
@@ -202,14 +207,19 @@ ODA({
     _multiYear: false,
     _periodBase: '',
     $observers: {
-        _rebuild(start, end, mode) {
-            this._build(start, end, mode);
+        _rebuild(start, end, mode, days) {
+            this._build(start, end, mode, days);
         }
     },
-    _build(start, end, mode) {
+    _hasCustomDays: false,
+    _build(start, end, mode, customDays = this.days) {
         this.error = '';
-        const dStart = _parseBound(start);
-        const dEnd = _parseBound(end);
+        const validCustom = Array.isArray(customDays)
+            ? [...new Set(customDays.map(String).filter(d => _parseBound(d)))].sort()
+            : [];
+        this._hasCustomDays = validCustom.length > 0;
+        const dStart = _parseBound(start || validCustom[0] || '');
+        const dEnd = _parseBound(end || validCustom[validCustom.length - 1] || '');
         if (!dStart || !dEnd) {
             this.items = [];
             this._dayNames = [];
@@ -223,18 +233,23 @@ ODA({
         }
         let from = dStart, to = dEnd;
         if (from > to) [from, to] = [to, from];
-        // Все дни диапазона
-        const days = [];
-        const guard = 366 * 12; // ~12 лет, защита от зависания
-        for (let cur = new Date(from); cur <= to && days.length < guard; cur.setDate(cur.getDate() + 1)) {
-            days.push(_toISO(cur.getFullYear(), cur.getMonth() + 1, cur.getDate()));
+        let days;
+        if (this._hasCustomDays) {
+            days = validCustom;
+        } else {
+            // Все дни диапазона
+            days = [];
+            const guard = 366 * 12; // ~12 лет, защита от зависания
+            for (let cur = new Date(from); cur <= to && days.length < guard; cur.setDate(cur.getDate() + 1)) {
+                days.push(_toISO(cur.getFullYear(), cur.getMonth() + 1, cur.getDate()));
+            }
         }
         this._dayNames = days;
         this._lo = days[0] ?? '';
         this._hi = days[days.length - 1] ?? '';
         this._multiYear = this._lo.slice(0, 4) !== this._hi.slice(0, 4);
         // Усечение guard'ом — не молча: сообщаем фактическое покрытие
-        if (this._hi && this._hi < _toISO(to.getFullYear(), to.getMonth() + 1, to.getDate()))
+        if (!this._hasCustomDays && this._hi && this._hi < _toISO(to.getFullYear(), to.getMonth() + 1, to.getDate()))
             this.error = `Диапазон ограничен ${this._lo} — ${this._hi}`;
         this._dayIndex = this._buildIndex(days);
         this._units = this._buildUnits(days, mode);
@@ -396,7 +411,9 @@ ODA({
         const nowName = mode === 'year' ? todayISO.slice(0, 4) :
             mode === 'quarter' ? `${todayISO.slice(0, 4)}-q${_getQuarterOfMonth(todayISO.slice(5, 7))}` :
                 mode === 'month' ? todayISO.slice(0, 7) : todayISO;
-        const nowInRange = todayISO >= rangeStart && todayISO <= rangeEnd;
+        const nowInRange = this._hasCustomDays
+            ? Boolean(this._dayIndex?.[nowName])
+            : (todayISO >= rangeStart && todayISO <= rangeEnd);
         const nowItem = this._makeItem({
             name: nowName, is: 'oda-packets-now-selector', type: mode === 'year' ? 'year' : mode === 'quarter' ? 'quarter' : mode,
             disabled: !nowInRange
@@ -542,6 +559,8 @@ ODA({
             const only = selection[0];
             if (only.name === 'period') return { start: only.start, end: only.end };
             const [s, e] = only.name === '*' ? [this._lo, this._hi] : _leafSpan(only.name, only.type);
+            if (this._hasCustomDays && only.name !== '*')
+                return { start: s, end: e };
             const clipped = this._clipRange(s, e);
             if (clipped) return { start: clipped[0], end: clipped[1] };
             // «Сейчас» вне диапазона журнала: выбор остаётся на сегодня, таблица пустая

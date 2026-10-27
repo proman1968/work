@@ -469,8 +469,17 @@ ODA({ is: 'work-prompt-bar',
         this.focusInput();
     },
     async selectModel(e) {
+        const modelsRoot = await WORK.get_item('/MODELS');
+        try {
+            if (modelsRoot?.[R]?.cache)
+                delete modelsRoot[R].cache.items;
+            const localNode = WORK.items?.['/MODELS/Local'];
+            if (localNode?.[R]?.cache)
+                delete localNode[R].cache.items;
+        }
+        catch { /* ignore */ }
         const tree = ODA.createElement('item-tree', {
-            $item: await WORK.get_item('/MODELS'), hideTops: 1, hideRoots: 2, allowCategories: false,
+            $item: modelsRoot, hideTops: 1, hideRoots: 2, allowCategories: false,
             execute(item) {
                 if (item?.type && item.type !== '$ai')
                     return;

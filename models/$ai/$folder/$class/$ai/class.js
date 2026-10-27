@@ -192,6 +192,13 @@ export default {
             }
         }
 
+        const isLocalNode = ai.protocol === 'local' || String(ai.path || ai.short || '').startsWith('/MODELS/Local/');
+        const primaryFile = String(ai.primaryFile || ai.DATA?.primaryFile || '');
+        if ((ai.protocol === 'local' || (isLocalNode && (!ai.baseUrl || primaryFile.endsWith('.safetensors')))) && typeof WORK?.localStreamChat === 'function') {
+            yield* WORK.localStreamChat(ai, body, options);
+            return;
+        }
+
         const headers = await getAuthHeaders(ai);
         const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
@@ -238,7 +245,13 @@ export default {
                 }
                 resolve(res);
             });
-            req.on('error', reject);
+            req.on('error', (err) => {
+                if (isLocalNode && typeof WORK?.localStreamChat === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                    resolve({ __localFallback: true });
+                    return;
+                }
+                reject(err);
+            });
             // Простой сокета (нет байтов) дольше idleMs — обрыв, а не вечное ожидание.
             // Локальным CPU-моделям (первый ход — обработка промпта минутами) idleMs задаёт сама модель.
             const idleMs = Number(options.idleMs) > 0 ? Number(options.idleMs)
@@ -255,6 +268,11 @@ export default {
             req.write(JSON.stringify(body));
             req.end();
         });
+
+        if (res?.__localFallback && typeof WORK?.localStreamChat === 'function') {
+            yield* WORK.localStreamChat(ai, body, options);
+            return;
+        }
 
         if (isAnthropic) {
             yield* anthropicStream(res, body.model);

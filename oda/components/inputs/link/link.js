@@ -60,10 +60,32 @@ ODA({is: 'oda-link-input',
             border-radius: 0;
             box-shadow: none;
         }
+        :host([dense]) {
+            position: relative;
+            flex: 0 1 auto;
+        }
         :host([dense]) input,
         :host([dense]) .pick {
-            padding: var(--space-xs) var(--space-s);
-            font-size: inherit;
+            padding: 3px 6px;
+            font-size: 12px;
+            line-height: 1.3;
+        }
+        :host([dense]:not([borderless])) input {
+            border: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-radius: 3px;
+            background: light-dark(#ffffff, #1b1c20);
+            color: light-dark(#1f1f1f, #e2e8f0);
+        }
+        :host([dense]) .variants {
+            position: absolute;
+            top: calc(100% + 2px);
+            left: 0;
+            min-width: 100%;
+            z-index: 100;
+            background: light-dark(#ffffff, #22232a);
+            border: 1px solid light-dark(#9a9990, #4a4c56);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
         }
     </style>
     <div class="row">

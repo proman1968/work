@@ -38,83 +38,158 @@ export default {
         :host {
             @apply --vertical;
             @apply --flex;
-            gap: 8px;
-            padding: 8px;
+            gap: 0;
+            padding: 0;
             overflow: hidden;
+            background: var(--content-background, #fff);
+            color: var(--content-color, #222);
+            font-size: 13px;
         }
         .bar {
             @apply --horizontal;
+            flex-shrink: 0;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
+            padding: 4px 8px;
+            background: light-dark(#efeee4, #24252b);
+            border-bottom: 1px solid light-dark(#b5b4ac, #3e4049);
+            font-size: 12px;
         }
         .bar input {
             min-width: 0;
-            width: 140px;
+            width: 145px;
             box-sizing: border-box;
-            padding: 4px;
-            font-size: 110%;
-            border: none;
-            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+            border: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-radius: 3px;
+            background: light-dark(#ffffff, #1b1c20);
+            color: inherit;
         }
         .error {
-            color: var(--error-color, red);
+            padding: 6px 10px;
+            color: var(--error-color, #c53030);
+            background: light-dark(#fff5f5, rgba(229, 62, 62, 0.15));
+            border-bottom: 1px solid var(--error-color, #feb2b2);
             white-space: break-spaces;
         }
         .grid {
             @apply --vertical;
             flex: 1;
-            overflow: auto;
+            min-height: 0;
+            overflow: hidden;
         }
-        .head, .row {
-            @apply --horizontal;
-            gap: 8px;
-            padding: 4px 8px;
+        div.head, div.row {
+            display: grid !important;
+            align-items: stretch;
+        }
+        .head-wrap {
+            @apply --vertical;
+            flex-shrink: 0;
+            background: light-dark(#e3e1d3, #2a2b32);
+            color: light-dark(#1f1f1f, #e2e8f0);
+            border-bottom: 1px solid light-dark(#9a9990, #4a4c56);
+            user-select: none;
+            scrollbar-gutter: stable;
+            overflow-y: hidden;
         }
         .head {
-            font-weight: bold;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .grid-body {
+            @apply --vertical;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            scrollbar-gutter: stable;
+            background: light-dark(#ffffff, #1b1c20);
+        }
+        div.row {
+            flex-shrink: 0;
+            min-height: 25px;
+            border-bottom: 1px solid light-dark(#ecece8, #2c2d34);
+        }
+        div.row:hover:not(.total) {
+            background: light-dark(#f2f5fb, rgba(255, 255, 255, 0.05));
         }
         .cell {
-            flex: 1;
+            min-width: 0;
+            padding: 4px 8px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            border-right: 1px solid light-dark(#e2e2dc, #2f3038);
+        }
+        .cell:last-child {
+            border-right: none;
+        }
+        .head-wrap .cell {
+            border-right: 1px solid light-dark(#b8b7ae, #3e4049);
+            padding: 4px 8px;
+        }
+        .head-wrap .cell:last-child {
+            border-right: none;
         }
         .cell.num {
+            justify-content: flex-end;
             text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .head .cell.num {
+            justify-content: center;
+            text-align: center;
         }
         .cell.link, .cell.edit {
             cursor: pointer;
             text-decoration: underline;
         }
         .cell.edit {
-            flex: 0 0 auto;
+            justify-content: center;
         }
-        .total {
-            font-weight: bold;
+        div.row.total {
+            flex-shrink: 0;
+            font-weight: 700;
+            min-height: 27px;
+            background: light-dark(#e3e1d3, #2a2b32);
+            color: light-dark(#111, #f1f5f9);
+            border-top: 2px solid light-dark(#8c8b82, #52545f);
+            border-bottom: none;
+            scrollbar-gutter: stable;
+            overflow-y: hidden;
+            cursor: default;
         }
     </style>
     <div class="bar">
-        <input :value="at" placeholder="на дату 2026-01-01" @change="at = $this.value">
-        <oda-button icon="icons:refresh" @tap="reload">Показать</oda-button>
+        <span>На дату:</span>
+        <input :value="at" placeholder="сегодня (ГГГГ-ММ-ДД)" @change="setAt($this.value)">
     </div>
     <div class="error" ~if="error && !editing">{{error}}</div>
     <div class="grid">
-        <div class="head">
-            <div class="cell">Название</div>
-            <div class="cell num">Сальдо</div>
-            <div class="cell num">Кол-во</div>
-            <div class="cell" ~for="slots">{{$for.item.label}}</div>
-            <div class="cell edit" ~if="canEdit"></div>
+        <div class="head-wrap">
+            <div class="head" ~style="{gridTemplateColumns: gridCols}">
+                <div class="cell">Название</div>
+                <div class="cell num">Сальдо</div>
+                <div class="cell num">Кол-во</div>
+                <div class="cell" ~for="slots">{{$for.item.label}}</div>
+                <div class="cell edit" ~if="canEdit"></div>
+            </div>
         </div>
-        <div class="row" ~for="displayRows">
-            <div class="cell link" @tap="open($for.item)">{{$for.item.name}}</div>
-            <div class="cell num">{{$for.item.balance}}</div>
-            <div class="cell num">{{$for.item.qty}}</div>
-            <div class="cell" ~for="$for.item.slots">{{$for.$for.item}}</div>
-            <div class="cell edit" ~if="canEdit" @tap="editExt($for.item)">Изменить</div>
+        <div class="grid-body">
+            <div class="row" ~for="displayRows" ~style="{gridTemplateColumns: gridCols}">
+                <div class="cell link" @tap="open($for.item)">{{$for.item.name}}</div>
+                <div class="cell num">{{$for.item.balance}}</div>
+                <div class="cell num">{{$for.item.qty}}</div>
+                <div class="cell" ~for="$for.item.slots">{{$for.$for.item}}</div>
+                <div class="cell edit" ~if="canEdit" @tap="editExt($for.item)">Изменить</div>
+            </div>
         </div>
-        <div class="row total">
+        <div class="row total" ~style="{gridTemplateColumns: gridCols}">
             <div class="cell">Записей: {{rows.length}}</div>
         </div>
     </div>
@@ -131,6 +206,15 @@ export default {
     editing: null,
     busy: false,
     error: '',
+    get gridCols() {
+        const slotCols = (this.slots || []).map(() => 'minmax(110px, 1fr)').join(' ');
+        const editCol = this.canEdit ? ' 86px' : '';
+        return `minmax(180px, 1.8fr) minmax(110px, 0.9fr) minmax(80px, 0.7fr)${slotCols ? ' ' + slotCols : ''}${editCol}`;
+    },
+    async setAt(val) {
+        this.at = String(val || '');
+        await this.reload();
+    },
     /** Править можно текущий состав (без даты) справочника с полями OVERLAY. */
     get canEdit() {
         return this.fields.length > 0 && !String(this.at || '').trim();

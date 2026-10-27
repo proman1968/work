@@ -312,6 +312,13 @@ function readSubAnalyticValue(db, targetSchema, objId, fieldPath) {
     return cur === undefined || cur === null || cur === '' ? null : String(cur);
 }
 
+function rangeOfTimes(rows) {
+    if (!rows?.length)
+        return null;
+    const days = [...new Set(rows.map(r => localDay(r.time)).filter(Boolean))].sort();
+    return days.length ? { start: days[0], end: days[days.length - 1], days } : null;
+}
+
 /* ---------- журнал ---------- */
 
 /**
@@ -327,31 +334,36 @@ function readSubAnalyticValue(db, targetSchema, objId, fieldPath) {
  * @param {boolean} [q.desc] Новые сверху
  * @param {number} [q.limit=100]
  * @param {number} [q.offset=0]
- * @returns {{ total, sum: {amount, qty, qty2}, items: object[], names }}
+ * @returns {{ total, sum: {amount, qty, qty2}, items: object[], names, range }}
  */
 export function journal(db, q = {}) {
     const [from, to] = periodRange(q.from, q.to);
-    const conds = entryConds(db, q);
+    const baseConds = entryConds(db, q);
+    if (!isEmpty(q.account)) {
+        const cids = accountCids(db, q.account);
+        const [d, da] = inCond('e.debit_cid', cids), [c, ca] = inCond('e.credit_cid', cids);
+        baseConds.push([`(${d} OR ${c})`, [...da, ...ca]]);
+    }
+    if (!isEmpty(q.debit))
+        baseConds.push(inCond('e.debit_cid', accountCids(db, q.debit)));
+    if (!isEmpty(q.credit))
+        baseConds.push(inCond('e.credit_cid', accountCids(db, q.credit)));
+    if (!isEmpty(q.object))
+        baseConds.push(['EXISTS (SELECT 1 FROM entry_analytics f WHERE f.entry_id = e.id AND f.ref_id = ?)', [String(q.object)]]);
+    if (q.effective)
+        baseConds.push(['e.storno = 0 AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.op_id = e.op_id AND x.op_version > e.op_version)', []]);
+    const visible = entryCond(q.visible);
+    if (visible)
+        baseConds.push(visible);
+    const baseWhere = baseConds.length ? 'WHERE ' + baseConds.map(c => c[0]).join(' AND ') : '';
+    const baseArgs = baseConds.flatMap(c => c[1]);
+    const range = rangeOfTimes(db.prepare(`SELECT DISTINCT e.time AS time FROM entries e ${baseWhere}`).all(...baseArgs));
+
+    const conds = [...baseConds];
     if (from > -Infinity)
         conds.push(['e.time >= ?', [from]]);
     if (to < Infinity)
         conds.push(['e.time < ?', [to]]);
-    if (!isEmpty(q.account)) {
-        const cids = accountCids(db, q.account);
-        const [d, da] = inCond('e.debit_cid', cids), [c, ca] = inCond('e.credit_cid', cids);
-        conds.push([`(${d} OR ${c})`, [...da, ...ca]]);
-    }
-    if (!isEmpty(q.debit))
-        conds.push(inCond('e.debit_cid', accountCids(db, q.debit)));
-    if (!isEmpty(q.credit))
-        conds.push(inCond('e.credit_cid', accountCids(db, q.credit)));
-    if (!isEmpty(q.object))
-        conds.push(['EXISTS (SELECT 1 FROM entry_analytics f WHERE f.entry_id = e.id AND f.ref_id = ?)', [String(q.object)]]);
-    if (q.effective)
-        conds.push(['e.storno = 0 AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.op_id = e.op_id AND x.op_version > e.op_version)', []]);
-    const visible = entryCond(q.visible);
-    if (visible)
-        conds.push(visible);
     const where = conds.length ? 'WHERE ' + conds.map(c => c[0]).join(' AND ') : '';
     const args = conds.flatMap(c => c[1]);
     const t = db.prepare(`SELECT count(*) n, coalesce(sum(e.amount), 0) a, coalesce(sum(e.qty), 0) q, coalesce(sum(e.qty2), 0) q2
@@ -370,6 +382,7 @@ export function journal(db, q = {}) {
         total: t.n,
         sum: { amount: rub(t.a), qty: q6(t.q), qty2: q6(t.q2) },
         items,
+        range,
         names: namesOf(db,
             items.flatMap(e => [e.op_id, ...Object.values(e.debit_analytics), ...Object.values(e.credit_analytics)]),
             items.flatMap(e => [e.debit, e.credit, e.op_cid])),
@@ -442,8 +455,10 @@ export function trialBalance(db, q = {}) {
     const accList = isEmpty(q.account) ? null : [...nodes.keys()];
     const slotTargets = slotsOfAccounts(db, accList);
     const resolvedAnalytics = resolveAnalyticsFilter(db, accList, q.analytics, q.subanalytics);
-    const conds = entryConds(db, q);
-    conds.push(['e.time < ?', [hi(to)]]);
+    const baseConds = entryConds(db, q);
+    const baseSide = sideRows({ accounts: accList, analytics: resolvedAnalytics, conds: baseConds, visible: q.visible });
+    const range = rangeOfTimes(db.prepare(`SELECT DISTINCT time FROM (${baseSide.sql})`).all(...baseSide.args));
+    const conds = [...baseConds, ['e.time < ?', [hi(to)]]];
     const { sql, args } = sideRows({ accounts: accList, by: baseSlots, analytics: resolvedAnalytics, conds, visible: q.visible });
     const keys = baseSlots.map((_, i) => `k${i}`);
     const F = lo(from);
@@ -534,7 +549,7 @@ export function trialBalance(db, q = {}) {
         addTotals(total, r.t);
         emit(r);
     }
-    return { rows: out, total: presentTotals(total), names };
+    return { rows: out, total: presentTotals(total), range, names };
 }
 
 /* ---------- карточка счёта ---------- */
@@ -588,10 +603,12 @@ export function accountCard(db, q = {}) {
         throw new DataError('карточка счёта: не задан счёт');
     const cls = mustClass(db, q.account, 'account', 'счёт');
     const [from, to] = periodRange(q.from, q.to);
-    const conds = entryConds(db, q);
-    conds.push(['e.time < ?', [hi(to)]]);
+    const baseConds = entryConds(db, q);
     const accs = descendants(db, cls.cid);
     const resolvedAnalytics = resolveAnalyticsFilter(db, accs, q.analytics, q.subanalytics);
+    const baseSide = sideRows({ accounts: accs, analytics: resolvedAnalytics, conds: baseConds, visible: q.visible });
+    const range = rangeOfTimes(db.prepare(`SELECT DISTINCT time FROM (${baseSide.sql})`).all(...baseSide.args));
+    const conds = [...baseConds, ['e.time < ?', [hi(to)]]];
     const { sql, args } = sideRows({ accounts: accs, analytics: resolvedAnalytics, conds, visible: q.visible });
     const F = lo(from);
     const o = db.prepare(`SELECT coalesce(sum(amt), 0) a, coalesce(sum(q), 0) q, coalesce(sum(q2), 0) q2 FROM (${sql}) WHERE time < ?`)
@@ -616,6 +633,7 @@ export function accountCard(db, q = {}) {
         closing: balance(o.a + t.da - t.ca, o.q + t.dq - t.cq, o.q2 + t.dq2 - t.cq2),
         total: t.n,
         items,
+        range,
         names: itemNames(db, items, extraIds),
     };
 }
@@ -731,6 +749,7 @@ export function accountTurnovers(db, q = {}) {
         },
         total: card.total,
         items: q.group ? items.filter(i => i.groupKey === String(q.group)) : items,
+        range: card.range,
         names: card.names,
     };
 }

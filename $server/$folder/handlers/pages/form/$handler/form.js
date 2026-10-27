@@ -129,9 +129,9 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div slot="footer" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
-            <item-tools id="mainTools" :$item filter="service" show-labels></item-tools>
-            <item-tools id="focusedTools" :target-item="focusedItem" :$item="focusedItem" filter="service" show-labels></item-tools>
+        <div id="formFooter" slot="footer" ~show="hasFooter" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
+            <item-tools id="mainTools" :$item filter="service" ::tool-items="mainToolItems" @tools-changed="mainToolItems = $event.detail?.value || []" show-labels></item-tools>
+            <item-tools id="focusedTools" focused-only :target-item="focusedItem" :$item="focusedItem" filter="service" ::tool-items="focusedToolItems" @tools-changed="focusedToolItems = $event.detail?.value || []" show-labels></item-tools>
             <div flex></div>
             <div no-flex horizontal ~show="dialog">
                 <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="Apply"></oda-button>
@@ -429,9 +429,16 @@ ODA({is: 'work-form',
             }
         }
     },
+    mainToolItems: [],
+    focusedToolItems: [],
+    get hasFooter() {
+        return Boolean(this.dialog || this.mainToolItems?.length || this.focusedToolItems?.length);
+    },
     focusedItem: {
         $def: null,
         set(n) {
+            if (!n)
+                this.focusedToolItems = [];
             const ft = this.$?.('#focusedTools');
             if (ft)
                 ft.targetItem = n;

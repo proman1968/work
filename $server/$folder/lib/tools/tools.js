@@ -47,13 +47,13 @@ export default {
                 transform: translateY(0.5px);
             }
         </style>
-        <div class="service-wrap" ~show="showLabels">
+        <div class="service-wrap" ~show="showLabels && toolItems?.length">
             <button type="button" class="service-btn" ~for="toolItems" :title="$for.item?.label || $for.item?.id" @tap.stop="runTool($for.item, $event)">
                 <oda-icon ~if="$for.item?.icon" :icon="$for.item.icon" icon-size="16"></oda-icon>
                 <span>{{$for.item?.label || $for.item?.id}}</span>
             </button>
         </div>
-        <div class="service-wrap" ~show="!showLabels">
+        <div class="service-wrap" ~show="!showLabels && toolItems?.length">
             <item-icon auto-run class="item" light raised ~for="toolItems" raised border :show-labels :$item="$for?.item" :hide-toolbar="!showLabels"></item-icon>
         </div>
     `,
@@ -68,34 +68,48 @@ export default {
         showLabels: {
             $def: false,
             $attr: true,
+        },
+        focusedOnly: {
+            $def: false,
+            $attr: true,
+        },
+        toolItems: {
+            $def: [],
+            $type: Array,
         }
     },
-    toolItems: [],
+    _setTools(list) {
+        const next = Array.isArray(list) ? list : [];
+        this.toolItems = next;
+        this.fire('tools-changed', next);
+    },
     $observers: {
-        async _syncTools(targetItem, $item, filter) {
-            const active = targetItem || $item;
+        async _syncTools(targetItem, $item, filter, focusedOnly) {
+            const active = focusedOnly ? targetItem : (targetItem || $item);
             if (!active) {
-                this.toolItems = [];
+                this._setTools([]);
                 return;
             }
             const own = active.tools;
             if (Array.isArray(own) && own.length) {
-                this.toolItems = own;
+                this._setTools(own);
                 return;
             }
-            if (filter !== 'service' || typeof active.fetch !== 'function') {
-                this.toolItems = [];
+            if (filter !== 'service' || typeof active.fetch !== 'function' || !targetItem) {
+                this._setTools([]);
                 return;
             }
             const host = this.domHost;
-            if (host && host.$item === active && !targetItem) {
-                this.toolItems = [];
+            const hostPath = host?.$item?.short || host?.$item?.path || '';
+            const activePath = active?.short || active?.path || '';
+            if (hostPath && activePath && hostPath === activePath) {
+                this._setTools([]);
                 return;
             }
             const role = host?.activeRole || active.role || '';
             const list = await this.loadServiceHandlers(active, role);
-            if ((this.targetItem || this.$item) === active) {
-                this.toolItems = list;
+            if (this.targetItem === active) {
+                this._setTools(list);
                 this.render?.();
             }
         }

@@ -960,9 +960,12 @@ describe('состав виртуального справочника (form/vir
 describe('архитектура представлений формы (VIEW по ролям), $handler счетов и Ведомость', () => {
     it('компактная кнопка Консультант (icons:help) и сервисная панель item-tools в подвале work-form', () => {
         const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
+        const svgSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/tools/icons/lib/svg/odant.svg'), 'utf-8');
         assert.match(formSrc, /id="consultantBtn"[^>]*icon="icons:help"/, 'кнопка Консультант с иконкой ?');
         assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
+        assert.match(formSrc, /slot="footer"[^>]*~show="hasFooter"/, 'футер формы виден только при наличии содержимого (hasFooter)');
         assert.match(formSrc, /<item-tools[^>]*:\$item="focusedItem"[^>]*filter="service"[^>]*show-labels>/, 'сервисная панель focusedItem с подписями в футере');
+        assert.match(svgSrc, /<symbol id="calendar"/, 'иконка odant:calendar для кнопки Обороты определена в odant.svg');
     });
 
     it('представления Ведомости: двухслойный заголовок, прижатый футер, без лишней панели инпутов и закостыленных кнопок', () => {
@@ -974,6 +977,29 @@ describe('архитектура представлений формы (VIEW п�
         assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/19', label: '19 НДС по приобретённым ценностям' }), '19 НДС по приобретённым ценностям');
         assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/68/01', label: '68.01 НДФЛ' }), '68.01 НДФЛ');
         assert.equal(sheet.rowLabel({ account: '/MODULES/Register/REGISTER/Технический', label: 'Технический (корреспондент)' }), 'Технический (корреспондент)');
+    });
+
+    it('пакетировщик oda-packets в отчётах строится только по реально существующим периодам (res.range) и сбрасывает устаревший внедиапазонный период', async () => {
+        const calls = [];
+        const h = host(sheet, calls, {
+            fetch: (m) => (m === 'db_sheet' ? {
+                rows: [{ account: '/MODULES/Register/REGISTER/51', label: '51 Расчётные счета', level: 0, leaf: true, opening: { debit: 0, credit: 0 }, turnover: { debit: 100, credit: 0 }, closing: { debit: 100, credit: 0 } }],
+                total: { opening: { debit: 0, credit: 0 }, turnover: { debit: 100, credit: 0 }, closing: { debit: 100, credit: 0 } },
+                range: { start: '2026-02-01', end: '2026-10-05', days: ['2026-02-01', '2026-05-20', '2026-10-05'] },
+                names: {},
+            } : null),
+        });
+        h.from = '2021-01-01';
+        h.to = '2021-12-31';
+        h.packetsKey = '2021*';
+        h._packetFiltered = true;
+        await h.reload();
+        assert.equal(h.packetsStart, '2026-02-01', 'нижняя граница пакета — первая реальная проводка');
+        assert.equal(h.packetsEnd, '2026-10-05', 'верхняя граница пакета — последняя реальная проводка');
+        assert.deepEqual(h.packetDays, ['2026-02-01', '2026-05-20', '2026-10-05'], 'список дат с данными передаётся в oda-packets');
+        assert.equal(h.packetsKey, '*', 'несуществующий 2021 год автоматически сброшен на Все (*)');
+        assert.equal(h.from, '');
+        assert.equal(h.to, '');
     });
 
     it('$handler Счетов (turnovers, analysis, postings) объявлены как сервисные представления с порядком 1..3', async () => {

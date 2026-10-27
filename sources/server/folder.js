@@ -581,9 +581,10 @@ export class $folder extends $item{
         // элемент дерева не может указывать вверх по диску: '.'/'..' (в т.ч. в составном id 'a/b')
         if (String(id).split('/').some(s => s === '..' || s === '.'))
             throw new Error('Недопустимое имя элемента: ' + id);
-        return parent.__items__[id] ??= (()=>{
-            return new this({id}, parent);
-        })()
+        const existing = parent.__items__[id];
+        if (existing && existing.constructor === this)
+            return existing;
+        return parent.__items__[id] = new this({id}, parent);
     }
     get type(){
         return this.constructor.name;

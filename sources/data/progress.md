@@ -1,6 +1,17 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [00:25, 28.10] Полировка учётных представлений счетов/журнала по эталону ODANT и локальный мультимодальный ИИ-контур (`/MODELS/Local`, `form/trainer`, `sources/modules/trainer/`):
+  - **Учётные формы (`postings.js`, `journal.js`, `virtual.js`, `sheet.js`), пакетировщик `oda-packets` и подвал `work-form`:**
+    1. Подвал `work-form` (`#formFooter`) снабжён условием `~show="hasFooter"`, а `#focusedTools` — флагом `focused-only`: подвал показывается только тогда, когда есть сервисные кнопки выбранного дочернего элемента (и не дублирует `VIEW` шапки при открытии самого счёта).
+    2. Методы отчётов (`db_sheet`, `db_journal`, `db_card`, `db_turnovers` в `sources/data/reports.js`) возвращают `range: { start, end, days }`, а `oda-packets` поддерживает `:days="packetDays"`, отображая только реально существующие годы, кварталы, месяцы и дни.
+    3. В `oda/tools/icons/lib/svg/odant.svg` добавлена иконка `odant:calendar` для представления `Обороты`.
+    4. Представления `Анализ`, `Обороты`, `Проводки` (`postings.js`), `Журнал проводок` (`journal.js`) и `Виртуальный справочник` (`virtual.js`) переведены на ровный CSS Grid с двухслойными шапками, прижатыми к низу футерами `Итого / На конец` и компактной полосой фильтров (`oda-link-input[dense]`), без лишних инпутов дат и дублирующих вкладок `.mode-tabs`.
+  - **Локальный мультимодальный контур ИИ, Hugging Face Hub, дообучение LoRA / SFT / GRPO и PyTorch-инференс (`sources/modules/trainer/`, `MODELS/Local`, `form/trainer`):**
+    1. Реализован адаптивный профилировщик железа хоста (`detectHardware`, `computeAdaptiveDefaults`, `evaluateModelFit`), определяющий реальные ресурсы CPU/RAM/GPU и подбирающий оптимальные модели и параметры обучения под текущую машину.
+    2. В `sources/modules/trainer/huggingface.js` и `form/trainer` развёрнут мультимодальный каталог и поиск моделей на Hugging Face Hub по 7 категориям (`llm`, `vlm`, `image`, `audio`, `video`, `embed`) и 13 умениям (`capabilities`), с потоковой загрузкой (`Range`), фирменными иконками (`ai:qwen`, `ai:llama3`, `ai:stablediffusion`, `carbon:microphone`, `carbon:volume-up`, `av:videocam`) и мгновенной регистрацией `$ai` в `/MODELS/Local`.
+    3. В `sources/modules/trainer/dataset.js` и `runner.js` реализованы сборщик обучающих датасетов WORK (`buildWorkDataset` в формате ChatML `.jsonl` из задач `.task`, базы `work.db` и классов `/MODULES`), детерминированный верификатор учётного ядра (`verifyCompletion` для GRPO) и контур дообучения `LoRA / SFT / GRPO`.
+    4. Добавлен постоянный локальный движок нейросетевого инференса `sources/modules/trainer/worker/local_infer_worker.py` + `local-engine.js` (PyTorch zero-copy `mmap` по `.safetensors` с `KV-Cache` и токенизатором `@huggingface/transformers`), позволяющий сразу вести диалог со скачанными моделями (`/MODELS/Local/Qwen3-0.6B`) без внешних серверов.
 - [05:15, 27.10] Доработка формы (`work-form`) по ролям и представления «Ведомость» (`form/sheet`) по эталону ODANT:
   - **Список VIEW на форме по активной роли и компактная кнопка «Консультант» (`$server/$folder/handlers/pages/form/$handler/form.js`, `sources/server/access/gateway.js`, `sources/server/folder.js`, `class.js` представлений `form/*`):**
     1. В `visibleOnly` (`gateway.js`) и `info` (`folder.js`) включена обязательная проверка `_roleAllowed` и `_usable` для всех `$handler` (в т.ч. в режиме `DEV_MODE`).

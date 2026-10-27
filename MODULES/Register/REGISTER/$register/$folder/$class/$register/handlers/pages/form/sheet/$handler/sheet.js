@@ -8,8 +8,12 @@
 
 const PERIOD_STORAGE_KEY = 'work.accounting.period';
 
-const _yearStart = () => `${new Date().getFullYear() - 5}-01-01`;
-const _yearEnd = () => `${new Date().getFullYear()}-12-31`;
+function _day(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const _today = () => _day(new Date());
+const _yearStart = () => `${new Date().getFullYear()}-01-01`;
+const _yearEnd = () => _today();
 
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
@@ -227,7 +231,7 @@ export default {
         }
     </style>
     <oda-packets no-flex mode="month" ~if="packetsStart"
-        :start="packetsStart" :end="packetsEnd"
+        :start="packetsStart" :end="packetsEnd" :days="packetDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
     <div class="error" ~if="error">{{error}}</div>
     <div class="grid">
@@ -274,6 +278,7 @@ export default {
     packetsKey: { $def: '*', $type: String, $save: true },
     packetsStart: _yearStart(),
     packetsEnd: _yearEnd(),
+    packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
     from: '',
@@ -470,6 +475,35 @@ export default {
             p.by = JSON.stringify(by);
         return p;
     },
+    _syncPacketRange(res) {
+        if (!res || !('range' in res))
+            return false;
+        const r = res.range;
+        if (!r || !r.start || !r.end) {
+            this.packetsStart = '';
+            this.packetsEnd = '';
+            this.packetDays = null;
+            return false;
+        }
+        this.packetsStart = r.start;
+        this.packetsEnd = r.end;
+        this.packetDays = Array.isArray(r.days) && r.days.length ? r.days : null;
+        if (this._packetFiltered && ((this.to && this.to < r.start) || (this.from && this.from > r.end))) {
+            this._initializingPackets = true;
+            try {
+                this._packetFiltered = false;
+                this.from = '';
+                this.to = '';
+                this.packetsKey = '*';
+                _writeSavedPeriod('*', '', '');
+            }
+            finally {
+                this._initializingPackets = false;
+            }
+            return true;
+        }
+        return false;
+    },
     async reload() {
         this.rows = [];
         this.total = null;
@@ -478,6 +512,8 @@ export default {
             return;
         try {
             const res = await this.$item.fetch('db_sheet', this.params());
+            if (this._syncPacketRange(res))
+                return await this.reload();
             this.names = { objects: {}, classes: {}, paths: {}, ...(res?.names || {}) };
             this.rows = Array.isArray(res?.rows) ? res.rows : [];
             this.total = res?.total || null;
